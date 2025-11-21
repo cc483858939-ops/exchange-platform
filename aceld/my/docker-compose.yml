@@ -1,0 +1,45 @@
+version: '3.8'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace:cached
+    command: sleep infinity
+    # --- 新增内容 ---
+    # 添加 depends_on，确保 db 和 redis 服务先于 app 启动
+    depends_on:
+      - db
+      - redis
+    # --- 新增结束 ---
+
+  db:
+    image: mysql:8.0
+    container_name: some-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "1234"
+      MYSQL_DATABASE: "test"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  # --- 新增的 Redis 服务 ---
+  redis:
+    image: "redis:alpine"              # 使用官方的轻量级 Redis 镜像
+    container_name: some-redis         # 给 Redis 容器一个清晰的名字
+    ports:
+      - "6379:6379"                    # 将端口映射到主机，以便 VS Code 插件连接
+    volumes:
+      - redis-data:/data               # (推荐) 数据持久化
+  # --- 新增结束 ---
+
+volumes:
+  mysql-data:
+  # --- 新增内容 ---
+  redis-data:                          # 为 Redis 数据卷添加声明
+  # --- 新增结束 ---```
+
+### 主要修改点说明：
+

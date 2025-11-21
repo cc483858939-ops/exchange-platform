@@ -1,0 +1,15 @@
+{
+	"mounts": [
+		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+	],
+	"name": "Go & MySQL App",
+	"dockerComposeFile": [
+		"../docker-compose.yml"
+	],
+	"service": "app",
+	// workspaceFolder 必须和上面 volumes 的目标路径一致
+	"workspaceFolder": "/workspace",
+	"extensions": [
+		"golang.go"
+	]
+}
