@@ -2,3 +2,4 @@ main
 .vscode/
 node_modules/
 dist/
+*.tar.gz
