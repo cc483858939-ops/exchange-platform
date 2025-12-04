@@ -7,6 +7,8 @@ services:
     volumes:
       - ..:/workspace:cached
     command: sleep infinity
+      ports:
+      - "3000:3000"
     # --- 新增内容 ---
     # 添加 depends_on，确保 db 和 redis 服务先于 app 启动
     depends_on:

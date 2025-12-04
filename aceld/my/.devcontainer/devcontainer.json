@@ -11,5 +11,6 @@
 	"workspaceFolder": "/workspace",
 	"extensions": [
 		"golang.go"
-	]
+	],
+	"postCreateCommand": "git config --global user.name 'cc' && git config --global user.email 'cc483858939@gmail.com'"
 }

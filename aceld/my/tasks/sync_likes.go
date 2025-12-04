@@ -3,30 +3,43 @@ package tasks
 import (
 	"aceld/consts"
 	"aceld/global"
-	"errors"
-
-	// 引入常量包
 	"aceld/models"
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v7"
 )
 
-func SyncLikesToMySQL() {
+func SyncLikesToMySQL(ctx context.Context, wg *sync.WaitGroup) {
+	// 确保函数退出时通知 main
+	defer wg.Done()
+
 	defer func() {
 		if err := recover(); err != nil {
 			log.Printf("[Sync] 定时任务发生 Panic: %v", err)
-			// 可以在这里选择重启协程: go SyncLikesToMySQL()
 		}
 	}()
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		syncLogic()
+	log.Println("[Sync] 任务启动...")
+
+	for {
+		select {
+		case <-ctx.Done():
+			//  收到退出信号
+
+			return
+		case <-ticker.C:
+			// 正常执行逻辑
+			syncLogic()
+		}
 	}
 }
 func syncLogic() {
