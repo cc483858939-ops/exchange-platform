@@ -33,6 +33,7 @@ services:
     container_name: some-redis         # 给 Redis 容器一个清晰的名字
     ports:
       - "6379:6379"                    # 将端口映射到主机，以便 VS Code 插件连接
+      - "6060:6060"
     volumes:
       - redis-data:/data               # (推荐) 数据持久化
   # --- 新增结束 ---
