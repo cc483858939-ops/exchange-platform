@@ -15,9 +15,21 @@ func AuthMiddleWare() gin.HandlerFunc {
 			ctx.Abort()
 			return
 		}
-		username, err := utils.ParseJWT(token)
+		_, claims, err := utils.ParseJWT(token)
 		if err != nil {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			ctx.Abort()
+			return
+		}
+		if tokenType, ok := claims["type"].(string); !ok || tokenType != "access" {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Please use access token"})
+			ctx.Abort()
+			return
+		}
+
+		username, ok := claims["username"].(string)
+		if !ok {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid claims"})
 			ctx.Abort()
 			return
 		}

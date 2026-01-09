@@ -1,16 +1,17 @@
 {
-	"mounts": [
-		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
-	],
-	"name": "Go & MySQL App",
-	"dockerComposeFile": [
-		"../docker-compose.yml"
-	],
-	"service": "app",
-	// workspaceFolder 必须和上面 volumes 的目标路径一致
-	"workspaceFolder": "/workspace",
-	"extensions": [
-		"golang.go"
-	],
-	"postCreateCommand": "git config --global user.name 'cc' && git config --global user.email 'cc483858939@gmail.com'"
+  "name": "Go & MySQL App",
+  "dockerComposeFile": [
+    "../docker-compose.yml"
+  ],
+  "service": "app",
+  "workspaceFolder": "/workspace",
+
+  // ❌ 删掉 features 字段！防止卡在下载 GitHub 脚本上
+  
+  "extensions": [
+    "golang.go"
+  ],
+
+  // ✅ 保留这行！这是自动修权限的关键
+  "postCreateCommand": "sudo chmod 666 /var/run/docker.sock && git config --global user.name 'cc' && git config --global user.email 'cc483858939@gmail.com' && go env -w GOPROXY=https://goproxy.cn,direct"
 }

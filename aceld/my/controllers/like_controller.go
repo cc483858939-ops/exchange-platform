@@ -55,7 +55,7 @@ func LikeArticle(ctx *gin.Context) {
 		}
 
 		// 查到库了，写入 Redis 并执行 +1 操作
-		// 注意：这里需要再次把 +1 后的结果算出来，或者再次调简单命令
+	
 		// 为了简单，这里直接 Set 进去数据库的值，然后让客户端重试，或者手动 +1
 		// 更好的做法是：Set 进去后，直接手动 +1 并加入脏集合（可以用 Pipeline）
 
@@ -108,8 +108,7 @@ func GetArticleLikes(ctx *gin.Context) {
 			// 此时不要直接报错，而是打印日志，并尝试去数据库兜底
 			global.Db.Logger.Error(ctx, "Redis数据异常，解析失败，尝试回源数据库: ", err)
 
-			// 这里可以复制上面查数据库的代码，或者把查库逻辑封装成一个小函数复用
-			// 为了简单，通常直接让它报错也行，因为这种情况极少发生
+			// 后面可以设计一个兜底机制在这里再查MySQL
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "缓存数据异常"})
 			return
 		}

@@ -4,17 +4,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # =======================================================
+    # 修改重点在这里：volumes 向左移了，和 build 对齐
+    # =======================================================
     volumes:
-      - ..:/workspace:cached
+      - .:/workspace:cached
+      - /var/run/docker.sock:/var/run/docker.sock
+    
     command: sleep infinity
-      ports:
+    ports:
       - "3000:3000"
-    # --- 新增内容 ---
-    # 添加 depends_on，确保 db 和 redis 服务先于 app 启动
+    
     depends_on:
       - db
       - redis
-    # --- 新增结束 ---
 
   db:
     image: mysql:8.0
@@ -24,25 +27,52 @@ services:
       MYSQL_DATABASE: "test"
     volumes:
       - mysql-data:/var/lib/mysql
+      
     ports:
       - "3306:3306"
 
-  # --- 新增的 Redis 服务 ---
   redis:
-    image: "redis:alpine"              # 使用官方的轻量级 Redis 镜像
-    container_name: some-redis         # 给 Redis 容器一个清晰的名字
+    image: "redis:alpine"
+    container_name: some-redis
     ports:
-      - "6379:6379"                    # 将端口映射到主机，以便 VS Code 插件连接
+      - "6379:6379"
       - "6060:6060"
     volumes:
-      - redis-data:/data               # (推荐) 数据持久化
-  # --- 新增结束 ---
+      - redis-data:/data
+      
+  # Kafka (KRaft模式) 
+  kafka:
+    image: bitnamilegacy/kafka:latest
+    container_name: kafka
+    ports:
+      - "9094:9094" # 给宿主机用的端口
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      # 定义两个监听器：INTERNAL用于容器间通信，EXTERNAL用于宿主机访问
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+    volumes:
+      - kafka_data:/bitnami/kafka
+
+  # === 新增：Kafka UI (可视化界面) ===
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      # UI 连接 Kafka 使用内部端口 9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 
 volumes:
   mysql-data:
-  # --- 新增内容 ---
-  redis-data:                          # 为 Redis 数据卷添加声明
-  # --- 新增结束 ---```
-
-### 主要修改点说明：
-
+  redis-data:
+  kafka_data:

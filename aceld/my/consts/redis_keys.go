@@ -19,7 +19,7 @@ const (
 	ArticleLikeExpire = 24 * time.Hour
 	//配置lua脚本减少网络io保证原子性移动以免MySQL覆盖
 	//一共两个set我们需要做的就是看脏集合里面的ID如果处理集合里面没有，那我们就直接SMOVE的操作把对应的id移动到另一个集合里面。如果处理集合里面本来就有的话我们就不移过去
-	//
+	Refresh = refresh_token:%s//
 	FetchSafeBatchScript = `
 	local dirty_set = KEYS[1]
 	local processing_set = KEYS[2]
@@ -46,7 +46,7 @@ const (
 					table.insert(result, id)
 					table.insert(result, val)
 				else
-					-- 异常保护：移动成功但没取到值（极少见），移除锁防止死锁
+					-- 异常保护：移动成功但没取到值  移除锁防止死锁
 					redis.call("SREM", processing_set, id)
 				end
 			end
