@@ -5,7 +5,6 @@ services:
       context: .
       dockerfile: Dockerfile
     # =======================================================
-    # 修改重点在这里：volumes 向左移了，和 build 对齐
     # =======================================================
     volumes:
       - .:/workspace:cached

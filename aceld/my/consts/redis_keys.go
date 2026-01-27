@@ -7,7 +7,7 @@ const (
 	// fmt.Sprintf(ArticleLikeKey, articleID)
 	ArticleLikeKey = "article:%s:likes"
 
-	// 暂时没用，如果要去重可以用
+	// 
 	ArticleUserSet = "article:%s:users"
 
 	// 待同步的脏数据集合 (Set)
@@ -19,7 +19,7 @@ const (
 	ArticleLikeExpire = 24 * time.Hour
 	//配置lua脚本减少网络io保证原子性移动以免MySQL覆盖
 	//一共两个set我们需要做的就是看脏集合里面的ID如果处理集合里面没有，那我们就直接SMOVE的操作把对应的id移动到另一个集合里面。如果处理集合里面本来就有的话我们就不移过去
-	Refresh = refresh_token:%s//
+	Refresh = refresh_token:%s//用来实现双token
 	FetchSafeBatchScript = `
 	local dirty_set = KEYS[1]
 	local processing_set = KEYS[2]
