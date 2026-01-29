@@ -1,7 +1,7 @@
 package config
 
 import (
-	"aceld/global"
+	"Go.exchange/global"
 	"log"
 
 	"github.com/go-redis/redis/v7"

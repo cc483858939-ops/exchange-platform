@@ -1,8 +1,8 @@
 package controllers
 
 import (
-	"aceld/global"
-	"aceld/models"
+	"Go.exchange/global"
+	"Go.exchange/models"
 	"encoding/json"
 	"errors"
 	"net/http"

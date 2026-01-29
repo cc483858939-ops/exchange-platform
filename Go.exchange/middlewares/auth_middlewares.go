@@ -1,7 +1,7 @@
 package middlewares
 
 import (
-	"aceld/utils"
+	"Go.exchange/utils"
 	"net/http"
 
 	"github.com/gin-gonic/gin"

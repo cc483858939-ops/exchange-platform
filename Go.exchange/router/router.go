@@ -1,8 +1,8 @@
 package router
 
 import (
-	"aceld/controllers"
-	"aceld/middlewares"
+	"Go.exchange/controllers"
+	"Go.exchange/middlewares"
 	"time"
 
 	"github.com/gin-contrib/cors"

@@ -1,8 +1,8 @@
 package tasks
 
 import (
-	"aceld/consts"
-	"aceld/global"
+	"Go.exchange/consts"
+	"Go.exchange/global"
 	"context"
 	"log"
 	"sync"

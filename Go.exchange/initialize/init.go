@@ -1,9 +1,9 @@
 package initialize
 
 import (
-	"aceld/config"
-	"aceld/global"
-	"aceld/models"
+	"Go.exchange/config"
+	"Go.exchange/global"
+	"Go.exchange/models"
 	"log"
 )
 

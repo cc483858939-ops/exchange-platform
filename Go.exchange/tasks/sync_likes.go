@@ -1,9 +1,9 @@
 package tasks
 
 import (
-	"aceld/consts"
-	"aceld/global"
-	"aceld/models"
+	"Go.exchange/consts"
+	"Go.exchange/global"
+	"Go.exchange/models"
 	"context"
 	"math/rand"
 	"time"
