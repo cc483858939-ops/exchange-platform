@@ -1,12 +1,14 @@
 FROM mcr.microsoft.com/devcontainers/go:1-1.21-bullseye
 
 # 1. ❌ 千万不要换源！保留官方源，配合你的代理最稳定
-# RUN sed -i ... (不要写这一行)
+# (此处保持原样)
 
-# 2. 手动安装 Docker (回归最原始的方法，但在前面加了 fix-missing 防止断连)
-# 注意：这里加了 usermod 把 vscode 加入 docker 组，配合 postCreateCommand 双保险
-RUN apt-get update --fix-missing && apt-get install -y docker.io \
-    && usermod -aG docker vscode
+# 2. 修复 GPG 错误并安装 Docker
+# 核心改动：在第一行增加了 rm -f /etc/apt/sources.list.d/yarn.list
+RUN rm -f /etc/apt/sources.list.d/yarn.list && \
+    apt-get update --fix-missing && \
+    apt-get install -y docker.io && \
+    usermod -aG docker vscode
 
 # 3. 安装 Go 1.25.2
 RUN wget https://golang.google.cn/dl/go1.25.2.linux-amd64.tar.gz -O /tmp/go.tar.gz \

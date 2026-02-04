@@ -19,7 +19,7 @@ const (
 	ArticleLikeExpire = 24 * time.Hour
 	//配置lua脚本减少网络io保证原子性移动以免MySQL覆盖
 	//一共两个set我们需要做的就是看脏集合里面的ID如果处理集合里面没有，那我们就直接SMOVE的操作把对应的id移动到另一个集合里面。如果处理集合里面本来就有的话我们就不移过去
-	Refresh = refresh_token:%s//用来实现双token
+	Refresh = "refresh_token:%s"//用来实现双token
 	FetchSafeBatchScript = `
 	local dirty_set = KEYS[1]
 	local processing_set = KEYS[2]
@@ -33,7 +33,7 @@ const (
 	local result = {}
 	
 	for _, id in ipairs(candidates) do
-		-- 2. 互斥检查：如果 processing_set 里有，说明别的协程正在处理，跳过
+		-- 2. 互斥检查 如果 processing_set 里有，说明别的协程正在处理，跳过
 		-- 这样保证了同一时刻，一个 ID 只有一个任务在跑，解决了 MySQL 覆盖新值的问题
 		if redis.call("SISMEMBER", processing_set, id) == 0 then
 			

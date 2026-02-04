@@ -25,4 +25,4 @@ func initDB() {
 	global.Db = db
 }
 
-// 参考 https://github.com/go-sql-driver/mysql#dsn-data-source-name
+

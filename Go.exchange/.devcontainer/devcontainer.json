@@ -5,13 +5,14 @@
   ],
   "service": "app",
   "workspaceFolder": "/workspace",
-
-  // ❌ 删掉 features 字段！防止卡在下载 GitHub 脚本上
-  
-  "extensions": [
-    "golang.go"
-  ],
-
-  // ✅ 保留这行！这是自动修权限的关键
-  "postCreateCommand": "sudo chmod 666 /var/run/docker.sock && git config --global user.name 'cc' && git config --global user.email 'cc483858939@gmail.com' && go env -w GOPROXY=https://goproxy.cn,direct"
+  "shutdownAction": "stopCompose",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ]
+    }
+  },
+  "postCreateCommand": "sudo chmod 666 /var/run/docker.sock || true && git config --global user.name 'cc' && git config --global user.email 'cc483858939@gmail.com' && git config --global --add safe.directory /workspace && go env -w GOPROXY=https://goproxy.cn,direct"
 }

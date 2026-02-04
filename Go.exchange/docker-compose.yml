@@ -17,6 +17,7 @@ services:
     depends_on:
       - db
       - redis
+      - kafka
 
   db:
     image: mysql:8.0

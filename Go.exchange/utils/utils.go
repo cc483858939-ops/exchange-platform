@@ -2,7 +2,7 @@ package utils
 
 import (
 	"errors"
-	"strings" // 【新增】 必须导入 strings 包
+	"strings" 
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	// 【修正】去掉多余的 s: Accesss -> Access
+	
 	AccessTokenDuration  = time.Hour * 1
 	RefreshTokenDuration = time.Hour * 24 * 7
 )
@@ -40,13 +40,13 @@ func GenerateTokenPair(username string) (accessToken string, refreshToken string
 	if err != nil {
 		return "", "", err
 	}
-	// Bearer 后加一个空格
+	
 	accessToken = "Bearer " + accessToken
 
 	// 2. 生成 Refresh Token
 	rtClaim := jwt.MapClaims{
 		"username": username,
-		"exp":      time.Now().Add(RefreshTokenDuration).Unix(), // 【修正】这里漏了逗号
+		"exp":      time.Now().Add(RefreshTokenDuration).Unix(), 
 		"type":     "refresh",
 	}
 	

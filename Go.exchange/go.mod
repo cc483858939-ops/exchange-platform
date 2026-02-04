@@ -1,4 +1,4 @@
-module aceld
+module Go.exchange
 
 go 1.24.0
 
