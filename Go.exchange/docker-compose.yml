@@ -7,13 +7,13 @@ services:
     # =======================================================
     # =======================================================
     volumes:
-      - .:/workspace:cached
+      - ../../:/workspace:cached
       - /var/run/docker.sock:/var/run/docker.sock
-    
+
     command: sleep infinity
     ports:
       - "3000:3000"
-    
+
     depends_on:
       - db
       - redis
@@ -21,29 +21,29 @@ services:
 
   db:
     image: mysql:8.0
-    container_name: some-mysql
+
     environment:
       MYSQL_ROOT_PASSWORD: "1234"
       MYSQL_DATABASE: "test"
     volumes:
       - mysql-data:/var/lib/mysql
-      
+
     ports:
       - "3306:3306"
 
   redis:
     image: "redis:alpine"
-    container_name: some-redis
+
     ports:
       - "6379:6379"
       - "6060:6060"
     volumes:
       - redis-data:/data
-      
+
   # Kafka (KRaft模式) 
   kafka:
     image: bitnamilegacy/kafka:latest
-    container_name: kafka
+
     ports:
       - "9094:9094" # 给宿主机用的端口
     environment:

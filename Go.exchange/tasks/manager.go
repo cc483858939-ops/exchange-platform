@@ -1,12 +1,13 @@
 package tasks
 
 import (
-	"Go.exchange/consts"
-	"Go.exchange/global"
 	"context"
 	"log"
 	"sync"
 	"time"
+
+	"Go.exchange/consts"
+	"Go.exchange/global"
 )
 
 const (
@@ -18,7 +19,31 @@ const (
 
 var sem = make(chan struct{}, MaxDynamicWorker)
 
+// recoverOrphanedData 崩溃恢复策略
+// 在启动 Worker 前，如果 ProcessingSet 中有残留数据（说明上次程序崩溃挂掉导致未消费/落库完），
+// 将这些因为崩溃遗留在 Processing 集合的孤立数据回退到 Dirty 集合重新处理。
+func recoverOrphanedData() {
+	count, err := global.RedisDB.SCard(consts.ArticleProcessingSetKey).Result()
+	if err != nil {
+		log.Printf("[Task] [Recover] 读取 ProcessingSet 失败: %v", err)
+		return
+	}
+	if count > 0 {
+		// 使用 SUnionStore 将 ProcessingSet 合并回 DirtySet 并覆盖 DirtySet
+		err = global.RedisDB.SUnionStore(consts.ArticleDirtySetKey, consts.ArticleDirtySetKey, consts.ArticleProcessingSetKey).Err()
+		if err == nil {
+			global.RedisDB.Del(consts.ArticleProcessingSetKey)
+			log.Printf("[Task] [Recover] 崩溃恢复：成功将 %d 个孤立的 ID 退回到 DirtySet", count)
+		} else {
+			log.Printf("[Task] [Recover] 崩溃恢复合并失败: %v", err)
+		}
+	}
+}
+
 func StartAll(ctx context.Context, wg *sync.WaitGroup) {
+	// 启动 Worker 前执行崩溃恢复
+	recoverOrphanedData()
+
 	//先开启固定的协程
 	for i := 0; i < StaticWorkerCount; i++ {
 		wg.Add(1)
@@ -38,7 +63,7 @@ func StartAll(ctx context.Context, wg *sync.WaitGroup) {
 				log.Println("[Task] 调度器收到停止信号，停止分发新任务")
 				return
 			case <-ticker.C:
-				// 修正：尝试获取一个信号量，用以判断是否已达动态扩容上限
+				// 尝试获取一个信号量，用以判断是否已达动态扩容上限
 				select {
 				case sem <- struct{}{}:
 					// 成功获取一个令牌，立即释放，因为我们只是检查容量

@@ -1,12 +1,13 @@
 package tasks
 
 import (
-	"Go.exchange/consts"
-	"Go.exchange/global"
-	"Go.exchange/models"
 	"context"
 	"math/rand"
 	"time"
+
+	"Go.exchange/consts"
+	"Go.exchange/global"
+	"Go.exchange/models"
 
 	"fmt"
 	"log"
@@ -136,11 +137,23 @@ func processBatchData(data []interface{}) {
 	}).Create(&article).Error
 	if err != nil {
 		log.Printf("[Sync] Batch Update Error: %v", err)
+		// 崩溃恢复与回滚策略：若落库 MySQL 失败，则将处理中的 ID 通过管道事务回退到 DirtySet 供后续重试
+		if len(successIDs) > 0 {
+			pipe := global.RedisDB.Pipeline()
+			pipe.SAdd(consts.ArticleDirtySetKey, successIDs...)
+			pipe.SRem(consts.ArticleProcessingSetKey, successIDs...)
+			_, pipeErr := pipe.Exec()
+			if pipeErr != nil {
+				log.Printf("[Sync] 严重错误: 回滚至 DirtySet 失败: %v", pipeErr)
+			} else {
+				log.Printf("[Sync] 成功将 %d 个落库失败的 ID 回滚至 DirtySet", len(successIDs))
+			}
+		}
 	} else {
 		if len(successIDs) > 0 {
 			global.RedisDB.SRem(consts.ArticleProcessingSetKey, successIDs...)
 		}
 	}
-	// 从 Processing Set 中移除 (ACK)
+	// 从 Processing Set 中移除 (ACK) 逻辑已结合在上述 if-else 中
 
 }

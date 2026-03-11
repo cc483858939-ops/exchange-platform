@@ -105,7 +105,7 @@ func GetArticleLikes(ctx *gin.Context) {
 		likes, err = strconv.ParseInt(valStr, 10, 64)
 		if err != nil {
 			// 如果 Redis 里的数据因为某种原因坏掉了（比如变成了 "abc"），解析报错
-			// 此时不要直接报错，而是打印日志，并尝试去数据库兜底
+			// 可以不直接报错，打印日志，去用数据库兜底
 			global.Db.Logger.Error(ctx, "Redis数据异常，解析失败，尝试回源数据库: ", err)
 
 			// 后面可以设计一个兜底机制在这里再查MySQL
