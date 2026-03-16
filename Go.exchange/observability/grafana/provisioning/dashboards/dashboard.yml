@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: go-exchange
+    orgId: 1
+    folder: Go.exchange
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

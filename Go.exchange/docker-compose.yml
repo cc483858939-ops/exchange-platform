@@ -4,16 +4,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # =======================================================
-    # =======================================================
     volumes:
       - ../../:/workspace:cached
       - /var/run/docker.sock:/var/run/docker.sock
-
     command: sleep infinity
     ports:
       - "3000:3000"
-
     depends_on:
       - db
       - redis
@@ -21,36 +17,30 @@ services:
 
   db:
     image: mysql:8.0
-
     environment:
       MYSQL_ROOT_PASSWORD: "1234"
       MYSQL_DATABASE: "test"
     volumes:
       - mysql-data:/var/lib/mysql
-
     ports:
       - "3306:3306"
 
   redis:
     image: "redis:alpine"
-
     ports:
       - "6379:6379"
       - "6060:6060"
     volumes:
       - redis-data:/data
 
-  # Kafka (KRaft模式) 
   kafka:
     image: bitnamilegacy/kafka:latest
-
     ports:
-      - "9094:9094" # 给宿主机用的端口
+      - "9094:9094"
     environment:
       - KAFKA_CFG_NODE_ID=0
       - KAFKA_CFG_PROCESS_ROLES=controller,broker
       - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
-      # 定义两个监听器：INTERNAL用于容器间通信，EXTERNAL用于宿主机访问
       - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
       - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
@@ -59,7 +49,6 @@ services:
     volumes:
       - kafka_data:/bitnami/kafka
 
-  # === 新增：Kafka UI (可视化界面) ===
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -69,10 +58,31 @@ services:
       - kafka
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      # UI 连接 Kafka 使用内部端口 9092
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
 
 volumes:
   mysql-data:
   redis-data:
   kafka_data:
+  grafana-data:
