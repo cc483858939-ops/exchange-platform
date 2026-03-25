@@ -56,6 +56,7 @@ func recoverOrphanedData() {
 
 func StartAll(ctx context.Context, wg *sync.WaitGroup) {
 	recoverOrphanedData()
+	startArticleAnalysisWorkers(ctx, wg)
 
 	for i := 0; i < StaticWorkerCount; i++ {
 		wg.Add(1)

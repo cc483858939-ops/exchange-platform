@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"Go.exchange/global"
@@ -19,7 +20,6 @@ var (
 	// articleListCacheKey 文章列表的 Redis Key
 	articleListCacheKey = "articles"
 	// articleCacheGroup 用于防击穿的 Singleflight 分组
-
 	articleCacheGroup singleflight.Group
 )
 
@@ -32,6 +32,16 @@ type cacheSetter func(key string, payload []byte, expiration time.Duration) erro
 // articleDetailCacheKey 生成文章详情的 Redis Key
 func articleDetailCacheKey(id string) string {
 	return "article:detail:" + id
+}
+
+// InvalidateArticleListCache 主动删除文章列表缓存。
+func InvalidateArticleListCache() error {
+	return global.RedisDB.Del(articleListCacheKey).Err()
+}
+
+// InvalidateArticleDetailCacheByID 主动删除指定文章的详情缓存。
+func InvalidateArticleDetailCacheByID(id uint) error {
+	return global.RedisDB.Del(articleDetailCacheKey(strconv.FormatUint(uint64(id), 10))).Err()
 }
 
 // loadArticleList 加载文章列表，优先走缓存
@@ -98,7 +108,7 @@ func loadJSONCacheWithStore[T any](
 
 	// 2. 缓存未命中，进入 Singleflight 控制
 	value, err, _ := articleCacheGroup.Do(key, func() (interface{}, error) {
-		// 2.1 二次检查 (Double Check)：
+		// 2.1 二次检查：
 		// 当并发请求被 Do 阻塞再被唤醒时，之前的请求可能已经把缓存填上了，
 		// 所以在这里再查一次 Redis，如果命中了直接返回，避免再次打库。
 		cachedData, err := getter(key)
@@ -121,7 +131,7 @@ func loadJSONCacheWithStore[T any](
 			return zero, err
 		}
 		if err := setter(key, payload, expiration); err != nil {
-			// redis出现问题，上报错误避免高并发压垮数据库
+			// Redis 出现问题时，直接上报错误，避免高并发把数据库压垮。
 			return zero, err
 		}
 		return result, nil

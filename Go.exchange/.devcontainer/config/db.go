@@ -24,5 +24,3 @@ func initDB() {
 	}
 	global.Db = db
 }
-
-

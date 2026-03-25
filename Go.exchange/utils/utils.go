@@ -2,7 +2,7 @@ package utils
 
 import (
 	"errors"
-	"strings" 
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	
 	AccessTokenDuration  = time.Hour * 1
 	RefreshTokenDuration = time.Hour * 24 * 7
 )
@@ -32,24 +31,24 @@ func GenerateTokenPair(username string) (accessToken string, refreshToken string
 	atClaim := jwt.MapClaims{
 		"username": username,
 		"exp":      time.Now().Add(AccessTokenDuration).Unix(),
-		"type":     "access", 
+		"type":     "access",
 	}
-	
+
 	at := jwt.NewWithClaims(jwt.SigningMethodHS256, atClaim)
 	accessToken, err = at.SignedString(Secret)
 	if err != nil {
 		return "", "", err
 	}
-	
+
 	accessToken = "Bearer " + accessToken
 
 	// 2. 生成 Refresh Token
 	rtClaim := jwt.MapClaims{
 		"username": username,
-		"exp":      time.Now().Add(RefreshTokenDuration).Unix(), 
+		"exp":      time.Now().Add(RefreshTokenDuration).Unix(),
 		"type":     "refresh",
 	}
-	
+
 	rt := jwt.NewWithClaims(jwt.SigningMethodHS256, rtClaim)
 	refreshToken, err = rt.SignedString(Secret)
 	if err != nil {

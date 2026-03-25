@@ -55,8 +55,7 @@ func LikeArticle(ctx *gin.Context) {
 		}
 
 		// 查到库了，写入 Redis 并执行 +1 操作
-	
-		
+
 		// 更好的做法是：Set 进去后，直接手动 +1 并加入脏集合（可以用 Pipeline）
 
 		newCount := article.LikeCount + 1

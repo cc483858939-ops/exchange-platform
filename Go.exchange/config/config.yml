@@ -1,4 +1,4 @@
-app:
+﻿app:
   name: CurrencyExchangeApp
   port: ":3000"
 
@@ -6,3 +6,15 @@ database:
   dsn: "root:1234@tcp(db:3306)/test?charset=utf8mb4&parseTime=True&loc=Local"
   maxidleconns: 11
   maxopenconns: 114
+
+ai:
+  base_url: "https://api.deepseek.com"
+  api_key: "sk-1c2fe18dcd2246ab95c728d92cfcc415"
+  model: "deepseek-chat"
+  chunk_model: "deepseek-chat"
+  main_model: "deepseek-chat"
+  timeout_seconds: 30
+  chunk_size: 1200
+  chunk_overlap: 120
+  max_chunk_parallelism: 3
+  top_n_tags: 5
