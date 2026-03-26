@@ -2,25 +2,70 @@ package tasks
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"math/rand"
+	"strconv"
+	"sync"
 	"time"
 
 	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
-	"fmt"
-	"log"
-	"strconv"
-	"sync"
-
 	"github.com/go-redis/redis/v7"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
+// --- 可 mock 的函数变量，方便单元测试 ---
+
+var batchUpsert = func(articles []models.Article) error {
+	return global.Db.
+		Session(&gorm.Session{SkipDefaultTransaction: true}).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"like_count"}),
+		}).
+		Create(&articles).Error
+}
+
+var singleUpsert = func(article models.Article) error {
+	return global.Db.
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"like_count"}),
+		}).
+		Create(&article).Error
+}
+
+var incrRetryCount = func(idStr string) (int64, error) {
+	return global.RedisDB.HIncrBy(consts.ArticleLikeRetryCountKey, idStr, 1).Result()
+}
+
+var moveToDeadLetter = func(ids ...interface{}) error {
+	pipe := global.RedisDB.Pipeline()
+	pipe.SAdd(consts.ArticleLikeDeadLetterKey, ids...)
+	pipe.SRem(consts.ArticleProcessingSetKey, ids...)
+	_, err := pipe.Exec()
+	return err
+}
+
+var rollbackToRetry = func(ids ...interface{}) error {
+	pipe := global.RedisDB.Pipeline()
+	pipe.SAdd(consts.ArticleDirtySetKey, ids...)
+	pipe.SRem(consts.ArticleProcessingSetKey, ids...)
+	_, err := pipe.Exec()
+	return err
+}
+
+var ackSuccess = func(ids ...interface{}) error {
+	return global.RedisDB.SRem(consts.ArticleProcessingSetKey, ids...).Err()
+}
+
+// ---
+
 func staticLoop(ctx context.Context, wg *sync.WaitGroup) {
-	//退出的时候记得把对应的协程wg.done,如果有数据就处理如果没有数据就sleep
 	defer wg.Done()
 	for {
 		select {
@@ -30,27 +75,25 @@ func staticLoop(ctx context.Context, wg *sync.WaitGroup) {
 		}
 		hasData := fetchAndProcessBatch()
 		if !hasData {
-			time.Sleep(1 * time.Second) //没数据就休眠
+			time.Sleep(1 * time.Second)
 		}
 	}
 }
+
 func dynamicLoop(ctx context.Context, wg *sync.WaitGroup) {
-	//对于这种临时协程那么就饥饿释放和信号释放，而且要归还信号量
 	defer wg.Done()
 	defer func() {
 		<-sem
 	}()
-	timer := time.NewTimer(0) //不用time.after免得GC炸掉
+	timer := time.NewTimer(0)
 	if !timer.Stop() {
 		select {
 		case <-timer.C:
 		default:
 		}
 	}
-	//如果连续三次都出现了没抢到数据那么说明这个时候流量已经处理得差不多了就可以将他销毁掉了
 	cout := 0
 	for {
-		// 每次循环开始先检查一下
 		select {
 		case <-ctx.Done():
 			return
@@ -67,24 +110,21 @@ func dynamicLoop(ctx context.Context, wg *sync.WaitGroup) {
 				return
 			}
 			sleepDuration := 200*time.Millisecond + time.Duration(rand.Intn(200))*time.Millisecond
-			timer.Reset(sleepDuration) //设置为0.2秒+随机时间免得cpu空转和redis的惊群效应，讲道理也能防止同一时间的销毁压力
+			timer.Reset(sleepDuration)
 			select {
 			case <-ctx.Done():
-				//如果在等待期间收到退出信号，直接返回，用死等
 				return
 			case <-timer.C:
-				// 等待 500ms 什么都不做，继续下一次循环
 			}
-
 		}
 	}
 }
+
 func fetchAndProcessBatch() bool {
-	// Lua 脚本原子获取
 	val, err := global.RedisDB.Eval(
 		consts.FetchSafeBatchScript,
 		[]string{consts.ArticleDirtySetKey, consts.ArticleProcessingSetKey},
-		100, // 每次取100条
+		100,
 		consts.ArticleLikeKey,
 	).Result()
 
@@ -100,14 +140,17 @@ func fetchAndProcessBatch() bool {
 		return false
 	}
 
-	// 具体的业务处理逻辑
 	processBatchData(resultList)
 	return true
 }
-func processBatchData(data []interface{}) {
 
-	var article []models.Article
-	var successIDs []interface{}
+func processBatchData(data []interface{}) {
+	type entry struct {
+		idStr   string
+		article models.Article
+	}
+
+	var entries []entry
 	for i := 0; i < len(data); i += 2 {
 		rawID := data[i]
 		rawVal := data[i+1]
@@ -120,40 +163,73 @@ func processBatchData(data []interface{}) {
 		idInt64, err1 := strconv.ParseInt(idStr, 10, 64)
 		likes, err2 := strconv.ParseInt(valStr, 10, 64)
 		if err1 != nil || err2 != nil {
-			log.Printf("解析id或者点赞失败: ID=%v, Val=%v", rawID, rawVal)
+			log.Printf("[Sync] 解析 id 或点赞数失败: ID=%v, Val=%v", rawID, rawVal)
 			continue
 		}
-		article = append(article, models.Article{
-			Model:     gorm.Model{ID: uint(idInt64)},
-			LikeCount: likes,
+		entries = append(entries, entry{
+			idStr: idStr,
+			article: models.Article{
+				Model:     gorm.Model{ID: uint(idInt64)},
+				LikeCount: likes,
+			},
 		})
-		successIDs = append(successIDs, rawID)
-		// 写入 MySQL
-
 	}
-	err := global.Db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"like_count"}),
-	}).Create(&article).Error
-	if err != nil {
-		log.Printf("[Sync] Batch Update Error: %v", err)
-		// 崩溃恢复与回滚策略：若落库 MySQL 失败，则将处理中的 ID 通过管道事务回退到 DirtySet 供后续重试
-		if len(successIDs) > 0 {
-			pipe := global.RedisDB.Pipeline()
-			pipe.SAdd(consts.ArticleDirtySetKey, successIDs...)
-			pipe.SRem(consts.ArticleProcessingSetKey, successIDs...)
-			_, pipeErr := pipe.Exec()
-			if pipeErr != nil {
-				log.Printf("[Sync] 严重错误: 回滚至 DirtySet 失败: %v", pipeErr)
-			} else {
-				log.Printf("[Sync] 成功将 %d 个落库失败的 ID 回滚至 DirtySet", len(successIDs))
+
+	if len(entries) == 0 {
+		return
+	}
+
+	// 构建批量写入列表
+	articles := make([]models.Article, 0, len(entries))
+	for _, e := range entries {
+		articles = append(articles, e.article)
+	}
+
+	// Step 1: 尝试批量 upsert（已关闭默认事务，避免全批回滚）
+	if err := batchUpsert(articles); err == nil {
+		// 全批成功，ACK
+		ids := make([]interface{}, 0, len(entries))
+		for _, e := range entries {
+			ids = append(ids, e.idStr)
+		}
+		if ackErr := ackSuccess(ids...); ackErr != nil {
+			log.Printf("[Sync] ACK 失败: %v", ackErr)
+		}
+		return
+	}
+
+	// Step 2: 批量写入失败，降级为逐条 upsert，精确识别问题数据
+	log.Printf("[Sync] 批量 upsert 失败，降级为逐条处理，共 %d 条", len(entries))
+	for _, e := range entries {
+		if err := singleUpsert(e.article); err == nil {
+			// 单条成功
+			if ackErr := ackSuccess(e.idStr); ackErr != nil {
+				log.Printf("[Sync] 单条 ACK 失败: id=%s, %v", e.idStr, ackErr)
+			}
+			continue
+		}
+
+		// Step 3: 单条失败，记录重试次数
+		retryCount, incrErr := incrRetryCount(e.idStr)
+		if incrErr != nil {
+			log.Printf("[Sync] 记录重试次数失败: id=%s, %v", e.idStr, incrErr)
+			// 保守策略：回退到 dirty set 等待重试
+			_ = rollbackToRetry(e.idStr)
+			continue
+		}
+
+		if retryCount >= consts.MaxRetryCount {
+			// Step 4: 超过最大重试次数，进死信，不再重试
+			log.Printf("[Sync] ⚠️  死信告警: article id=%s 已失败 %d 次，移入死信集合，请人工排查", e.idStr, retryCount)
+			if dlErr := moveToDeadLetter(e.idStr); dlErr != nil {
+				log.Printf("[Sync] 移入死信失败: id=%s, %v", e.idStr, dlErr)
+			}
+		} else {
+			// 还有重试机会，回滚到 dirty set
+			log.Printf("[Sync] article id=%s 落库失败，第 %d 次，回队列重试", e.idStr, retryCount)
+			if rbErr := rollbackToRetry(e.idStr); rbErr != nil {
+				log.Printf("[Sync] 回滚到 dirty set 失败: id=%s, %v", e.idStr, rbErr)
 			}
 		}
-	} else {
-		if len(successIDs) > 0 {
-			global.RedisDB.SRem(consts.ArticleProcessingSetKey, successIDs...)
-		}
 	}
-	// 从 Processing Set 中移除 (ACK) 逻辑已结合在上述 if-else 中
-
 }

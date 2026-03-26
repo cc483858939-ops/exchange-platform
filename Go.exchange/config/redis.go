@@ -8,16 +8,16 @@ import (
 )
 
 func initRedis() {
-	RedisClient := redis.NewClient(&redis.Options{
-		Addr:         "redis:6379",
-		DB:           0,
-		Password:     "",
-		PoolSize:     1000, // 核心：将连接池扩大到 1000 (默认是 10，高并发下会导致严重的锁等待)
-		MinIdleConns: 50,
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:         RedisAddr(),
+		DB:           RedisDB(),
+		Password:     RedisPassword(),
+		PoolSize:     RedisPoolSize(),
+		MinIdleConns: RedisMinIdleConns(),
 	})
-	_, err := RedisClient.Ping().Result()
+	_, err := redisClient.Ping().Result()
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis, got error:%v", err)
 	}
-	global.RedisDB = RedisClient
+	global.RedisDB = redisClient
 }

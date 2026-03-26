@@ -1,0 +1,10 @@
+﻿.git
+.devcontainer
+.idea
+*.code-workspace
+bin/
+coverage/
+observability/
+go1.25.3.linux-amd64.tar.gz
+Dockerfile
+README.article-ai-processor.md

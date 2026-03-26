@@ -14,10 +14,7 @@ import (
 )
 
 func StartHttpServer() *http.Server {
-	port := config.AppConfig.App.Port
-	if port == "" {
-		port = ":3000"
-	}
+	port := config.AppPort()
 	r := router.SetupRouter()
 	srv := &http.Server{
 		Addr:    port,
@@ -31,6 +28,7 @@ func StartHttpServer() *http.Server {
 	}()
 	return srv
 }
+
 func WaitForShutdown(ctx context.Context, cancel context.CancelFunc, srv *http.Server, wg *sync.WaitGroup) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

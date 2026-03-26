@@ -23,6 +23,8 @@ func SetupRouter() *gin.Engine {
 	}))
 	r.Use(metrics.Middleware())
 
+	r.GET("/healthz", controllers.Healthz)
+	r.GET("/readyz", controllers.Readyz)
 	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	auth := r.Group("/api/auth")

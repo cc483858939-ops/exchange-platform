@@ -1,0 +1,18 @@
+﻿apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: go-exchange-config
+data:
+  APP_PORT: "3000"
+  REDIS_ADDR: "redis:6379"
+  REDIS_DB: "0"
+  REDIS_POOL_SIZE: "200"
+  REDIS_MIN_IDLE_CONNS: "20"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: go-exchange-secrets
+type: Opaque
+stringData:
+  DATABASE_DSN: "root:1234@tcp(mysql:3306)/test?charset=utf8mb4&parseTime=True&loc=Local"

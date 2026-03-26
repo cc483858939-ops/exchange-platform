@@ -1,0 +1,44 @@
+﻿apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-exchange-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: go-exchange
+      component: api
+  template:
+    metadata:
+      labels:
+        app: go-exchange
+        component: api
+    spec:
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: app
+          image: your-registry/go-exchange:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: go-exchange-config
+            - secretRef:
+                name: go-exchange-secrets
+          env:
+            - name: APP_RUNTIME_ROLE
+              value: api
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
