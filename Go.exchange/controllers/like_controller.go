@@ -73,6 +73,10 @@ func LikeArticle(ctx *gin.Context) {
 		result = int(newCount)
 	}
 
+	if idUint64, parseErr := strconv.ParseUint(articleID, 10, 64); parseErr == nil {
+		recordArticleBehaviorFromContext(ctx, uint(idUint64), ArticleBehaviorActionLike)
+	}
+
 	ctx.JSON(http.StatusOK, gin.H{
 		"message": "Successfully liked the article",
 		"likes":   result,

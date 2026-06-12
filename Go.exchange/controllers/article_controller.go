@@ -105,5 +105,6 @@ func GetArticleByID(ctx *gin.Context) {
 		return
 	}
 
+	recordArticleBehaviorFromContext(ctx, article.ID, ArticleBehaviorActionView)
 	ctx.JSON(http.StatusOK, article)
 }
