@@ -2,16 +2,106 @@ package controllers
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+func TestNormalizedRecommendationConfigDefaultsWhenMissing(t *testing.T) {
+	originalConfig := config.AppConfig
+	config.AppConfig = nil
+	defer func() {
+		config.AppConfig = originalConfig
+	}()
+
+	cfg := normalizedRecommendationConfig()
+
+	if cfg.BehaviorWeights.View != 1 ||
+		cfg.BehaviorWeights.Like != 4 ||
+		cfg.CategoryWeight != 3 ||
+		cfg.TagWeight != 2 ||
+		cfg.PopularityWeight != 0.5 ||
+		cfg.FreshnessWeight != 1 {
+		t.Fatalf("unexpected default recommendation config: %#v", cfg)
+	}
+}
+
+func TestNormalizedRecommendationConfigFallsBackForNonPositiveWeights(t *testing.T) {
+	withRecommendationConfig(t, config.RecommendationConfig{
+		BehaviorWeights:  config.RecommendationBehaviorWeights{View: 0, Like: -1},
+		CategoryWeight:   -2,
+		TagWeight:        0,
+		PopularityWeight: -0.5,
+		FreshnessWeight:  0,
+	})
+
+	cfg := normalizedRecommendationConfig()
+
+	if cfg.BehaviorWeights.View != 1 ||
+		cfg.BehaviorWeights.Like != 4 ||
+		cfg.CategoryWeight != 3 ||
+		cfg.TagWeight != 2 ||
+		cfg.PopularityWeight != 0.5 ||
+		cfg.FreshnessWeight != 1 {
+		t.Fatalf("unexpected fallback recommendation config: %#v", cfg)
+	}
+}
+
+func TestBuildUserInterestProfileUsesConfiguredBehaviorWeights(t *testing.T) {
+	withRecommendationConfig(t, config.RecommendationConfig{
+		BehaviorWeights: config.RecommendationBehaviorWeights{View: 10, Like: 1},
+	})
+
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	profile := buildUserInterestProfile([]articleBehaviorSignal{
+		{
+			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, Count: 1, Active: true},
+			Article:  recommendationTestArticle(1, now, "Backend", []string{"Go"}, 0),
+		},
+		{
+			Behavior: models.ArticleBehavior{ArticleID: 2, Action: ArticleBehaviorActionLike, Count: 1, Active: true},
+			Article:  recommendationTestArticle(2, now, "AI", []string{"LLM"}, 0),
+		},
+	})
+
+	if profile.Categories["backend"] <= profile.Categories["ai"] {
+		t.Fatalf("expected configured view weight to be stronger: profile=%#v", profile.Categories)
+	}
+	if profile.Tags["go"] <= profile.Tags["llm"] {
+		t.Fatalf("expected configured view tag weight to be stronger: profile=%#v", profile.Tags)
+	}
+}
+
+func TestScoreArticleUsesConfiguredWeights(t *testing.T) {
+	withRecommendationConfig(t, config.RecommendationConfig{
+		CategoryWeight:   5,
+		TagWeight:        7,
+		PopularityWeight: 11,
+		FreshnessWeight:  13,
+	})
+
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	profile := userInterestProfile{
+		Categories:           map[string]float64{"backend": 2},
+		Tags:                 map[string]float64{"go": 3},
+		InteractedArticleIDs: map[uint]struct{}{},
+	}
+	article := recommendationTestArticle(1, now.Add(-time.Hour), "Backend", []string{"Go"}, 1)
+
+	got := scoreArticle(profile, article, now)
+	want := 2*float64(5) + 3*float64(7) + math.Log(2)*float64(11) + float64(13)
+	if math.Abs(got-want) > 0.000001 {
+		t.Fatalf("unexpected configured score: got %f want %f", got, want)
+	}
+}
 
 func TestRecommendArticlesPrefersMatchingSignals(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
@@ -192,4 +282,13 @@ func recommendationTestArticle(id uint, createdAt time.Time, category string, ta
 		Tags:      tags,
 		LikeCount: likeCount,
 	}
+}
+
+func withRecommendationConfig(t *testing.T, recommendation config.RecommendationConfig) {
+	t.Helper()
+	originalConfig := config.AppConfig
+	config.AppConfig = &config.Config{Recommendation: recommendation}
+	t.Cleanup(func() {
+		config.AppConfig = originalConfig
+	})
 }

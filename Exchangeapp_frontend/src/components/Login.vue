@@ -28,12 +28,29 @@
   const authStore = useAuthStore();
   const router = useRouter();
   
+  const formatLoginError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : '';
+    if (message === 'Invalid username or password') {
+      return '用户名或密码错误';
+    }
+    return '登录失败，请稍后重试';
+  };
+
   const login = async () => {
+    if (!form.value.username) {
+      ElMessage.error('请输入用户名');
+      return;
+    }
+    if (!form.value.password) {
+      ElMessage.error('请输入密码');
+      return;
+    }
     try {
       await authStore.login(form.value.username, form.value.password);
+      ElMessage.success('登录成功');
       router.push({ name: 'News' });
-    } catch {
-      ElMessage.error('登录失败，请检查用户名和密码。');
+    } catch (error) {
+      ElMessage.error(formatLoginError(error));
     }
   };
   </script>

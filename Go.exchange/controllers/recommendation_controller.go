@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -23,9 +24,15 @@ const (
 	behaviorCountCap           = 5
 )
 
-var recommendationActionWeight = map[string]float64{
-	ArticleBehaviorActionView: 1,
-	ArticleBehaviorActionLike: 4,
+var defaultRecommendationConfig = config.RecommendationConfig{
+	BehaviorWeights: config.RecommendationBehaviorWeights{
+		View: 1,
+		Like: 4,
+	},
+	CategoryWeight:   3,
+	TagWeight:        2,
+	PopularityWeight: 0.5,
+	FreshnessWeight:  1,
 }
 
 type articleBehaviorSignal struct {
@@ -49,6 +56,45 @@ type recommendedArticleResponse struct {
 	LikeCount int64     `json:"like_count"`
 	CreatedAt time.Time `json:"created_at"`
 	Score     float64   `json:"score"`
+}
+
+func normalizedRecommendationConfig() config.RecommendationConfig {
+	cfg := defaultRecommendationConfig
+	if config.AppConfig == nil {
+		return cfg
+	}
+
+	configured := config.AppConfig.Recommendation
+	if configured.BehaviorWeights.View > 0 {
+		cfg.BehaviorWeights.View = configured.BehaviorWeights.View
+	}
+	if configured.BehaviorWeights.Like > 0 {
+		cfg.BehaviorWeights.Like = configured.BehaviorWeights.Like
+	}
+	if configured.CategoryWeight > 0 {
+		cfg.CategoryWeight = configured.CategoryWeight
+	}
+	if configured.TagWeight > 0 {
+		cfg.TagWeight = configured.TagWeight
+	}
+	if configured.PopularityWeight > 0 {
+		cfg.PopularityWeight = configured.PopularityWeight
+	}
+	if configured.FreshnessWeight > 0 {
+		cfg.FreshnessWeight = configured.FreshnessWeight
+	}
+	return cfg
+}
+
+func recommendationActionWeight(cfg config.RecommendationConfig, action string) (float64, bool) {
+	switch action {
+	case ArticleBehaviorActionView:
+		return cfg.BehaviorWeights.View, true
+	case ArticleBehaviorActionLike:
+		return cfg.BehaviorWeights.Like, true
+	default:
+		return 0, false
+	}
 }
 
 var loadRecommendationBehaviorSignals = func(username string) ([]articleBehaviorSignal, error) {
@@ -179,6 +225,7 @@ func buildUserInterestProfile(signals []articleBehaviorSignal) userInterestProfi
 		Tags:                 map[string]float64{},
 		InteractedArticleIDs: map[uint]struct{}{},
 	}
+	recommendationCfg := normalizedRecommendationConfig()
 
 	for _, signal := range signals {
 		if !signal.Behavior.Active {
@@ -188,7 +235,7 @@ func buildUserInterestProfile(signals []articleBehaviorSignal) userInterestProfi
 			profile.InteractedArticleIDs[signal.Behavior.ArticleID] = struct{}{}
 		}//K是对应文章id然后V设为空，好让后面查询的时候不会查到这些文章
 
-		actionWeight, ok := recommendationActionWeight[signal.Behavior.Action]
+		actionWeight, ok := recommendationActionWeight(recommendationCfg, signal.Behavior.Action)
 		if !ok {
 			continue
 		}
@@ -266,11 +313,12 @@ func scoreArticle(profile userInterestProfile, article models.Article, now time.
 	for _, tag := range article.Tags {
 		tagMatch += profile.Tags[normalizeRecommendationLabel(tag)]
 	}
+	recommendationCfg := normalizedRecommendationConfig()
 
-	return categoryMatch*3 +
-		tagMatch*2 +
-		math.Log(float64(article.LikeCount)+1)*0.5 +
-		freshnessScore(article.CreatedAt, now)
+	return categoryMatch*recommendationCfg.CategoryWeight +
+		tagMatch*recommendationCfg.TagWeight +
+		math.Log(float64(article.LikeCount)+1)*recommendationCfg.PopularityWeight +
+		freshnessScore(article.CreatedAt, now)*recommendationCfg.FreshnessWeight
 }//根据类型标签热度外加时间权重给出分数
 
 func freshnessScore(createdAt time.Time, now time.Time) float64 {

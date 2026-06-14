@@ -26,12 +26,32 @@
   const authStore = useAuthStore();
   const router = useRouter();
   
+  const formatRegisterError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : '';
+    if (message === 'User already exists or database error') {
+      return '注册失败，用户名可能已被占用';
+    }
+    if (message === 'Invalid request data') {
+      return '请输入用户名和密码';
+    }
+    return '注册失败，请稍后重试';
+  };
+
   const register = async () => {
+    if (!form.value.username) {
+      ElMessage.error('请输入用户名');
+      return;
+    }
+    if (!form.value.password) {
+      ElMessage.error('请输入密码');
+      return;
+    }
     try {
       await authStore.register(form.value.username, form.value.password);
+      ElMessage.success('注册成功');
       router.push({ name: 'News' });
-    } catch {
-      ElMessage.error('注册失败，请重试。');
+    } catch (error) {
+      ElMessage.error(formatRegisterError(error));
     }
   };
   </script>

@@ -18,7 +18,7 @@
       <div class="hero-visual" aria-hidden="true">
         <div class="score-orbit">
           <span>{{ topScoreLabel }}</span>
-          <small>highest score</small>
+          <small>最高分</small>
         </div>
         <div class="topic-stack">
           <span v-for="topic in heroTopics" :key="topic">{{ topic }}</span>
@@ -89,7 +89,7 @@
               <span v-for="tag in article.tags.slice(0, 3)" :key="tag">{{ tag }}</span>
             </div>
             <div class="card-footer">
-              <span>{{ article.like_count }} likes</span>
+              <span>{{ article.like_count }} 点赞</span>
               <button type="button">阅读</button>
             </div>
           </div>
@@ -152,7 +152,7 @@ const fetchRecommendations = async () => {
     animateCards();
   } catch (error) {
     console.error('Failed to load recommendations:', error);
-    errorMessage.value = '请稍后再试，或确认后端服务和登录状态是否正常。';
+    errorMessage.value = '推荐加载失败，请稍后重试；如果仍然失败，请重新登录。';
   } finally {
     loading.value = false;
   }

@@ -26,6 +26,7 @@
   
   <script setup lang="ts">
   import { ref, onMounted } from 'vue';
+  import { ElMessage } from 'element-plus';
   import axios from '../axios';
   
   interface ExchangeRate {
@@ -51,18 +52,38 @@
       currencies.value = [...new Set(response.data.map((rate: ExchangeRate) => [rate.fromCurrency, rate.toCurrency]).flat())];
     }catch(error){
       console.log('Failed to load currencies', error)
+      ElMessage.error('汇率数据加载失败，请稍后重试');
     }
   };
   
   const exchange = () => {
+    if (!form.value.fromCurrency) {
+      ElMessage.error('请选择要兑换的货币');
+      result.value = null;
+      return;
+    }
+    if (!form.value.toCurrency) {
+      ElMessage.error('请选择兑换后的货币');
+      result.value = null;
+      return;
+    }
+
+    const amount = Number(form.value.amount);
+    if (!amount || amount <= 0) {
+      ElMessage.error('请输入有效金额');
+      result.value = null;
+      return;
+    }
+
     const rate = rates.value.find(
       (rate) => rate.fromCurrency === form.value.fromCurrency && rate.toCurrency === form.value.toCurrency
     )?.rate;
   
     if (rate) {
-      result.value = form.value.amount * rate;
+      result.value = amount * rate;
     } else {
       result.value = null;
+      ElMessage.error('暂未找到该货币兑换路径');
     }
   };
   

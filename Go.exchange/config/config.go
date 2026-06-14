@@ -20,6 +20,19 @@ type AIConfig struct {
 	TopNTags            int    `mapstructure:"top_n_tags"`
 }
 
+type RecommendationBehaviorWeights struct {
+	View float64 `mapstructure:"view"`
+	Like float64 `mapstructure:"like"`
+}
+
+type RecommendationConfig struct {
+	BehaviorWeights  RecommendationBehaviorWeights `mapstructure:"behavior_weights"`
+	CategoryWeight   float64                       `mapstructure:"category_weight"`
+	TagWeight        float64                       `mapstructure:"tag_weight"`
+	PopularityWeight float64                       `mapstructure:"popularity_weight"`
+	FreshnessWeight  float64                       `mapstructure:"freshness_weight"`
+}
+
 type Config struct {
 	App struct {
 		Name string
@@ -30,7 +43,8 @@ type Config struct {
 		MaxIdleconns int
 		MaxOpenConns int
 	}
-	AI AIConfig
+	AI             AIConfig
+	Recommendation RecommendationConfig
 }
 
 var AppConfig *Config

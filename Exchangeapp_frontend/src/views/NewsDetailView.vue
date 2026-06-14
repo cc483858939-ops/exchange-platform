@@ -1,7 +1,8 @@
 <template>
   <el-container>
     <el-main>
-      <el-card v-if="article" class="article-detail">
+      <div v-if="loading" class="no-data">文章加载中...</div>
+      <el-card v-else-if="article" class="article-detail">
         <h1>{{ article.Title }}</h1>
         
         <!-- 【新增】这里开始：显示过期时间 -->
@@ -17,22 +18,37 @@
           <span class="likes-count">点赞数: {{ likes }}</span>
         </div>
       </el-card>
-      <div v-else class="no-data">您必须登录/注册才可以阅读文章，或者文章不存在</div>
+      <div v-else class="no-data">{{ detailMessage }}</div>
     </el-main>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { useRoute } from "vue-router";
+import { ElMessage } from 'element-plus';
 import axios from "../axios";
+import { useAuthStore } from "../store/auth";
 import type { Article, Like } from "../types/Article";
 
 const article = ref<Article | null>(null);
 const route = useRoute();
 const likes = ref<number>(0)
+const loading = ref(false);
+const loadError = ref(false);
+const authStore = useAuthStore();
 
 const { id } = route.params;
+
+const detailMessage = computed(() => {
+  if (!authStore.isAuthenticated) {
+    return '登录后可以阅读文章';
+  }
+  if (loadError.value) {
+    return '文章加载失败，请稍后重试';
+  }
+  return '文章不存在或已下架';
+});
 
 // 【新增】格式化时间的函数
 const formatDate = (dateStr: string) => {
@@ -42,11 +58,24 @@ const formatDate = (dateStr: string) => {
 };
 
 const fetchArticle = async () => {
+  if (!authStore.isAuthenticated) {
+    article.value = null;
+    loadError.value = false;
+    return;
+  }
+
+  loading.value = true;
+  loadError.value = false;
+
   try {
     const response = await axios.get<Article>(`/articles/${id}`);
     article.value = response.data;
   } catch (error) {
     console.error("Failed to load article:", error);
+    const status = (error as { response?: { status?: number } }).response?.status;
+    loadError.value = status !== 404;
+  } finally {
+    loading.value = false;
   }
 };
 
@@ -57,10 +86,15 @@ const likeArticle = async () => {
     await fetchLike()
   } catch (error) {
     console.log('Error Liking article:', error)
+    ElMessage.error('点赞失败，请稍后重试');
   }
 };
 
 const fetchLike = async ()=>{
+  if (!authStore.isAuthenticated) {
+    return;
+  }
+
   try{
     const res = await axios.get<Like>(`articles/${id}/like`)
     likes.value = res.data.likes
@@ -69,8 +103,10 @@ const fetchLike = async ()=>{
   }
 }
 
-onMounted(fetchArticle);
-onMounted(fetchLike)
+onMounted(() => {
+  fetchArticle();
+  fetchLike();
+});
 </script>
 
 <style scoped>

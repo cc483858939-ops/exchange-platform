@@ -18,3 +18,12 @@ ai:
   chunk_overlap: 120
   max_chunk_parallelism: 3
   top_n_tags: 5
+
+recommendation:
+  behavior_weights:
+    view: 1
+    like: 4
+  category_weight: 3
+  tag_weight: 2
+  popularity_weight: 0.5
+  freshness_weight: 1
