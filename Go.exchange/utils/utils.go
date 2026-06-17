@@ -26,9 +26,10 @@ func CheckPassword(password string, hash string) bool {
 	return err == nil
 }
 
-func GenerateTokenPair(username string) (accessToken string, refreshToken string, err error) {
+func GenerateTokenPair(userID uint, username string) (accessToken string, refreshToken string, err error) {
 	// 1. 生成 Access Token
 	atClaim := jwt.MapClaims{
+		"user_id":  userID,
 		"username": username,
 		"exp":      time.Now().Add(AccessTokenDuration).Unix(),
 		"type":     "access",
@@ -44,6 +45,7 @@ func GenerateTokenPair(username string) (accessToken string, refreshToken string
 
 	// 2. 生成 Refresh Token
 	rtClaim := jwt.MapClaims{
+		"user_id":  userID,
 		"username": username,
 		"exp":      time.Now().Add(RefreshTokenDuration).Unix(),
 		"type":     "refresh",

@@ -18,7 +18,7 @@ RUN echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # 3. 安装指定版本的 Go 
 
-RUN wget https://golang.google.cn/dl/go1.24.0.linux-amd64.tar.gz -O /tmp/go.tar.gz \
+RUN wget https://golang.google.cn/dl/go1.25.2.linux-amd64.tar.gz -O /tmp/go.tar.gz \
     && rm -rf /usr/local/go \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz

@@ -4,8 +4,8 @@
       <div v-if="loading" class="no-data">文章加载中...</div>
       <div v-else-if="articles && articles.length">
         <el-card v-for="article in articles" :key="article.ID" class="article-card">
-          <h2>{{ article.Title }}</h2>
-          <p>{{ article.Preview }}</p>
+          <h2>{{ article.title }}</h2>
+          <p>{{ article.preview }}</p>
           <el-button text @click="viewDetail(article.ID)">阅读更多</el-button>
         </el-card>
       </div>
@@ -59,7 +59,7 @@ const fetchArticles = async () => {
   }
 };
 
-const viewDetail = (id: string) => {
+const viewDetail = (id: number) => {
   if (!authStore.isAuthenticated) {
     ElMessage.error('请先登录后再阅读文章');
     return;

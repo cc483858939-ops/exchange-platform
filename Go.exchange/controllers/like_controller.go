@@ -4,6 +4,7 @@ import (
 	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,110 +13,290 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v7"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var likeScript = redis.NewScript(`
-    if redis.call("EXISTS",KEYS[1])== 0 then
-	return -1
+	if redis.call("EXISTS",KEYS[1]) == 0 then
+		redis.call("SET",KEYS[1],ARGV[3])
 	end
-	local Newcount = redis.call("INCR",KEYS[1])
-	redis.call("EXPIRE",KEYS[1],ARGV[1])
-	redis.call("SADD",KEYS[2],ARGV[2])
+	local Current = tonumber(redis.call("GET",KEYS[1]) or "0")
+	local Delta = tonumber(ARGV[1])
+	local Newcount = Current + Delta
+	if Newcount < 0 then
+		Newcount = 0
+	end
+	redis.call("SET",KEYS[1],Newcount)
+	redis.call("EXPIRE",KEYS[1],ARGV[2])
+	redis.call("SADD",KEYS[2],ARGV[4])
 	return Newcount
 	`)
 
+type articleLikeMutationResult struct {
+	Likes            int64
+	Liked            bool
+	ChangedToLiked   bool
+	ChangedToUnliked bool
+}
+
+type articleLikeStateResult struct {
+	Likes int64
+	Liked bool
+}
+
+var setArticleLikedState = setArticleLikedStateWithDB
+var loadArticleLikeState = loadArticleLikeStateFromDB
+var applyArticleLikeDelta = applyArticleLikeDeltaWithRedis
+
 func LikeArticle(ctx *gin.Context) {
-	articleID := ctx.Param("id")
-
-	likeKey := fmt.Sprintf(consts.ArticleLikeKey, articleID) //先查询数据库以免缓存未命中直接加一导致赞数丢失
-	// 尝试执行 Lua 脚本
-	// KEYS: [likeKey, ArticleDirtySetKey]
-	// ARGV: [ExpireSeconds, articleID]
-	result, err := likeScript.Run(global.RedisDB,
-		[]string{likeKey, consts.ArticleDirtySetKey},
-		consts.ArticleLikeExpire.Seconds(),
-		articleID).Int()
-
-	if err != nil && err != redis.Nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	articleID, ok := articleIDFromContext(ctx)
+	if !ok {
 		return
 	}
 
-	// 结果为 -1 说明 Redis 中 key 不存在（缓存击穿/未命中），需要回源查数据库
-	if result == -1 {
-		var article models.Article
-		if err := global.Db.Select("like_count").First(&article, articleID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				ctx.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
-				return
-			}
-			global.Db.Logger.Error(ctx, "查询文章点赞数失败: ", err)
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
-			return
-		}
-
-		// 查到库了，写入 Redis 并执行 +1 操作
-
-		// 更好的做法是：Set 进去后，直接手动 +1 并加入脏集合（可以用 Pipeline）
-
-		newCount := article.LikeCount + 1
-		pipe := global.RedisDB.Pipeline()
-		pipe.Set(likeKey, newCount, consts.ArticleLikeExpire) // 直接存 +1 后的值
-		pipe.SAdd(consts.ArticleDirtySetKey, articleID)
-		_, pipeErr := pipe.Exec()
-
-		if pipeErr != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
-			return
-		}
-
-		// 更新 result 用于返回
-		result = int(newCount)
+	userID, ok := userIDFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user"})
+		return
 	}
 
-	if idUint64, parseErr := strconv.ParseUint(articleID, 10, 64); parseErr == nil {
-		recordArticleBehaviorFromContext(ctx, uint(idUint64), ArticleBehaviorActionLike)
+	result, err := setArticleLikedState(userID, articleID, true)//改变点赞状态，并增加点赞数
+	if err != nil {
+		writeArticleLikeError(ctx, err)
+		return
+	}
+
+	if result.ChangedToLiked {
+		recordArticleBehaviorFromContext(ctx, articleID, ArticleBehaviorActionLike)//记录用户点赞行为
+	}
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "Successfully liked the article",
+		"likes":   result.Likes,
+		"liked":   result.Liked,
+	})
+}
+
+func UnlikeArticle(ctx *gin.Context) {
+	articleID, ok := articleIDFromContext(ctx)
+	if !ok {
+		return
+	}
+
+	userID, ok := userIDFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user"})
+		return
+	}
+
+	result, err := setArticleLikedState(userID, articleID, false)//改变点赞状态，并减少点赞数
+	if err != nil {
+		writeArticleLikeError(ctx, err)
+		return
+	}
+
+	if result.ChangedToUnliked {
+		if err := archiveArticleBehavior(userID, articleID, ArticleBehaviorActionLike); err != nil {//记录用户取消点赞行为
+			articleBehaviorLogError(ctx, "failed to archive article like behavior", err)
+		}
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{
-		"message": "Successfully liked the article",
-		"likes":   result,
+		"message": "Successfully unliked the article",
+		"likes":   result.Likes,
+		"liked":   result.Liked,
 	})
 }
+
 func GetArticleLikes(ctx *gin.Context) {
-	articleID := ctx.Param("id")
-	likeKey := fmt.Sprintf(consts.ArticleLikeKey, articleID)
+	articleID, ok := articleIDFromContext(ctx)
+	if !ok {
+		return
+	}
+
+	userID, _ := userIDFromContext(ctx)
+	result, err := loadArticleLikeState(userID, articleID)
+	if err != nil {
+		writeArticleLikeError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"likes": result.Likes, "liked": result.Liked})
+}//获取点赞数
+
+func articleIDFromContext(ctx *gin.Context) (uint, bool) {
+	idUint64, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil || idUint64 == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid article id"})
+		return 0, false
+	}
+	return uint(idUint64), true
+}
+
+func writeArticleLikeError(ctx *gin.Context, err error) {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
+		return
+	}
+	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+}
+
+func setArticleLikedStateWithDB(userID uint, articleID uint, liked bool) (articleLikeMutationResult, error) {
+	var result articleLikeMutationResult
+	if global.Db == nil {
+		return result, errors.New("database is not initialized")
+	}
+
+	err := global.Db.Transaction(func(tx *gorm.DB) error {
+		var article models.Article
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id", "like_count").
+			First(&article, articleID).Error; err != nil {
+			return err
+		}
+
+		var reaction models.ArticleReaction
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("user_id = ? AND article_id = ?", userID, articleID).
+			First(&reaction).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		wasLiked := err == nil && reaction.Reaction == models.ArticleReactionLike
+		var delta int64
+
+		switch {
+		case liked && !wasLiked:
+			reaction = models.ArticleReaction{
+				UserID:    userID,
+				ArticleID: articleID,
+				Reaction:  models.ArticleReactionLike,
+			}
+			if err == nil {
+				if err := tx.Model(&reaction).Update("reaction", models.ArticleReactionLike).Error; err != nil {
+					return err
+				}
+			} else if err := tx.Create(&reaction).Error; err != nil {
+				return err
+			}
+			delta = 1
+		case !liked && wasLiked:
+			if err := tx.Delete(&reaction).Error; err != nil {
+				return err
+			}
+			delta = -1
+		}
+
+		likes := int64(0)
+		if delta != 0 {
+			nextLikes, err := applyArticleLikeDelta(articleID, delta, article.LikeCount)
+			if err != nil {
+				return err
+			}
+			likes = nextLikes
+		} else {
+			currentLikes, err := getArticleLikeCount(articleID)
+			if err != nil {
+				return err
+			}
+			likes = currentLikes
+		}
+
+		result = articleLikeMutationResult{
+			Likes:            likes,
+			Liked:            liked,
+			ChangedToLiked:   !wasLiked && liked,
+			ChangedToUnliked: wasLiked && !liked,
+		}
+		return nil
+	})
+	return result, err
+}
+
+func loadArticleLikeStateFromDB(userID uint, articleID uint) (articleLikeStateResult, error) {
+	likes, err := getArticleLikeCount(articleID)
+	if err != nil {
+		return articleLikeStateResult{}, err
+	}
+
+	result := articleLikeStateResult{Likes: likes}
+	if userID == 0 {
+		return result, nil
+	}
+
+	var reaction models.ArticleReaction
+	err = global.Db.
+		Where("user_id = ? AND article_id = ? AND reaction = ?", userID, articleID, models.ArticleReactionLike).
+		First(&reaction).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return result, nil
+		}
+		return result, err
+	}
+	result.Liked = true
+	return result, nil
+}
+
+func getArticleLikeCount(articleID uint) (int64, error) {
+	if global.Db == nil {
+		return 0, errors.New("database is not initialized")
+	}
+	if global.RedisDB == nil {
+		var article models.Article
+		if err := global.Db.Select("like_count").First(&article, articleID).Error; err != nil {
+			return 0, err
+		}
+		return int64(article.LikeCount), nil
+	}
+
+	articleIDStr := strconv.FormatUint(uint64(articleID), 10)
+	likeKey := fmt.Sprintf(consts.ArticleLikeKey, articleIDStr)
 	valStr, err := global.RedisDB.Get(likeKey).Result()
 	var likes int64
 	if err == redis.Nil {
 		var article models.Article
 		if err := global.Db.Select("like_count").First(&article, articleID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				ctx.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
-				return
-			}
-			global.Db.Logger.Error(ctx, "查询文章点赞数失败: ", err)
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
-			return
+			return 0, err
 		}
 		likes = int64(article.LikeCount)
 		global.RedisDB.Set(likeKey, article.LikeCount, consts.ArticleLikeExpire)
 	} else if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		return 0, err
 	} else {
 		// 缓存命中
 		likes, err = strconv.ParseInt(valStr, 10, 64)
 		if err != nil {
 			// 如果 Redis 里的数据因为某种原因坏掉了（比如变成了 "abc"），解析报错
 			// 可以不直接报错，打印日志，去用数据库兜底
-			global.Db.Logger.Error(ctx, "Redis数据异常，解析失败，尝试回源数据库: ", err)
+			global.Db.Logger.Error(context.Background(), "Redis数据异常，解析失败，尝试回源数据库: ", err)
 
 			// 后面可以设计一个兜底机制在这里再查MySQL
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "缓存数据异常"})
-			return
+			return 0, errors.New("缓存数据异常")
 		}
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{"likes": likes})
+	return likes, nil
+}
+
+func applyArticleLikeDeltaWithRedis(articleID uint, delta int64, baselineLikes int64) (int64, error) {
+	if global.RedisDB == nil {
+		return 0, errors.New("redis is not initialized")
+	}
+	if baselineLikes < 0 {
+		baselineLikes = 0
+	}
+
+	articleIDStr := strconv.FormatUint(uint64(articleID), 10)
+	likeKey := fmt.Sprintf(consts.ArticleLikeKey, articleIDStr) //先查询数据库以免缓存未命中直接加一导致赞数丢失
+	result, err := likeScript.Run(global.RedisDB,
+		[]string{likeKey, consts.ArticleDirtySetKey},
+		delta,
+		consts.ArticleLikeExpire.Seconds(),
+		baselineLikes,
+		articleIDStr).Int()
+	if err != nil && err != redis.Nil {
+		return 0, err
+	}
+	return int64(result), nil
 }

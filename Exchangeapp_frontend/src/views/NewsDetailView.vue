@@ -3,7 +3,7 @@
     <el-main>
       <div v-if="loading" class="no-data">文章加载中...</div>
       <el-card v-else-if="article" class="article-detail">
-        <h1>{{ article.Title }}</h1>
+        <h1>{{ article.title }}</h1>
         
         <!-- 【新增】这里开始：显示过期时间 -->
         <div v-if="article.expired_at" class="expire-info">
@@ -11,10 +11,10 @@
         </div>
         <!-- 【新增】结束 -->
 
-        <p class="content">{{ article.Content }}</p>
+        <p class="content">{{ article.content }}</p>
         
         <div class="actions">
-          <el-button type="primary" @click="likeArticle">点赞</el-button>
+          <el-button :type="liked ? 'primary' : 'default'" :disabled="likeSubmitting" @click="likeArticle">{{ liked ? '取消点赞' : '点赞' }}</el-button>
           <span class="likes-count">点赞数: {{ likes }}</span>
         </div>
       </el-card>
@@ -34,6 +34,8 @@ import type { Article, Like } from "../types/Article";
 const article = ref<Article | null>(null);
 const route = useRoute();
 const likes = ref<number>(0)
+const liked = ref(false);
+const likeSubmitting = ref(false);
 const loading = ref(false);
 const loadError = ref(false);
 const authStore = useAuthStore();
@@ -80,13 +82,31 @@ const fetchArticle = async () => {
 };
 
 const likeArticle = async () => {
+  if (likeSubmitting.value) {
+    return;
+  }
+
+  likeSubmitting.value = true;
+  const previousLiked = liked.value;
+  const previousLikes = likes.value;
+  const nextLiked = !previousLiked;
+
+  liked.value = nextLiked;
+  likes.value = Math.max(0, previousLikes + (nextLiked ? 1 : -1));
+
   try {
-    const res = await axios.post<Like>(`articles/${id}/like`)
+    const res = previousLiked
+      ? await axios.delete<Like>(`articles/${id}/like`)
+      : await axios.put<Like>(`articles/${id}/like`)
     likes.value = res.data.likes
-    await fetchLike()
+    liked.value = res.data.liked
   } catch (error) {
+    liked.value = previousLiked;
+    likes.value = previousLikes;
     console.log('Error Liking article:', error)
     ElMessage.error('点赞失败，请稍后重试');
+  } finally {
+    likeSubmitting.value = false;
   }
 };
 
@@ -98,6 +118,7 @@ const fetchLike = async ()=>{
   try{
     const res = await axios.get<Like>(`articles/${id}/like`)
     likes.value = res.data.likes
+    liked.value = res.data.liked
   }catch(error){
     console.log('Error fetching likes:', error)
   }

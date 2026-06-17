@@ -1,29 +1,52 @@
-version: '3.8'
+x-go-service: &go-service
+  image: goexchange-app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  working_dir: /workspace/mf/Go.exchange
+  volumes:
+    - ../../:/workspace:cached
+    - go-mod-cache:/home/vscode/go/pkg/mod
+    - go-build-cache:/home/vscode/.cache/go-build
+  depends_on:
+    - db
+    - redis
+    - kafka
+
 services:
+  api:
+    <<: *go-service
+    command: ["go", "run", "main.go"]
+    environment:
+      APP_RUNTIME_ROLE: api
+    ports:
+      - "3000:3000"
+
+  worker:
+    <<: *go-service
+    command: ["go", "run", "main.go"]
+    environment:
+      APP_RUNTIME_ROLE: worker
+
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *go-service
+    profiles:
+      - devcontainer
     volumes:
       - ../../:/workspace:cached
       - /var/run/docker.sock:/var/run/docker.sock
-    command: sleep infinity
-    ports:
-      - "3000:3000"
-    depends_on:
-      - db
-      - redis
-      - kafka
+    command: ["sleep", "infinity"]
 
   db:
-    image: mysql:8.0
+    image: postgres:16
     environment:
-      MYSQL_ROOT_PASSWORD: "1234"
-      MYSQL_DATABASE: "test"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "1234"
+      POSTGRES_DB: test
     volumes:
-      - mysql-data:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
     ports:
-      - "3306:3306"
+      - "5432:5432"
 
   redis:
     image: "redis:alpine"
@@ -65,7 +88,7 @@ services:
     ports:
       - "9090:9090"
     depends_on:
-      - app
+      - api
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
@@ -82,7 +105,9 @@ services:
       - grafana-data:/var/lib/grafana
 
 volumes:
-  mysql-data:
+  postgres-data:
   redis-data:
   kafka_data:
   grafana-data:
+  go-mod-cache:
+  go-build-cache:

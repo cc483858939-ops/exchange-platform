@@ -8,14 +8,15 @@ import (
 	"errors"
 	"fmt" // 必须引入
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 // SaveRefreshTokenToRedis 将 Refresh Token 存入 Redis
-func SaveRefreshTokenToRedis(username string, token string) error {
-	key := fmt.Sprintf(consts.Refresh, username)
+func SaveRefreshTokenToRedis(userID uint, token string) error {
+	key := fmt.Sprintf(consts.Refresh, strconv.FormatUint(uint64(userID), 10))
 	//  return err 变量，
 	err := global.RedisDB.Set(key, token, utils.RefreshTokenDuration).Err()
 	return err
@@ -45,14 +46,14 @@ func Register(ctx *gin.Context) {
 	}
 
 	// 3. 生成双 Token
-	accessToken, refreshToken, err := utils.GenerateTokenPair(user.Username)
+	accessToken, refreshToken, err := utils.GenerateTokenPair(user.ID, user.Username)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	// 4. 存入 Redis
-	if err := SaveRefreshTokenToRedis(user.Username, refreshToken); err != nil {
+	if err := SaveRefreshTokenToRedis(user.ID, refreshToken); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
 		return
 	}
@@ -94,14 +95,14 @@ func Login(ctx *gin.Context) {
 	}
 
 	// 3. 生成双 Token (匹配 RefreshToken 逻辑)
-	accessToken, refreshToken, err := utils.GenerateTokenPair(user.Username)
+	accessToken, refreshToken, err := utils.GenerateTokenPair(user.ID, user.Username)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	// 4. 存入 Redis
-	if err := SaveRefreshTokenToRedis(user.Username, refreshToken); err != nil {
+	if err := SaveRefreshTokenToRedis(user.ID, refreshToken); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
 		return
 	}
@@ -140,9 +141,14 @@ func RefreshToken(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
 		return
 	}
+	userID, ok := jwtUserIDClaim(claims["user_id"])
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+		return
+	}
 
 	// 3. Redis 校验
-	redisKey := fmt.Sprintf(consts.Refresh, username)
+	redisKey := fmt.Sprintf(consts.Refresh, strconv.FormatUint(uint64(userID), 10))
 	storedToken, err := global.RedisDB.Get(redisKey).Result()
 	if err != nil {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh token expired or logged out"})
@@ -156,14 +162,14 @@ func RefreshToken(ctx *gin.Context) {
 	}
 
 	// 5. 生成新的双 Token (Rolling Update 机制)
-	newAccessToken, newRefreshToken, err := utils.GenerateTokenPair(username)
+	newAccessToken, newRefreshToken, err := utils.GenerateTokenPair(userID, username)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Error generating token"})
 		return
 	}
 
 	// 6. 更新 Redis 中的旧 Token
-	if err := SaveRefreshTokenToRedis(username, newRefreshToken); err != nil {
+	if err := SaveRefreshTokenToRedis(userID, newRefreshToken); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
 		return
 	}
@@ -172,4 +178,24 @@ func RefreshToken(ctx *gin.Context) {
 		"access_token":  newAccessToken,
 		"refresh_token": newRefreshToken,
 	})
+}
+
+func jwtUserIDClaim(value interface{}) (uint, bool) {
+	switch userID := value.(type) {
+	case float64:
+		id := uint(userID)
+		return id, id > 0 && userID == float64(id)
+	case uint:
+		return userID, userID > 0
+	case int:
+		return uint(userID), userID > 0
+	case string:
+		parsed, err := strconv.ParseUint(userID, 10, 64)
+		if err != nil || parsed == 0 {
+			return 0, false
+		}
+		return uint(parsed), true
+	default:
+		return 0, false
+	}
 }

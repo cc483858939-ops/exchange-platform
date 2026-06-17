@@ -21,10 +21,9 @@ const (
 	articleBehaviorRetentionLimit = 200
 )
 
-var recordArticleBehavior = func(username string, articleID uint, action string) error {
-	username = strings.TrimSpace(username)
+var recordArticleBehavior = func(userID uint, articleID uint, action string) error {
 	action = strings.TrimSpace(action)
-	if username == "" || articleID == 0 || action == "" {
+	if userID == 0 || articleID == 0 || action == "" {
 		return nil
 	}
 	if global.Db == nil {
@@ -33,7 +32,7 @@ var recordArticleBehavior = func(username string, articleID uint, action string)
 
 	now := time.Now()
 	behavior := models.ArticleBehavior{
-		Username:   username,
+		UserID:     userID,
 		ArticleID:  articleID,
 		Action:     action,
 		Count:      1,
@@ -43,7 +42,7 @@ var recordArticleBehavior = func(username string, articleID uint, action string)
 
 	if err := global.Db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
-			{Name: "username"},
+			{Name: "user_id"},
 			{Name: "article_id"},
 			{Name: "action"},
 		},
@@ -57,14 +56,14 @@ var recordArticleBehavior = func(username string, articleID uint, action string)
 		return err
 	}
 
-	return enforceArticleBehaviorRetention(username, action)
+	return enforceArticleBehaviorRetention(userID, action)
 }
 
-var loadActiveArticleBehaviorsForRetention = func(username string, action string) ([]models.ArticleBehavior, error) {
+var loadActiveArticleBehaviorsForRetention = func(userID uint, action string) ([]models.ArticleBehavior, error) {
 	var behaviors []models.ArticleBehavior
 	err := global.Db.
 		Select("id,last_seen_at,active").
-		Where("username = ? AND action = ? AND active = ?", username, action, true).
+		Where("user_id = ? AND action = ? AND active = ?", userID, action, true).
 		Find(&behaviors).Error
 	return behaviors, err
 }
@@ -78,12 +77,25 @@ var archiveArticleBehaviorIDs = func(ids []uint) error {
 		Update("active", false).Error
 }
 
-var enforceArticleBehaviorRetention = func(username string, action string) error {
+var archiveArticleBehavior = func(userID uint, articleID uint, action string) error {
+	action = strings.TrimSpace(action)
+	if userID == 0 || articleID == 0 || action == "" {
+		return nil
+	}
+	if global.Db == nil {
+		return errors.New("database is not initialized")
+	}
+	return global.Db.Model(&models.ArticleBehavior{}).
+		Where("user_id = ? AND article_id = ? AND action = ? AND active = ?", userID, articleID, action, true).
+		Update("active", false).Error
+}
+
+var enforceArticleBehaviorRetention = func(userID uint, action string) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
 
-	behaviors, err := loadActiveArticleBehaviorsForRetention(username, action)
+	behaviors, err := loadActiveArticleBehaviorsForRetention(userID, action)
 	if err != nil {
 		return err
 	}
@@ -111,7 +123,7 @@ func articleBehaviorIDsBeyondRetention(behaviors []models.ArticleBehavior, limit
 			return left.LastSeenAt.After(right.LastSeenAt)
 		}
 		return left.ID > right.ID
-	})//按照上次查看时间排序
+	}) //按照上次查看时间排序
 
 	if len(activeBehaviors) <= limit {
 		return nil
@@ -122,7 +134,7 @@ func articleBehaviorIDsBeyondRetention(behaviors []models.ArticleBehavior, limit
 		archiveIDs = append(archiveIDs, behavior.ID)
 	}
 	return archiveIDs
-}//得到超过限度的对应文章，把他的active设为false
+} //得到超过限度的对应文章，把他的active设为false
 
 var articleBehaviorLogError = func(ctx *gin.Context, msg string, err error) {
 	if global.Db != nil {
@@ -131,35 +143,37 @@ var articleBehaviorLogError = func(ctx *gin.Context, msg string, err error) {
 }
 
 func recordArticleBehaviorFromContext(ctx *gin.Context, articleID uint, action string) {
-	username, ok := usernameFromContext(ctx) //从ctx中提取username
+	userID, ok := userIDFromContext(ctx) //从ctx中提取username
 	if !ok {
 		return
 	}
 
-	if err := recordArticleBehavior(username, articleID, action); err != nil { //记录行为
+	if err := recordArticleBehavior(userID, articleID, action); err != nil { //记录行为
 		articleBehaviorLogError(ctx, "failed to record article behavior", err)
 	}
 }
 
-func usernameFromContext(ctx *gin.Context) (string, bool) {
+func userIDFromContext(ctx *gin.Context) (uint, bool) {
 	if ctx == nil {
-		return "", false
+		return 0, false
 	}
 
-	value, exists := ctx.Get("username")
+	value, exists := ctx.Get("user_id")
 	if !exists {
-		return "", false
+		return 0, false
 	}
 
-	username, ok := value.(string)
-	if !ok {
-		return "", false
+	switch userID := value.(type) {
+	case uint:
+		return userID, userID > 0
+	case uint64:
+		return uint(userID), userID > 0
+	case int:
+		return uint(userID), userID > 0
+	case float64:
+		id := uint(userID)
+		return id, id > 0 && userID == float64(id)
+	default:
+		return 0, false
 	}
-
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return "", false
-	}
-
-	return username, true
 }

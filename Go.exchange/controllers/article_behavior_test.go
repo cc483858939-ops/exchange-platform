@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestRecordArticleBehaviorFromContextSkipsWithoutUsername(t *testing.T) {
+func TestRecordArticleBehaviorFromContextSkipsWithoutUserID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	originalRecordArticleBehavior := recordArticleBehavior
@@ -22,7 +22,7 @@ func TestRecordArticleBehaviorFromContextSkipsWithoutUsername(t *testing.T) {
 	}()
 
 	called := false
-	recordArticleBehavior = func(string, uint, string) error {
+	recordArticleBehavior = func(uint, uint, string) error {
 		called = true
 		return nil
 	}
@@ -32,11 +32,11 @@ func TestRecordArticleBehaviorFromContextSkipsWithoutUsername(t *testing.T) {
 	recordArticleBehaviorFromContext(ctx, 7, ArticleBehaviorActionView)
 
 	if called {
-		t.Fatal("expected behavior recording to be skipped without username")
+		t.Fatal("expected behavior recording to be skipped without user_id")
 	}
 }
 
-func TestRecordArticleBehaviorFromContextRecordsTrimmedUsername(t *testing.T) {
+func TestRecordArticleBehaviorFromContextRecordsUserID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	originalRecordArticleBehavior := recordArticleBehavior
@@ -46,11 +46,11 @@ func TestRecordArticleBehaviorFromContextRecordsTrimmedUsername(t *testing.T) {
 		articleBehaviorLogError = originalArticleBehaviorLogError
 	}()
 
-	recordedUsername := ""
+	recordedUserID := uint(0)
 	recordedArticleID := uint(0)
 	recordedAction := ""
-	recordArticleBehavior = func(username string, articleID uint, action string) error {
-		recordedUsername = username
+	recordArticleBehavior = func(userID uint, articleID uint, action string) error {
+		recordedUserID = userID
 		recordedArticleID = articleID
 		recordedAction = action
 		return nil
@@ -58,12 +58,12 @@ func TestRecordArticleBehaviorFromContextRecordsTrimmedUsername(t *testing.T) {
 	articleBehaviorLogError = func(*gin.Context, string, error) {}
 
 	ctx, _ := gin.CreateTestContext(nil)
-	ctx.Set("username", " alice ")
+	ctx.Set("user_id", uint(11))
 
 	recordArticleBehaviorFromContext(ctx, 9, ArticleBehaviorActionLike)
 
-	if recordedUsername != "alice" || recordedArticleID != 9 || recordedAction != ArticleBehaviorActionLike {
-		t.Fatalf("unexpected recorded behavior: username=%q articleID=%d action=%q", recordedUsername, recordedArticleID, recordedAction)
+	if recordedUserID != 11 || recordedArticleID != 9 || recordedAction != ArticleBehaviorActionLike {
+		t.Fatalf("unexpected recorded behavior: userID=%d articleID=%d action=%q", recordedUserID, recordedArticleID, recordedAction)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestRecordArticleBehaviorFromContextLogsRecordErrors(t *testing.T) {
 	}()
 
 	expectedErr := errors.New("db down")
-	recordArticleBehavior = func(string, uint, string) error {
+	recordArticleBehavior = func(uint, uint, string) error {
 		return expectedErr
 	}
 
@@ -88,7 +88,7 @@ func TestRecordArticleBehaviorFromContextLogsRecordErrors(t *testing.T) {
 	}
 
 	ctx, _ := gin.CreateTestContext(nil)
-	ctx.Set("username", "alice")
+	ctx.Set("user_id", uint(11))
 
 	recordArticleBehaviorFromContext(ctx, 9, ArticleBehaviorActionLike)
 

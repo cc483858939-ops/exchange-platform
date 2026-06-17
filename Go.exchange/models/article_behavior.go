@@ -8,7 +8,7 @@ import (
 
 type ArticleBehavior struct {
 	gorm.Model
-	Username   string    `json:"username" gorm:"size:191;not null;uniqueIndex:idx_article_behavior_user_article_action;index:idx_article_behavior_user_action_active_seen,priority:1"`
+	UserID     uint      `json:"user_id" gorm:"not null;index;uniqueIndex:idx_article_behavior_user_article_action;index:idx_article_behavior_user_action_active_seen,priority:1"`
 	ArticleID  uint      `json:"article_id" gorm:"not null;index;uniqueIndex:idx_article_behavior_user_article_action"`
 	Action     string    `json:"action" gorm:"size:32;not null;index;uniqueIndex:idx_article_behavior_user_article_action;index:idx_article_behavior_user_action_active_seen,priority:2"`
 	Count      int64     `json:"count" gorm:"not null;default:0"`

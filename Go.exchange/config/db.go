@@ -5,13 +5,13 @@ import (
 	"log"
 	"time"
 
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 func initDB() {
 	dsn := DatabaseDSN()
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Failed to initialize datebase,got erro:%v", err)
 	}
@@ -25,4 +25,4 @@ func initDB() {
 	global.Db = db
 }
 
-// Reference: https://github.com/go-sql-driver/mysql#dsn-data-source-name
+// Reference: https://github.com/go-gorm/postgres

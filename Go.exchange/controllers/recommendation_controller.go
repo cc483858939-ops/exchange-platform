@@ -97,8 +97,8 @@ func recommendationActionWeight(cfg config.RecommendationConfig, action string) 
 	}
 }
 
-var loadRecommendationBehaviorSignals = func(username string) ([]articleBehaviorSignal, error) {
-	if strings.TrimSpace(username) == "" {
+var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSignal, error) {
+	if userID == 0 {
 		return nil, nil
 	}
 	if global.Db == nil {
@@ -107,7 +107,7 @@ var loadRecommendationBehaviorSignals = func(username string) ([]articleBehavior
 
 	var behaviors []models.ArticleBehavior
 	if err := global.Db.
-		Where("username = ? AND active = ? AND action IN ?", username, true, []string{ArticleBehaviorActionView, ArticleBehaviorActionLike}).
+		Where("user_id = ? AND active = ? AND action IN ?", userID, true, []string{ArticleBehaviorActionView, ArticleBehaviorActionLike}).
 		Find(&behaviors).Error; err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ var loadRecommendationBehaviorSignals = func(username string) ([]articleBehavior
 			continue
 		}
 		seenIDs[behavior.ArticleID] = struct{}{}
-		articleIDs = append(articleIDs, behavior.ArticleID)//得到去重之后的文章id
+		articleIDs = append(articleIDs, behavior.ArticleID) //得到去重之后的文章id
 	}
 	if len(articleIDs) == 0 {
 		return nil, nil
@@ -137,12 +137,12 @@ var loadRecommendationBehaviorSignals = func(username string) ([]articleBehavior
 		Where("id IN ?", articleIDs).
 		Find(&articles).Error; err != nil {
 		return nil, err
-	}//查询文章类型
+	} //查询文章类型
 
 	articleByID := make(map[uint]models.Article, len(articles))
 	for _, article := range articles {
 		articleByID[article.ID] = article
-	}//根据行为里面包含的文章ID可以快速查找到文章的详情
+	} //根据行为里面包含的文章ID可以快速查找到文章的详情
 
 	signals := make([]articleBehaviorSignal, 0, len(behaviors))
 	for _, behavior := range behaviors {
@@ -156,7 +156,7 @@ var loadRecommendationBehaviorSignals = func(username string) ([]articleBehavior
 		})
 	}
 	return signals, nil
-}//包括用户行为和文章类型，和文章的id
+} //包括用户行为和文章类型，和文章的id
 
 var loadRecommendationCandidates = func(excludedArticleIDs map[uint]struct{}, now time.Time) ([]models.Article, error) {
 	if global.Db == nil {
@@ -168,26 +168,26 @@ var loadRecommendationCandidates = func(excludedArticleIDs map[uint]struct{}, no
 		Where("status = ?", consts.ArticleStatusCompleted).
 		Where("expired_at > ? OR expired_at IS NULL", now).
 		Order("created_at desc").
-		Limit(recommendationCandidateCap)//先构建好查询语句模板
+		Limit(recommendationCandidateCap) //先构建好查询语句模板
 
 	excludedIDs := articleIDList(excludedArticleIDs)
 	if len(excludedIDs) > 0 {
 		query = query.Where("id NOT IN ?", excludedIDs)
-	}//排除已经看过的文章
+	} //排除已经看过的文章
 
 	var articles []models.Article
 	return articles, query.Find(&articles).Error
 }
 
 func GetArticleRecommendations(ctx *gin.Context) {
-	username, ok := usernameFromContext(ctx)
+	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing username"})
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
 
 	limit := parseRecommendationLimit(ctx.Query("limit"))
-	signals, err := loadRecommendationBehaviorSignals(username)
+	signals, err := loadRecommendationBehaviorSignals(userID)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -233,7 +233,7 @@ func buildUserInterestProfile(signals []articleBehaviorSignal) userInterestProfi
 		}
 		if signal.Behavior.ArticleID != 0 {
 			profile.InteractedArticleIDs[signal.Behavior.ArticleID] = struct{}{}
-		}//K是对应文章id然后V设为空，好让后面查询的时候不会查到这些文章
+		} //K是对应文章id然后V设为空，好让后面查询的时候不会查到这些文章
 
 		actionWeight, ok := recommendationActionWeight(recommendationCfg, signal.Behavior.Action)
 		if !ok {
@@ -247,8 +247,8 @@ func buildUserInterestProfile(signals []articleBehaviorSignal) userInterestProfi
 			weightedCount = behaviorCountCap
 		}
 		weight := actionWeight * float64(weightedCount)
-//算分
-//分别给文章类型和标签加权
+		//算分
+		//分别给文章类型和标签加权
 		if category := normalizeRecommendationLabel(signal.Article.Category); category != "" {
 			profile.Categories[category] += weight
 		}
@@ -319,7 +319,7 @@ func scoreArticle(profile userInterestProfile, article models.Article, now time.
 		tagMatch*recommendationCfg.TagWeight +
 		math.Log(float64(article.LikeCount)+1)*recommendationCfg.PopularityWeight +
 		freshnessScore(article.CreatedAt, now)*recommendationCfg.FreshnessWeight
-}//根据类型标签热度外加时间权重给出分数
+} //根据类型标签热度外加时间权重给出分数
 
 func freshnessScore(createdAt time.Time, now time.Time) float64 {
 	age := now.Sub(createdAt)
@@ -331,7 +331,7 @@ func freshnessScore(createdAt time.Time, now time.Time) float64 {
 	default:
 		return 0
 	}
-}//根据时间算分
+} //根据时间算分
 
 func normalizeRecommendationLabel(label string) string {
 	return strings.ToLower(strings.TrimSpace(label))
@@ -352,4 +352,4 @@ func articleIDList(set map[uint]struct{}) []uint {
 		return ids[i] < ids[j]
 	})
 	return ids
-}//把文章id转化成数组
+} //把文章id转化成数组

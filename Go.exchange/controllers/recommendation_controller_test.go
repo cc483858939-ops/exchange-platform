@@ -231,9 +231,9 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 	}()
 
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	loadRecommendationBehaviorSignals = func(username string) ([]articleBehaviorSignal, error) {
-		if username != "alice" {
-			t.Fatalf("unexpected username: %q", username)
+	loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSignal, error) {
+		if userID != 11 {
+			t.Fatalf("unexpected userID: %d", userID)
 		}
 		return []articleBehaviorSignal{
 			{
@@ -251,7 +251,7 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("username", "alice")
+	ctx.Set("user_id", uint(11))
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/recommendations/articles?limit=2", nil)
 
 	GetArticleRecommendations(ctx)

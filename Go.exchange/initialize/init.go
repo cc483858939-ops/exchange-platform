@@ -9,7 +9,7 @@ import (
 
 func InitAll() {
 	config.InitConfig()
-	if err := global.Db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleBehavior{}); err != nil {
+	if err := global.Db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleBehavior{}, &models.ArticleReaction{}); err != nil {
 		// 如果这里报错，说明连数据库都连不上或者表建不了，直接让程序退出
 		log.Fatalf("failed to migrate database: %v", err)
 	}
