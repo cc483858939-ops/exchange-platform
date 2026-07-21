@@ -14,6 +14,7 @@
         <router-link :to="{ name: 'CurrencyExchange' }">汇率</router-link>
         <router-link :to="{ name: 'News' }">新闻</router-link>
         <router-link :to="{ name: 'Recommendations' }">推荐</router-link>
+        <router-link v-if="authStore.isAuthenticated" :to="{ name: 'ArticleCreate' }">发布</router-link>
       </nav>
 
       <div class="account-actions">

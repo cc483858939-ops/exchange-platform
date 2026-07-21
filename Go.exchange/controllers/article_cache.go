@@ -50,7 +50,7 @@ func loadArticleList() ([]models.Article, error) {
 		var articles []models.Article
 		// 数据库查询逻辑
 		err := global.Db.
-			Select("id,title,preview,expired_at,created_at,updated_at,deleted_at").
+			Select("id,title,preview,cover_image_url,expired_at,created_at,updated_at,deleted_at").
 			Where("expired_at > ? OR expired_at IS NULL", time.Now()).
 			Order("created_at desc").
 			Find(&articles).Error

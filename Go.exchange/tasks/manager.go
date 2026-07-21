@@ -55,6 +55,7 @@ func recoverOrphanedData() {
 }
 
 func StartAll(ctx context.Context, wg *sync.WaitGroup) {
+	startExchangeRateRefresh(ctx, wg)
 	recoverOrphanedData()
 	startArticleAnalysisWorkers(ctx, wg)
 

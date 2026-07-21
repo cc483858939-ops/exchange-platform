@@ -1,0 +1,12 @@
+# 排除构建产物和依赖，加快 docker build 速度
+node_modules
+dist
+.vite
+
+# 编辑器和系统文件
+.vscode
+.DS_Store
+*.local
+
+# 类型声明（构建期不需要）
+__VLS_types.d.ts

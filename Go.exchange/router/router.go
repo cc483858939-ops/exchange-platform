@@ -36,11 +36,14 @@ func SetupRouter() *gin.Engine {
 
 	api := r.Group("/api")
 	api.GET("/exchangeRates", controllers.GetExchangeRates)
+	api.GET("/exchange/currencies", controllers.GetExchangeCurrencies)
+	api.GET("/exchange/quote", controllers.GetExchangeQuote)
+	api.GET("/files/*objectKey", controllers.GetFile)
 
 	api.Use(middlewares.AuthMiddleWare())
 	{
-		api.POST("/exchangeRates", controllers.CreateExchangeRate)
 		api.GET("/recommendations/articles", controllers.GetArticleRecommendations)
+		api.POST("/uploads/article-cover", controllers.UploadArticleCover)
 		api.POST("/articles", controllers.CreateArticle)
 		api.GET("/articles", controllers.GetArticle)
 		api.GET("/articles/:id", controllers.GetArticleByID)

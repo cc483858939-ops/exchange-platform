@@ -27,3 +27,9 @@ recommendation:
   tag_weight: 2
   popularity_weight: 0.5
   freshness_weight: 1
+storage:
+  endpoint: "minio:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "go-exchange"
+  use_ssl: false

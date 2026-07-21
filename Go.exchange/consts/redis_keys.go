@@ -27,6 +27,10 @@ const (
 	MaxRetryCount = 3
 
 	Refresh = "refresh_token:%s" //用来实现双token
+	// ExchangeRateSnapshotKey stores one provider-backed currency snapshot.
+	// It is deliberately separate from the legacy exchange_rates database table.
+	ExchangeRateSnapshotKey = "exchange:rates:snapshot:v1"
+
 	FetchSafeBatchScript = `
 	local dirty_set = KEYS[1]
 	local processing_set = KEYS[2]

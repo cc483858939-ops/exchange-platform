@@ -1,95 +1,128 @@
-# Go.exchange 
+# Go.exchange
 
-Go.exchange 是一个基于 Go 语言和 Gin 框架开发的高性能后端服务项目，集成了文章管理、点赞系统（Redis 异步缓存与 MySQL 数据同步）以及汇率查询等功能。
+Go.exchange is a Go + Gin backend for article publishing, article reactions, recommendation signals, exchange-rate records, and article-cover file storage. The current local stack uses PostgreSQL, Redis, MinIO, and Docker Compose. Background work is split into a dedicated worker process, and schema changes are run through a one-shot migration job instead of API startup.
 
-## 🛠 技术栈
+## Tech Stack
 
-- **Web 框架**: [Gin](https://gin-gonic.com/) (v1.11.0)
-- **ORM / 数据库**: [GORM](https://gorm.io/) + MySQL 8.0
-- **缓存与异步**: Redis (v7) + Lua 脚本实现高性能并发处理
-- **消息队列**: Kafka ([segmentio/kafka-go](https://github.com/segmentio/kafka-go)) + Kafka-UI
-- **认证授权**: JWT (JSON Web Token)
-- **配置管理**: Viper
-- **部署环境**: Docker & Docker Compose
+- Web framework: Gin
+- ORM / database: GORM + PostgreSQL
+- Cache and async state: Redis + Lua scripts
+- Object storage: MinIO
+- Authentication: JWT access tokens and Redis-backed refresh tokens
+- Background workers: like-count persistence and article analysis workers
+- Observability: Prometheus metrics, Grafana dashboard, health checks, pprof
+- Local orchestration: Docker Compose
 
-## 🚀 核心功能
+Kafka and Kafka UI are present in the local compose file for experiments or future event-driven work, but the current backend request and worker paths mainly use Redis rather than Kafka.
 
-1. **用户认证 (Authentication)**
-   - 用户注册、登录
-   - JWT 令牌刷新机制 (Refresh Token)
+## Runtime Roles
 
-2. **文章管理 (Article Management)**
-   - 发布文章
-   - 获取文章列表及详情
+The same Go application can run different roles through `APP_RUNTIME_ROLE`:
 
-3. **高性能点赞系统 (Like System)**
-   - 使用 Redis 处理海量的高频率点赞并发请求，缓解数据库压力。
-   - 采用后端的异步定时任务 (`sync_likes` Worker) 将 Redis 中的点赞数据通过 Lua 脚本原子性、批量地同步持久化到 MySQL 数据库中（具有 ACK 机制及容错重试处理）。
+- `api`: HTTP API only
+- `worker`: background workers only
+- unset or `all`: API and workers in one process
 
-4. **汇率功能 (Exchange Rates)**
-   - 支持创建和查询汇率信息。
+Normal local development should use the split `api` and `worker` compose services.
 
-## 📂 项目结构
+## Database Migration
+
+Schema migration is intentionally separated from API and worker startup.
+
+- Migration entrypoint: `cmd/migrate`
+- Migration runner: `initialize.RunMigrations()`
+- Compose service: `migrate`
+
+The `api` and `worker` services depend on `migrate` completing successfully. `migrate` is a one-shot container, so `Exited (0)` is the expected successful state.
+
+Manual migration command:
+
+```powershell
+cd D:\code\mf
+docker compose run --rm migrate
+```
+
+## Local Development
+
+Start the common local stack:
+
+```powershell
+cd D:\code\mf
+docker compose up -d api worker db redis kafka minio frontend
+```
+
+Optional observability and admin UI services:
+
+```powershell
+docker compose up -d prometheus grafana kafka-ui
+```
+
+Health check:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/healthz
+```
+
+## Useful Local URLs
+
+- Frontend: `http://127.0.0.1:5173`
+- API health: `http://127.0.0.1:3000/healthz`
+- API readiness: `http://127.0.0.1:3000/readyz`
+- API metrics: `http://127.0.0.1:3000/metrics`
+- Prometheus: `http://127.0.0.1:9090`
+- Grafana: `http://127.0.0.1:3001`
+- MinIO Console: `http://127.0.0.1:9001`
+- Kafka UI: `http://127.0.0.1:8080` when the optional `kafka-ui` service is running
+
+The API and worker both start pprof on port `6060` inside their containers. That port is not currently published to the host in the local compose file.
+
+## Core API Surface
+
+Public endpoints:
+
+- `POST /api/auth/login`
+- `POST /api/auth/register`
+- `POST /api/auth/refresh`
+- `GET /api/exchangeRates`
+- `GET /api/files/*objectKey`
+
+Authenticated endpoints:
+
+- `POST /api/exchangeRates`
+- `GET /api/recommendations/articles`
+- `POST /api/uploads/article-cover`
+- `POST /api/articles`
+- `GET /api/articles`
+- `GET /api/articles/:id`
+- `GET /api/articles/:id/like`
+- `PUT /api/articles/:id/like`
+- `DELETE /api/articles/:id/like`
+
+## Project Layout
 
 ```text
 Go.exchange/
-├── config/           # 配置文件与 Viper 配置加载
-├── consts/           # 全局静态常量、Redis Key 命名规范及 Lua 脚本定义
-├── controllers/      # 接口层 (登录/注册/文章/汇率等 Controller)
-├── core/             # 核心组件 (HTTP 服务启动与优雅退出设计)
-├── global/           # 全局变量 (数据库连接池 db、redis 等)
-├── initialize/       # 系统初始化 (配置、路由、连接池装载)
-├── middlewares/      # 中间件 (JWT Auth 鉴权中间件、CORS 跨域等)
-├── models/           # 数据模型 (MySQL 数据库映射结构)
-├── router/           # 路由配置注册中心
-├── study_kafka/      # Kafka 学习/测试脚本
-├── tasks/            # 异步后台持续运行任务 (如 sync_likes 将 Redis 同步至 DB)
-├── utils/            # 工具类 (加密、Token 颁发等)
-├── main.go           # 服务入口
-└── docker-compose.yml# 依赖环境一键拉起
+|-- cmd/migrate/       # one-shot database migration command
+|-- config/            # config loading and runtime dependency initialization
+|-- consts/            # Redis keys and Lua scripts
+|-- controllers/       # HTTP handlers
+|-- core/              # HTTP server startup and graceful shutdown
+|-- global/            # shared DB, Redis, and MinIO clients
+|-- initialize/        # app initialization and migration runner
+|-- metrics/           # Prometheus metrics middleware and handler
+|-- middlewares/       # JWT auth middleware
+|-- models/            # GORM models
+|-- observability/     # Prometheus and Grafana provisioning
+|-- router/            # route registration
+|-- tasks/             # background workers
+|-- utils/             # JWT and utility helpers
+`-- main.go            # API/worker runtime entrypoint
 ```
 
-## 🐳 环境与依赖安装
+## Design Notes
 
-本项目使用 Docker Compose 进行环境编排，能够一键拉起所需的外部依赖服务（MySQL、Redis、Kafka）。
-
-1. 确保已安装 [Docker](https://www.docker.com/) 和 [Docker Compose](https://docs.docker.com/compose/)。
-2. 启动基础服务（包括 mysql, redis, kafka 等）：
-   ```bash
-   docker-compose up -d
-   ```
-   > 容器提供的端口映射：
-   > - MySQL: 3306 (默认密码 `1234`，库名为 `test`)
-   > - Redis: 6379, 6060
-   > - Kafka: 9094 (外部)，9092 (内部)
-   > - Kafka-UI: 8080 (可视化的 Kafka 面板)
-
-3. 启动 Go 后端服务：
-   ```bash
-   go mod tidy
-   go run main.go
-   ```
-
-## 📄 API 接口概览
-
-### 公共认证接口
-- `POST /api/auth/login` —— 账号登录
-- `POST /api/auth/register` —— 账号注册
-- `POST /api/auth/refresh` —— 刷新访问令牌
-
-### 汇率接口
-- `GET /api/exchangeRates` —— 查询汇率 (免鉴权)
-- `POST /api/exchangeRates` —— 创建汇率 (需鉴权)
-
-### 文章接口 (需鉴权)
-- `GET /api/articles` —— 获取文章列表
-- `GET /api/articles/:id` —— 获取文章详细信息
-- `POST /api/articles` —— 发布新文章
-- `GET /api/articles/:id/like` —— 获取文章当前点赞状态/数量
-- `POST /api/articles/:id/like` —— 针对文章进行点赞操作
-
-## 🛡 开发与设计亮点
-
-- **防惊群效应**: 在后台动态调度任务(`tasks.dynamicLoop`)中加入了休眠退避与随机时间(Random Jitter)的机制，避免了 Redis 出现打点式的瞬时集中冲击以及协程的空转浪费。
-- **原子性取值与消费**: 利用 `Eval` 调用预置的 Lua 脚本批量并原子性获取待处理集合的数据，处理落库完毕后通过清理 `Processing Set` 完成业务的“ACK”。
-- **平滑重启 (Graceful Shutdown)**: 主进程使用 `context.WithCancel` 与 `sync.WaitGroup`进行控制，并在 `core.WaitForShutdown` 捕获系统退出信号(SIGINT/SIGTERM)，进而做到无损切流和确保正在处理中的写库操作安全退出。
+- Redis is the hot path for article like counts; PostgreSQL stores the durable projection.
+- Article list/detail responses are cached in Redis.
+- Article analysis is queued through Redis sets and processed by worker goroutines.
+- Article cover images are stored in MinIO and served through `/api/files/*objectKey`.
+- API and worker processes do not run `AutoMigrate`; schema changes belong to the `migrate` job.

@@ -52,13 +52,14 @@ func TestCreateArticleIgnoresAISystemFieldsAndQueuesPending(t *testing.T) {
 	articleControllerLogError = func(*gin.Context, string, error) {}
 
 	body := map[string]any{
-		"title":    "hello",
-		"content":  "world",
-		"preview":  "preview",
-		"summary":  "malicious",
-		"tags":     []string{"x"},
-		"category": "hack",
-		"status":   "completed",
+		"title":           "hello",
+		"content":         "world",
+		"preview":         "preview",
+		"cover_image_url": "/api/files/article-covers/cover.jpg",
+		"summary":         "malicious",
+		"tags":            []string{"x"},
+		"category":        "hack",
+		"status":          "completed",
 	}
 	payload, _ := json.Marshal(body)
 
@@ -81,8 +82,27 @@ func TestCreateArticleIgnoresAISystemFieldsAndQueuesPending(t *testing.T) {
 	if persisted.Status != consts.ArticleStatusPending {
 		t.Fatalf("unexpected persisted status: %s", persisted.Status)
 	}
+	if persisted.CoverImageURL != "/api/files/article-covers/cover.jpg" {
+		t.Fatalf("unexpected cover image url: %s", persisted.CoverImageURL)
+	}
 	if persisted.Summary != "" || persisted.Category != "" || len(persisted.Tags) != 0 {
 		t.Fatalf("unexpected AI fields in persisted article: %#v", persisted)
+	}
+}
+
+func TestCreateArticleRejectsInvalidCoverImageURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"title":"hello","content":"world","preview":"preview","cover_image_url":"https://example.com/cover.jpg"}`)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	CreateArticle(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: got %d want %d", recorder.Code, http.StatusBadRequest)
 	}
 }
 

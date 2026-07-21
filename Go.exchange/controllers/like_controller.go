@@ -47,6 +47,10 @@ type articleLikeStateResult struct {
 var setArticleLikedState = setArticleLikedStateWithDB
 var loadArticleLikeState = loadArticleLikeStateFromDB
 var applyArticleLikeDelta = applyArticleLikeDeltaWithRedis
+var loadArticleLikeBaseline = loadArticleLikeBaselineFromDB
+var insertArticleLikeReaction = insertArticleLikeReactionWithDB
+var deleteArticleLikeReaction = deleteArticleLikeReactionWithDB
+var loadArticleLikeCount = getArticleLikeCount
 
 func LikeArticle(ctx *gin.Context) {
 	articleID, ok := articleIDFromContext(ctx)
@@ -60,14 +64,14 @@ func LikeArticle(ctx *gin.Context) {
 		return
 	}
 
-	result, err := setArticleLikedState(userID, articleID, true)//改变点赞状态，并增加点赞数
+	result, err := setArticleLikedState(userID, articleID, true) //改变点赞状态，并增加点赞数
 	if err != nil {
 		writeArticleLikeError(ctx, err)
 		return
 	}
 
 	if result.ChangedToLiked {
-		recordArticleBehaviorFromContext(ctx, articleID, ArticleBehaviorActionLike)//记录用户点赞行为
+		recordArticleBehaviorFromContext(ctx, articleID, ArticleBehaviorActionLike) //记录用户点赞行为
 	}
 	ctx.JSON(http.StatusOK, gin.H{
 		"message": "Successfully liked the article",
@@ -88,14 +92,14 @@ func UnlikeArticle(ctx *gin.Context) {
 		return
 	}
 
-	result, err := setArticleLikedState(userID, articleID, false)//改变点赞状态，并减少点赞数
+	result, err := setArticleLikedState(userID, articleID, false) //改变点赞状态，并减少点赞数
 	if err != nil {
 		writeArticleLikeError(ctx, err)
 		return
 	}
 
 	if result.ChangedToUnliked {
-		if err := archiveArticleBehavior(userID, articleID, ArticleBehaviorActionLike); err != nil {//记录用户取消点赞行为
+		if err := archiveArticleBehavior(userID, articleID, ArticleBehaviorActionLike); err != nil { //记录用户取消点赞行为
 			articleBehaviorLogError(ctx, "failed to archive article like behavior", err)
 		}
 	}
@@ -121,7 +125,7 @@ func GetArticleLikes(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"likes": result.Likes, "liked": result.Liked})
-}//获取点赞数
+} //获取点赞数
 
 func articleIDFromContext(ctx *gin.Context) (uint, bool) {
 	idUint64, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
@@ -147,70 +151,98 @@ func setArticleLikedStateWithDB(userID uint, articleID uint, liked bool) (articl
 	}
 
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
-		var article models.Article
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("id", "like_count").
-			First(&article, articleID).Error; err != nil {
-			return err
-		}
-
-		var reaction models.ArticleReaction
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("user_id = ? AND article_id = ?", userID, articleID).
-			First(&reaction).Error
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-
-		wasLiked := err == nil && reaction.Reaction == models.ArticleReactionLike
-		var delta int64
-
-		switch {
-		case liked && !wasLiked:
-			reaction = models.ArticleReaction{
-				UserID:    userID,
-				ArticleID: articleID,
-				Reaction:  models.ArticleReactionLike,
-			}
-			if err == nil {
-				if err := tx.Model(&reaction).Update("reaction", models.ArticleReactionLike).Error; err != nil {
-					return err
-				}
-			} else if err := tx.Create(&reaction).Error; err != nil {
-				return err
-			}
-			delta = 1
-		case !liked && wasLiked:
-			if err := tx.Delete(&reaction).Error; err != nil {
-				return err
-			}
-			delta = -1
-		}
-
-		likes := int64(0)
-		if delta != 0 {
-			nextLikes, err := applyArticleLikeDelta(articleID, delta, article.LikeCount)
-			if err != nil {
-				return err
-			}
-			likes = nextLikes
-		} else {
-			currentLikes, err := getArticleLikeCount(articleID)
-			if err != nil {
-				return err
-			}
-			likes = currentLikes
-		}
-
-		result = articleLikeMutationResult{
-			Likes:            likes,
-			Liked:            liked,
-			ChangedToLiked:   !wasLiked && liked,
-			ChangedToUnliked: wasLiked && !liked,
-		}
-		return nil
+		nextResult, err := setArticleLikedStateInTx(tx, userID, articleID, liked)
+		result = nextResult
+		return err
 	})
 	return result, err
+}
+
+func setArticleLikedStateInTx(tx *gorm.DB, userID uint, articleID uint, liked bool) (articleLikeMutationResult, error) {
+	var result articleLikeMutationResult
+
+	article, err := loadArticleLikeBaseline(tx, articleID)//这里读点赞数，如果redis有缓存的话是不会用的只作baseline
+	if err != nil {
+		return result, err
+	}
+
+	changed := false
+	var delta int64
+
+	if liked {                                                         //这里的liked是传进来的用户想要达到的状态
+		changed, err = insertArticleLikeReaction(tx, userID, articleID)
+		if err != nil {
+			return result, err
+		}
+		if changed {
+			delta = 1
+		}
+	} else {
+		changed, err = deleteArticleLikeReaction(tx, userID, articleID)
+		if err != nil {
+			return result, err
+		}
+		if changed {
+			delta = -1
+		}
+	}
+
+	if delta != 0 {
+		nextLikes, err := applyArticleLikeDelta(articleID, delta, article.LikeCount)
+		if err != nil {
+			return result, err
+		}
+		result.Likes = nextLikes
+	} else {
+		currentLikes, err := loadArticleLikeCount(articleID)
+		if err != nil {
+			return result, err
+		}
+		result.Likes = currentLikes
+	}
+
+	result.Liked = liked
+	result.ChangedToLiked = liked && changed
+	result.ChangedToUnliked = !liked && changed
+	return result, nil
+}
+
+func loadArticleLikeBaselineFromDB(tx *gorm.DB, articleID uint) (models.Article, error) {
+	var article models.Article
+	err := tx.
+		Select("id", "like_count").
+		First(&article, articleID).Error
+	return article, err
+}
+
+func insertArticleLikeReactionWithDB(tx *gorm.DB, userID uint, articleID uint) (bool, error) {
+	reaction := models.ArticleReaction{
+		UserID:    userID,
+		ArticleID: articleID,
+		Reaction:  models.ArticleReactionLike,
+	}
+
+	result := tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "user_id"},
+			{Name: "article_id"},
+		},
+		DoNothing: true,
+	}).Create(&reaction)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+func deleteArticleLikeReactionWithDB(tx *gorm.DB, userID uint, articleID uint) (bool, error) {
+	result := tx.
+		Where("user_id = ? AND article_id = ?", userID, articleID).
+		Delete(&models.ArticleReaction{})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func loadArticleLikeStateFromDB(userID uint, articleID uint) (articleLikeStateResult, error) {
@@ -271,7 +303,6 @@ func getArticleLikeCount(articleID uint) (int64, error) {
 			// 可以不直接报错，打印日志，去用数据库兜底
 			global.Db.Logger.Error(context.Background(), "Redis数据异常，解析失败，尝试回源数据库: ", err)
 
-			// 后面可以设计一个兜底机制在这里再查MySQL
 			return 0, errors.New("缓存数据异常")
 		}
 	}

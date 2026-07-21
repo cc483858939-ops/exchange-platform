@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -76,6 +77,107 @@ func RedisMinIdleConns() int {
 	return envInt("REDIS_MIN_IDLE_CONNS", 50)
 }
 
+func StorageEndpoint() string {
+	if endpoint := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	if AppConfig != nil && strings.TrimSpace(AppConfig.Storage.Endpoint) != "" {
+		return strings.TrimSpace(AppConfig.Storage.Endpoint)
+	}
+	return "minio:9000"
+}
+
+func StorageAccessKey() string {
+	if accessKey := strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")); accessKey != "" {
+		return accessKey
+	}
+	if AppConfig != nil && strings.TrimSpace(AppConfig.Storage.AccessKey) != "" {
+		return strings.TrimSpace(AppConfig.Storage.AccessKey)
+	}
+	return "minioadmin"
+}
+
+func StorageSecretKey() string {
+	if secretKey := strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")); secretKey != "" {
+		return secretKey
+	}
+	if AppConfig != nil && strings.TrimSpace(AppConfig.Storage.SecretKey) != "" {
+		return strings.TrimSpace(AppConfig.Storage.SecretKey)
+	}
+	return "minioadmin"
+}
+
+func StorageBucket() string {
+	if bucket := strings.TrimSpace(os.Getenv("MINIO_BUCKET")); bucket != "" {
+		return bucket
+	}
+	if AppConfig != nil && strings.TrimSpace(AppConfig.Storage.Bucket) != "" {
+		return strings.TrimSpace(AppConfig.Storage.Bucket)
+	}
+	return "go-exchange"
+}
+
+func StorageUseSSL() bool {
+	if raw := strings.TrimSpace(os.Getenv("MINIO_USE_SSL")); raw != "" {
+		return envBool("MINIO_USE_SSL", false)
+	}
+	if AppConfig != nil {
+		return AppConfig.Storage.UseSSL
+	}
+	return false
+}
+
+// ExchangeRateEndpoint is configured by environment variable so deployments
+// can switch providers without putting credentials in config.yml.
+func ExchangeRateEndpoint() string {
+	if endpoint := strings.TrimSpace(os.Getenv("EXCHANGE_RATE_API_URL")); endpoint != "" {
+		return endpoint
+	}
+	return "https://api.frankfurter.dev/v2/rates"
+}
+
+func ExchangeRateProvider() string {
+	if provider := strings.TrimSpace(os.Getenv("EXCHANGE_RATE_PROVIDER")); provider != "" {
+		return strings.ToUpper(provider)
+	}
+	return "ECB"
+}
+
+func ExchangeRateBaseCurrency() string {
+	if currency := strings.TrimSpace(os.Getenv("EXCHANGE_RATE_BASE")); currency != "" {
+		return strings.ToUpper(currency)
+	}
+	return "EUR"
+}
+
+func ExchangeRateRefreshInterval() time.Duration {
+	return envDuration("EXCHANGE_RATE_REFRESH_INTERVAL", 15*time.Minute)
+}
+
+func ExchangeRateFreshFor() time.Duration {
+	return envDuration("EXCHANGE_RATE_FRESH_FOR", 30*time.Minute)
+}
+
+func ExchangeRateMaxStale() time.Duration {
+	return envDuration("EXCHANGE_RATE_MAX_STALE", 24*time.Hour)
+}
+
+func ExchangeRateRequestTimeout() time.Duration {
+	return envDuration("EXCHANGE_RATE_REQUEST_TIMEOUT", 8*time.Second)
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
 func envInt(key string, fallback int) int {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -86,4 +188,18 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envBool(key string, fallback bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch raw {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	case "":
+		return fallback
+	default:
+		return fallback
+	}
 }

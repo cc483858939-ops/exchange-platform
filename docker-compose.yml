@@ -1,23 +1,40 @@
-# Deprecated: this compose file was moved to D:/code/mf/docker-compose.yml.
-# Prefer: cd D:/code/mf && docker compose up -d
-# Running both old and new compose files can cause port and container conflicts.
+# Full-stack development compose file.
+# Root directory: D:/code/mf
+# Usage: cd D:/code/mf && docker compose up -d
 
 x-go-service: &go-service
   image: goexchange-app
   build:
-    context: .
+    context: ./Go.exchange
     dockerfile: Dockerfile
   working_dir: /workspace/mf/Go.exchange
   volumes:
-    - ../../:/workspace:cached
+    - ./:/workspace/mf:cached
     - go-mod-cache:/home/vscode/go/pkg/mod
     - go-build-cache:/home/vscode/.cache/go-build
   depends_on:
     - db
     - redis
     - kafka
+    - minio
 
 services:
+  frontend:
+    build:
+      context: ./Exchangeapp_frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./Exchangeapp_frontend:/app:cached
+      - /app/node_modules
+    depends_on:
+      - api
+    environment:
+      - NODE_ENV=development
+      - API_URL=http://api:3000
+    restart: unless-stopped
+
   migrate:
     <<: *go-service
     command: ["go", "run", "./cmd/migrate"]
@@ -35,6 +52,8 @@ services:
         condition: service_started
       kafka:
         condition: service_started
+      minio:
+        condition: service_started
     environment:
       APP_RUNTIME_ROLE: api
     ports:
@@ -50,6 +69,8 @@ services:
         condition: service_started
       kafka:
         condition: service_started
+      minio:
+        condition: service_started
     environment:
       APP_RUNTIME_ROLE: worker
 
@@ -58,7 +79,7 @@ services:
     profiles:
       - devcontainer
     volumes:
-      - ../../:/workspace:cached
+      - ./:/workspace/mf:cached
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["sleep", "infinity"]
 
@@ -77,14 +98,29 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   redis:
-    image: "redis:alpine"
+    image: redis:alpine
     ports:
       - "6379:6379"
       - "6060:6060"
     volumes:
       - redis-data:/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
 
   kafka:
     image: bitnamilegacy/kafka:latest
@@ -101,6 +137,7 @@ services:
       - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
     volumes:
       - kafka_data:/bitnami/kafka
+    restart: unless-stopped
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -112,6 +149,7 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:latest
@@ -120,7 +158,8 @@ services:
     depends_on:
       - api
     volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./Go.exchange/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
@@ -129,15 +168,31 @@ services:
     depends_on:
       - prometheus
     volumes:
-      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./Go.exchange/observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./Go.exchange/observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./Go.exchange/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
+    restart: unless-stopped
 
 volumes:
   postgres-data:
+    external: true
+    name: goexchange_postgres-data
   redis-data:
+    external: true
+    name: goexchange_redis-data
   kafka_data:
+    external: true
+    name: goexchange_kafka_data
   grafana-data:
+    external: true
+    name: goexchange_grafana-data
   go-mod-cache:
+    external: true
+    name: goexchange_go-mod-cache
   go-build-cache:
+    external: true
+    name: goexchange_go-build-cache
+  minio-data:
+    external: true
+    name: mf_minio-data

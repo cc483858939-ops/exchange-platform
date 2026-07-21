@@ -3,6 +3,7 @@ package controllers
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"Go.exchange/consts"
@@ -15,10 +16,11 @@ import (
 
 // createArticleRequest 只接收创建文章所需字段，避免客户端伪造 AI 结果字段。
 type createArticleRequest struct {
-	Title     string     `json:"title" binding:"required"`
-	Content   string     `json:"content" binding:"required"`
-	Preview   string     `json:"preview" binding:"required"`
-	ExpiredAt *time.Time `json:"expired_at"`
+	Title         string     `json:"title" binding:"required"`
+	Content       string     `json:"content" binding:"required"`
+	Preview       string     `json:"preview" binding:"required"`
+	ExpiredAt     *time.Time `json:"expired_at"`
+	CoverImageURL string     `json:"cover_image_url"`
 }
 
 var createArticleRecord = func(article *models.Article) error {
@@ -42,6 +44,20 @@ var articleControllerLogError = func(ctx *gin.Context, msg string, err error) {
 	}
 }
 
+func normalizeArticleCoverImageURL(raw string) (string, error) {
+	coverImageURL := strings.TrimSpace(raw)
+	if coverImageURL == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(coverImageURL, "/api/files/article-covers/") {
+		return "", errors.New("invalid cover_image_url")
+	}
+	if strings.Contains(coverImageURL, "..") || strings.ContainsAny(coverImageURL, "\r\n") {
+		return "", errors.New("invalid cover_image_url")
+	}
+	return coverImageURL, nil
+}
+
 func CreateArticle(ctx *gin.Context) {
 	var req createArticleRequest
 	if err := ctx.ShouldBind(&req); err != nil {
@@ -49,13 +65,20 @@ func CreateArticle(ctx *gin.Context) {
 		return
 	}
 
+	coverImageURL, err := normalizeArticleCoverImageURL(req.CoverImageURL)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	// 文章创建时先落库，AI 相关字段统一由异步链路补齐。
 	article := models.Article{
-		Title:     req.Title,
-		Content:   req.Content,
-		Preview:   req.Preview,
-		ExpiredAt: req.ExpiredAt,
-		Status:    consts.ArticleStatusPending,
+		Title:         req.Title,
+		Content:       req.Content,
+		Preview:       req.Preview,
+		ExpiredAt:     req.ExpiredAt,
+		CoverImageURL: coverImageURL,
+		Status:        consts.ArticleStatusPending,
 	}
 
 	if err := createArticleRecord(&article); err != nil {

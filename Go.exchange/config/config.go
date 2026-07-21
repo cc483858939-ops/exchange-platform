@@ -33,6 +33,14 @@ type RecommendationConfig struct {
 	FreshnessWeight  float64                       `mapstructure:"freshness_weight"`
 }
 
+type StorageConfig struct {
+	Endpoint  string `mapstructure:"endpoint"`
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+	Bucket    string `mapstructure:"bucket"`
+	UseSSL    bool   `mapstructure:"use_ssl"`
+}
+
 type Config struct {
 	App struct {
 		Name string
@@ -45,11 +53,24 @@ type Config struct {
 	}
 	AI             AIConfig
 	Recommendation RecommendationConfig
+	Storage        StorageConfig
 }
 
 var AppConfig *Config
 
 func InitConfig() {
+	LoadConfig()
+	InitDB()
+	initRedis()
+	initStorage()
+}
+
+func InitDatabaseConfig() {
+	LoadConfig()
+	InitDB()
+}
+
+func LoadConfig() {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yml")
 	viper.AddConfigPath("./config")
@@ -60,6 +81,8 @@ func InitConfig() {
 	if err := viper.Unmarshal(AppConfig); err != nil {
 		log.Fatalf("Unable to decode into struct: %v", err)
 	}
+}
+
+func InitDB() {
 	initDB()
-	initRedis()
 }
