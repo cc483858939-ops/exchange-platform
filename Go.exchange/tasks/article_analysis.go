@@ -2,229 +2,358 @@ package tasks
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
 	"log"
-	"strconv"
+	"os"
 	"sync"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/consts"
 	"Go.exchange/controllers"
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
-	"github.com/go-redis/redis/v7"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
-	// 先用小并发保守跑，避免第一次接入就把模型接口打满。
-	articleAnalysisWorkerCount = 2
-	// 每次只取 1 个文章 ID，先把状态流转和失败处理做稳。
-	articleAnalysisBatchSize = 1
+	articleAnalysisWorkerCount       = 2
+	articleAnalysisDispatchBatchSize = 50
 )
 
 var newArticleAnalyzer = func() (ArticleAnalyzer, error) {
 	return NewEINOArticleAnalysisAgent(config.AppConfig.AI)
 }
 
-var loadArticleForAnalysis = func(id uint) (models.Article, error) {
-	var article models.Article
-	err := global.Db.Select("id", "title", "preview", "content").First(&article, id).Error
-	return article, err
-}
-
-var updateArticleAnalysisStatus = func(id uint, status string) error {
-	return global.Db.Model(&models.Article{}).Where("id = ?", id).Update("status", status).Error
-}
-
-var saveArticleAnalysisResult = func(id uint, result ArticleAnalysisResult) error {
-	return global.Db.Model(&models.Article{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"summary":  result.Summary,
-		"tags":     result.Tags,
-		"category": result.Category,
-		"status":   consts.ArticleStatusCompleted,
-	}).Error
-}
-
-var ackArticleAnalysisTask = func(articleID uint) error {
-	return global.RedisDB.SRem(consts.ArticleAnalysisProcessingSetKey, articleID).Err()
-}
-
 var invalidateArticleDetailCache = controllers.InvalidateArticleDetailCacheByID
 
 func startArticleAnalysisWorkers(ctx context.Context, wg *sync.WaitGroup) {
-	recoverOrphanedArticleAnalysisData()
-
+	startArticleAnalysisDispatcher(ctx, wg)
 	for i := 0; i < articleAnalysisWorkerCount; i++ {
 		wg.Add(1)
-		go articleAnalysisLoop(ctx, wg)
+		go func(workerNumber int) {
+			defer wg.Done()
+			runArticleAnalysisConsumerWithRetry(ctx, fmt.Sprintf("%s-analysis-%d", workerIdentity(), workerNumber))
+		}(i + 1)
 	}
-	log.Printf("[Task] started %d article analysis workers", articleAnalysisWorkerCount)
+	log.Printf("[ArticleAnalysis] started %d Kafka consumers", articleAnalysisWorkerCount)
 }
 
-func recoverOrphanedArticleAnalysisData() {
-	// 服务异常退出时，processing_set 里可能残留未 ACK 的文章 ID。
-	// 启动时把它们并回 dirty_set，保证这些任务还能被重新消费。
-	count, err := global.RedisDB.SCard(consts.ArticleAnalysisProcessingSetKey).Result()
-	if err != nil {
-		log.Printf("[Task] [ArticleAnalysis Recover] failed to read processing set: %v", err)
-		return
-	}
-	if count == 0 {
-		return
-	}
-
-	err = global.RedisDB.SUnionStore(
-		consts.ArticleAnalysisDirtySetKey,
-		consts.ArticleAnalysisDirtySetKey,
-		consts.ArticleAnalysisProcessingSetKey,
-	).Err()
-	if err != nil {
-		log.Printf("[Task] [ArticleAnalysis Recover] failed to merge processing set back to dirty set: %v", err)
-		return
-	}
-
-	global.RedisDB.Del(consts.ArticleAnalysisProcessingSetKey)
-	log.Printf("[Task] [ArticleAnalysis Recover] moved %d orphaned ids back to dirty set", count)
+func startArticleAnalysisDispatcher(ctx context.Context, wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			if err := recoverExpiredArticleAnalysisLeases(time.Now().UTC()); err != nil {
+				log.Printf("[ArticleAnalysis] recover expired leases: %v", err)
+			}
+			if err := dispatchDueArticleAnalysisJobs(time.Now().UTC()); err != nil {
+				log.Printf("[ArticleAnalysis] dispatch due jobs: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }
 
-func articleAnalysisLoop(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	// 配置缺失时直接停掉当前 worker，避免把整个服务启动打挂。
-	analyzer, err := newArticleAnalyzer()
-	if err != nil {
-		log.Printf("[Task] article analysis worker disabled: %v", err)
-		return
-	}
-
+func runArticleAnalysisConsumerWithRetry(ctx context.Context, workerID string) {
 	for {
+		runArticleAnalysisConsumer(ctx, workerID)
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("[ArticleAnalysis] consumer %s stopped; retrying in 2s", workerID)
 		select {
 		case <-ctx.Done():
 			return
-		default:
+		case <-time.After(2 * time.Second):
 		}
+	}
+}
+func runArticleAnalysisConsumer(ctx context.Context, workerID string) {
+	analyzer, err := newArticleAnalyzer()
+	if err != nil {
+		log.Printf("[ArticleAnalysis] consumer disabled: %v", err)
+		return
+	}
 
-		ids, err := fetchArticleAnalysisBatch()
+	reader, err := eventing.NewKafkaReader(config.AppConfig.Kafka, config.AppConfig.Kafka.ArticleAnalysisTopic, config.AppConfig.Kafka.ArticleAnalysisGroupID)
+	if err != nil {
+		log.Printf("[ArticleAnalysis] create Kafka reader: %v", err)
+		return
+	}
+	articleAnalysisConsumers.Add(1)
+	defer articleAnalysisConsumers.Add(-1)
+	defer reader.Close()
+
+	for {
+		message, err := reader.FetchMessage(ctx)
 		if err != nil {
-			log.Printf("[Task] fetch article analysis batch failed: %v", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		if len(ids) == 0 {
-			time.Sleep(time.Second)
-			continue
+			if ctx.Err() == nil {
+				log.Printf("[ArticleAnalysis] fetch Kafka message: %v", err)
+			}
+			return
 		}
 
-		for _, id := range ids {
-			processArticleAnalysisTask(ctx, analyzer, id)
+		event, err := eventing.DecodeEnvelope(message.Value)
+		if err != nil {
+			log.Printf("[ArticleAnalysis] discard malformed Kafka message: %v", err)
+		} else if event.Type == eventing.EventTypeArticleAnalysisRequested {
+			if err := processArticleAnalysisEvent(ctx, analyzer, workerID, event); err != nil {
+				log.Printf("[ArticleAnalysis] handle event: %v", err)
+				return
+			}
+		}
+		if err := reader.CommitMessages(ctx, message); err != nil {
+			log.Printf("[ArticleAnalysis] commit Kafka message: %v", err)
+			return
 		}
 	}
 }
 
-func fetchArticleAnalysisBatch() ([]uint, error) {
-	val, err := global.RedisDB.Eval(
-		consts.FetchArticleAnalysisBatchScript,
-		[]string{consts.ArticleAnalysisDirtySetKey, consts.ArticleAnalysisProcessingSetKey},
-		articleAnalysisBatchSize,
-	).Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, nil
-		}
-		return nil, err
+func processArticleAnalysisEvent(ctx context.Context, analyzer ArticleAnalyzer, workerID string, event eventing.Envelope) error {
+	var payload eventing.ArticleAnalysisRequestedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("decode article analysis payload: %w", err)
 	}
 
-	rawList, ok := val.([]interface{})
-	if !ok || len(rawList) == 0 {
-		return nil, nil
+	job, claimed, err := claimArticleAnalysisJob(payload, workerID, time.Now().UTC())
+	if err != nil || !claimed {
+		return err
 	}
 
-	ids := make([]uint, 0, len(rawList))
-	for _, rawID := range rawList {
-		idStr := strconv.FormatInt(toInt64(rawID), 10)
-		idUint64, err := strconv.ParseUint(idStr, 10, 64)
-		if err != nil {
-			log.Printf("[Task] skip invalid article analysis id %v: %v", rawID, err)
-			continue
-		}
-		ids = append(ids, uint(idUint64))
-	}
-	return ids, nil
-}
-
-func processArticleAnalysisTask(ctx context.Context, analyzer ArticleAnalyzer, articleID uint) {
-	defer func() {
-		// v1 不做自动重试，所以成功或失败都要 ACK，避免坏任务在 Redis 里死循环。
-		if err := ackArticleAnalysisTask(articleID); err != nil {
-			log.Printf("[Task] failed to ACK article analysis task %d: %v", articleID, err)
-		}
-	}()
-
-	// 状态刚进入 processing 时就删一次详情缓存，让读请求尽快看到最新状态。
-	if err := updateArticleAnalysisStatus(articleID, consts.ArticleStatusProcessing); err != nil {
-		log.Printf("[Task] failed to mark article %d as processing: %v", articleID, err)
-		return
-	}
-	invalidateArticleDetailCacheBestEffort(articleID)
-
-	article, err := loadArticleForAnalysis(articleID)
-	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Printf("[Task] failed to load article %d for analysis: %v", articleID, err)
-		}
-		markArticleAnalysisFailed(articleID)
-		return
+	var article models.Article
+	if err := global.Db.First(&article, job.ArticleID).Error; err != nil {
+		return finishArticleAnalysisFailure(job, fmt.Errorf("load article: %w", err), time.Now().UTC())
 	}
 
 	result, err := analyzer.Analyze(ctx, article)
 	if err != nil {
-		log.Printf("[Task] failed to analyze article %d: %v", articleID, err)
-		markArticleAnalysisFailed(articleID)
-		return
+		return finishArticleAnalysisFailure(job, err, time.Now().UTC())
 	}
-
-	if err := saveArticleAnalysisResult(articleID, result); err != nil {
-		log.Printf("[Task] failed to save article analysis result for %d: %v", articleID, err)
-		markArticleAnalysisFailed(articleID)
-		return
-	}
-
-	// AI 结果回写成功后再删一次详情缓存，让读请求拿到 summary/tags/category。
-	invalidateArticleDetailCacheBestEffort(articleID)
+	return finishArticleAnalysisSuccess(job, result, time.Now().UTC())
 }
 
-func markArticleAnalysisFailed(articleID uint) {
-	if err := updateArticleAnalysisStatus(articleID, consts.ArticleStatusFailed); err != nil {
-		log.Printf("[Task] failed to mark article %d as failed: %v", articleID, err)
+func claimArticleAnalysisJob(payload eventing.ArticleAnalysisRequestedPayload, workerID string, now time.Time) (models.ArticleAnalysisJob, bool, error) {
+	var claimed models.ArticleAnalysisJob
+	didClaim := false
+	leaseUntil := now.Add(jobLeaseDuration())
+
+	err := global.Db.Transaction(func(tx *gorm.DB) error {
+		var job models.ArticleAnalysisJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&job, payload.JobID).Error; err != nil {
+			return err
+		}
+		if job.ArticleID != payload.ArticleID || job.State != models.ArticleAnalysisJobQueued && job.State != models.ArticleAnalysisJobRetryWait || job.NextAttemptAt.After(now) {
+			return nil
+		}
+
+		updates := map[string]interface{}{
+			"state":         models.ArticleAnalysisJobLeased,
+			"attempt_count": job.AttemptCount + 1,
+			"lease_until":   leaseUntil,
+			"leased_by":     workerID,
+			"last_error":    "",
+		}
+		if err := tx.Model(&models.ArticleAnalysisJob{}).Where("id = ?", job.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Article{}).Where("id = ?", job.ArticleID).Update("analysis_state", consts.ArticleAnalysisStateProcessing).Error; err != nil {
+			return err
+		}
+		job.State = models.ArticleAnalysisJobLeased
+		job.AttemptCount++
+		job.LeaseUntil = &leaseUntil
+		job.LeasedBy = workerID
+		claimed = job
+		didClaim = true
+		return nil
+	})
+	if err == nil && didClaim {
+		invalidateArticleDetailCacheBestEffort(claimed.ArticleID)
 	}
-	invalidateArticleDetailCacheBestEffort(articleID)
+	return claimed, didClaim, err
+}
+
+func finishArticleAnalysisSuccess(job models.ArticleAnalysisJob, result ArticleAnalysisResult, now time.Time) error {
+	return global.Db.Transaction(func(tx *gorm.DB) error {
+		var current models.ArticleAnalysisJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, job.ID).Error; err != nil {
+			return err
+		}
+		if current.State != models.ArticleAnalysisJobLeased {
+			return fmt.Errorf("analysis job %d is no longer leased", current.ID)
+		}
+		if err := tx.Model(&models.Article{}).Where("id = ?", job.ArticleID).Updates(map[string]interface{}{
+			"summary":          result.Summary,
+			"tags":             result.Tags,
+			"category":         result.Category,
+			"analysis_state":   consts.ArticleAnalysisStateCompleted,
+			"analysis_version": consts.ArticleAnalysisVersionV1,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.ArticleAnalysisJob{}).Where("id = ?", current.ID).Updates(map[string]interface{}{
+			"state":       models.ArticleAnalysisJobSucceeded,
+			"lease_until": nil,
+			"leased_by":   "",
+			"finished_at": now,
+			"last_error":  "",
+		}).Error
+	})
+}
+func finishArticleAnalysisFailure(job models.ArticleAnalysisJob, analysisErr error, now time.Time) error {
+	errText := analysisErr.Error()
+	err := global.Db.Transaction(func(tx *gorm.DB) error {
+		var current models.ArticleAnalysisJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, job.ID).Error; err != nil {
+			return err
+		}
+		if current.State != models.ArticleAnalysisJobLeased {
+			return nil
+		}
+
+		if current.AttemptCount >= current.MaxAttempts {
+			if err := tx.Model(&models.ArticleAnalysisJob{}).Where("id = ?", current.ID).Updates(map[string]interface{}{
+				"state":       models.ArticleAnalysisJobDead,
+				"lease_until": nil,
+				"leased_by":   "",
+				"last_error":  errText,
+				"finished_at": now,
+			}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&models.Article{}).Where("id = ?", current.ArticleID).Update("analysis_state", consts.ArticleAnalysisStateFailed).Error; err != nil {
+				return err
+			}
+			deadEvent, err := eventing.NewOutboxEvent(eventing.EventTypeArticleAnalysisDead, "article", fmt.Sprintf("%d", current.ArticleID), eventing.ArticleAnalysisRequestedPayload{
+				JobID:           current.ID,
+				ArticleID:       current.ArticleID,
+				AnalysisVersion: consts.ArticleAnalysisVersionV1,
+			})
+			if err != nil {
+				return err
+			}
+			return eventing.AddOutboxEvent(tx, deadEvent)
+		}
+
+		retryAt := now.Add(articleAnalysisRetryDelay(current.AttemptCount))
+		if err := tx.Model(&models.ArticleAnalysisJob{}).Where("id = ?", current.ID).Updates(map[string]interface{}{
+			"state":              models.ArticleAnalysisJobRetryWait,
+			"next_attempt_at":    retryAt,
+			"lease_until":        nil,
+			"leased_by":          "",
+			"last_error":         errText,
+			"last_dispatched_at": nil,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.Article{}).Where("id = ?", current.ArticleID).Update("analysis_state", consts.ArticleAnalysisStatePending).Error
+	})
+	if err == nil {
+		invalidateArticleDetailCacheBestEffort(job.ArticleID)
+	}
+	return err
+}
+
+func dispatchDueArticleAnalysisJobs(now time.Time) error {
+	return global.Db.Transaction(func(tx *gorm.DB) error {
+		var jobs []models.ArticleAnalysisJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("state IN ? AND next_attempt_at <= ? AND (last_dispatched_at IS NULL OR last_dispatched_at < next_attempt_at)", []string{models.ArticleAnalysisJobQueued, models.ArticleAnalysisJobRetryWait}, now).
+			Order("next_attempt_at ASC").
+			Limit(articleAnalysisDispatchBatchSize).
+			Find(&jobs).Error; err != nil {
+			return err
+		}
+		for _, job := range jobs {
+			event, err := eventing.NewArticleAnalysisRequested(job, consts.ArticleAnalysisVersionV1)
+			if err != nil {
+				return err
+			}
+			if err := eventing.AddOutboxEvent(tx, event); err != nil {
+				return err
+			}
+			if err := tx.Model(&models.ArticleAnalysisJob{}).Where("id = ?", job.ID).Update("last_dispatched_at", now).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func recoverExpiredArticleAnalysisLeases(now time.Time) error {
+	return global.Db.Transaction(func(tx *gorm.DB) error {
+		var expired []models.ArticleAnalysisJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("state = ? AND lease_until < ?", models.ArticleAnalysisJobLeased, now).
+			Find(&expired).Error; err != nil {
+			return err
+		}
+		for _, job := range expired {
+			if err := tx.Model(&models.ArticleAnalysisJob{}).Where("id = ?", job.ID).Updates(map[string]interface{}{
+				"state":              models.ArticleAnalysisJobRetryWait,
+				"next_attempt_at":    now,
+				"lease_until":        nil,
+				"leased_by":          "",
+				"last_dispatched_at": nil,
+				"last_error":         "worker lease expired",
+			}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&models.Article{}).Where("id = ?", job.ArticleID).Update("analysis_state", consts.ArticleAnalysisStatePending).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func articleAnalysisRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Minute << min(attempt-1, 6)
+	if delay > time.Hour {
+		return time.Hour
+	}
+	return delay
+}
+
+func jobLeaseDuration() time.Duration {
+	seconds := config.AppConfig.Kafka.JobLeaseSeconds
+	if seconds <= 0 {
+		seconds = 120
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func workerIdentity() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "worker"
+	}
+	return host
 }
 
 func invalidateArticleDetailCacheBestEffort(articleID uint) {
 	if err := invalidateArticleDetailCache(articleID); err != nil {
-		log.Printf("[Task] failed to invalidate article detail cache for %d: %v", articleID, err)
+		log.Printf("[ArticleAnalysis] invalidate article %d cache: %v", articleID, err)
 	}
 }
 
-func toInt64(value interface{}) int64 {
-	// Lua 返回值在不同路径下可能是 int、int64、uint 或 string，这里统一转成 int64。
-	switch v := value.(type) {
-	case int64:
-		return v
-	case int:
-		return int64(v)
-	case uint64:
-		return int64(v)
-	case uint:
-		return int64(v)
-	case string:
-		parsed, err := strconv.ParseInt(v, 10, 64)
-		if err == nil {
-			return parsed
-		}
+func min(left, right int) int {
+	if left < right {
+		return left
 	}
-	return 0
+	return right
 }

@@ -47,6 +47,13 @@ func startAPI(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGroup
 
 func startWorker(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGroup) {
 	tasks.StartAll(ctx, wg)
+	healthServer := core.StartWorkerHealthServer(config.WorkerHealthAddr(), tasks.WorkerReady)
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = healthServer.Shutdown(shutdownCtx)
+	}()
 	waitForWorkerShutdown(cancel, wg)
 }
 

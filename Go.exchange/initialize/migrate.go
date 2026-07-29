@@ -25,6 +25,9 @@ func RunMigrations() error {
 		if err := tx.AutoMigrate(
 			&models.User{},
 			&models.Article{},
+			&models.ArticleAnalysisJob{},
+			&models.OutboxEvent{},
+			&models.ConsumerInbox{},
 			&models.ArticleBehavior{},
 			&models.ArticleReaction{},
 			&models.ExchangeRate{},
@@ -32,6 +35,13 @@ func RunMigrations() error {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
 
+		if err := tx.Exec(`
+UPDATE article_reaction
+SET liked = (reaction = 1)
+WHERE reaction_version = 0
+`).Error; err != nil {
+			return fmt.Errorf("backfill article reaction tombstones: %w", err)
+		}
 		return nil
 	})
 }

@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -14,145 +13,63 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestCreateArticleIgnoresAISystemFieldsAndQueuesPending(t *testing.T) {
+func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	originalCreateArticleRecord := createArticleRecord
-	originalInvalidateArticleListCache := invalidateArticleListCache
-	originalEnqueueArticleAnalysis := enqueueArticleAnalysis
-	originalMarkArticleStatus := markArticleStatus
-	originalArticleControllerLogError := articleControllerLogError
+	originalCreate := createArticleWithAnalysisJob
+	originalInvalidate := invalidateArticleListCache
 	defer func() {
-		createArticleRecord = originalCreateArticleRecord
-		invalidateArticleListCache = originalInvalidateArticleListCache
-		enqueueArticleAnalysis = originalEnqueueArticleAnalysis
-		markArticleStatus = originalMarkArticleStatus
-		articleControllerLogError = originalArticleControllerLogError
+		createArticleWithAnalysisJob = originalCreate
+		invalidateArticleListCache = originalInvalidate
 	}()
 
-	persisted := models.Article{}
-	createArticleRecord = func(article *models.Article) error {
+	var persisted models.Article
+	createArticleWithAnalysisJob = func(article *models.Article) error {
 		article.ID = 42
 		persisted = *article
 		return nil
 	}
-	cacheInvalidated := false
-	invalidateArticleListCache = func() error {
-		cacheInvalidated = true
-		return nil
-	}
-	queuedID := uint(0)
-	enqueueArticleAnalysis = func(articleID uint) error {
-		queuedID = articleID
-		return nil
-	}
-	markArticleStatus = func(id uint, status string) error {
-		return nil
-	}
-	articleControllerLogError = func(*gin.Context, string, error) {}
-
-	body := map[string]any{
-		"title":           "hello",
-		"content":         "world",
-		"preview":         "preview",
-		"cover_image_url": "/api/files/article-covers/cover.jpg",
-		"summary":         "malicious",
-		"tags":            []string{"x"},
-		"category":        "hack",
-		"status":          "completed",
-	}
-	payload, _ := json.Marshal(body)
+	invalidateArticleListCache = func() error { return nil }
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewReader(payload))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
 
 	if recorder.Code != http.StatusCreated {
-		t.Fatalf("unexpected status: got %d want %d", recorder.Code, http.StatusCreated)
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !cacheInvalidated {
-		t.Fatal("expected article list cache invalidation")
+	if persisted.PublicationState != consts.ArticlePublicationStatePublished {
+		t.Fatalf("publication state=%q", persisted.PublicationState)
 	}
-	if queuedID != 42 {
-		t.Fatalf("unexpected queued article id: %d", queuedID)
+	if persisted.AnalysisState != consts.ArticleAnalysisStatePending {
+		t.Fatalf("analysis state=%q", persisted.AnalysisState)
 	}
-	if persisted.Status != consts.ArticleStatusPending {
-		t.Fatalf("unexpected persisted status: %s", persisted.Status)
-	}
-	if persisted.CoverImageURL != "/api/files/article-covers/cover.jpg" {
-		t.Fatalf("unexpected cover image url: %s", persisted.CoverImageURL)
-	}
-	if persisted.Summary != "" || persisted.Category != "" || len(persisted.Tags) != 0 {
-		t.Fatalf("unexpected AI fields in persisted article: %#v", persisted)
+	if persisted.AnalysisVersion != consts.ArticleAnalysisVersionV1 || persisted.PublishedAt == nil {
+		t.Fatalf("expected clean-cut analysis metadata, got %#v", persisted)
 	}
 }
 
-func TestCreateArticleRejectsInvalidCoverImageURL(t *testing.T) {
+func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	originalCreate := createArticleWithAnalysisJob
+	defer func() { createArticleWithAnalysisJob = originalCreate }()
 
-	body := []byte(`{"title":"hello","content":"world","preview":"preview","cover_image_url":"https://example.com/cover.jpg"}`)
+	called := false
+	createArticleWithAnalysisJob = func(*models.Article) error {
+		called = true
+		return errors.New("must not persist")
+	}
+
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewReader(body))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p","cover_image_url":"https://invalid"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
 
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("unexpected status: got %d want %d", recorder.Code, http.StatusBadRequest)
-	}
-}
-
-func TestCreateArticleMarksFailedWhenEnqueueFails(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	originalCreateArticleRecord := createArticleRecord
-	originalInvalidateArticleListCache := invalidateArticleListCache
-	originalEnqueueArticleAnalysis := enqueueArticleAnalysis
-	originalMarkArticleStatus := markArticleStatus
-	originalArticleControllerLogError := articleControllerLogError
-	defer func() {
-		createArticleRecord = originalCreateArticleRecord
-		invalidateArticleListCache = originalInvalidateArticleListCache
-		enqueueArticleAnalysis = originalEnqueueArticleAnalysis
-		markArticleStatus = originalMarkArticleStatus
-		articleControllerLogError = originalArticleControllerLogError
-	}()
-
-	createArticleRecord = func(article *models.Article) error {
-		article.ID = 7
-		return nil
-	}
-	invalidateArticleListCache = func() error {
-		return nil
-	}
-	enqueueArticleAnalysis = func(articleID uint) error {
-		return errors.New("redis down")
-	}
-	markedID := uint(0)
-	markedStatus := ""
-	markArticleStatus = func(id uint, status string) error {
-		markedID = id
-		markedStatus = status
-		return nil
-	}
-	articleControllerLogError = func(*gin.Context, string, error) {}
-
-	body := []byte(`{"title":"hello","content":"world","preview":"preview"}`)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewReader(body))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	CreateArticle(ctx)
-
-	if recorder.Code != http.StatusCreated {
-		t.Fatalf("unexpected status: got %d want %d", recorder.Code, http.StatusCreated)
-	}
-	if markedID != 7 || markedStatus != consts.ArticleStatusFailed {
-		t.Fatalf("unexpected failed status update: id=%d status=%s", markedID, markedStatus)
+	if recorder.Code != http.StatusBadRequest || called {
+		t.Fatalf("status=%d called=%t", recorder.Code, called)
 	}
 }

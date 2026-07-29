@@ -1,20 +1,23 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/consts"
+	"Go.exchange/eventing"
 	"Go.exchange/global"
+	"Go.exchange/likes"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-// createArticleRequest 只接收创建文章所需字段，避免客户端伪造 AI 结果字段。
 type createArticleRequest struct {
 	Title         string     `json:"title" binding:"required"`
 	Content       string     `json:"content" binding:"required"`
@@ -23,25 +26,45 @@ type createArticleRequest struct {
 	CoverImageURL string     `json:"cover_image_url"`
 }
 
-var createArticleRecord = func(article *models.Article) error {
-	return global.Db.Create(article).Error
-}
+var createArticleWithAnalysisJob = func(article *models.Article) error {
+	if global.Db == nil {
+		return errors.New("database is not initialized")
+	}
+	return global.Db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(article).Error; err != nil {
+			return err
+		}
 
-var markArticleStatus = func(id uint, status string) error {
-	return global.Db.Model(&models.Article{}).Where("id = ?", id).Update("status", status).Error
+		now := time.Now().UTC()
+		maxAttempts := config.AppConfig.Kafka.JobMaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 5
+		}
+		job := models.ArticleAnalysisJob{
+			ArticleID:        article.ID,
+			State:            models.ArticleAnalysisJobQueued,
+			MaxAttempts:      maxAttempts,
+			NextAttemptAt:    now,
+			LastDispatchedAt: &now,
+		}
+		if err := tx.Create(&job).Error; err != nil {
+			return err
+		}
+		event, err := eventing.NewArticleAnalysisRequested(job, article.AnalysisVersion)
+		if err != nil {
+			return err
+		}
+		return eventing.AddOutboxEvent(tx, event)
+	})
 }
 
 var invalidateArticleListCache = InvalidateArticleListCache
-
-// enqueueArticleAnalysis 只负责把文章 ID 放进待分析集合，实际 AI 处理由后台 worker 完成。
-var enqueueArticleAnalysis = func(articleID uint) error {
-	return global.RedisDB.SAdd(consts.ArticleAnalysisDirtySetKey, articleID).Err()
-}
-
-var articleControllerLogError = func(ctx *gin.Context, msg string, err error) {
-	if global.Db != nil {
-		global.Db.Logger.Error(ctx, msg, err)
+var initializeArticleLikeState = func(articleID uint) error {
+	if global.RedisDB == nil {
+		return nil
 	}
+	_, err := likes.NewStore(global.RedisDB).Initialize(context.Background(), articleID, 0, 0, nil)
+	return err
 }
 
 func normalizeArticleCoverImageURL(raw string) (string, error) {
@@ -71,33 +94,28 @@ func CreateArticle(ctx *gin.Context) {
 		return
 	}
 
-	// 文章创建时先落库，AI 相关字段统一由异步链路补齐。
+	now := time.Now().UTC()
 	article := models.Article{
-		Title:         req.Title,
-		Content:       req.Content,
-		Preview:       req.Preview,
-		ExpiredAt:     req.ExpiredAt,
-		CoverImageURL: coverImageURL,
-		Status:        consts.ArticleStatusPending,
+		Title:            req.Title,
+		Content:          req.Content,
+		Preview:          req.Preview,
+		ExpiredAt:        req.ExpiredAt,
+		CoverImageURL:    coverImageURL,
+		PublicationState: consts.ArticlePublicationStatePublished,
+		AnalysisState:    consts.ArticleAnalysisStatePending,
+		AnalysisVersion:  consts.ArticleAnalysisVersionV1,
+		PublishedAt:      &now,
 	}
 
-	if err := createArticleRecord(&article); err != nil {
+	if err := createArticleWithAnalysisJob(&article); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	if err := invalidateArticleListCache(); err != nil {
-		articleControllerLogError(ctx, "failed to invalidate article list cache", err)
+	if err := initializeArticleLikeState(article.ID); err != nil && global.Db != nil {
+		global.Db.Logger.Error(ctx, "failed to initialize article like state", err)
 	}
-
-	if err := enqueueArticleAnalysis(article.ID); err != nil {
-		// 这里不回滚文章创建，只把状态标成 failed，方便后续排查或补偿。
-		articleControllerLogError(ctx, "failed to enqueue article analysis", err)
-		if updateErr := markArticleStatus(article.ID, consts.ArticleStatusFailed); updateErr != nil {
-			articleControllerLogError(ctx, "failed to mark article analysis status as failed", updateErr)
-		} else {
-			article.Status = consts.ArticleStatusFailed
-		}
+	if err := invalidateArticleListCache(); err != nil && global.Db != nil {
+		global.Db.Logger.Error(ctx, "failed to invalidate article list cache", err)
 	}
 
 	ctx.JSON(http.StatusCreated, article)
@@ -118,7 +136,8 @@ func GetArticle(ctx *gin.Context) {
 }
 
 func GetArticleByID(ctx *gin.Context) {
-	article, err := loadArticleDetail(ctx.Param("id"))
+	id := ctx.Param("id")
+	article, err := loadArticleDetail(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})

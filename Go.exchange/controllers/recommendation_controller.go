@@ -163,22 +163,56 @@ var loadRecommendationCandidates = func(excludedArticleIDs map[uint]struct{}, no
 		return nil, errors.New("database is not initialized")
 	}
 
-	query := global.Db.
-		Select("id,title,preview,summary,tags,category,like_count,created_at,updated_at,deleted_at").
-		Where("status = ?", consts.ArticleStatusCompleted).
-		Where("expired_at > ? OR expired_at IS NULL", now).
-		Order("created_at desc").
-		Limit(recommendationCandidateCap) //先构建好查询语句模板
+	selectColumns := "id,title,preview,summary,tags,category,publication_state,analysis_state,like_count,created_at,updated_at,deleted_at"
+	baseQuery := global.Db.
+		Select(selectColumns).
+		Where("publication_state = ?", consts.ArticlePublicationStatePublished).
+		Where("expired_at > ? OR expired_at IS NULL", now)
 
-	excludedIDs := articleIDList(excludedArticleIDs)
+	excludedIDs := articleIDList(excludedArticleIDs)//排除已看文章
 	if len(excludedIDs) > 0 {
-		query = query.Where("id NOT IN ?", excludedIDs)
-	} //排除已经看过的文章
+		baseQuery = baseQuery.Where("id NOT IN ?", excludedIDs)
+	}
 
-	var articles []models.Article
-	return articles, query.Find(&articles).Error
+	var completed []models.Article
+	if err := baseQuery.
+		Where("analysis_state = ?", consts.ArticleAnalysisStateCompleted).
+		Order("created_at desc").
+		Limit(recommendationCandidateCap).
+		Find(&completed).Error; err != nil {
+		return nil, err
+	}
+	if len(completed) >= recommendationCandidateCap {
+		return completed, nil
+	}
+
+	fallbackQuery := global.Db.
+		Select(selectColumns).
+		Where("publication_state = ?", consts.ArticlePublicationStatePublished).
+		Where("analysis_state <> ?", consts.ArticleAnalysisStateCompleted).
+		Where("expired_at > ? OR expired_at IS NULL", now)
+	fallbackExcludedIDs := append(articleIDList(excludedArticleIDs), articleIDs(completed)...)//排除已看文章和已完成分析的文章
+	if len(fallbackExcludedIDs) > 0 {
+		fallbackQuery = fallbackQuery.Where("id NOT IN ?", fallbackExcludedIDs)
+	}
+	var fallback []models.Article
+	if err := fallbackQuery.
+		Order("like_count DESC, created_at DESC").
+		Limit(recommendationCandidateCap - len(completed)).
+		Find(&fallback).Error; err != nil {
+		return nil, err
+	}
+	return append(completed, fallback...), nil
 }
-
+func articleIDs(articles []models.Article) []uint {
+	ids := make([]uint, 0, len(articles))
+	for _, article := range articles {
+		if article.ID != 0 {
+			ids = append(ids, article.ID)
+		}
+	}
+	return ids
+}
 func GetArticleRecommendations(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
@@ -315,10 +349,14 @@ func scoreArticle(profile userInterestProfile, article models.Article, now time.
 	}
 	recommendationCfg := normalizedRecommendationConfig()
 
-	return categoryMatch*recommendationCfg.CategoryWeight +
+	score := categoryMatch*recommendationCfg.CategoryWeight +
 		tagMatch*recommendationCfg.TagWeight +
 		math.Log(float64(article.LikeCount)+1)*recommendationCfg.PopularityWeight +
 		freshnessScore(article.CreatedAt, now)*recommendationCfg.FreshnessWeight
+	if article.AnalysisState == consts.ArticleAnalysisStateCompleted {
+		score += 1000
+	}
+	return score
 } //根据类型标签热度外加时间权重给出分数
 
 func freshnessScore(createdAt time.Time, now time.Time) float64 {

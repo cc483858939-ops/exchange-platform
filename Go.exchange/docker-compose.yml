@@ -52,6 +52,10 @@ services:
         condition: service_started
     environment:
       APP_RUNTIME_ROLE: worker
+      LIKE_BEHAVIOR_BATCH_SIZE: ${LIKE_BEHAVIOR_BATCH_SIZE:-500}
+      LIKE_BEHAVIOR_CLAIM_LEASE: ${LIKE_BEHAVIOR_CLAIM_LEASE:-30s}
+      LIKE_BEHAVIOR_FLUSH_INTERVAL: ${LIKE_BEHAVIOR_FLUSH_INTERVAL:-1s}
+      LIKE_BEHAVIOR_PROJECTION_CONSUMERS: ${LIKE_BEHAVIOR_PROJECTION_CONSUMERS:-6}
 
   app:
     <<: *go-service
@@ -80,6 +84,7 @@ services:
 
   redis:
     image: "redis:alpine"
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
     ports:
       - "6379:6379"
       - "6060:6060"

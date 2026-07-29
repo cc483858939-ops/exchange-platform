@@ -44,6 +44,16 @@ func AppPort() string {
 	return port
 }
 
+func WorkerHealthAddr() string {
+	port := strings.TrimSpace(os.Getenv("WORKER_HEALTH_PORT"))
+	if port == "" {
+		port = "8081"
+	}
+	if !strings.HasPrefix(port, ":") {
+		port = ":" + port
+	}
+	return port
+}
 func DatabaseDSN() string {
 	if dsn := strings.TrimSpace(os.Getenv("DATABASE_DSN")); dsn != "" {
 		return dsn
@@ -77,6 +87,36 @@ func RedisMinIdleConns() int {
 	return envInt("REDIS_MIN_IDLE_CONNS", 50)
 }
 
+func LikeSnapshotPollInterval() time.Duration {
+	return envDuration("LIKE_SNAPSHOT_POLL_INTERVAL", time.Second)
+}
+
+func LikeSnapshotBatchSize() int    { return envInt("LIKE_SNAPSHOT_BATCH_SIZE", 100) }
+func LikeClaimLease() time.Duration { return envDuration("LIKE_CLAIM_LEASE", 30*time.Second) }
+
+func LikeBehaviorBatchSize() int {
+	batch := envInt("LIKE_BEHAVIOR_BATCH_SIZE", 500)
+	if batch < 1 {
+		return 1
+	}
+	return batch
+}
+
+func LikeBehaviorClaimLease() time.Duration {
+	return envDuration("LIKE_BEHAVIOR_CLAIM_LEASE", 30*time.Second)
+}
+
+func LikeBehaviorFlushInterval() time.Duration {
+	return envDuration("LIKE_BEHAVIOR_FLUSH_INTERVAL", time.Second)
+}
+
+func LikeBehaviorProjectionConsumers() int {
+	consumers := envInt("LIKE_BEHAVIOR_PROJECTION_CONSUMERS", 6)
+	if consumers < 1 {
+		return 1
+	}
+	return consumers
+}
 func StorageEndpoint() string {
 	if endpoint := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); endpoint != "" {
 		return endpoint
