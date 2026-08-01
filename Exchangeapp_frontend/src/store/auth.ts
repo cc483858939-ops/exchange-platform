@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import axios from 'axios';
+import { apiBaseUrl } from '../api';
 
 const authClient = axios.create({
-  baseURL: '/api',
+  baseURL: apiBaseUrl,
 });
 
 const accessTokenKey = 'token';

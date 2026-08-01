@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { apiBaseUrl } from './api';
 import { useAuthStore } from './store/auth';
 
 type RetryableRequestConfig = InternalAxiosRequestConfig & {
@@ -7,7 +8,7 @@ type RetryableRequestConfig = InternalAxiosRequestConfig & {
 };
 
 const instance = axios.create({
-  baseURL: '/api',
+  baseURL: apiBaseUrl,
 });
 
 let refreshPromise: Promise<string> | null = null;
