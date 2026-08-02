@@ -10,6 +10,7 @@ func StartAll(ctx context.Context, wg *sync.WaitGroup) {
 	startOutboxRelay(ctx, wg)
 	startArticleAnalysisWorkers(ctx, wg)
 	startUserBehaviorProjectionConsumer(ctx, wg)
+	startRecommendationMetricsConsumer(ctx, wg)
 	startLikeStateRelay(ctx, wg)
 	startLikeSnapshotRelay(ctx, wg)
 	startLikeSnapshotProjectionConsumer(ctx, wg)

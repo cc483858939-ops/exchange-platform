@@ -69,12 +69,14 @@
         <article
           v-for="(article, index) in articles"
           :key="article.id"
+          :ref="element => bindRecommendationCard(element, article)"
           class="recommendation-card"
           :class="{ 'tall-card': index % 5 === 0, 'compact-card': index % 4 === 2 }"
-          @click="openArticle(article.id)"
+          @click="openArticle(article)"
         >
           <div class="image-wrap">
-            <img :src="articleImage(article, index)" :alt="article.title" loading="lazy" />
+            <img v-if="article.cover_image_url" :src="article.cover_image_url" :alt="article.title" loading="lazy" />
+            <div v-else class="cover-placeholder" aria-hidden="true"></div>
             <span class="score-chip">{{ formatScore(article.score) }}</span>
           </div>
 
@@ -101,10 +103,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { ComponentPublicInstance } from 'vue';
 import { useRouter } from 'vue-router';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import axios from '../axios';
+import { RecommendationTelemetryClient } from '../services/recommendationTelemetry';
 import { useAuthStore } from '../store/auth';
 import type { RecommendedArticle } from '../types/Recommendation';
 
@@ -112,6 +116,7 @@ gsap.registerPlugin(ScrollTrigger);
 
 const router = useRouter();
 const authStore = useAuthStore();
+const recommendationTelemetry = new RecommendationTelemetryClient(() => authStore.token);
 const articles = ref<RecommendedArticle[]>([]);
 const loading = ref(false);
 const errorMessage = ref('');
@@ -137,6 +142,14 @@ const topScoreLabel = computed(() => {
   return formatScore(Math.max(...articles.value.map((article) => article.score)));
 });
 
+
+const normalizeRecommendationTags = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((tag): tag is string => typeof tag === 'string');
+};
+
 const fetchRecommendations = async () => {
   if (!authStore.isAuthenticated) {
     return;
@@ -144,10 +157,15 @@ const fetchRecommendations = async () => {
 
   loading.value = true;
   errorMessage.value = '';
+  recommendationTelemetry.resetObservedCards();
+  void recommendationTelemetry.flush(false);
 
   try {
     const response = await axios.get<RecommendedArticle[]>('/recommendations/articles?limit=50');
-    articles.value = response.data;
+    articles.value = response.data.map((article) => ({
+      ...article,
+      tags: normalizeRecommendationTags(article.tags),
+    }));
     await nextTick();
     animateCards();
   } catch (error) {
@@ -223,8 +241,6 @@ const animateCards = () => {
   }, root);
 };
 
-const articleImage = (article: RecommendedArticle, index: number) =>
-  `https://picsum.photos/seed/gx-recommend-${article.id}-${index}/900/700`;
 
 const formatScore = (score: number) => score.toFixed(2);
 
@@ -238,8 +254,18 @@ const formatDate = (value: string) => {
   });
 };
 
-const openArticle = (id: number) => {
-  router.push({ name: 'NewsDetail', params: { id: String(id) } });
+const bindRecommendationCard = (
+  element: Element | ComponentPublicInstance | null,
+  article: RecommendedArticle,
+) => {
+  if (element instanceof HTMLElement) {
+    recommendationTelemetry.observeCard(element, article.id, article.tracking);
+  }
+};
+
+const openArticle = (article: RecommendedArticle) => {
+  recommendationTelemetry.recordClick(article.id, article.tracking);
+  router.push({ name: 'NewsDetail', params: { id: String(article.id) } });
 };
 
 const goLogin = () => {
@@ -256,17 +282,20 @@ watch(
     if (isAuthenticated) {
       fetchRecommendations();
     } else {
+      recommendationTelemetry.clearSession();
       articles.value = [];
     }
   },
 );
 
 onMounted(() => {
+  recommendationTelemetry.start();
   animateHero();
   fetchRecommendations();
 });
 
 onBeforeUnmount(() => {
+  recommendationTelemetry.stop();
   heroContext?.revert();
   cardsContext?.revert();
 });
@@ -509,6 +538,14 @@ onBeforeUnmount(() => {
 }
 
 .image-wrap img {
+.cover-placeholder {
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 20% 25%, rgba(191, 219, 254, 0.9), transparent 36%),
+    linear-gradient(135deg, #e2e8f0, #cbd5e1);
+}
+
   width: 100%;
   height: 100%;
   display: block;

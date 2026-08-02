@@ -32,7 +32,7 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p","cover_image_url":"/api/files/article-covers/cover.png"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
@@ -48,6 +48,10 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 	}
 	if persisted.AnalysisVersion != consts.ArticleAnalysisVersionV1 || persisted.PublishedAt == nil {
 		t.Fatalf("expected clean-cut analysis metadata, got %#v", persisted)
+		if persisted.CoverImageURL != "/api/files/article-covers/cover.png" {
+			t.Fatalf("cover image URL=%q", persisted.CoverImageURL)
+		}
+
 	}
 }
 
@@ -65,6 +69,28 @@ func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p","cover_image_url":"https://invalid"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	CreateArticle(ctx)
+
+	if recorder.Code != http.StatusBadRequest || called {
+		t.Fatalf("status=%d called=%t", recorder.Code, called)
+	}
+}
+func TestCreateArticleDoesNotPersistWithoutCover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalCreate := createArticleWithAnalysisJob
+	defer func() { createArticleWithAnalysisJob = originalCreate }()
+
+	called := false
+	createArticleWithAnalysisJob = func(*models.Article) error {
+		called = true
+		return errors.New("must not persist")
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)

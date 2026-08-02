@@ -2,5 +2,6 @@ main
 .vscode/
 node_modules/
 dist/
+.env
 *.tar.gz
 .agent/

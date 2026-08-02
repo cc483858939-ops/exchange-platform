@@ -21,17 +21,19 @@ type AIConfig struct {
 }
 
 type KafkaConfig struct {
-	Brokers                  []string `mapstructure:"brokers"`
-	ArticleAnalysisTopic     string   `mapstructure:"article_analysis_topic"`
-	ArticleAnalysisDLQTopic  string   `mapstructure:"article_analysis_dlq_topic"`
-	UserBehaviorTopic        string   `mapstructure:"user_behavior_topic"`
-	LikeSnapshotTopic        string   `mapstructure:"like_snapshot_topic"`
-	ArticleAnalysisGroupID   string   `mapstructure:"article_analysis_group_id"`
-	UserBehaviorGroupID      string   `mapstructure:"user_behavior_group_id"`
-	LikeSnapshotGroupID      string   `mapstructure:"like_snapshot_group_id"`
-	OutboxPollIntervalSecond int      `mapstructure:"outbox_poll_interval_seconds"`
-	JobLeaseSeconds          int      `mapstructure:"job_lease_seconds"`
-	JobMaxAttempts           int      `mapstructure:"job_max_attempts"`
+	Brokers                      []string `mapstructure:"brokers"`
+	ArticleAnalysisTopic         string   `mapstructure:"article_analysis_topic"`
+	ArticleAnalysisDLQTopic      string   `mapstructure:"article_analysis_dlq_topic"`
+	UserBehaviorTopic            string   `mapstructure:"user_behavior_topic"`
+	LikeSnapshotTopic            string   `mapstructure:"like_snapshot_topic"`
+	RecommendationEventsTopic    string   `mapstructure:"recommendation_events_topic"`
+	ArticleAnalysisGroupID       string   `mapstructure:"article_analysis_group_id"`
+	UserBehaviorGroupID          string   `mapstructure:"user_behavior_group_id"`
+	LikeSnapshotGroupID          string   `mapstructure:"like_snapshot_group_id"`
+	RecommendationMetricsGroupID string   `mapstructure:"recommendation_metrics_group_id"`
+	OutboxPollIntervalSecond     int      `mapstructure:"outbox_poll_interval_seconds"`
+	JobLeaseSeconds              int      `mapstructure:"job_lease_seconds"`
+	JobMaxAttempts               int      `mapstructure:"job_max_attempts"`
 }
 type RecommendationBehaviorWeights struct {
 	View float64 `mapstructure:"view"`

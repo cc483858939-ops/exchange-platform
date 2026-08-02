@@ -272,6 +272,65 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 	}
 }
 
+func TestRecommendArticlesIncludesCoverImageURL(t *testing.T) {
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	article := recommendationTestArticle(2, now, "Travel", []string{"Food"}, 0)
+	article.CoverImageURL = "/api/files/article-covers/cover.png"
+	recommendations := recommendArticles(buildUserInterestProfile(nil), []models.Article{article}, now, 1)
+
+	if len(recommendations) != 1 {
+		t.Fatalf("expected 1 recommendation, got %d", len(recommendations))
+	}
+	if recommendations[0].CoverImageURL != article.CoverImageURL {
+		t.Fatalf("cover image URL=%q", recommendations[0].CoverImageURL)
+	}
+}
+
+func TestGetArticleRecommendationsSerializesNilTagsAsArray(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalLoadRecommendationBehaviorSignals := loadRecommendationBehaviorSignals
+	originalLoadRecommendationCandidates := loadRecommendationCandidates
+	t.Cleanup(func() {
+		loadRecommendationBehaviorSignals = originalLoadRecommendationBehaviorSignals
+		loadRecommendationCandidates = originalLoadRecommendationCandidates
+	})
+
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	loadRecommendationBehaviorSignals = func(uint) ([]articleBehaviorSignal, error) {
+		return nil, nil
+	}
+	loadRecommendationCandidates = func(map[uint]struct{}, time.Time) ([]models.Article, error) {
+		return []models.Article{
+			recommendationTestArticle(2, now, "Travel", nil, 0),
+		}, nil
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(11))
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/recommendations/articles", nil)
+
+	GetArticleRecommendations(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload []struct {
+		Tags json.RawMessage `json:"tags"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("expected 1 recommendation, got %d", len(payload))
+	}
+	if got := string(payload[0].Tags); got != "[]" {
+		t.Fatalf("expected nil tags to serialize as [], got %s", got)
+	}
+}
+
 func recommendationTestArticle(id uint, createdAt time.Time, category string, tags []string, likeCount int64) models.Article {
 	return models.Article{
 		Model:     gorm.Model{ID: id, CreatedAt: createdAt},

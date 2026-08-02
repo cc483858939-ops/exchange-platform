@@ -2,10 +2,12 @@ package tasks
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"sync"
 	"time"
 
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/likes"
 	"Go.exchange/metrics"
@@ -54,6 +56,22 @@ func refreshPipelineMetrics() {
 		return
 	}
 	metrics.SetOutboxPending(float64(pendingOutbox))
+	var oldestRecommendationOutbox sql.NullTime
+	if err := global.Db.Model(&models.OutboxEvent{}).
+		Select("MIN(created_at)").
+		Where("published_at IS NULL AND event_type = ?", eventing.EventTypeRecommendationEventsRecorded).
+		Scan(&oldestRecommendationOutbox).Error; err != nil {
+		log.Printf("[Metrics] load oldest recommendation outbox: %v", err)
+		return
+	}
+	oldestAge := 0.0
+	if oldestRecommendationOutbox.Valid {
+		oldestAge = time.Since(oldestRecommendationOutbox.Time).Seconds()
+		if oldestAge < 0 {
+			oldestAge = 0
+		}
+	}
+	metrics.SetRecommendationTelemetryOutboxOldestAge(oldestAge)
 	if global.RedisDB != nil {
 		if dirty, err := global.RedisDB.SCard(likes.DirtyKey).Result(); err == nil {
 			metrics.SetLikePipelineDepth("dirty", float64(dirty))

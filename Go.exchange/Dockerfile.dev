@@ -1,0 +1,29 @@
+FROM mcr.microsoft.com/devcontainers/go:1.24-bookworm
+
+USER root
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        sudo \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+RUN wget https://golang.google.cn/dl/go1.25.2.linux-amd64.tar.gz -O /tmp/go.tar.gz \
+    && rm -rf /usr/local/go \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH="/home/vscode/go"
+ENV PATH="${GOPATH}/bin:${PATH}"
+
+RUN mkdir -p /home/vscode/.cache/go-build /home/vscode/go/pkg/mod \
+    && chown -R vscode:vscode /home/vscode/.cache /home/vscode/go
+
+USER vscode
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

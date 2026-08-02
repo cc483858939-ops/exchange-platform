@@ -14,6 +14,7 @@ import (
 var workerReady atomic.Bool
 var articleAnalysisConsumers atomic.Int32
 var userBehaviorConsumers atomic.Int32
+var recommendationMetricsConsumers atomic.Int32
 var likeSnapshotConsumers atomic.Int32
 var outboxRelayRunning atomic.Bool
 var likeEventRelayRunning atomic.Bool
@@ -21,7 +22,7 @@ var likeBehaviorRelayWorkers atomic.Int32
 var likeSnapshotRelayRunning atomic.Bool
 
 func WorkerReady() bool {
-	return workerReady.Load() && outboxRelayRunning.Load() && articleAnalysisConsumers.Load() > 0 && userBehaviorConsumers.Load() > 0 && likeSnapshotConsumers.Load() > 0 && likeBehaviorRelayWorkers.Load() > 0 && likeSnapshotRelayRunning.Load()
+	return workerReady.Load() && outboxRelayRunning.Load() && articleAnalysisConsumers.Load() > 0 && userBehaviorConsumers.Load() > 0 && recommendationMetricsConsumers.Load() > 0 && likeSnapshotConsumers.Load() > 0 && likeBehaviorRelayWorkers.Load() > 0 && likeSnapshotRelayRunning.Load()
 }
 func refreshWorkerReadiness(ctx context.Context) error {
 	if global.Db == nil {

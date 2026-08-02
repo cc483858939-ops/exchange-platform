@@ -32,6 +32,9 @@ func TestMiddlewareRecordsHTTPMetricsAndSkipsMetricsEndpoint(t *testing.T) {
 func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	SetArticleAnalysisJobs("queued", 7)
 	SetOutboxPending(11)
+	RecordRecommendationTelemetryEvent("accepted", "impression", "")
+	RecordRecommendationTelemetryProjection("applied")
+	SetRecommendationTelemetryOutboxOldestAge(3)
 	r := httptest.NewRecorder()
 	Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := r.Body.String()
@@ -39,6 +42,15 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 		t.Fatal(body)
 	}
 	if !strings.Contains(body, "go_exchange_outbox_pending_events 11") {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, `go_exchange_recommendation_telemetry_events_total{event_type="impression",reason="",status="accepted"} 1`) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, `go_exchange_recommendation_telemetry_projection_total{status="applied"} 1`) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "go_exchange_recommendation_telemetry_outbox_oldest_age_seconds 3") {
 		t.Fatal(body)
 	}
 }

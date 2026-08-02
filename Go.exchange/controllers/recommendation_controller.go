@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"errors"
+	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -47,15 +48,17 @@ type userInterestProfile struct {
 }
 
 type recommendedArticleResponse struct {
-	ID        uint      `json:"id"`
-	Title     string    `json:"title"`
-	Preview   string    `json:"preview"`
-	Summary   string    `json:"summary"`
-	Tags      []string  `json:"tags"`
-	Category  string    `json:"category"`
-	LikeCount int64     `json:"like_count"`
-	CreatedAt time.Time `json:"created_at"`
-	Score     float64   `json:"score"`
+	ID            uint                            `json:"id"`
+	Title         string                          `json:"title"`
+	Preview       string                          `json:"preview"`
+	Summary       string                          `json:"summary"`
+	CoverImageURL string                          `json:"cover_image_url"`
+	Tags          []string                        `json:"tags"`
+	Category      string                          `json:"category"`
+	LikeCount     int64                           `json:"like_count"`
+	CreatedAt     time.Time                       `json:"created_at"`
+	Score         float64                         `json:"score"`
+	Tracking      *recommendationTrackingResponse `json:"tracking,omitempty"`
 }
 
 func normalizedRecommendationConfig() config.RecommendationConfig {
@@ -163,13 +166,13 @@ var loadRecommendationCandidates = func(excludedArticleIDs map[uint]struct{}, no
 		return nil, errors.New("database is not initialized")
 	}
 
-	selectColumns := "id,title,preview,summary,tags,category,publication_state,analysis_state,like_count,created_at,updated_at,deleted_at"
+	selectColumns := "id,title,preview,summary,cover_image_url,tags,category,publication_state,analysis_state,like_count,created_at,updated_at,deleted_at"
 	baseQuery := global.Db.
 		Select(selectColumns).
 		Where("publication_state = ?", consts.ArticlePublicationStatePublished).
 		Where("expired_at > ? OR expired_at IS NULL", now)
 
-	excludedIDs := articleIDList(excludedArticleIDs)//排除已看文章
+	excludedIDs := articleIDList(excludedArticleIDs) //排除已看文章
 	if len(excludedIDs) > 0 {
 		baseQuery = baseQuery.Where("id NOT IN ?", excludedIDs)
 	}
@@ -191,7 +194,7 @@ var loadRecommendationCandidates = func(excludedArticleIDs map[uint]struct{}, no
 		Where("publication_state = ?", consts.ArticlePublicationStatePublished).
 		Where("analysis_state <> ?", consts.ArticleAnalysisStateCompleted).
 		Where("expired_at > ? OR expired_at IS NULL", now)
-	fallbackExcludedIDs := append(articleIDList(excludedArticleIDs), articleIDs(completed)...)//排除已看文章和已完成分析的文章
+	fallbackExcludedIDs := append(articleIDList(excludedArticleIDs), articleIDs(completed)...) //排除已看文章和已完成分析的文章
 	if len(fallbackExcludedIDs) > 0 {
 		fallbackQuery = fallbackQuery.Where("id NOT IN ?", fallbackExcludedIDs)
 	}
@@ -204,6 +207,7 @@ var loadRecommendationCandidates = func(excludedArticleIDs map[uint]struct{}, no
 	}
 	return append(completed, fallback...), nil
 }
+
 func articleIDs(articles []models.Article) []uint {
 	ids := make([]uint, 0, len(articles))
 	for _, article := range articles {
@@ -228,14 +232,18 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	}
 
 	profile := buildUserInterestProfile(signals)
-	now := time.Now()
+	now := time.Now().UTC()
 	candidates, err := loadRecommendationCandidates(profile.InteractedArticleIDs, now)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	ctx.JSON(http.StatusOK, recommendArticles(profile, candidates, now, limit))
+	recommendations := recommendArticles(profile, candidates, now, limit)
+	if err := attachRecommendationTracking(userID, profile, recommendations, now); err != nil {
+		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", err)
+	}
+	ctx.JSON(http.StatusOK, recommendations)
 }
 
 func parseRecommendationLimit(raw string) int {
@@ -311,15 +319,16 @@ func recommendArticles(profile userInterestProfile, candidates []models.Article,
 		}
 
 		recommendations = append(recommendations, recommendedArticleResponse{
-			ID:        article.ID,
-			Title:     article.Title,
-			Preview:   article.Preview,
-			Summary:   article.Summary,
-			Tags:      article.Tags,
-			Category:  article.Category,
-			LikeCount: article.LikeCount,
-			CreatedAt: article.CreatedAt,
-			Score:     scoreArticle(profile, article, now),
+			ID:            article.ID,
+			Title:         article.Title,
+			Preview:       article.Preview,
+			Summary:       article.Summary,
+			CoverImageURL: article.CoverImageURL,
+			Tags:          recommendationTags(article.Tags),
+			Category:      article.Category,
+			LikeCount:     article.LikeCount,
+			CreatedAt:     article.CreatedAt,
+			Score:         scoreArticle(profile, article, now),
 		})
 	}
 
@@ -373,6 +382,13 @@ func freshnessScore(createdAt time.Time, now time.Time) float64 {
 
 func normalizeRecommendationLabel(label string) string {
 	return strings.ToLower(strings.TrimSpace(label))
+}
+
+func recommendationTags(tags []string) []string {
+	if len(tags) == 0 {
+		return []string{}
+	}
+	return tags
 }
 
 func articleIDList(set map[uint]struct{}) []uint {

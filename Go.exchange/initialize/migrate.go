@@ -30,6 +30,8 @@ func RunMigrations() error {
 			&models.ConsumerInbox{},
 			&models.ArticleBehavior{},
 			&models.ArticleReaction{},
+			&models.RecommendationEvent{},
+			&models.RecommendationDailyMetric{},
 			&models.ExchangeRate{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)

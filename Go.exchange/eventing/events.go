@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	EventTypeArticleAnalysisRequested = "article.analysis.requested"
-	EventTypeArticleAnalysisDead      = "article.analysis.dead"
-	EventTypeArticleViewed            = "article.viewed"
-	EventTypeArticleLiked             = "article.liked"
-	EventTypeArticleUnliked           = "article.unliked"
+	EventTypeArticleAnalysisRequested     = "article.analysis.requested"
+	EventTypeArticleAnalysisDead          = "article.analysis.dead"
+	EventTypeArticleViewed                = "article.viewed"
+	EventTypeArticleLiked                 = "article.liked"
+	EventTypeArticleUnliked               = "article.unliked"
+	EventTypeRecommendationEventsRecorded = "recommendation.events.recorded"
 )
 
 type Envelope struct {
@@ -136,6 +137,8 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 		return strings.TrimSpace(kafkaConfig.UserBehaviorTopic), nil
 	case EventTypeArticleLikeSnapshot:
 		return strings.TrimSpace(kafkaConfig.LikeSnapshotTopic), nil
+	case EventTypeRecommendationEventsRecorded:
+		return strings.TrimSpace(kafkaConfig.RecommendationEventsTopic), nil
 	default:
 		return "", fmt.Errorf("unsupported event type %q", eventType)
 	}
@@ -150,6 +153,11 @@ func KeyForEvent(event Envelope) string {
 		}
 	case EventTypeArticleViewed:
 		var payload UserBehaviorPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 {
+			return strconv.FormatUint(uint64(payload.UserID), 10)
+		}
+	case EventTypeRecommendationEventsRecorded:
+		var payload RecommendationEventsRecordedPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 {
 			return strconv.FormatUint(uint64(payload.UserID), 10)
 		}

@@ -6,7 +6,7 @@ x-go-service: &go-service
   image: goexchange-app
   build:
     context: .
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.dev
   working_dir: /workspace/mf/Go.exchange
   volumes:
     - ../../:/workspace:cached
@@ -37,6 +37,12 @@ services:
         condition: service_started
     environment:
       APP_RUNTIME_ROLE: api
+      RECOMMENDATION_TELEMETRY_ENABLED: ${RECOMMENDATION_TELEMETRY_ENABLED:-false}
+      RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT: ${RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT:-0}
+      RECOMMENDATION_TELEMETRY_SIGNING_KEY: ${RECOMMENDATION_TELEMETRY_SIGNING_KEY:-}
+      RECOMMENDATION_TELEMETRY_TOKEN_TTL: ${RECOMMENDATION_TELEMETRY_TOKEN_TTL:-24h}
+      RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW: ${RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW:-5m}
+      RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE: ${RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE:-1000}
     ports:
       - "3000:3000"
 

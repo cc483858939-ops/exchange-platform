@@ -1,0 +1,171 @@
+package controllers
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"Go.exchange/config"
+
+	"github.com/google/uuid"
+)
+
+const (
+	recommendationScene                  = "recommendation_page"
+	recommendationRankerVersion          = "rules_v1"
+	recommendationPersonalizedStrategyID = "personalized_rules_v1"
+	recommendationColdStartStrategyID    = "cold_start_rules_v1"
+	recommendationTrackingTokenVersion   = "v1"
+	recommendationSigningKeyMinBytes     = 32
+)
+
+type recommendationTrackingResponse struct {
+	RequestID        string    `json:"request_id"`
+	Position         int       `json:"position"`
+	Scene            string    `json:"scene"`
+	RankerVersion    string    `json:"ranker_version"`
+	RankerConfigHash string    `json:"ranker_config_hash"`
+	StrategyID       string    `json:"strategy_id"`
+	Token            string    `json:"token"`
+	ExpiresAt        time.Time `json:"expires_at"`
+}
+
+type recommendationTrackingClaims struct {
+	UserID           uint   `json:"user_id"`
+	RequestID        string `json:"request_id"`
+	ArticleID        uint   `json:"article_id"`
+	Position         int    `json:"position"`
+	Scene            string `json:"scene"`
+	RankerVersion    string `json:"ranker_version"`
+	RankerConfigHash string `json:"ranker_config_hash"`
+	StrategyID       string `json:"strategy_id"`
+	IssuedAtUnix     int64  `json:"iat"`
+	ExpiresAtUnix    int64  `json:"exp"`
+}
+
+func attachRecommendationTracking(userID uint, profile userInterestProfile, recommendations []recommendedArticleResponse, now time.Time) error {
+	if len(recommendations) == 0 || !config.RecommendationTelemetryEnabled() {
+		return nil
+	}
+
+	requestID := uuid.NewString()
+	if !recommendationTelemetryRequestSelected(userID, requestID, config.RecommendationTelemetryRolloutPercent()) {
+		return nil
+	}
+
+	key := []byte(config.RecommendationTelemetrySigningKey())
+	if len(key) < recommendationSigningKeyMinBytes {
+		return errors.New("recommendation telemetry signing key must contain at least 32 bytes")
+	}
+
+	issuedAt := now.UTC()
+	expiresAt := issuedAt.Add(config.RecommendationTelemetryTokenTTL())
+	strategyID := recommendationStrategyID(profile)
+	configHash := recommendationRankerConfigHash(normalizedRecommendationConfig())
+
+	for index := range recommendations {
+		claims := recommendationTrackingClaims{
+			UserID: userID, RequestID: requestID, ArticleID: recommendations[index].ID,
+			Position: index + 1, Scene: recommendationScene,
+			RankerVersion: recommendationRankerVersion, RankerConfigHash: configHash,
+			StrategyID: strategyID, IssuedAtUnix: issuedAt.Unix(), ExpiresAtUnix: expiresAt.Unix(),
+		}
+		token, err := signRecommendationTrackingClaims(claims, key)
+		if err != nil {
+			return err
+		}
+		recommendations[index].Tracking = &recommendationTrackingResponse{
+			RequestID: requestID, Position: index + 1, Scene: recommendationScene,
+			RankerVersion: recommendationRankerVersion, RankerConfigHash: configHash,
+			StrategyID: strategyID, Token: token, ExpiresAt: expiresAt,
+		}
+	}
+	return nil
+}
+
+func recommendationStrategyID(profile userInterestProfile) string {
+	if len(profile.Categories) > 0 || len(profile.Tags) > 0 {
+		return recommendationPersonalizedStrategyID
+	}
+	return recommendationColdStartStrategyID
+}
+
+func recommendationTelemetryRequestSelected(userID uint, requestID string, percent int) bool {
+	if percent <= 0 {
+		return false
+	}
+	if percent >= 100 {
+		return true
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", userID, requestID)))
+	bucket := int(sum[0])<<8 | int(sum[1])
+	return bucket%100 < percent
+}
+
+func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
+	canonical := fmt.Sprintf(
+		"view=%g|like=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_cap=%d|behavior_cap=%d",
+		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.CategoryWeight, cfg.TagWeight,
+		cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateCap, behaviorCountCap,
+	)
+	sum := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {
+	if len(key) < recommendationSigningKeyMinBytes {
+		return "", errors.New("recommendation telemetry signing key is too short")
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return "", fmt.Errorf("marshal recommendation tracking claims: %w", err)
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	signedValue := recommendationTrackingTokenVersion + "." + encodedPayload
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(signedValue))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return signedValue + "." + signature, nil
+}
+
+func verifyRecommendationTrackingToken(token string, key []byte) (recommendationTrackingClaims, error) {
+	if len(key) < recommendationSigningKeyMinBytes {
+		return recommendationTrackingClaims{}, errors.New("recommendation telemetry signing key is too short")
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[0] != recommendationTrackingTokenVersion {
+		return recommendationTrackingClaims{}, errors.New("invalid tracking token format")
+	}
+	providedSignature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return recommendationTrackingClaims{}, errors.New("invalid tracking token signature")
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	if !hmac.Equal(providedSignature, mac.Sum(nil)) {
+		return recommendationTrackingClaims{}, errors.New("invalid tracking token signature")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return recommendationTrackingClaims{}, errors.New("invalid tracking token payload")
+	}
+	var claims recommendationTrackingClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return recommendationTrackingClaims{}, errors.New("invalid tracking token payload")
+	}
+	if claims.UserID == 0 || claims.ArticleID == 0 || claims.Position <= 0 ||
+		claims.Scene == "" || claims.RankerVersion == "" || claims.RankerConfigHash == "" || claims.StrategyID == "" ||
+		claims.IssuedAtUnix <= 0 || claims.ExpiresAtUnix <= claims.IssuedAtUnix {
+		return recommendationTrackingClaims{}, errors.New("incomplete tracking token claims")
+	}
+	if _, err := uuid.Parse(claims.RequestID); err != nil {
+		return recommendationTrackingClaims{}, errors.New("invalid tracking request id")
+	}
+	return claims, nil
+}

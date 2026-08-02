@@ -117,6 +117,42 @@ func LikeBehaviorProjectionConsumers() int {
 	}
 	return consumers
 }
+
+func RecommendationTelemetryEnabled() bool {
+	return envBool("RECOMMENDATION_TELEMETRY_ENABLED", false)
+}
+
+func RecommendationTelemetryRolloutPercent() int {
+	percent := envInt("RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT", 0)
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
+}
+
+func RecommendationTelemetrySigningKey() string {
+	return strings.TrimSpace(os.Getenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY"))
+}
+
+func RecommendationTelemetryTokenTTL() time.Duration {
+	return envDuration("RECOMMENDATION_TELEMETRY_TOKEN_TTL", 24*time.Hour)
+}
+
+func RecommendationTelemetryMaxClockSkew() time.Duration {
+	return envDuration("RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW", 5*time.Minute)
+}
+
+func RecommendationTelemetryEventsPerMinute() int {
+	limit := envInt("RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE", 1000)
+	if limit < 1 {
+		return 1
+	}
+	return limit
+}
+
 func StorageEndpoint() string {
 	if endpoint := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); endpoint != "" {
 		return endpoint

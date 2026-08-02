@@ -29,7 +29,7 @@
             />
           </el-form-item>
 
-          <el-form-item label="封面图">
+          <el-form-item label="封面图（必填）" required>
             <label class="cover-picker" for="article-cover-input">
               <input
                 id="article-cover-input"
@@ -38,7 +38,7 @@
                 accept="image/jpeg,image/png,image/webp"
                 @change="handleCoverChange"
               />
-              <span v-if="!coverPreview" class="cover-empty">选择 jpg、png 或 webp 图片</span>
+              <span v-if="!coverPreview" class="cover-empty">请上传封面图（必填，支持 jpg、png 或 webp）</span>
               <img v-else class="cover-preview" :src="coverPreview" alt="文章封面预览" />
             </label>
             <el-button v-if="coverFile" text type="danger" @click="clearCover">移除封面</el-button>
@@ -69,7 +69,7 @@ type CreateArticlePayload = {
   title: string;
   preview: string;
   content: string;
-  cover_image_url?: string;
+  cover_image_url: string;
 };
 
 const maxCoverBytes = 5 * 1024 * 1024;
@@ -140,7 +140,12 @@ const validateForm = () => {
     ElMessage.error('请输入文章正文');
     return false;
   }
+  if (!coverFile.value) {
+    ElMessage.error('请先上传一张封面图后再发布');
+    return false;
+  }
   return true;
+
 };
 
 const uploadCover = async () => {
@@ -162,14 +167,15 @@ const submitArticle = async () => {
   submitting.value = true;
   try {
     const coverImageURL = await uploadCover();
+    if (!coverImageURL) {
+      throw new Error('cover image upload returned an empty URL');
+    }
     const payload: CreateArticlePayload = {
       title: form.title.trim(),
       preview: form.preview.trim(),
       content: form.content.trim(),
+      cover_image_url: coverImageURL,
     };
-    if (coverImageURL) {
-      payload.cover_image_url = coverImageURL;
-    }
 
     const response = await axios.post<Article>('/articles', payload);
     ElMessage.success('文章已发布');
