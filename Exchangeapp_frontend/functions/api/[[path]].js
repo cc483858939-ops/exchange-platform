@@ -31,6 +31,25 @@ export async function onRequest(context) {
   const headers = new Headers(context.request.headers);
   headers.delete('host');
 
+  // Keep Cloudflare Access credentials server-side. Browser-supplied values must
+  // never be forwarded, otherwise clients could choose the upstream identity.
+  headers.delete('cf-access-client-id');
+  headers.delete('cf-access-client-secret');
+
+  const accessClientID = context.env.CF_ACCESS_CLIENT_ID;
+  const accessClientSecret = context.env.CF_ACCESS_CLIENT_SECRET;
+  const hasAccessClientID = Boolean(accessClientID);
+  const hasAccessClientSecret = Boolean(accessClientSecret);
+
+  if (hasAccessClientID !== hasAccessClientSecret) {
+    return errorResponse(500, 'API proxy access credentials are incomplete');
+  }
+
+  if (hasAccessClientID) {
+    headers.set('CF-Access-Client-Id', accessClientID);
+    headers.set('CF-Access-Client-Secret', accessClientSecret);
+  }
+
   const method = context.request.method;
   const requestInit = {
     method,
