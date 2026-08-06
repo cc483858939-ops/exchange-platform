@@ -1,84 +1,250 @@
-# Go.exchange 
+# Exchange Platform
 
-Go.exchange 是一个基于 Go 语言和 Gin 框架开发的高性能后端服务项目，集成了文章管理、点赞系统（Redis 异步缓存与 MySQL 数据同步）以及汇率查询等功能。
+一个全栈汇率与内容服务平台，包含 Go 后端服务与 Vue 前端应用。
 
-## 🛠 技术栈
+项目提供用户认证、文章管理、文章推荐、点赞系统、汇率查询、文件存储等能力，并通过 Docker Compose 集成本地开发所需的基础设施。
 
-- **Web 框架**: [Gin](https://gin-gonic.com/) (v1.11.0)
-- **ORM / 数据库**: [GORM](https://gorm.io/) + MySQL 8.0
-- 缓存与异步: Redis (v7) + Lua 脚本实现高性能并发处理
-  
-- 认证授权: JWT (JSON Web Token)
+## 项目组成
 
-- 部署环境 Docker & Docker Compose
-
- 核心功能
-
-1. 用户认证 (Authentication)
-   - 用户注册、登录
-   - JWT 令牌刷新机制 (Refresh Token)
-
-2. 文章管理 (Article Management)
-   - 发布文章
-   - 获取文章列表及详情
-
-3. 高性能点赞系统 (Like System)
-   - 使用 Redis 处理海量的高频率点赞并发请求，缓解数据库压力。
-   - 采用后端的异步定时任务 (`sync_likes` Worker) 将 Redis 中的点赞数据通过 Lua 脚本原子性、批量地同步持久化到 MySQL 数据库中（具有 ACK 机制及容错重试处理）。
-
-4. 汇率功能 (Exchange Rates)
-   - 支持创建和查询汇率信息。
- 项目结构
-Go.exchange/
-├── config/           # 配置文件与配置加载
-├── consts/           # 全局静态常量、Redis Key 命名规范及 Lua 脚本定义
-├── controllers/      # 接口层 (登录/注册/文章/汇率等 Controller)
-├── core/             # 核心组件 (HTTP 服务启动与优雅退出设计)
-├── global/           # 全局变量 (数据库连接池 db、redis 等)
-├── initialize/       # 系统初始化 (配置、路由、连接池装载)
-├── middlewares/      # 中间件 (JWT Auth 鉴权中间件等)
-├── models/           # 数据模型 (MySQL 数据库映射结构)
-├── router/           # 路由配置注册中心
-├── tasks/            # 异步后台持续运行任务 (如 sync_likes 将 Redis 同步至 DB)
-├── utils/            # 工具类 (加密、Token 颁发等)
-├── main.go           # 服务入口
-└── docker-compose.yml# 依赖环境一键拉起
+```
+exchange-platform/
+├── Go.exchange/              # Go + Gin 后端服务
+├── Exchangeapp_frontend/     # Vue3 + TypeScript 前端应用
+├── docker-compose.yml        # 全栈开发环境编排
+└── README.md
 ```
 
-环境与依赖安装
+## 核心功能
 
-本项目使用 Docker Compose 进行环境编排，能够一键拉起所需的外部依赖服务（MySQL、Redis、Kafka）。
+### 用户系统
 
-1. 确保已安装 [Docker](https://www.docker.com/) 和 [Docker Compose](https://docs.docker.com/compose/)。
-2. 启动基础服务（包括 mysql, redis 等）：
-   docker-compose up -d
-   
-   > 容器提供的端口映射：
-   > - MySQL: 3306 
-   > - Redis: 6379, 6060
+- 用户注册
+- 用户登录
+- JWT Token 鉴权
+- Refresh Token 刷新机制
 
+### 文章系统
 
+- 创建文章
+- 文章列表与详情查询
+- 文章封面上传
+- 文章点赞与取消点赞
 
- API 接口概览
+### 推荐系统
 
-公共认证接口
-- POST /api/auth/login` —— 账号登录
-- POST /api/auth/register` —— 账号注册
-- POST /api/auth/refresh` —— 刷新访问令牌
+- 用户行为采集
+- 文章推荐接口
+- 推荐事件处理
+- 后台异步计算
 
-汇率接口
-- GET /api/exchangeRates —— 查询汇率 (免鉴权)
-- POST /api/exchangeRates —— 创建汇率 (需鉴权)
+### 汇率系统
 
-文章接口 (需鉴权)
-- `GET /api/articles —— 获取文章列表
-- `GET /api/articles/:id —— 获取文章详细信息
-- `POST /api/articles —— 发布新文章
-- `GET /api/articles/:id/like —— 获取文章当前点赞状态/数量
-- `POST /api/articles/:id/like —— 针对文章进行点赞操作
+- 汇率查询
+- 货币列表查询
+- 汇率报价查询
+- 汇率数据同步任务
 
-开发与设计亮点
+### 高性能点赞架构
 
-- 防惊群效应: 在后台动态调度任务(`tasks.dynamicLoop`)中加入了休眠退避与随机时间(Random Jitter)的机制，避免了 Redis 出现打点式的瞬时集中冲击以及协程的空转浪费。
-- 原子性取值与消费: 利用 `Eval` 调用预置的 Lua 脚本批量并原子性获取待处理集合的数据，处理落库完毕后通过清理 `Processing Set` 完成业务的ACK。
-- 平滑重启 (Graceful Shutdown): 主进程使用 context.WithCancel与 sync.WaitGroup进行控制，并在 core.WaitForShutdown捕获系统退出信号(SIGINT/SIGTERM)，进而做到无损切流和确保正在处理中的写库操作安全退出。
+点赞链路采用缓存与异步处理设计：
+
+```
+Client
+  |
+  v
+Redis
+  |
+  v
+Worker
+  |
+  v
+PostgreSQL
+```
+
+特点：
+
+- Redis 承担高频点赞请求
+- Worker 后台异步处理持久化
+- Lua 脚本保证原子操作
+- 支持批量同步和失败重试
+
+## 技术栈
+
+### Backend
+
+- Go 1.25
+- Gin
+- GORM
+- PostgreSQL
+- Redis
+- MinIO
+- JWT
+- Prometheus
+- Grafana
+
+### Frontend
+
+- Vue 3
+- TypeScript
+- Vite
+- Element Plus
+- Pinia
+
+### Infrastructure
+
+- Docker
+- Docker Compose
+- Kafka
+- Kafka UI
+
+## 运行模式
+
+后端支持不同运行角色：
+
+|角色|说明|
+|-|-|
+|api|HTTP API 服务|
+|worker|后台任务服务|
+|all|API + Worker 混合运行|
+
+通过环境变量控制：
+
+```bash
+APP_RUNTIME_ROLE=api
+```
+
+## 快速启动
+
+### 环境要求
+
+- Docker
+- Docker Compose
+
+### 启动完整开发环境
+
+在项目根目录执行：
+
+```bash
+docker compose up -d
+```
+
+启动服务包括：
+
+- Frontend
+- API
+- Worker
+- PostgreSQL
+- Redis
+- MinIO
+- Kafka
+- Prometheus
+- Grafana
+
+## 服务地址
+
+|服务|地址|
+|-|-|
+|Frontend|http://127.0.0.1:5173|
+|API|http://127.0.0.1:3000|
+|API Health|http://127.0.0.1:3000/healthz|
+|API Metrics|http://127.0.0.1:3000/metrics|
+|Prometheus|http://127.0.0.1:9090|
+|Grafana|http://127.0.0.1:3001|
+|MinIO Console|http://127.0.0.1:9001|
+|Kafka UI|http://127.0.0.1:8080|
+
+## API 概览
+
+### 认证接口
+
+```
+POST /api/auth/login
+POST /api/auth/register
+POST /api/auth/refresh
+```
+
+### 汇率接口
+
+```
+GET /api/exchangeRates
+GET /api/exchange/currencies
+GET /api/exchange/quote
+```
+
+### 文章接口（需要认证）
+
+```
+POST   /api/articles
+GET    /api/articles
+GET    /api/articles/:id
+GET    /api/articles/:id/like
+PUT    /api/articles/:id/like
+DELETE /api/articles/:id/like
+```
+
+### 推荐接口（需要认证）
+
+```
+GET  /api/recommendations/articles
+POST /api/recommendation-events
+```
+
+## 项目结构
+
+### Backend
+
+```
+Go.exchange/
+├── cmd/              # 命令入口
+├── config/           # 配置加载
+├── controllers/      # HTTP Controller
+├── core/             # 服务启动与优雅退出
+├── initialize/       # 初始化流程
+├── metrics/          # Prometheus 指标
+├── middlewares/      # JWT 中间件
+├── models/           # 数据模型
+├── router/           # 路由注册
+├── tasks/            # 异步任务
+├── utils/            # 工具类
+└── main.go
+```
+
+### Frontend
+
+```
+Exchangeapp_frontend/
+├── src/
+│   ├── views/        # 页面
+│   ├── components/   # 组件
+│   ├── router/       # 路由
+│   ├── services/     # API 服务
+│   └── store/        # 状态管理
+└── package.json
+```
+
+## 数据与基础设施
+
+本地环境使用：
+
+- PostgreSQL：业务数据存储
+- Redis：缓存、高频状态处理
+- MinIO：对象存储
+- Kafka：事件基础设施
+
+数据库迁移独立执行，不在 API 启动阶段自动修改结构。
+
+## 开发说明
+
+后端目录：
+
+```bash
+cd Go.exchange
+```
+
+前端目录：
+
+```bash
+cd Exchangeapp_frontend
+npm install
+npm run dev
+```
