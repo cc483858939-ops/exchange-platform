@@ -248,9 +248,3 @@ cd Exchangeapp_frontend
 npm install
 npm run dev
 ```
-
-## 注意事项
-
-- 不要将真实密钥提交到仓库。
-- 生产环境应通过环境变量注入数据库、存储和 AI 服务配置。
-- 本 README 仅描述项目结构和运行方式，不包含敏感配置。
