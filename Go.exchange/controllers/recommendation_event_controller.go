@@ -27,10 +27,13 @@ const (
 )
 
 type recommendationEventInput struct {
-	EventID       string `json:"event_id"`
-	EventType     string `json:"event_type"`
-	TrackingToken string `json:"tracking_token"`
-	OccurredAt    string `json:"occurred_at"`
+	EventID          string  `json:"event_id"`
+	EventType        string  `json:"event_type"`
+	TrackingToken    string  `json:"tracking_token"`
+	OccurredAt       string  `json:"occurred_at"`
+	ForegroundTimeMS *int64  `json:"foreground_time_ms,omitempty"`
+	MaxScrollDepth   *int    `json:"max_scroll_depth,omitempty"`
+	ExitType         *string `json:"exit_type,omitempty"`
 }
 
 type recommendationEventBatchRequest struct {
@@ -164,10 +167,14 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 		return models.RecommendationEvent{}, "invalid_event_id"
 	}
 	eventType := strings.TrimSpace(input.EventType)
-	if eventType != models.RecommendationEventTypeImpression && eventType != models.RecommendationEventTypeClick {
+	if !isRecommendationEventType(eventType) {
 		return models.RecommendationEvent{}, "unsupported_event_type"
 	}
 	claims, err := verifyRecommendationTrackingToken(strings.TrimSpace(input.TrackingToken), key)
+	foregroundTimeMS, maxScrollDepth, exitType, qualifiedRead, quickBounce, reason := validateRecommendationReadPayload(eventType, input)
+	if reason != "" {
+		return models.RecommendationEvent{}, reason
+	}
 	if err != nil {
 		return models.RecommendationEvent{}, "invalid_tracking_token"
 	}
@@ -196,7 +203,8 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 		ArticleID: claims.ArticleID, EventType: eventType, Scene: claims.Scene,
 		Position: claims.Position, RankerVersion: claims.RankerVersion,
 		RankerConfigHash: claims.RankerConfigHash, StrategyID: claims.StrategyID,
-		OccurredAt: occurredAt, ReceivedAt: now, CreatedAt: now,
+		OccurredAt: occurredAt, ReceivedAt: now, ForegroundTimeMS: foregroundTimeMS,
+		MaxScrollDepth: maxScrollDepth, ExitType: exitType, QualifiedRead: qualifiedRead, QuickBounce: quickBounce, CreatedAt: now,
 	}, ""
 }
 
@@ -258,7 +266,8 @@ func recommendationEventMatches(existing, incoming models.RecommendationEvent) b
 		existing.EventType == incoming.EventType && existing.Scene == incoming.Scene &&
 		existing.Position == incoming.Position && existing.RankerVersion == incoming.RankerVersion &&
 		existing.RankerConfigHash == incoming.RankerConfigHash && existing.StrategyID == incoming.StrategyID &&
-		existing.OccurredAt.Equal(incoming.OccurredAt)
+		existing.OccurredAt.Equal(incoming.OccurredAt) &&
+		recommendationReadPayloadMatches(existing, incoming)
 }
 
 func enforceRecommendationTelemetryRateLimit(userID uint, eventCount int) (bool, error) {
@@ -281,10 +290,8 @@ func enforceRecommendationTelemetryRateLimit(userID uint, eventCount int) (bool,
 
 func recommendationEventTypeMetricLabel(eventType string) string {
 	switch strings.TrimSpace(eventType) {
-	case models.RecommendationEventTypeImpression:
-		return models.RecommendationEventTypeImpression
-	case models.RecommendationEventTypeClick:
-		return models.RecommendationEventTypeClick
+	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick, models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeNotInterested:
+		return eventType
 	default:
 		return "unknown"
 	}

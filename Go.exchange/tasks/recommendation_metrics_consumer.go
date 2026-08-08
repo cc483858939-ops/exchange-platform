@@ -110,7 +110,7 @@ func applyRecommendationMetricsEvent(event eventing.Envelope) error {
 	for _, fact := range payload.Events {
 		if fact.UserID != payload.UserID || fact.EventID == "" || fact.ArticleID == 0 || fact.RequestID == "" ||
 			fact.Position <= 0 || fact.Scene == "" || fact.RankerVersion == "" || fact.RankerConfigHash == "" || fact.StrategyID == "" ||
-			(fact.EventType != models.RecommendationEventTypeImpression && fact.EventType != models.RecommendationEventTypeClick) || fact.OccurredAt.IsZero() {
+			!validRecommendationMetricsFact(fact) || fact.OccurredAt.IsZero() {
 			return fmt.Errorf("%w: invalid fact %q", errInvalidRecommendationMetricsEvent, fact.EventID)
 		}
 	}
@@ -135,17 +135,27 @@ func applyRecommendationMetricsEvent(event eventing.Envelope) error {
 func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEventFact) error {
 	occurredAt := fact.OccurredAt.UTC()
 	metricDate := time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC)
-	impressions, clicks := int64(0), int64(0)
-	if fact.EventType == models.RecommendationEventTypeImpression {
+	impressions, clicks, qualifiedReads, quickBounces, notInterested := int64(0), int64(0), int64(0), int64(0), int64(0)
+	switch fact.EventType {
+	case models.RecommendationEventTypeImpression:
 		impressions = 1
-	} else {
+	case models.RecommendationEventTypeClick:
 		clicks = 1
+	case models.RecommendationEventTypeReadEnd:
+		if fact.QualifiedRead {
+			qualifiedReads = 1
+		} else if fact.QuickBounce {
+			quickBounces = 1
+		}
+	case models.RecommendationEventTypeNotInterested:
+		notInterested = 1
 	}
 	metric := models.RecommendationDailyMetric{
 		MetricDate: metricDate, Scene: fact.Scene, RankerVersion: fact.RankerVersion,
 		RankerConfigHash: fact.RankerConfigHash, StrategyID: fact.StrategyID,
 		Position: fact.Position, ArticleID: fact.ArticleID,
-		ImpressionCount: impressions, ClickCount: clicks, UpdatedAt: time.Now().UTC(),
+		ImpressionCount: impressions, ClickCount: clicks, QualifiedReadCount: qualifiedReads,
+		QuickBounceCount: quickBounces, NotInterestedCount: notInterested, UpdatedAt: time.Now().UTC(),
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
@@ -153,9 +163,12 @@ func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEv
 			{Name: "ranker_config_hash"}, {Name: "strategy_id"}, {Name: "position"}, {Name: "article_id"},
 		},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"impression_count": gorm.Expr("recommendation_daily_metrics.impression_count + ?", impressions),
-			"click_count":      gorm.Expr("recommendation_daily_metrics.click_count + ?", clicks),
-			"updated_at":       time.Now().UTC(),
+			"impression_count":     gorm.Expr("recommendation_daily_metrics.impression_count + ?", impressions),
+			"click_count":          gorm.Expr("recommendation_daily_metrics.click_count + ?", clicks),
+			"qualified_read_count": gorm.Expr("recommendation_daily_metrics.qualified_read_count + ?", qualifiedReads),
+			"quick_bounce_count":   gorm.Expr("recommendation_daily_metrics.quick_bounce_count + ?", quickBounces),
+			"not_interested_count": gorm.Expr("recommendation_daily_metrics.not_interested_count + ?", notInterested),
+			"updated_at":           time.Now().UTC(),
 		}),
 	}).Create(&metric).Error
 }

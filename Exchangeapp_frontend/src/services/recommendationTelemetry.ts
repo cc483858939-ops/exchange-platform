@@ -2,13 +2,18 @@ import { isAxiosError } from 'axios';
 import axiosClient from '../axios';
 import type { RecommendationTracking } from '../types/Recommendation';
 
-type RecommendationEventType = 'impression' | 'click';
+export type RecommendationEventType = 'impression' | 'click' | 'read_end' | 'not_interested';
+
+export type RecommendationReadEndPayload = { foreground_time_ms: number; max_scroll_depth: number; exit_type: string; };
 
 type QueuedRecommendationEvent = {
   event_id: string;
   event_type: RecommendationEventType;
   tracking_token: string;
   occurred_at: string;
+  foreground_time_ms?: number;
+  max_scroll_depth?: number;
+  exit_type?: string;
 };
 
 type RecommendationEventResult = {
@@ -37,6 +42,16 @@ const flushDelayMs = 1000;
 const impressionDelayMs = 1000;
 const maxRetryDelayMs = 30_000;
 
+let sharedClient: RecommendationTelemetryClient | null = null;
+
+export const getRecommendationTelemetry = (getAccessToken: () => string | null) => {
+  if (!sharedClient) {
+    sharedClient = new RecommendationTelemetryClient(getAccessToken);
+    sharedClient.start();
+  }
+  return sharedClient;
+};
+
 export class RecommendationTelemetryClient {
   private queue: QueuedRecommendationEvent[] = [];
   private observer: IntersectionObserver | null = null;
@@ -45,6 +60,8 @@ export class RecommendationTelemetryClient {
   private visibilityTimers = new Map<Element, number>();
   private seenImpressions = new Set<string>();
   private seenClicks = new Set<string>();
+  private seenReadEnds = new Set<string>();
+  private seenNotInterested = new Set<string>();
   private flushTimer: number | null = null;
   private retryTimer: number | null = null;
   private retryDelayMs = 1000;
@@ -94,6 +111,8 @@ export class RecommendationTelemetryClient {
     this.queue = [];
     this.seenImpressions.clear();
     this.seenClicks.clear();
+    this.seenReadEnds.clear();
+    this.seenNotInterested.clear();
     this.persistQueue();
     this.clearScheduledFlush();
     this.clearRetry();
@@ -121,6 +140,23 @@ export class RecommendationTelemetryClient {
     void this.flush(false);
   }
 
+  recordReadEnd(articleID: number, tracking: RecommendationTracking | undefined, payload: RecommendationReadEndPayload) {
+    if (!tracking?.token) return;
+    const key = this.businessKey(articleID, tracking);
+    if (this.seenReadEnds.has(key)) return;
+    this.seenReadEnds.add(key);
+    this.enqueue('read_end', tracking, payload);
+    void this.flush(false);
+  }
+
+  recordNotInterested(articleID: number, tracking?: RecommendationTracking) {
+    if (!tracking?.token) return;
+    const key = this.businessKey(articleID, tracking);
+    if (this.seenNotInterested.has(key)) return;
+    this.seenNotInterested.add(key);
+    this.enqueue('not_interested', tracking);
+    void this.flush(false);
+  }
   async flush(keepalive = false): Promise<void> {
     this.clearScheduledFlush();
     if (this.inFlight) {
@@ -231,12 +267,13 @@ export class RecommendationTelemetryClient {
     void this.flush(true);
   };
 
-  private enqueue(eventType: RecommendationEventType, tracking: RecommendationTracking) {
+  private enqueue(eventType: RecommendationEventType, tracking: RecommendationTracking, readPayload?: RecommendationReadEndPayload) {
     this.queue.push({
       event_id: crypto.randomUUID(),
       event_type: eventType,
       tracking_token: tracking.token,
       occurred_at: new Date().toISOString(),
+      ...readPayload,
     });
     if (this.queue.length > maxBufferedEvents) {
       this.queue.splice(0, this.queue.length - maxBufferedEvents);

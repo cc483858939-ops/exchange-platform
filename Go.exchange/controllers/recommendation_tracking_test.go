@@ -38,8 +38,13 @@ func TestAttachRecommendationTrackingUsesFinalPositions(t *testing.T) {
 
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	recommendations := []recommendedArticleResponse{{ID: 11}, {ID: 12}}
-	if err := attachRecommendationTracking(7, buildUserInterestProfile(nil), recommendations, now); err != nil {
+	requestID := "550e8400-e29b-41d4-a716-446655440001"
+	trackedCount, err := attachRecommendationTracking(7, requestID, buildUserInterestProfile(nil), recommendations, now)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if trackedCount != len(recommendations) {
+		t.Fatalf("trackedCount=%d", trackedCount)
 	}
 	if recommendations[0].Tracking == nil || recommendations[1].Tracking == nil {
 		t.Fatal("expected tracking metadata")
@@ -47,8 +52,8 @@ func TestAttachRecommendationTrackingUsesFinalPositions(t *testing.T) {
 	if recommendations[0].Tracking.Position != 1 || recommendations[1].Tracking.Position != 2 {
 		t.Fatalf("unexpected positions: %#v %#v", recommendations[0].Tracking, recommendations[1].Tracking)
 	}
-	if recommendations[0].Tracking.RequestID != recommendations[1].Tracking.RequestID {
-		t.Fatal("expected one request id for the returned list")
+	if recommendations[0].Tracking.RequestID != requestID || recommendations[1].Tracking.RequestID != requestID {
+		t.Fatal("expected supplied request id for the returned list")
 	}
 	claims, err := verifyRecommendationTrackingToken(
 		recommendations[1].Tracking.Token,

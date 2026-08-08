@@ -1,54 +1,23 @@
-# Recommendation telemetry V1
+# Recommendation Telemetry v1.1
 
-Recommendation telemetry records viewable impressions and first clicks without changing `ArticleBehavior` or recommendation weights.
+The recommendation API remains `rules_v1`; this feature records measurable serving and engagement facts only.
 
-## Runtime contract
+## Contract
 
-- `GET /api/recommendations/articles` keeps its array response and adds optional per-item `tracking` metadata.
-- `POST /api/recommendation-events` accepts at most 50 signed events and returns per-event `accepted`, `duplicate`, or `rejected` results.
-- PostgreSQL `recommendation_events` is the source of truth.
-- One accepted HTTP batch produces at most one `recommendation.events.recorded` Outbox event.
-- Kafka topic `goexchange.recommendation.events.v1` feeds the rebuildable `recommendation_daily_metrics` projection.
-- Delivery is at least once. `consumer_inboxes` and database uniqueness prevent double counting.
+Each successful `GET /api/recommendations/articles` creates one UUID request ID. The same ID is embedded in every signed card token and recorded in `recommendation_requests`. The request record is best effort: persistence failure is logged and does not change a successful response.
 
-## Enablement
+`POST /api/recommendation-events` accepts `impression`, `click`, `read_end`, and `not_interested`. Tokens are HMAC-signed server attribution; the client cannot choose user, article, position, strategy, or ranker fields. `event_id` provides transport idempotency and `(request_id, article_id, event_type)` provides business uniqueness.
 
-Telemetry is disabled by default. Configure the API service with:
+`read_end` requires `foreground_time_ms`, `max_scroll_depth`, and `exit_type`. A qualified read is foreground time at least 20 seconds or depth at least 50%. A quick bounce is below 5 seconds and below 25%; qualified reads take precedence. Other event types must not include read fields.
 
-```text
-RECOMMENDATION_TELEMETRY_ENABLED=true
-RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT=100
-RECOMMENDATION_TELEMETRY_SIGNING_KEY=<at least 32 random bytes>
-RECOMMENDATION_TELEMETRY_TOKEN_TTL=24h
-RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW=5m
-RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE=1000
-```
+## Delivery and metrics
 
-The signing key must be identical across API replicas and must not be committed. During rollback, set rollout percent to `0` first and leave ingestion and the worker running for at least one token TTL.
+Accepted facts are written with an outbox event, then projected through Kafka and ConsumerInbox into `recommendation_daily_metrics`. The projection tracks impressions, clicks, qualified reads, quick bounces, and not-interested counts by day, scene, ranker, strategy, position, and article. Rebuilds derive the same metrics from durable facts.
 
-## CTR query
+## Frontend flow
 
-Aggregate counts before division:
+The global client records a 50%-visible card after one second, buffers events in session storage, and retries safely. Clicking a card first saves session-only attribution, records the click, then navigates. The detail page consumes only that article's attribution, measures foreground time and depth, and sends one `read_end` on page hide or route exit. “Not interested” records an event and removes only that card from the current list.
 
-```sql
-SELECT
-  metric_date,
-  scene,
-  ranker_version,
-  ranker_config_hash,
-  strategy_id,
-  position,
-  SUM(click_count)::numeric / NULLIF(SUM(impression_count), 0) AS ctr
-FROM recommendation_daily_metrics
-GROUP BY metric_date, scene, ranker_version, ranker_config_hash, strategy_id, position;
-```
+## Local configuration
 
-## Rebuild
-
-Rebuild a UTC date range from raw facts:
-
-```powershell
-go run ./cmd/rebuild-recommendation-metrics --from 2026-07-01 --to 2026-07-30
-```
-
-Raw events should be retained for 90 days. Do not use canary-period counts as full traffic totals while rollout percent is below 100.
+The root `D:\code\mf\docker-compose.yml` enables telemetry locally with a development-only signing key. Environment variables tune token TTL, rate limit, qualified-read thresholds, and quick-bounce thresholds. Replace the default signing key outside local development.

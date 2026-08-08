@@ -92,7 +92,7 @@
             </div>
             <div class="card-footer">
               <span>{{ article.like_count }} 点赞</span>
-              <button type="button">阅读</button>
+              <button type="button" @click.stop="markNotInterested(article)">不感兴趣</button>`n              <button type="button" @click.stop="openArticle(article)">阅读</button>
             </div>
           </div>
         </article>
@@ -108,7 +108,8 @@ import { useRouter } from 'vue-router';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import axios from '../axios';
-import { RecommendationTelemetryClient } from '../services/recommendationTelemetry';
+import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
+import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { useAuthStore } from '../store/auth';
 import type { RecommendedArticle } from '../types/Recommendation';
 
@@ -116,7 +117,7 @@ gsap.registerPlugin(ScrollTrigger);
 
 const router = useRouter();
 const authStore = useAuthStore();
-const recommendationTelemetry = new RecommendationTelemetryClient(() => authStore.token);
+const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 const articles = ref<RecommendedArticle[]>([]);
 const loading = ref(false);
 const errorMessage = ref('');
@@ -263,7 +264,13 @@ const bindRecommendationCard = (
   }
 };
 
+const markNotInterested = (article: RecommendedArticle) => {
+  recommendationTelemetry.recordNotInterested(article.id, article.tracking);
+  articles.value = articles.value.filter((item) => item.id !== article.id);
+};
+
 const openArticle = (article: RecommendedArticle) => {
+  savePendingRecommendationAttribution(article.id, article.tracking);
   recommendationTelemetry.recordClick(article.id, article.tracking);
   router.push({ name: 'NewsDetail', params: { id: String(article.id) } });
 };
@@ -289,13 +296,11 @@ watch(
 );
 
 onMounted(() => {
-  recommendationTelemetry.start();
   animateHero();
   fetchRecommendations();
 });
 
 onBeforeUnmount(() => {
-  recommendationTelemetry.stop();
   heroContext?.revert();
   cardsContext?.revert();
 });

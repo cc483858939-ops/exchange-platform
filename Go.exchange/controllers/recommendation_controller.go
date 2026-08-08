@@ -13,9 +13,11 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/consts"
 	"Go.exchange/global"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 const (
@@ -223,25 +225,56 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
+	started := time.Now()
+	requestID := uuid.NewString()
 
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	signals, err := loadRecommendationBehaviorSignals(userID)
 	if err != nil {
+		metrics.RecordRecommendationRequest("error", "unknown")
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	profile := buildUserInterestProfile(signals)
 	now := time.Now().UTC()
+	strategyID := recommendationStrategyID(profile)
 	candidates, err := loadRecommendationCandidates(profile.InteractedArticleIDs, now)
 	if err != nil {
+		metrics.RecordRecommendationRequest("error", strategyID)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	recommendations := recommendArticles(profile, candidates, now, limit)
-	if err := attachRecommendationTracking(userID, profile, recommendations, now); err != nil {
-		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", err)
+	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, recommendations, now)
+	if trackingErr != nil {
+		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
+	}
+	metrics.AddRecommendationTrackingResults("tracked", trackedCount)
+	metrics.AddRecommendationTrackingResults("untracked", len(recommendations)-trackedCount)
+
+	outcome := "success"
+	if len(recommendations) == 0 {
+		outcome = "empty"
+	}
+	generationDuration := time.Since(started)
+	metrics.RecordRecommendationRequest(outcome, strategyID)
+	metrics.ObserveRecommendationCandidateCount(len(candidates))
+	metrics.ObserveRecommendationResultCount(len(recommendations))
+	metrics.ObserveRecommendationGenerationDuration(strategyID, generationDuration)
+
+	requestRecord := models.RecommendationRequest{
+		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
+		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(normalizedRecommendationConfig()),
+		RequestedLimit: limit, CandidateCount: len(candidates), ResultCount: len(recommendations),
+		TrackedResultCount: trackedCount, PersonalizedSignalCount: len(signals),
+		FallbackReason:      recommendationFallbackReason(len(signals), len(recommendations), limit),
+		GenerationLatencyMS: generationDuration.Milliseconds(), CreatedAt: time.Now().UTC(),
+	}
+	if err := persistRecommendationRequest(requestRecord); err != nil {
+		log.Printf("[RecommendationTelemetry] persist request %s: %v", requestID, err)
+		metrics.RecordRecommendationRequestLogFailure()
 	}
 	ctx.JSON(http.StatusOK, recommendations)
 }

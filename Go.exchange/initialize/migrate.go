@@ -32,11 +32,15 @@ func RunMigrations() error {
 			&models.ArticleReaction{},
 			&models.RecommendationEvent{},
 			&models.RecommendationDailyMetric{},
+			&models.RecommendationRequest{},
 			&models.ExchangeRate{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
 
+		if err := applyRecommendationTelemetryConstraints(tx); err != nil {
+			return err
+		}
 		if err := tx.Exec(`
 UPDATE article_reaction
 SET liked = (reaction = 1)
@@ -46,4 +50,23 @@ WHERE reaction_version = 0
 		}
 		return nil
 	})
+}
+
+func applyRecommendationTelemetryConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_type",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_foreground_time",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_scroll_depth",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_exit_type",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_type CHECK (event_type IN ('impression','click','read_end','not_interested'))",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_foreground_time CHECK (foreground_time_ms IS NULL OR foreground_time_ms BETWEEN 0 AND 21600000)",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_scroll_depth CHECK (max_scroll_depth IS NULL OR max_scroll_depth BETWEEN 0 AND 100)",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_exit_type CHECK (exit_type IS NULL OR exit_type IN ('back_to_recommendation','navigate_to_article','route_leave','page_hide','refresh','unknown'))",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation telemetry constraint: %w", err)
+		}
+	}
+	return nil
 }

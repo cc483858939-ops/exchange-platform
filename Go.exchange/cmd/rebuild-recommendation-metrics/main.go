@@ -63,7 +63,8 @@ func rebuildRecommendationMetrics(from, to time.Time) error {
 		return tx.Exec(`
 INSERT INTO recommendation_daily_metrics (
   metric_date, scene, ranker_version, ranker_config_hash, strategy_id,
-  position, article_id, impression_count, click_count, updated_at
+  position, article_id, impression_count, click_count, qualified_read_count,
+  quick_bounce_count, not_interested_count, updated_at
 )
 SELECT
   (occurred_at AT TIME ZONE 'UTC')::date AS metric_date,
@@ -75,6 +76,9 @@ SELECT
   article_id,
   SUM(CASE WHEN event_type = 'impression' THEN 1 ELSE 0 END) AS impression_count,
   SUM(CASE WHEN event_type = 'click' THEN 1 ELSE 0 END) AS click_count,
+  SUM(CASE WHEN event_type = 'read_end' AND qualified_read = TRUE THEN 1 ELSE 0 END) AS qualified_read_count,
+  SUM(CASE WHEN event_type = 'read_end' AND quick_bounce = TRUE THEN 1 ELSE 0 END) AS quick_bounce_count,
+  SUM(CASE WHEN event_type = 'not_interested' THEN 1 ELSE 0 END) AS not_interested_count,
   NOW() AS updated_at
 FROM recommendation_events
 WHERE occurred_at >= ? AND occurred_at < ?

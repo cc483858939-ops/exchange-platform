@@ -49,19 +49,21 @@ type recommendationTrackingClaims struct {
 	ExpiresAtUnix    int64  `json:"exp"`
 }
 
-func attachRecommendationTracking(userID uint, profile userInterestProfile, recommendations []recommendedArticleResponse, now time.Time) error {
+func attachRecommendationTracking(userID uint, requestID string, profile userInterestProfile, recommendations []recommendedArticleResponse, now time.Time) (int, error) {
 	if len(recommendations) == 0 || !config.RecommendationTelemetryEnabled() {
-		return nil
+		return 0, nil
 	}
 
-	requestID := uuid.NewString()
+	if _, err := uuid.Parse(requestID); err != nil {
+		return 0, errors.New("recommendation tracking request id must be a UUID")
+	}
 	if !recommendationTelemetryRequestSelected(userID, requestID, config.RecommendationTelemetryRolloutPercent()) {
-		return nil
+		return 0, nil
 	}
 
 	key := []byte(config.RecommendationTelemetrySigningKey())
 	if len(key) < recommendationSigningKeyMinBytes {
-		return errors.New("recommendation telemetry signing key must contain at least 32 bytes")
+		return 0, errors.New("recommendation telemetry signing key must contain at least 32 bytes")
 	}
 
 	issuedAt := now.UTC()
@@ -78,7 +80,7 @@ func attachRecommendationTracking(userID uint, profile userInterestProfile, reco
 		}
 		token, err := signRecommendationTrackingClaims(claims, key)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		recommendations[index].Tracking = &recommendationTrackingResponse{
 			RequestID: requestID, Position: index + 1, Scene: recommendationScene,
@@ -86,7 +88,7 @@ func attachRecommendationTracking(userID uint, profile userInterestProfile, reco
 			StrategyID: strategyID, Token: token, ExpiresAt: expiresAt,
 		}
 	}
-	return nil
+	return len(recommendations), nil
 }
 
 func recommendationStrategyID(profile userInterestProfile) string {

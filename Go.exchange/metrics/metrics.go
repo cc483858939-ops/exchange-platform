@@ -21,6 +21,12 @@ var (
 	recommendationTelemetryIngestDuration  = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
 	recommendationTelemetryProjection      = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_projection_total", Help: "Recommendation telemetry projection outcomes."}, []string{"status"})
 	recommendationTelemetryOutboxOldestAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_recommendation_telemetry_outbox_oldest_age_seconds", Help: "Age of the oldest unpublished recommendation telemetry outbox event."})
+	recommendationRequests                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_requests_total", Help: "Recommendation requests by outcome and strategy."}, []string{"outcome", "strategy_id"})
+	recommendationRequestLogFailures       = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_request_log_failures_total", Help: "Recommendation request records that failed to persist."})
+	recommendationTrackingResults          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_tracking_results_total", Help: "Returned recommendation results by tracking availability."}, []string{"status"})
+	recommendationCandidateCount           = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_candidate_count", Help: "Candidate count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50, 100, 200}})
+	recommendationResultCount              = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_result_count", Help: "Result count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50}})
+	recommendationGenerationDuration       = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_generation_duration_seconds", Help: "Recommendation generation duration.", Buckets: prometheus.DefBuckets}, []string{"strategy_id"})
 )
 
 func init() {
@@ -28,7 +34,9 @@ func init() {
 		httpRequestsTotal, httpRequestDuration, articleAnalysisJobs, outboxPending, likePipelineDepth,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection,
-		recommendationTelemetryOutboxOldestAge,
+		recommendationTelemetryOutboxOldestAge, recommendationRequests,
+		recommendationRequestLogFailures, recommendationTrackingResults,
+		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration,
 	)
 }
 func Middleware() gin.HandlerFunc {
@@ -73,6 +81,29 @@ func RecordRecommendationTelemetryProjection(status string) {
 	recommendationTelemetryProjection.WithLabelValues(status).Inc()
 }
 
+func RecordRecommendationRequest(outcome, strategyID string) {
+	recommendationRequests.WithLabelValues(outcome, strategyID).Inc()
+}
+
+func RecordRecommendationRequestLogFailure() { recommendationRequestLogFailures.Inc() }
+
+func AddRecommendationTrackingResults(status string, count int) {
+	if count > 0 {
+		recommendationTrackingResults.WithLabelValues(status).Add(float64(count))
+	}
+}
+
+func ObserveRecommendationCandidateCount(count int) {
+	recommendationCandidateCount.Observe(float64(count))
+}
+
+func ObserveRecommendationResultCount(count int) {
+	recommendationResultCount.Observe(float64(count))
+}
+
+func ObserveRecommendationGenerationDuration(strategyID string, duration time.Duration) {
+	recommendationGenerationDuration.WithLabelValues(strategyID).Observe(duration.Seconds())
+}
 func SetRecommendationTelemetryOutboxOldestAge(seconds float64) {
 	recommendationTelemetryOutboxOldestAge.Set(seconds)
 }
