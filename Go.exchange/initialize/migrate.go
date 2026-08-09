@@ -48,6 +48,9 @@ func RunMigrations() error {
 		if err := applyArticleAuthorConstraints(tx); err != nil {
 			return err
 		}
+		if err := applyArticleEngagementConstraints(tx); err != nil {
+			return err
+		}
 		if err := applyCommentConstraints(tx); err != nil {
 			return err
 		}
@@ -70,6 +73,19 @@ func applyArticleAuthorConstraints(tx *gorm.DB) error {
 	}
 	if err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_articles_author_created ON articles (author_id, created_at DESC, id DESC)").Error; err != nil {
 		return fmt.Errorf("create article author index: %w", err)
+	}
+	return nil
+}
+
+func applyArticleEngagementConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE articles DROP CONSTRAINT IF EXISTS chk_articles_comment_count_nonnegative",
+		"ALTER TABLE articles ADD CONSTRAINT chk_articles_comment_count_nonnegative CHECK (comment_count >= 0)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply article engagement constraint: %w", err)
+		}
 	}
 	return nil
 }

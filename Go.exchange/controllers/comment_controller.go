@@ -65,19 +65,6 @@ func CreateArticleComment(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if global.Db == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
-		return
-	}
-
-	var article models.Article
-	if err := global.Db.
-		Select("id").
-		Scopes(func(tx *gorm.DB) *gorm.DB { return visibleArticleScope(tx, time.Now()) }).
-		First(&article, articleID).Error; err != nil {
-		writeCommentArticleLookupError(ctx, err)
-		return
-	}
 
 	author, err := loadPublicAuthorByID(userID)
 	if err != nil {
@@ -89,15 +76,16 @@ func CreateArticleComment(ctx *gin.Context) {
 		return
 	}
 
-	comment := models.Comment{
-		ArticleID: articleID,
-		UserID:    userID,
-		Content:   content,
-	}
-	if err := global.Db.Create(&comment).Error; err != nil {
+	comment, err := createCommentWithCount(articleID, userID, content)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeCommentArticleLookupError(ctx, err)
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	invalidateCommentArticleCaches(articleID)
 	comment.Author = models.User{Model: gorm.Model{ID: author.ID}, Username: author.Username}
 
 	response, err := newCommentResponse(comment)
@@ -196,34 +184,19 @@ func DeleteComment(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	if global.Db == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
-		return
-	}
-
-	var comment models.Comment
-	if err := global.Db.First(&comment, commentID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	comment, err := deleteCommentWithCount(commentID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "comment not found"})
-			return
+		case errors.Is(err, errCommentForbidden):
+			ctx.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		default:
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if comment.UserID != userID {
-		ctx.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-		return
-	}
-
-	result := global.Db.Where("id = ? AND user_id = ?", commentID, userID).Delete(&models.Comment{})
-	if result.Error != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
-		return
-	}
-	if result.RowsAffected != 1 {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "comment not found"})
-		return
-	}
+	invalidateCommentArticleCaches(comment.ArticleID)
 	ctx.Status(http.StatusNoContent)
 	ctx.Writer.WriteHeaderNow()
 }

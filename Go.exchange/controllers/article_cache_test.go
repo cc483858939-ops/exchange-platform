@@ -169,24 +169,26 @@ func TestLoadJSONCacheWithStorePreservesArticleAuthorDTO(t *testing.T) {
 	loader := func() (articleResponse, error) {
 		loads++
 		return articleResponse{
-			ID:     42,
-			Title:  "cached article",
-			Author: publicAuthorResponse{ID: 7, Username: "alice"},
+			ID:           42,
+			Title:        "cached article",
+			LikeCount:    11,
+			CommentCount: 3,
+			Author:       publicAuthorResponse{ID: 7, Username: "alice"},
 		}, nil
 	}
 
-	miss, err := loadJSONCacheWithStore("article:detail:v2:42", time.Minute, getter, setter, loader)
+	miss, err := loadJSONCacheWithStore("article:detail:v3:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hit, err := loadJSONCacheWithStore("article:detail:v2:42", time.Minute, getter, setter, loader)
+	hit, err := loadJSONCacheWithStore("article:detail:v3:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if loads != 1 {
 		t.Fatalf("loader calls=%d want 1", loads)
 	}
-	if miss.Author != hit.Author || hit.Author.ID != 7 || hit.Author.Username != "alice" {
+	if miss.Author != hit.Author || hit.Author.ID != 7 || hit.Author.Username != "alice" || miss.LikeCount != 11 || hit.LikeCount != 11 || miss.CommentCount != 3 || hit.CommentCount != 3 {
 		t.Fatalf("author was not preserved across cache hit: miss=%+v hit=%+v", miss.Author, hit.Author)
 	}
 }

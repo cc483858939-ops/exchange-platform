@@ -300,8 +300,10 @@ func TestRecommendArticlesIncludesCoverImageURL(t *testing.T) {
 	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	article := recommendationTestArticle(2, now, "Travel", []string{"Food"}, 0)
 	article.CoverImageURL = "/api/files/article-covers/cover.png"
+	article.CommentCount = 17
 	cfg := normalizedRulesV2RecommendationConfig()
 	profile := buildRulesV2InterestProfile(nil, nil, now, cfg)
+	expectedScore := scoreRulesV2Article(profile, article, now, cfg)
 	recommendations := recommendRulesV2Articles(profile, []models.Article{article}, now, cfg, 1)
 
 	if len(recommendations) != 1 {
@@ -309,6 +311,9 @@ func TestRecommendArticlesIncludesCoverImageURL(t *testing.T) {
 	}
 	if recommendations[0].CoverImageURL != article.CoverImageURL {
 		t.Fatalf("cover image URL=%q", recommendations[0].CoverImageURL)
+	}
+	if recommendations[0].CommentCount != article.CommentCount || recommendations[0].Score != expectedScore {
+		t.Fatalf("comment_count=%d score=%f want comment_count=%d score=%f", recommendations[0].CommentCount, recommendations[0].Score, article.CommentCount, expectedScore)
 	}
 }
 

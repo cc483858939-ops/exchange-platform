@@ -53,8 +53,8 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	expiredAt := now.Add(-time.Hour)
 	articles := []models.Article{
-		{AuthorID: target.ID, Title: "older", Preview: "p", Model: gorm.Model{CreatedAt: now.Add(-time.Hour)}},
-		{AuthorID: target.ID, Title: "newer", Preview: "p", Model: gorm.Model{CreatedAt: now}},
+		{AuthorID: target.ID, Title: "older", Preview: "p", LikeCount: 9, CommentCount: 4, Model: gorm.Model{CreatedAt: now.Add(-time.Hour)}},
+		{AuthorID: target.ID, Title: "newer", Preview: "p", LikeCount: 17, CommentCount: 8, Model: gorm.Model{CreatedAt: now}},
 		{AuthorID: target.ID, Title: "expired", Preview: "p", ExpiredAt: &expiredAt, Model: gorm.Model{CreatedAt: now.Add(time.Hour)}},
 		{AuthorID: other.ID, Title: "other", Preview: "p", Model: gorm.Model{CreatedAt: now.Add(2 * time.Hour)}},
 	}
@@ -94,7 +94,7 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response) != 2 || response[0].Title != "newer" || response[1].Title != "older" {
+	if len(response) != 2 || response[0].Title != "newer" || response[1].Title != "older" || response[0].LikeCount != 17 || response[0].CommentCount != 8 {
 		t.Fatalf("unexpected author articles: %#v", response)
 	}
 	for _, article := range response {

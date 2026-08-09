@@ -24,5 +24,6 @@ type Article struct {
 	PublishedAt      *time.Time `json:"published_at"`
 	ExpiredAt        *time.Time `json:"expired_at" gorm:"index:idx_articles_recommendation,priority:3"`
 	LikeCount        int64      `json:"like_count" gorm:"default:0"`
+	CommentCount     int64      `json:"comment_count" gorm:"not null;default:0"`
 	LikeSyncVersion  int64      `json:"like_sync_version" gorm:"not null;default:0"`
 }

@@ -184,3 +184,37 @@ func TestRulesV2CandidateStableOrderIntegration(t *testing.T) {
 		t.Fatalf("completed candidates must precede fallback candidates: order=%v", positions)
 	}
 }
+func TestRulesV2CandidateLoadsCommentCountIntegration(t *testing.T) {
+	db := openRulesV2IntegrationDatabase(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	author := createArticleIntegrationAuthor(t, db)
+	article := models.Article{
+		Title:            "comment count candidate",
+		AuthorID:         author.ID,
+		PublicationState: consts.ArticlePublicationStatePublished,
+		AnalysisState:    consts.ArticleAnalysisStateCompleted,
+		LikeCount:        17,
+		CommentCount:     8,
+		Model:            gorm.Model{CreatedAt: now},
+	}
+	if err := db.Create(&article).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Delete(&article)
+	})
+
+	candidates, err := loadRulesV2Candidates(uint(now.UnixNano()&0x3fffffff), map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range candidates {
+		if candidate.ID == article.ID {
+			if candidate.LikeCount != 17 || candidate.CommentCount != 8 {
+				t.Fatalf("candidate like_count=%d comment_count=%d", candidate.LikeCount, candidate.CommentCount)
+			}
+			return
+		}
+	}
+	t.Fatalf("candidate %d is missing", article.ID)
+}

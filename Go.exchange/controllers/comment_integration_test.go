@@ -3,6 +3,7 @@ package controllers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -98,7 +99,21 @@ func createCommentRecord(t *testing.T, db *gorm.DB, articleID, userID uint, cont
 	if !createdAt.IsZero() {
 		comment.CreatedAt = createdAt
 	}
-	if err := db.Create(&comment).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&comment).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&models.Article{}).
+			Where("id = ?", articleID).
+			UpdateColumn("comment_count", gorm.Expr("comment_count + 1"))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("fixture article counter update affected an unexpected number of rows")
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return comment
@@ -135,6 +150,19 @@ func TestCreateArticleCommentIntegration(t *testing.T) {
 	if comment.ArticleID != fixture.Article.ID || comment.UserID != fixture.Commenter.ID || comment.Content != "hello" {
 		t.Fatalf("stored comment=%#v", comment)
 	}
+
+	if commentArticleCount(t, db, fixture.Article.ID) != 1 {
+		t.Fatalf("count after first create=%d", commentArticleCount(t, db, fixture.Article.ID))
+	}
+	ctx, recorder = newCommentIntegrationContext(http.MethodPost, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), `{"content":"second"}`, fixture.Commenter.ID)
+	CreateArticleComment(ctx)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("second create status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if commentArticleCount(t, db, fixture.Article.ID) != 2 {
+		t.Fatalf("count after second create=%d", commentArticleCount(t, db, fixture.Article.ID))
+	}
+
 	for _, forbidden := range []string{"user_id", "UserID", "password", "Password", "DeletedAt"} {
 		if bytes.Contains(recorder.Body.Bytes(), []byte(forbidden)) {
 			t.Fatalf("response leaked %s: %s", forbidden, recorder.Body.String())
@@ -156,6 +184,9 @@ func TestCreateArticleCommentIntegration(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expired article status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	if commentArticleCount(t, db, fixture.Article.ID) != 2 {
+		t.Fatalf("expired create changed count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	}
 }
 
 func TestGetArticleCommentsCursorIntegration(t *testing.T) {
@@ -170,9 +201,7 @@ func TestGetArticleCommentsCursorIntegration(t *testing.T) {
 		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "fourth", now),
 	}
 	removed := createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "removed", now.Add(-time.Second))
-	if err := db.Delete(&removed).Error; err != nil {
-		t.Fatal(err)
-	}
+	softDeleteCounterAwareComment(t, db, removed)
 
 	otherArticle := models.Article{AuthorID: fixture.Author.ID, Title: "other comment article", Preview: "other"}
 	if err := db.Create(&otherArticle).Error; err != nil {
@@ -246,6 +275,9 @@ func TestDeleteCommentRowsAffectedIntegration(t *testing.T) {
 	if err := db.First(&models.Comment{}, owned.ID).Error; err != nil {
 		t.Fatalf("forbidden delete removed comment: %v", err)
 	}
+	if commentArticleCount(t, db, fixture.Article.ID) != 1 {
+		t.Fatalf("forbidden delete changed count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	}
 
 	ctx, recorder = newCommentIntegrationContext(http.MethodDelete, "/api/comments/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
 	DeleteComment(ctx)
@@ -256,10 +288,16 @@ func TestDeleteCommentRowsAffectedIntegration(t *testing.T) {
 	if err := db.Unscoped().First(&deleted, owned.ID).Error; err != nil || !deleted.DeletedAt.Valid {
 		t.Fatalf("soft deleted=%#v err=%v", deleted, err)
 	}
+	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("owner delete count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	}
 	ctx, recorder = newCommentIntegrationContext(http.MethodDelete, "/api/comments/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
 	DeleteComment(ctx)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("repeat delete status=%d", recorder.Code)
+	}
+	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("repeat delete changed count=%d", commentArticleCount(t, db, fixture.Article.ID))
 	}
 
 	expiring := createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "expire then delete", time.Time{})
@@ -271,6 +309,9 @@ func TestDeleteCommentRowsAffectedIntegration(t *testing.T) {
 	DeleteComment(ctx)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("delete after article expiry status=%d", recorder.Code)
+	}
+	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("delete after expiry count=%d", commentArticleCount(t, db, fixture.Article.ID))
 	}
 
 	concurrent := createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "concurrent delete", time.Time{})
@@ -301,6 +342,9 @@ func TestDeleteCommentRowsAffectedIntegration(t *testing.T) {
 	}
 	if successes != 1 || notFound != 1 {
 		t.Fatalf("concurrent delete successes=%d notFound=%d", successes, notFound)
+	}
+	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("concurrent delete count=%d", commentArticleCount(t, db, fixture.Article.ID))
 	}
 }
 func TestGetArticleCommentsEmptyFeed(t *testing.T) {
@@ -361,9 +405,7 @@ func TestCommentCursorStableAfterDelete(t *testing.T) {
 		t.Fatalf("unexpected first page=%#v", first.Items)
 	}
 
-	if err := db.Delete(&comments[0]).Error; err != nil {
-		t.Fatal(err)
-	}
+	softDeleteCounterAwareComment(t, db, comments[0])
 	ctx, recorder = newCommentIntegrationContext(http.MethodGet, path+"&cursor="+*first.NextCursor, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
 	GetArticleComments(ctx)
 	if recorder.Code != http.StatusOK {

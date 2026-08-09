@@ -17,7 +17,7 @@ const articleCacheTTL = 10 * time.Minute
 
 var (
 	// articleListCacheKey 文章列表的 Redis Key
-	articleListCacheKey = "articles:v2"
+	articleListCacheKey = "articles:v3"
 	// articleCacheGroup 用于防击穿的 Singleflight 分组
 	articleCacheGroup singleflight.Group
 )
@@ -30,7 +30,7 @@ type cacheSetter func(key string, payload []byte, expiration time.Duration) erro
 
 // articleDetailCacheKey 生成文章详情的 Redis Key
 func articleDetailCacheKey(id string) string {
-	return "article:detail:v2:" + id
+	return "article:detail:v3:" + id
 }
 
 // InvalidateArticleListCache 主动删除文章列表缓存。
