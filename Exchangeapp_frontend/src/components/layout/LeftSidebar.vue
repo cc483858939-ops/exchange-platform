@@ -38,11 +38,9 @@
 </template>
 
 <script setup lang="ts">
-import { useRouter } from 'vue-router';
-import { useAuthStore } from '../../store/auth';
+import { useLogout } from '../../composables/useLogout';
 
-const router = useRouter();
-const authStore = useAuthStore();
+const { authStore, handleLogout } = useLogout();
 
 const navigation = [
   { name: 'Home', label: 'Home' },
@@ -51,10 +49,6 @@ const navigation = [
   { name: 'CurrencyExchange', label: 'Exchange' },
 ];
 
-const handleLogout = () => {
-  authStore.logout();
-  void router.push({ name: 'Home' });
-};
 </script>
 
 <style scoped>

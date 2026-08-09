@@ -39,24 +39,17 @@
 </template>
 
 <script setup lang="ts">
-import { useRouter } from 'vue-router';
-import { useAuthStore } from '../../store/auth';
+import { useLogout } from '../../composables/useLogout';
 import LeftSidebar from './LeftSidebar.vue';
 import RightRail from './RightRail.vue';
 
-const router = useRouter();
-const authStore = useAuthStore();
-
-const handleLogout = () => {
-  authStore.logout();
-  void router.push({ name: 'Home' });
-};
+const { authStore, handleLogout } = useLogout();
 </script>
 
 <style scoped>
 .app-layout {
   display: grid;
-  width: min(100%, 1280px);
+  width: min(100%, 1268px);
   min-height: 100vh;
   grid-template-columns: var(--shell-left-width) minmax(0, var(--shell-main-width)) var(--shell-right-width);
   align-items: start;
@@ -88,7 +81,7 @@ const handleLogout = () => {
   display: none;
 }
 
-@media (max-width: 1199px) {
+@media (max-width: 1279px) {
   .app-layout {
     width: min(100%, 792px);
     grid-template-columns: 96px minmax(0, var(--shell-main-width));
