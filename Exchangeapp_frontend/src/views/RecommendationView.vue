@@ -302,6 +302,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .recommendation-page {
+  container-type: inline-size;
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
@@ -752,6 +753,32 @@ onBeforeUnmount(() => {
 
   .masonry-grid {
     column-count: 1;
+  }
+}
+@container (max-width: 720px) {
+  .recommendation-hero {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    gap: 28px;
+    padding: 28px;
+  }
+
+  .hero-copy h1 {
+    font-size: clamp(42px, 10vw, 64px);
+  }
+
+  .hero-visual {
+    min-height: 300px;
+  }
+
+  .masonry-grid {
+    column-count: 1;
+  }
+
+  .state-panel {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 28px;
   }
 }
 </style>

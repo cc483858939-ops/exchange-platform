@@ -10,15 +10,15 @@ import Login from '../components/Login.vue';
 import Register from '../components/Register.vue';
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', name: 'Home', component: HomeView },
-  { path: '/exchange', name: 'CurrencyExchange', component: LiveExchangeView },
-  { path: '/news', name: 'News', component: NewsView },
-  { path: '/news/new', name: 'ArticleCreate', component: ArticleCreateView },
-  { path: '/news/:id', name: 'NewsDetail', component: NewsDetailView },
-  { path: '/recommendations', name: 'Recommendations', component: RecommendationView },
-  { path: '/users/:id', name: 'UserProfile', component: UserProfileView },
-  { path: '/login', name: 'Login', component: Login },
-  { path: '/register', name: 'Register', component: Register },
+  { path: '/', name: 'Home', component: HomeView, meta: { layout: 'app' } },
+  { path: '/exchange', name: 'CurrencyExchange', component: LiveExchangeView, meta: { layout: 'app' } },
+  { path: '/news', name: 'News', component: NewsView, meta: { layout: 'app' } },
+  { path: '/news/new', name: 'ArticleCreate', component: ArticleCreateView, meta: { layout: 'app' } },
+  { path: '/news/:id', name: 'NewsDetail', component: NewsDetailView, meta: { layout: 'app' } },
+  { path: '/recommendations', name: 'Recommendations', component: RecommendationView, meta: { layout: 'app' } },
+  { path: '/users/:id', name: 'UserProfile', component: UserProfileView, meta: { layout: 'app' } },
+  { path: '/login', name: 'Login', component: Login, meta: { layout: 'auth' } },
+  { path: '/register', name: 'Register', component: Register, meta: { layout: 'auth' } },
 ];
 
 const router = createRouter({

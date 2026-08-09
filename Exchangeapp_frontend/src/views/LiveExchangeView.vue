@@ -174,4 +174,33 @@ dd { margin: 0; font-size: 14px; word-break: break-word; }
   .swap-button { width: 100%; margin: -2px 0 18px; }
   .quote-panel { min-height: 280px; }
 }
+.exchange-page {
+  container-type: inline-size;
+}
+
+@container (max-width: 720px) {
+  .page-header,
+  .exchange-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .market-status {
+    width: 100%;
+  }
+
+  .currency-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .swap-button {
+    width: 100%;
+    margin: -2px 0 18px;
+  }
+
+  .quote-panel {
+    min-height: 280px;
+  }
+}
 </style>

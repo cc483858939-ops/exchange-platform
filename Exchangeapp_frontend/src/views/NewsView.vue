@@ -93,6 +93,7 @@ onMounted(fetchArticles);
 
 <style scoped>
 .news-main {
+  container-type: inline-size;
   padding: 32px clamp(18px, 4vw, 48px);
 }
 
@@ -190,6 +191,26 @@ onMounted(fetchArticles);
 
   .article-card-content {
     grid-template-columns: 1fr;
+  }
+
+  .article-cover img {
+    aspect-ratio: 16 / 9;
+    min-height: 0;
+  }
+}
+@container (max-width: 700px) {
+  .news-main {
+    padding: 24px 18px;
+  }
+
+  .news-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .article-card-content {
+    grid-template-columns: 1fr;
+    gap: 18px;
   }
 
   .article-cover img {

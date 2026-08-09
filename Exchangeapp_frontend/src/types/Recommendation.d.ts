@@ -1,4 +1,5 @@
 import type { PublicAuthor } from './User';
+
 export interface RecommendationTracking {
   request_id: string;
   position: number;
@@ -20,6 +21,7 @@ export interface RecommendedArticle {
   tags: string[];
   category: string;
   like_count: number;
+  comment_count: number;
   created_at: string;
   score: number;
   tracking?: RecommendationTracking;

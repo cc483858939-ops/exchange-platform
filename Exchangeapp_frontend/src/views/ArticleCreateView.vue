@@ -286,4 +286,21 @@ onBeforeUnmount(revokeCoverPreview);
     flex: 1;
   }
 }
+.compose-main {
+  container-type: inline-size;
+}
+
+@container (max-width: 700px) {
+  .compose-panel {
+    padding: 20px;
+  }
+
+  .form-actions {
+    justify-content: stretch;
+  }
+
+  .form-actions :deep(.el-button) {
+    flex: 1;
+  }
+}
 </style>

@@ -133,4 +133,14 @@ onBeforeUnmount(() => { finishRead('route_leave'); document.removeEventListener(
   font-size: 18px;
   color: #64748b;
 }
+.detail-main {
+  container-type: inline-size;
+}
+
+@container (max-width: 700px) {
+  .actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 </style>

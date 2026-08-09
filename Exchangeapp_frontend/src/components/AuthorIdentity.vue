@@ -2,7 +2,7 @@
   <RouterLink
     class="author-identity"
     :to="{ name: 'UserProfile', params: { id: author.id } }"
-    :aria-label="`查看 ${displayName} 的主页`"
+    :aria-label="`View ${displayName}'s profile`"
     @click.stop
   >
     <span class="author-avatar" aria-hidden="true">{{ initial }}</span>
@@ -35,31 +35,25 @@ const relativeTime = computed(() => formatRelativeTime(props.createdAt));
   gap: 9px;
   width: fit-content;
   min-width: 0;
-  color: #475569;
+  color: var(--color-text-secondary);
   text-decoration: none;
 }
 
 .author-identity:hover .author-name,
 .author-identity:focus-visible .author-name {
-  color: #1d4ed8;
-}
-
-.author-identity:focus-visible {
-  outline: 2px solid #60a5fa;
-  outline-offset: 3px;
-  border-radius: 6px;
+  color: var(--color-accent);
 }
 
 .author-avatar {
   display: grid;
-  place-items: center;
-  flex: 0 0 auto;
   width: 30px;
   height: 30px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--color-border-strong);
   border-radius: 50%;
-  background: linear-gradient(135deg, #dbeafe, #eff6ff);
-  color: #1d4ed8;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
   font-size: 13px;
   font-weight: 800;
 }
@@ -71,22 +65,22 @@ const relativeTime = computed(() => formatRelativeTime(props.createdAt));
   line-height: 1.12;
 }
 
-.author-name {
+.author-name,
+.author-meta {
   overflow: hidden;
-  color: #1e293b;
-  font-size: 13px;
-  font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color 160ms ease;
+}
+
+.author-name {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 750;
+  transition: color var(--transition-fast);
 }
 
 .author-meta {
-  overflow: hidden;
-  color: #94a3b8;
+  color: var(--color-text-tertiary);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 </style>
-

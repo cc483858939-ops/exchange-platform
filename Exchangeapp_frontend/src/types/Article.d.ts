@@ -1,16 +1,37 @@
 import type { PublicAuthor } from './User';
+
 export interface Article {
-  CreatedAt: string;
-  author: PublicAuthor;
   ID: number;
+
+  CreatedAt: string;
+  UpdatedAt: string;
+
   title: string;
-  preview: string;
   content: string;
-  cover_image_url?: string;
-  expired_at?: string;
+  preview: string;
+  cover_image_url: string;
+
+  summary: string;
+  tags: string[] | null;
+  category: string;
+
+  publication_state: string;
+  analysis_state: string;
+  analysis_version: string;
+
+  published_at: string | null;
+  expired_at: string | null;
+
+  like_count: number;
+  comment_count: number;
+  like_sync_version: number;
+
+  author: PublicAuthor;
 }
 
-export interface Like {
+export interface ArticleLikeState {
   likes: number;
   liked: boolean;
 }
+
+export type Like = ArticleLikeState;

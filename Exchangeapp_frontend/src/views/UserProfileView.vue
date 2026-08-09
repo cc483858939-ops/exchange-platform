@@ -382,4 +382,23 @@ watch(
   }
 }
 
+.profile-page {
+  container-type: inline-size;
+}
+
+@container (max-width: 700px) {
+  .profile-header {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 28px;
+  }
+
+  .author-article {
+    grid-template-columns: 1fr auto;
+  }
+
+  .author-article .article-date {
+    grid-column: 1 / -1;
+  }
+}
 </style>
