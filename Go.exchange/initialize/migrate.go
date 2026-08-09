@@ -25,6 +25,7 @@ func RunMigrations() error {
 		if err := tx.AutoMigrate(
 			&models.User{},
 			&models.Article{},
+			&models.Comment{},
 			&models.ArticleAnalysisJob{},
 			&models.OutboxEvent{},
 			&models.ConsumerInbox{},
@@ -45,6 +46,9 @@ func RunMigrations() error {
 			return err
 		}
 		if err := applyArticleAuthorConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyCommentConstraints(tx); err != nil {
 			return err
 		}
 		if err := tx.Exec(`
@@ -70,7 +74,28 @@ func applyArticleAuthorConstraints(tx *gorm.DB) error {
 	return nil
 }
 
+func applyCommentConstraints(tx *gorm.DB) error {
+	if !tx.Migrator().HasConstraint(&models.Comment{}, "Article") {
+		if err := tx.Migrator().CreateConstraint(&models.Comment{}, "Article"); err != nil {
+			return fmt.Errorf("create comment article foreign key: %w", err)
+		}
+	}
+	if !tx.Migrator().HasConstraint(&models.Comment{}, "Author") {
+		if err := tx.Migrator().CreateConstraint(&models.Comment{}, "Author"); err != nil {
+			return fmt.Errorf("create comment author foreign key: %w", err)
+		}
+	}
+	if err := tx.Exec(`
+CREATE INDEX IF NOT EXISTS idx_comments_article_created
+ON comments (article_id, created_at DESC, id DESC)
+WHERE deleted_at IS NULL
+`).Error; err != nil {
+		return fmt.Errorf("create comment cursor index: %w", err)
+	}
+	return nil
+}
 func applyRecommendationTelemetryConstraints(tx *gorm.DB) error {
+
 	statements := []string{
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_type",
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_foreground_time",
