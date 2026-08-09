@@ -3,15 +3,12 @@ package controllers
 import (
 	"errors"
 	"log"
-	"math"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"Go.exchange/config"
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
@@ -24,19 +21,7 @@ const (
 	defaultRecommendationLimit = 20
 	maxRecommendationLimit     = 50
 	recommendationCandidateCap = 200
-	behaviorCountCap           = 5
 )
-
-var defaultRecommendationConfig = config.RecommendationConfig{
-	BehaviorWeights: config.RecommendationBehaviorWeights{
-		View: 1,
-		Like: 4,
-	},
-	CategoryWeight:   3,
-	TagWeight:        2,
-	PopularityWeight: 0.5,
-	FreshnessWeight:  1,
-}
 
 type articleBehaviorSignal struct {
 	Behavior models.ArticleBehavior
@@ -44,9 +29,10 @@ type articleBehaviorSignal struct {
 }
 
 type userInterestProfile struct {
-	Categories           map[string]float64
-	Tags                 map[string]float64
-	InteractedArticleIDs map[uint]struct{}
+	Categories              map[string]float64
+	Tags                    map[string]float64
+	InteractedArticleIDs    map[uint]struct{}
+	PersonalizedSignalCount int
 }
 
 type recommendedArticleResponse struct {
@@ -63,45 +49,6 @@ type recommendedArticleResponse struct {
 	Tracking      *recommendationTrackingResponse `json:"tracking,omitempty"`
 }
 
-func normalizedRecommendationConfig() config.RecommendationConfig {
-	cfg := defaultRecommendationConfig
-	if config.AppConfig == nil {
-		return cfg
-	}
-
-	configured := config.AppConfig.Recommendation
-	if configured.BehaviorWeights.View > 0 {
-		cfg.BehaviorWeights.View = configured.BehaviorWeights.View
-	}
-	if configured.BehaviorWeights.Like > 0 {
-		cfg.BehaviorWeights.Like = configured.BehaviorWeights.Like
-	}
-	if configured.CategoryWeight > 0 {
-		cfg.CategoryWeight = configured.CategoryWeight
-	}
-	if configured.TagWeight > 0 {
-		cfg.TagWeight = configured.TagWeight
-	}
-	if configured.PopularityWeight > 0 {
-		cfg.PopularityWeight = configured.PopularityWeight
-	}
-	if configured.FreshnessWeight > 0 {
-		cfg.FreshnessWeight = configured.FreshnessWeight
-	}
-	return cfg
-}
-
-func recommendationActionWeight(cfg config.RecommendationConfig, action string) (float64, bool) {
-	switch action {
-	case ArticleBehaviorActionView:
-		return cfg.BehaviorWeights.View, true
-	case ArticleBehaviorActionLike:
-		return cfg.BehaviorWeights.Like, true
-	default:
-		return 0, false
-	}
-}
-
 var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSignal, error) {
 	if userID == 0 {
 		return nil, nil
@@ -113,6 +60,7 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 	var behaviors []models.ArticleBehavior
 	if err := global.Db.
 		Where("user_id = ? AND active = ? AND action IN ?", userID, true, []string{ArticleBehaviorActionView, ArticleBehaviorActionLike}).
+		Order("article_id ASC, action ASC, id ASC").
 		Find(&behaviors).Error; err != nil {
 		return nil, err
 	}
@@ -163,53 +111,6 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 	return signals, nil
 } //包括用户行为和文章类型，和文章的id
 
-var loadRecommendationCandidates = func(excludedArticleIDs map[uint]struct{}, now time.Time) ([]models.Article, error) {
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-
-	selectColumns := "id,title,preview,summary,cover_image_url,tags,category,publication_state,analysis_state,like_count,created_at,updated_at,deleted_at"
-	baseQuery := global.Db.
-		Select(selectColumns).
-		Where("publication_state = ?", consts.ArticlePublicationStatePublished).
-		Where("expired_at > ? OR expired_at IS NULL", now)
-
-	excludedIDs := articleIDList(excludedArticleIDs) //排除已看文章
-	if len(excludedIDs) > 0 {
-		baseQuery = baseQuery.Where("id NOT IN ?", excludedIDs)
-	}
-
-	var completed []models.Article
-	if err := baseQuery.
-		Where("analysis_state = ?", consts.ArticleAnalysisStateCompleted).
-		Order("created_at desc").
-		Limit(recommendationCandidateCap).
-		Find(&completed).Error; err != nil {
-		return nil, err
-	}
-	if len(completed) >= recommendationCandidateCap {
-		return completed, nil
-	}
-
-	fallbackQuery := global.Db.
-		Select(selectColumns).
-		Where("publication_state = ?", consts.ArticlePublicationStatePublished).
-		Where("analysis_state <> ?", consts.ArticleAnalysisStateCompleted).
-		Where("expired_at > ? OR expired_at IS NULL", now)
-	fallbackExcludedIDs := append(articleIDList(excludedArticleIDs), articleIDs(completed)...) //排除已看文章和已完成分析的文章
-	if len(fallbackExcludedIDs) > 0 {
-		fallbackQuery = fallbackQuery.Where("id NOT IN ?", fallbackExcludedIDs)
-	}
-	var fallback []models.Article
-	if err := fallbackQuery.
-		Order("like_count DESC, created_at DESC").
-		Limit(recommendationCandidateCap - len(completed)).
-		Find(&fallback).Error; err != nil {
-		return nil, err
-	}
-	return append(completed, fallback...), nil
-}
-
 func articleIDs(articles []models.Article) []uint {
 	ids := make([]uint, 0, len(articles))
 	for _, article := range articles {
@@ -226,59 +127,54 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		return
 	}
 	started := time.Now()
+	now := started.UTC()
 	requestID := uuid.NewString()
-
 	limit := parseRecommendationLimit(ctx.Query("limit"))
-	signals, err := loadRecommendationBehaviorSignals(userID)
+	cfg := normalizedRulesV2RecommendationConfig()
+	lookbackStart := now.AddDate(0, 0, -cfg.FeedbackLookbackDays)
+	behaviors, err := loadRecommendationBehaviorSignals(userID)
 	if err != nil {
 		metrics.RecordRecommendationRequest("error", "unknown")
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	profile := buildUserInterestProfile(signals)
-	now := time.Now().UTC()
+	feedback, err := loadRecommendationFeedbackSignals(userID, lookbackStart)
+	if err != nil {
+		metrics.RecordRecommendationRequest("error", "unknown")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	profile := buildRulesV2InterestProfile(behaviors, feedback, now, cfg)
 	strategyID := recommendationStrategyID(profile)
-	candidates, err := loadRecommendationCandidates(profile.InteractedArticleIDs, now)
+	candidates, err := loadRulesV2Candidates(userID, profile.InteractedArticleIDs, lookbackStart, now)
 	if err != nil {
 		metrics.RecordRecommendationRequest("error", strategyID)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	recommendations := recommendArticles(profile, candidates, now, limit)
+	recommendations := recommendRulesV2Articles(profile, candidates, now, cfg, limit)
 	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
 	}
 	metrics.AddRecommendationTrackingResults("tracked", trackedCount)
 	metrics.AddRecommendationTrackingResults("untracked", len(recommendations)-trackedCount)
-
 	outcome := "success"
 	if len(recommendations) == 0 {
 		outcome = "empty"
 	}
-	generationDuration := time.Since(started)
+	duration := time.Since(started)
 	metrics.RecordRecommendationRequest(outcome, strategyID)
 	metrics.ObserveRecommendationCandidateCount(len(candidates))
 	metrics.ObserveRecommendationResultCount(len(recommendations))
-	metrics.ObserveRecommendationGenerationDuration(strategyID, generationDuration)
-
-	requestRecord := models.RecommendationRequest{
-		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
-		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(normalizedRecommendationConfig()),
-		RequestedLimit: limit, CandidateCount: len(candidates), ResultCount: len(recommendations),
-		TrackedResultCount: trackedCount, PersonalizedSignalCount: len(signals),
-		FallbackReason:      recommendationFallbackReason(len(signals), len(recommendations), limit),
-		GenerationLatencyMS: generationDuration.Milliseconds(), CreatedAt: time.Now().UTC(),
-	}
+	metrics.ObserveRecommendationGenerationDuration(strategyID, duration)
+	requestRecord := models.RecommendationRequest{RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID, RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg), RequestedLimit: limit, CandidateCount: len(candidates), ResultCount: len(recommendations), TrackedResultCount: trackedCount, PersonalizedSignalCount: profile.PersonalizedSignalCount, FallbackReason: recommendationFallbackReason(profile.PersonalizedSignalCount, len(recommendations), limit), GenerationLatencyMS: duration.Milliseconds(), CreatedAt: now}
 	if err := persistRecommendationRequest(requestRecord); err != nil {
 		log.Printf("[RecommendationTelemetry] persist request %s: %v", requestID, err)
 		metrics.RecordRecommendationRequestLogFailure()
 	}
 	ctx.JSON(http.StatusOK, recommendations)
 }
-
 func parseRecommendationLimit(raw string) int {
 	if strings.TrimSpace(raw) == "" {
 		return defaultRecommendationLimit
@@ -293,113 +189,6 @@ func parseRecommendationLimit(raw string) int {
 	}
 	return limit
 }
-
-func buildUserInterestProfile(signals []articleBehaviorSignal) userInterestProfile {
-	profile := userInterestProfile{
-		Categories:           map[string]float64{},
-		Tags:                 map[string]float64{},
-		InteractedArticleIDs: map[uint]struct{}{},
-	}
-	recommendationCfg := normalizedRecommendationConfig()
-
-	for _, signal := range signals {
-		if !signal.Behavior.Active {
-			continue
-		}
-		if signal.Behavior.ArticleID != 0 {
-			profile.InteractedArticleIDs[signal.Behavior.ArticleID] = struct{}{}
-		} //K是对应文章id然后V设为空，好让后面查询的时候不会查到这些文章
-
-		actionWeight, ok := recommendationActionWeight(recommendationCfg, signal.Behavior.Action)
-		if !ok {
-			continue
-		}
-		weightedCount := signal.Behavior.Count
-		if weightedCount <= 0 {
-			weightedCount = 1
-		}
-		if weightedCount > behaviorCountCap {
-			weightedCount = behaviorCountCap
-		}
-		weight := actionWeight * float64(weightedCount)
-		//算分
-		//分别给文章类型和标签加权
-		if category := normalizeRecommendationLabel(signal.Article.Category); category != "" {
-			profile.Categories[category] += weight
-		}
-		for _, tag := range signal.Article.Tags {
-			if normalizedTag := normalizeRecommendationLabel(tag); normalizedTag != "" {
-				profile.Tags[normalizedTag] += weight
-			}
-		}
-	}
-
-	return profile
-}
-
-func recommendArticles(profile userInterestProfile, candidates []models.Article, now time.Time, limit int) []recommendedArticleResponse {
-	if limit <= 0 {
-		limit = defaultRecommendationLimit
-	}
-	if limit > maxRecommendationLimit {
-		limit = maxRecommendationLimit
-	}
-
-	recommendations := make([]recommendedArticleResponse, 0, len(candidates))
-	for _, article := range candidates {
-		if _, interacted := profile.InteractedArticleIDs[article.ID]; interacted {
-			continue
-		}
-
-		recommendations = append(recommendations, recommendedArticleResponse{
-			ID:            article.ID,
-			Title:         article.Title,
-			Preview:       article.Preview,
-			Summary:       article.Summary,
-			CoverImageURL: article.CoverImageURL,
-			Tags:          recommendationTags(article.Tags),
-			Category:      article.Category,
-			LikeCount:     article.LikeCount,
-			CreatedAt:     article.CreatedAt,
-			Score:         scoreArticle(profile, article, now),
-		})
-	}
-
-	sort.SliceStable(recommendations, func(i, j int) bool {
-		left := recommendations[i]
-		right := recommendations[j]
-		if left.Score != right.Score {
-			return left.Score > right.Score
-		}
-		if !left.CreatedAt.Equal(right.CreatedAt) {
-			return left.CreatedAt.After(right.CreatedAt)
-		}
-		return left.ID > right.ID
-	})
-
-	if len(recommendations) > limit {
-		return recommendations[:limit]
-	}
-	return recommendations
-}
-
-func scoreArticle(profile userInterestProfile, article models.Article, now time.Time) float64 {
-	categoryMatch := profile.Categories[normalizeRecommendationLabel(article.Category)]
-	tagMatch := 0.0
-	for _, tag := range article.Tags {
-		tagMatch += profile.Tags[normalizeRecommendationLabel(tag)]
-	}
-	recommendationCfg := normalizedRecommendationConfig()
-
-	score := categoryMatch*recommendationCfg.CategoryWeight +
-		tagMatch*recommendationCfg.TagWeight +
-		math.Log(float64(article.LikeCount)+1)*recommendationCfg.PopularityWeight +
-		freshnessScore(article.CreatedAt, now)*recommendationCfg.FreshnessWeight
-	if article.AnalysisState == consts.ArticleAnalysisStateCompleted {
-		score += 1000
-	}
-	return score
-} //根据类型标签热度外加时间权重给出分数
 
 func freshnessScore(createdAt time.Time, now time.Time) float64 {
 	age := now.Sub(createdAt)

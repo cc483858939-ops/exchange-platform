@@ -1,4 +1,4 @@
-﻿app:
+app:
   name: CurrencyExchangeApp
   port: ":3000"
 
@@ -36,8 +36,15 @@ kafka:
   job_max_attempts: 5
 recommendation:
   behavior_weights:
-    view: 1
-    like: 4
+    view: 0.5
+    like: 6
+    click: 1.5
+    qualified_read: 3
+    quick_bounce: 3
+    not_interested: 6
+  signal_half_life_days: 14
+  feedback_lookback_days: 90
+  interest_saturation_scale: 6
   category_weight: 3
   tag_weight: 2
   popularity_weight: 0.5

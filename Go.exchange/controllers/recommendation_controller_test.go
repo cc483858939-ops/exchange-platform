@@ -15,17 +15,22 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestNormalizedRecommendationConfigDefaultsWhenMissing(t *testing.T) {
+func TestNormalizedRulesV2RecommendationConfigDefaultsWhenMissing(t *testing.T) {
 	originalConfig := config.AppConfig
 	config.AppConfig = nil
-	defer func() {
-		config.AppConfig = originalConfig
-	}()
+	t.Cleanup(func() { config.AppConfig = originalConfig })
 
-	cfg := normalizedRecommendationConfig()
+	cfg := normalizedRulesV2RecommendationConfig()
 
-	if cfg.BehaviorWeights.View != 1 ||
-		cfg.BehaviorWeights.Like != 4 ||
+	if cfg.BehaviorWeights.View != 0.5 ||
+		cfg.BehaviorWeights.Like != 6 ||
+		cfg.BehaviorWeights.Click != 1.5 ||
+		cfg.BehaviorWeights.QualifiedRead != 3 ||
+		cfg.BehaviorWeights.QuickBounce != 3 ||
+		cfg.BehaviorWeights.NotInterested != 6 ||
+		cfg.SignalHalfLifeDays != 14 ||
+		cfg.FeedbackLookbackDays != 90 ||
+		cfg.InterestSaturationScale != 6 ||
 		cfg.CategoryWeight != 3 ||
 		cfg.TagWeight != 2 ||
 		cfg.PopularityWeight != 0.5 ||
@@ -34,19 +39,31 @@ func TestNormalizedRecommendationConfigDefaultsWhenMissing(t *testing.T) {
 	}
 }
 
-func TestNormalizedRecommendationConfigFallsBackForNonPositiveWeights(t *testing.T) {
+func TestNormalizedRulesV2RecommendationConfigFallsBackForNonPositiveValues(t *testing.T) {
 	withRecommendationConfig(t, config.RecommendationConfig{
-		BehaviorWeights:  config.RecommendationBehaviorWeights{View: 0, Like: -1},
-		CategoryWeight:   -2,
-		TagWeight:        0,
-		PopularityWeight: -0.5,
-		FreshnessWeight:  0,
+		BehaviorWeights: config.RecommendationBehaviorWeights{
+			View: 0, Like: -1, Click: 0, QualifiedRead: -1, QuickBounce: 0, NotInterested: -1,
+		},
+		SignalHalfLifeDays:      -1,
+		FeedbackLookbackDays:    0,
+		InterestSaturationScale: -1,
+		CategoryWeight:          -2,
+		TagWeight:               0,
+		PopularityWeight:        -0.5,
+		FreshnessWeight:         0,
 	})
 
-	cfg := normalizedRecommendationConfig()
+	cfg := normalizedRulesV2RecommendationConfig()
 
-	if cfg.BehaviorWeights.View != 1 ||
-		cfg.BehaviorWeights.Like != 4 ||
+	if cfg.BehaviorWeights.View != 0.5 ||
+		cfg.BehaviorWeights.Like != 6 ||
+		cfg.BehaviorWeights.Click != 1.5 ||
+		cfg.BehaviorWeights.QualifiedRead != 3 ||
+		cfg.BehaviorWeights.QuickBounce != 3 ||
+		cfg.BehaviorWeights.NotInterested != 6 ||
+		cfg.SignalHalfLifeDays != 14 ||
+		cfg.FeedbackLookbackDays != 90 ||
+		cfg.InterestSaturationScale != 6 ||
 		cfg.CategoryWeight != 3 ||
 		cfg.TagWeight != 2 ||
 		cfg.PopularityWeight != 0.5 ||
@@ -55,22 +72,23 @@ func TestNormalizedRecommendationConfigFallsBackForNonPositiveWeights(t *testing
 	}
 }
 
-func TestBuildUserInterestProfileUsesConfiguredBehaviorWeights(t *testing.T) {
+func TestRulesV2ProfileUsesConfiguredBehaviorWeights(t *testing.T) {
 	withRecommendationConfig(t, config.RecommendationConfig{
 		BehaviorWeights: config.RecommendationBehaviorWeights{View: 10, Like: 1},
 	})
 
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	profile := buildUserInterestProfile([]articleBehaviorSignal{
+	cfg := normalizedRulesV2RecommendationConfig()
+	profile := buildRulesV2InterestProfile([]articleBehaviorSignal{
 		{
-			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, Count: 1, Active: true},
+			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, Count: 1, Active: true, LastSeenAt: now},
 			Article:  recommendationTestArticle(1, now, "Backend", []string{"Go"}, 0),
 		},
 		{
-			Behavior: models.ArticleBehavior{ArticleID: 2, Action: ArticleBehaviorActionLike, Count: 1, Active: true},
+			Behavior: models.ArticleBehavior{ArticleID: 2, Action: ArticleBehaviorActionLike, Count: 1, Active: true, LastSeenAt: now},
 			Article:  recommendationTestArticle(2, now, "AI", []string{"LLM"}, 0),
 		},
-	})
+	}, nil, now, cfg)
 
 	if profile.Categories["backend"] <= profile.Categories["ai"] {
 		t.Fatalf("expected configured view weight to be stronger: profile=%#v", profile.Categories)
@@ -80,7 +98,7 @@ func TestBuildUserInterestProfileUsesConfiguredBehaviorWeights(t *testing.T) {
 	}
 }
 
-func TestScoreArticleUsesConfiguredWeights(t *testing.T) {
+func TestRulesV2ScoreUsesConfiguredWeights(t *testing.T) {
 	withRecommendationConfig(t, config.RecommendationConfig{
 		CategoryWeight:   5,
 		TagWeight:        7,
@@ -96,26 +114,27 @@ func TestScoreArticleUsesConfiguredWeights(t *testing.T) {
 	}
 	article := recommendationTestArticle(1, now.Add(-time.Hour), "Backend", []string{"Go"}, 1)
 
-	got := scoreArticle(profile, article, now)
+	got := scoreRulesV2Article(profile, article, now, normalizedRulesV2RecommendationConfig())
 	want := 2*float64(5) + 3*float64(7) + math.Log(2)*float64(11) + float64(13)
 	if math.Abs(got-want) > 0.000001 {
 		t.Fatalf("unexpected configured score: got %f want %f", got, want)
 	}
 }
 
-func TestRecommendArticlesPrefersMatchingSignals(t *testing.T) {
+func TestRulesV2RecommendArticlesPrefersMatchingSignals(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	profile := buildUserInterestProfile([]articleBehaviorSignal{
+	cfg := normalizedRulesV2RecommendationConfig()
+	profile := buildRulesV2InterestProfile([]articleBehaviorSignal{
 		{
-			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionLike, Count: 1, Active: true},
+			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionLike, Count: 1, Active: true, LastSeenAt: now},
 			Article:  recommendationTestArticle(1, now, "Backend", []string{"Go", "AI"}, 0),
 		},
-	})
+	}, nil, now, cfg)
 
-	recommendations := recommendArticles(profile, []models.Article{
+	recommendations := recommendRulesV2Articles(profile, []models.Article{
 		recommendationTestArticle(2, now.Add(-time.Hour), "Travel", []string{"Food"}, 0),
 		recommendationTestArticle(3, now.Add(-2*time.Hour), "Backend", []string{"Go"}, 0),
-	}, now, 10)
+	}, now, cfg, 10)
 
 	if len(recommendations) != 2 {
 		t.Fatalf("expected 2 recommendations, got %d", len(recommendations))
@@ -125,18 +144,19 @@ func TestRecommendArticlesPrefersMatchingSignals(t *testing.T) {
 	}
 }
 
-func TestBuildUserInterestProfileWeightsLikesAboveViews(t *testing.T) {
+func TestRulesV2ProfileWeightsLikesAboveViews(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	profile := buildUserInterestProfile([]articleBehaviorSignal{
+	cfg := normalizedRulesV2RecommendationConfig()
+	profile := buildRulesV2InterestProfile([]articleBehaviorSignal{
 		{
-			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, Count: 1, Active: true},
+			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, Count: 1, Active: true, LastSeenAt: now},
 			Article:  recommendationTestArticle(1, now, "Backend", []string{"Go"}, 0),
 		},
 		{
-			Behavior: models.ArticleBehavior{ArticleID: 2, Action: ArticleBehaviorActionLike, Count: 1, Active: true},
+			Behavior: models.ArticleBehavior{ArticleID: 2, Action: ArticleBehaviorActionLike, Count: 1, Active: true, LastSeenAt: now},
 			Article:  recommendationTestArticle(2, now, "AI", []string{"LLM"}, 0),
 		},
-	})
+	}, nil, now, cfg)
 
 	if profile.Categories["ai"] <= profile.Categories["backend"] {
 		t.Fatalf("expected like-weighted category to be stronger: profile=%#v", profile.Categories)
@@ -146,28 +166,29 @@ func TestBuildUserInterestProfileWeightsLikesAboveViews(t *testing.T) {
 	}
 }
 
-func TestBuildUserInterestProfileIgnoresInactiveSignals(t *testing.T) {
+func TestRulesV2ProfileIgnoresInactiveSignals(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	profile := buildUserInterestProfile([]articleBehaviorSignal{
+	profile := buildRulesV2InterestProfile([]articleBehaviorSignal{
 		{
-			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionLike, Count: 5, Active: false},
+			Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionLike, Count: 5, Active: false, LastSeenAt: now},
 			Article:  recommendationTestArticle(1, now, "Backend", []string{"Go"}, 0),
 		},
-	})
+	}, nil, now, normalizedRulesV2RecommendationConfig())
 
 	if len(profile.Categories) != 0 || len(profile.Tags) != 0 || len(profile.InteractedArticleIDs) != 0 {
 		t.Fatalf("expected inactive behavior to be ignored, got profile=%#v", profile)
 	}
 }
 
-func TestRecommendArticlesFallsBackToPopularityAndFreshnessWithoutBehavior(t *testing.T) {
+func TestRulesV2RecommendArticlesFallsBackToPopularityAndFreshnessWithoutBehavior(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	profile := buildUserInterestProfile(nil)
+	cfg := normalizedRulesV2RecommendationConfig()
+	profile := buildRulesV2InterestProfile(nil, nil, now, cfg)
 
-	recommendations := recommendArticles(profile, []models.Article{
+	recommendations := recommendRulesV2Articles(profile, []models.Article{
 		recommendationTestArticle(1, now.Add(-60*24*time.Hour), "Old", []string{"x"}, 100),
 		recommendationTestArticle(2, now.Add(-24*time.Hour), "Fresh", []string{"y"}, 0),
-	}, now, 10)
+	}, now, cfg, 10)
 
 	if len(recommendations) != 2 {
 		t.Fatalf("expected 2 recommendations, got %d", len(recommendations))
@@ -177,7 +198,7 @@ func TestRecommendArticlesFallsBackToPopularityAndFreshnessWithoutBehavior(t *te
 	}
 }
 
-func TestRecommendArticlesExcludesInteractedAndClampsLimit(t *testing.T) {
+func TestRulesV2RecommendArticlesExcludesInteractedAndClampsLimit(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	profile := userInterestProfile{
 		Categories:           map[string]float64{},
@@ -190,7 +211,7 @@ func TestRecommendArticlesExcludesInteractedAndClampsLimit(t *testing.T) {
 		candidates = append(candidates, recommendationTestArticle(id, now.Add(-time.Duration(id)*time.Minute), "News", []string{"tag"}, int64(id)))
 	}
 
-	recommendations := recommendArticles(profile, candidates, now, 99)
+	recommendations := recommendRulesV2Articles(profile, candidates, now, normalizedRulesV2RecommendationConfig(), 99)
 	if len(recommendations) != maxRecommendationLimit {
 		t.Fatalf("expected clamped result length %d, got %d", maxRecommendationLimit, len(recommendations))
 	}
@@ -224,10 +245,12 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	originalLoadRecommendationBehaviorSignals := loadRecommendationBehaviorSignals
-	originalLoadRecommendationCandidates := loadRecommendationCandidates
+	originalLoadFeedback := loadRecommendationFeedbackSignals
+	originalLoadRulesV2Candidates := loadRulesV2Candidates
 	defer func() {
 		loadRecommendationBehaviorSignals = originalLoadRecommendationBehaviorSignals
-		loadRecommendationCandidates = originalLoadRecommendationCandidates
+		loadRecommendationFeedbackSignals = originalLoadFeedback
+		loadRulesV2Candidates = originalLoadRulesV2Candidates
 	}()
 
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
@@ -242,7 +265,8 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 			},
 		}, nil
 	}
-	loadRecommendationCandidates = func(map[uint]struct{}, time.Time) ([]models.Article, error) {
+	loadRecommendationFeedbackSignals = func(uint, time.Time) ([]recommendationFeedbackSignal, error) { return nil, nil }
+	loadRulesV2Candidates = func(uint, map[uint]struct{}, time.Time, time.Time) ([]models.Article, error) {
 		return []models.Article{
 			recommendationTestArticle(2, now.Add(-2*time.Hour), "Travel", []string{"Food"}, 0),
 			recommendationTestArticle(3, now.Add(-time.Hour), "Backend", []string{"Go"}, 0),
@@ -276,7 +300,9 @@ func TestRecommendArticlesIncludesCoverImageURL(t *testing.T) {
 	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	article := recommendationTestArticle(2, now, "Travel", []string{"Food"}, 0)
 	article.CoverImageURL = "/api/files/article-covers/cover.png"
-	recommendations := recommendArticles(buildUserInterestProfile(nil), []models.Article{article}, now, 1)
+	cfg := normalizedRulesV2RecommendationConfig()
+	profile := buildRulesV2InterestProfile(nil, nil, now, cfg)
+	recommendations := recommendRulesV2Articles(profile, []models.Article{article}, now, cfg, 1)
 
 	if len(recommendations) != 1 {
 		t.Fatalf("expected 1 recommendation, got %d", len(recommendations))
@@ -290,17 +316,20 @@ func TestGetArticleRecommendationsSerializesNilTagsAsArray(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	originalLoadRecommendationBehaviorSignals := loadRecommendationBehaviorSignals
-	originalLoadRecommendationCandidates := loadRecommendationCandidates
+	originalLoadFeedback := loadRecommendationFeedbackSignals
+	originalLoadRulesV2Candidates := loadRulesV2Candidates
 	t.Cleanup(func() {
 		loadRecommendationBehaviorSignals = originalLoadRecommendationBehaviorSignals
-		loadRecommendationCandidates = originalLoadRecommendationCandidates
+		loadRecommendationFeedbackSignals = originalLoadFeedback
+		loadRulesV2Candidates = originalLoadRulesV2Candidates
 	})
 
 	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	loadRecommendationBehaviorSignals = func(uint) ([]articleBehaviorSignal, error) {
 		return nil, nil
 	}
-	loadRecommendationCandidates = func(map[uint]struct{}, time.Time) ([]models.Article, error) {
+	loadRecommendationFeedbackSignals = func(uint, time.Time) ([]recommendationFeedbackSignal, error) { return nil, nil }
+	loadRulesV2Candidates = func(uint, map[uint]struct{}, time.Time, time.Time) ([]models.Article, error) {
 		return []models.Article{
 			recommendationTestArticle(2, now, "Travel", nil, 0),
 		}, nil

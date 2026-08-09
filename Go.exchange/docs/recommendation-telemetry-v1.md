@@ -1,6 +1,6 @@
 # Recommendation Telemetry v1.1
 
-The recommendation API remains `rules_v1`; this feature records measurable serving and engagement facts only.
+The recommendation API serves deterministic `rules_v2`; this feature records measurable serving and engagement facts only.
 
 ## Contract
 

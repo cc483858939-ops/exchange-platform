@@ -36,16 +36,23 @@ type KafkaConfig struct {
 	JobMaxAttempts               int      `mapstructure:"job_max_attempts"`
 }
 type RecommendationBehaviorWeights struct {
-	View float64 `mapstructure:"view"`
-	Like float64 `mapstructure:"like"`
+	View          float64 `mapstructure:"view"`
+	Like          float64 `mapstructure:"like"`
+	Click         float64 `mapstructure:"click"`
+	QualifiedRead float64 `mapstructure:"qualified_read"`
+	QuickBounce   float64 `mapstructure:"quick_bounce"`
+	NotInterested float64 `mapstructure:"not_interested"`
 }
 
 type RecommendationConfig struct {
-	BehaviorWeights  RecommendationBehaviorWeights `mapstructure:"behavior_weights"`
-	CategoryWeight   float64                       `mapstructure:"category_weight"`
-	TagWeight        float64                       `mapstructure:"tag_weight"`
-	PopularityWeight float64                       `mapstructure:"popularity_weight"`
-	FreshnessWeight  float64                       `mapstructure:"freshness_weight"`
+	BehaviorWeights         RecommendationBehaviorWeights `mapstructure:"behavior_weights"`
+	SignalHalfLifeDays      float64                       `mapstructure:"signal_half_life_days"`
+	FeedbackLookbackDays    int                           `mapstructure:"feedback_lookback_days"`
+	InterestSaturationScale float64                       `mapstructure:"interest_saturation_scale"`
+	CategoryWeight          float64                       `mapstructure:"category_weight"`
+	TagWeight               float64                       `mapstructure:"tag_weight"`
+	PopularityWeight        float64                       `mapstructure:"popularity_weight"`
+	FreshnessWeight         float64                       `mapstructure:"freshness_weight"`
 }
 
 type StorageConfig struct {

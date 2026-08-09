@@ -39,7 +39,7 @@ func TestAttachRecommendationTrackingUsesFinalPositions(t *testing.T) {
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	recommendations := []recommendedArticleResponse{{ID: 11}, {ID: 12}}
 	requestID := "550e8400-e29b-41d4-a716-446655440001"
-	trackedCount, err := attachRecommendationTracking(7, requestID, buildUserInterestProfile(nil), recommendations, now)
+	trackedCount, err := attachRecommendationTracking(7, requestID, userInterestProfile{}, recommendations, now)
 	if err != nil {
 		t.Fatal(err)
 	}

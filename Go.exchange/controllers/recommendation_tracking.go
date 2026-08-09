@@ -18,9 +18,9 @@ import (
 
 const (
 	recommendationScene                  = "recommendation_page"
-	recommendationRankerVersion          = "rules_v1"
-	recommendationPersonalizedStrategyID = "personalized_rules_v1"
-	recommendationColdStartStrategyID    = "cold_start_rules_v1"
+	recommendationRankerVersion          = "rules_v2"
+	recommendationPersonalizedStrategyID = "personalized_rules_v2"
+	recommendationColdStartStrategyID    = "cold_start_rules_v2"
 	recommendationTrackingTokenVersion   = "v1"
 	recommendationSigningKeyMinBytes     = 32
 )
@@ -69,7 +69,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 	issuedAt := now.UTC()
 	expiresAt := issuedAt.Add(config.RecommendationTelemetryTokenTTL())
 	strategyID := recommendationStrategyID(profile)
-	configHash := recommendationRankerConfigHash(normalizedRecommendationConfig())
+	configHash := recommendationRankerConfigHash(normalizedRulesV2RecommendationConfig())
 
 	for index := range recommendations {
 		claims := recommendationTrackingClaims{
@@ -92,7 +92,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 }
 
 func recommendationStrategyID(profile userInterestProfile) string {
-	if len(profile.Categories) > 0 || len(profile.Tags) > 0 {
+	if profile.PersonalizedSignalCount > 0 {
 		return recommendationPersonalizedStrategyID
 	}
 	return recommendationColdStartStrategyID
@@ -112,14 +112,12 @@ func recommendationTelemetryRequestSelected(userID uint, requestID string, perce
 
 func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
 	canonical := fmt.Sprintf(
-		"view=%g|like=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_cap=%d|behavior_cap=%d",
-		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.CategoryWeight, cfg.TagWeight,
-		cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateCap, behaviorCountCap,
+		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_cap=%d|behavior_cap=%d|feedback_limit=%d|feedback_cap=%d",
+		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateCap, recommendationBehaviorCountCap, recommendationFeedbackEventLimit, recommendationFeedbackSignalCountCap,
 	)
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])[:12]
 }
-
 func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {
 	if len(key) < recommendationSigningKeyMinBytes {
 		return "", errors.New("recommendation telemetry signing key is too short")

@@ -41,6 +41,9 @@ func RunMigrations() error {
 		if err := applyRecommendationTelemetryConstraints(tx); err != nil {
 			return err
 		}
+		if err := applyRecommendationRankerV2Indexes(tx); err != nil {
+			return err
+		}
 		if err := tx.Exec(`
 UPDATE article_reaction
 SET liked = (reaction = 1)
@@ -66,6 +69,19 @@ func applyRecommendationTelemetryConstraints(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply recommendation telemetry constraint: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyRecommendationRankerV2Indexes(tx *gorm.DB) error {
+	statements := []string{
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_events_user_feedback_order ON recommendation_events (user_id, occurred_at DESC, received_at DESC, event_id DESC) WHERE event_type IN ('click', 'read_end', 'not_interested')",
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_events_user_article_negative ON recommendation_events (user_id, article_id, occurred_at DESC) WHERE event_type = 'not_interested'",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation ranker v2 index: %w", err)
 		}
 	}
 	return nil
