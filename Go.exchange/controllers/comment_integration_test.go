@@ -303,3 +303,140 @@ func TestDeleteCommentRowsAffectedIntegration(t *testing.T) {
 		t.Fatalf("concurrent delete successes=%d notFound=%d", successes, notFound)
 	}
 }
+func TestGetArticleCommentsEmptyFeed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openCommentIntegrationDatabase(t)
+	fixture := newCommentIntegrationFixture(t, db)
+
+	ctx, recorder := newCommentIntegrationContext(
+		http.MethodGet,
+		"/api/articles/"+strconvUint(fixture.Article.ID)+"/comments?limit=20",
+		strconvUint(fixture.Article.ID),
+		"",
+		fixture.Commenter.ID,
+	)
+	GetArticleComments(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if string(response["items"]) != "[]" {
+		t.Fatalf("items=%s, want []", response["items"])
+	}
+	if string(response["next_cursor"]) != "null" {
+		t.Fatalf("next_cursor=%s, want null", response["next_cursor"])
+	}
+}
+
+func TestCommentCursorStableAfterDelete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openCommentIntegrationDatabase(t)
+	fixture := newCommentIntegrationFixture(t, db)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	comments := []models.Comment{
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "newest", now),
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now.Add(-time.Second)),
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now.Add(-2*time.Second)),
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "oldest", now.Add(-3*time.Second)),
+	}
+
+	path := "/api/articles/" + strconvUint(fixture.Article.ID) + "/comments?limit=2"
+	ctx, recorder := newCommentIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetArticleComments(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("first page status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var first commentListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.NextCursor == nil {
+		t.Fatalf("first page=%#v", first)
+	}
+	if first.Items[0].ID != comments[0].ID || first.Items[1].ID != comments[1].ID {
+		t.Fatalf("unexpected first page=%#v", first.Items)
+	}
+
+	if err := db.Delete(&comments[0]).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder = newCommentIntegrationContext(http.MethodGet, path+"&cursor="+*first.NextCursor, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetArticleComments(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("second page status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var second commentListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 2 || second.NextCursor != nil {
+		t.Fatalf("second page=%#v", second)
+	}
+	for index, expected := range []models.Comment{comments[2], comments[3]} {
+		if second.Items[index].ID != expected.ID {
+			t.Fatalf("second page item %d id=%d want=%d", index, second.Items[index].ID, expected.ID)
+		}
+	}
+	for _, item := range second.Items {
+		for _, alreadyLoaded := range first.Items {
+			if item.ID == alreadyLoaded.ID {
+				t.Fatalf("duplicate across pages id=%d", item.ID)
+			}
+		}
+	}
+}
+
+func TestCommentCursorStableAfterNewComment(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openCommentIntegrationDatabase(t)
+	fixture := newCommentIntegrationFixture(t, db)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	comments := []models.Comment{
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "newest", now),
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now.Add(-time.Second)),
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now.Add(-2*time.Second)),
+		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "oldest", now.Add(-3*time.Second)),
+	}
+
+	path := "/api/articles/" + strconvUint(fixture.Article.ID) + "/comments?limit=2"
+	ctx, recorder := newCommentIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetArticleComments(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("first page status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var first commentListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.NextCursor == nil {
+		t.Fatalf("first page=%#v", first)
+	}
+
+	inserted := createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "inserted after first page", now.Add(time.Second))
+	ctx, recorder = newCommentIntegrationContext(http.MethodGet, path+"&cursor="+*first.NextCursor, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetArticleComments(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("second page status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var second commentListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 2 || second.NextCursor != nil {
+		t.Fatalf("second page=%#v", second)
+	}
+	for index, expected := range []models.Comment{comments[2], comments[3]} {
+		if second.Items[index].ID != expected.ID {
+			t.Fatalf("second page item %d id=%d want=%d", index, second.Items[index].ID, expected.ID)
+		}
+	}
+	for _, item := range append(first.Items, second.Items...) {
+		if item.ID == inserted.ID {
+			t.Fatalf("newer comment %d leaked into cursor continuation", inserted.ID)
+		}
+	}
+}
