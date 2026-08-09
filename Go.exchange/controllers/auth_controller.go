@@ -14,6 +14,11 @@ import (
 	"gorm.io/gorm"
 )
 
+type registerRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
 // SaveRefreshTokenToRedis 将 Refresh Token 存入 Redis
 func SaveRefreshTokenToRedis(userID uint, token string) error {
 	key := fmt.Sprintf(consts.Refresh, strconv.FormatUint(uint64(userID), 10))
@@ -22,22 +27,26 @@ func SaveRefreshTokenToRedis(userID uint, token string) error {
 	return err
 }
 
+var saveRefreshToken = SaveRefreshTokenToRedis
+
 // Register 注册
 func Register(ctx *gin.Context) {
-	var user models.User
-	if err := ctx.ShouldBindJSON(&user); err != nil {
+	var req registerRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
 
 	// 1. 密码加密
-	hashedPwd, err := utils.HashPassword(user.Password)
+	hashedPwd, err := utils.HashPassword(req.Password)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
 		return
 	}
-	// 加密后的密码赋回去
-	user.Password = hashedPwd
+	user := models.User{
+		Username: req.Username,
+		Password: hashedPwd,
+	}
 
 	// 2. 存入数据库
 	if err := global.Db.Create(&user).Error; err != nil {
@@ -53,7 +62,7 @@ func Register(ctx *gin.Context) {
 	}
 
 	// 4. 存入 Redis
-	if err := SaveRefreshTokenToRedis(user.ID, refreshToken); err != nil {
+	if err := saveRefreshToken(user.ID, refreshToken); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
 		return
 	}
