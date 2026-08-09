@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"Go.exchange/global"
-	"Go.exchange/models"
 
 	"github.com/go-redis/redis/v7"
 	"golang.org/x/sync/singleflight"
@@ -18,7 +17,7 @@ const articleCacheTTL = 10 * time.Minute
 
 var (
 	// articleListCacheKey 文章列表的 Redis Key
-	articleListCacheKey = "articles"
+	articleListCacheKey = "articles:v2"
 	// articleCacheGroup 用于防击穿的 Singleflight 分组
 	articleCacheGroup singleflight.Group
 )
@@ -31,7 +30,7 @@ type cacheSetter func(key string, payload []byte, expiration time.Duration) erro
 
 // articleDetailCacheKey 生成文章详情的 Redis Key
 func articleDetailCacheKey(id string) string {
-	return "article:detail:" + id
+	return "article:detail:v2:" + id
 }
 
 // InvalidateArticleListCache 主动删除文章列表缓存。
@@ -42,32 +41,6 @@ func InvalidateArticleListCache() error {
 // InvalidateArticleDetailCacheByID 主动删除指定文章的详情缓存。
 func InvalidateArticleDetailCacheByID(id uint) error {
 	return global.RedisDB.Del(articleDetailCacheKey(strconv.FormatUint(uint64(id), 10))).Err()
-}
-
-// loadArticleList 加载文章列表，优先走缓存
-func loadArticleList() ([]models.Article, error) {
-	return loadJSONCache(articleListCacheKey, func() ([]models.Article, error) {
-		var articles []models.Article
-		// 数据库查询逻辑
-		err := global.Db.
-			Select("id,title,preview,cover_image_url,expired_at,created_at,updated_at,deleted_at").
-			Where("expired_at > ? OR expired_at IS NULL", time.Now()).
-			Order("created_at desc").
-			Find(&articles).Error
-		return articles, err
-	})
-}
-
-// loadArticleDetail 加载文章详情，优先走缓存
-func loadArticleDetail(id string) (models.Article, error) {
-	return loadJSONCache(articleDetailCacheKey(id), func() (models.Article, error) {
-		var article models.Article
-		// 数据库查询逻辑
-		err := global.Db.
-			Where("id = ? AND (expired_at > ? OR expired_at IS NULL)", id, time.Now()).
-			First(&article).Error
-		return article, err
-	})
 }
 
 // loadJSONCache 默认使用全局 Redis 的缓存包装函数

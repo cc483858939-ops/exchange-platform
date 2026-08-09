@@ -363,6 +363,8 @@ func TestGetArticleRecommendationsSerializesNilTagsAsArray(t *testing.T) {
 func recommendationTestArticle(id uint, createdAt time.Time, category string, tags []string, likeCount int64) models.Article {
 	return models.Article{
 		Model:     gorm.Model{ID: id, CreatedAt: createdAt},
+		AuthorID:  1,
+		Author:    models.User{Model: gorm.Model{ID: 1}, Username: "author"},
 		Title:     "article",
 		Preview:   "preview",
 		Summary:   "summary",

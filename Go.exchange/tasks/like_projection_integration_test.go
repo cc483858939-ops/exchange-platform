@@ -9,6 +9,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"github.com/google/uuid"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -23,7 +24,7 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Article{}, &models.ConsumerInbox{}, &models.ArticleReaction{}, &models.ArticleBehavior{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleReaction{}, &models.ArticleBehavior{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
@@ -31,7 +32,11 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.LikeSnapshotGroupID = "like-snapshot-integration"
 	defer func() { global.Db = originalDB; config.AppConfig = originalConfig }()
-	article := models.Article{Title: "t", Content: "c", Preview: "p"}
+	author := models.User{Username: "like-projection-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&author).Error; err != nil {
+		t.Fatal(err)
+	}
+	article := models.Article{AuthorID: author.ID, Title: "t", Content: "c", Preview: "p"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}

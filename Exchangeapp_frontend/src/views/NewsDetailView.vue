@@ -4,6 +4,7 @@
       <div v-if="loading" class="no-data">文章加载中...</div>
       <el-card v-else-if="article" class="article-detail">
         <h1>{{ article.title }}</h1>
+        <AuthorIdentity :author="article.author" :created-at="article.CreatedAt" />
 
         <div v-if="article.expired_at" class="expire-info">
           本文将于 {{ formatDate(article.expired_at) }} 过期
@@ -35,6 +36,7 @@ import { getRecommendationTelemetry } from '../services/recommendationTelemetry'
 import { useAuthStore } from '../store/auth';
 import type { Article, Like } from '../types/Article';
 import type { RecommendationTracking } from '../types/Recommendation';
+import AuthorIdentity from '../components/AuthorIdentity.vue';
 
 const article = ref<Article | null>(null);
 const route = useRoute();

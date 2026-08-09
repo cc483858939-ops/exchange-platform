@@ -59,6 +59,7 @@ var createArticleWithAnalysisJob = func(article *models.Article) error {
 }
 
 var invalidateArticleListCache = InvalidateArticleListCache
+var loadArticleAuthorForCreate = loadPublicAuthorByID
 var initializeArticleLikeState = func(articleID uint) error {
 	if global.RedisDB == nil {
 		return nil
@@ -82,6 +83,22 @@ func normalizeArticleCoverImageURL(raw string) (string, error) {
 }
 
 func CreateArticle(ctx *gin.Context) {
+	userID, ok := userIDFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		return
+	}
+
+	author, err := loadArticleAuthorForCreate(userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	var req createArticleRequest
 	if err := ctx.ShouldBind(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -101,6 +118,7 @@ func CreateArticle(ctx *gin.Context) {
 
 	now := time.Now().UTC()
 	article := models.Article{
+		AuthorID:         userID,
 		Title:            req.Title,
 		Content:          req.Content,
 		Preview:          req.Preview,
@@ -123,7 +141,13 @@ func CreateArticle(ctx *gin.Context) {
 		global.Db.Logger.Error(ctx, "failed to invalidate article list cache", err)
 	}
 
-	ctx.JSON(http.StatusCreated, article)
+	article.Author = models.User{Model: gorm.Model{ID: author.ID}, Username: author.Username}
+	response, err := newArticleResponse(article)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, response)
 }
 
 func GetArticle(ctx *gin.Context) {

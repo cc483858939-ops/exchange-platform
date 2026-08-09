@@ -45,6 +45,8 @@ func SetupRouter() *gin.Engine {
 		api.GET("/recommendations/articles", controllers.GetArticleRecommendations)
 		api.POST("/recommendation-events", controllers.RecordRecommendationEvents)
 		api.POST("/uploads/article-cover", controllers.UploadArticleCover)
+		api.GET("/users/:id", controllers.GetUserByID)
+		api.GET("/users/:id/articles", controllers.GetUserArticles)
 		api.POST("/articles", controllers.CreateArticle)
 		api.GET("/articles", controllers.GetArticle)
 		api.GET("/articles/:id", controllers.GetArticleByID)

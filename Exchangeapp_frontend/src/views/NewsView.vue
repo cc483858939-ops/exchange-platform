@@ -14,6 +14,7 @@
         <el-card v-for="article in articles" :key="article.ID" class="article-card" shadow="hover">
           <div class="article-card-content" :class="{ 'without-cover': !article.cover_image_url }">
             <div class="article-copy">
+              <AuthorIdentity :author="article.author" :created-at="article.CreatedAt" />
               <h2>{{ article.title }}</h2>
               <p>{{ article.preview }}</p>
               <el-button text @click="viewDetail(article.ID)">阅读更多</el-button>
@@ -36,6 +37,7 @@ import { ElMessage } from 'element-plus';
 import axios from '../axios';
 import { useAuthStore } from '../store/auth';
 import type { Article } from '../types/Article';
+import AuthorIdentity from '../components/AuthorIdentity.vue';
 
 const articles = ref<Article[]>([]);
 const loading = ref(false);

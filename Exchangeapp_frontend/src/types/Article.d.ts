@@ -1,4 +1,7 @@
+import type { PublicAuthor } from './User';
 export interface Article {
+  CreatedAt: string;
+  author: PublicAuthor;
   ID: number;
   title: string;
   preview: string;

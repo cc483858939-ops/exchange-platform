@@ -151,6 +151,45 @@ func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
 		t.Fatalf("expected loader to run once per cache key, got %d", loads.Load())
 	}
 }
+func TestLoadJSONCacheWithStorePreservesArticleAuthorDTO(t *testing.T) {
+	articleCacheGroup = singleflight.Group{}
+	cache := map[string]string{}
+	loads := 0
+	getter := func(key string) (string, error) {
+		value, ok := cache[key]
+		if !ok {
+			return "", redis.Nil
+		}
+		return value, nil
+	}
+	setter := func(key string, payload []byte, _ time.Duration) error {
+		cache[key] = string(payload)
+		return nil
+	}
+	loader := func() (articleResponse, error) {
+		loads++
+		return articleResponse{
+			ID:     42,
+			Title:  "cached article",
+			Author: publicAuthorResponse{ID: 7, Username: "alice"},
+		}, nil
+	}
+
+	miss, err := loadJSONCacheWithStore("article:detail:v2:42", time.Minute, getter, setter, loader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hit, err := loadJSONCacheWithStore("article:detail:v2:42", time.Minute, getter, setter, loader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 {
+		t.Fatalf("loader calls=%d want 1", loads)
+	}
+	if miss.Author != hit.Author || hit.Author.ID != 7 || hit.Author.Username != "alice" {
+		t.Fatalf("author was not preserved across cache hit: miss=%+v hit=%+v", miss.Author, hit.Author)
+	}
+}
 
 // TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading 测试缓存命中场景：
 // 如果缓存中已经有数据，则直接返回，不再触发回源逻辑。

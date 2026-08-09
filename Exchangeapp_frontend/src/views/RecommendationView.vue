@@ -81,9 +81,10 @@
           </div>
 
           <div class="card-content">
+            <AuthorIdentity :author="article.author" :created-at="article.created_at" />
             <div class="card-meta">
               <span>{{ article.category || '未分类' }}</span>
-              <span>{{ formatDate(article.created_at) }}</span>
+              <span>{{ formatRelativeTime(article.created_at) }}</span>
             </div>
             <h3>{{ article.title }}</h3>
             <p>{{ article.summary || article.preview }}</p>
@@ -112,6 +113,8 @@ import { getRecommendationTelemetry } from '../services/recommendationTelemetry'
 import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { useAuthStore } from '../store/auth';
 import type { RecommendedArticle } from '../types/Recommendation';
+import AuthorIdentity from '../components/AuthorIdentity.vue';
+import { formatRelativeTime } from '../utils/time';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -245,15 +248,6 @@ const animateCards = () => {
 
 const formatScore = (score: number) => score.toFixed(2);
 
-const formatDate = (value: string) => {
-  if (!value) {
-    return '刚刚';
-  }
-  return new Date(value).toLocaleDateString('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-  });
-};
 
 const bindRecommendationCard = (
   element: Element | ComponentPublicInstance | null,
@@ -579,6 +573,10 @@ onBeforeUnmount(() => {
 
 .card-content {
   padding: 22px;
+
+.card-content > .author-identity {
+  margin-bottom: 16px;
+}
 }
 
 .card-meta,

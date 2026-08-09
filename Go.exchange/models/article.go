@@ -8,6 +8,8 @@ import (
 
 type Article struct {
 	gorm.Model
+	AuthorID      uint   `json:"-" gorm:"not null"`
+	Author        User   `json:"-" gorm:"foreignKey:AuthorID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
 	Title         string `json:"title" binding:"required"`
 	Content       string `json:"content" binding:"required"`
 	Preview       string `json:"preview" binding:"required"`

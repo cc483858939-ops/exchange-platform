@@ -44,6 +44,9 @@ func RunMigrations() error {
 		if err := applyRecommendationRankerV2Indexes(tx); err != nil {
 			return err
 		}
+		if err := applyArticleAuthorConstraints(tx); err != nil {
+			return err
+		}
 		if err := tx.Exec(`
 UPDATE article_reaction
 SET liked = (reaction = 1)
@@ -53,6 +56,18 @@ WHERE reaction_version = 0
 		}
 		return nil
 	})
+}
+
+func applyArticleAuthorConstraints(tx *gorm.DB) error {
+	if !tx.Migrator().HasConstraint(&models.Article{}, "Author") {
+		if err := tx.Migrator().CreateConstraint(&models.Article{}, "Author"); err != nil {
+			return fmt.Errorf("create article author foreign key: %w", err)
+		}
+	}
+	if err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_articles_author_created ON articles (author_id, created_at DESC, id DESC)").Error; err != nil {
+		return fmt.Errorf("create article author index: %w", err)
+	}
+	return nil
 }
 
 func applyRecommendationTelemetryConstraints(tx *gorm.DB) error {

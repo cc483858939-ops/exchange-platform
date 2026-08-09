@@ -1,3 +1,4 @@
+import type { PublicAuthor } from './User';
 export interface RecommendationTracking {
   request_id: string;
   position: number;
@@ -10,6 +11,7 @@ export interface RecommendationTracking {
 }
 
 export interface RecommendedArticle {
+  author: PublicAuthor;
   id: number;
   title: string;
   preview: string;

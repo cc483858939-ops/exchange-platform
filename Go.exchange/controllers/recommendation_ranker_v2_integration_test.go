@@ -23,7 +23,7 @@ func TestRulesV2FeedbackLoaderIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Article{}, &models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
@@ -31,7 +31,8 @@ func TestRulesV2FeedbackLoaderIntegration(t *testing.T) {
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	requestID := uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	article := models.Article{Model: gorm.Model{ID: uint(time.Now().UnixNano() & 0x3fffffff)}, Title: "ranker v2", Category: "backend", Tags: []string{"go"}}
+	author := createArticleIntegrationAuthor(t, db)
+	article := models.Article{Model: gorm.Model{ID: uint(time.Now().UnixNano() & 0x3fffffff)}, AuthorID: author.ID, Title: "ranker v2", Category: "backend", Tags: []string{"go"}}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -65,15 +66,16 @@ func TestRulesV2FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Article{}, &models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
 	global.Db = db
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	completed := models.Article{Title: "completed", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	fallback := models.Article{Title: "fallback", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
+	author := createArticleIntegrationAuthor(t, db)
+	completed := models.Article{Title: "completed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	fallback := models.Article{Title: "fallback", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
 	if err := db.Create(&completed).Error; err != nil {
 		t.Fatal(err)
 	}

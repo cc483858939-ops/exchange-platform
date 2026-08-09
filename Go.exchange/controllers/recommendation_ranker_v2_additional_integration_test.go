@@ -24,7 +24,7 @@ func openRulesV2IntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Article{}, &models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
@@ -91,11 +91,12 @@ func TestRulesV2CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	lookbackStart := now.AddDate(0, 0, -90)
+	author := createArticleIntegrationAuthor(t, db)
 
-	completedSuppressed := models.Article{Title: "completed suppressed", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	fallbackSuppressed := models.Article{Title: "fallback suppressed", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
-	expiredNegativeAllowed := models.Article{Title: "expired negative allowed", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
-	completedAllowed := models.Article{Title: "completed allowed", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	completedSuppressed := models.Article{Title: "completed suppressed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	fallbackSuppressed := models.Article{Title: "fallback suppressed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
+	expiredNegativeAllowed := models.Article{Title: "expired negative allowed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
+	completedAllowed := models.Article{Title: "completed allowed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
 	articles := []*models.Article{&completedSuppressed, &fallbackSuppressed, &expiredNegativeAllowed, &completedAllowed}
 	for _, article := range articles {
 		if err := db.Create(article).Error; err != nil {
@@ -144,10 +145,11 @@ func TestRulesV2CandidateStableOrderIntegration(t *testing.T) {
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	completedLowID := models.Article{Title: "completed low id", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	completedHighID := models.Article{Title: "completed high id", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	fallbackLowID := models.Article{Title: "fallback low id", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
-	fallbackHighID := models.Article{Title: "fallback high id", PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
+	author := createArticleIntegrationAuthor(t, db)
+	completedLowID := models.Article{Title: "completed low id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	completedHighID := models.Article{Title: "completed high id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	fallbackLowID := models.Article{Title: "fallback low id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
+	fallbackHighID := models.Article{Title: "fallback high id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
 	articles := []*models.Article{&completedLowID, &completedHighID, &fallbackLowID, &fallbackHighID}
 	for _, article := range articles {
 		if err := db.Create(article).Error; err != nil {
