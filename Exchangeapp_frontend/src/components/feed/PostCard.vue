@@ -1,54 +1,8 @@
 <template>
   <article class="post-card">
-    <AuthorIdentity :author="post.author" :created-at="post.createdAt" />
+    <div class="post-card__header">
+      <AuthorIdentity :author="post.author" :created-at="post.createdAt" />
 
-    <RouterLink
-      class="post-card__content"
-      :to="{ name: 'NewsDetail', params: { id: String(post.id) } }"
-      @click="emit('articleClick', post)"
-    >
-      <h2 v-if="post.title.trim()" class="post-card__title">{{ post.title }}</h2>
-      <p v-if="post.excerpt" class="post-card__excerpt" :class="{ 'post-card__excerpt--standalone': !post.title.trim() }">{{ post.excerpt }}</p>
-      <figure v-if="showCover" class="post-card__cover">
-        <img
-          :src="post.coverImageUrl"
-          :alt="post.title.trim() || 'Post image'"
-          loading="lazy"
-          @error="hideCover"
-        />
-      </figure>
-    </RouterLink>
-
-    <div class="post-card__engagement" aria-label="Engagement">
-      <RouterLink
-        class="post-card__metric post-card__reply"
-        :to="{
-          name: 'NewsDetail',
-          params: { id: String(post.id) },
-          query: { reply: '1' },
-        }"
-        :aria-label="replyLabel"
-        @click="emit('articleClick', post)"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-5.2A7.5 7.5 0 1 1 20 11.5Z" />
-        </svg>
-        <span>{{ post.commentCount }}</span>
-      </RouterLink>
-      <button
-        class="post-card__metric post-card__like"
-        :class="{ 'post-card__like--active': post.likeStatus === 'ready' && post.liked }"
-        type="button"
-        :disabled="likeDisabled"
-        :aria-pressed="post.likeStatus === 'ready' ? post.liked : undefined"
-        :aria-label="likeLabel"
-        @click.stop="emit('toggleLike', post.id)"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
-        </svg>
-        <span>{{ post.likeCount }}</span>
-      </button>
       <div class="post-card__more">
         <button
           ref="moreButtonRef"
@@ -100,6 +54,61 @@
           {{ copyActionLabel }}
         </span>
       </div>
+    </div>
+
+    <RouterLink
+      class="post-card__content"
+      :to="{ name: 'NewsDetail', params: { id: String(post.id) } }"
+      @click="emit('articleClick', post)"
+    >
+      <h2 v-if="post.title.trim()" class="post-card__title">{{ post.title }}</h2>
+      <p
+        v-if="post.excerpt"
+        class="post-card__excerpt"
+        :class="{ 'post-card__excerpt--standalone': !post.title.trim() }"
+      >
+        {{ post.excerpt }}
+      </p>
+      <figure v-if="showCover" class="post-card__cover">
+        <img
+          :src="post.coverImageUrl"
+          :alt="post.title.trim() || 'Post image'"
+          loading="lazy"
+          @error="hideCover"
+        />
+      </figure>
+    </RouterLink>
+
+    <div class="post-card__engagement" aria-label="Engagement">
+      <RouterLink
+        class="post-card__metric post-card__reply"
+        :to="{
+          name: 'NewsDetail',
+          params: { id: String(post.id) },
+          query: { reply: '1' },
+        }"
+        :aria-label="replyLabel"
+        @click="emit('articleClick', post)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-5.2A7.5 7.5 0 1 1 20 11.5Z" />
+        </svg>
+        <span>{{ post.commentCount }}</span>
+      </RouterLink>
+      <button
+        class="post-card__metric post-card__like"
+        :class="{ 'post-card__like--active': post.likeStatus === 'ready' && post.liked }"
+        type="button"
+        :disabled="likeDisabled"
+        :aria-pressed="post.likeStatus === 'ready' ? post.liked : undefined"
+        :aria-label="likeLabel"
+        @click.stop="emit('toggleLike', post.id)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
+        </svg>
+        <span>{{ post.likeCount }}</span>
+      </button>
     </div>
   </article>
 </template>
@@ -321,13 +330,66 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .post-card {
-  padding: var(--space-4) var(--space-5);
+  --post-avatar-size: 40px;
+  --post-column-gap: 12px;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
 
-.post-card > .author-identity {
-  margin-bottom: var(--space-3);
+.post-card__header {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.post-card__header :deep(.author-identity) {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  gap: var(--post-column-gap);
+}
+
+.post-card__header :deep(.author-avatar) {
+  width: var(--post-avatar-size);
+  height: var(--post-avatar-size);
+  font-size: 15px;
+}
+
+.post-card__header :deep(.author-copy) {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  gap: var(--space-2);
+  line-height: 1.2;
+}
+
+.post-card__header :deep(.author-name) {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.post-card__header :deep(.author-meta) {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.post-card__more {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: var(--space-2);
+}
+
+.post-card__content,
+.post-card__engagement {
+  margin-left: calc(var(--post-avatar-size) + var(--post-column-gap));
 }
 
 .post-card__content {
@@ -336,38 +398,47 @@ onBeforeUnmount(() => {
   text-decoration: none;
 }
 
-.post-card__title {
-  margin: 0;
-  color: var(--color-text);
-  font-size: 20px;
-  line-height: 1.22;
-  letter-spacing: -0.025em;
+.post-card__content:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
 }
 
-.post-card__content:hover .post-card__title,
-.post-card__content:focus-visible .post-card__title {
-  color: var(--color-accent);
+.post-card__title {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.45;
 }
 
 .post-card__excerpt {
   display: -webkit-box;
+  max-height: calc(1.5em * 5);
   margin: var(--space-2) 0 0;
   overflow: hidden;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  line-height: 1.55;
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
 }
 
 .post-card__excerpt--standalone {
   margin-top: 0;
 }
+
 .post-card__cover {
+  box-sizing: border-box;
   aspect-ratio: 16 / 9;
-  margin: var(--space-4) 0 0;
+  margin: var(--space-3) 0 0;
   overflow: hidden;
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
 }
 
@@ -381,8 +452,8 @@ onBeforeUnmount(() => {
 .post-card__engagement {
   display: flex;
   align-items: center;
-  gap: var(--space-5);
-  margin-top: var(--space-3);
+  gap: var(--space-8);
+  margin-top: var(--space-2);
   color: var(--color-text-tertiary);
   font-size: 13px;
 }
@@ -393,13 +464,17 @@ onBeforeUnmount(() => {
   gap: var(--space-1);
 }
 
-.post-card__like {
+.post-card__like,
+.post-card__reply {
   min-width: 40px;
   min-height: 40px;
   margin: -8px 0;
-  border: 0;
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-2);
+}
+
+.post-card__like {
+  border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -408,18 +483,9 @@ onBeforeUnmount(() => {
 }
 
 .post-card__reply {
-  min-width: 40px;
-  min-height: 40px;
-  margin: -8px 0;
-  border-radius: var(--radius-pill);
-  padding: var(--space-1) var(--space-2);
   color: inherit;
   text-decoration: none;
   transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
-}
-
-.post-card__more {
-  position: relative;
 }
 
 .post-card__more-button {
@@ -522,11 +588,21 @@ onBeforeUnmount(() => {
 
 @media (max-width: 420px) {
   .post-card {
-    padding: var(--space-4);
+    --post-avatar-size: 36px;
+    --post-column-gap: 10px;
+    padding: var(--space-3);
   }
 
-  .post-card__title {
-    font-size: 19px;
+  .post-card__header :deep(.author-copy) {
+    gap: var(--space-1);
+  }
+
+  .post-card__header :deep(.author-name) {
+    font-size: 14px;
+  }
+
+  .post-card__header :deep(.author-meta) {
+    font-size: 13px;
   }
 }
 
