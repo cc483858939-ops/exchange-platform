@@ -19,9 +19,9 @@ import (
 )
 
 type createArticleRequest struct {
-	Title         string     `json:"title" binding:"required"`
-	Content       string     `json:"content" binding:"required"`
-	Preview       string     `json:"preview" binding:"required"`
+	Title         string     `json:"title"`
+	Content       string     `json:"content"`
+	Preview       string     `json:"preview"`
 	ExpiredAt     *time.Time `json:"expired_at"`
 	CoverImageURL string     `json:"cover_image_url"`
 }
@@ -105,6 +105,13 @@ func CreateArticle(ctx *gin.Context) {
 		return
 	}
 
+	title := strings.TrimSpace(req.Title)
+	preview := strings.TrimSpace(req.Preview)
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
+		return
+	}
 	coverImageURL, err := normalizeArticleCoverImageURL(req.CoverImageURL)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -114,9 +121,9 @@ func CreateArticle(ctx *gin.Context) {
 	now := time.Now().UTC()
 	article := models.Article{
 		AuthorID:         userID,
-		Title:            req.Title,
-		Content:          req.Content,
-		Preview:          req.Preview,
+		Title:            title,
+		Content:          content,
+		Preview:          preview,
 		ExpiredAt:        req.ExpiredAt,
 		CoverImageURL:    coverImageURL,
 		PublicationState: consts.ArticlePublicationStatePublished,

@@ -15,6 +15,7 @@ export interface RecommendedArticle {
   author: PublicAuthor;
   id: number;
   title: string;
+  content: string;
   preview: string;
   summary: string;
   cover_image_url: string;

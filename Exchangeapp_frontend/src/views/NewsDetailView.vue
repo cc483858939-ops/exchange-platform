@@ -17,7 +17,7 @@
       <article class="article-detail">
         <AuthorIdentity :author="article.author" :created-at="article.CreatedAt" />
 
-        <h1 class="article-detail__title">{{ article.title }}</h1>
+        <h1 v-if="article.title.trim()" class="article-detail__title">{{ article.title }}</h1>
 
         <p v-if="article.expired_at" class="article-detail__expiry">
           {{ articleExpiredLabel }}
@@ -28,7 +28,7 @@
         <figure v-if="showCover" class="article-detail__cover">
           <img
             :src="article.cover_image_url"
-            :alt="article.title"
+            :alt="article.title.trim() || 'Post image'"
             loading="lazy"
             @error="hideCover"
           />

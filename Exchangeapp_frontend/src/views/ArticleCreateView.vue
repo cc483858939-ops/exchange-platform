@@ -29,7 +29,7 @@
       aria-labelledby="composer-login-heading"
     >
       <h1 id="composer-login-heading">Log in to create a post.</h1>
-      <p>Your account is required to publish an article.</p>
+      <p>Your account is required to publish a post.</p>
       <RouterLink class="composer-action" :to="{ name: 'Login' }">Log in</RouterLink>
     </section>
 
@@ -54,61 +54,7 @@
       <section class="composer-section composer-section--fields" aria-labelledby="post-fields-heading">
         <h2 id="post-fields-heading" class="sr-only">Post content</h2>
 
-        <div class="composer-field">
-          <label for="article-title">Headline</label>
-          <input
-            id="article-title"
-            v-model="form.title"
-            class="composer-input composer-input--title"
-            type="text"
-            autocomplete="off"
-            placeholder="Headline"
-            :disabled="isSubmitting"
-            aria-describedby="article-title-help article-title-error"
-          />
-          <div id="article-title-help" class="composer-field__meta">
-            <span
-              v-if="titleError"
-              id="article-title-error"
-              class="field-error"
-              role="alert"
-            >
-              {{ titleError }}
-            </span>
-            <span :class="{ 'field-count--over': titleLength > maxTitleLength }">
-              {{ titleLength }}/{{ maxTitleLength }}
-            </span>
-          </div>
-        </div>
-
-        <div class="composer-field">
-          <label for="article-preview">Summary</label>
-          <textarea
-            id="article-preview"
-            v-model="form.preview"
-            class="composer-input composer-input--preview"
-            rows="2"
-            autocomplete="off"
-            placeholder="Add a short summary..."
-            :disabled="isSubmitting"
-            aria-describedby="article-preview-help article-preview-error"
-          ></textarea>
-          <div id="article-preview-help" class="composer-field__meta">
-            <span
-              v-if="previewError"
-              id="article-preview-error"
-              class="field-error"
-              role="alert"
-            >
-              {{ previewError }}
-            </span>
-            <span :class="{ 'field-count--over': previewLength > maxPreviewLength }">
-              {{ previewLength }}/{{ maxPreviewLength }}
-            </span>
-          </div>
-        </div>
-
-        <div class="composer-field">
+        <div class="composer-field composer-field--primary">
           <label for="article-content">Post</label>
           <textarea
             id="article-content"
@@ -116,7 +62,7 @@
             v-model="form.content"
             class="composer-input composer-input--content"
             rows="5"
-            placeholder="Write your post..."
+            placeholder="What's happening?"
             :disabled="isSubmitting"
             aria-describedby="article-content-help article-content-error"
           ></textarea>
@@ -134,6 +80,65 @@
             </span>
           </div>
         </div>
+
+        <details class="composer-details">
+          <summary>Additional details</summary>
+          <div class="composer-details__fields">
+            <div class="composer-field">
+              <label for="article-title">Headline (optional)</label>
+              <input
+                id="article-title"
+                v-model="form.title"
+                class="composer-input composer-input--title"
+                type="text"
+                autocomplete="off"
+                placeholder="Headline"
+                :disabled="isSubmitting"
+                aria-describedby="article-title-help article-title-error"
+              />
+              <div id="article-title-help" class="composer-field__meta">
+                <span
+                  v-if="titleError"
+                  id="article-title-error"
+                  class="field-error"
+                  role="alert"
+                >
+                  {{ titleError }}
+                </span>
+                <span :class="{ 'field-count--over': titleLength > maxTitleLength }">
+                  {{ titleLength }}/{{ maxTitleLength }}
+                </span>
+              </div>
+            </div>
+
+            <div class="composer-field">
+              <label for="article-preview">Summary (optional)</label>
+              <textarea
+                id="article-preview"
+                v-model="form.preview"
+                class="composer-input composer-input--preview"
+                rows="2"
+                autocomplete="off"
+                placeholder="Add a short summary..."
+                :disabled="isSubmitting"
+                aria-describedby="article-preview-help article-preview-error"
+              ></textarea>
+              <div id="article-preview-help" class="composer-field__meta">
+                <span
+                  v-if="previewError"
+                  id="article-preview-error"
+                  class="field-error"
+                  role="alert"
+                >
+                  {{ previewError }}
+                </span>
+                <span :class="{ 'field-count--over': previewLength > maxPreviewLength }">
+                  {{ previewLength }}/{{ maxPreviewLength }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </details>
       </section>
 
       <section class="composer-section composer-section--cover" aria-labelledby="cover-heading">
@@ -271,18 +276,12 @@ const titleError = computed(() => {
   if (titleLength.value > maxTitleLength) {
     return 'Headline must be ' + maxTitleLength + ' characters or fewer.';
   }
-  if (validationAttempted.value && !form.title.trim()) {
-    return 'Headline is required.';
-  }
   return '';
 });
 
 const previewError = computed(() => {
   if (previewLength.value > maxPreviewLength) {
     return 'Summary must be ' + maxPreviewLength + ' characters or fewer.';
-  }
-  if (validationAttempted.value && !form.preview.trim()) {
-    return 'Summary is required.';
   }
   return '';
 });
@@ -299,9 +298,7 @@ const contentError = computed(() => {
 
 const canPublish = computed(() => (
   authStore.isAuthenticated
-  && Boolean(form.title.trim())
   && titleLength.value <= maxTitleLength
-  && Boolean(form.preview.trim())
   && previewLength.value <= maxPreviewLength
   && Boolean(form.content.trim())
   && contentLength.value <= maxContentLength
@@ -595,6 +592,30 @@ onBeforeUnmount(revokeCoverPreview);
 .composer-section--fields {
   display: grid;
   gap: var(--space-6);
+}
+
+.composer-details {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
+}
+
+.composer-details summary {
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.composer-details summary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
+  outline-offset: 3px;
+}
+
+.composer-details__fields {
+  display: grid;
+  gap: var(--space-6);
+  margin-top: var(--space-4);
 }
 
 .composer-field {

@@ -42,7 +42,7 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p","cover_image_url":"/api/files/article-covers/cover.png"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
@@ -59,11 +59,47 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 	if persisted.AnalysisVersion != consts.ArticleAnalysisVersionV1 || persisted.PublishedAt == nil {
 		t.Fatalf("expected clean-cut analysis metadata, got %#v", persisted)
 	}
-	if persisted.CoverImageURL != "/api/files/article-covers/cover.png" {
-		t.Fatalf("cover image URL=%q", persisted.CoverImageURL)
+	if persisted.AuthorID != 7 {
+		t.Fatalf("author_id=%d", persisted.AuthorID)
+	}
+	if persisted.Title != "" || persisted.Preview != "" || persisted.Content != "c" || persisted.CoverImageURL != "" {
+		t.Fatalf("unexpected content fields: title=%q preview=%q content=%q cover=%q", persisted.Title, persisted.Preview, persisted.Content, persisted.CoverImageURL)
 	}
 }
 
+func TestCreateArticleTrimsTextFields(t *testing.T) {
+	stubCreateArticleAuthor(t)
+	gin.SetMode(gin.TestMode)
+	originalCreate := createArticleWithAnalysisJob
+	originalInvalidate := invalidateArticleListCache
+	defer func() {
+		createArticleWithAnalysisJob = originalCreate
+		invalidateArticleListCache = originalInvalidate
+	}()
+
+	var persisted models.Article
+	createArticleWithAnalysisJob = func(article *models.Article) error {
+		article.ID = 43
+		persisted = *article
+		return nil
+	}
+	invalidateArticleListCache = func() error { return nil }
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(7))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"  title  \",\"content\":\"  canonical body  \",\"preview\":\"  summary  \"}"))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	CreateArticle(ctx)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if persisted.Title != "title" || persisted.Content != "canonical body" || persisted.Preview != "summary" {
+		t.Fatalf("unexpected normalized fields: title=%q content=%q preview=%q", persisted.Title, persisted.Content, persisted.Preview)
+	}
+}
 func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	gin.SetMode(gin.TestMode)
@@ -79,7 +115,7 @@ func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p","cover_image_url":"https://invalid"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\",\"cover_image_url\":\"https://invalid\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
@@ -109,7 +145,7 @@ func TestCreateArticlePersistsWithoutCover(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
@@ -124,11 +160,35 @@ func TestCreateArticlePersistsWithoutCover(t *testing.T) {
 		t.Fatalf("response missing empty cover image URL: %s", recorder.Body.String())
 	}
 }
+func TestCreateArticleRejectsWhitespaceOnlyContent(t *testing.T) {
+	stubCreateArticleAuthor(t)
+	gin.SetMode(gin.TestMode)
+	originalCreate := createArticleWithAnalysisJob
+	defer func() { createArticleWithAnalysisJob = originalCreate }()
+
+	called := false
+	createArticleWithAnalysisJob = func(*models.Article) error {
+		called = true
+		return errors.New("must not persist")
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(7))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\" \t\n \"}"))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	CreateArticle(ctx)
+
+	if recorder.Code != http.StatusBadRequest || called {
+		t.Fatalf("status=%d called=%t body=%s", recorder.Code, called, recorder.Body.String())
+	}
+}
 func TestCreateArticleRejectsMissingUserContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p","cover_image_url":"/api/files/article-covers/cover.png"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\",\"cover_image_url\":\"/api/files/article-covers/cover.png\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
@@ -156,7 +216,7 @@ func TestCreateArticleIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p","cover_image_url":"/api/files/article-covers/cover.png","author_id":999,"author":{"id":999}}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\",\"cover_image_url\":\"/api/files/article-covers/cover.png\",\"author_id\":999,\"author\":{\"id\":999}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)

@@ -243,7 +243,7 @@ var loadRulesV2Candidates = func(userID uint, excluded map[uint]struct{}, lookba
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	columns := "id,title,preview,summary,cover_image_url,tags,category,publication_state,analysis_state,like_count,comment_count,created_at,updated_at,deleted_at,author_id"
+	columns := "id,title,content,preview,summary,cover_image_url,tags,category,publication_state,analysis_state,like_count,comment_count,created_at,updated_at,deleted_at,author_id"
 	scoped := func(query *gorm.DB) *gorm.DB {
 		sub := global.Db.Table("recommendation_events AS re").Select("1").Where("re.user_id = ? AND re.article_id = articles.id AND re.event_type = ? AND re.occurred_at >= ?", userID, models.RecommendationEventTypeNotInterested, lookbackStart)
 		query = query.Where("publication_state = ?", consts.ArticlePublicationStatePublished).Where("expired_at > ? OR expired_at IS NULL", now).Where("NOT EXISTS (?)", sub)
@@ -284,7 +284,7 @@ func recommendRulesV2Articles(profile userInterestProfile, candidates []models.A
 		if _, ok := profile.InteractedArticleIDs[article.ID]; ok {
 			continue
 		}
-		result = append(result, recommendedArticleResponse{ID: article.ID, Title: article.Title, Preview: article.Preview, Summary: article.Summary, CoverImageURL: article.CoverImageURL, Tags: recommendationTags(article.Tags), Category: article.Category, LikeCount: article.LikeCount, CommentCount: article.CommentCount, CreatedAt: article.CreatedAt, Author: publicAuthorResponse{ID: article.Author.ID, Username: article.Author.Username}, Score: scoreRulesV2Article(profile, article, now, cfg)})
+		result = append(result, recommendedArticleResponse{ID: article.ID, Title: article.Title, Content: article.Content, Preview: article.Preview, Summary: article.Summary, CoverImageURL: article.CoverImageURL, Tags: recommendationTags(article.Tags), Category: article.Category, LikeCount: article.LikeCount, CommentCount: article.CommentCount, CreatedAt: article.CreatedAt, Author: publicAuthorResponse{ID: article.Author.ID, Username: article.Author.Username}, Score: scoreRulesV2Article(profile, article, now, cfg)})
 	}
 	sort.SliceStable(result, func(i, j int) bool {
 		if result[i].Score != result[j].Score {

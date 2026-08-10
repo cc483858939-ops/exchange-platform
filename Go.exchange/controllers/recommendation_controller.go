@@ -38,6 +38,7 @@ type userInterestProfile struct {
 type recommendedArticleResponse struct {
 	ID            uint                            `json:"id"`
 	Title         string                          `json:"title"`
+	Content       string                          `json:"content"`
 	Preview       string                          `json:"preview"`
 	Summary       string                          `json:"summary"`
 	CoverImageURL string                          `json:"cover_image_url"`

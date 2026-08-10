@@ -7,12 +7,12 @@
       :to="{ name: 'NewsDetail', params: { id: String(post.id) } }"
       @click="emit('articleClick', post)"
     >
-      <h2 class="post-card__title">{{ post.title }}</h2>
-      <p v-if="post.excerpt" class="post-card__excerpt">{{ post.excerpt }}</p>
+      <h2 v-if="post.title.trim()" class="post-card__title">{{ post.title }}</h2>
+      <p v-if="post.excerpt" class="post-card__excerpt" :class="{ 'post-card__excerpt--standalone': !post.title.trim() }">{{ post.excerpt }}</p>
       <figure v-if="showCover" class="post-card__cover">
         <img
           :src="post.coverImageUrl"
-          :alt="post.title"
+          :alt="post.title.trim() || 'Post image'"
           loading="lazy"
           @error="hideCover"
         />
@@ -360,6 +360,9 @@ onBeforeUnmount(() => {
   -webkit-line-clamp: 3;
 }
 
+.post-card__excerpt--standalone {
+  margin-top: 0;
+}
 .post-card__cover {
   aspect-ratio: 16 / 9;
   margin: var(--space-4) 0 0;
