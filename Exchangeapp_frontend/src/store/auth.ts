@@ -2,6 +2,8 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import axios from 'axios';
 import { apiBaseUrl } from '../api';
+import { decodeAuthIdentity } from '../utils/authIdentity';
+import type { AuthIdentity } from '../utils/authIdentity';
 
 const authClient = axios.create({
   baseURL: apiBaseUrl,
@@ -29,6 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
   const refreshToken = ref<string | null>(localStorage.getItem(refreshTokenKey));
 
   const isAuthenticated = computed(() => !!token.value);
+  const currentIdentity = computed<AuthIdentity | null>(() => decodeAuthIdentity(token.value));
 
   const setTokens = (accessToken: string, nextRefreshToken: string) => {
     token.value = accessToken;
@@ -97,6 +100,7 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     refreshToken,
     isAuthenticated,
+    currentIdentity,
     login,
     register,
     refreshAccessToken,

@@ -1,146 +1,952 @@
 <template>
-  <el-container>
-    <el-main class="detail-main">
-      <div v-if="loading" class="no-data">文章加载中...</div>
-      <el-card v-else-if="article" class="article-detail">
-        <h1>{{ article.title }}</h1>
+  <main class="detail-view">
+    <header class="detail-header">
+      <button class="detail-header__back" type="button" aria-label="Back" @click="goBack">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m15 5-7 7 7 7" />
+        </svg>
+        <span>Post</span>
+      </button>
+    </header>
+
+    <section v-if="articleLoading" class="detail-state" aria-live="polite">
+      <p>Loading article...</p>
+    </section>
+
+    <template v-else-if="article">
+      <article class="article-detail">
         <AuthorIdentity :author="article.author" :created-at="article.CreatedAt" />
 
-        <div v-if="article.expired_at" class="expire-info">
-          本文将于 {{ formatDate(article.expired_at) }} 过期
-        </div>
+        <h1 class="article-detail__title">{{ article.title }}</h1>
 
-        <p ref="contentRef" class="content">{{ article.content }}</p>
+        <p v-if="article.expired_at" class="article-detail__expiry">
+          {{ articleExpiredLabel }}
+        </p>
 
-        <div class="actions">
-          <el-button :type="liked ? 'primary' : 'default'" :disabled="likeSubmitting" @click="likeArticle">{{ liked ? '取消点赞' : '点赞' }}</el-button>
-          <span class="likes-count">点赞数: {{ likes }}</span>
-        </div>
+        <div ref="articleBodyRef" class="article-detail__body">{{ article.content }}</div>
 
-        <figure v-if="article.cover_image_url" class="detail-cover">
-          <img :src="article.cover_image_url" :alt="article.title" loading="lazy" />
+        <figure v-if="showCover" class="article-detail__cover">
+          <img
+            :src="article.cover_image_url"
+            :alt="article.title"
+            loading="lazy"
+            @error="hideCover"
+          />
         </figure>
-      </el-card>
-      <div v-else class="no-data">{{ detailMessage }}</div>
-    </el-main>
-  </el-container>
+
+        <div class="article-detail__meta">
+          <span>{{ article.category || 'Article' }}</span>
+          <span v-if="article.CreatedAt">{{ formatArticleDate(article.CreatedAt) }}</span>
+        </div>
+
+        <div class="article-detail__engagement" aria-label="Article engagement">
+          <button
+            class="engagement-action"
+            :class="{ 'engagement-action--liked': liked }"
+            type="button"
+            :disabled="!authStore.isAuthenticated || likeStateLoading || likeSubmitting"
+            :aria-pressed="liked"
+            :aria-busy="likeStateLoading || likeSubmitting"
+            @click="toggleLike"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
+            </svg>
+            <span>{{ likeCount }}</span>
+            <span class="sr-only">{{ liked ? 'Unlike' : 'Like' }}</span>
+          </button>
+
+          <span class="engagement-metric">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-5.2A7.5 7.5 0 1 1 20 11.5Z" />
+            </svg>
+            <span>{{ commentCount }}</span>
+            <span class="sr-only">Replies</span>
+          </span>
+        </div>
+
+        <p v-if="likeError" class="detail-inline-error" role="status">{{ likeError }}</p>
+      </article>
+
+      <section class="replies-section" aria-labelledby="replies-heading">
+        <div class="replies-section__heading">
+          <h2 id="replies-heading">Replies</h2>
+          <span>{{ commentCount }}</span>
+        </div>
+
+        <CommentComposer
+          v-if="authStore.isAuthenticated"
+          :key="articleId"
+          ref="composerRef"
+          :author="currentIdentity"
+          :submitting="commentSubmitting"
+          @submit="handleCreateComment"
+        />
+        <div v-else class="login-prompt">
+          <span>Log in to join the conversation.</span>
+          <RouterLink :to="{ name: 'Login' }">Log in</RouterLink>
+        </div>
+
+        <p v-if="commentError" class="comment-error" role="alert">{{ commentError }}</p>
+
+        <div v-if="commentsInitialLoading" class="comments-state" aria-live="polite">
+          Loading replies...
+        </div>
+        <div v-else-if="commentsError" class="comments-state comments-state--error" role="alert">
+          <p>Replies could not be loaded.</p>
+          <span>{{ commentsError }}</span>
+          <button type="button" @click="retryInitialComments">Retry</button>
+        </div>
+        <CommentList
+          v-else
+          :key="articleId"
+          :comments="comments"
+          :current-identity="currentIdentity"
+          :deleting-comment-id="deletingCommentId"
+          :has-next="Boolean(nextCursor)"
+          :loading-more="commentsLoadingMore"
+          :load-more-error="commentsLoadMoreError"
+          @load-more="loadMoreComments"
+          @retry="retryLoadMoreComments"
+          @delete="deleteOwnComment"
+        />
+      </section>
+    </template>
+
+    <section v-else class="detail-state detail-state--error">
+      <h1>{{ articleFailureTitle }}</h1>
+      <p>{{ articleFailureMessage }}</p>
+      <RouterLink v-if="!authStore.isAuthenticated" class="detail-state__link" :to="{ name: 'Login' }">
+        Log in
+      </RouterLink>
+      <button v-else type="button" @click="retryArticle">Try again</button>
+    </section>
+  </main>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { onBeforeRouteLeave, useRoute } from 'vue-router';
-import { ElMessage } from 'element-plus';
-import axios from '../axios';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
+import AuthorIdentity from '../components/AuthorIdentity.vue';
+import CommentComposer from '../components/comments/CommentComposer.vue';
+import CommentList from '../components/comments/CommentList.vue';
+import { createArticleComment, deleteComment, getArticleComments } from '../services/commentService';
+import { getArticleById } from '../services/articleService';
+import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { useAuthStore } from '../store/auth';
-import type { Article, Like } from '../types/Article';
+import type { Article } from '../types/Article';
+import type { ArticleComment } from '../types/Comment';
 import type { RecommendationTracking } from '../types/Recommendation';
-import AuthorIdentity from '../components/AuthorIdentity.vue';
 
-const article = ref<Article | null>(null);
 const route = useRoute();
-const articleID = computed(() => String(route.params.id ?? ''));
-const likes = ref(0); const liked = ref(false); const likeSubmitting = ref(false);
-const loading = ref(false); const loadError = ref(false); const contentRef = ref<HTMLElement | null>(null);
+const router = useRouter();
 const authStore = useAuthStore();
-const telemetry = getRecommendationTelemetry(() => authStore.token);
+const currentIdentity = computed(() => authStore.currentIdentity);
+const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
+
+const articleId = computed(() => String(route.params.id ?? '').trim());
+const article = ref<Article | null>(null);
+const articleLoading = ref(false);
+const articleError = ref('');
+const showCover = ref(false);
+const articleBodyRef = ref<HTMLElement | null>(null);
+
+const liked = ref(false);
+const likeCount = ref(0);
+const likeStateLoading = ref(false);
+const likeSubmitting = ref(false);
+const likeError = ref('');
+
+const comments = ref<ArticleComment[]>([]);
+const nextCursor = ref<string | null>(null);
+const commentsInitialLoading = ref(false);
+const commentsLoadingMore = ref(false);
+const commentsError = ref('');
+const commentsLoadMoreError = ref('');
+const commentSubmitting = ref(false);
+const commentError = ref('');
+const deletingCommentId = ref<number | null>(null);
+const composerRef = ref<InstanceType<typeof CommentComposer> | null>(null);
+const commentCount = ref(0);
+
+let detailRequestVersion = 0;
+let likeRequestVersion = 0;
+let likeMutationVersion = 0;
+let commentsRequestVersion = 0;
+
 let tracking: RecommendationTracking | null = null;
-let activeID = ''; let readEndSent = false; let foregroundStartedAt: number | null = null;
-let foregroundTimeMS = 0; let maxScrollDepth = 0;
+let trackedArticleID = '';
+let readEndSent = false;
+let foregroundStartedAt: number | null = null;
+let foregroundTimeMS = 0;
+let maxScrollDepth = 0;
 
-const detailMessage = computed(() => !authStore.isAuthenticated ? '登录后可以阅读文章' : loadError.value ? '文章加载失败，请稍后重试' : '文章不存在或已下架');
-const formatDate = (dateStr: string) => dateStr ? new Date(dateStr).toLocaleString() : '';
-const pauseForeground = () => { if (foregroundStartedAt !== null) { foregroundTimeMS += Date.now() - foregroundStartedAt; foregroundStartedAt = null; } };
-const updateDepth = () => { const el = contentRef.value; if (!el) return; const rect = el.getBoundingClientRect(); const height = Math.max(rect.height, 1); const viewed = Math.min(height, Math.max(0, window.innerHeight - Math.max(rect.top, 0))); maxScrollDepth = Math.max(maxScrollDepth, Math.min(100, Math.round(viewed / height * 100))); };
-const finishRead = (exitType: string) => { if (!tracking || readEndSent || !activeID) return; pauseForeground(); readEndSent = true; telemetry.recordReadEnd(Number(activeID), tracking, { foreground_time_ms: Math.max(0, Math.round(foregroundTimeMS)), max_scroll_depth: maxScrollDepth, exit_type: exitType }); };
-const handleVisibility = () => { if (document.visibilityState === 'hidden') { finishRead('page_hide'); void telemetry.flush(true); } else if (tracking && !readEndSent) foregroundStartedAt = Date.now(); };
-const startRead = () => { tracking = consumePendingRecommendationAttribution(Number(articleID.value)); activeID = articleID.value; readEndSent = false; foregroundTimeMS = 0; maxScrollDepth = 0; if (tracking && document.visibilityState === 'visible') foregroundStartedAt = Date.now(); updateDepth(); };
+const clampCount = (value: unknown) => {
+  const count = Number(value);
+  return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+};
 
-const fetchArticle = async () => { if (!authStore.isAuthenticated) { article.value = null; loadError.value = false; return; } loading.value = true; loadError.value = false; try { const response = await axios.get<Article>(`/articles/${articleID.value}`); article.value = response.data; startRead(); } catch (error) { article.value = null; loadError.value = (error as { response?: { status?: number } }).response?.status !== 404; } finally { loading.value = false; } };
-const likeArticle = async () => { if (likeSubmitting.value) return; likeSubmitting.value = true; const previousLiked = liked.value; const previousLikes = likes.value; liked.value = !previousLiked; likes.value = Math.max(0, previousLikes + (liked.value ? 1 : -1)); try { const res = previousLiked ? await axios.delete<Like>(`articles/${articleID.value}/like`) : await axios.put<Like>(`articles/${articleID.value}/like`); likes.value = res.data.likes; liked.value = res.data.liked; } catch { liked.value = previousLiked; likes.value = previousLikes; ElMessage.error('点赞失败，请稍后重试'); } finally { likeSubmitting.value = false; } };
-const fetchLike = async () => { if (!authStore.isAuthenticated) return; try { const res = await axios.get<Like>(`articles/${articleID.value}/like`); likes.value = res.data.likes; liked.value = res.data.liked; } catch { /* optional */ } };
-watch(articleID, () => { finishRead('navigate_to_article'); void fetchArticle(); void fetchLike(); });
-onBeforeRouteLeave((to) => { finishRead(to.name === 'Recommendations' ? 'back_to_recommendation' : 'route_leave'); });
-onMounted(() => { document.addEventListener('visibilitychange', handleVisibility); window.addEventListener('scroll', updateDepth, { passive: true }); window.addEventListener('pagehide', () => finishRead('page_hide')); void fetchArticle(); void fetchLike(); });
-onBeforeUnmount(() => { finishRead('route_leave'); document.removeEventListener('visibilitychange', handleVisibility); window.removeEventListener('scroll', updateDepth); });
+const isValidArticleID = (value: string) => {
+  const parsed = Number(value);
+  return /^\d+$/.test(value) && Number.isSafeInteger(parsed) && parsed > 0;
+};
+
+const formatArticleDate = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString();
+};
+
+const articleExpiredLabel = computed(() => {
+  if (!article.value?.expired_at) {
+    return '';
+  }
+
+  const date = new Date(article.value.expired_at);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.getTime() <= Date.now()
+    ? 'Expired ' + date.toLocaleString()
+    : 'Expires ' + date.toLocaleString();
+});
+
+const articleFailureTitle = computed(() => {
+  if (!authStore.isAuthenticated) {
+    return 'Log in to read this article';
+  }
+  return 'Article unavailable';
+});
+
+const articleFailureMessage = computed(() => {
+  if (!authStore.isAuthenticated) {
+    return 'Sign in to open the full article and join the conversation.';
+  }
+  return articleError.value || 'This article could not be found.';
+});
+
+const mergeComments = (items: ArticleComment[]) => {
+  const seen = new Set<number>();
+  return items.filter(comment => {
+    if (seen.has(comment.id)) {
+      return false;
+    }
+    seen.add(comment.id);
+    return true;
+  });
+};
+
+const pauseForeground = () => {
+  if (foregroundStartedAt !== null) {
+    foregroundTimeMS += Date.now() - foregroundStartedAt;
+    foregroundStartedAt = null;
+  }
+};
+
+const updateScrollDepth = () => {
+  const element = articleBodyRef.value;
+  if (!element) {
+    return;
+  }
+
+  const rect = element.getBoundingClientRect();
+  const height = Math.max(rect.height, 1);
+  const visible = Math.min(height, Math.max(0, window.innerHeight - Math.max(rect.top, 0)));
+  maxScrollDepth = Math.max(maxScrollDepth, Math.min(100, Math.round((visible / height) * 100)));
+};
+
+const finishRead = (exitType: string) => {
+  if (!tracking || readEndSent || !trackedArticleID) {
+    return;
+  }
+
+  pauseForeground();
+  readEndSent = true;
+  recommendationTelemetry.recordReadEnd(Number(trackedArticleID), tracking, {
+    foreground_time_ms: Math.max(0, Math.round(foregroundTimeMS)),
+    max_scroll_depth: maxScrollDepth,
+    exit_type: exitType,
+  });
+  void recommendationTelemetry.flush(false);
+};
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'hidden') {
+    finishRead('page_hide');
+    void recommendationTelemetry.flush(true);
+  } else if (tracking && !readEndSent) {
+    foregroundStartedAt = Date.now();
+  }
+};
+
+const handlePageHide = () => {
+  finishRead('page_hide');
+  void recommendationTelemetry.flush(true);
+};
+
+const startRead = (id: string) => {
+  tracking = consumePendingRecommendationAttribution(Number(id));
+  trackedArticleID = id;
+  readEndSent = false;
+  foregroundStartedAt = null;
+  foregroundTimeMS = 0;
+  maxScrollDepth = 0;
+
+  if (tracking && document.visibilityState === 'visible') {
+    foregroundStartedAt = Date.now();
+  }
+  updateScrollDepth();
+};
+
+const resetLikeState = () => {
+  likeRequestVersion += 1;
+  likeMutationVersion += 1;
+  liked.value = false;
+  likeCount.value = 0;
+  likeStateLoading.value = false;
+  likeSubmitting.value = false;
+  likeError.value = '';
+};
+
+const resetCommentsState = () => {
+  commentsRequestVersion += 1;
+  comments.value = [];
+  nextCursor.value = null;
+  commentsInitialLoading.value = false;
+  commentsLoadingMore.value = false;
+  commentsError.value = '';
+  commentsLoadMoreError.value = '';
+  commentSubmitting.value = false;
+  commentError.value = '';
+  deletingCommentId.value = null;
+  commentCount.value = 0;
+};
+
+const resetArticleState = () => {
+  article.value = null;
+  articleLoading.value = false;
+  articleError.value = '';
+  showCover.value = false;
+};
+
+const loadLikeState = async (id: string, detailVersion: number) => {
+  if (!authStore.isAuthenticated) {
+    return;
+  }
+
+  const requestVersion = ++likeRequestVersion;
+  const mutationVersionAtStart = likeMutationVersion;
+  likeStateLoading.value = true;
+  likeError.value = '';
+
+  try {
+    const response = await getArticleLikeState(id);
+    if (
+      detailVersion !== detailRequestVersion ||
+      requestVersion !== likeRequestVersion ||
+      mutationVersionAtStart !== likeMutationVersion
+    ) {
+      return;
+    }
+
+    liked.value = response.liked;
+    likeCount.value = clampCount(response.likes);
+  } catch {
+    if (detailVersion === detailRequestVersion && requestVersion === likeRequestVersion) {
+      likeError.value = 'Like status is unavailable. You can still try again.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && requestVersion === likeRequestVersion) {
+      likeStateLoading.value = false;
+    }
+  }
+};
+
+const toggleLike = async () => {
+  if (
+    !article.value ||
+    !authStore.isAuthenticated ||
+    likeStateLoading.value ||
+    likeSubmitting.value
+  ) {
+    return;
+  }
+
+  const detailVersion = detailRequestVersion;
+  const id = articleId.value;
+  const mutationVersion = ++likeMutationVersion;
+  const previousLiked = liked.value;
+  const previousCount = likeCount.value;
+
+  likeSubmitting.value = true;
+  likeError.value = '';
+  liked.value = !previousLiked;
+  likeCount.value = Math.max(0, previousCount + (liked.value ? 1 : -1));
+
+  try {
+    const response = previousLiked ? await unlikeArticle(id) : await likeArticle(id);
+    if (detailVersion !== detailRequestVersion || mutationVersion !== likeMutationVersion) {
+      return;
+    }
+
+    liked.value = response.liked;
+    likeCount.value = clampCount(response.likes);
+  } catch {
+    if (detailVersion === detailRequestVersion && mutationVersion === likeMutationVersion) {
+      liked.value = previousLiked;
+      likeCount.value = Math.max(0, previousCount);
+      likeError.value = 'Like failed. Please try again.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && mutationVersion === likeMutationVersion) {
+      likeSubmitting.value = false;
+    }
+  }
+};
+
+const loadInitialComments = async (id: string, detailVersion: number) => {
+  const requestVersion = ++commentsRequestVersion;
+  commentsInitialLoading.value = true;
+  commentsLoadingMore.value = false;
+  commentsError.value = '';
+  commentsLoadMoreError.value = '';
+  comments.value = [];
+  nextCursor.value = null;
+
+  try {
+    const page = await getArticleComments(id, { limit: 20 });
+    if (detailVersion !== detailRequestVersion || requestVersion !== commentsRequestVersion) {
+      return;
+    }
+
+    comments.value = mergeComments(comments.value.concat(page.items));
+    nextCursor.value = page.next_cursor || null;
+  } catch {
+    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
+      commentsError.value = 'The replies could not be loaded.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
+      commentsInitialLoading.value = false;
+    }
+  }
+};
+
+const loadMoreComments = async () => {
+  if (
+    !nextCursor.value ||
+    commentsInitialLoading.value ||
+    commentsLoadingMore.value ||
+    !article.value
+  ) {
+    return;
+  }
+
+  const id = articleId.value;
+  const detailVersion = detailRequestVersion;
+  const requestVersion = ++commentsRequestVersion;
+  const cursor = nextCursor.value;
+  commentsLoadingMore.value = true;
+  commentsLoadMoreError.value = '';
+
+  try {
+    const page = await getArticleComments(id, { limit: 20, cursor });
+    if (detailVersion !== detailRequestVersion || requestVersion !== commentsRequestVersion) {
+      return;
+    }
+
+    comments.value = mergeComments(comments.value.concat(page.items));
+    nextCursor.value = page.next_cursor || null;
+  } catch {
+    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
+      commentsLoadMoreError.value = 'Could not load more replies.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
+      commentsLoadingMore.value = false;
+    }
+  }
+};
+
+const retryInitialComments = () => {
+  if (article.value) {
+    void loadInitialComments(articleId.value, detailRequestVersion);
+  }
+};
+
+const retryLoadMoreComments = () => {
+  void loadMoreComments();
+};
+
+const handleCreateComment = async (content: string) => {
+  if (!article.value || !authStore.isAuthenticated || commentSubmitting.value) {
+    return;
+  }
+
+  const id = articleId.value;
+  const detailVersion = detailRequestVersion;
+  commentSubmitting.value = true;
+  commentError.value = '';
+
+  try {
+    const created = await createArticleComment(id, content);
+    if (detailVersion !== detailRequestVersion || articleId.value !== id) {
+      return;
+    }
+
+    comments.value = mergeComments([created].concat(comments.value));
+    commentsError.value = '';
+    commentCount.value = clampCount(commentCount.value + 1);
+    composerRef.value?.clear();
+  } catch {
+    if (detailVersion === detailRequestVersion) {
+      commentError.value = 'Reply failed. Please try again.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion) {
+      commentSubmitting.value = false;
+    }
+  }
+};
+
+const deleteOwnComment = async (commentID: number) => {
+  if (
+    !authStore.isAuthenticated ||
+    deletingCommentId.value !== null ||
+    !comments.value.some(comment => comment.id === commentID)
+  ) {
+    return;
+  }
+
+  const detailVersion = detailRequestVersion;
+  deletingCommentId.value = commentID;
+  commentError.value = '';
+
+  try {
+    await deleteComment(commentID);
+    if (detailVersion !== detailRequestVersion) {
+      return;
+    }
+
+    comments.value = comments.value.filter(comment => comment.id !== commentID);
+    commentCount.value = Math.max(0, commentCount.value - 1);
+  } catch {
+    if (detailVersion === detailRequestVersion) {
+      commentError.value = 'Reply could not be deleted. Please try again.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && deletingCommentId.value === commentID) {
+      deletingCommentId.value = null;
+    }
+  }
+};
+
+const loadDetail = async (id: string, isAuthenticated: boolean) => {
+  const detailVersion = ++detailRequestVersion;
+  finishRead('navigate_to_article');
+  resetArticleState();
+  resetLikeState();
+  resetCommentsState();
+
+  if (!isAuthenticated) {
+    return;
+  }
+
+  if (!isValidArticleID(id)) {
+    articleError.value = 'This article URL is not valid.';
+    return;
+  }
+
+  articleLoading.value = true;
+
+  try {
+    const loadedArticle = await getArticleById(id);
+    if (detailVersion !== detailRequestVersion) {
+      return;
+    }
+
+    article.value = loadedArticle;
+    showCover.value = Boolean(loadedArticle.cover_image_url);
+    likeCount.value = clampCount(loadedArticle.like_count);
+    commentCount.value = clampCount(loadedArticle.comment_count);
+    startRead(id);
+    void loadLikeState(id, detailVersion);
+    void loadInitialComments(id, detailVersion);
+  } catch (error) {
+    if (detailVersion === detailRequestVersion) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      articleError.value = status === 404
+        ? 'This article does not exist.'
+        : 'The article could not be loaded.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion) {
+      articleLoading.value = false;
+    }
+  }
+};
+
+const retryArticle = () => {
+  void loadDetail(articleId.value, authStore.isAuthenticated);
+};
+
+const goBack = () => {
+  const historyState = window.history.state as { back?: string | null } | null;
+  if (historyState?.back) {
+    router.back();
+    return;
+  }
+
+  void router.push({ name: 'Home' });
+};
+
+const hideCover = () => {
+  showCover.value = false;
+};
+
+watch(
+  [articleId, () => authStore.isAuthenticated],
+  ([id, isAuthenticated]) => {
+    void loadDetail(id, isAuthenticated);
+  },
+  { immediate: true },
+);
+
+onBeforeRouteLeave(to => {
+  finishRead(to.name === 'Recommendations' ? 'back_to_recommendation' : 'route_leave');
+  void recommendationTelemetry.flush(false);
+});
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('scroll', updateScrollDepth, { passive: true });
+  window.addEventListener('pagehide', handlePageHide);
+  updateScrollDepth();
+});
+
+onBeforeUnmount(() => {
+  finishRead('route_leave');
+  void recommendationTelemetry.flush(false);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('scroll', updateScrollDepth);
+  window.removeEventListener('pagehide', handlePageHide);
+});
 </script>
 
 <style scoped>
-.detail-main {
-  padding: 32px clamp(18px, 4vw, 48px);
+.detail-view {
+  min-height: 100vh;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.detail-header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.detail-header__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 40px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.detail-header__back:hover {
+  color: var(--color-accent);
+}
+
+.detail-header__back svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.article-detail,
+.replies-section {
+  padding: var(--space-5);
 }
 
 .article-detail {
-  max-width: 880px;
-  margin: 0 auto;
-  border-radius: 8px;
+  border-bottom: 1px solid var(--color-border);
 }
 
-.article-detail h1 {
-  margin: 0 0 18px;
-  font-size: 34px;
-  line-height: 1.2;
-  color: #111827;
+.article-detail > .author-identity {
+  margin-bottom: var(--space-5);
 }
 
-.content {
-  white-space: pre-wrap;
-  line-height: 1.8;
-  margin-bottom: 20px;
-  color: #1f2937;
+.article-detail__title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: clamp(28px, 4vw, 42px);
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
 }
 
-.expire-info {
+.article-detail__expiry {
   display: inline-block;
-  margin-bottom: 18px;
-  padding: 8px 10px;
-  border-radius: 4px;
-  background-color: #fdf6ec;
-  color: #b45309;
-  font-size: 14px;
+  margin: var(--space-4) 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  margin-top: 20px;
+.article-detail__body {
+  margin-top: var(--space-5);
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.likes-count {
-  font-size: 14px;
-  color: #666;
-}
-
-.detail-cover {
-  margin: 28px 0 0;
+.article-detail__cover {
+  margin: var(--space-5) 0 0;
   overflow: hidden;
-  border-radius: 8px;
-  background: #e2e8f0;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
 }
 
-.detail-cover img {
+.article-detail__cover img {
   display: block;
   width: 100%;
-  max-height: 520px;
+  max-height: 620px;
   object-fit: cover;
 }
 
-.no-data {
-  margin-top: 50px;
-  text-align: center;
-  font-size: 18px;
-  color: #64748b;
-}
-.detail-main {
-  container-type: inline-size;
+.article-detail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  color: var(--color-text-tertiary);
+  font-size: 12px;
 }
 
-@container (max-width: 700px) {
-  .actions {
+.article-detail__engagement {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.engagement-action,
+.engagement-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.engagement-action {
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  background: transparent;
+  cursor: pointer;
+}
+
+.engagement-action:hover:not(:disabled),
+.engagement-action--liked {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-accent);
+}
+
+.engagement-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.engagement-action svg,
+.engagement-metric svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.detail-inline-error,
+.comment-error {
+  margin: var(--space-3) 0 0;
+  color: var(--color-danger);
+  font-size: 12px;
+}
+
+.replies-section {
+  padding-top: var(--space-4);
+}
+
+.replies-section__heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.replies-section__heading h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.replies-section__heading span {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.login-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.login-prompt a,
+.detail-state__link {
+  color: var(--color-accent);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.login-prompt a:hover,
+.detail-state__link:hover {
+  text-decoration: underline;
+}
+
+.comments-state {
+  padding: var(--space-8) 0;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.comments-state--error {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+}
+
+.comments-state p {
+  margin: 0;
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.comments-state span {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.comments-state button,
+.detail-state button {
+  min-height: 34px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-4);
+  background: var(--color-accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.detail-state {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  min-height: 360px;
+  padding: var(--space-8) var(--space-5);
+  align-content: center;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.detail-state p,
+.detail-state h1 {
+  margin: 0;
+}
+
+.detail-state h1 {
+  color: var(--color-text);
+  font-size: 24px;
+}
+
+.detail-state--error {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@media (max-width: 799px) {
+  .detail-header {
+    top: var(--app-mobile-nav-offset, 0px);
+  }
+}
+
+@media (max-width: 420px) {
+  .detail-header {
+    padding-inline: var(--space-4);
+  }
+
+  .article-detail,
+  .replies-section {
+    padding-inline: var(--space-4);
+  }
+
+  .article-detail__title {
+    font-size: 28px;
+  }
+
+  .login-prompt {
     align-items: flex-start;
     flex-direction: column;
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-header {
+    backdrop-filter: none;
+  }
+}
+
 </style>
