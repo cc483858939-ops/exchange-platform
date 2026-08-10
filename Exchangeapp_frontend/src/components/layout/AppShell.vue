@@ -48,6 +48,7 @@ const { authStore, handleLogout } = useLogout();
 
 <style scoped>
 .app-layout {
+  --app-mobile-nav-offset: 0px;
   display: grid;
   width: min(100%, 1268px);
   min-height: 100vh;
@@ -119,6 +120,9 @@ const { authStore, handleLogout } = useLogout();
 
 @media (max-width: 799px) {
   .app-layout {
+    --app-mobile-nav-offset: calc(
+      var(--space-2) + 32px + var(--space-2) + 34px + var(--space-3) + 1px
+    );
     display: block;
     width: 100%;
   }

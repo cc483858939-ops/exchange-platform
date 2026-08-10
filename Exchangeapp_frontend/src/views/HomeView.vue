@@ -147,10 +147,10 @@ const activeFeedStatus = computed(() => {
 });
 
 const selectTab = (tab: FeedTab) => {
-  if (route.query.tab === tab) {
+  if (activeTab.value === tab) {
     return;
   }
-  void router.replace({
+  void router.push({
     name: 'Home',
     query: {
       ...route.query,
@@ -385,6 +385,12 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   backdrop-filter: blur(10px);
+}
+
+@media (max-width: 799px) {
+  .home-feed-header {
+    top: var(--app-mobile-nav-offset, 0px);
+  }
 }
 
 .home-feed-header h1 {
