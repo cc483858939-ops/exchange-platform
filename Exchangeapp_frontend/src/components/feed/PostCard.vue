@@ -49,28 +49,90 @@
         </svg>
         <span>{{ post.likeCount }}</span>
       </button>
+      <div class="post-card__more">
+        <button
+          ref="moreButtonRef"
+          class="post-card__metric post-card__more-button"
+          type="button"
+          aria-label="More actions"
+          aria-haspopup="menu"
+          :aria-expanded="moreOpen"
+          @click.stop="toggleMore"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.5" />
+            <circle cx="12" cy="12" r="1.5" />
+            <circle cx="19" cy="12" r="1.5" />
+          </svg>
+        </button>
+        <div
+          v-if="moreOpen"
+          ref="menuRef"
+          class="post-card__menu"
+          role="menu"
+          @keydown="handleMenuKeydown"
+        >
+          <button
+            :ref="element => setMenuItemRef(element, 0)"
+            class="post-card__menu-item"
+            type="button"
+            role="menuitem"
+            @click.stop="copyLink"
+          >
+            {{ copyActionLabel }}
+          </button>
+          <button
+            v-if="showNotInterested"
+            :ref="element => setMenuItemRef(element, 1)"
+            class="post-card__menu-item"
+            type="button"
+            role="menuitem"
+            @click.stop="handleNotInterested"
+          >
+            Not interested
+          </button>
+        </div>
+        <span
+          v-if="copyState !== 'idle'"
+          class="post-card__copy-status"
+          aria-live="polite"
+        >
+          {{ copyActionLabel }}
+        </span>
+      </div>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
 
 const props = withDefaults(defineProps<{
   post: FeedPost;
   likePending?: boolean;
+  showNotInterested?: boolean;
 }>(), {
   likePending: false,
+  showNotInterested: false,
 });
 
 const emit = defineEmits<{
   articleClick: [post: FeedPost];
   toggleLike: [articleId: number];
+  notInterested: [articleId: number];
 }>();
 
+const router = useRouter();
 const showCover = ref(Boolean(props.post.coverImageUrl));
+const moreButtonRef = ref<HTMLButtonElement | null>(null);
+const menuRef = ref<HTMLDivElement | null>(null);
+const menuItemRefs = ref<HTMLButtonElement[]>([]);
+const moreOpen = ref(false);
+type CopyState = 'idle' | 'success' | 'error';
+const copyState = ref<CopyState>('idle');
 
 const likeDisabled = computed(() =>
   props.post.likeStatus !== 'ready' || props.likePending,
@@ -94,6 +156,129 @@ const replyLabel = computed(() => {
   return 'Reply to post, ' + countLabel;
 });
 
+const copyActionLabel = computed(() => {
+  if (copyState.value === 'success') {
+    return 'Copied';
+  }
+  if (copyState.value === 'error') {
+    return 'Copy failed';
+  }
+  return 'Copy link';
+});
+
+const getMenuItems = () => menuItemRefs.value.filter(Boolean);
+
+const setMenuItemRef = (element: unknown, index: number) => {
+  if (element instanceof HTMLButtonElement) {
+    menuItemRefs.value[index] = element;
+  } else {
+    delete menuItemRefs.value[index];
+  }
+};
+
+const focusMenuItem = (index: number) => {
+  const items = getMenuItems();
+  if (items.length === 0) {
+    return;
+  }
+  items[(index + items.length) % items.length]?.focus();
+};
+
+const removeOutsideListener = () => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown);
+};
+
+const closeMore = (restoreFocus = false) => {
+  const wasOpen = moreOpen.value;
+  moreOpen.value = false;
+  copyState.value = 'idle';
+  menuItemRefs.value = [];
+  removeOutsideListener();
+  if (restoreFocus && wasOpen) {
+    void nextTick(() => moreButtonRef.value?.focus());
+  }
+};
+
+const handleDocumentPointerDown = (event: PointerEvent) => {
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    return;
+  }
+  if (moreButtonRef.value?.contains(target) || menuRef.value?.contains(target)) {
+    return;
+  }
+  closeMore();
+};
+
+const openMore = async () => {
+  if (moreOpen.value) {
+    return;
+  }
+  moreOpen.value = true;
+  document.addEventListener('pointerdown', handleDocumentPointerDown);
+  await nextTick();
+  if (moreOpen.value) {
+    focusMenuItem(0);
+  }
+};
+
+const toggleMore = () => {
+  if (moreOpen.value) {
+    closeMore(true);
+    return;
+  }
+  void openMore();
+};
+
+const handleMenuKeydown = (event: KeyboardEvent) => {
+  const items = getMenuItems();
+  if (items.length === 0) {
+    return;
+  }
+
+  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    focusMenuItem(currentIndex < 0 ? 0 : currentIndex + 1);
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    focusMenuItem(currentIndex < 0 ? items.length - 1 : currentIndex - 1);
+  } else if (event.key === 'Home') {
+    event.preventDefault();
+    focusMenuItem(0);
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    focusMenuItem(items.length - 1);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeMore(true);
+  } else if (event.key === 'Tab') {
+    closeMore();
+  }
+};
+
+const copyLink = async () => {
+  try {
+    const resolved = router.resolve({
+      name: 'NewsDetail',
+      params: { id: String(props.post.id) },
+    });
+    const url = new URL(resolved.href, window.location.origin).toString();
+    if (!navigator.clipboard) {
+      throw new Error('Clipboard API unavailable');
+    }
+    await navigator.clipboard.writeText(url);
+    copyState.value = 'success';
+  } catch {
+    copyState.value = 'error';
+  }
+};
+
+const handleNotInterested = () => {
+  closeMore();
+  emit('notInterested', props.post.id);
+};
+
 watch(
   () => props.post.coverImageUrl,
   (coverImageUrl) => {
@@ -101,9 +286,18 @@ watch(
   },
 );
 
+watch(
+  () => props.post.id,
+  () => closeMore(),
+);
+
 const hideCover = () => {
   showCover.value = false;
 };
+
+onBeforeUnmount(() => {
+  closeMore();
+});
 </script>
 
 <style scoped>
@@ -202,16 +396,82 @@ const hideCover = () => {
   transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
 }
 
+.post-card__more {
+  position: relative;
+}
+
+.post-card__more-button {
+  min-width: 40px;
+  min-height: 40px;
+  margin: -8px 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.post-card__menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 148px;
+  gap: 2px;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.post-card__menu-item {
+  min-height: 36px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.post-card__menu-item:hover,
+.post-card__menu-item:focus-visible {
+  background: var(--color-surface-subtle);
+  color: var(--color-accent);
+}
+
+.post-card__copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .post-card__like:hover:not(:disabled),
 .post-card__like:focus-visible,
 .post-card__reply:hover,
-.post-card__reply:focus-visible {
+.post-card__reply:focus-visible,
+.post-card__more-button:hover,
+.post-card__more-button:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-accent);
 }
 
 .post-card__like:active:not(:disabled),
-.post-card__reply:active {
+.post-card__reply:active,
+.post-card__more-button:active {
   transform: scale(0.97);
 }
 
@@ -249,7 +509,9 @@ const hideCover = () => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .post-card__like {
+  .post-card__like,
+  .post-card__reply,
+  .post-card__more-button {
     transition: none;
   }
 }

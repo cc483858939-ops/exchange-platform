@@ -68,8 +68,10 @@
           <PostCard
             :post="item.post"
             :like-pending="likePendingArticleIds.has(item.post.id)"
+            :show-not-interested="true"
             @article-click="handleRecommendationClick(item.article)"
             @toggle-like="handleLikeToggle"
+            @not-interested="handleNotInterested"
           />
         </div>
       </template>
@@ -559,6 +561,17 @@ const bindRecommendationCard = (
 const handleRecommendationClick = (article: RecommendedArticle) => {
   savePendingRecommendationAttribution(article.id, article.tracking);
   recommendationTelemetry.recordClick(article.id, article.tracking);
+};
+
+const handleNotInterested = (articleId: number) => {
+  const item = forYouFeed.items.find((feedItem) => feedItem.article.id === articleId);
+  if (!item) {
+    return;
+  }
+
+  recommendationTelemetry.recordNotInterested(item.article.id, item.article.tracking);
+  forYouFeed.items = forYouFeed.items.filter((feedItem) => feedItem.article.id !== articleId);
+  recommendationCardElements.delete(articleId);
 };
 
 watch(
