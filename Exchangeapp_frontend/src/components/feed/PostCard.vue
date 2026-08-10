@@ -133,6 +133,7 @@ const menuItemRefs = ref<HTMLButtonElement[]>([]);
 const moreOpen = ref(false);
 type CopyState = 'idle' | 'success' | 'error';
 const copyState = ref<CopyState>('idle');
+let copyRequestVersion = 0;
 
 const likeDisabled = computed(() =>
   props.post.likeStatus !== 'ready' || props.likePending,
@@ -190,6 +191,7 @@ const removeOutsideListener = () => {
 
 const closeMore = (restoreFocus = false) => {
   const wasOpen = moreOpen.value;
+  copyRequestVersion += 1;
   moreOpen.value = false;
   copyState.value = 'idle';
   menuItemRefs.value = [];
@@ -257,19 +259,36 @@ const handleMenuKeydown = (event: KeyboardEvent) => {
   }
 };
 
+const isCurrentCopyRequest = (requestVersion: number, articleId: number) =>
+  requestVersion === copyRequestVersion
+  && articleId === props.post.id
+  && moreOpen.value;
+
 const copyLink = async () => {
+  const requestVersion = ++copyRequestVersion;
+  const articleId = props.post.id;
+
   try {
     const resolved = router.resolve({
       name: 'NewsDetail',
-      params: { id: String(props.post.id) },
+      params: { id: String(articleId) },
     });
     const url = new URL(resolved.href, window.location.origin).toString();
     if (!navigator.clipboard) {
       throw new Error('Clipboard API unavailable');
     }
     await navigator.clipboard.writeText(url);
+
+    if (!isCurrentCopyRequest(requestVersion, articleId)) {
+      return;
+    }
+
     copyState.value = 'success';
   } catch {
+    if (!isCurrentCopyRequest(requestVersion, articleId)) {
+      return;
+    }
+
     copyState.value = 'error';
   }
 };
