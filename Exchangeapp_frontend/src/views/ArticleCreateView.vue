@@ -1,306 +1,862 @@
 <template>
-  <el-container>
-    <el-main class="compose-main">
-      <section class="compose-panel">
-        <header class="compose-header">
-          <div>
-            <h1>发布文章</h1>
-            <p>填写正文并上传一张封面图</p>
-          </div>
-        </header>
+  <main class="composer-view">
+    <header class="composer-header">
+      <button
+        class="composer-header__back"
+        type="button"
+        aria-label="Back"
+        @click="goBack"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m15 18-6-6 6-6" />
+        </svg>
+        <span>Create post</span>
+      </button>
 
-        <el-form class="article-form" :model="form" label-position="top" @submit.prevent="submitArticle">
-          <el-form-item label="标题">
-            <el-input v-model="form.title" maxlength="80" show-word-limit placeholder="输入文章标题" />
-          </el-form-item>
+      <button
+        class="publish-button"
+        type="submit"
+        form="composer-form"
+        :disabled="!canPublish || isSubmitting"
+      >
+        {{ publishLabel }}
+      </button>
+    </header>
 
-          <el-form-item label="摘要">
-            <el-input v-model="form.preview" maxlength="180" show-word-limit placeholder="输入列表中展示的简短摘要" />
-          </el-form-item>
+    <section
+      v-if="!authStore.isAuthenticated"
+      class="composer-auth-state"
+      aria-labelledby="composer-login-heading"
+    >
+      <h1 id="composer-login-heading">Log in to create a post.</h1>
+      <p>Your account is required to publish an article.</p>
+      <RouterLink class="composer-action" :to="{ name: 'Login' }">Log in</RouterLink>
+    </section>
 
-          <el-form-item label="正文">
-            <el-input
-              v-model="form.content"
-              type="textarea"
-              :rows="12"
-              maxlength="10000"
-              show-word-limit
-              placeholder="输入文章正文"
-            />
-          </el-form-item>
-
-          <el-form-item label="封面图（必填）" required>
-            <label class="cover-picker" for="article-cover-input">
-              <input
-                id="article-cover-input"
-                class="cover-input"
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                @change="handleCoverChange"
-              />
-              <span v-if="!coverPreview" class="cover-empty">请上传封面图（必填，支持 jpg、png 或 webp）</span>
-              <img v-else class="cover-preview" :src="coverPreview" alt="文章封面预览" />
-            </label>
-            <el-button v-if="coverFile" text type="danger" @click="clearCover">移除封面</el-button>
-          </el-form-item>
-
-          <div class="form-actions">
-            <el-button @click="cancelCreate">取消</el-button>
-            <el-button type="primary" native-type="submit" :loading="submitting">发布</el-button>
-          </div>
-        </el-form>
+    <form
+      v-else
+      id="composer-form"
+      class="composer-form"
+      novalidate
+      @submit.prevent="submitArticle"
+    >
+      <section class="composer-section composer-section--identity" aria-labelledby="author-heading">
+        <h1 id="author-heading" class="sr-only">Current author</h1>
+        <div class="composer-author">
+          <span class="composer-author__avatar" aria-hidden="true">{{ identityInitial }}</span>
+          <span class="composer-author__copy">
+            <strong>{{ identityUsername }}</strong>
+            <small>{{ identityHandle }}</small>
+          </span>
+        </div>
       </section>
-    </el-main>
-  </el-container>
+
+      <section class="composer-section composer-section--fields" aria-labelledby="post-fields-heading">
+        <h2 id="post-fields-heading" class="sr-only">Post content</h2>
+
+        <div class="composer-field">
+          <label for="article-title">Headline</label>
+          <input
+            id="article-title"
+            v-model="form.title"
+            class="composer-input composer-input--title"
+            type="text"
+            autocomplete="off"
+            placeholder="Headline"
+            :disabled="isSubmitting"
+            aria-describedby="article-title-help article-title-error"
+          />
+          <div id="article-title-help" class="composer-field__meta">
+            <span
+              v-if="titleError"
+              id="article-title-error"
+              class="field-error"
+              role="alert"
+            >
+              {{ titleError }}
+            </span>
+            <span :class="{ 'field-count--over': titleLength > maxTitleLength }">
+              {{ titleLength }}/{{ maxTitleLength }}
+            </span>
+          </div>
+        </div>
+
+        <div class="composer-field">
+          <label for="article-preview">Summary</label>
+          <textarea
+            id="article-preview"
+            v-model="form.preview"
+            class="composer-input composer-input--preview"
+            rows="2"
+            autocomplete="off"
+            placeholder="Add a short summary..."
+            :disabled="isSubmitting"
+            aria-describedby="article-preview-help article-preview-error"
+          ></textarea>
+          <div id="article-preview-help" class="composer-field__meta">
+            <span
+              v-if="previewError"
+              id="article-preview-error"
+              class="field-error"
+              role="alert"
+            >
+              {{ previewError }}
+            </span>
+            <span :class="{ 'field-count--over': previewLength > maxPreviewLength }">
+              {{ previewLength }}/{{ maxPreviewLength }}
+            </span>
+          </div>
+        </div>
+
+        <div class="composer-field">
+          <label for="article-content">Post</label>
+          <textarea
+            id="article-content"
+            ref="contentInput"
+            v-model="form.content"
+            class="composer-input composer-input--content"
+            rows="5"
+            placeholder="Write your post..."
+            :disabled="isSubmitting"
+            aria-describedby="article-content-help article-content-error"
+          ></textarea>
+          <div id="article-content-help" class="composer-field__meta">
+            <span
+              v-if="contentError"
+              id="article-content-error"
+              class="field-error"
+              role="alert"
+            >
+              {{ contentError }}
+            </span>
+            <span :class="{ 'field-count--over': contentLength > maxContentLength }">
+              {{ contentLength }}/{{ maxContentLength }}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section class="composer-section composer-section--cover" aria-labelledby="cover-heading">
+        <div class="cover-heading">
+          <div>
+            <h2 id="cover-heading">Cover</h2>
+            <p>Required · JPEG, PNG, or WebP · up to 5 MB</p>
+          </div>
+        </div>
+
+        <figure class="cover-preview-frame" :class="{ 'cover-preview-frame--empty': !coverPreviewURL }">
+          <img
+            v-if="coverPreviewURL"
+            :src="coverPreviewURL"
+            alt="Selected cover preview"
+          />
+          <div v-else class="cover-empty" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="8.5" cy="9" r="1.5" />
+              <path d="m4 17 5-5 3 3 2-2 6 5" />
+            </svg>
+            <span>No cover selected</span>
+          </div>
+        </figure>
+
+        <div class="cover-actions">
+          <label
+            class="composer-action composer-action--secondary"
+            :class="{ 'composer-action--disabled': isSubmitting }"
+            :aria-disabled="isSubmitting"
+            for="article-cover-input"
+          >
+            {{ coverFile ? 'Replace cover' : 'Add cover' }}
+            <input
+              id="article-cover-input"
+              class="cover-input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              :disabled="isSubmitting"
+              @change="handleCoverChange"
+            />
+          </label>
+          <button
+            v-if="coverFile"
+            class="composer-action composer-action--secondary"
+            type="button"
+            :disabled="isSubmitting"
+            @click="removeCover"
+          >
+            Remove
+          </button>
+        </div>
+
+        <p v-if="coverError" class="field-error cover-error" role="alert">
+          {{ coverError }}
+        </p>
+      </section>
+
+      <div
+        v-if="uploadError || publishError"
+        class="composer-status"
+        role="alert"
+        aria-live="polite"
+      >
+        {{ uploadError || publishError }}
+      </div>
+
+      <p v-if="isSubmitting" class="composer-progress" aria-live="polite">
+        {{ publishLabel }}
+      </p>
+    </form>
+  </main>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onBeforeUnmount } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
-import axios from '../axios';
-import type { Article } from '../types/Article';
+import { createArticle, uploadArticleCover } from '../services/articleService';
+import { useAuthStore } from '../store/auth';
 
-type UploadArticleCoverResponse = {
-  cover_image_url: string;
-};
+type PublishPhase = 'idle' | 'uploading' | 'publishing';
 
-type CreateArticlePayload = {
-  title: string;
-  preview: string;
-  content: string;
-  cover_image_url: string;
-};
-
+const maxTitleLength = 80;
+const maxPreviewLength = 180;
+const maxContentLength = 10000;
 const maxCoverBytes = 5 * 1024 * 1024;
+const maxContentHeight = 360;
 const allowedCoverTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const router = useRouter();
-const submitting = ref(false);
-const coverFile = ref<File | null>(null);
-const coverPreview = ref('');
+const authStore = useAuthStore();
 const form = reactive({
   title: '',
   preview: '',
   content: '',
 });
 
+const phase = ref<PublishPhase>('idle');
+const validationAttempted = ref(false);
+const coverFile = ref<File | null>(null);
+const coverPreviewURL = ref('');
+const uploadedCoverURL = ref('');
+const coverError = ref('');
+const uploadError = ref('');
+const publishError = ref('');
+const contentInput = ref<HTMLTextAreaElement | null>(null);
+
+const currentIdentity = computed(() => authStore.currentIdentity);
+const identityUsername = computed(() => currentIdentity.value?.username || 'Current user');
+const identityHandle = computed(() => (
+  currentIdentity.value ? '@' + currentIdentity.value.username : 'Signed-in account'
+));
+const identityInitial = computed(
+  () => Array.from(currentIdentity.value?.username.trim() ?? '')[0]?.toUpperCase() || '?',
+);
+
+const isSubmitting = computed(() => phase.value !== 'idle');
+const publishLabel = computed(() => {
+  if (phase.value === 'uploading') {
+    return 'Uploading...';
+  }
+  if (phase.value === 'publishing') {
+    return 'Publishing...';
+  }
+  return 'Publish';
+});
+
+const codePointLength = (value: string) => Array.from(value.trim()).length;
+const titleLength = computed(() => codePointLength(form.title));
+const previewLength = computed(() => codePointLength(form.preview));
+const contentLength = computed(() => codePointLength(form.content));
+
+const titleError = computed(() => {
+  if (titleLength.value > maxTitleLength) {
+    return 'Headline must be ' + maxTitleLength + ' characters or fewer.';
+  }
+  if (validationAttempted.value && !form.title.trim()) {
+    return 'Headline is required.';
+  }
+  return '';
+});
+
+const previewError = computed(() => {
+  if (previewLength.value > maxPreviewLength) {
+    return 'Summary must be ' + maxPreviewLength + ' characters or fewer.';
+  }
+  if (validationAttempted.value && !form.preview.trim()) {
+    return 'Summary is required.';
+  }
+  return '';
+});
+
+const contentError = computed(() => {
+  if (contentLength.value > maxContentLength) {
+    return 'Post must be ' + maxContentLength + ' characters or fewer.';
+  }
+  if (validationAttempted.value && !form.content.trim()) {
+    return 'Post is required.';
+  }
+  return '';
+});
+
+const canPublish = computed(() => (
+  authStore.isAuthenticated
+  && Boolean(form.title.trim())
+  && titleLength.value <= maxTitleLength
+  && Boolean(form.preview.trim())
+  && previewLength.value <= maxPreviewLength
+  && Boolean(form.content.trim())
+  && contentLength.value <= maxContentLength
+  && Boolean(coverFile.value)
+  && !coverError.value
+));
+
 const revokeCoverPreview = () => {
-  if (coverPreview.value) {
-    URL.revokeObjectURL(coverPreview.value);
+  if (coverPreviewURL.value) {
+    URL.revokeObjectURL(coverPreviewURL.value);
+    coverPreviewURL.value = '';
   }
 };
 
-const handleCoverChange = (event: Event) => {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) {
-    clearCover();
+const removeCover = () => {
+  if (isSubmitting.value) {
     return;
   }
 
-  if (!allowedCoverTypes.has(file.type)) {
-    ElMessage.error('封面图仅支持 jpg、png 或 webp');
-    input.value = '';
-    clearCover();
-    return;
-  }
-  if (file.size > maxCoverBytes) {
-    ElMessage.error('封面图不能超过 5MB');
-    input.value = '';
-    clearCover();
-    return;
-  }
-
-  revokeCoverPreview();
-  coverFile.value = file;
-  coverPreview.value = URL.createObjectURL(file);
-};
-
-const clearCover = () => {
   revokeCoverPreview();
   coverFile.value = null;
-  coverPreview.value = '';
+  uploadedCoverURL.value = '';
+  coverError.value = '';
+  uploadError.value = '';
+  publishError.value = '';
+
   const input = document.getElementById('article-cover-input') as HTMLInputElement | null;
   if (input) {
     input.value = '';
   }
 };
 
-const validateForm = () => {
-  if (!form.title.trim()) {
-    ElMessage.error('请输入文章标题');
-    return false;
-  }
-  if (!form.preview.trim()) {
-    ElMessage.error('请输入文章摘要');
-    return false;
-  }
-  if (!form.content.trim()) {
-    ElMessage.error('请输入文章正文');
-    return false;
-  }
-  if (!coverFile.value) {
-    ElMessage.error('请先上传一张封面图后再发布');
-    return false;
-  }
-  return true;
-
-};
-
-const uploadCover = async () => {
-  if (!coverFile.value) {
-    return '';
-  }
-
-  const data = new FormData();
-  data.append('image', coverFile.value);
-  const response = await axios.post<UploadArticleCoverResponse>('/uploads/article-cover', data);
-  return response.data.cover_image_url;
-};
-
-const submitArticle = async () => {
-  if (submitting.value || !validateForm()) {
+const handleCoverChange = (event: Event) => {
+  if (isSubmitting.value) {
     return;
   }
 
-  submitting.value = true;
-  try {
-    const coverImageURL = await uploadCover();
-    if (!coverImageURL) {
-      throw new Error('cover image upload returned an empty URL');
-    }
-    const payload: CreateArticlePayload = {
-      title: form.title.trim(),
-      preview: form.preview.trim(),
-      content: form.content.trim(),
-      cover_image_url: coverImageURL,
-    };
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
 
-    const response = await axios.post<Article>('/articles', payload);
-    ElMessage.success('文章已发布');
-    router.push({ name: 'NewsDetail', params: { id: response.data.ID } });
-  } catch (error) {
-    console.error('Failed to create article:', error);
-    ElMessage.error('文章发布失败，请稍后重试');
+  if (file.size <= 0) {
+    coverError.value = 'Choose a non-empty image file.';
+    input.value = '';
+    return;
+  }
+
+  if (!allowedCoverTypes.has(file.type)) {
+    coverError.value = 'Cover must be JPEG, PNG, or WebP.';
+    input.value = '';
+    return;
+  }
+
+  if (file.size > maxCoverBytes) {
+    coverError.value = 'Cover must be 5 MB or smaller.';
+    input.value = '';
+    return;
+  }
+
+  revokeCoverPreview();
+  coverFile.value = file;
+  coverPreviewURL.value = URL.createObjectURL(file);
+  uploadedCoverURL.value = '';
+  coverError.value = '';
+  uploadError.value = '';
+  publishError.value = '';
+  input.value = '';
+};
+
+const resizeContent = () => {
+  const input = contentInput.value;
+  if (!input) {
+    return;
+  }
+
+  input.style.height = 'auto';
+  const nextHeight = Math.min(input.scrollHeight, maxContentHeight);
+  input.style.height = String(nextHeight) + 'px';
+  input.style.overflowY = input.scrollHeight > maxContentHeight ? 'auto' : 'hidden';
+};
+
+const goHome = () => {
+  void router.push({ name: 'Home' });
+};
+
+const goBack = () => {
+  const historyState = window.history.state as { back?: string | null } | null;
+  if (historyState?.back) {
+    router.back();
+    return;
+  }
+
+  goHome();
+};
+
+const submitArticle = async () => {
+  if (isSubmitting.value) {
+    return;
+  }
+
+  validationAttempted.value = true;
+  if (!canPublish.value) {
+    if (!coverFile.value && !coverError.value) {
+      coverError.value = 'Add a cover before publishing.';
+    }
+    return;
+  }
+
+  const selectedCover = coverFile.value;
+  if (!selectedCover) {
+    return;
+  }
+
+  const draft = {
+    title: form.title.trim(),
+    preview: form.preview.trim(),
+    content: form.content.trim(),
+  };
+
+  uploadError.value = '';
+  publishError.value = '';
+
+  try {
+    let coverImageURL = uploadedCoverURL.value;
+
+    if (!coverImageURL) {
+      phase.value = 'uploading';
+      try {
+        const uploadedURL = (await uploadArticleCover(selectedCover)).trim();
+        if (!uploadedURL) {
+          throw new Error('The cover upload returned no URL.');
+        }
+        uploadedCoverURL.value = uploadedURL;
+        coverImageURL = uploadedURL;
+      } catch {
+        uploadError.value = 'Cover upload failed. Your draft was preserved.';
+        return;
+      }
+    }
+
+    phase.value = 'publishing';
+    try {
+      const article = await createArticle({
+        ...draft,
+        cover_image_url: coverImageURL,
+      });
+      void router.push({
+        name: 'NewsDetail',
+        params: { id: String(article.ID) },
+      });
+    } catch {
+      publishError.value = 'Post could not be published. Try again.';
+    }
   } finally {
-    submitting.value = false;
+    phase.value = 'idle';
   }
 };
 
-const cancelCreate = () => {
-  router.push({ name: 'News' });
-};
+watch(
+  () => form.content,
+  () => {
+    void nextTick(resizeContent);
+  },
+);
+
+onMounted(() => {
+  void nextTick(resizeContent);
+});
 
 onBeforeUnmount(revokeCoverPreview);
 </script>
 
 <style scoped>
-.compose-main {
-  padding: 36px clamp(18px, 4vw, 48px);
+.composer-view {
+  min-height: 100vh;
+  color: var(--color-text);
+  background: var(--color-surface);
 }
 
-.compose-panel {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 28px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
-}
-
-.compose-header {
+.composer-header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+  min-height: 56px;
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  backdrop-filter: blur(10px);
 }
 
-.compose-header h1 {
-  margin: 0;
-  font-size: 28px;
-  line-height: 1.2;
-}
-
-.compose-header p {
-  margin: 8px 0 0;
-  color: #64748b;
-}
-
-.article-form {
-  display: grid;
-  gap: 8px;
-}
-
-.cover-picker {
-  display: grid;
-  width: min(100%, 420px);
-  min-height: 180px;
-  place-items: center;
-  overflow: hidden;
-  border: 1px dashed #94a3b8;
-  border-radius: 8px;
-  background: #f8fafc;
+.composer-header__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--color-text);
   cursor: pointer;
+  font: inherit;
+  font-weight: 750;
+}
+
+.composer-header__back:hover {
+  background: var(--color-surface-subtle);
+}
+
+.composer-header__back svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.publish-button {
+  min-height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-accent);
+  color: var(--color-surface);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.publish-button:hover:not(:disabled),
+.publish-button:focus-visible:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.publish-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer-form,
+.composer-auth-state {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.composer-section {
+  padding: var(--space-6) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.composer-section--identity {
+  padding-top: var(--space-5);
+  padding-bottom: var(--space-5);
+}
+
+.composer-author {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.composer-author__avatar {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.composer-author__copy {
+  display: grid;
+  gap: 2px;
+  line-height: 1.15;
+}
+
+.composer-author__copy strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.composer-author__copy small {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.composer-section--fields {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.composer-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.composer-field label,
+.cover-heading h2 {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.composer-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-text);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.composer-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.composer-input:focus {
+  border-color: var(--color-accent);
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
+  outline-offset: 1px;
+}
+
+.composer-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.66;
+}
+
+.composer-input--title {
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.composer-input--preview {
+  min-height: 64px;
+}
+
+.composer-input--content {
+  min-height: 120px;
+  max-height: 360px;
+  overflow-y: hidden;
+}
+
+.composer-field__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 18px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.field-count--over {
+  color: var(--color-danger);
+  font-weight: 700;
+}
+
+.field-error {
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+.cover-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cover-heading h2 {
+  margin: 0;
+}
+
+.cover-heading p {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.cover-preview-frame {
+  display: grid;
+  width: min(100%, 560px);
+  aspect-ratio: 16 / 9;
+  margin: var(--space-4) 0 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+}
+
+.cover-preview-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.cover-empty svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.cover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.composer-action {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.composer-action:hover,
+.composer-action:focus-visible,
+.composer-action:focus-within {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.composer-action--disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.composer-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .cover-input {
   position: absolute;
   width: 1px;
   height: 1px;
-  opacity: 0;
-  pointer-events: none;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
-.cover-empty {
-  padding: 0 18px;
-  color: #64748b;
+.cover-input:focus-visible + span {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.cover-error {
+  margin: var(--space-3) 0 0;
+}
+
+.composer-status {
+  padding: var(--space-4) var(--space-5) 0;
+  color: var(--color-danger);
+  font-size: 14px;
+}
+
+.composer-progress {
+  margin: 0;
+  padding: var(--space-3) var(--space-5) var(--space-6);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.composer-auth-state {
+  padding: clamp(56px, 12vw, 120px) var(--space-5);
   text-align: center;
 }
 
-.cover-preview {
-  width: 100%;
-  height: 240px;
-  object-fit: cover;
+.composer-auth-state h1 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 24px;
+  letter-spacing: -0.02em;
 }
 
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 8px;
+.composer-auth-state p {
+  margin: var(--space-2) 0 var(--space-5);
+  color: var(--color-text-secondary);
 }
 
-@media (max-width: 640px) {
-  .compose-panel {
-    padding: 20px;
-  }
-
-  .form-actions {
-    justify-content: stretch;
-  }
-
-  .form-actions :deep(.el-button) {
-    flex: 1;
-  }
-}
-.compose-main {
-  container-type: inline-size;
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-@container (max-width: 700px) {
-  .compose-panel {
-    padding: 20px;
+@media (max-width: 799px) {
+  .composer-header {
+    top: var(--app-mobile-nav-offset, 0px);
+  }
+}
+
+@media (max-width: 420px) {
+  .composer-header,
+  .composer-section,
+  .composer-status,
+  .composer-progress,
+  .composer-auth-state {
+    padding-inline: var(--space-4);
   }
 
-  .form-actions {
-    justify-content: stretch;
+  .composer-header {
+    min-height: 54px;
   }
 
-  .form-actions :deep(.el-button) {
-    flex: 1;
+  .composer-input--title {
+    font-size: 20px;
+  }
+
+  .cover-preview-frame {
+    width: 100%;
   }
 }
 </style>
