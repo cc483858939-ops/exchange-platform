@@ -58,10 +58,9 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 	}
 	if persisted.AnalysisVersion != consts.ArticleAnalysisVersionV1 || persisted.PublishedAt == nil {
 		t.Fatalf("expected clean-cut analysis metadata, got %#v", persisted)
-		if persisted.CoverImageURL != "/api/files/article-covers/cover.png" {
-			t.Fatalf("cover image URL=%q", persisted.CoverImageURL)
-		}
-
+	}
+	if persisted.CoverImageURL != "/api/files/article-covers/cover.png" {
+		t.Fatalf("cover image URL=%q", persisted.CoverImageURL)
 	}
 }
 
@@ -89,28 +88,40 @@ func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
 		t.Fatalf("status=%d called=%t", recorder.Code, called)
 	}
 }
-func TestCreateArticleDoesNotPersistWithoutCover(t *testing.T) {
+func TestCreateArticlePersistsWithoutCover(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	gin.SetMode(gin.TestMode)
 	originalCreate := createArticleWithAnalysisJob
-	defer func() { createArticleWithAnalysisJob = originalCreate }()
+	originalInvalidate := invalidateArticleListCache
+	defer func() {
+		createArticleWithAnalysisJob = originalCreate
+		invalidateArticleListCache = originalInvalidate
+	}()
 
-	called := false
-	createArticleWithAnalysisJob = func(*models.Article) error {
-		called = true
-		return errors.New("must not persist")
+	var persisted models.Article
+	createArticleWithAnalysisJob = func(article *models.Article) error {
+		article.ID = 42
+		persisted = *article
+		return nil
 	}
+	invalidateArticleListCache = func() error { return nil }
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString(`{"title":"t","content":"c","preview":"p"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	CreateArticle(ctx)
 
-	if recorder.Code != http.StatusBadRequest || called {
-		t.Fatalf("status=%d called=%t", recorder.Code, called)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if persisted.CoverImageURL != "" {
+		t.Fatalf("cover image URL=%q", persisted.CoverImageURL)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("\"cover_image_url\":\"\"")) {
+		t.Fatalf("response missing empty cover image URL: %s", recorder.Body.String())
 	}
 }
 func TestCreateArticleRejectsMissingUserContext(t *testing.T) {

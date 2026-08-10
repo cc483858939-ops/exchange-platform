@@ -140,7 +140,7 @@
         <div class="cover-heading">
           <div>
             <h2 id="cover-heading">Cover</h2>
-            <p>Required · JPEG, PNG, or WebP · up to 5 MB</p>
+            <p>Optional · JPEG, PNG, or WebP · up to 5 MB</p>
           </div>
         </div>
 
@@ -305,8 +305,6 @@ const canPublish = computed(() => (
   && previewLength.value <= maxPreviewLength
   && Boolean(form.content.trim())
   && contentLength.value <= maxContentLength
-  && Boolean(coverFile.value)
-  && !coverError.value
 ));
 
 const revokeCoverPreview = () => {
@@ -406,17 +404,10 @@ const submitArticle = async () => {
 
   validationAttempted.value = true;
   if (!canPublish.value) {
-    if (!coverFile.value && !coverError.value) {
-      coverError.value = 'Add a cover before publishing.';
-    }
     return;
   }
 
   const selectedCover = coverFile.value;
-  if (!selectedCover) {
-    return;
-  }
-
   const draft = {
     title: form.title.trim(),
     preview: form.preview.trim(),
@@ -429,7 +420,7 @@ const submitArticle = async () => {
   try {
     let coverImageURL = uploadedCoverURL.value;
 
-    if (!coverImageURL) {
+    if (selectedCover && !coverImageURL) {
       phase.value = 'uploading';
       try {
         const uploadedURL = (await uploadArticleCover(selectedCover)).trim();
@@ -446,10 +437,11 @@ const submitArticle = async () => {
 
     phase.value = 'publishing';
     try {
-      const article = await createArticle({
-        ...draft,
-        cover_image_url: coverImageURL,
-      });
+      const article = await createArticle(
+        coverImageURL
+          ? { ...draft, cover_image_url: coverImageURL }
+          : draft,
+      );
       void router.push({
         name: 'NewsDetail',
         params: { id: String(article.ID) },

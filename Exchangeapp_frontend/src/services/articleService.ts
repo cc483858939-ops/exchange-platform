@@ -6,7 +6,7 @@ export type CreateArticlePayload = {
   title: string;
   preview: string;
   content: string;
-  cover_image_url: string;
+  cover_image_url?: string;
 };
 
 type UploadArticleCoverResponse = {

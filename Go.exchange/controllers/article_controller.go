@@ -23,7 +23,7 @@ type createArticleRequest struct {
 	Content       string     `json:"content" binding:"required"`
 	Preview       string     `json:"preview" binding:"required"`
 	ExpiredAt     *time.Time `json:"expired_at"`
-	CoverImageURL string     `json:"cover_image_url" binding:"required"`
+	CoverImageURL string     `json:"cover_image_url"`
 }
 
 var createArticleWithAnalysisJob = func(article *models.Article) error {
@@ -108,11 +108,6 @@ func CreateArticle(ctx *gin.Context) {
 	coverImageURL, err := normalizeArticleCoverImageURL(req.CoverImageURL)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if coverImageURL == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "cover_image_url is required"})
 		return
 	}
 
