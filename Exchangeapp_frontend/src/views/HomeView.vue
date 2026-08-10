@@ -429,12 +429,13 @@ const handleLikeToggle = async (articleId: number) => {
       : await likeArticle(articleId);
 
     if (isCurrentMutation()) {
+      const settledVersion = bumpLikeMutationVersion(articleId);
       applyHomeLikeUpdate({
         articleId,
         likes: result.likes,
         liked: result.liked,
         status: 'ready',
-      }, mutationVersion);
+      }, settledVersion);
       likePendingArticleIds.delete(articleId);
     }
   } catch (error) {
@@ -442,12 +443,13 @@ const handleLikeToggle = async (articleId: number) => {
       return;
     }
 
+    const settledVersion = bumpLikeMutationVersion(articleId);
     applyHomeLikeUpdate({
       articleId,
       likes: previousLikes,
       liked: previousLiked,
       status: 'ready',
-    }, mutationVersion);
+    }, settledVersion);
 
     if (getLikeErrorStatus(error) === 503) {
       applyHomeLikeUpdate({
@@ -455,7 +457,7 @@ const handleLikeToggle = async (articleId: number) => {
         likes: previousLikes,
         liked: previousLiked,
         status: 'unavailable',
-      }, mutationVersion);
+      }, settledVersion);
     }
     likePendingArticleIds.delete(articleId);
   }
