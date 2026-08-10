@@ -68,6 +68,55 @@ func (s *Store) Get(ctx context.Context, userID, articleID uint) (State, error) 
 	return state, nil
 }
 
+func (s *Store) GetMany(ctx context.Context, userID uint, articleIDs []uint) (map[uint]State, []uint, error) {
+	if s == nil || s.client == nil {
+		return nil, nil, errors.New("redis is not initialized")
+	}
+	states := make(map[uint]State, len(articleIDs))
+	unavailable := make([]uint, 0)
+	if len(articleIDs) == 0 {
+		return states, unavailable, nil
+	}
+
+	type commands struct {
+		articleID uint
+		ready     *redis.StringCmd
+		count     *redis.StringCmd
+		member    *redis.BoolCmd
+	}
+	pipe := s.client.Pipeline()
+	batch := make([]commands, 0, len(articleIDs))
+	user := strconv.FormatUint(uint64(userID), 10)
+	for _, articleID := range articleIDs {
+		batch = append(batch, commands{
+			articleID: articleID,
+			ready:     pipe.Get(ReadyKey(articleID)),
+			count:     pipe.Get(CountKey(articleID)),
+			member:    pipe.SIsMember(UsersKey(articleID), user),
+		})
+	}
+	_, err := pipe.ExecContext(ctx)
+	if err != nil && err != redis.Nil {
+		return nil, nil, err
+	}
+
+	for _, command := range batch {
+		for _, commandErr := range []error{command.ready.Err(), command.count.Err(), command.member.Err()} {
+			if commandErr != nil && commandErr != redis.Nil {
+				return nil, nil, commandErr
+			}
+		}
+		if command.ready.Val() != "1" {
+			unavailable = append(unavailable, command.articleID)
+			continue
+		}
+		states[command.articleID] = State{
+			Count: parseInt64(command.count.Val()),
+			Liked: command.member.Val(),
+		}
+	}
+	return states, unavailable, nil
+}
 func (s *Store) Initialize(ctx context.Context, articleID uint, count, version int64, userIDs []uint) (bool, error) {
 	if s == nil || s.client == nil {
 		return false, errors.New("redis is not initialized")
