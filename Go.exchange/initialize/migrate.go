@@ -24,6 +24,7 @@ func RunMigrations() error {
 
 		if err := tx.AutoMigrate(
 			&models.User{},
+			&models.UserFollow{},
 			&models.Article{},
 			&models.Comment{},
 			&models.ArticleAnalysisJob{},
@@ -37,6 +38,10 @@ func RunMigrations() error {
 			&models.ExchangeRate{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
+		}
+
+		if err := applyUserFollowConstraints(tx); err != nil {
+			return err
 		}
 
 		if err := applyRecommendationTelemetryConstraints(tx); err != nil {
@@ -65,6 +70,25 @@ WHERE reaction_version = 0
 	})
 }
 
+func applyUserFollowConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_user_follows_pair ON user_follows (follower_id, following_id)",
+		"ALTER TABLE user_follows DROP CONSTRAINT IF EXISTS fk_user_follows_follower",
+		"ALTER TABLE user_follows ADD CONSTRAINT fk_user_follows_follower FOREIGN KEY (follower_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_follows DROP CONSTRAINT IF EXISTS fk_user_follows_following",
+		"ALTER TABLE user_follows ADD CONSTRAINT fk_user_follows_following FOREIGN KEY (following_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_follows DROP CONSTRAINT IF EXISTS chk_user_follows_not_self",
+		"ALTER TABLE user_follows ADD CONSTRAINT chk_user_follows_not_self CHECK (follower_id <> following_id)",
+		"CREATE INDEX IF NOT EXISTS idx_user_follows_follower_created ON user_follows (follower_id, created_at DESC, id DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_user_follows_following_created ON user_follows (following_id, created_at DESC, id DESC)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply user follow constraint: %w", err)
+		}
+	}
+	return nil
+}
 func applyArticleAuthorConstraints(tx *gorm.DB) error {
 	if !tx.Migrator().HasConstraint(&models.Article{}, "Author") {
 		if err := tx.Migrator().CreateConstraint(&models.Article{}, "Author"); err != nil {
