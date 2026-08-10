@@ -49,7 +49,7 @@
     try {
       await authStore.register(form.value.username, form.value.password);
       ElMessage.success('注册成功');
-      router.push({ name: 'News' });
+      router.push({ name: 'Home' });
     } catch (error) {
       ElMessage.error(formatRegisterError(error));
     }

@@ -22,8 +22,6 @@
       </div>
       <nav class="app-layout__mobile-links" aria-label="Mobile navigation">
         <router-link :to="{ name: 'Home' }">Home</router-link>
-        <router-link :to="{ name: 'News' }">Latest</router-link>
-        <router-link :to="{ name: 'Recommendations' }">For You</router-link>
         <router-link :to="{ name: 'CurrencyExchange' }">Exchange</router-link>
       </nav>
     </header>
@@ -194,7 +192,7 @@ const { authStore, handleLogout } = useLogout();
 
   .app-layout__mobile-links {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-1);
   }
 

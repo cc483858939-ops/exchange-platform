@@ -1,11 +1,9 @@
 <template>
   <section class="right-rail" aria-label="Market quick access">
     <p class="right-rail__eyebrow">MARKET</p>
-    <h2>Quick access</h2>
+    <h2>Tools</h2>
     <nav class="right-rail__links" aria-label="Market quick access links">
       <router-link :to="{ name: 'CurrencyExchange' }">Exchange</router-link>
-      <router-link :to="{ name: 'News' }">Latest</router-link>
-      <router-link :to="{ name: 'Recommendations' }">For You</router-link>
     </nav>
   </section>
 </template>

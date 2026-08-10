@@ -44,8 +44,6 @@ const { authStore, handleLogout } = useLogout();
 
 const navigation = [
   { name: 'Home', label: 'Home' },
-  { name: 'News', label: 'Latest' },
-  { name: 'Recommendations', label: 'For You' },
   { name: 'CurrencyExchange', label: 'Exchange' },
 ];
 
