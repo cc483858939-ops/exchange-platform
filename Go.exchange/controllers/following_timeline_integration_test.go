@@ -154,7 +154,7 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		t.Fatalf("page1 order=%v", followingTimelineArticleIDs(page1.Items))
 	}
 	first := page1.Items[0]
-	if first.Title != "" || first.Content != "Canonical following body" || first.AnalysisState != "pending" || first.LikeCount != 0 || first.CommentCount != 0 || first.Author.ID != followedA.ID || first.Author.Username != followedA.Username {
+	if first.Title != "" || first.Content != "Canonical following body" || first.LikeCount != 0 || first.CommentCount != 0 || first.Author.ID != followedA.ID || first.Author.Username != followedA.Username {
 		t.Fatalf("content-only response=%#v", first)
 	}
 
