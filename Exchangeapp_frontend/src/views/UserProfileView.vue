@@ -117,7 +117,13 @@
         </p>
 
         <div v-else class="profile-post-list">
-          <PostCard v-for="post in articles" :key="post.id" :post="post" />
+          <PostCard
+            v-for="post in articles"
+            :key="post.id"
+            :post="post"
+            :like-pending="likePendingArticleIds.has(post.id)"
+            @toggle-like="handleLikeToggle"
+          />
         </div>
 
         <div
@@ -150,14 +156,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import PostCard from '../components/feed/PostCard.vue';
 import { getUser, getUserArticles } from '../services/userService';
+import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
 import type { Article } from '../types/Article';
-import type { FeedPost } from '../types/Feed';
+import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
 import type { PublicUser } from '../types/User';
-import { articleToFeedPost } from '../utils/feedPost';
+import {
+  applyFeedLikeStateUpdate,
+  articleToFeedPost,
+  setFeedPostLikeUnavailable,
+} from '../utils/feedPost';
 
 const pageSize = 20;
 const skeletonCount = 3;
@@ -183,6 +194,9 @@ const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined
 const loadedArticleIds = new Set<number>();
 let profileRequestVersion = 0;
 let feedRequestVersion = 0;
+const likePendingArticleIds = reactive(new Set<number>());
+const likeMutationVersions = new Map<number, number>();
+let profileLikeHydrationGeneration = 0;
 let observer: IntersectionObserver | null = null;
 
 const headerUsername = computed(() => user.value?.username || 'Profile');
@@ -209,6 +223,116 @@ const joinedLabel = computed(() => {
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
+const getLikeMutationVersion = (articleId: number) =>
+  likeMutationVersions.get(articleId) ?? 0;
+
+const bumpLikeMutationVersion = (articleId: number) => {
+  const nextVersion = getLikeMutationVersion(articleId) + 1;
+  likeMutationVersions.set(articleId, nextVersion);
+  return nextVersion;
+};
+
+
+const findProfilePost = (articleId: number) =>
+  articles.value.find((post) => post.id === articleId);
+
+const applyProfileLikeUpdate = (update: FeedLikeStateUpdate, expectedVersion?: number) => {
+  if (
+    expectedVersion !== undefined
+    && getLikeMutationVersion(update.articleId) !== expectedVersion
+  ) {
+    return false;
+  }
+
+  const post = findProfilePost(update.articleId);
+  return post ? applyFeedLikeStateUpdate(post, update) : false;
+};
+
+const markProfileHydrationUnavailable = (articleIds: number[], versions: Map<number, number>) => {
+  articleIds.forEach((articleId) => {
+    const capturedVersion = versions.get(articleId);
+    const post = findProfilePost(articleId);
+    if (
+      capturedVersion === undefined
+      || getLikeMutationVersion(articleId) !== capturedVersion
+      || !post
+      || post.likeStatus !== 'unknown'
+    ) {
+      return;
+    }
+    setFeedPostLikeUnavailable(post);
+  });
+};
+
+const hydrateProfileLikeStates = async (newPosts: FeedPost[], profileVersion: number) => {
+  const articleIds = Array.from(new Set(newPosts.map((post) => post.id)));
+  if (articleIds.length === 0) {
+    return;
+  }
+
+  const likeGeneration = profileLikeHydrationGeneration;
+  const versions = new Map(
+    articleIds.map((articleId) => [articleId, getLikeMutationVersion(articleId)]),
+  );
+
+  try {
+    const response = await getArticleLikeStates(articleIds);
+    if (
+      profileVersion !== profileRequestVersion
+      || likeGeneration !== profileLikeHydrationGeneration
+      || userId.value !== String(route.params.id ?? '').trim()
+    ) {
+      return;
+    }
+
+    const readyIds = new Set<number>();
+    response.items.forEach((item) => {
+      const capturedVersion = versions.get(item.article_id);
+      if (
+        capturedVersion === undefined
+        || getLikeMutationVersion(item.article_id) !== capturedVersion
+        || !findProfilePost(item.article_id)
+      ) {
+        return;
+      }
+
+      readyIds.add(item.article_id);
+      applyProfileLikeUpdate({
+        articleId: item.article_id,
+        likes: item.likes,
+        liked: item.liked,
+        status: 'ready',
+      }, capturedVersion);
+    });
+
+    response.unavailable_article_ids.forEach((articleId) => {
+      if (readyIds.has(articleId)) {
+        return;
+      }
+      const capturedVersion = versions.get(articleId);
+      if (
+        capturedVersion !== undefined
+        && getLikeMutationVersion(articleId) === capturedVersion
+        && findProfilePost(articleId)
+      ) {
+        applyProfileLikeUpdate({
+          articleId,
+          likes: 0,
+          liked: false,
+          status: 'unavailable',
+        }, capturedVersion);
+      }
+    });
+  } catch {
+    if (
+      profileVersion === profileRequestVersion
+      && likeGeneration === profileLikeHydrationGeneration
+      && userId.value === String(route.params.id ?? '').trim()
+    ) {
+      markProfileHydrationUnavailable(articleIds, versions);
+    }
+  }
+};
 const disconnectObserver = () => {
   observer?.disconnect();
   observer = null;
@@ -216,6 +340,9 @@ const disconnectObserver = () => {
 
 const resetFeedState = () => {
   feedRequestVersion += 1;
+  profileLikeHydrationGeneration += 1;
+  likePendingArticleIds.clear();
+  likeMutationVersions.clear();
   articles.value = [];
   articlesInitialLoading.value = false;
   articlesLoadingMore.value = false;
@@ -227,7 +354,7 @@ const resetFeedState = () => {
   disconnectObserver();
 };
 
-const appendArticles = (rawArticles: Article[]) => {
+const appendArticles = (rawArticles: Article[]): FeedPost[] => {
   const newPosts = rawArticles
     .filter((article) => {
       if (loadedArticleIds.has(article.ID)) {
@@ -242,6 +369,7 @@ const appendArticles = (rawArticles: Article[]) => {
   if (newPosts.length > 0) {
     articles.value = [...articles.value, ...newPosts];
   }
+  return newPosts;
 };
 
 const loadInitialPosts = async (id: string, profileVersion: number) => {
@@ -261,9 +389,10 @@ const loadInitialPosts = async (id: string, profileVersion: number) => {
       return;
     }
 
-    appendArticles(rawPage);
+    const newPosts = appendArticles(rawPage);
     nextOffset.value += rawPage.length;
     hasMore.value = rawPage.length === pageSize;
+    void hydrateProfileLikeStates(newPosts, profileVersion);
   } catch (error) {
     if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
       return;
@@ -305,9 +434,10 @@ const loadMorePosts = async () => {
       return;
     }
 
-    appendArticles(rawPage);
+    const newPosts = appendArticles(rawPage);
     nextOffset.value += rawPage.length;
     hasMore.value = rawPage.length === pageSize;
+    void hydrateProfileLikeStates(newPosts, profileVersion);
   } catch (error) {
     if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
       return;
@@ -325,6 +455,7 @@ const loadMorePosts = async () => {
 
 const retryInitialPosts = () => {
   if (user.value && userId.value) {
+    resetFeedState();
     void loadInitialPosts(userId.value, profileRequestVersion);
   }
 };
@@ -336,6 +467,76 @@ const retryLoadMore = () => {
 
 const retryProfile = () => {
   void loadProfile();
+};
+
+const handleLikeToggle = async (articleId: number) => {
+  const post = findProfilePost(articleId);
+  if (
+    !post
+    || post.likeStatus !== 'ready'
+    || likePendingArticleIds.has(articleId)
+  ) {
+    return;
+  }
+
+  const previousLiked = post.liked;
+  const previousLikes = post.likeCount;
+  const mutationVersion = bumpLikeMutationVersion(articleId);
+  const likeGeneration = profileLikeHydrationGeneration;
+  const profileVersion = profileRequestVersion;
+  const profileID = userId.value;
+  likePendingArticleIds.add(articleId);
+
+  applyProfileLikeUpdate({
+    articleId,
+    likes: previousLiked ? Math.max(0, previousLikes - 1) : previousLikes + 1,
+    liked: !previousLiked,
+    status: 'ready',
+  }, mutationVersion);
+
+  const isCurrentMutation = () =>
+    profileRequestVersion === profileVersion
+    && profileLikeHydrationGeneration === likeGeneration
+    && userId.value === profileID
+    && getLikeMutationVersion(articleId) === mutationVersion
+    && likePendingArticleIds.has(articleId);
+
+  try {
+    const result = previousLiked
+      ? await unlikeArticle(articleId)
+      : await likeArticle(articleId);
+
+    if (isCurrentMutation()) {
+      applyProfileLikeUpdate({
+        articleId,
+        likes: result.likes,
+        liked: result.liked,
+        status: 'ready',
+      }, mutationVersion);
+      likePendingArticleIds.delete(articleId);
+    }
+  } catch (error) {
+    if (!isCurrentMutation()) {
+      return;
+    }
+
+    applyProfileLikeUpdate({
+      articleId,
+      likes: previousLikes,
+      liked: previousLiked,
+      status: 'ready',
+    }, mutationVersion);
+
+    if (getErrorStatus(error) === 503) {
+      applyProfileLikeUpdate({
+        articleId,
+        likes: previousLikes,
+        liked: previousLiked,
+        status: 'unavailable',
+      }, mutationVersion);
+    }
+    likePendingArticleIds.delete(articleId);
+  }
 };
 
 const loadProfile = async () => {
@@ -443,6 +644,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   profileRequestVersion += 1;
   feedRequestVersion += 1;
+  profileLikeHydrationGeneration += 1;
+  likePendingArticleIds.clear();
+  likeMutationVersions.clear();
   disconnectObserver();
 });
 </script>

@@ -26,30 +26,58 @@
         </svg>
         <span>{{ post.commentCount }}</span>
       </span>
-      <span class="post-card__metric">
+      <button
+        class="post-card__metric post-card__like"
+        :class="{ 'post-card__like--active': post.likeStatus === 'ready' && post.liked }"
+        type="button"
+        :disabled="likeDisabled"
+        :aria-pressed="post.likeStatus === 'ready' ? post.liked : undefined"
+        :aria-label="likeLabel"
+        @click.stop="emit('toggleLike', post.id)"
+      >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
         </svg>
         <span>{{ post.likeCount }}</span>
-      </span>
+      </button>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   post: FeedPost;
-}>();
+  likePending?: boolean;
+}>(), {
+  likePending: false,
+});
 
 const emit = defineEmits<{
   articleClick: [post: FeedPost];
+  toggleLike: [articleId: number];
 }>();
 
 const showCover = ref(Boolean(props.post.coverImageUrl));
+
+const likeDisabled = computed(() =>
+  props.post.likeStatus !== 'ready' || props.likePending,
+);
+
+const likeLabel = computed(() => {
+  const countLabel = String(props.post.likeCount)
+    + (props.post.likeCount === 1 ? ' like' : ' likes');
+  if (props.post.likeStatus === 'unavailable') {
+    return 'Like unavailable, ' + countLabel;
+  }
+  if (props.post.likeStatus !== 'ready' || !props.post.liked) {
+    return 'Like post, ' + countLabel;
+  }
+  return 'Unlike post, ' + countLabel;
+});
 
 watch(
   () => props.post.coverImageUrl,
@@ -134,6 +162,39 @@ const hideCover = () => {
   gap: var(--space-1);
 }
 
+.post-card__like {
+  min-width: 40px;
+  min-height: 40px;
+  margin: -8px 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.post-card__like:hover:not(:disabled),
+.post-card__like:focus-visible {
+  background: var(--color-surface-subtle);
+  color: var(--color-accent);
+}
+
+.post-card__like:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.post-card__like:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.post-card__like--active {
+  color: var(--color-accent);
+}
+
 .post-card__metric svg {
   width: 16px;
   height: 16px;
@@ -142,6 +203,10 @@ const hideCover = () => {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.7;
+}
+
+.post-card__like--active svg {
+  fill: currentColor;
 }
 
 @media (max-width: 420px) {
@@ -155,7 +220,7 @@ const hideCover = () => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .post-card__content {
+  .post-card__like {
     transition: none;
   }
 }

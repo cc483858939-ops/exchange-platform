@@ -67,7 +67,9 @@
         >
           <PostCard
             :post="item.post"
+            :like-pending="likePendingArticleIds.has(item.post.id)"
             @article-click="handleRecommendationClick(item.article)"
+            @toggle-like="handleLikeToggle"
           />
         </div>
       </template>
@@ -77,6 +79,8 @@
         v-else
         :key="post.id"
         :post="post"
+        :like-pending="likePendingArticleIds.has(post.id)"
+        @toggle-like="handleLikeToggle"
       />
     </section>
 
@@ -92,12 +96,18 @@ import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import { getArticles } from '../services/articleService';
 import { getArticleRecommendations } from '../services/recommendationService';
+import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
 import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { useAuthStore } from '../store/auth';
 import type { RecommendedArticle } from '../types/Recommendation';
-import type { FeedPost, FeedTab } from '../types/Feed';
-import { articleToFeedPost, recommendationToFeedPost } from '../utils/feedPost';
+import type { FeedLikeStateUpdate, FeedPost, FeedTab } from '../types/Feed';
+import {
+  applyFeedLikeStateUpdate,
+  articleToFeedPost,
+  recommendationToFeedPost,
+  setFeedPostLikeUnavailable,
+} from '../utils/feedPost';
 
 type FeedState<T> = {
   items: T[];
@@ -135,6 +145,9 @@ const recommendationCardElements = new Map<number, HTMLElement>();
 let authGeneration = 0;
 let latestRequestVersion = 0;
 let forYouRequestVersion = 0;
+const likePendingArticleIds = reactive(new Set<number>());
+const likeMutationVersions = new Map<number, number>();
+let homeLikeGeneration = 0;
 
 const activeTab = computed<FeedTab>(() => route.query.tab === 'latest' ? 'latest' : 'for-you');
 const activeFeedStatus = computed(() => {
@@ -188,6 +201,7 @@ const resetForYou = () => {
 
 const invalidateAfterLogout = () => {
   authGeneration += 1;
+  invalidateHomeLikeWork();
   latestRequestVersion += 1;
   forYouRequestVersion += 1;
   resetLatest();
@@ -207,9 +221,143 @@ const isCurrentForYouRequest = (version: number, generation: number) =>
   && generation === authGeneration
   && authStore.isAuthenticated;
 
+const getLikeMutationVersion = (articleId: number) =>
+  likeMutationVersions.get(articleId) ?? 0;
+
+const bumpLikeMutationVersion = (articleId: number) => {
+  const nextVersion = getLikeMutationVersion(articleId) + 1;
+  likeMutationVersions.set(articleId, nextVersion);
+  return nextVersion;
+};
+
+const invalidateHomeLikeWork = () => {
+  homeLikeGeneration += 1;
+  likePendingArticleIds.clear();
+  likeMutationVersions.clear();
+};
+
+const findHomePost = (articleId: number): FeedPost | undefined => {
+  const latestPost = latestFeed.items.find((post) => post.id === articleId);
+  const forYouPost = forYouFeed.items.find((item) => item.post.id === articleId)?.post;
+  return activeTab.value === 'for-you'
+    ? forYouPost || latestPost
+    : latestPost || forYouPost;
+};
+
+const forEachHomePost = (articleId: number, callback: (post: FeedPost) => void) => {
+  latestFeed.items.forEach((post) => {
+    if (post.id === articleId) {
+      callback(post);
+    }
+  });
+  forYouFeed.items.forEach((item) => {
+    if (item.post.id === articleId) {
+      callback(item.post);
+    }
+  });
+};
+
+const applyHomeLikeUpdate = (update: FeedLikeStateUpdate, expectedVersion?: number) => {
+  if (
+    expectedVersion !== undefined
+    && getLikeMutationVersion(update.articleId) !== expectedVersion
+  ) {
+    return false;
+  }
+
+  let applied = false;
+  forEachHomePost(update.articleId, (post) => {
+    applied = applyFeedLikeStateUpdate(post, update) || applied;
+  });
+  return applied;
+};
+
+const markHomeHydrationUnavailable = (articleIds: number[], versions: Map<number, number>) => {
+  articleIds.forEach((articleId) => {
+    const capturedVersion = versions.get(articleId);
+    if (capturedVersion === undefined || getLikeMutationVersion(articleId) !== capturedVersion) {
+      return;
+    }
+    forEachHomePost(articleId, (post) => {
+      if (post.likeStatus === 'unknown') {
+        setFeedPostLikeUnavailable(post);
+      }
+    });
+  });
+};
+
+const hydrateHomeLikeStates = async (
+  articleIds: number[],
+  isCurrent: () => boolean,
+) => {
+  const uniqueIds = Array.from(new Set(articleIds));
+  if (uniqueIds.length === 0) {
+    return;
+  }
+
+  const versions = new Map(
+    uniqueIds.map((articleId) => [articleId, getLikeMutationVersion(articleId)]),
+  );
+
+  try {
+    const response = await getArticleLikeStates(uniqueIds);
+    if (!isCurrent()) {
+      return;
+    }
+
+    const readyIds = new Set<number>();
+    response.items.forEach((item) => {
+      const capturedVersion = versions.get(item.article_id);
+      if (
+        capturedVersion === undefined
+        || getLikeMutationVersion(item.article_id) !== capturedVersion
+        || !findHomePost(item.article_id)
+      ) {
+        return;
+      }
+
+      readyIds.add(item.article_id);
+      applyHomeLikeUpdate({
+        articleId: item.article_id,
+        likes: item.likes,
+        liked: item.liked,
+        status: 'ready',
+      }, capturedVersion);
+    });
+
+    response.unavailable_article_ids.forEach((articleId) => {
+      if (readyIds.has(articleId)) {
+        return;
+      }
+      const capturedVersion = versions.get(articleId);
+      if (
+        capturedVersion !== undefined
+        && getLikeMutationVersion(articleId) === capturedVersion
+        && findHomePost(articleId)
+      ) {
+        applyHomeLikeUpdate({
+          articleId,
+          likes: 0,
+          liked: false,
+          status: 'unavailable',
+        }, capturedVersion);
+      }
+    });
+  } catch {
+    if (isCurrent()) {
+      markHomeHydrationUnavailable(uniqueIds, versions);
+    }
+  }
+};
+
+const getLikeErrorStatus = (error: unknown) =>
+  (error as { response?: { status?: number } }).response?.status;
 const loadLatest = async (force = false) => {
   if (!authStore.isAuthenticated || latestFeed.loading && !force) {
     return;
+  }
+  if (force) {
+    invalidateHomeLikeWork();
   }
   if (latestFeed.loaded && !force) {
     return;
@@ -227,6 +375,11 @@ const loadLatest = async (force = false) => {
     }
     latestFeed.items = articles.map(articleToFeedPost);
     latestFeed.loaded = true;
+    const likeGeneration = homeLikeGeneration;
+    void hydrateHomeLikeStates(
+      latestFeed.items.map((post) => post.id),
+      () => isCurrentLatestRequest(version, generation) && homeLikeGeneration === likeGeneration,
+    );
   } catch {
     if (!isCurrentLatestRequest(version, generation)) {
       return;
@@ -239,6 +392,74 @@ const loadLatest = async (force = false) => {
   }
 };
 
+const handleLikeToggle = async (articleId: number) => {
+  const post = findHomePost(articleId);
+  if (
+    !post
+    || post.likeStatus !== 'ready'
+    || likePendingArticleIds.has(articleId)
+  ) {
+    return;
+  }
+
+  const previousLiked = post.liked;
+  const previousLikes = post.likeCount;
+  const mutationVersion = bumpLikeMutationVersion(articleId);
+  const likeGeneration = homeLikeGeneration;
+  const generation = authGeneration;
+  likePendingArticleIds.add(articleId);
+
+  applyHomeLikeUpdate({
+    articleId,
+    likes: previousLiked ? Math.max(0, previousLikes - 1) : previousLikes + 1,
+    liked: !previousLiked,
+    status: 'ready',
+  }, mutationVersion);
+
+  const isCurrentMutation = () =>
+    authStore.isAuthenticated
+    && authGeneration === generation
+    && homeLikeGeneration === likeGeneration
+    && getLikeMutationVersion(articleId) === mutationVersion
+    && likePendingArticleIds.has(articleId);
+
+  try {
+    const result = previousLiked
+      ? await unlikeArticle(articleId)
+      : await likeArticle(articleId);
+
+    if (isCurrentMutation()) {
+      applyHomeLikeUpdate({
+        articleId,
+        likes: result.likes,
+        liked: result.liked,
+        status: 'ready',
+      }, mutationVersion);
+      likePendingArticleIds.delete(articleId);
+    }
+  } catch (error) {
+    if (!isCurrentMutation()) {
+      return;
+    }
+
+    applyHomeLikeUpdate({
+      articleId,
+      likes: previousLikes,
+      liked: previousLiked,
+      status: 'ready',
+    }, mutationVersion);
+
+    if (getLikeErrorStatus(error) === 503) {
+      applyHomeLikeUpdate({
+        articleId,
+        likes: previousLikes,
+        liked: previousLiked,
+        status: 'unavailable',
+      }, mutationVersion);
+    }
+    likePendingArticleIds.delete(articleId);
+  }
+};
 const bindCurrentRecommendationCards = async () => {
   await nextTick();
   if (!authStore.isAuthenticated || activeTab.value !== 'for-you') {
@@ -262,6 +483,9 @@ const loadForYou = async (force = false) => {
   if (!authStore.isAuthenticated || forYouFeed.loading && !force) {
     return;
   }
+  if (force) {
+    invalidateHomeLikeWork();
+  }
   if (forYouFeed.loaded && !force) {
     await bindCurrentRecommendationCards();
     return;
@@ -283,6 +507,11 @@ const loadForYou = async (force = false) => {
       post: recommendationToFeedPost(article),
     }));
     forYouFeed.loaded = true;
+    const likeGeneration = homeLikeGeneration;
+    void hydrateHomeLikeStates(
+      forYouFeed.items.map((item) => item.post.id),
+      () => isCurrentForYouRequest(version, generation) && homeLikeGeneration === likeGeneration,
+    );
     forYouFeed.loading = false;
     await bindCurrentRecommendationCards();
   } catch {
@@ -360,6 +589,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  invalidateHomeLikeWork();
   recommendationTelemetry.resetObservedCards();
   void recommendationTelemetry.flush(false);
   recommendationCardElements.clear();
