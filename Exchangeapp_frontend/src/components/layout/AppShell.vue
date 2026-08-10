@@ -72,7 +72,7 @@ const { authStore, handleLogout } = useLogout();
 .app-layout__main {
   min-width: 0;
   min-height: 100vh;
-  overflow: hidden;
+  overflow: clip;
   border-inline: 1px solid var(--color-border);
   background: var(--color-surface);
 }
