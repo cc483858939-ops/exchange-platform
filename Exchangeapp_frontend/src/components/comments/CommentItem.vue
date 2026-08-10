@@ -3,9 +3,6 @@
     <div class="comment-item__header">
       <AuthorIdentity :author="comment.author" :created-at="comment.created_at" />
       <div class="comment-item__tools">
-        <time class="comment-item__time" :datetime="comment.created_at">
-          {{ relativeTime || '-' }}
-        </time>
         <button
           v-if="canDelete"
           class="comment-item__delete"
@@ -27,10 +24,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
 import type { ArticleComment } from '../../types/Comment';
 import AuthorIdentity from '../AuthorIdentity.vue';
-import { formatRelativeTime } from '../../utils/time';
 
 const props = defineProps<{
   comment: ArticleComment;
@@ -41,8 +36,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   delete: [commentID: number];
 }>();
-
-const relativeTime = computed(() => formatRelativeTime(props.comment.created_at));
 </script>
 
 <style scoped>
@@ -62,14 +55,9 @@ const relativeTime = computed(() => formatRelativeTime(props.comment.created_at)
 .comment-item__tools {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  margin-left: auto;
 }
 
-.comment-item__time {
-  color: var(--color-text-tertiary);
-  font-size: 12px;
-  white-space: nowrap;
-}
 
 .comment-item__delete {
   display: grid;
@@ -124,9 +112,6 @@ const relativeTime = computed(() => formatRelativeTime(props.comment.created_at)
     align-items: flex-start;
   }
 
-  .comment-item__time {
-    display: none;
-  }
 
   .comment-item__content,
   .comment-item__status {

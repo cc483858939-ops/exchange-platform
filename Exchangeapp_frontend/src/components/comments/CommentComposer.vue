@@ -9,7 +9,6 @@
         v-model="content"
         class="comment-composer__textarea"
         rows="1"
-        maxlength="2000"
         :disabled="disabled || submitting"
         placeholder="Post your reply"
         aria-label="Reply content"
@@ -18,8 +17,17 @@
     </div>
 
     <div class="comment-composer__footer">
-      <span class="comment-composer__hint">Keep it useful.</span>
-      <button class="comment-composer__submit" type="submit" :disabled="disabled || submitting || !trimmedContent">
+      <div class="comment-composer__footer-copy">
+        <span class="comment-composer__hint">Keep it useful.</span>
+        <span v-if="exceedsMaxLength" class="comment-composer__validation" role="alert">
+          {{ contentLength }}/{{ maxContentLength }} characters. Please shorten your reply.
+        </span>
+      </div>
+      <button
+        class="comment-composer__submit"
+        type="submit"
+        :disabled="disabled || submitting || !trimmedContent || exceedsMaxLength"
+      >
         {{ submitting ? 'Replying...' : 'Reply' }}
       </button>
     </div>
@@ -46,7 +54,10 @@ const emit = defineEmits<{
 
 const content = ref('');
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const maxContentLength = 1000;
 const trimmedContent = computed(() => content.value.trim());
+const contentLength = computed(() => Array.from(trimmedContent.value).length);
+const exceedsMaxLength = computed(() => contentLength.value > maxContentLength);
 const initial = computed(() => Array.from(props.author?.username.trim() ?? '')[0]?.toUpperCase() || '?');
 
 const resizeTextarea = () => {
@@ -65,7 +76,7 @@ const clear = () => {
 };
 
 const submitReply = () => {
-  if (props.disabled || props.submitting || !trimmedContent.value) {
+  if (props.disabled || props.submitting || !trimmedContent.value || exceedsMaxLength.value) {
     return;
   }
 
@@ -133,9 +144,23 @@ onMounted(resizeTextarea);
   padding-left: 42px;
 }
 
+.comment-composer__footer-copy {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.comment-composer__hint,
+.comment-composer__validation {
+  font-size: 12px;
+}
+
 .comment-composer__hint {
   color: var(--color-text-tertiary);
-  font-size: 12px;
+}
+
+.comment-composer__validation {
+  color: var(--color-danger);
 }
 
 .comment-composer__submit {
