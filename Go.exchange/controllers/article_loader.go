@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const articleListSelectColumns = "id,title,preview,cover_image_url,expired_at,created_at,updated_at,deleted_at,author_id,like_count,comment_count"
+const articleListSelectColumns = "articles.id,articles.title,articles.content,articles.preview,articles.cover_image_url,articles.expired_at,articles.created_at,articles.updated_at,articles.deleted_at,articles.author_id,articles.like_count,articles.comment_count"
 
 func visibleArticleScope(query *gorm.DB, now time.Time) *gorm.DB {
 	return query.Where("expired_at > ? OR expired_at IS NULL", now)

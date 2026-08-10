@@ -50,6 +50,7 @@ func SetupRouter() *gin.Engine {
 		api.GET("/users/:id/follow", controllers.GetUserFollowState)
 		api.PUT("/users/:id/follow", controllers.FollowUser)
 		api.DELETE("/users/:id/follow", controllers.UnfollowUser)
+		api.GET("/feed/following", controllers.GetFollowingTimeline)
 		api.POST("/articles", controllers.CreateArticle)
 		api.GET("/articles", controllers.GetArticle)
 		api.GET("/articles/:id", controllers.GetArticleByID)
