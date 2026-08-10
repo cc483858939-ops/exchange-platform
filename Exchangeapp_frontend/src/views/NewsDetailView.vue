@@ -125,7 +125,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 import CommentComposer from '../components/comments/CommentComposer.vue';
@@ -175,6 +175,8 @@ let detailRequestVersion = 0;
 let likeRequestVersion = 0;
 let likeMutationVersion = 0;
 let commentsRequestVersion = 0;
+let replyIntentTask: Promise<void> | null = null;
+let replyIntentRetryRequested = false;
 
 let tracking: RecommendationTracking | null = null;
 let trackedArticleID = '';
@@ -543,6 +545,73 @@ const deleteOwnComment = async (commentID: number) => {
   }
 };
 
+const consumeReplyIntent = async () => {
+  if (replyIntentTask) {
+    replyIntentRetryRequested = true;
+    return;
+  }
+
+  const task = (async () => {
+    if (route.query.reply !== '1' || !authStore.isAuthenticated || !article.value) {
+      return;
+    }
+
+    const detailVersion = detailRequestVersion;
+    const id = articleId.value;
+    await nextTick();
+
+    const isCurrentIntent = () =>
+      route.query.reply === '1'
+      && authStore.isAuthenticated
+      && detailVersion === detailRequestVersion
+      && id === articleId.value
+      && Boolean(article.value);
+
+    if (!isCurrentIntent()) {
+      return;
+    }
+
+    const composer = composerRef.value;
+    if (!composer || !await composer.focus()) {
+      return;
+    }
+
+    if (!isCurrentIntent()) {
+      return;
+    }
+
+    const query = { ...route.query };
+    delete query.reply;
+
+    try {
+      await router.replace({
+        name: 'NewsDetail',
+        params: route.params,
+        query,
+        hash: route.hash,
+      });
+    } catch {
+      // Keep the one-shot intent in the URL if the replacement is rejected.
+    }
+  })();
+
+  replyIntentTask = task;
+  try {
+    await task;
+  } finally {
+    if (replyIntentTask !== task) {
+      return;
+    }
+
+    replyIntentTask = null;
+    const shouldRetry = replyIntentRetryRequested;
+    replyIntentRetryRequested = false;
+    if (shouldRetry && route.query.reply === '1') {
+      void consumeReplyIntent();
+    }
+  }
+};
+
 const loadDetail = async (id: string, isAuthenticated: boolean) => {
   const detailVersion = ++detailRequestVersion;
   finishRead('navigate_to_article');
@@ -612,6 +681,16 @@ watch(
     void loadDetail(id, isAuthenticated);
   },
   { immediate: true },
+);
+
+watch(
+  [() => route.query.reply, article, () => authStore.isAuthenticated, commentSubmitting],
+  () => {
+    if (route.query.reply === '1') {
+      void consumeReplyIntent();
+    }
+  },
+  { flush: 'post' },
 );
 
 onBeforeRouteLeave(to => {

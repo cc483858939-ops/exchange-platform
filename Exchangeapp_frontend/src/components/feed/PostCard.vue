@@ -20,12 +20,21 @@
     </RouterLink>
 
     <div class="post-card__engagement" aria-label="Engagement">
-      <span class="post-card__metric">
+      <RouterLink
+        class="post-card__metric post-card__reply"
+        :to="{
+          name: 'NewsDetail',
+          params: { id: String(post.id) },
+          query: { reply: '1' },
+        }"
+        :aria-label="replyLabel"
+        @click="emit('articleClick', post)"
+      >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-5.2A7.5 7.5 0 1 1 20 11.5Z" />
         </svg>
         <span>{{ post.commentCount }}</span>
-      </span>
+      </RouterLink>
       <button
         class="post-card__metric post-card__like"
         :class="{ 'post-card__like--active': post.likeStatus === 'ready' && post.liked }"
@@ -77,6 +86,12 @@ const likeLabel = computed(() => {
     return 'Like post, ' + countLabel;
   }
   return 'Unlike post, ' + countLabel;
+});
+
+const replyLabel = computed(() => {
+  const countLabel = String(props.post.commentCount)
+    + (props.post.commentCount === 1 ? ' reply' : ' replies');
+  return 'Reply to post, ' + countLabel;
 });
 
 watch(
@@ -176,13 +191,27 @@ const hideCover = () => {
   transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
 }
 
+.post-card__reply {
+  min-width: 40px;
+  min-height: 40px;
+  margin: -8px 0;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2);
+  color: inherit;
+  text-decoration: none;
+  transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
 .post-card__like:hover:not(:disabled),
-.post-card__like:focus-visible {
+.post-card__like:focus-visible,
+.post-card__reply:hover,
+.post-card__reply:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-accent);
 }
 
-.post-card__like:active:not(:disabled) {
+.post-card__like:active:not(:disabled),
+.post-card__reply:active {
   transform: scale(0.97);
 }
 

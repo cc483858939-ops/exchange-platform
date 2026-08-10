@@ -75,6 +75,22 @@ const clear = () => {
   void nextTick(resizeTextarea);
 };
 
+const focus = async (): Promise<boolean> => {
+  await nextTick();
+
+  const textarea = textareaRef.value;
+  if (!textarea || textarea.disabled) {
+    return false;
+  }
+
+  textarea.scrollIntoView({
+    behavior: 'auto',
+    block: 'center',
+  });
+  textarea.focus({ preventScroll: true });
+  return document.activeElement === textarea;
+};
+
 const submitReply = () => {
   if (props.disabled || props.submitting || !trimmedContent.value || exceedsMaxLength.value) {
     return;
@@ -83,7 +99,7 @@ const submitReply = () => {
   emit('submit', trimmedContent.value);
 };
 
-defineExpose({ clear });
+defineExpose({ clear, focus });
 
 onMounted(resizeTextarea);
 </script>
