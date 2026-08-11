@@ -18,6 +18,16 @@
         {{ item.label }}
       </router-link>
       <router-link
+        v-if="authStore.isAuthenticated && currentProfileID !== null"
+        class="left-sidebar__link"
+        :to="{
+          name: 'UserProfile',
+          params: { id: String(currentProfileID) },
+        }"
+      >
+        Profile
+      </router-link>
+      <router-link
         v-if="authStore.isAuthenticated"
         class="left-sidebar__link"
         :to="{ name: 'ArticleCreate' }"
@@ -41,9 +51,15 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useLogout } from '../../composables/useLogout';
 
 const { authStore, handleLogout } = useLogout();
+const currentProfileID = computed(() => {
+  const id = authStore.currentIdentity?.id;
+
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
+});
 
 const navigation = [
   { name: 'Home', label: 'Home' },
