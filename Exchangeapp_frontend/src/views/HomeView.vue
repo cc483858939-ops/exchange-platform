@@ -51,7 +51,7 @@
       class="home-state"
       aria-live="polite"
     >
-      <h2>{{ activeTab === 'for-you' ? 'No recommendations yet' : 'No articles available' }}</h2>
+      <h2>{{ activeTab === 'for-you' ? 'No recommendations yet' : 'No posts from people you follow yet' }}</h2>
     </section>
 
     <section
@@ -76,14 +76,38 @@
         </div>
       </template>
 
-      <PostCard
-        v-for="post in latestFeed.items"
-        v-else
-        :key="post.id"
-        :post="post"
-        :like-pending="likePendingArticleIds.has(post.id)"
-        @toggle-like="handleLikeToggle"
-      />
+      <template v-else>
+        <PostCard
+          v-for="post in followingFeed.items"
+          :key="post.id"
+          :post="post"
+          :like-pending="likePendingArticleIds.has(post.id)"
+          @toggle-like="handleLikeToggle"
+        />
+
+        <div
+          v-if="followingFeed.nextCursor || followingFeed.loadingMore || followingFeed.loadMoreError"
+          ref="followingSentinelRef"
+          class="home-feed-sentinel"
+          aria-live="polite"
+        >
+          <span v-if="followingFeed.loadingMore">Loading more posts...</span>
+          <template v-else-if="followingFeed.loadMoreError">
+            <span>Could not load more posts.</span>
+            <button class="home-state__primary" type="button" @click="retryFollowingLoadMore">
+              Retry
+            </button>
+          </template>
+          <button
+            v-else-if="!followingIntersectionObserverAvailable && followingFeed.nextCursor"
+            class="home-state__primary"
+            type="button"
+            @click="loadMoreFollowing"
+          >
+            Load more posts
+          </button>
+        </div>
+      </template>
     </section>
 
     </div>
@@ -91,17 +115,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import type { ComponentPublicInstance } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
-import { getArticles } from '../services/articleService';
+import { getFollowingTimeline } from '../services/articleService';
 import { getArticleRecommendations } from '../services/recommendationService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
 import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { useAuthStore } from '../store/auth';
+import type { Article } from '../types/Article';
 import type { RecommendedArticle } from '../types/Recommendation';
 import type { FeedLikeStateUpdate, FeedPost, FeedTab } from '../types/Feed';
 import {
@@ -128,11 +153,20 @@ const router = useRouter();
 const authStore = useAuthStore();
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
-const latestFeed = reactive<FeedState<FeedPost>>({
+type FollowingFeedState = FeedState<FeedPost> & {
+  nextCursor: string | null;
+  loadingMore: boolean;
+  loadMoreError: boolean;
+};
+
+const followingFeed = reactive<FollowingFeedState>({
   items: [],
   loading: false,
   error: false,
   loaded: false,
+  nextCursor: null,
+  loadingMore: false,
+  loadMoreError: false,
 });
 
 const forYouFeed = reactive<FeedState<RecommendationFeedItem>>({
@@ -144,16 +178,21 @@ const forYouFeed = reactive<FeedState<RecommendationFeedItem>>({
 
 const skeletonPosts = [0, 1, 2];
 const recommendationCardElements = new Map<number, HTMLElement>();
+const followingLoadedArticleIds = new Set<number>();
+const followingSentinelRef = ref<HTMLElement | null>(null);
+const followingIntersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
+let followingObserver: IntersectionObserver | null = null;
 let authGeneration = 0;
-let latestRequestVersion = 0;
+let followingRequestVersion = 0;
+let followingPagingVersion = 0;
 let forYouRequestVersion = 0;
 const likePendingArticleIds = reactive(new Set<number>());
 const likeMutationVersions = new Map<number, number>();
 let homeLikeGeneration = 0;
 
-const activeTab = computed<FeedTab>(() => route.query.tab === 'latest' ? 'latest' : 'for-you');
+const activeTab = computed<FeedTab>(() => route.query.tab === 'following' ? 'following' : 'for-you');
 const activeFeedStatus = computed(() => {
-  const state = activeTab.value === 'for-you' ? forYouFeed : latestFeed;
+  const state = activeTab.value === 'for-you' ? forYouFeed : followingFeed;
   return {
     loading: state.loading || (!state.loaded && !state.error),
     error: state.error,
@@ -175,7 +214,7 @@ const selectTab = (tab: FeedTab) => {
 };
 
 const normalizeRouteTab = (value: unknown) => {
-  if (value === undefined || value === 'for-you' || value === 'latest') {
+  if (value === undefined || value === 'for-you' || value === 'following') {
     return;
   }
   void router.replace({
@@ -187,11 +226,23 @@ const normalizeRouteTab = (value: unknown) => {
   });
 };
 
-const resetLatest = () => {
-  latestFeed.items = [];
-  latestFeed.loading = false;
-  latestFeed.error = false;
-  latestFeed.loaded = false;
+const disconnectFollowingObserver = () => {
+  followingObserver?.disconnect();
+  followingObserver = null;
+};
+
+const resetFollowingFeed = () => {
+  followingRequestVersion += 1;
+  followingPagingVersion += 1;
+  followingFeed.items = [];
+  followingFeed.loading = false;
+  followingFeed.error = false;
+  followingFeed.loaded = false;
+  followingFeed.nextCursor = null;
+  followingFeed.loadingMore = false;
+  followingFeed.loadMoreError = false;
+  followingLoadedArticleIds.clear();
+  disconnectFollowingObserver();
 };
 
 const resetForYou = () => {
@@ -204,18 +255,27 @@ const resetForYou = () => {
 const invalidateAfterLogout = () => {
   authGeneration += 1;
   invalidateHomeLikeWork();
-  latestRequestVersion += 1;
   forYouRequestVersion += 1;
-  resetLatest();
+  resetFollowingFeed();
   resetForYou();
   recommendationCardElements.clear();
   recommendationTelemetry.resetObservedCards();
   recommendationTelemetry.clearSession();
 };
 
-const isCurrentLatestRequest = (version: number, generation: number) =>
-  version === latestRequestVersion
+const isCurrentFollowingRequest = (version: number, generation: number) =>
+  version === followingRequestVersion
   && generation === authGeneration
+  && authStore.isAuthenticated;
+
+const isCurrentFollowingPageLineage = (
+  requestVersion: number,
+  generation: number,
+  pagingVersion: number,
+) =>
+  requestVersion === followingRequestVersion
+  && generation === authGeneration
+  && pagingVersion === followingPagingVersion
   && authStore.isAuthenticated;
 
 const isCurrentForYouRequest = (version: number, generation: number) =>
@@ -239,15 +299,15 @@ const invalidateHomeLikeWork = () => {
 };
 
 const findHomePost = (articleId: number): FeedPost | undefined => {
-  const latestPost = latestFeed.items.find((post) => post.id === articleId);
+  const followingPost = followingFeed.items.find((post) => post.id === articleId);
   const forYouPost = forYouFeed.items.find((item) => item.post.id === articleId)?.post;
   return activeTab.value === 'for-you'
-    ? forYouPost || latestPost
-    : latestPost || forYouPost;
+    ? forYouPost || followingPost
+    : followingPost || forYouPost;
 };
 
 const forEachHomePost = (articleId: number, callback: (post: FeedPost) => void) => {
-  latestFeed.items.forEach((post) => {
+  followingFeed.items.forEach((post) => {
     if (post.id === articleId) {
       callback(post);
     }
@@ -354,44 +414,146 @@ const hydrateHomeLikeStates = async (
 
 const getLikeErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
-const loadLatest = async (force = false) => {
-  if (!authStore.isAuthenticated || latestFeed.loading && !force) {
+
+const appendFollowingArticles = (rawArticles: Article[]): FeedPost[] => {
+  const newPosts = rawArticles
+    .filter((article) => {
+      if (followingLoadedArticleIds.has(article.ID)) {
+        return false;
+      }
+      followingLoadedArticleIds.add(article.ID);
+      return true;
+    })
+    .map(articleToFeedPost);
+
+  if (newPosts.length > 0) {
+    followingFeed.items = [...followingFeed.items, ...newPosts];
+  }
+  return newPosts;
+};
+
+const loadFollowing = async (force = false) => {
+  if (!authStore.isAuthenticated || followingFeed.loading && !force) {
+    return;
+  }
+  if (followingFeed.loaded && !force) {
+    void updateFollowingObserver();
     return;
   }
   if (force) {
-    invalidateHomeLikeWork();
+    resetFollowingFeed();
   }
-  if (latestFeed.loaded && !force) {
+
+  const version = ++followingRequestVersion;
+  const generation = authGeneration;
+  const pagingVersion = ++followingPagingVersion;
+  followingFeed.loading = true;
+  followingFeed.error = false;
+  followingFeed.loadMoreError = false;
+
+  try {
+    const response = await getFollowingTimeline({ limit: 20 });
+    if (!isCurrentFollowingRequest(version, generation)) {
+      return;
+    }
+    const newPosts = appendFollowingArticles(response.items);
+    followingFeed.nextCursor = response.next_cursor;
+    followingFeed.loaded = true;
+    const likeGeneration = homeLikeGeneration;
+    void hydrateHomeLikeStates(
+      newPosts.map((post) => post.id),
+      () => isCurrentFollowingRequest(version, generation)
+        && homeLikeGeneration === likeGeneration,
+    );
+  } catch {
+    if (!isCurrentFollowingRequest(version, generation)) {
+      return;
+    }
+    followingFeed.error = true;
+  } finally {
+    if (version === followingRequestVersion && generation === authGeneration && pagingVersion === followingPagingVersion) {
+      followingFeed.loading = false;
+    }
+  }
+};
+
+const loadMoreFollowing = async () => {
+  if (
+    !authStore.isAuthenticated
+    || activeTab.value !== 'following'
+    || !followingFeed.loaded
+    || !followingFeed.nextCursor
+    || followingFeed.loading
+    || followingFeed.loadingMore
+    || followingFeed.loadMoreError
+  ) {
     return;
   }
 
-  const version = ++latestRequestVersion;
+  const requestedCursor = followingFeed.nextCursor;
+  const requestVersion = followingRequestVersion;
   const generation = authGeneration;
-  latestFeed.loading = true;
-  latestFeed.error = false;
+  const pagingVersion = ++followingPagingVersion;
+  followingFeed.loadingMore = true;
+  followingFeed.loadMoreError = false;
 
   try {
-    const articles = await getArticles();
-    if (!isCurrentLatestRequest(version, generation)) {
+    const response = await getFollowingTimeline({ limit: 20, cursor: requestedCursor });
+    if (
+      !isCurrentFollowingPageLineage(requestVersion, generation, pagingVersion)
+      || followingFeed.nextCursor !== requestedCursor
+    ) {
       return;
     }
-    latestFeed.items = articles.map(articleToFeedPost);
-    latestFeed.loaded = true;
+
+    const newPosts = appendFollowingArticles(response.items);
+    followingFeed.nextCursor = response.next_cursor;
     const likeGeneration = homeLikeGeneration;
     void hydrateHomeLikeStates(
-      latestFeed.items.map((post) => post.id),
-      () => isCurrentLatestRequest(version, generation) && homeLikeGeneration === likeGeneration,
+      newPosts.map((post) => post.id),
+      () => isCurrentFollowingRequest(requestVersion, generation)
+        && homeLikeGeneration === likeGeneration,
     );
   } catch {
-    if (!isCurrentLatestRequest(version, generation)) {
-      return;
+    if (isCurrentFollowingPageLineage(requestVersion, generation, pagingVersion)) {
+      followingFeed.loadMoreError = true;
     }
-    latestFeed.error = true;
   } finally {
-    if (version === latestRequestVersion && generation === authGeneration) {
-      latestFeed.loading = false;
+    if (isCurrentFollowingPageLineage(requestVersion, generation, pagingVersion)) {
+      followingFeed.loadingMore = false;
     }
   }
+};
+
+const retryFollowingLoadMore = () => {
+  if (!followingFeed.nextCursor) {
+    return;
+  }
+  followingFeed.loadMoreError = false;
+  void loadMoreFollowing();
+};
+
+const updateFollowingObserver = () => {
+  disconnectFollowingObserver();
+
+  if (
+    !followingIntersectionObserverAvailable
+    || activeTab.value !== 'following'
+    || !followingSentinelRef.value
+    || !followingFeed.nextCursor
+    || followingFeed.loadingMore
+    || followingFeed.loadMoreError
+    || !authStore.isAuthenticated
+  ) {
+    return;
+  }
+
+  followingObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      void loadMoreFollowing();
+    }
+  }, { rootMargin: '240px 0px' });
+  followingObserver.observe(followingSentinelRef.value);
 };
 
 const handleLikeToggle = async (articleId: number) => {
@@ -535,14 +697,14 @@ const loadActiveFeed = async (tab: FeedTab = activeTab.value) => {
     await loadForYou();
     return;
   }
-  await loadLatest();
+  await loadFollowing();
 };
 
 const retryActiveFeed = () => {
   if (activeTab.value === 'for-you') {
     void loadForYou(true);
   } else {
-    void loadLatest(true);
+    void loadFollowing(true);
   }
 };
 
@@ -586,9 +748,26 @@ watch(
     if (previousTab === 'for-you' && tab !== 'for-you') {
       resetRecommendationObservation();
     }
+    if (previousTab === 'following' && tab !== 'following') {
+      disconnectFollowingObserver();
+    }
     void loadActiveFeed(tab);
   },
   { immediate: true },
+);
+
+watch(
+  [
+    activeTab,
+    () => followingFeed.nextCursor,
+    () => followingFeed.loadingMore,
+    () => followingFeed.loadMoreError,
+    () => followingFeed.loading,
+  ],
+  () => {
+    void nextTick(updateFollowingObserver);
+  },
+  { flush: 'post' },
 );
 
 watch(
@@ -604,6 +783,9 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  followingRequestVersion += 1;
+  followingPagingVersion += 1;
+  disconnectFollowingObserver();
   invalidateHomeLikeWork();
   recommendationTelemetry.resetObservedCards();
   void recommendationTelemetry.flush(false);
@@ -753,6 +935,18 @@ onBeforeUnmount(() => {
   50% {
     opacity: 1;
   }
+}
+
+.home-feed-sentinel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 64px;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
 @media (max-width: 620px) {

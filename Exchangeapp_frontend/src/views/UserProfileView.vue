@@ -46,6 +46,36 @@
         >
           Joined {{ joinedLabel }}
         </time>
+        <div v-if="socialReady" class="profile-social" aria-label="Social stats">
+          <span>{{ followState?.following_count ?? 0 }} Following</span>
+          <span>{{ followState?.follower_count ?? 0 }} Followers</span>
+        </div>
+        <div v-else-if="followLoading" class="profile-social profile-social--loading" aria-label="Loading social stats">
+          <span class="profile-social__skeleton"></span>
+          <span class="profile-social__skeleton"></span>
+        </div>
+        <p v-if="followError" class="profile-social-error" aria-live="polite">
+          <span>Social stats unavailable.</span>
+          <button class="profile-action profile-action--compact" type="button" @click="retryFollowState">
+            Retry
+          </button>
+        </p>
+      </div>
+      <div v-if="showFollowControl" class="profile-identity__action">
+        <button
+          class="profile-follow-button"
+          :class="{ 'profile-follow-button--following': followState?.following }"
+          type="button"
+          :aria-pressed="followState?.following === true"
+          :aria-busy="followPending"
+          :disabled="followPending"
+          @click="handleFollowToggle"
+        >
+          {{ followState?.following ? 'Following' : 'Follow' }}
+        </button>
+        <p v-if="followActionError" class="profile-action-error" aria-live="polite">
+          {{ followActionError }}
+        </p>
       </div>
     </section>
 
@@ -159,11 +189,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import PostCard from '../components/feed/PostCard.vue';
-import { getUser, getUserArticles } from '../services/userService';
+import { useAuthStore } from '../store/auth';
+import { followUser, getUser, getUserArticles, getUserFollowState, unfollowUser } from '../services/userService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
 import type { Article } from '../types/Article';
 import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
 import type { PublicUser } from '../types/User';
+import type { UserFollowState } from '../services/userService';
 import {
   applyFeedLikeStateUpdate,
   articleToFeedPost,
@@ -174,6 +206,7 @@ const pageSize = 20;
 const skeletonCount = 3;
 const route = useRoute();
 const router = useRouter();
+const authStore = useAuthStore();
 
 const userId = computed(() => String(route.params.id ?? '').trim());
 const user = ref<PublicUser | null>(null);
@@ -198,6 +231,14 @@ const likePendingArticleIds = reactive(new Set<number>());
 const likeMutationVersions = new Map<number, number>();
 let profileLikeHydrationGeneration = 0;
 let observer: IntersectionObserver | null = null;
+const followState = ref<UserFollowState | null>(null);
+const followLoading = ref(false);
+const followError = ref('');
+const followActionError = ref('');
+const followPending = ref(false);
+let followRequestVersion = 0;
+let followMutationVersion = 0;
+let viewerGeneration = 0;
 
 const headerUsername = computed(() => user.value?.username || 'Profile');
 const profileInitial = computed(
@@ -222,6 +263,165 @@ const joinedLabel = computed(() => {
 
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
+
+const currentViewerID = computed(() => {
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && id > 0 ? id : null;
+});
+
+const socialReady = computed(() => Boolean(
+  user.value
+  && followState.value
+  && !followLoading.value
+  && !followError.value,
+));
+
+const showFollowControl = computed(() => Boolean(
+  socialReady.value
+  && currentViewerID.value !== null
+  && user.value
+  && user.value.id !== currentViewerID.value,
+));
+
+const invalidateSocialState = () => {
+  followRequestVersion += 1;
+  followMutationVersion += 1;
+  followState.value = null;
+  followLoading.value = false;
+  followError.value = '';
+  followActionError.value = '';
+  followPending.value = false;
+};
+
+const isCurrentSocialRequest = (
+  profileVersion: number,
+  targetID: number,
+  viewerID: number,
+  capturedViewerGeneration: number,
+  requestVersion: number,
+  mutationVersion: number,
+) =>
+  profileVersion === profileRequestVersion
+  && user.value?.id === targetID
+  && currentViewerID.value === viewerID
+  && viewerGeneration === capturedViewerGeneration
+  && followRequestVersion === requestVersion
+  && followMutationVersion === mutationVersion
+  && authStore.isAuthenticated;
+
+const loadFollowStateForProfile = async (targetID: number, profileVersion: number) => {
+  const viewerID = currentViewerID.value;
+  if (viewerID === null || !authStore.isAuthenticated) {
+    followState.value = null;
+    followLoading.value = false;
+    return;
+  }
+
+  const requestVersion = ++followRequestVersion;
+  const mutationVersion = followMutationVersion;
+  const capturedViewerGeneration = viewerGeneration;
+  followLoading.value = true;
+  followError.value = '';
+  followActionError.value = '';
+
+  const isCurrent = () => isCurrentSocialRequest(
+    profileVersion,
+    targetID,
+    viewerID,
+    capturedViewerGeneration,
+    requestVersion,
+    mutationVersion,
+  );
+
+  try {
+    const response = await getUserFollowState(targetID);
+    if (!isCurrent()) {
+      return;
+    }
+    if (response.user_id !== targetID) {
+      throw new Error('invalid follow response');
+    }
+    followState.value = response;
+  } catch {
+    if (isCurrent()) {
+      followState.value = null;
+      followError.value = 'Social stats unavailable.';
+    }
+  } finally {
+    if (isCurrent()) {
+      followLoading.value = false;
+    }
+  }
+};
+
+const retryFollowState = () => {
+  if (user.value && currentViewerID.value !== null) {
+    void loadFollowStateForProfile(user.value.id, profileRequestVersion);
+  }
+};
+
+const handleFollowToggle = async () => {
+  const targetID = user.value?.id;
+  const viewerID = currentViewerID.value;
+  const previous = followState.value;
+  if (
+    targetID === undefined
+    || viewerID === null
+    || targetID === viewerID
+    || !previous
+    || !socialReady.value
+    || followPending.value
+  ) {
+    return;
+  }
+
+  const profileVersion = profileRequestVersion;
+  const requestVersion = followRequestVersion;
+  const capturedViewerGeneration = viewerGeneration;
+  const mutationVersion = ++followMutationVersion;
+  const previousState: UserFollowState = { ...previous };
+  followPending.value = true;
+  followActionError.value = '';
+  followState.value = {
+    ...previousState,
+    following: !previousState.following,
+    follower_count: previousState.following
+      ? Math.max(0, previousState.follower_count - 1)
+      : previousState.follower_count + 1,
+  };
+
+  const isCurrent = () =>
+    profileVersion === profileRequestVersion
+    && user.value?.id === targetID
+    && currentViewerID.value === viewerID
+    && viewerGeneration === capturedViewerGeneration
+    && followRequestVersion === requestVersion
+    && followMutationVersion === mutationVersion
+    && followPending.value
+    && authStore.isAuthenticated;
+
+  try {
+    const response = previousState.following
+      ? await unfollowUser(targetID)
+      : await followUser(targetID);
+    if (!isCurrent()) {
+      return;
+    }
+    if (response.user_id !== targetID) {
+      throw new Error('invalid follow response');
+    }
+    followState.value = response;
+    followPending.value = false;
+    followActionError.value = '';
+  } catch {
+    if (!isCurrent()) {
+      return;
+    }
+    followState.value = previousState;
+    followPending.value = false;
+    followActionError.value = 'Could not update follow status.';
+  }
+};
 
 const getLikeMutationVersion = (articleId: number) =>
   likeMutationVersions.get(articleId) ?? 0;
@@ -542,6 +742,7 @@ const handleLikeToggle = async (articleId: number) => {
 const loadProfile = async () => {
   const id = userId.value;
   const profileVersion = ++profileRequestVersion;
+  invalidateSocialState();
 
   user.value = null;
   profileLoading.value = false;
@@ -565,6 +766,7 @@ const loadProfile = async () => {
     user.value = loadedUser;
     profileLoading.value = false;
     void loadInitialPosts(id, profileVersion);
+    void loadFollowStateForProfile(loadedUser.id, profileVersion);
   } catch (error) {
     if (profileVersion !== profileRequestVersion) {
       return;
@@ -637,6 +839,17 @@ watch(userId, () => {
   void loadProfile();
 }, { immediate: true });
 
+watch(currentViewerID, (viewerID, previousViewerID) => {
+  if (viewerID === previousViewerID) {
+    return;
+  }
+  viewerGeneration += 1;
+  invalidateSocialState();
+  if (viewerID !== null && user.value) {
+    void loadFollowStateForProfile(user.value.id, profileRequestVersion);
+  }
+});
+
 onMounted(() => {
   void nextTick(updateObserver);
 });
@@ -645,6 +858,8 @@ onBeforeUnmount(() => {
   profileRequestVersion += 1;
   feedRequestVersion += 1;
   profileLikeHydrationGeneration += 1;
+  viewerGeneration += 1;
+  invalidateSocialState();
   likePendingArticleIds.clear();
   likeMutationVersions.clear();
   disconnectObserver();
@@ -729,6 +944,7 @@ onBeforeUnmount(() => {
 .profile-identity {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-4);
   padding: var(--space-6) var(--space-5) var(--space-5);
   border-bottom: 1px solid var(--color-border);
@@ -749,7 +965,91 @@ onBeforeUnmount(() => {
 }
 
 .profile-identity__copy {
+  flex: 1 1 220px;
   min-width: 0;
+}
+
+.profile-identity__action {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.profile-social {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.profile-social--loading {
+  gap: var(--space-3);
+}
+
+.profile-social__skeleton {
+  display: block;
+  width: 76px;
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+}
+
+.profile-social-error,
+.profile-action-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.profile-action-error {
+  justify-content: end;
+  max-width: 180px;
+  color: var(--color-text-secondary);
+  text-align: right;
+}
+
+.profile-action--compact {
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  font-size: 12px;
+}
+
+.profile-follow-button {
+  min-height: 40px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-5);
+  background: var(--color-accent);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.profile-follow-button--following {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.profile-follow-button:hover,
+.profile-follow-button:focus-visible {
+  border-color: var(--color-text);
+}
+
+.profile-follow-button:disabled {
+  cursor: wait;
+  opacity: 0.64;
 }
 
 .profile-identity h1 {
@@ -981,6 +1281,18 @@ onBeforeUnmount(() => {
 
   .profile-identity {
     align-items: flex-start;
+  }
+
+  .profile-identity__action {
+    flex-basis: 100%;
+    justify-items: start;
+    margin-left: 0;
+  }
+
+  .profile-action-error {
+    justify-content: start;
+    max-width: none;
+    text-align: left;
   }
 
   .profile-avatar {

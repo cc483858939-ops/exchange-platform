@@ -22,3 +22,28 @@ export async function getUserArticles(
   const response = await apiClient.get<Article[]>(`/users/${id}/articles`, { params: options });
   return response.data;
 }
+
+export type UserFollowState = {
+  user_id: number;
+  following: boolean;
+  follower_count: number;
+  following_count: number;
+};
+
+export async function getUserFollowState(userId: number | string): Promise<UserFollowState> {
+  const id = normalizeResourceID(userId, 'user');
+  const response = await apiClient.get<UserFollowState>(`/users/${id}/follow`);
+  return response.data;
+}
+
+export async function followUser(userId: number | string): Promise<UserFollowState> {
+  const id = normalizeResourceID(userId, 'user');
+  const response = await apiClient.put<UserFollowState>(`/users/${id}/follow`);
+  return response.data;
+}
+
+export async function unfollowUser(userId: number | string): Promise<UserFollowState> {
+  const id = normalizeResourceID(userId, 'user');
+  const response = await apiClient.delete<UserFollowState>(`/users/${id}/follow`);
+  return response.data;
+}

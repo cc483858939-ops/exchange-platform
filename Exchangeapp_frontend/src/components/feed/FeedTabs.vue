@@ -34,7 +34,7 @@ const emit = defineEmits<{
 
 const tabs: Array<{ value: FeedTab; label: string }> = [
   { value: 'for-you', label: 'For You' },
-  { value: 'latest', label: 'Latest' },
+  { value: 'following', label: 'Following' },
 ];
 
 const selectTab = (tab: FeedTab) => {

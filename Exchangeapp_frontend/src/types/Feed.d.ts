@@ -1,6 +1,6 @@
 import type { PublicAuthor } from './User';
 
-export type FeedTab = 'for-you' | 'latest';
+export type FeedTab = 'for-you' | 'following';
 
 export type FeedLikeStatus = 'unknown' | 'ready' | 'unavailable';
 

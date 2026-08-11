@@ -13,8 +13,28 @@ type UploadArticleCoverResponse = {
   cover_image_url: string;
 };
 
+export type FollowingTimelineQuery = {
+  limit?: number;
+  cursor?: string;
+};
+
+export type FollowingTimelineResponse = {
+  items: Article[];
+  next_cursor: string | null;
+};
+
 export async function getArticles(): Promise<Article[]> {
   const response = await apiClient.get<Article[]>('/articles');
+  return response.data;
+}
+
+export async function getFollowingTimeline(
+  options: FollowingTimelineQuery = {},
+): Promise<FollowingTimelineResponse> {
+  const response = await apiClient.get<FollowingTimelineResponse>(
+    '/feed/following',
+    { params: options },
+  );
   return response.data;
 }
 
