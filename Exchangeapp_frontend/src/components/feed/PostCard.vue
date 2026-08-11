@@ -27,7 +27,7 @@
           @keydown="handleMenuKeydown"
         >
           <button
-            :ref="element => setMenuItemRef(element, 0)"
+            :ref="setMenuItemRef"
             class="post-card__menu-item"
             type="button"
             role="menuitem"
@@ -37,13 +37,25 @@
           </button>
           <button
             v-if="showNotInterested"
-            :ref="element => setMenuItemRef(element, 1)"
+            :ref="setMenuItemRef"
             class="post-card__menu-item"
             type="button"
             role="menuitem"
             @click.stop="handleNotInterested"
           >
             Not interested
+          </button>
+          <button
+            v-if="showDelete"
+            :ref="setMenuItemRef"
+            class="post-card__menu-item post-card__menu-item--danger"
+            type="button"
+            role="menuitem"
+            :disabled="deletePending"
+            :aria-busy="deletePending"
+            @click.stop="handleDeletePost"
+          >
+            Delete post
           </button>
         </div>
         <span
@@ -52,6 +64,14 @@
           aria-live="polite"
         >
           {{ copyActionLabel }}
+        </span>
+        <span
+          v-if="deleteError"
+          class="post-card__delete-status"
+          role="status"
+          aria-live="polite"
+        >
+          {{ deleteError }}
         </span>
       </div>
     </div>
@@ -136,15 +156,22 @@ const props = withDefaults(defineProps<{
   post: FeedPost;
   likePending?: boolean;
   showNotInterested?: boolean;
+  showDelete?: boolean;
+  deletePending?: boolean;
+  deleteError?: string;
 }>(), {
   likePending: false,
   showNotInterested: false,
+  showDelete: false,
+  deletePending: false,
+  deleteError: '',
 });
 
 const emit = defineEmits<{
   articleClick: [post: FeedPost];
   toggleLike: [articleId: number];
   notInterested: [articleId: number];
+  deletePost: [articleId: number];
 }>();
 
 const router = useRouter();
@@ -218,14 +245,19 @@ const copyActionLabel = computed(() => {
   return 'Copy link';
 });
 
-const getMenuItems = () => menuItemRefs.value.filter(Boolean);
+const syncMenuItemRefs = () => {
+  menuItemRefs.value = menuRef.value
+    ? Array.from(menuRef.value.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+    : [];
+};
 
-const setMenuItemRef = (element: unknown, index: number) => {
-  if (element instanceof HTMLButtonElement) {
-    menuItemRefs.value[index] = element;
-  } else {
-    delete menuItemRefs.value[index];
-  }
+const getMenuItems = () => {
+  syncMenuItemRefs();
+  return menuItemRefs.value;
+};
+
+const setMenuItemRef = () => {
+  void nextTick(syncMenuItemRefs);
 };
 
 const focusMenuItem = (index: number) => {
@@ -347,6 +379,18 @@ const copyLink = async () => {
 const handleNotInterested = () => {
   closeMore();
   emit('notInterested', props.post.id);
+};
+
+const handleDeletePost = () => {
+  if (props.deletePending) {
+    return;
+  }
+  if (!window.confirm('Delete this post? This cannot be undone.')) {
+    return;
+  }
+
+  closeMore();
+  emit('deletePost', props.post.id);
 };
 
 watch(
@@ -585,6 +629,20 @@ onBeforeUnmount(() => {
   color: var(--color-accent);
 }
 
+.post-card__menu-item--danger {
+  color: var(--color-danger);
+}
+
+.post-card__menu-item--danger:hover:not(:disabled),
+.post-card__menu-item--danger:focus-visible {
+  color: var(--color-danger);
+}
+
+.post-card__menu-item--danger:disabled {
+  cursor: wait;
+  opacity: 0.64;
+}
+
 .post-card__copy-status {
   position: absolute;
   width: 1px;
@@ -593,6 +651,13 @@ onBeforeUnmount(() => {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+}
+
+.post-card__delete-status {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--color-danger);
+  font-size: 12px;
 }
 
 .post-card__like:hover:not(:disabled),

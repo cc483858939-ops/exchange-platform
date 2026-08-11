@@ -8,6 +8,7 @@ const (
 	ArticleAnalysisJobRetryWait = "retry_wait"
 	ArticleAnalysisJobSucceeded = "succeeded"
 	ArticleAnalysisJobDead      = "dead"
+	ArticleAnalysisJobCanceled  = "canceled"
 )
 
 // ArticleAnalysisJob is the durable source of truth for AI analysis work.

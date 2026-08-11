@@ -44,6 +44,11 @@ export async function getArticleById(articleId: number | string): Promise<Articl
   return response.data;
 }
 
+export async function deleteArticle(articleId: number | string): Promise<void> {
+  const id = normalizeResourceID(articleId, 'article');
+  await apiClient.delete('/articles/' + id);
+}
+
 export async function uploadArticleCover(file: File): Promise<string> {
   const formData = new FormData();
   formData.append('image', file);

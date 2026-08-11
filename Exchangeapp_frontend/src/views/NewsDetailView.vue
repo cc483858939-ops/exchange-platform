@@ -37,6 +37,16 @@
         <div class="article-detail__meta">
           <span>{{ article.category || 'Article' }}</span>
           <span v-if="article.CreatedAt">{{ formatArticleDate(article.CreatedAt) }}</span>
+          <button
+            v-if="canDeleteArticle"
+            class="detail-delete-action"
+            type="button"
+            :disabled="deletePending"
+            :aria-busy="deletePending"
+            @click="handleDeleteArticle"
+          >
+            Delete post
+          </button>
         </div>
 
         <div class="article-detail__engagement" aria-label="Article engagement">
@@ -66,6 +76,7 @@
         </div>
 
         <p v-if="likeError" class="detail-inline-error" role="status">{{ likeError }}</p>
+        <p v-if="deleteError" class="detail-inline-error" role="alert">{{ deleteError }}</p>
       </article>
 
       <section class="replies-section" aria-labelledby="replies-heading">
@@ -131,11 +142,12 @@ import AuthorIdentity from '../components/AuthorIdentity.vue';
 import CommentComposer from '../components/comments/CommentComposer.vue';
 import CommentList from '../components/comments/CommentList.vue';
 import { createArticleComment, deleteComment, getArticleComments } from '../services/commentService';
-import { getArticleById } from '../services/articleService';
+import { deleteArticle, getArticleById } from '../services/articleService';
 import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { useAuthStore } from '../store/auth';
+import { useFeedStore } from '../store/feed';
 import type { Article } from '../types/Article';
 import type { ArticleComment } from '../types/Comment';
 import type { RecommendationTracking } from '../types/Recommendation';
@@ -143,6 +155,7 @@ import type { RecommendationTracking } from '../types/Recommendation';
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const feedStore = useFeedStore();
 const currentIdentity = computed(() => authStore.currentIdentity);
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
@@ -151,6 +164,8 @@ const article = ref<Article | null>(null);
 const articleLoading = ref(false);
 const articleError = ref('');
 const showCover = ref(false);
+const deletePending = ref(false);
+const deleteError = ref('');
 const articleBodyRef = ref<HTMLElement | null>(null);
 
 const liked = ref(false);
@@ -172,6 +187,7 @@ const composerRef = ref<InstanceType<typeof CommentComposer> | null>(null);
 const commentCount = ref(0);
 
 let detailRequestVersion = 0;
+let deleteRequestVersion = 0;
 let likeRequestVersion = 0;
 let likeMutationVersion = 0;
 let commentsRequestVersion = 0;
@@ -228,6 +244,18 @@ const articleFailureMessage = computed(() => {
   }
   return articleError.value || 'This article could not be found.';
 });
+
+const currentViewerID = computed(() => {
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : null;
+});
+
+const canDeleteArticle = computed(() => Boolean(
+  article.value
+  && authStore.isAuthenticated
+  && currentViewerID.value !== null
+  && article.value.author.id === currentViewerID.value,
+));
 
 const mergeComments = (items: ArticleComment[]) => {
   const seen = new Set<number>();
@@ -327,10 +355,85 @@ const resetCommentsState = () => {
 };
 
 const resetArticleState = () => {
+  deleteRequestVersion += 1;
   article.value = null;
   articleLoading.value = false;
   articleError.value = '';
   showCover.value = false;
+  deletePending.value = false;
+  deleteError.value = '';
+};
+
+const getErrorStatus = (error: unknown) =>
+  (error as { response?: { status?: number } }).response?.status;
+
+const handleDeleteArticle = async () => {
+  const currentArticle = article.value;
+  const viewerID = currentViewerID.value;
+  if (
+    !currentArticle
+    || viewerID === null
+    || !canDeleteArticle.value
+    || deletePending.value
+  ) {
+    return;
+  }
+  if (!window.confirm('Delete this post? This cannot be undone.')) {
+    return;
+  }
+
+  const detailVersion = detailRequestVersion;
+  const requestVersion = ++deleteRequestVersion;
+  const articleID = currentArticle.ID;
+  deletePending.value = true;
+  deleteError.value = '';
+
+  const isCurrentDelete = () =>
+    requestVersion === deleteRequestVersion
+    && detailVersion === detailRequestVersion
+    && authStore.isAuthenticated
+    && currentViewerID.value === viewerID
+    && feedStore.viewerID === viewerID
+    && article.value?.ID === articleID;
+
+  const finishTerminalDelete = () => {
+    if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleID, viewerID)) {
+      return false;
+    }
+    finishRead('post_deleted');
+    deletePending.value = false;
+    deleteError.value = '';
+    void router.replace({
+      name: 'UserProfile',
+      params: { id: String(viewerID) },
+    });
+    return true;
+  };
+
+  try {
+    await deleteArticle(articleID);
+    finishTerminalDelete();
+  } catch (error) {
+    if (!isCurrentDelete()) {
+      return;
+    }
+
+    const status = getErrorStatus(error);
+    if (status === 404) {
+      finishTerminalDelete();
+      return;
+    }
+    deleteError.value = status === 403
+      ? 'You can only delete your own posts.'
+      : status === 401
+        ? 'Please log in again to delete this post.'
+        : 'Could not delete post. Please try again.';
+    deletePending.value = false;
+  } finally {
+    if (requestVersion === deleteRequestVersion && detailVersion === detailRequestVersion) {
+      deletePending.value = false;
+    }
+  }
 };
 
 const loadLikeState = async (id: string, detailVersion: number) => {
@@ -683,6 +786,15 @@ watch(
   { immediate: true },
 );
 
+watch(currentViewerID, (viewerID, previousViewerID) => {
+  if (viewerID === previousViewerID) {
+    return;
+  }
+  deleteRequestVersion += 1;
+  deletePending.value = false;
+  deleteError.value = '';
+});
+
 watch(
   [() => route.query.reply, article, () => authStore.isAuthenticated, commentSubmitting],
   () => {
@@ -821,6 +933,28 @@ onBeforeUnmount(() => {
   margin-top: var(--space-5);
   color: var(--color-text-tertiary);
   font-size: 12px;
+}
+
+.detail-delete-action {
+  margin-left: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-danger);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detail-delete-action:hover,
+.detail-delete-action:focus-visible {
+  text-decoration: underline;
+}
+
+.detail-delete-action:disabled {
+  cursor: wait;
+  opacity: 0.64;
 }
 
 .article-detail__engagement {

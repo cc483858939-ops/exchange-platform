@@ -152,7 +152,11 @@
             :key="post.id"
             :post="post"
             :like-pending="likePendingArticleIds.has(post.id)"
+            :show-delete="canDeletePost(post)"
+            :delete-pending="pendingDeleteArticleIds.has(post.id)"
+            :delete-error="deleteErrors.get(post.id) || ''"
             @toggle-like="handleLikeToggle"
+            @delete-post="handleDeletePost"
           />
         </div>
 
@@ -190,7 +194,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router';
 import PostCard from '../components/feed/PostCard.vue';
 import { useAuthStore } from '../store/auth';
+import { useFeedStore } from '../store/feed';
 import { followUser, getUser, getUserArticles, getUserFollowState, unfollowUser } from '../services/userService';
+import { deleteArticle } from '../services/articleService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
 import type { Article } from '../types/Article';
 import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
@@ -207,6 +213,7 @@ const skeletonCount = 3;
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const feedStore = useFeedStore();
 
 const userId = computed(() => String(route.params.id ?? '').trim());
 const user = ref<PublicUser | null>(null);
@@ -229,6 +236,8 @@ let profileRequestVersion = 0;
 let feedRequestVersion = 0;
 const likePendingArticleIds = reactive(new Set<number>());
 const likeMutationVersions = new Map<number, number>();
+const pendingDeleteArticleIds = reactive(new Set<number>());
+const deleteErrors = reactive(new Map<number, string>());
 let profileLikeHydrationGeneration = 0;
 let observer: IntersectionObserver | null = null;
 const followState = ref<UserFollowState | null>(null);
@@ -282,6 +291,11 @@ const showFollowControl = computed(() => Boolean(
   && user.value
   && user.value.id !== currentViewerID.value,
 ));
+
+const canDeletePost = (post: FeedPost) =>
+  authStore.isAuthenticated
+  && currentViewerID.value !== null
+  && post.author.id === currentViewerID.value;
 
 const invalidateSocialState = () => {
   followRequestVersion += 1;
@@ -543,6 +557,8 @@ const resetFeedState = () => {
   profileLikeHydrationGeneration += 1;
   likePendingArticleIds.clear();
   likeMutationVersions.clear();
+  pendingDeleteArticleIds.clear();
+  deleteErrors.clear();
   articles.value = [];
   articlesInitialLoading.value = false;
   articlesLoadingMore.value = false;
@@ -562,7 +578,7 @@ const appendArticles = (rawArticles: Article[]): FeedPost[] => {
       }
 
       loadedArticleIds.add(article.ID);
-      return true;
+      return !feedStore.isArticleDeleted(article.ID);
     })
     .map(articleToFeedPost);
 
@@ -667,6 +683,82 @@ const retryLoadMore = () => {
 
 const retryProfile = () => {
   void loadProfile();
+};
+
+const handleDeletePost = async (articleId: number) => {
+  if (pendingDeleteArticleIds.has(articleId)) {
+    return;
+  }
+
+  const ownerUserID = currentViewerID.value;
+  const post = findProfilePost(articleId);
+  if (
+    ownerUserID === null
+    || !authStore.isAuthenticated
+    || !post
+    || !canDeletePost(post)
+  ) {
+    return;
+  }
+
+  const capturedViewerGeneration = viewerGeneration;
+  const capturedProfileID = userId.value;
+  pendingDeleteArticleIds.add(articleId);
+  deleteErrors.delete(articleId);
+
+  const isCurrentDelete = () =>
+    authStore.isAuthenticated
+    && currentViewerID.value === ownerUserID
+    && viewerGeneration === capturedViewerGeneration
+    && userId.value === capturedProfileID
+    && pendingDeleteArticleIds.has(articleId);
+
+  const finishTerminalDelete = () => {
+    if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleId, ownerUserID)) {
+      return false;
+    }
+
+    const wasLoaded = articles.value.some((item) => item.id === articleId);
+    articles.value = articles.value.filter((item) => item.id !== articleId);
+    loadedArticleIds.delete(articleId);
+    if (wasLoaded) {
+      nextOffset.value = Math.max(0, nextOffset.value - 1);
+    }
+    pendingDeleteArticleIds.delete(articleId);
+    deleteErrors.delete(articleId);
+    likePendingArticleIds.delete(articleId);
+    likeMutationVersions.delete(articleId);
+    feedRequestVersion += 1;
+    articlesLoadingMore.value = false;
+    articlesLoadMoreError.value = '';
+    disconnectObserver();
+    void nextTick(updateObserver);
+    return true;
+  };
+
+  try {
+    await deleteArticle(articleId);
+    finishTerminalDelete();
+  } catch (error) {
+    if (!isCurrentDelete()) {
+      return;
+    }
+
+    const status = getErrorStatus(error);
+    if (status === 404) {
+      finishTerminalDelete();
+      return;
+    }
+    deleteErrors.set(
+      articleId,
+      status === 403
+        ? 'You can only delete your own posts.'
+        : status === 401
+          ? 'Please log in again to delete this post.'
+          : 'Could not delete post. Please try again.',
+    );
+    pendingDeleteArticleIds.delete(articleId);
+  }
 };
 
 const handleLikeToggle = async (articleId: number) => {
@@ -844,6 +936,8 @@ watch(currentViewerID, (viewerID, previousViewerID) => {
     return;
   }
   viewerGeneration += 1;
+  pendingDeleteArticleIds.clear();
+  deleteErrors.clear();
   invalidateSocialState();
   if (viewerID !== null && user.value) {
     void loadFollowStateForProfile(user.value.id, profileRequestVersion);
@@ -862,6 +956,8 @@ onBeforeUnmount(() => {
   invalidateSocialState();
   likePendingArticleIds.clear();
   likeMutationVersions.clear();
+  pendingDeleteArticleIds.clear();
+  deleteErrors.clear();
   disconnectObserver();
 });
 </script>

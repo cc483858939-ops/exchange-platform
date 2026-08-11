@@ -64,7 +64,11 @@
           :key="'recent-' + post.id"
           :post="post"
           :like-pending="likePendingArticleIds.has(post.id)"
+          :show-delete="canDeletePost(post)"
+          :delete-pending="pendingDeleteArticleIds.has(post.id)"
+          :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
+          @delete-post="handleDeletePost"
         />
 
         <div
@@ -95,9 +99,13 @@
             :post="item.post"
             :like-pending="likePendingArticleIds.has(item.post.id)"
             :show-not-interested="true"
+            :show-delete="canDeletePost(item.post)"
+            :delete-pending="pendingDeleteArticleIds.has(item.post.id)"
+            :delete-error="deleteErrors.get(item.post.id) || ''"
             @article-click="handleRecommendationClick(item.article)"
             @toggle-like="handleLikeToggle"
             @not-interested="handleNotInterested"
+            @delete-post="handleDeletePost"
           />
         </div>
       </template>
@@ -108,7 +116,11 @@
           :key="post.id"
           :post="post"
           :like-pending="likePendingArticleIds.has(post.id)"
+          :show-delete="canDeletePost(post)"
+          :delete-pending="pendingDeleteArticleIds.has(post.id)"
+          :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
+          @delete-post="handleDeletePost"
         />
 
         <div
@@ -146,7 +158,7 @@ import type { ComponentPublicInstance } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
-import { getFollowingTimeline } from '../services/articleService';
+import { deleteArticle, getFollowingTimeline } from '../services/articleService';
 import { getArticleRecommendations } from '../services/recommendationService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
 import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
@@ -216,6 +228,8 @@ let followingPagingVersion = 0;
 let forYouRequestVersion = 0;
 const likePendingArticleIds = reactive(new Set<number>());
 const likeMutationVersions = new Map<number, number>();
+const pendingDeleteArticleIds = reactive(new Set<number>());
+const deleteErrors = reactive(new Map<number, string>());
 let homeLikeGeneration = 0;
 
 const activeTab = computed<FeedTab>(() => route.query.tab === 'following' ? 'following' : 'for-you');
@@ -237,8 +251,21 @@ const recentlyPublishedIDs = computed(
 );
 
 const visibleForYouItems = computed(() =>
-  forYouFeed.items.filter((item) => !recentlyPublishedIDs.value.has(item.post.id)),
+  forYouFeed.items.filter((item) =>
+    !recentlyPublishedIDs.value.has(item.post.id)
+    && !feedStore.isArticleDeleted(item.post.id)
+  ),
 );
+
+const currentViewerID = () => {
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : null;
+};
+
+const canDeletePost = (post: FeedPost) =>
+  authStore.isAuthenticated
+  && currentViewerID() !== null
+  && post.author.id === currentViewerID();
 
 const selectTab = (tab: FeedTab) => {
   if (activeTab.value === tab) {
@@ -295,6 +322,8 @@ const resetForYou = () => {
 const invalidateAfterLogout = () => {
   authGeneration += 1;
   invalidateHomeLikeWork();
+  pendingDeleteArticleIds.clear();
+  deleteErrors.clear();
   forYouRequestVersion += 1;
   resetFollowingFeed();
   resetForYou();
@@ -339,6 +368,9 @@ const invalidateHomeLikeWork = () => {
 };
 
 const findHomePost = (articleId: number): FeedPost | undefined => {
+  if (feedStore.isArticleDeleted(articleId)) {
+    return undefined;
+  }
   const recentlyPublishedPost = feedStore.recentlyPublishedPosts.find((post) => post.id === articleId);
   const followingPost = followingFeed.items.find((post) => post.id === articleId);
   const forYouPost = forYouFeed.items.find((item) => item.post.id === articleId)?.post;
@@ -348,6 +380,9 @@ const findHomePost = (articleId: number): FeedPost | undefined => {
 };
 
 const forEachHomePost = (articleId: number, callback: (post: FeedPost) => void) => {
+  if (feedStore.isArticleDeleted(articleId)) {
+    return;
+  }
   feedStore.recentlyPublishedPosts.forEach((post) => {
     if (post.id === articleId) {
       callback(post);
@@ -468,7 +503,7 @@ const appendFollowingArticles = (rawArticles: Article[]): FeedPost[] => {
         return false;
       }
       followingLoadedArticleIds.add(article.ID);
-      return true;
+      return !feedStore.isArticleDeleted(article.ID);
     })
     .map(articleToFeedPost);
 
@@ -714,10 +749,12 @@ const loadForYou = async (force = false) => {
     if (!isCurrentForYouRequest(version, generation)) {
       return;
     }
-    forYouFeed.items = articles.map((article) => ({
-      article,
-      post: recommendationToFeedPost(article),
-    }));
+    forYouFeed.items = articles
+      .filter((article) => !feedStore.isArticleDeleted(article.id))
+      .map((article) => ({
+        article,
+        post: recommendationToFeedPost(article),
+      }));
     forYouFeed.loaded = true;
     const likeGeneration = homeLikeGeneration;
     void hydrateHomeLikeStates(
@@ -771,6 +808,76 @@ const handleRecommendationClick = (article: RecommendedArticle) => {
   recommendationTelemetry.recordClick(article.id, article.tracking);
 };
 
+const removeHomeArticle = (articleId: number) => {
+  followingFeed.items = followingFeed.items.filter((post) => post.id !== articleId);
+  forYouFeed.items = forYouFeed.items.filter((item) => item.post.id !== articleId);
+  followingLoadedArticleIds.delete(articleId);
+  recommendationCardElements.delete(articleId);
+  likePendingArticleIds.delete(articleId);
+  likeMutationVersions.delete(articleId);
+};
+
+const handleDeletePost = async (articleId: number) => {
+  if (pendingDeleteArticleIds.has(articleId)) {
+    return;
+  }
+
+  const ownerUserID = currentViewerID();
+  if (
+    ownerUserID === null
+    || !authStore.isAuthenticated
+    || !findHomePost(articleId)
+    || !canDeletePost(findHomePost(articleId) as FeedPost)
+  ) {
+    return;
+  }
+
+  const capturedAuthGeneration = authGeneration;
+  pendingDeleteArticleIds.add(articleId);
+  deleteErrors.delete(articleId);
+
+  const isCurrentDelete = () =>
+    authStore.isAuthenticated
+    && authGeneration === capturedAuthGeneration
+    && currentViewerID() === ownerUserID
+    && feedStore.viewerID === ownerUserID
+    && pendingDeleteArticleIds.has(articleId);
+
+  const finishTerminalDelete = () => {
+    if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleId, ownerUserID)) {
+      return false;
+    }
+    removeHomeArticle(articleId);
+    pendingDeleteArticleIds.delete(articleId);
+    deleteErrors.delete(articleId);
+    return true;
+  };
+
+  try {
+    await deleteArticle(articleId);
+    finishTerminalDelete();
+  } catch (error) {
+    if (!isCurrentDelete()) {
+      return;
+    }
+
+    const status = getLikeErrorStatus(error);
+    if (status === 404) {
+      finishTerminalDelete();
+      return;
+    }
+    deleteErrors.set(
+      articleId,
+      status === 403
+        ? 'You can only delete your own posts.'
+        : status === 401
+          ? 'Please log in again to delete this post.'
+          : 'Could not delete post. Please try again.',
+    );
+    pendingDeleteArticleIds.delete(articleId);
+  }
+};
+
 const handleNotInterested = (articleId: number) => {
   const item = forYouFeed.items.find((feedItem) => feedItem.article.id === articleId);
   if (!item) {
@@ -817,6 +924,19 @@ watch(
 );
 
 watch(
+  () => authStore.currentIdentity?.id,
+  (viewerID, previousViewerID) => {
+    if (viewerID === previousViewerID) {
+      return;
+    }
+    invalidateAfterLogout();
+    if (authStore.isAuthenticated) {
+      void loadActiveFeed();
+    }
+  },
+);
+
+watch(
   () => authStore.isAuthenticated,
   (isAuthenticated) => {
     if (!isAuthenticated) {
@@ -853,10 +973,13 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  authGeneration += 1;
   followingRequestVersion += 1;
   followingPagingVersion += 1;
   disconnectFollowingObserver();
   invalidateHomeLikeWork();
+  pendingDeleteArticleIds.clear();
+  deleteErrors.clear();
   recommendationTelemetry.resetObservedCards();
   void recommendationTelemetry.flush(false);
   recommendationCardElements.clear();
