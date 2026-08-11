@@ -97,17 +97,23 @@
       </RouterLink>
       <button
         class="post-card__metric post-card__like"
-        :class="{ 'post-card__like--active': post.likeStatus === 'ready' && post.liked }"
+        :class="{
+          'post-card__like--active': post.likeStatus === 'ready' && post.liked,
+          'post-card__like--animating-like': likeAnimation === 'like',
+          'post-card__like--animating-unlike': likeAnimation === 'unlike',
+        }"
         type="button"
         :disabled="likeDisabled"
         :aria-pressed="post.likeStatus === 'ready' ? post.liked : undefined"
         :aria-label="likeLabel"
-        @click.stop="emit('toggleLike', post.id)"
+        @click.stop="handleLikeActivation"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
-        </svg>
-        <span>{{ post.likeCount }}</span>
+        <span class="post-card__like-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
+          </svg>
+        </span>
+        <span class="post-card__like-count">{{ post.likeCount }}</span>
       </button>
     </div>
   </article>
@@ -143,10 +149,39 @@ const moreOpen = ref(false);
 type CopyState = 'idle' | 'success' | 'error';
 const copyState = ref<CopyState>('idle');
 let copyRequestVersion = 0;
+type LikeAnimation = 'like' | 'unlike' | null;
+const likeAnimation = ref<LikeAnimation>(null);
+let likeAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 
 const likeDisabled = computed(() =>
   props.post.likeStatus !== 'ready' || props.likePending,
 );
+
+const clearLikeAnimationTimer = () => {
+  if (likeAnimationTimer !== null) {
+    clearTimeout(likeAnimationTimer);
+    likeAnimationTimer = null;
+  }
+};
+
+const startLikeAnimation = (animation: Exclude<LikeAnimation, null>) => {
+  clearLikeAnimationTimer();
+  likeAnimation.value = animation;
+  likeAnimationTimer = setTimeout(() => {
+    likeAnimation.value = null;
+    likeAnimationTimer = null;
+  }, animation === 'like' ? 440 : 240);
+};
+
+const handleLikeActivation = () => {
+  if (likeDisabled.value) {
+    return;
+  }
+
+  const wasLiked = props.post.liked;
+  startLikeAnimation(wasLiked ? 'unlike' : 'like');
+  emit('toggleLike', props.post.id);
+};
 
 const likeLabel = computed(() => {
   const countLabel = String(props.post.likeCount)
@@ -316,7 +351,11 @@ watch(
 
 watch(
   () => props.post.id,
-  () => closeMore(),
+  () => {
+    closeMore();
+    clearLikeAnimationTimer();
+    likeAnimation.value = null;
+  },
 );
 
 const hideCover = () => {
@@ -324,6 +363,7 @@ const hideCover = () => {
 };
 
 onBeforeUnmount(() => {
+  clearLikeAnimationTimer();
   closeMore();
 });
 </script>
@@ -568,6 +608,11 @@ onBeforeUnmount(() => {
   opacity: 0.72;
 }
 
+.post-card__like--animating-like:disabled,
+.post-card__like--animating-unlike:disabled {
+  opacity: 1;
+}
+
 .post-card__like--active {
   color: var(--color-accent);
 }
@@ -584,6 +629,118 @@ onBeforeUnmount(() => {
 
 .post-card__like--active svg {
   fill: currentColor;
+}
+
+.post-card__like-icon {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+.post-card__like-icon::after {
+  position: absolute;
+  inset: -4px;
+  border: 1.5px solid var(--color-accent);
+  border-radius: 50%;
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+}
+
+@keyframes post-like-pop {
+  0% {
+    transform: scale(1);
+  }
+
+  18% {
+    transform: scale(0.82);
+  }
+
+  48% {
+    transform: scale(1.28);
+  }
+
+  74% {
+    transform: scale(0.94);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes post-unlike-release {
+  0% {
+    transform: scale(1);
+  }
+
+  42% {
+    transform: scale(0.82);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes post-like-halo {
+  0% {
+    transform: scale(0.45);
+    opacity: 0.28;
+  }
+
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+
+@keyframes post-like-count-in {
+  0% {
+    transform: translateY(3px) scale(0.96);
+    opacity: 0.55;
+  }
+
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes post-unlike-count-out {
+  0% {
+    transform: translateY(-2px);
+    opacity: 0.65;
+  }
+
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.post-card__like--animating-like .post-card__like-icon {
+  animation: post-like-pop 400ms ease-out both;
+}
+
+.post-card__like--animating-unlike .post-card__like-icon {
+  animation: post-unlike-release 220ms ease-out both;
+}
+
+.post-card__like--animating-like .post-card__like-icon::after {
+  animation: post-like-halo 300ms ease-out both;
+}
+
+.post-card__like--animating-like .post-card__like-count {
+  animation: post-like-count-in 240ms ease-out both;
+}
+
+.post-card__like--animating-unlike .post-card__like-count {
+  animation: post-unlike-count-out 180ms ease-out both;
 }
 
 @media (max-width: 420px) {
@@ -611,6 +768,17 @@ onBeforeUnmount(() => {
   .post-card__reply,
   .post-card__more-button {
     transition: none;
+  }
+
+  .post-card__like--animating-like .post-card__like-icon,
+  .post-card__like--animating-unlike .post-card__like-icon,
+  .post-card__like--animating-like .post-card__like-count,
+  .post-card__like--animating-unlike .post-card__like-count {
+    animation: none;
+  }
+
+  .post-card__like-icon::after {
+    display: none;
   }
 }
 </style>
