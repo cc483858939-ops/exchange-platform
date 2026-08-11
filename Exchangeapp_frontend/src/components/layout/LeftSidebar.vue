@@ -10,6 +10,9 @@
         v-for="item in navigation"
         :key="item.name"
         class="left-sidebar__link"
+        :class="{
+          'left-sidebar__link--wide-exchange': item.name === 'CurrencyExchange',
+        }"
         :to="{ name: item.name }"
       >
         {{ item.label }}
@@ -128,6 +131,12 @@ const navigation = [
 
 .left-sidebar__signup {
   color: var(--color-accent);
+}
+
+@media (min-width: 1280px) {
+  .left-sidebar__link--wide-exchange {
+    display: none;
+  }
 }
 
 .left-sidebar__logout {
