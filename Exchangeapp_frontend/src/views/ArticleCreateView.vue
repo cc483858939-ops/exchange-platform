@@ -219,6 +219,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRouter } from 'vue-router';
 import { createArticle, uploadArticleCover } from '../services/articleService';
 import { useAuthStore } from '../store/auth';
+import { useFeedStore } from '../store/feed';
 
 type PublishPhase = 'idle' | 'uploading' | 'publishing';
 
@@ -231,6 +232,7 @@ const allowedCoverTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const router = useRouter();
 const authStore = useAuthStore();
+const feedStore = useFeedStore();
 const form = reactive({
   title: '',
   preview: '',
@@ -404,6 +406,16 @@ const submitArticle = async () => {
     return;
   }
 
+  const publisherUserID = authStore.currentIdentity?.id;
+  if (
+    typeof publisherUserID !== 'number'
+    || !Number.isFinite(publisherUserID)
+    || publisherUserID <= 0
+  ) {
+    publishError.value = 'Your account could not be verified. Your draft was preserved.';
+    return;
+  }
+
   const selectedCover = coverFile.value;
   const draft = {
     title: form.title.trim(),
@@ -432,6 +444,11 @@ const submitArticle = async () => {
       }
     }
 
+    if (authStore.currentIdentity?.id !== publisherUserID) {
+      publishError.value = 'Your account changed while publishing. No post was created, and your draft was preserved.';
+      return;
+    }
+
     phase.value = 'publishing';
     try {
       const article = await createArticle(
@@ -439,9 +456,22 @@ const submitArticle = async () => {
           ? { ...draft, cover_image_url: coverImageURL }
           : draft,
       );
-      void router.push({
-        name: 'NewsDetail',
-        params: { id: String(article.ID) },
+      if (
+        authStore.currentIdentity?.id !== publisherUserID
+        || article.author?.id !== publisherUserID
+      ) {
+        publishError.value = 'The post was saved, but your account changed during publishing. It was not added to this Home feed.';
+        return;
+      }
+
+      if (!feedStore.registerPublishedArticle(article, publisherUserID)) {
+        publishError.value = 'The post was published, but Home could not update for this account. Your draft was preserved.';
+        return;
+      }
+
+      await router.replace({
+        name: 'Home',
+        query: { tab: 'for-you' },
       });
     } catch {
       publishError.value = 'Post could not be published. Try again.';

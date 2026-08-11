@@ -25,7 +25,7 @@
     </section>
 
     <section
-      v-else-if="activeFeedStatus.loading"
+      v-else-if="activeFeedStatus.loading && !hasRecentlyPublishedPosts"
       class="feed-list feed-list--loading"
       :aria-labelledby="'feed-tab-' + activeTab"
     >
@@ -38,7 +38,7 @@
     </section>
 
     <section
-      v-else-if="activeFeedStatus.error"
+      v-else-if="activeFeedStatus.error && !hasRecentlyPublishedPosts"
       class="home-state"
       aria-live="polite"
     >
@@ -47,7 +47,7 @@
     </section>
 
     <section
-      v-else-if="activeFeedStatus.empty"
+      v-else-if="activeFeedStatus.empty && !hasRecentlyPublishedPosts"
       class="home-state"
       aria-live="polite"
     >
@@ -59,8 +59,34 @@
       class="feed-list"
     >
       <template v-if="activeTab === 'for-you'">
+        <PostCard
+          v-for="post in feedStore.recentlyPublishedPosts"
+          :key="'recent-' + post.id"
+          :post="post"
+          :like-pending="likePendingArticleIds.has(post.id)"
+          @toggle-like="handleLikeToggle"
+        />
+
         <div
-          v-for="item in forYouFeed.items"
+          v-if="forYouFeed.loading && hasRecentlyPublishedPosts"
+          class="home-feed-inline-state"
+          aria-live="polite"
+        >
+          Loading recommendations...
+        </div>
+        <div
+          v-else-if="forYouFeed.error && hasRecentlyPublishedPosts"
+          class="home-feed-inline-state"
+          aria-live="polite"
+        >
+          <span>Could not load recommendations.</span>
+          <button class="home-state__primary" type="button" @click="loadForYou(true)">
+            Retry
+          </button>
+        </div>
+
+        <div
+          v-for="item in visibleForYouItems"
           :key="item.article.id"
           class="recommendation-card-wrapper"
           :ref="element => bindRecommendationCard(element, item)"
@@ -126,6 +152,7 @@ import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/li
 import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { useAuthStore } from '../store/auth';
+import { useFeedStore } from '../store/feed';
 import type { Article } from '../types/Article';
 import type { RecommendedArticle } from '../types/Recommendation';
 import type { FeedLikeStateUpdate, FeedPost, FeedTab } from '../types/Feed';
@@ -151,6 +178,7 @@ type RecommendationFeedItem = {
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const feedStore = useFeedStore();
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
 type FollowingFeedState = FeedState<FeedPost> & {
@@ -199,6 +227,18 @@ const activeFeedStatus = computed(() => {
     empty: state.loaded && !state.loading && !state.error && state.items.length === 0,
   };
 });
+
+const hasRecentlyPublishedPosts = computed(
+  () => activeTab.value === 'for-you' && feedStore.recentlyPublishedPosts.length > 0,
+);
+
+const recentlyPublishedIDs = computed(
+  () => new Set(feedStore.recentlyPublishedPosts.map((post) => post.id)),
+);
+
+const visibleForYouItems = computed(() =>
+  forYouFeed.items.filter((item) => !recentlyPublishedIDs.value.has(item.post.id)),
+);
 
 const selectTab = (tab: FeedTab) => {
   if (activeTab.value === tab) {
@@ -299,14 +339,20 @@ const invalidateHomeLikeWork = () => {
 };
 
 const findHomePost = (articleId: number): FeedPost | undefined => {
+  const recentlyPublishedPost = feedStore.recentlyPublishedPosts.find((post) => post.id === articleId);
   const followingPost = followingFeed.items.find((post) => post.id === articleId);
   const forYouPost = forYouFeed.items.find((item) => item.post.id === articleId)?.post;
   return activeTab.value === 'for-you'
-    ? forYouPost || followingPost
-    : followingPost || forYouPost;
+    ? recentlyPublishedPost || forYouPost || followingPost
+    : followingPost || forYouPost || recentlyPublishedPost;
 };
 
 const forEachHomePost = (articleId: number, callback: (post: FeedPost) => void) => {
+  feedStore.recentlyPublishedPosts.forEach((post) => {
+    if (post.id === articleId) {
+      callback(post);
+    }
+  });
   followingFeed.items.forEach((post) => {
     if (post.id === articleId) {
       callback(post);
@@ -631,7 +677,7 @@ const bindCurrentRecommendationCards = async () => {
   if (!authStore.isAuthenticated || activeTab.value !== 'for-you') {
     return;
   }
-  forYouFeed.items.forEach((item) => {
+  visibleForYouItems.value.forEach((item) => {
     const element = recommendationCardElements.get(item.article.id);
     if (element) {
       recommendationTelemetry.observeCard(element, item.article.id, item.article.tracking);
@@ -778,6 +824,30 @@ watch(
       return;
     }
     void loadActiveFeed();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => feedStore.recentlyPublishedPosts
+    .map((post) => String(post.id) + ':' + post.likeStatus)
+    .join(','),
+  () => {
+    const articleIds = feedStore.recentlyPublishedPosts
+      .filter((post) => post.likeStatus === 'unknown')
+      .map((post) => post.id);
+    if (!authStore.isAuthenticated || articleIds.length === 0) {
+      return;
+    }
+
+    const likeGeneration = homeLikeGeneration;
+    const viewerID = feedStore.viewerID;
+    void hydrateHomeLikeStates(
+      articleIds,
+      () => authStore.isAuthenticated
+        && feedStore.viewerID === viewerID
+        && homeLikeGeneration === likeGeneration,
+    );
   },
   { immediate: true },
 );
@@ -935,6 +1005,18 @@ onBeforeUnmount(() => {
   50% {
     opacity: 1;
   }
+}
+
+.home-feed-inline-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 56px;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
 .home-feed-sentinel {
