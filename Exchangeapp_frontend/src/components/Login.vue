@@ -128,11 +128,7 @@ const login = async () => {
   place-items: center;
   overflow-x: hidden;
   padding-inline: clamp(32px, 6vw, 96px);
-  background:
-    radial-gradient(ellipse at 15% 10%, rgba(29, 155, 240, 0.22), transparent 38%),
-    radial-gradient(ellipse at 85% 14%, rgba(99, 102, 241, 0.14), transparent 34%),
-    radial-gradient(ellipse at 50% 100%, rgba(14, 116, 144, 0.1), transparent 42%),
-    linear-gradient(145deg, #020617 0%, #061326 48%, #020617 100%);
+  background: #020617;
   color: #f8fafc;
 }
 
@@ -145,20 +141,28 @@ const login = async () => {
 }
 
 .auth-page::before {
-  background-image:
-    radial-gradient(circle at 12% 18%, rgba(226, 242, 255, 0.82) 0 0.7px, transparent 1px),
-    radial-gradient(circle at 62% 34%, rgba(186, 224, 255, 0.64) 0 0.8px, transparent 1.2px),
-    radial-gradient(circle at 84% 76%, rgba(226, 242, 255, 0.68) 0 0.65px, transparent 1px);
-  background-position: 24px 18px, 82px 44px, 12px 96px;
-  background-size: 178px 214px, 246px 286px, 332px 390px;
-  opacity: 0.62;
+  background-image: url('../assets/auth-nebula.jpg');
+  background-position: 58% center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0.86;
 }
 
 .auth-page::after {
   background:
-    radial-gradient(circle at 28% 72%, rgba(29, 155, 240, 0.08), transparent 24%),
-    radial-gradient(circle at 74% 28%, rgba(129, 140, 248, 0.06), transparent 22%);
-  opacity: 0.9;
+    linear-gradient(
+      90deg,
+      rgba(2, 6, 23, 0.92) 0%,
+      rgba(2, 6, 23, 0.82) 28%,
+      rgba(2, 6, 23, 0.64) 50%,
+      rgba(2, 6, 23, 0.48) 72%,
+      rgba(2, 6, 23, 0.52) 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(2, 6, 23, 0.20) 0%,
+      rgba(2, 6, 23, 0.48) 100%
+    );
 }
 
 .auth-layout {
@@ -379,6 +383,18 @@ const login = async () => {
   .auth-page {
     place-items: start center;
     padding-block: clamp(24px, 6vw, 48px);
+  }
+
+  .auth-page::before {
+    background-position: 60% center;
+  }
+
+  .auth-page::after {
+    background: linear-gradient(
+      180deg,
+      rgba(2, 6, 23, 0.72),
+      rgba(2, 6, 23, 0.84)
+    );
   }
 
   .auth-layout {
