@@ -165,6 +165,9 @@ const register = async () => {
 }
 
 .auth-layout {
+  position: relative;
+  z-index: 1;
+
   display: grid;
   width: min(100%, 1440px);
   grid-template-columns: minmax(340px, 0.85fr) minmax(360px, 1.15fr);
