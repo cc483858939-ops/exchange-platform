@@ -1,13 +1,14 @@
 <template>
   <main class="auth-page">
-    <section class="auth-panel" aria-labelledby="login-title">
-      <div class="auth-brand">
-        <span class="auth-brand__mark" aria-hidden="true">GX</span>
-        <span class="auth-brand__name">Go Exchange</span>
-      </div>
+    <div class="auth-layout">
+      <section class="auth-content" aria-labelledby="login-title">
+        <div class="auth-brand">
+          <span class="auth-brand__mobile-mark" aria-hidden="true">GX</span>
+          <span class="auth-brand__name">Go Exchange</span>
+        </div>
 
       <header class="auth-heading">
-        <p class="auth-eyebrow">Financial feed</p>
+
         <h1 id="login-title">Welcome back</h1>
         <p>Sign in to continue to your financial feed.</p>
       </header>
@@ -59,7 +60,12 @@
         <span>Don't have an account?</span>
         <RouterLink :to="{ name: 'Register' }">Sign up</RouterLink>
       </p>
-    </section>
+      </section>
+
+      <div class="auth-visual" aria-hidden="true">
+        <span class="auth-visual__mark">GX</span>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -121,7 +127,7 @@ const login = async () => {
   min-height: 100svh;
   place-items: center;
   overflow-x: hidden;
-  padding: clamp(24px, 5vw, 56px) 20px;
+  padding-inline: clamp(32px, 6vw, 96px);
   background:
     radial-gradient(ellipse at 15% 10%, rgba(29, 155, 240, 0.22), transparent 38%),
     radial-gradient(ellipse at 85% 14%, rgba(99, 102, 241, 0.14), transparent 34%),
@@ -155,29 +161,30 @@ const login = async () => {
   opacity: 0.9;
 }
 
-.auth-panel {
-  position: relative;
-  z-index: 1;
+.auth-layout {
+  display: grid;
+  width: min(100%, 1440px);
+  grid-template-columns: minmax(340px, 0.85fr) minmax(360px, 1.15fr);
+  align-items: center;
+  gap: clamp(40px, 6vw, 96px);
+}
+
+.auth-content {
   width: min(100%, 420px);
-  padding: clamp(28px, 5vw, 40px);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 24px;
-  background: rgba(4, 12, 28, 0.94);
-  box-shadow:
-    0 28px 80px rgba(0, 0, 0, 0.38),
-    0 8px 24px rgba(2, 6, 23, 0.28);
+  min-width: 0;
+  justify-self: start;
 }
 
 .auth-brand {
   display: grid;
-  justify-items: center;
+  justify-items: start;
   gap: 10px;
-  margin-bottom: 34px;
-  text-align: center;
+  margin-bottom: 42px;
+  text-align: left;
 }
 
-.auth-brand__mark {
-  display: grid;
+.auth-brand__mobile-mark {
+  display: none;
   width: 48px;
   height: 48px;
   place-items: center;
@@ -191,41 +198,50 @@ const login = async () => {
 }
 
 .auth-brand__name {
-  color: #cbd5e1;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: #f8fafc;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.auth-visual {
+  display: grid;
+  min-width: 0;
+  min-height: clamp(300px, 42vw, 560px);
+  place-items: center;
+  pointer-events: none;
+}
+
+.auth-visual__mark {
+  color: rgba(224, 242, 254, 0.88);
+  font-size: clamp(200px, 26vw, 420px);
+  font-weight: 900;
+  letter-spacing: -0.1em;
+  line-height: 0.78;
+  user-select: none;
+  white-space: nowrap;
+  text-shadow: 0 10px 34px rgba(29, 155, 240, 0.1);
 }
 
 .auth-heading {
-  margin-bottom: 28px;
-}
-
-.auth-eyebrow {
-  margin: 0 0 9px;
-  color: var(--color-accent);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  margin-bottom: 32px;
 }
 
 .auth-heading h1 {
   margin: 0;
   color: #f8fafc;
-  font-size: clamp(28px, 6vw, 36px);
+  font-size: clamp(36px, 4vw, 46px);
   font-weight: 780;
-  letter-spacing: -0.045em;
-  line-height: 1.05;
+  letter-spacing: -0.055em;
+  line-height: 1.02;
 }
 
 .auth-heading > p:last-child {
-  max-width: 30ch;
-  margin: 12px 0 0;
+  max-width: 34ch;
+  margin: 14px 0 0;
   color: #94a3b8;
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 .auth-form {
@@ -334,13 +350,13 @@ const login = async () => {
 .auth-switch {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 5px;
   margin: 28px 0 0;
   color: #94a3b8;
   font-size: 13px;
   line-height: 1.5;
-  text-align: center;
+  text-align: left;
 }
 
 .auth-switch a {
@@ -356,24 +372,64 @@ const login = async () => {
   text-underline-offset: 3px;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 899px) {
   .auth-page {
-    align-items: start;
-    padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    place-items: start center;
+    padding-block: clamp(24px, 6vw, 48px);
   }
 
-  .auth-panel {
-    margin: auto 0;
-    padding: 28px 24px;
-    border-radius: 20px;
+  .auth-layout {
+    width: min(100%, 420px);
+    grid-template-columns: minmax(0, 1fr);
+    margin-block: auto;
+  }
+
+  .auth-content {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .auth-visual {
+    display: none;
+  }
+
+  .auth-brand {
+    justify-items: center;
+    margin-bottom: 32px;
+    text-align: center;
+  }
+
+  .auth-brand__mobile-mark {
+    display: grid;
+  }
+
+  .auth-heading h1 {
+    font-size: clamp(36px, 8vw, 44px);
+  }
+
+  .auth-switch {
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-page {
+    padding-inline: 16px;
+    padding-top: max(24px, env(safe-area-inset-top));
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
   }
 
   .auth-brand {
     margin-bottom: 30px;
   }
 
+  .auth-heading {
+    margin-bottom: 28px;
+  }
+
   .auth-heading h1 {
-    font-size: 29px;
+    font-size: 36px;
   }
 }
 
