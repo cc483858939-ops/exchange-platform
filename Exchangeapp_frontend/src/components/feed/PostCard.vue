@@ -112,6 +112,13 @@
           <svg viewBox="0 0 24 24">
             <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
           </svg>
+          <span class="post-card__like-burst" aria-hidden="true">
+            <span
+              v-for="particle in 6"
+              :key="particle"
+              class="post-card__like-particle"
+            ></span>
+          </span>
         </span>
         <span class="post-card__like-count">{{ post.likeCount }}</span>
       </button>
@@ -170,7 +177,7 @@ const startLikeAnimation = (animation: Exclude<LikeAnimation, null>) => {
   likeAnimationTimer = setTimeout(() => {
     likeAnimation.value = null;
     likeAnimationTimer = null;
-  }, animation === 'like' ? 440 : 240);
+  }, animation === 'like' ? 320 : 200);
 };
 
 const handleLikeActivation = () => {
@@ -372,6 +379,7 @@ onBeforeUnmount(() => {
 .post-card {
   --post-avatar-size: 40px;
   --post-column-gap: 12px;
+  --post-like-color: #f91880;
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -588,7 +596,11 @@ onBeforeUnmount(() => {
 }
 
 .post-card__like:hover:not(:disabled),
-.post-card__like:focus-visible,
+.post-card__like:focus-visible {
+  background: var(--color-surface-subtle);
+  color: var(--post-like-color);
+}
+
 .post-card__reply:hover,
 .post-card__reply:focus-visible,
 .post-card__more-button:hover,
@@ -614,7 +626,7 @@ onBeforeUnmount(() => {
 }
 
 .post-card__like--active {
-  color: var(--color-accent);
+  color: var(--post-like-color);
 }
 
 .post-card__metric svg {
@@ -639,33 +651,74 @@ onBeforeUnmount(() => {
   flex: 0 0 16px;
   align-items: center;
   justify-content: center;
+  overflow: visible;
 }
 
-.post-card__like-icon::after {
+.post-card__like-burst {
   position: absolute;
-  inset: -4px;
-  border: 1.5px solid var(--color-accent);
+  inset: 50% auto auto 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.post-card__like-particle {
+  position: absolute;
+  top: -1.25px;
+  left: -1.25px;
+  width: 2.5px;
+  height: 2.5px;
   border-radius: 50%;
-  content: '';
+  background: var(--post-like-color);
   opacity: 0;
   pointer-events: none;
 }
 
-@keyframes post-like-pop {
+.post-card__like-particle:nth-child(1) {
+  --particle-x: 0px;
+  --particle-y: -9px;
+}
+
+.post-card__like-particle:nth-child(2) {
+  --particle-x: 8px;
+  --particle-y: -5px;
+}
+
+.post-card__like-particle:nth-child(3) {
+  --particle-x: 8px;
+  --particle-y: 5px;
+}
+
+.post-card__like-particle:nth-child(4) {
+  --particle-x: 0px;
+  --particle-y: 9px;
+}
+
+.post-card__like-particle:nth-child(5) {
+  --particle-x: -8px;
+  --particle-y: 5px;
+}
+
+.post-card__like-particle:nth-child(6) {
+  --particle-x: -8px;
+  --particle-y: -5px;
+}
+
+@keyframes post-like-burst-pop {
   0% {
     transform: scale(1);
   }
 
-  18% {
-    transform: scale(0.82);
+  15% {
+    transform: scale(0.92);
   }
 
   48% {
-    transform: scale(1.28);
+    transform: scale(1.4);
   }
 
-  74% {
-    transform: scale(0.94);
+  72% {
+    transform: scale(0.98);
   }
 
   100% {
@@ -679,7 +732,7 @@ onBeforeUnmount(() => {
   }
 
   42% {
-    transform: scale(0.82);
+    transform: scale(0.88);
   }
 
   100% {
@@ -687,34 +740,10 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes post-like-halo {
-  0% {
-    transform: scale(0.45);
-    opacity: 0.28;
-  }
-
-  100% {
-    transform: scale(1.65);
-    opacity: 0;
-  }
-}
-
 @keyframes post-like-count-in {
   0% {
-    transform: translateY(3px) scale(0.96);
-    opacity: 0.55;
-  }
-
-  100% {
-    transform: translateY(0) scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes post-unlike-count-out {
-  0% {
-    transform: translateY(-2px);
-    opacity: 0.65;
+    transform: translateY(2px);
+    opacity: 0.7;
   }
 
   100% {
@@ -723,24 +752,52 @@ onBeforeUnmount(() => {
   }
 }
 
+@keyframes post-unlike-count-out {
+  0% {
+    transform: translateY(-1px);
+    opacity: 0.7;
+  }
+
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes post-like-particle-burst {
+  0% {
+    transform: translate(0, 0) scale(0.55);
+    opacity: 0;
+  }
+
+  18% {
+    opacity: 0.85;
+  }
+
+  100% {
+    transform: translate(var(--particle-x), var(--particle-y)) scale(0.7);
+    opacity: 0;
+  }
+}
+
 .post-card__like--animating-like .post-card__like-icon {
-  animation: post-like-pop 400ms ease-out both;
+  animation: post-like-burst-pop 280ms ease-out both;
 }
 
 .post-card__like--animating-unlike .post-card__like-icon {
-  animation: post-unlike-release 220ms ease-out both;
+  animation: post-unlike-release 170ms ease-out both;
 }
 
-.post-card__like--animating-like .post-card__like-icon::after {
-  animation: post-like-halo 300ms ease-out both;
+.post-card__like--animating-like .post-card__like-particle {
+  animation: post-like-particle-burst 220ms ease-out 60ms both;
 }
 
 .post-card__like--animating-like .post-card__like-count {
-  animation: post-like-count-in 240ms ease-out both;
+  animation: post-like-count-in 160ms ease-out both;
 }
 
 .post-card__like--animating-unlike .post-card__like-count {
-  animation: post-unlike-count-out 180ms ease-out both;
+  animation: post-unlike-count-out 130ms ease-out both;
 }
 
 @media (max-width: 420px) {
@@ -777,7 +834,12 @@ onBeforeUnmount(() => {
     animation: none;
   }
 
-  .post-card__like-icon::after {
+  .post-card__like--animating-like:disabled,
+  .post-card__like--animating-unlike:disabled {
+    opacity: 0.72;
+  }
+
+  .post-card__like-particle {
     display: none;
   }
 }
