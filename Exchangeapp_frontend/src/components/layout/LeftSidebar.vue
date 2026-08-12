@@ -10,6 +10,9 @@
         v-for="item in navigation"
         :key="item.name"
         class="left-sidebar__link left-sidebar__link--icon"
+        :class="{
+          'left-sidebar__link--compact-only': item.compactOnly,
+        }"
         :to="{ name: item.name }"
         :aria-label="item.label"
         :title="item.label"
@@ -80,7 +83,8 @@ const currentProfileID = computed(() => {
 });
 
 const navigation = [
-  { name: 'Home', label: 'Home', icon: 'home' as const },
+  { name: 'Home', label: 'Home', icon: 'home' as const, compactOnly: false },
+  { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, compactOnly: true },
 ];
 
 </script>
@@ -143,6 +147,10 @@ const navigation = [
   transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 }
 
+.left-sidebar__link--compact-only {
+  display: none;
+}
+
 .left-sidebar__link:hover,
 .left-sidebar__link:focus-visible {
   background: var(--color-surface-subtle);
@@ -187,5 +195,11 @@ const navigation = [
 
 .left-sidebar__logout {
   width: auto;
+}
+
+@media (min-width: 800px) and (max-width: 1279px) {
+  .left-sidebar__link--compact-only {
+    display: flex;
+  }
 }
 </style>
