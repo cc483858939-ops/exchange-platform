@@ -7,6 +7,21 @@ export type UserArticleQuery = {
   limit?: number;
   offset?: number;
 };
+export type UserConnectionItem = {
+	user: PublicUser;
+	following: boolean;
+};
+
+export type UserConnectionPage = {
+	items: UserConnectionItem[];
+	has_more: boolean;
+};
+
+export type UserConnectionQuery = {
+	limit?: number;
+	offset?: number;
+};
+
 
 export async function getUser(userId: number | string): Promise<PublicUser> {
   const id = normalizeResourceID(userId, 'user');
@@ -55,6 +70,18 @@ export async function getUserFollowState(userId: number | string): Promise<UserF
   const id = normalizeResourceID(userId, 'user');
   const response = await apiClient.get<UserFollowState>(`/users/${id}/follow`);
   return response.data;
+}
+
+export async function getUserFollowers(userId: number | string, options: UserConnectionQuery = {}): Promise<UserConnectionPage> {
+	const id = normalizeResourceID(userId, 'user');
+	const response = await apiClient.get<UserConnectionPage>(`/users/${id}/followers`, { params: options });
+	return response.data;
+}
+
+export async function getUserFollowing(userId: number | string, options: UserConnectionQuery = {}): Promise<UserConnectionPage> {
+	const id = normalizeResourceID(userId, 'user');
+	const response = await apiClient.get<UserConnectionPage>(`/users/${id}/following`, { params: options });
+	return response.data;
 }
 
 export async function followUser(userId: number | string): Promise<UserFollowState> {

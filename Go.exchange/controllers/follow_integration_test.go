@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -202,5 +203,123 @@ func TestFollowGraphIntegration(t *testing.T) {
 	FollowUser(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("soft-deleted viewer status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func newFollowConnectionListIntegrationContext(viewerID, targetID uint, connectionPath, query string) (*gin.Context, *httptest.ResponseRecorder) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/users/"+strconvUint(targetID)+"/"+connectionPath+query, nil)
+	ctx.Params = gin.Params{{Key: "id", Value: strconvUint(targetID)}}
+	ctx.Set("user_id", viewerID)
+	return ctx, recorder
+}
+
+func decodeFollowConnectionListPage(t *testing.T, recorder *httptest.ResponseRecorder) userConnectionPageResponse {
+	t.Helper()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var page userConnectionPageResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if page.Items == nil {
+		t.Fatal("items must be [] rather than null")
+	}
+	return page
+}
+
+func TestFollowConnectionListsIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
+		t.Fatal(err)
+	}
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+	newUser := func(label string) models.User {
+		return models.User{Username: "connections-" + label + "-" + uuid.NewString(), Password: "test", DisplayName: label}
+	}
+	users := []models.User{newUser("alice"), newUser("bob"), newUser("charlie"), newUser("dave"), newUser("deleted-follower"), newUser("deleted-following")}
+	for index := 0; index < 20; index += 1 {
+		users = append(users, newUser("page-"+strconvUint(uint(index))))
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	alice, bob, charlie, dave := users[0], users[1], users[2], users[3]
+	deletedFollower, deletedFollowing := users[4], users[5]
+	userIDs := make([]uint, 0, len(users))
+	for _, user := range users {
+		userIDs = append(userIDs, user.ID)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
+		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
+	})
+	tie := time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC)
+	older := tie.Add(-time.Hour)
+	relations := []models.UserFollow{
+		{FollowerID: charlie.ID, FollowingID: bob.ID, CreatedAt: tie}, {FollowerID: alice.ID, FollowingID: bob.ID, CreatedAt: tie}, {FollowerID: deletedFollower.ID, FollowingID: bob.ID, CreatedAt: older},
+		{FollowerID: bob.ID, FollowingID: charlie.ID, CreatedAt: tie}, {FollowerID: bob.ID, FollowingID: dave.ID, CreatedAt: tie}, {FollowerID: alice.ID, FollowingID: charlie.ID, CreatedAt: older}, {FollowerID: bob.ID, FollowingID: deletedFollowing.ID, CreatedAt: older},
+	}
+	for _, user := range users[6:] {
+		relations = append(relations, models.UserFollow{FollowerID: bob.ID, FollowingID: user.ID, CreatedAt: older})
+	}
+	if err := db.Create(&relations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&deletedFollower).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&deletedFollowing).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder := newFollowConnectionListIntegrationContext(alice.ID, bob.ID, "followers", "")
+	GetUserFollowers(ctx)
+	followers := decodeFollowConnectionListPage(t, recorder)
+	if followers.HasMore || len(followers.Items) != 2 || followers.Items[0].User.ID != alice.ID || followers.Items[0].Following || followers.Items[1].User.ID != charlie.ID || followers.Items[1].Following {
+		t.Fatalf("followers=%#v", followers)
+	}
+	ctx, recorder = newFollowConnectionListIntegrationContext(alice.ID, bob.ID, "following", "?limit=2")
+	GetUserFollowing(ctx)
+	following := decodeFollowConnectionListPage(t, recorder)
+	if !following.HasMore || len(following.Items) != 2 || following.Items[0].User.ID != dave.ID || following.Items[0].Following || following.Items[1].User.ID != charlie.ID || !following.Items[1].Following {
+		t.Fatalf("following=%#v", following)
+	}
+	ctx, recorder = newFollowConnectionListIntegrationContext(alice.ID, bob.ID, "following", "?limit=20&offset=2")
+	GetUserFollowing(ctx)
+	followingAfterOffset := decodeFollowConnectionListPage(t, recorder)
+	if followingAfterOffset.HasMore || len(followingAfterOffset.Items) != 20 {
+		t.Fatalf("following offset=%#v", followingAfterOffset)
+	}
+	if err := db.Delete(&bob).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder = newFollowConnectionListIntegrationContext(alice.ID, bob.ID, "followers", "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("soft-deleted target status=%d", recorder.Code)
+	}
+	ctx, recorder = newFollowConnectionListIntegrationContext(alice.ID, charlie.ID, "followers", "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("active target status=%d", recorder.Code)
+	}
+	if err := db.Delete(&alice).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder = newFollowConnectionListIntegrationContext(alice.ID, charlie.ID, "followers", "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("soft-deleted viewer status=%d", recorder.Code)
 	}
 }

@@ -3,6 +3,8 @@ package controllers
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -25,10 +27,44 @@ type userFollowState struct {
 	FollowingCount int64
 }
 
+const (
+	defaultFollowListLimit = 20
+	maxFollowListLimit     = 50
+)
+
+type followConnectionKind uint8
+
+const (
+	followConnectionFollowers followConnectionKind = iota
+	followConnectionFollowing
+)
+
+type userConnectionResponse struct {
+	User      publicUserResponse `json:"user"`
+	Following bool               `json:"following"`
+}
+
+type userConnectionPageResponse struct {
+	Items   []userConnectionResponse `json:"items"`
+	HasMore bool                     `json:"has_more"`
+}
+
+type userConnectionQueryRow struct {
+	UserID         uint      `gorm:"column:user_id"`
+	Username       string    `gorm:"column:username"`
+	DisplayName    string    `gorm:"column:display_name"`
+	Bio            string    `gorm:"column:bio"`
+	AvatarURL      string    `gorm:"column:avatar_url"`
+	UserCreatedAt  time.Time `gorm:"column:user_created_at"`
+	ViewerFollowID *uint     `gorm:"column:viewer_follow_id"`
+}
+
 var loadActiveFollowUser = loadActiveFollowUserFromDB
 var loadFollowState = loadFollowStateFromDB
 var followAndLoadState = followAndLoadStateFromDB
 var unfollowAndLoadState = unfollowAndLoadStateFromDB
+
+var loadUserConnections = loadUserConnectionsFromDB
 
 func loadActiveFollowUserFromDB(id uint) error {
 	if global.Db == nil {
@@ -71,6 +107,46 @@ func readFollowState(db *gorm.DB, viewerID, targetID uint) (userFollowState, err
 
 func loadFollowStateFromDB(viewerID, targetID uint) (userFollowState, error) {
 	return readFollowState(global.Db, viewerID, targetID)
+}
+
+func loadUserConnectionsFromDB(viewerID, targetID uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
+	if global.Db == nil {
+		return userConnectionPageResponse{}, errors.New("database is not initialized")
+	}
+	listedUserJoin := "JOIN users AS listed_user ON listed_user.id = target_follow.follower_id AND listed_user.deleted_at IS NULL"
+	switch kind {
+	case followConnectionFollowers:
+	case followConnectionFollowing:
+		listedUserJoin = "JOIN users AS listed_user ON listed_user.id = target_follow.following_id AND listed_user.deleted_at IS NULL"
+	default:
+		return userConnectionPageResponse{}, errors.New("invalid follow connection kind")
+	}
+	query := global.Db.Table("user_follows AS target_follow").
+		Select(`listed_user.id AS user_id, listed_user.username AS username, listed_user.display_name AS display_name, listed_user.bio AS bio, listed_user.avatar_url AS avatar_url, listed_user.created_at AS user_created_at, viewer_follow.id AS viewer_follow_id`).
+		Joins(listedUserJoin).
+		Joins("LEFT JOIN user_follows AS viewer_follow ON viewer_follow.follower_id = ? AND viewer_follow.following_id = listed_user.id", viewerID).
+		Order("target_follow.created_at DESC").Order("target_follow.id DESC").Limit(limit + 1).Offset(offset)
+	if kind == followConnectionFollowers {
+		query = query.Where("target_follow.following_id = ?", targetID)
+	} else {
+		query = query.Where("target_follow.follower_id = ?", targetID)
+	}
+	var rows []userConnectionQueryRow
+	if err := query.Scan(&rows).Error; err != nil {
+		return userConnectionPageResponse{}, err
+	}
+	page := userConnectionPageResponse{Items: make([]userConnectionResponse, 0, len(rows))}
+	if len(rows) > limit {
+		page.HasMore = true
+		rows = rows[:limit]
+	}
+	for _, row := range rows {
+		page.Items = append(page.Items, userConnectionResponse{
+			User:      publicUserResponse{ID: row.UserID, Username: row.Username, DisplayName: row.DisplayName, Bio: row.Bio, AvatarURL: row.AvatarURL, CreatedAt: row.UserCreatedAt},
+			Following: row.UserID != viewerID && row.ViewerFollowID != nil,
+		})
+	}
+	return page, nil
 }
 
 func followAndLoadStateFromDB(viewerID, targetID uint) (userFollowState, error) {
@@ -155,6 +231,29 @@ func validateFollowParticipants(ctx *gin.Context) (uint, uint, bool) {
 	return viewerID, targetID, true
 }
 
+func parseFollowListPagination(ctx *gin.Context) (int, int, error) {
+	limit := defaultFollowListLimit
+	if raw, exists := ctx.GetQuery("limit"); exists {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			return 0, 0, errors.New("invalid limit")
+		}
+		limit = parsed
+	}
+	if limit > maxFollowListLimit {
+		limit = maxFollowListLimit
+	}
+	offset := 0
+	if raw, exists := ctx.GetQuery("offset"); exists {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			return 0, 0, errors.New("invalid offset")
+		}
+		offset = parsed
+	}
+	return limit, offset, nil
+}
+
 func writeFollowStoreError(ctx *gin.Context) {
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
@@ -216,4 +315,32 @@ func UnfollowUser(ctx *gin.Context) {
 		return
 	}
 	writeFollowState(ctx, targetID, state)
+}
+func GetUserFollowers(ctx *gin.Context) {
+	getUserConnections(ctx, followConnectionFollowers)
+}
+
+func GetUserFollowing(ctx *gin.Context) {
+	getUserConnections(ctx, followConnectionFollowing)
+}
+
+func getUserConnections(ctx *gin.Context, kind followConnectionKind) {
+	viewerID, targetID, ok := validateFollowParticipants(ctx)
+	if !ok {
+		return
+	}
+	limit, offset, err := parseFollowListPagination(ctx)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	page, err := loadUserConnections(viewerID, targetID, kind, limit, offset)
+	if err != nil {
+		writeFollowStoreError(ctx)
+		return
+	}
+	if page.Items == nil {
+		page.Items = make([]userConnectionResponse, 0)
+	}
+	ctx.JSON(http.StatusOK, page)
 }

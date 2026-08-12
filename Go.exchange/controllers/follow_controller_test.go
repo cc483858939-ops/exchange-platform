@@ -241,3 +241,141 @@ func TestFollowControllerMapsDatastoreFailureToGeneric500(t *testing.T) {
 		t.Fatalf("raw datastore error leaked: %s", recorder.Body.String())
 	}
 }
+
+func newFollowListControllerContext(targetID string, viewerID *uint, query string) (*gin.Context, *httptest.ResponseRecorder) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/users/"+targetID+"/followers"+query, nil)
+	ctx.Params = gin.Params{{Key: "id", Value: targetID}}
+	if viewerID != nil {
+		ctx.Set("user_id", *viewerID)
+	}
+	return ctx, recorder
+}
+
+func TestGetUserConnectionListsForwardArgumentsAndSerializePage(t *testing.T) {
+	viewerID := uint(7)
+	originalLoadUser := loadActiveFollowUser
+	originalLoadConnections := loadUserConnections
+	t.Cleanup(func() {
+		loadActiveFollowUser = originalLoadUser
+		loadUserConnections = originalLoadConnections
+	})
+	loadActiveFollowUser = func(uint) error { return nil }
+
+	for _, testCase := range []struct {
+		name    string
+		kind    followConnectionKind
+		handler gin.HandlerFunc
+	}{
+		{name: "followers", kind: followConnectionFollowers, handler: GetUserFollowers},
+		{name: "following", kind: followConnectionFollowing, handler: GetUserFollowing},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			loadUserConnections = func(viewer, target uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
+				if viewer != viewerID || target != 42 || kind != testCase.kind || limit != defaultFollowListLimit || offset != 0 {
+					t.Fatalf("loader args viewer=%d target=%d kind=%d limit=%d offset=%d", viewer, target, kind, limit, offset)
+				}
+				return userConnectionPageResponse{
+					Items:   []userConnectionResponse{{User: publicUserResponse{ID: 9, Username: "carol", DisplayName: "Carol"}, Following: true}},
+					HasMore: true,
+				}, nil
+			}
+			ctx, recorder := newFollowListControllerContext("42", &viewerID, "")
+			testCase.handler(ctx)
+			if !strings.Contains(recorder.Body.String(), `"items":[{"user":{"id":9,"username":"carol","display_name":"Carol","bio":"","avatar_url":"","created_at":"0001-01-01T00:00:00Z"},"following":true}],"has_more":true`) {
+				t.Fatalf("canonical JSON=%s", recorder.Body.String())
+			}
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var page userConnectionPageResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
+				t.Fatalf("decode page: %v", err)
+			}
+			if !page.HasMore || len(page.Items) != 1 || page.Items[0].User.ID != 9 || !page.Items[0].Following {
+				t.Fatalf("page=%#v", page)
+			}
+		})
+	}
+}
+
+func TestGetUserConnectionsPaginationAndEmptyItems(t *testing.T) {
+	viewerID := uint(7)
+	originalLoadUser := loadActiveFollowUser
+	originalLoadConnections := loadUserConnections
+	t.Cleanup(func() {
+		loadActiveFollowUser = originalLoadUser
+		loadUserConnections = originalLoadConnections
+	})
+	loadActiveFollowUser = func(uint) error { return nil }
+	loadUserConnections = func(viewer, target uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
+		if viewer != viewerID || target != viewerID || kind != followConnectionFollowing || limit != maxFollowListLimit || offset != 13 {
+			t.Fatalf("loader args viewer=%d target=%d kind=%d limit=%d offset=%d", viewer, target, kind, limit, offset)
+		}
+		return userConnectionPageResponse{}, nil
+	}
+	ctx, recorder := newFollowListControllerContext("7", &viewerID, "?limit=99&offset=13")
+	GetUserFollowing(ctx)
+	if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != `{"items":[],"has_more":false}` {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, query := range []string{"?limit=0", "?limit=no", "?offset=-1", "?offset=no"} {
+		ctx, recorder = newFollowListControllerContext("42", &viewerID, query)
+		GetUserFollowers(ctx)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("query=%s status=%d body=%s", query, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestGetUserConnectionsMapsParticipantsAndStoreFailure(t *testing.T) {
+	viewerID := uint(7)
+	originalLoadUser := loadActiveFollowUser
+	originalLoadConnections := loadUserConnections
+	t.Cleanup(func() {
+		loadActiveFollowUser = originalLoadUser
+		loadUserConnections = originalLoadConnections
+	})
+	loadUserConnections = func(uint, uint, followConnectionKind, int, int) (userConnectionPageResponse, error) {
+		return userConnectionPageResponse{}, errors.New("database exploded")
+	}
+	loadActiveFollowUser = func(id uint) error {
+		if id == viewerID {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
+	ctx, recorder := newFollowListControllerContext("42", &viewerID, "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("missing viewer status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	loadActiveFollowUser = func(id uint) error {
+		if id == 42 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
+	ctx, recorder = newFollowListControllerContext("42", &viewerID, "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing target status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	loadActiveFollowUser = func(uint) error { return nil }
+	ctx, recorder = newFollowListControllerContext("42", &viewerID, "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "database exploded") {
+		t.Fatalf("store failure status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	ctx, recorder = newFollowListControllerContext("bad", &viewerID, "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("bad target status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	ctx, recorder = newFollowListControllerContext("42", nil, "")
+	GetUserFollowers(ctx)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("missing context viewer status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

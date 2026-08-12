@@ -54,8 +54,12 @@
           Joined {{ joinedLabel }}
         </time>
         <div v-if="socialReady" class="profile-social" aria-label="Social stats">
-          <span>{{ followState?.following_count ?? 0 }} Following</span>
-          <span>{{ followState?.follower_count ?? 0 }} Followers</span>
+          <RouterLink :to="{ name: 'UserFollowing', params: { id: user.id } }">
+            {{ followState?.following_count ?? 0 }} Following
+          </RouterLink>
+          <RouterLink :to="{ name: 'UserFollowers', params: { id: user.id } }">
+            {{ followState?.follower_count ?? 0 }} Followers
+          </RouterLink>
         </div>
         <div v-else-if="followLoading" class="profile-social profile-social--loading" aria-label="Loading social stats">
           <span class="profile-social__skeleton"></span>
@@ -1494,6 +1498,18 @@ onBeforeUnmount(() => {
   color: var(--color-text-secondary);
   font-size: 13px;
   font-weight: 650;
+}
+
+.profile-social a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.profile-social a:hover,
+.profile-social a:focus-visible {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .profile-social--loading {
