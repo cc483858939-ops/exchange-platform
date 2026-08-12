@@ -10,9 +10,6 @@
         v-for="item in navigation"
         :key="item.name"
         class="left-sidebar__link left-sidebar__link--icon"
-        :class="{
-          'left-sidebar__link--wide-exchange': item.name === 'CurrencyExchange',
-        }"
         :to="{ name: item.name }"
         :aria-label="item.label"
         :title="item.label"
@@ -84,7 +81,6 @@ const currentProfileID = computed(() => {
 
 const navigation = [
   { name: 'Home', label: 'Home', icon: 'home' as const },
-  { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const },
 ];
 
 </script>
