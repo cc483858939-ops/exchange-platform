@@ -9,42 +9,62 @@
       <router-link
         v-for="item in navigation"
         :key="item.name"
-        class="left-sidebar__link"
+        class="left-sidebar__link left-sidebar__link--icon"
         :class="{
           'left-sidebar__link--wide-exchange': item.name === 'CurrencyExchange',
         }"
         :to="{ name: item.name }"
+        :aria-label="item.label"
+        :title="item.label"
       >
-        {{ item.label }}
+        <AppIcon :name="item.icon" :size="24" />
+        <span class="left-sidebar__label">{{ item.label }}</span>
       </router-link>
       <router-link
         v-if="authStore.isAuthenticated && currentProfileID !== null"
-        class="left-sidebar__link"
+        class="left-sidebar__link left-sidebar__link--icon"
         :to="{
           name: 'UserProfile',
           params: { id: String(currentProfileID) },
         }"
+        aria-label="Profile"
+        title="Profile"
       >
-        Profile
+        <AppIcon name="profile" :size="24" />
+        <span class="left-sidebar__label">Profile</span>
       </router-link>
       <router-link
         v-if="authStore.isAuthenticated"
-        class="left-sidebar__link"
+        class="left-sidebar__link left-sidebar__link--icon left-sidebar__link--primary"
         :to="{ name: 'ArticleCreate' }"
+        aria-label="Post"
+        title="Post"
       >
-        Post
+        <AppIcon name="compose" :size="22" />
+        <span class="left-sidebar__label">Post</span>
       </router-link>
     </nav>
 
     <div class="left-sidebar__account">
       <template v-if="authStore.isAuthenticated">
-        <button class="left-sidebar__link left-sidebar__logout" type="button" @click="handleLogout">
-          Log out
+        <button
+          class="left-sidebar__link left-sidebar__link--icon left-sidebar__logout"
+          type="button"
+          aria-label="Log out"
+          title="Log out"
+          @click="handleLogout"
+        >
+          <AppIcon name="logout" :size="24" />
+          <span class="left-sidebar__label">Log out</span>
         </button>
       </template>
       <template v-else>
-        <router-link class="left-sidebar__link" :to="{ name: 'Login' }">Log in</router-link>
-        <router-link class="left-sidebar__link left-sidebar__signup" :to="{ name: 'Register' }">Sign up</router-link>
+        <router-link class="left-sidebar__link" :to="{ name: 'Login' }">
+          <span class="left-sidebar__label">Log in</span>
+        </router-link>
+        <router-link class="left-sidebar__link left-sidebar__signup" :to="{ name: 'Register' }">
+          <span class="left-sidebar__label">Sign up</span>
+        </router-link>
       </template>
     </div>
   </div>
@@ -53,6 +73,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useLogout } from '../../composables/useLogout';
+import AppIcon from '../icons/AppIcon.vue';
 
 const { authStore, handleLogout } = useLogout();
 const currentProfileID = computed(() => {
@@ -62,8 +83,8 @@ const currentProfileID = computed(() => {
 });
 
 const navigation = [
-  { name: 'Home', label: 'Home' },
-  { name: 'CurrencyExchange', label: 'Exchange' },
+  { name: 'Home', label: 'Home', icon: 'home' as const },
+  { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const },
 ];
 
 </script>
@@ -109,11 +130,12 @@ const navigation = [
 .left-sidebar__link {
   display: flex;
   align-items: center;
-  min-height: 44px;
+  min-height: 50px;
+  gap: 14px;
   margin: 0 var(--space-2);
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-4);
   border: 0;
-  border-left: 3px solid transparent;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -132,9 +154,27 @@ const navigation = [
 }
 
 .left-sidebar__link.router-link-active {
-  border-left-color: var(--color-accent);
   color: var(--color-text);
   font-weight: 750;
+}
+
+.left-sidebar__link.router-link-active .app-icon {
+  color: var(--color-accent);
+}
+
+.left-sidebar__link--primary {
+  min-height: 48px;
+  margin-top: var(--space-2);
+  justify-content: center;
+  background: var(--color-accent);
+  color: var(--color-surface);
+  font-weight: 750;
+}
+
+.left-sidebar__link--primary:hover,
+.left-sidebar__link--primary:focus-visible {
+  background: var(--color-accent-hover);
+  color: var(--color-surface);
 }
 
 .left-sidebar__account {
@@ -149,13 +189,7 @@ const navigation = [
   color: var(--color-accent);
 }
 
-@media (min-width: 1280px) {
-  .left-sidebar__link--wide-exchange {
-    display: none;
-  }
-}
-
 .left-sidebar__logout {
-  width: calc(100% - var(--space-4));
+  width: auto;
 }
 </style>

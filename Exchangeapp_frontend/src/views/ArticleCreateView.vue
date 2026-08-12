@@ -7,9 +7,7 @@
         aria-label="Back"
         @click="goBack"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m15 18-6-6 6-6" />
-        </svg>
+        <AppIcon name="arrow-left" :size="20" />
         <span>Create post</span>
       </button>
 
@@ -156,11 +154,7 @@
             alt="Selected cover preview"
           />
           <div v-else class="cover-empty" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <circle cx="8.5" cy="9" r="1.5" />
-              <path d="m4 17 5-5 3 3 2-2 6 5" />
-            </svg>
+            <AppIcon name="image" :size="28" />
             <span>No cover selected</span>
           </div>
         </figure>
@@ -172,6 +166,7 @@
             :aria-disabled="isSubmitting"
             for="article-cover-input"
           >
+            <AppIcon name="image" :size="16" />
             {{ coverFile ? 'Replace cover' : 'Add cover' }}
             <input
               id="article-cover-input"
@@ -189,6 +184,7 @@
             :disabled="isSubmitting"
             @click="removeCover"
           >
+            <AppIcon name="image-off" :size="16" />
             Remove
           </button>
         </div>
@@ -220,6 +216,7 @@ import { useRouter } from 'vue-router';
 import { createArticle, uploadArticleCover } from '../services/articleService';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
+import AppIcon from '../components/icons/AppIcon.vue';
 
 type PublishPhase = 'idle' | 'uploading' | 'publishing';
 
@@ -535,14 +532,8 @@ onBeforeUnmount(revokeCoverPreview);
   background: var(--color-surface-subtle);
 }
 
-.composer-header__back svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
+.composer-header__back .app-icon {
+  flex: 0 0 auto;
 }
 
 .publish-button {
@@ -765,14 +756,8 @@ onBeforeUnmount(revokeCoverPreview);
   font-size: 13px;
 }
 
-.cover-empty svg {
-  width: 28px;
-  height: 28px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.6;
+.cover-empty .app-icon {
+  flex: 0 0 auto;
 }
 
 .cover-actions {
@@ -787,6 +772,7 @@ onBeforeUnmount(revokeCoverPreview);
   min-height: 40px;
   align-items: center;
   justify-content: center;
+  gap: var(--space-1);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-pill);
   padding: var(--space-2) var(--space-4);

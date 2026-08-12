@@ -2,9 +2,7 @@
   <main class="detail-view">
     <header class="detail-header">
       <button class="detail-header__back" type="button" aria-label="Back" @click="goBack">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m15 5-7 7 7 7" />
-        </svg>
+        <AppIcon name="arrow-left" :size="20" />
         <span>Post</span>
       </button>
     </header>
@@ -45,7 +43,8 @@
             :aria-busy="deletePending"
             @click="handleDeleteArticle"
           >
-            Delete post
+            <AppIcon name="trash" :size="16" />
+            <span>Delete post</span>
           </button>
         </div>
 
@@ -59,17 +58,13 @@
             :aria-busy="likeStateLoading || likeSubmitting"
             @click="toggleLike"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
-            </svg>
+            <AppIcon name="heart" :size="18" :filled="liked" />
             <span>{{ likeCount }}</span>
             <span class="sr-only">{{ liked ? 'Unlike' : 'Like' }}</span>
           </button>
 
           <span class="engagement-metric">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-5.2A7.5 7.5 0 1 1 20 11.5Z" />
-            </svg>
+            <AppIcon name="reply" :size="18" />
             <span>{{ commentCount }}</span>
             <span class="sr-only">Replies</span>
           </span>
@@ -139,6 +134,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
+import AppIcon from '../components/icons/AppIcon.vue';
 import CommentComposer from '../components/comments/CommentComposer.vue';
 import CommentList from '../components/comments/CommentList.vue';
 import { createArticleComment, deleteComment, getArticleComments } from '../services/commentService';
@@ -864,14 +860,8 @@ onBeforeUnmount(() => {
   color: var(--color-accent);
 }
 
-.detail-header__back svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
+.detail-header__back .app-icon {
+  flex: 0 0 auto;
 }
 
 .article-detail,
@@ -936,6 +926,9 @@ onBeforeUnmount(() => {
 }
 
 .detail-delete-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   margin-left: auto;
   border: 0;
   padding: 0;
@@ -995,15 +988,9 @@ onBeforeUnmount(() => {
   opacity: 0.6;
 }
 
-.engagement-action svg,
-.engagement-metric svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
+.engagement-action .app-icon,
+.engagement-metric .app-icon {
+  flex: 0 0 auto;
 }
 
 .detail-inline-error,

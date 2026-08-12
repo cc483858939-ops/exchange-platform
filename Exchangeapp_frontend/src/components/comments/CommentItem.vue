@@ -12,9 +12,7 @@
           title="Delete reply"
           @click.stop="emit('delete', comment.id)"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 7h14M10 11v6M14 11v6M8 7l1-3h6l1 3m-9 0 .8 13h6.4L15 7" />
-          </svg>
+          <AppIcon name="trash" :size="16" />
         </button>
       </div>
     </div>
@@ -26,6 +24,7 @@
 <script setup lang="ts">
 import type { ArticleComment } from '../../types/Comment';
 import AuthorIdentity from '../AuthorIdentity.vue';
+import AppIcon from '../icons/AppIcon.vue';
 
 const props = defineProps<{
   comment: ArticleComment;
@@ -82,14 +81,9 @@ const emit = defineEmits<{
   opacity: 0.45;
 }
 
-.comment-item__delete svg {
+.comment-item__delete .app-icon {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
 }
 
 .comment-item__content {

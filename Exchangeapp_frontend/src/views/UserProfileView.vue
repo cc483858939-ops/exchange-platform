@@ -7,9 +7,7 @@
         aria-label="Back"
         @click="goBack"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m15 18-6-6 6-6" />
-        </svg>
+        <AppIcon name="arrow-left" :size="22" />
         <span class="profile-header__copy">
           <strong>{{ headerUsername }}</strong>
           <small>Profile</small>
@@ -224,7 +222,7 @@
             :disabled="editSaving"
             @click="closeEditProfile"
           >
-            ×
+            <AppIcon name="close" :size="20" />
           </button>
         </header>
 
@@ -242,6 +240,7 @@
             <span class="profile-edit-field__label">Avatar</span>
             <div class="profile-edit-avatar__actions">
               <label class="profile-action profile-action--compact" for="profile-avatar-input">
+                <AppIcon name="camera" :size="16" />
                 Change photo
                 <input
                   id="profile-avatar-input"
@@ -259,6 +258,7 @@
                 :disabled="editSaving || !editAvatarHasValue"
                 @click="removeProfileAvatar"
               >
+                <AppIcon name="image-off" :size="16" />
                 Remove photo
               </button>
             </div>
@@ -326,6 +326,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import PostCard from '../components/feed/PostCard.vue';
+import AppIcon from '../components/icons/AppIcon.vue';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import { followUser, getUser, getUserArticles, getUserFollowState, unfollowUser, updateUserProfile, uploadProfileAvatar } from '../services/userService';
@@ -1421,15 +1422,8 @@ onBeforeUnmount(() => {
   background: var(--color-surface-subtle);
 }
 
-.profile-header__back svg {
-  width: 22px;
-  height: 22px;
+.profile-header__back .app-icon {
   flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
 }
 
 .profile-header__copy {
@@ -1946,6 +1940,10 @@ onBeforeUnmount(() => {
 .profile-edit-avatar__actions {
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.profile-edit-avatar__actions .profile-action {
+  gap: var(--space-1);
 }
 
 .profile-edit-field {

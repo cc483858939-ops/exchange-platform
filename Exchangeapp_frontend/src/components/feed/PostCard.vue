@@ -13,11 +13,7 @@
           :aria-expanded="moreOpen"
           @click.stop="toggleMore"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="5" cy="12" r="1.5" />
-            <circle cx="12" cy="12" r="1.5" />
-            <circle cx="19" cy="12" r="1.5" />
-          </svg>
+          <AppIcon name="more" :size="20" />
         </button>
         <div
           v-if="moreOpen"
@@ -33,7 +29,8 @@
             role="menuitem"
             @click.stop="copyLink"
           >
-            {{ copyActionLabel }}
+            <AppIcon name="link" :size="18" />
+            <span>{{ copyActionLabel }}</span>
           </button>
           <button
             v-if="showNotInterested"
@@ -43,7 +40,8 @@
             role="menuitem"
             @click.stop="handleNotInterested"
           >
-            Not interested
+            <AppIcon name="eye-off" :size="18" />
+            <span>Not interested</span>
           </button>
           <button
             v-if="showDelete"
@@ -55,7 +53,8 @@
             :aria-busy="deletePending"
             @click.stop="handleDeletePost"
           >
-            Delete post
+            <AppIcon name="trash" :size="18" />
+            <span>Delete post</span>
           </button>
         </div>
         <span
@@ -110,9 +109,7 @@
         :aria-label="replyLabel"
         @click="emit('articleClick', post)"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-5.2A7.5 7.5 0 1 1 20 11.5Z" />
-        </svg>
+        <AppIcon name="reply" :size="18" />
         <span>{{ post.commentCount }}</span>
       </RouterLink>
       <button
@@ -129,9 +126,11 @@
         @click.stop="handleLikeActivation"
       >
         <span class="post-card__like-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="M20.8 8.9c0 5.2-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.9A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.8 2.3Z" />
-          </svg>
+          <AppIcon
+            name="heart"
+            :size="18"
+            :filled="post.likeStatus === 'ready' && post.liked"
+          />
           <span class="post-card__like-burst" aria-hidden="true">
             <span
               v-for="particle in 6"
@@ -151,6 +150,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
+import AppIcon from '../icons/AppIcon.vue';
 
 const props = withDefaults(defineProps<{
   post: FeedPost;
@@ -610,6 +610,9 @@ onBeforeUnmount(() => {
 }
 
 .post-card__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-height: 36px;
   border: 0;
   border-radius: calc(var(--radius-sm) - 2px);
@@ -621,6 +624,10 @@ onBeforeUnmount(() => {
   font-size: 13px;
   text-align: left;
   white-space: nowrap;
+}
+
+.post-card__menu-item .app-icon {
+  flex: 0 0 18px;
 }
 
 .post-card__menu-item:hover,
@@ -694,18 +701,15 @@ onBeforeUnmount(() => {
   color: var(--post-like-color);
 }
 
-.post-card__metric svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
+.post-card__reply .app-icon,
+.post-card__like-icon .app-icon {
+  width: 18px;
+  height: 18px;
 }
 
-.post-card__like--active svg {
-  fill: currentColor;
+.post-card__more-button .app-icon {
+  width: 20px;
+  height: 20px;
 }
 
 .post-card__like-icon {

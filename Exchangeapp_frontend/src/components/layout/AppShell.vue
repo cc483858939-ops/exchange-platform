@@ -11,8 +11,14 @@
         </router-link>
         <div class="app-layout__mobile-account">
           <template v-if="authStore.isAuthenticated">
-            <router-link :to="{ name: 'ArticleCreate' }">Post</router-link>
-            <button type="button" @click="handleLogout">Log out</button>
+            <router-link :to="{ name: 'ArticleCreate' }" aria-label="Post" title="Post">
+              <AppIcon name="compose" :size="20" />
+              <span>Post</span>
+            </router-link>
+            <button type="button" aria-label="Log out" title="Log out" @click="handleLogout">
+              <AppIcon name="logout" :size="20" />
+              <span>Log out</span>
+            </button>
           </template>
           <template v-else>
             <router-link :to="{ name: 'Login' }">Log in</router-link>
@@ -21,8 +27,14 @@
         </div>
       </div>
       <nav class="app-layout__mobile-links" aria-label="Mobile navigation">
-        <router-link :to="{ name: 'Home' }">Home</router-link>
-        <router-link :to="{ name: 'CurrencyExchange' }">Exchange</router-link>
+        <router-link :to="{ name: 'Home' }" aria-label="Home" title="Home">
+          <AppIcon name="home" :size="20" />
+          <span>Home</span>
+        </router-link>
+        <router-link :to="{ name: 'CurrencyExchange' }" aria-label="Exchange" title="Exchange">
+          <AppIcon name="exchange" :size="20" />
+          <span>Exchange</span>
+        </router-link>
       </nav>
     </header>
 
@@ -38,6 +50,7 @@
 
 <script setup lang="ts">
 import { useLogout } from '../../composables/useLogout';
+import AppIcon from '../icons/AppIcon.vue';
 import LeftSidebar from './LeftSidebar.vue';
 import RightRail from './RightRail.vue';
 
@@ -102,17 +115,30 @@ const { authStore, handleLogout } = useLogout();
 
   .app-layout__left :deep(.left-sidebar__link) {
     justify-content: center;
-    min-height: 44px;
+    min-height: 48px;
     margin-inline: var(--space-1);
     padding-inline: var(--space-1);
-    border-left: 0;
-    border-bottom: 2px solid transparent;
     font-size: 12px;
     text-align: center;
   }
 
-  .app-layout__left :deep(.left-sidebar__link.router-link-active) {
-    border-bottom-color: var(--color-accent);
+  .app-layout__left :deep(.left-sidebar__link--icon) {
+    gap: 0;
+  }
+
+  .app-layout__left :deep(.left-sidebar__link--icon .left-sidebar__label) {
+    display: none;
+  }
+
+  .app-layout__left :deep(.left-sidebar__link--primary) {
+    width: 48px;
+    min-height: 48px;
+    margin-inline: auto;
+    padding-inline: 0;
+  }
+
+  .app-layout__left :deep(.left-sidebar__link--primary .app-icon) {
+    color: var(--color-surface);
   }
 }
 
@@ -169,11 +195,14 @@ const { authStore, handleLogout } = useLogout();
 
   .app-layout__mobile-account {
     min-width: 0;
-    gap: var(--space-3);
+    gap: 5px;
   }
 
   .app-layout__mobile-account a,
   .app-layout__mobile-account button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     min-height: 32px;
     border: 0;
     padding: 0;
@@ -197,10 +226,12 @@ const { authStore, handleLogout } = useLogout();
   }
 
   .app-layout__mobile-links a {
-    display: grid;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     min-width: 0;
     min-height: 34px;
-    place-items: center;
     overflow: hidden;
     border-bottom: 2px solid transparent;
     color: var(--color-text-secondary);
@@ -221,6 +252,23 @@ const { authStore, handleLogout } = useLogout();
     min-height: calc(100vh - 102px);
     overflow: clip;
     border-inline: 0;
+  }
+}
+
+@media (max-width: 360px) {
+  .app-layout__mobile-account {
+    gap: 4px;
+  }
+
+  .app-layout__mobile-account a,
+  .app-layout__mobile-account button {
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .app-layout__mobile-links a {
+    gap: 4px;
+    font-size: 11px;
   }
 }
 </style>
