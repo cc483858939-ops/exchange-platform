@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -114,6 +115,109 @@ func newProfilePatchUnitContext(targetID, body string, viewerID any) (*gin.Conte
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/users/"+targetID, strings.NewReader(body))
 	ctx.Params = gin.Params{{Key: "id", Value: targetID}}
+	if viewerID != nil {
+		ctx.Set("user_id", viewerID)
+	}
+	return ctx, recorder
+}
+
+func TestSearchUsersContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalActive := loadActiveProfileViewer
+	originalSearch := searchUsers
+	t.Cleanup(func() { loadActiveProfileViewer = originalActive; searchUsers = originalSearch })
+	loadActiveProfileViewer = func(id uint) (models.User, error) { return models.User{Model: gorm.Model{ID: id}}, nil }
+
+	var receivedViewer uint
+	var receivedQuery string
+	var receivedLimit, receivedOffset int
+	searchUsers = func(viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
+		receivedViewer, receivedQuery, receivedLimit, receivedOffset = viewerID, query, limit, offset
+		return userConnectionPageResponse{Items: []userConnectionResponse{{User: publicUserResponse{ID: 7, Username: "alice", DisplayName: "Alice"}, Following: true}}, HasMore: true}, nil
+	}
+	ctx, recorder := newUserSearchUnitContext("?q=%20@Alice%20", uint(42))
+	SearchUsers(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if receivedViewer != 42 || receivedQuery != "Alice" || receivedLimit != 20 || receivedOffset != 0 {
+		t.Fatalf("loader args=%d %q %d %d", receivedViewer, receivedQuery, receivedLimit, receivedOffset)
+	}
+	var page userConnectionPageResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if !page.HasMore || len(page.Items) != 1 || page.Items[0].User.Username != "alice" || !page.Items[0].Following {
+		t.Fatalf("page=%#v", page)
+	}
+
+	ctx, recorder = newUserSearchUnitContext("?q=alice&limit=99&offset=4", uint(42))
+	SearchUsers(ctx)
+	if recorder.Code != http.StatusOK || receivedLimit != 50 || receivedOffset != 4 {
+		t.Fatalf("clamp status=%d args=%d,%d", recorder.Code, receivedLimit, receivedOffset)
+	}
+
+	for _, raw := range []string{"", "?q=", "?q=%20%20", "?q=@", "?q=alice&limit=0", "?q=alice&limit=nope", "?q=alice&offset=-1", "?q=alice&offset=nope"} {
+		ctx, recorder = newUserSearchUnitContext(raw, uint(42))
+		SearchUsers(ctx)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("query %q status=%d", raw, recorder.Code)
+		}
+	}
+	ctx, recorder = newUserSearchUnitContext("?q="+strings.Repeat("?", maxUserSearchQueryRunes+1), uint(42))
+	SearchUsers(ctx)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("overlong status=%d", recorder.Code)
+	}
+}
+
+func TestSearchUsersAuthenticationAndStoreErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalActive := loadActiveProfileViewer
+	originalSearch := searchUsers
+	t.Cleanup(func() { loadActiveProfileViewer = originalActive; searchUsers = originalSearch })
+
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		t.Fatal("active lookup should not run without viewer")
+		return models.User{}, nil
+	}
+	ctx, recorder := newUserSearchUnitContext("?q=alice", nil)
+	SearchUsers(ctx)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("missing viewer status=%d", recorder.Code)
+	}
+
+	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
+	ctx, recorder = newUserSearchUnitContext("?q=alice", uint(9))
+	SearchUsers(ctx)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("inactive viewer status=%d", recorder.Code)
+	}
+
+	loadActiveProfileViewer = func(id uint) (models.User, error) { return models.User{Model: gorm.Model{ID: id}}, nil }
+	searchUsers = func(uint, string, int, int) (userConnectionPageResponse, error) {
+		return userConnectionPageResponse{}, errors.New("database exploded")
+	}
+	ctx, recorder = newUserSearchUnitContext("?q=alice", uint(9))
+	SearchUsers(ctx)
+	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "internal server error") || strings.Contains(recorder.Body.String(), "exploded") {
+		t.Fatalf("store error status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	searchUsers = func(uint, string, int, int) (userConnectionPageResponse, error) {
+		return userConnectionPageResponse{}, nil
+	}
+	ctx, recorder = newUserSearchUnitContext("?q=alice", uint(9))
+	SearchUsers(ctx)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "\"items\":[]") || !strings.Contains(recorder.Body.String(), "\"has_more\":false") {
+		t.Fatalf("empty page status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func newUserSearchUnitContext(rawQuery string, viewerID any) (*gin.Context, *httptest.ResponseRecorder) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/users/search"+rawQuery, nil)
 	if viewerID != nil {
 		ctx.Set("user_id", viewerID)
 	}

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -311,4 +313,121 @@ func newUserProfilePatchIntegrationContextOptionalViewer(targetID, body string, 
 		ctx.Set("user_id", *viewerID)
 	}
 	return ctx, recorder
+}
+
+func TestUserSearchIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
+		t.Fatal(err)
+	}
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+
+	token := strings.ReplaceAll(uuid.NewString(), "-", "")
+	query := "alice" + token
+	viewer := models.User{Username: "search-viewer-" + token, Password: "secret", DisplayName: "Viewer"}
+	fixtures := []*models.User{
+		&viewer,
+		{Username: query, Password: "secret", DisplayName: "not exact"},
+		{Username: "display-exact-" + token, Password: "secret", DisplayName: query},
+		{Username: query + "-username-prefix", Password: "secret", DisplayName: "prefix"},
+		{Username: "display-prefix-" + token, Password: "secret", DisplayName: query + " display"},
+		{Username: "contains-" + query + "-user", Password: "secret", DisplayName: "contains"},
+		{Username: "display-contains-" + token, Password: "secret", DisplayName: "X " + query + " X"},
+		{Username: "deleted-" + query, Password: "secret", DisplayName: query},
+		{Username: "literal%" + token, Password: "secret", DisplayName: "literal percent"},
+	}
+	for _, user := range fixtures {
+		if err := db.Create(user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleted := fixtures[7]
+	if err := db.Delete(deleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	followed := fixtures[2]
+	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: followed.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ids := make([]uint, 0, len(fixtures))
+		for _, user := range fixtures {
+			ids = append(ids, user.ID)
+		}
+		db.Where("follower_id = ? OR following_id = ?", viewer.ID, viewer.ID).Delete(&models.UserFollow{})
+		db.Unscoped().Where("id IN ?", ids).Delete(&models.User{})
+	})
+
+	request := func(q string, limit, offset int) userConnectionPageResponse {
+		path := "/api/users/search?q=" + url.QueryEscape(q) + "&limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(offset)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, path, nil)
+		ctx.Set("user_id", viewer.ID)
+		SearchUsers(ctx)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("search %q status=%d body=%s", q, recorder.Code, recorder.Body.String())
+		}
+		var page userConnectionPageResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	page := request(query, 20, 0)
+	expected := []uint{fixtures[1].ID, fixtures[2].ID, fixtures[3].ID, fixtures[4].ID, fixtures[5].ID, fixtures[6].ID}
+	if len(page.Items) != len(expected) || page.HasMore {
+		t.Fatalf("page=%#v", page)
+	}
+	for index, id := range expected {
+		if page.Items[index].User.ID != id {
+			t.Fatalf("rank %d got=%d want=%d", index, page.Items[index].User.ID, id)
+		}
+	}
+	if !page.Items[1].Following || page.Items[0].Following {
+		t.Fatalf("following state=%#v", page.Items)
+	}
+	for _, item := range page.Items {
+		if item.User.ID == deleted.ID {
+			t.Fatal("soft-deleted search result returned")
+		}
+	}
+
+	upper := request(strings.ToUpper(query), 20, 0)
+	if len(upper.Items) != len(page.Items) {
+		t.Fatalf("case insensitive len=%d want=%d", len(upper.Items), len(page.Items))
+	}
+	atPage := request("@"+query, 20, 0)
+	if len(atPage.Items) != len(page.Items) || atPage.Items[0].User.ID != expected[0] {
+		t.Fatalf("leading at page=%#v", atPage)
+	}
+	wildcard := request("%", 20, 0)
+	if len(wildcard.Items) == 0 {
+		t.Fatal("literal percent did not match controlled user")
+	}
+	for _, item := range wildcard.Items {
+		if !strings.Contains(item.User.Username, "%") && !strings.Contains(item.User.DisplayName, "%") {
+			t.Fatalf("wildcard matched unrelated user=%#v", item.User)
+		}
+	}
+
+	first := request(query, 2, 0)
+	second := request(query, 2, 2)
+	last := request(query, 2, 4)
+	if !first.HasMore || !second.HasMore || last.HasMore || len(first.Items) != 2 || len(second.Items) != 2 || len(last.Items) != 2 {
+		t.Fatalf("pagination first=%#v second=%#v last=%#v", first, second, last)
+	}
+	self := request(viewer.Username, 20, 0)
+	if len(self.Items) != 1 || self.Items[0].User.ID != viewer.ID || self.Items[0].Following {
+		t.Fatalf("self=%#v", self)
+	}
 }

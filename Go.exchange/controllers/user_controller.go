@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -26,6 +27,22 @@ const (
 	maxProfileDisplayRunes  = 50
 	maxProfileBioRunes      = 160
 )
+
+const (
+	defaultUserSearchLimit  = 20
+	maxUserSearchLimit      = 50
+	maxUserSearchQueryRunes = 50
+)
+
+type userSearchQueryRow struct {
+	UserID         uint      `gorm:"column:user_id"`
+	Username       string    `gorm:"column:username"`
+	DisplayName    string    `gorm:"column:display_name"`
+	Bio            string    `gorm:"column:bio"`
+	AvatarURL      string    `gorm:"column:avatar_url"`
+	UserCreatedAt  time.Time `gorm:"column:user_created_at"`
+	ViewerFollowID *uint     `gorm:"column:viewer_follow_id"`
+}
 
 var loadActiveProfileViewer = func(userID uint) (models.User, error) {
 	if userID == 0 || global.Db == nil {
@@ -38,6 +55,8 @@ var loadActiveProfileViewer = func(userID uint) (models.User, error) {
 	}
 	return user, nil
 }
+
+var searchUsers = searchUsersFromDB
 
 func requireActiveProfileViewerID(ctx *gin.Context) (uint, bool) {
 	rawViewerID, exists := ctx.Get("user_id")
@@ -92,6 +111,94 @@ func parseUserArticlePagination(ctx *gin.Context) (int, int, error) {
 		offset = parsed
 	}
 	return limit, offset, nil
+
+}
+func normalizeUserSearchQuery(raw string) (string, error) {
+	query := strings.TrimSpace(raw)
+	if strings.HasPrefix(query, "@") {
+		query = strings.TrimSpace(strings.TrimPrefix(query, "@"))
+	}
+	if query == "" {
+		return "", errors.New("search query is required")
+	}
+	if utf8.RuneCountInString(query) > maxUserSearchQueryRunes {
+		return "", errors.New("search query is too long")
+	}
+	return query, nil
+}
+
+func parseUserSearchPagination(ctx *gin.Context) (int, int, error) {
+	limit := defaultUserSearchLimit
+	if raw, exists := ctx.GetQuery("limit"); exists {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			return 0, 0, errors.New("invalid limit")
+		}
+		limit = parsed
+	}
+	if limit > maxUserSearchLimit {
+		limit = maxUserSearchLimit
+	}
+
+	offset := 0
+	if raw, exists := ctx.GetQuery("offset"); exists {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			return 0, 0, errors.New("invalid offset")
+		}
+		offset = parsed
+	}
+	return limit, offset, nil
+}
+
+func escapeUserSearchLike(value string) string {
+	return strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(value)
+}
+
+func searchUsersFromDB(viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
+	if global.Db == nil {
+		return userConnectionPageResponse{}, errors.New("database is not initialized")
+	}
+
+	escapedQuery := escapeUserSearchLike(query)
+	prefixPattern := escapedQuery + "%"
+	containsPattern := "%" + escapedQuery + "%"
+	rankSQL := `CASE
+		WHEN LOWER(candidate.username) = LOWER(?) THEN 0
+		WHEN LOWER(candidate.display_name) = LOWER(?) THEN 1
+		WHEN candidate.username ILIKE ? ESCAPE '\' THEN 2
+		WHEN candidate.display_name ILIKE ? ESCAPE '\' THEN 3
+		WHEN candidate.username ILIKE ? ESCAPE '\' THEN 4
+		WHEN candidate.display_name ILIKE ? ESCAPE '\' THEN 5
+		ELSE 6
+	END`
+	queryDB := global.Db.Table("users AS candidate").
+		Select(`candidate.id AS user_id, candidate.username AS username, candidate.display_name AS display_name, candidate.bio AS bio, candidate.avatar_url AS avatar_url, candidate.created_at AS user_created_at, viewer_follow.id AS viewer_follow_id`).
+		Joins("LEFT JOIN user_follows AS viewer_follow ON viewer_follow.follower_id = ? AND viewer_follow.following_id = candidate.id", viewerID).
+		Where("candidate.deleted_at IS NULL").
+		Where("(candidate.username ILIKE ? ESCAPE '\\' OR candidate.display_name ILIKE ? ESCAPE '\\')", containsPattern, containsPattern).
+		Order(clause.Expr{SQL: rankSQL, Vars: []any{query, query, prefixPattern, prefixPattern, containsPattern, containsPattern}}).
+		Order("LOWER(candidate.username) ASC").
+		Order("candidate.id ASC").
+		Limit(limit + 1).
+		Offset(offset)
+
+	var rows []userSearchQueryRow
+	if err := queryDB.Scan(&rows).Error; err != nil {
+		return userConnectionPageResponse{}, err
+	}
+	page := userConnectionPageResponse{Items: make([]userConnectionResponse, 0, len(rows))}
+	if len(rows) > limit {
+		page.HasMore = true
+		rows = rows[:limit]
+	}
+	for _, row := range rows {
+		page.Items = append(page.Items, userConnectionResponse{
+			User:      publicUserResponse{ID: row.UserID, Username: row.Username, DisplayName: row.DisplayName, Bio: row.Bio, AvatarURL: row.AvatarURL, CreatedAt: row.UserCreatedAt},
+			Following: row.UserID != viewerID && row.ViewerFollowID != nil,
+		})
+	}
+	return page, nil
 }
 
 func writeUserAPIError(ctx *gin.Context, err error) {
@@ -275,6 +382,38 @@ func GetUserByID(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, user)
+}
+
+func SearchUsers(ctx *gin.Context) {
+	viewerID, ok := requireActiveProfileViewerID(ctx)
+	if !ok {
+		return
+	}
+
+	rawQuery, exists := ctx.GetQuery("q")
+	if !exists {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "search query is required"})
+		return
+	}
+	query, err := normalizeUserSearchQuery(rawQuery)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	limit, offset, err := parseUserSearchPagination(ctx)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	page, err := searchUsers(viewerID, query, limit, offset)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+	if page.Items == nil {
+		page.Items = []userConnectionResponse{}
+	}
+	ctx.JSON(http.StatusOK, page)
 }
 
 func GetUserArticles(ctx *gin.Context) {

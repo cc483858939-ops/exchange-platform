@@ -45,6 +45,11 @@
       />
     </template>
 
+    <template v-else-if="props.name === 'search'">
+      <circle cx="10.75" cy="10.75" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="m15 15 4.25 4.25" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </template>
+
     <template v-else-if="props.name === 'profile'">
       <path
         v-if="props.filled"
@@ -258,6 +263,7 @@
 type AppIconName =
   | 'home'
   | 'exchange'
+  | 'search'
   | 'profile'
   | 'compose'
   | 'logout'

@@ -26,10 +26,14 @@
           </template>
         </div>
       </div>
-      <nav class="app-layout__mobile-links" aria-label="Mobile navigation">
+      <nav class="app-layout__mobile-links" :class="{ 'app-layout__mobile-links--authenticated': authStore.isAuthenticated }" aria-label="Mobile navigation">
         <router-link :to="{ name: 'Home' }" aria-label="Home" title="Home">
           <AppIcon name="home" :size="20" />
           <span>Home</span>
+        </router-link>
+        <router-link v-if="authStore.isAuthenticated" :to="{ name: 'UserSearch' }" aria-label="Search" title="Search">
+          <AppIcon name="search" :size="20" />
+          <span>Search</span>
         </router-link>
         <router-link :to="{ name: 'CurrencyExchange' }" aria-label="Exchange" title="Exchange">
           <AppIcon name="exchange" :size="20" />
@@ -223,6 +227,10 @@ const { authStore, handleLogout } = useLogout();
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-1);
+  }
+
+  .app-layout__mobile-links--authenticated {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .app-layout__mobile-links a {

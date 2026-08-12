@@ -22,6 +22,12 @@ export type UserConnectionQuery = {
 	offset?: number;
 };
 
+export type UserSearchQuery = {
+	q: string;
+	limit?: number;
+	offset?: number;
+};
+
 
 export async function getUser(userId: number | string): Promise<PublicUser> {
   const id = normalizeResourceID(userId, 'user');
@@ -81,6 +87,11 @@ export async function getUserFollowers(userId: number | string, options: UserCon
 export async function getUserFollowing(userId: number | string, options: UserConnectionQuery = {}): Promise<UserConnectionPage> {
 	const id = normalizeResourceID(userId, 'user');
 	const response = await apiClient.get<UserConnectionPage>(`/users/${id}/following`, { params: options });
+	return response.data;
+}
+
+export async function searchUsers(options: UserSearchQuery): Promise<UserConnectionPage> {
+	const response = await apiClient.get<UserConnectionPage>('/users/search', { params: options });
 	return response.data;
 }
 

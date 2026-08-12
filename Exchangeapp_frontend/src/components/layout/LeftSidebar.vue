@@ -7,7 +7,7 @@
 
     <nav class="left-sidebar__nav" aria-label="Main navigation">
       <router-link
-        v-for="item in navigation"
+        v-for="item in visibleNavigation"
         :key="item.name"
         class="left-sidebar__link left-sidebar__link--icon"
         :class="{
@@ -83,9 +83,12 @@ const currentProfileID = computed(() => {
 });
 
 const navigation = [
-  { name: 'Home', label: 'Home', icon: 'home' as const, compactOnly: false },
-  { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, compactOnly: true },
+  { name: 'Home', label: 'Home', icon: 'home' as const, compactOnly: false, authOnly: false },
+  { name: 'UserSearch', label: 'Search', icon: 'search' as const, compactOnly: false, authOnly: true },
+  { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, compactOnly: true, authOnly: false },
 ];
+
+const visibleNavigation = computed(() => navigation.filter((item) => !item.authOnly || authStore.isAuthenticated));
 
 </script>
 
