@@ -264,6 +264,60 @@ func TestHydrateArticleResponseAuthorsRejectsMissingAuthor(t *testing.T) {
 	}
 }
 
+func TestHydrateArticleDetailResponseReturnsHydratedCopy(t *testing.T) {
+	originalLoader := loadPublicAuthorsByIDs
+	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
+	loadPublicAuthorsByIDs = func(ids []uint) (map[uint]publicAuthorResponse, error) {
+		if len(ids) != 1 || ids[0] != 7 {
+			t.Fatalf("unexpected author IDs: %v", ids)
+		}
+		return map[uint]publicAuthorResponse{
+			7: {ID: 7, Username: "alice", DisplayName: "New Name", AvatarURL: "new.jpg"},
+		}, nil
+	}
+
+	input := articleResponse{
+		ID:           42,
+		Title:        "cached article",
+		Content:      "body",
+		LikeCount:    11,
+		CommentCount: 3,
+		Author:       publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old Name", AvatarURL: "old.jpg"},
+	}
+
+	hydrated, err := hydrateArticleDetailResponse(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hydrated.Author.ID != 7 || hydrated.Author.Username != "alice" || hydrated.Author.DisplayName != "New Name" || hydrated.Author.AvatarURL != "new.jpg" {
+		t.Fatalf("returned author was not hydrated: %#v", hydrated.Author)
+	}
+	if hydrated.ID != 42 || hydrated.Title != "cached article" || hydrated.Content != "body" || hydrated.LikeCount != 11 || hydrated.CommentCount != 3 {
+		t.Fatalf("non-author fields changed during detail hydration: %#v", hydrated)
+	}
+}
+
+func TestHydrateArticleDetailResponsePropagatesMissingAuthorError(t *testing.T) {
+	originalLoader := loadPublicAuthorsByIDs
+	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
+	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
+		return map[uint]publicAuthorResponse{}, nil
+	}
+
+	input := articleResponse{
+		ID:     42,
+		Title:  "cached article",
+		Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old Name", AvatarURL: "old.jpg"},
+	}
+	hydrated, err := hydrateArticleDetailResponse(input)
+	if err == nil {
+		t.Fatal("expected missing author error")
+	}
+	if hydrated.Author.DisplayName == "Old Name" || hydrated.Author.AvatarURL == "old.jpg" {
+		t.Fatalf("returned stale author after hydration error: %#v", hydrated.Author)
+	}
+}
+
 // TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading 测试缓存命中场景：
 // 如果缓存中已经有数据，则直接返回，不再触发回源逻辑。
 func TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading(t *testing.T) {

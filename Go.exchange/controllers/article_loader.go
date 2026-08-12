@@ -36,6 +36,14 @@ func loadArticleList() ([]articleResponse, error) {
 	return responses, nil
 }
 
+func hydrateArticleDetailResponse(response articleResponse) (articleResponse, error) {
+	responses := []articleResponse{response}
+	if err := hydrateArticleResponseAuthors(responses); err != nil {
+		return articleResponse{}, err
+	}
+	return responses[0], nil
+}
+
 func loadArticleDetail(id string) (articleResponse, error) {
 	response, err := loadJSONCache(articleDetailCacheKey(id), func() (articleResponse, error) {
 		if global.Db == nil {
@@ -53,8 +61,5 @@ func loadArticleDetail(id string) (articleResponse, error) {
 	if err != nil {
 		return articleResponse{}, err
 	}
-	if err := hydrateArticleResponseAuthors([]articleResponse{response}); err != nil {
-		return articleResponse{}, err
-	}
-	return response, nil
+	return hydrateArticleDetailResponse(response)
 }
