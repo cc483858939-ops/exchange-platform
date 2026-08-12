@@ -3,6 +3,7 @@ import { ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import type { Article } from '../types/Article';
 import type { FeedPost } from '../types/Feed';
+import type { PublicAuthor } from '../types/User';
 import { articleToFeedPost } from '../utils/feedPost';
 
 const maxRecentlyPublishedPosts = 5;
@@ -89,6 +90,14 @@ export const useFeedStore = defineStore('feed', () => {
     return normalizedArticleID !== null && deletedArticleIDs.value.has(normalizedArticleID);
   };
 
+  const replaceAuthorIdentity = (author: PublicAuthor) => {
+    recentlyPublishedPosts.value = recentlyPublishedPosts.value.map((post) => (
+      post.author.id === author.id
+        ? { ...post, author }
+        : post
+    ));
+  };
+
   watch(
     () => authStore.currentIdentity?.id,
     (nextViewerID) => {
@@ -106,6 +115,7 @@ export const useFeedStore = defineStore('feed', () => {
     registerPublishedArticle,
     markArticleDeleted,
     isArticleDeleted,
+    replaceAuthorIdentity,
     clearRecentlyPublishedPosts,
   };
 });

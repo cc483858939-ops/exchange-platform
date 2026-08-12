@@ -79,7 +79,7 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 
 	users := []models.User{
 		{Username: "timeline-viewer-" + uuid.NewString(), Password: "secret"},
-		{Username: "timeline-followed-a-" + uuid.NewString(), Password: "secret"},
+		{Username: "timeline-followed-a-" + uuid.NewString(), Password: "secret", DisplayName: "Followed A", AvatarURL: "a.jpg"},
 		{Username: "timeline-followed-b-" + uuid.NewString(), Password: "secret"},
 		{Username: "timeline-unfollowed-" + uuid.NewString(), Password: "secret"},
 		{Username: "timeline-soft-followed-" + uuid.NewString(), Password: "secret"},
@@ -154,7 +154,7 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		t.Fatalf("page1 order=%v", followingTimelineArticleIDs(page1.Items))
 	}
 	first := page1.Items[0]
-	if first.Title != "" || first.Content != "Canonical following body" || first.LikeCount != 0 || first.CommentCount != 0 || first.Author.ID != followedA.ID || first.Author.Username != followedA.Username {
+	if first.Title != "" || first.Content != "Canonical following body" || first.LikeCount != 0 || first.CommentCount != 0 || first.Author.ID != followedA.ID || first.Author.Username != followedA.Username || first.Author.DisplayName != "Followed A" || first.Author.AvatarURL != "a.jpg" {
 		t.Fatalf("content-only response=%#v", first)
 	}
 

@@ -284,7 +284,7 @@ func recommendRulesV2Articles(profile userInterestProfile, candidates []models.A
 		if _, ok := profile.InteractedArticleIDs[article.ID]; ok {
 			continue
 		}
-		result = append(result, recommendedArticleResponse{ID: article.ID, Title: article.Title, Content: article.Content, Preview: article.Preview, Summary: article.Summary, CoverImageURL: article.CoverImageURL, Tags: recommendationTags(article.Tags), Category: article.Category, LikeCount: article.LikeCount, CommentCount: article.CommentCount, CreatedAt: article.CreatedAt, Author: publicAuthorResponse{ID: article.Author.ID, Username: article.Author.Username}, Score: scoreRulesV2Article(profile, article, now, cfg)})
+		result = append(result, recommendedArticleResponse{ID: article.ID, Title: article.Title, Content: article.Content, Preview: article.Preview, Summary: article.Summary, CoverImageURL: article.CoverImageURL, Tags: recommendationTags(article.Tags), Category: article.Category, LikeCount: article.LikeCount, CommentCount: article.CommentCount, CreatedAt: article.CreatedAt, Author: publicAuthorFromUser(article.Author), Score: scoreRulesV2Article(profile, article, now, cfg)})
 	}
 	sort.SliceStable(result, func(i, j int) bool {
 		if result[i].Score != result[j].Score {

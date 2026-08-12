@@ -333,7 +333,7 @@ import { deleteArticle } from '../services/articleService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
 import type { Article } from '../types/Article';
 import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
-import type { PublicUser } from '../types/User';
+import type { PublicAuthor, PublicUser } from '../types/User';
 import type { UpdateUserProfilePayload, UserFollowState } from '../services/userService';
 import {
   applyFeedLikeStateUpdate,
@@ -824,6 +824,17 @@ const saveProfile = async () => {
       return;
     }
     user.value = updatedUser;
+    const updatedAuthor: PublicAuthor = {
+      id: updatedUser.id,
+      username: updatedUser.username,
+      display_name: updatedUser.display_name,
+      avatar_url: updatedUser.avatar_url,
+    };
+    articles.value = articles.value.map((post) => (
+      post.author.id === updatedAuthor.id ? { ...post, author: updatedAuthor } : post
+    ));
+    feedStore.replaceAuthorIdentity(updatedAuthor);
+
     avatarLoadFailed.value = false;
     editSaving.value = false;
     clearEditDraft();

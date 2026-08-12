@@ -5,16 +5,24 @@
     :aria-label="`View ${displayName}'s profile`"
     @click.stop
   >
-    <span class="author-avatar" aria-hidden="true">{{ initial }}</span>
+    <span class="author-avatar" aria-hidden="true">
+      <img
+        v-if="avatarURL && !avatarLoadFailed"
+        :src="avatarURL"
+        alt=""
+        @error="avatarLoadFailed = true"
+      />
+      <span v-else>{{ initial }}</span>
+    </span>
     <span class="author-copy">
       <span class="author-name">{{ displayName }}</span>
-      <span class="author-meta">@{{ displayName }}<span v-if="relativeTime"> · {{ relativeTime }}</span></span>
+      <span class="author-meta">@{{ username }}<span v-if="relativeTime"> · {{ relativeTime }}</span></span>
     </span>
   </RouterLink>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { PublicAuthor } from '../types/User';
 import { formatRelativeTime } from '../utils/time';
 
@@ -23,9 +31,16 @@ const props = defineProps<{
   createdAt?: string;
 }>();
 
-const displayName = computed(() => props.author.username.trim() || '?');
-const initial = computed(() => Array.from(props.author.username.trim())[0]?.toUpperCase() || '?');
+const username = computed(() => props.author.username.trim() || '?');
+const displayName = computed(() => props.author.display_name.trim() || username.value);
+const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperCase() || '?');
+const avatarURL = computed(() => props.author.avatar_url.trim());
+const avatarLoadFailed = ref(false);
 const relativeTime = computed(() => formatRelativeTime(props.createdAt));
+
+watch(() => [props.author.id, props.author.avatar_url], () => {
+  avatarLoadFailed.value = false;
+});
 </script>
 
 <style scoped>
@@ -52,10 +67,17 @@ const relativeTime = computed(() => formatRelativeTime(props.createdAt));
   place-items: center;
   border: 1px solid var(--color-border-strong);
   border-radius: 50%;
+  overflow: hidden;
   background: var(--color-surface-subtle);
   color: var(--color-text-secondary);
   font-size: 13px;
   font-weight: 800;
+}
+
+.author-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .author-copy {

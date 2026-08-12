@@ -36,10 +36,10 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
-import type { PublicAuthor } from '../../types/User';
+import type { AuthIdentity } from '../../utils/authIdentity';
 
 const props = withDefaults(defineProps<{
-  author?: PublicAuthor | null;
+  author?: AuthIdentity | null;
   disabled?: boolean;
   submitting?: boolean;
 }>(), {

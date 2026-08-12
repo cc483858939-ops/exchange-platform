@@ -17,7 +17,7 @@ func visibleArticleScope(query *gorm.DB, now time.Time) *gorm.DB {
 }
 
 func loadArticleList() ([]articleResponse, error) {
-	return loadJSONCache(articleListCacheKey, func() ([]articleResponse, error) {
+	responses, err := loadJSONCache(articleListCacheKey, func() ([]articleResponse, error) {
 		if global.Db == nil {
 			return nil, errors.New("database is not initialized")
 		}
@@ -27,10 +27,17 @@ func loadArticleList() ([]articleResponse, error) {
 			Order("created_at DESC, id DESC")
 		return loadArticleResponses(query)
 	})
+	if err != nil {
+		return nil, err
+	}
+	if err := hydrateArticleResponseAuthors(responses); err != nil {
+		return nil, err
+	}
+	return responses, nil
 }
 
 func loadArticleDetail(id string) (articleResponse, error) {
-	return loadJSONCache(articleDetailCacheKey(id), func() (articleResponse, error) {
+	response, err := loadJSONCache(articleDetailCacheKey(id), func() (articleResponse, error) {
 		if global.Db == nil {
 			return articleResponse{}, errors.New("database is not initialized")
 		}
@@ -43,4 +50,11 @@ func loadArticleDetail(id string) (articleResponse, error) {
 		}
 		return newArticleResponse(article)
 	})
+	if err != nil {
+		return articleResponse{}, err
+	}
+	if err := hydrateArticleResponseAuthors([]articleResponse{response}); err != nil {
+		return articleResponse{}, err
+	}
+	return response, nil
 }

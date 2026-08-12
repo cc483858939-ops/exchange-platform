@@ -51,7 +51,7 @@ func newCommentIntegrationFixture(t *testing.T, db *gorm.DB) commentIntegrationF
 	t.Helper()
 	fixture := commentIntegrationFixture{
 		Author:    models.User{Username: "comment-author-" + uuid.NewString(), Password: "test"},
-		Commenter: models.User{Username: "commenter-" + uuid.NewString(), Password: "test"},
+		Commenter: models.User{Username: "commenter-" + uuid.NewString(), Password: "test", DisplayName: "Old Name", AvatarURL: "old.jpg"},
 		Other:     models.User{Username: "commenter-other-" + uuid.NewString(), Password: "test"},
 	}
 	if err := db.Create(&fixture.Author).Error; err != nil {
@@ -140,7 +140,7 @@ func TestCreateArticleCommentIntegration(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ArticleID != fixture.Article.ID || response.Content != "hello" || response.Author.ID != fixture.Commenter.ID || response.Author.Username != fixture.Commenter.Username {
+	if response.ArticleID != fixture.Article.ID || response.Content != "hello" || response.Author.ID != fixture.Commenter.ID || response.Author.Username != fixture.Commenter.Username || response.Author.DisplayName != "Old Name" || response.Author.AvatarURL != "old.jpg" {
 		t.Fatalf("response=%#v", response)
 	}
 	var comment models.Comment
@@ -480,5 +480,51 @@ func TestCommentCursorStableAfterNewComment(t *testing.T) {
 		if item.ID == inserted.ID {
 			t.Fatalf("newer comment %d leaked into cursor continuation", inserted.ID)
 		}
+	}
+}
+func TestCommentAuthorUsesCurrentUserIdentityIntegration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openCommentIntegrationDatabase(t)
+	fixture := newCommentIntegrationFixture(t, db)
+	historical := createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "historical", time.Now().UTC())
+
+	if err := db.Model(&fixture.Commenter).Updates(map[string]interface{}{
+		"display_name": "New Name",
+		"avatar_url":   "new.jpg",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, recorder := newCommentIntegrationContext(http.MethodGet, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetArticleComments(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("historical comments status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var comments commentListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &comments); err != nil {
+		t.Fatal(err)
+	}
+	var historicalResponse *commentResponse
+	for index := range comments.Items {
+		if comments.Items[index].ID == historical.ID {
+			historicalResponse = &comments.Items[index]
+			break
+		}
+	}
+	if historicalResponse == nil || historicalResponse.Author.DisplayName != "New Name" || historicalResponse.Author.AvatarURL != "new.jpg" {
+		t.Fatalf("historical comment identity=%#v", historicalResponse)
+	}
+
+	ctx, recorder = newCommentIntegrationContext(http.MethodPost, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), `{"content":"new comment"}`, fixture.Commenter.ID)
+	CreateArticleComment(ctx)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("new comment status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var created commentResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Author.DisplayName != "New Name" || created.Author.AvatarURL != "new.jpg" {
+		t.Fatalf("new comment identity=%#v", created.Author)
 	}
 }

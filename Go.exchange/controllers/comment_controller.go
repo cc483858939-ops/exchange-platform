@@ -86,7 +86,12 @@ func CreateArticleComment(ctx *gin.Context) {
 		return
 	}
 	invalidateCommentArticleCaches(articleID)
-	comment.Author = models.User{Model: gorm.Model{ID: author.ID}, Username: author.Username}
+	comment.Author = models.User{
+		Model:       gorm.Model{ID: author.ID},
+		Username:    author.Username,
+		DisplayName: author.DisplayName,
+		AvatarURL:   author.AvatarURL,
+	}
 
 	response, err := newCommentResponse(comment)
 	if err != nil {
@@ -138,7 +143,7 @@ func GetArticleComments(ctx *gin.Context) {
 	comments := make([]models.Comment, 0, limit+1)
 	if err := query.
 		Preload("Author", func(tx *gorm.DB) *gorm.DB {
-			return tx.Select("id, username")
+			return tx.Select("id, username, display_name, avatar_url")
 		}).
 		Order("created_at DESC, id DESC").
 		Limit(limit + 1).

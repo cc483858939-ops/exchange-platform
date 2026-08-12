@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"Go.exchange/global"
@@ -11,8 +12,10 @@ import (
 )
 
 type publicAuthorResponse struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
+	ID          uint   `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	AvatarURL   string `json:"avatar_url"`
 }
 
 type publicUserResponse struct {
@@ -47,11 +50,20 @@ type articleResponse struct {
 	Author           publicAuthorResponse `json:"author"`
 }
 
+func publicAuthorFromUser(user models.User) publicAuthorResponse {
+	return publicAuthorResponse{
+		ID:          user.ID,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+		AvatarURL:   user.AvatarURL,
+	}
+}
+
 func publicAuthorFromArticle(article models.Article) (publicAuthorResponse, error) {
 	if article.AuthorID == 0 || article.Author.ID == 0 || article.Author.ID != article.AuthorID {
 		return publicAuthorResponse{}, errors.New("article author is missing or invalid")
 	}
-	return publicAuthorResponse{ID: article.Author.ID, Username: article.Author.Username}, nil
+	return publicAuthorFromUser(article.Author), nil
 }
 
 func newArticleResponse(article models.Article) (articleResponse, error) {
@@ -88,10 +100,73 @@ func loadPublicAuthorByID(id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{}, errors.New("database is not initialized")
 	}
 	var user models.User
-	if err := global.Db.Select("id, username").First(&user, id).Error; err != nil {
+	if err := global.Db.Select("id, username, display_name, avatar_url").First(&user, id).Error; err != nil {
 		return publicAuthorResponse{}, err
 	}
-	return publicAuthorResponse{ID: user.ID, Username: user.Username}, nil
+	return publicAuthorFromUser(user), nil
+}
+
+var loadPublicAuthorsByIDs = loadPublicAuthorsByIDsFromDB
+
+func loadPublicAuthorsByIDsFromDB(ids []uint) (map[uint]publicAuthorResponse, error) {
+	uniqueIDs := make([]uint, 0, len(ids))
+	seen := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	authors := make(map[uint]publicAuthorResponse, len(uniqueIDs))
+	if len(uniqueIDs) == 0 {
+		return authors, nil
+	}
+	if global.Db == nil {
+		return nil, errors.New("database is not initialized")
+	}
+
+	var users []models.User
+	if err := global.Db.Select("id, username, display_name, avatar_url").Where("id IN ?", uniqueIDs).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	for _, user := range users {
+		authors[user.ID] = publicAuthorFromUser(user)
+	}
+	return authors, nil
+}
+
+func hydrateArticleResponseAuthors(responses []articleResponse) error {
+	if len(responses) == 0 {
+		return nil
+	}
+	authorIDs := make([]uint, 0, len(responses))
+	seenIDs := make(map[uint]struct{}, len(responses))
+	for _, response := range responses {
+		if response.Author.ID == 0 {
+			return errors.New("article author is missing or invalid")
+		}
+		if _, exists := seenIDs[response.Author.ID]; exists {
+			continue
+		}
+		seenIDs[response.Author.ID] = struct{}{}
+		authorIDs = append(authorIDs, response.Author.ID)
+	}
+	authors, err := loadPublicAuthorsByIDs(authorIDs)
+	if err != nil {
+		return err
+	}
+	for index := range responses {
+		author, ok := authors[responses[index].Author.ID]
+		if !ok {
+			return fmt.Errorf("article author %d could not be found", responses[index].Author.ID)
+		}
+		responses[index].Author = author
+	}
+	return nil
 }
 
 func loadPublicUserByID(id uint) (publicUserResponse, error) {
@@ -107,7 +182,7 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 
 func preloadArticleAuthor(query *gorm.DB) *gorm.DB {
 	return query.Preload("Author", func(tx *gorm.DB) *gorm.DB {
-		return tx.Select("id, username")
+		return tx.Select("id, username, display_name, avatar_url")
 	})
 }
 

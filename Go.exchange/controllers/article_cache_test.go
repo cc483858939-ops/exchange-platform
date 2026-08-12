@@ -173,7 +173,7 @@ func TestLoadJSONCacheWithStorePreservesArticleAuthorDTO(t *testing.T) {
 			Title:        "cached article",
 			LikeCount:    11,
 			CommentCount: 3,
-			Author:       publicAuthorResponse{ID: 7, Username: "alice"},
+			Author:       publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "/api/files/profile-avatars/7/avatar.jpg"},
 		}, nil
 	}
 
@@ -188,8 +188,79 @@ func TestLoadJSONCacheWithStorePreservesArticleAuthorDTO(t *testing.T) {
 	if loads != 1 {
 		t.Fatalf("loader calls=%d want 1", loads)
 	}
-	if miss.Author != hit.Author || hit.Author.ID != 7 || hit.Author.Username != "alice" || miss.LikeCount != 11 || hit.LikeCount != 11 || miss.CommentCount != 3 || hit.CommentCount != 3 {
+	if miss.Author != hit.Author || hit.Author.ID != 7 || hit.Author.Username != "alice" || hit.Author.DisplayName != "Alice Chen" || hit.Author.AvatarURL != "/api/files/profile-avatars/7/avatar.jpg" || miss.LikeCount != 11 || hit.LikeCount != 11 || miss.CommentCount != 3 || hit.CommentCount != 3 {
 		t.Fatalf("author was not preserved across cache hit: miss=%+v hit=%+v", miss.Author, hit.Author)
+	}
+}
+
+func TestHydrateArticleResponseAuthorsDeduplicatesAndPreservesArticleFields(t *testing.T) {
+	originalLoader := loadPublicAuthorsByIDs
+	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
+	var requested []uint
+	loadPublicAuthorsByIDs = func(ids []uint) (map[uint]publicAuthorResponse, error) {
+		requested = append([]uint(nil), ids...)
+		return map[uint]publicAuthorResponse{
+			7: {ID: 7, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "new.jpg"},
+			8: {ID: 8, Username: "bob", DisplayName: "Bob", AvatarURL: "bob.jpg"},
+		}, nil
+	}
+
+	responses := []articleResponse{
+		{ID: 101, Title: "first", Content: "one", LikeCount: 4, CommentCount: 2, Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old", AvatarURL: "old.jpg"}},
+		{ID: 102, Title: "second", Content: "two", LikeCount: 5, CommentCount: 3, Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old", AvatarURL: "old.jpg"}},
+		{ID: 103, Title: "third", Content: "three", LikeCount: 6, CommentCount: 4, Author: publicAuthorResponse{ID: 8, Username: "bob", DisplayName: "Old Bob", AvatarURL: "old-bob.jpg"}},
+	}
+
+	if err := hydrateArticleResponseAuthors(responses); err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) != 2 || requested[0] != 7 || requested[1] != 8 {
+		t.Fatalf("hydration should deduplicate IDs for the bulk loader: %v", requested)
+	}
+	if responses[0].Author.DisplayName != "Alice Chen" || responses[0].Author.AvatarURL != "new.jpg" || responses[1].Author != responses[0].Author {
+		t.Fatalf("current author identity was not applied: %#v", responses)
+	}
+	if responses[0].ID != 101 || responses[0].Title != "first" || responses[0].Content != "one" || responses[0].LikeCount != 4 || responses[0].CommentCount != 2 || responses[2].ID != 103 {
+		t.Fatalf("non-author article fields changed: %#v", responses)
+	}
+}
+
+func TestHydrateArticleResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
+	originalLoader := loadPublicAuthorsByIDs
+	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
+	var requested []uint
+	loadPublicAuthorsByIDs = func(ids []uint) (map[uint]publicAuthorResponse, error) {
+		requested = append([]uint(nil), ids...)
+		return map[uint]publicAuthorResponse{
+			7: {ID: 7, Username: "alice"},
+			8: {ID: 8, Username: "bob"},
+		}, nil
+	}
+	responses := []articleResponse{
+		{Author: publicAuthorResponse{ID: 7}},
+		{Author: publicAuthorResponse{ID: 7}},
+		{Author: publicAuthorResponse{ID: 8}},
+	}
+	if err := hydrateArticleResponseAuthors(responses); err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) != 2 || requested[0] != 7 || requested[1] != 8 {
+		t.Fatalf("unexpected hydration IDs: %v", requested)
+	}
+}
+
+func TestHydrateArticleResponseAuthorsRejectsMissingAuthor(t *testing.T) {
+	originalLoader := loadPublicAuthorsByIDs
+	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
+	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
+		return map[uint]publicAuthorResponse{}, nil
+	}
+	responses := []articleResponse{{Author: publicAuthorResponse{ID: 7, Username: "stale"}}}
+	if err := hydrateArticleResponseAuthors(responses); err == nil {
+		t.Fatal("expected missing author hydration to fail")
+	}
+	if responses[0].Author.Username != "stale" {
+		t.Fatalf("missing author should not silently use a placeholder: %#v", responses[0].Author)
 	}
 }
 

@@ -24,7 +24,7 @@ func publicAuthorFromComment(comment models.Comment) (publicAuthorResponse, erro
 	if comment.UserID == 0 || comment.Author.ID == 0 || comment.Author.ID != comment.UserID {
 		return publicAuthorResponse{}, errors.New("comment author is missing or invalid")
 	}
-	return publicAuthorResponse{ID: comment.Author.ID, Username: comment.Author.Username}, nil
+	return publicAuthorFromUser(comment.Author), nil
 }
 
 func newCommentResponse(comment models.Comment) (commentResponse, error) {

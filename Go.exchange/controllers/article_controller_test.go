@@ -17,7 +17,7 @@ func stubCreateArticleAuthor(t *testing.T) {
 	original := loadArticleAuthorForCreate
 	t.Cleanup(func() { loadArticleAuthorForCreate = original })
 	loadArticleAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
-		return publicAuthorResponse{ID: id, Username: "alice"}, nil
+		return publicAuthorResponse{ID: id, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "/api/files/profile-avatars/7/avatar.jpg"}, nil
 	}
 }
 
@@ -224,12 +224,12 @@ func TestCreateArticleIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
 	if recorder.Code != http.StatusCreated || persisted.AuthorID != 7 {
 		t.Fatalf("status=%d author_id=%d body=%s", recorder.Code, persisted.AuthorID, recorder.Body.String())
 	}
-	for _, forbidden := range []string{`"AuthorID"`, `"Password"`, `"DeletedAt"`, `"refresh_token"`} {
+	for _, forbidden := range []string{`"AuthorID"`, `"Password"`, `"DeletedAt"`, `"Bio"`, `"bio"`, `"refresh_token"`} {
 		if bytes.Contains(recorder.Body.Bytes(), []byte(forbidden)) {
 			t.Fatalf("response leaked %s: %s", forbidden, recorder.Body.String())
 		}
 	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"author":{"id":7,"username":"alice"}`)) {
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"author":{"id":7,"username":"alice","display_name":"Alice Chen","avatar_url":"/api/files/profile-avatars/7/avatar.jpg"}`)) {
 		t.Fatalf("missing public author: %s", recorder.Body.String())
 	}
 }

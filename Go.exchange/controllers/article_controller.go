@@ -143,7 +143,12 @@ func CreateArticle(ctx *gin.Context) {
 		global.Db.Logger.Error(ctx, "failed to invalidate article list cache", err)
 	}
 
-	article.Author = models.User{Model: gorm.Model{ID: author.ID}, Username: author.Username}
+	article.Author = models.User{
+		Model:       gorm.Model{ID: author.ID},
+		Username:    author.Username,
+		DisplayName: author.DisplayName,
+		AvatarURL:   author.AvatarURL,
+	}
 	response, err := newArticleResponse(article)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

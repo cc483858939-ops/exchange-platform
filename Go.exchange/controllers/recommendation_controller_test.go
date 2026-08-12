@@ -291,7 +291,7 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 	if len(payload) != 2 {
 		t.Fatalf("expected 2 recommendations, got %d", len(payload))
 	}
-	if payload[0].Content != "content" {
+	if payload[0].Content != "content" || payload[0].Author.DisplayName != "Author Name" || payload[0].Author.AvatarURL != "author.jpg" {
 		t.Fatalf("expected canonical content in recommendation payload, got %q", payload[0].Content)
 	}
 	if payload[0].ID != 3 {
@@ -372,7 +372,7 @@ func recommendationTestArticle(id uint, createdAt time.Time, category string, ta
 	return models.Article{
 		Model:     gorm.Model{ID: id, CreatedAt: createdAt},
 		AuthorID:  1,
-		Author:    models.User{Model: gorm.Model{ID: 1}, Username: "author"},
+		Author:    models.User{Model: gorm.Model{ID: 1}, Username: "author", DisplayName: "Author Name", AvatarURL: "author.jpg"},
 		Title:     "article",
 		Content:   "content",
 		Preview:   "preview",

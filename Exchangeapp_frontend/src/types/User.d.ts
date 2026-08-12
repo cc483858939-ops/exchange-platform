@@ -1,14 +1,12 @@
 export interface PublicAuthor {
   id: number;
   username: string;
+  display_name: string;
+  avatar_url: string;
 }
 
-export interface PublicUser {
-  id: number;
-  username: string;
-  display_name: string;
+export interface PublicUser extends PublicAuthor {
   bio: string;
-  avatar_url: string;
   created_at: string;
 }
 
