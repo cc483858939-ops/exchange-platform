@@ -23,6 +23,27 @@ export async function getUserArticles(
   return response.data;
 }
 
+export type UpdateUserProfilePayload = {
+  display_name?: string;
+  bio?: string;
+  avatar_url?: string;
+};
+
+export async function updateUserProfile(
+  userId: number | string,
+  payload: UpdateUserProfilePayload,
+): Promise<PublicUser> {
+  const id = normalizeResourceID(userId, 'user');
+  const response = await apiClient.patch<PublicUser>('/users/' + id, payload);
+  return response.data;
+}
+
+export async function uploadProfileAvatar(file: File): Promise<string> {
+  const data = new FormData();
+  data.append('image', file);
+  const response = await apiClient.post<{ avatar_url: string }>('/uploads/profile-avatar', data);
+  return response.data.avatar_url;
+}
 export type UserFollowState = {
   user_id: number;
   following: boolean;

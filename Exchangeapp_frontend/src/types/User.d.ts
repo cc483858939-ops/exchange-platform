@@ -6,6 +6,9 @@ export interface PublicAuthor {
 export interface PublicUser {
   id: number;
   username: string;
+  display_name: string;
+  bio: string;
+  avatar_url: string;
   created_at: string;
 }
 

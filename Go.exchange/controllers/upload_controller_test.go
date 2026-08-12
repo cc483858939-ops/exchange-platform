@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -11,7 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"Go.exchange/models"
+
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func TestUploadArticleCoverStoresImageAndReturnsURL(t *testing.T) {
@@ -101,4 +105,158 @@ func multipartImageRequestBody(t *testing.T, filename string, payload []byte) (*
 		t.Fatalf("close writer: %v", err)
 	}
 	return body, writer.FormDataContentType()
+}
+func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalLoader := loadActiveProfileViewer
+	originalPut := putArticleCoverObject
+	t.Cleanup(func() {
+		loadActiveProfileViewer = originalLoader
+		putArticleCoverObject = originalPut
+	})
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: 42}}, nil
+	}
+
+	cases := []struct {
+		name     string
+		filename string
+		payload  []byte
+		ext      string
+		mime     string
+	}{
+		{name: "jpeg", filename: "avatar.jpg", payload: []byte{0xff, 0xd8, 0xff, 0xe0, 'j', 'p', 'e', 'g'}, ext: ".jpg", mime: "image/jpeg"},
+		{name: "png", filename: "avatar.png", payload: append([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, []byte("png")...), ext: ".png", mime: "image/png"},
+		{name: "webp", filename: "avatar.webp", payload: append([]byte{'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'}, []byte("webp")...), ext: ".webp", mime: "image/webp"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var gotKey, gotMime string
+			var gotSize int64
+			var gotPayload []byte
+			putArticleCoverObject = func(_ context.Context, key string, reader io.Reader, size int64, mime string) error {
+				gotKey = key
+				gotMime = mime
+				gotSize = size
+				var err error
+				gotPayload, err = io.ReadAll(reader)
+				return err
+			}
+			body, contentType := multipartImageRequestBody(t, testCase.filename, testCase.payload)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/profile-avatar", body)
+			ctx.Request.Header.Set("Content-Type", contentType)
+			ctx.Set("user_id", uint(42))
+
+			UploadProfileAvatar(ctx)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if !strings.HasPrefix(gotKey, profileAvatarObjectPrefix+"42/") || !strings.HasSuffix(gotKey, testCase.ext) {
+				t.Fatalf("unexpected object key: %s", gotKey)
+			}
+			if gotMime != testCase.mime || gotSize != int64(len(testCase.payload)) || !bytes.Equal(gotPayload, testCase.payload) {
+				t.Fatalf("unexpected stored object mime=%s size=%d payload=%v", gotMime, gotSize, gotPayload)
+			}
+			var response map[string]string
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(response["avatar_url"], "/api/files/"+profileAvatarObjectPrefix+"42/") {
+				t.Fatalf("unexpected avatar URL: %s", response["avatar_url"])
+			}
+		})
+	}
+}
+
+func TestUploadProfileAvatarRejectsInvalidInput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalLoader := loadActiveProfileViewer
+	originalPut := putArticleCoverObject
+	t.Cleanup(func() {
+		loadActiveProfileViewer = originalLoader
+		putArticleCoverObject = originalPut
+	})
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: 42}}, nil
+	}
+	putArticleCoverObject = func(context.Context, string, io.Reader, int64, string) error {
+		t.Fatal("storage should not be called for invalid input")
+		return nil
+	}
+
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{name: "empty", payload: nil},
+		{name: "unsupported", payload: []byte("not an image")},
+		{name: "too large", payload: make([]byte, maxProfileAvatarImageSize+1)},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			body, contentType := multipartImageRequestBody(t, "avatar.bin", testCase.payload)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/profile-avatar", body)
+			ctx.Request.Header.Set("Content-Type", contentType)
+			ctx.Set("user_id", uint(42))
+			UploadProfileAvatar(ctx)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/profile-avatar", nil)
+	ctx.Set("user_id", uint(42))
+	UploadProfileAvatar(ctx)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("missing image status=%d", recorder.Code)
+	}
+}
+func TestUploadProfileAvatarRequiresActiveViewer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalLoader := loadActiveProfileViewer
+	t.Cleanup(func() { loadActiveProfileViewer = originalLoader })
+
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		t.Fatal("active lookup should not run without context identity")
+		return models.User{}, nil
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/profile-avatar", nil)
+	UploadProfileAvatar(ctx)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("missing identity status=%d", recorder.Code)
+	}
+
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "missing viewer row", err: gorm.ErrRecordNotFound, want: http.StatusUnauthorized},
+		{name: "unexpected lookup failure", err: errors.New("db unavailable"), want: http.StatusInternalServerError},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			loadActiveProfileViewer = func(uint) (models.User, error) {
+				return models.User{}, testCase.err
+			}
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/profile-avatar", nil)
+			ctx.Set("user_id", uint(42))
+			UploadProfileAvatar(ctx)
+			if recorder.Code != testCase.want {
+				t.Fatalf("status=%d want=%d body=%s", recorder.Code, testCase.want, recorder.Body.String())
+			}
+		})
+	}
 }

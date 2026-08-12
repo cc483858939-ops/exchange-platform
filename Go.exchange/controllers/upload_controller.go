@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	articleCoverObjectPrefix = "article-covers/"
-	maxArticleCoverImageSize = 5 << 20
+	articleCoverObjectPrefix  = "article-covers/"
+	maxArticleCoverImageSize  = 5 << 20
+	profileAvatarObjectPrefix = "profile-avatars/"
+	maxProfileAvatarImageSize = 2 << 20
 )
 
 type articleCoverUploadResponse struct {
@@ -85,9 +87,53 @@ func UploadArticleCover(ctx *gin.Context) {
 	})
 }
 
+func UploadProfileAvatar(ctx *gin.Context) {
+	viewerID, ok := requireActiveProfileViewerID(ctx)
+	if !ok {
+		return
+	}
+
+	fileHeader, err := ctx.FormFile("image")
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		return
+	}
+	if fileHeader.Size <= 0 || fileHeader.Size > maxProfileAvatarImageSize {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 2MB"})
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to open image file"})
+		return
+	}
+	defer file.Close()
+
+	sniff := make([]byte, 512)
+	n, err := file.Read(sniff)
+	if err != nil && !errors.Is(err, io.EOF) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
+		return
+	}
+	contentType, extension, ok := detectArticleCoverImageType(sniff[:n])
+	if !ok {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
+		return
+	}
+
+	objectKey := fmt.Sprintf("%s%d/%s%s", profileAvatarObjectPrefix, viewerID, uuid.NewString(), extension)
+	reader := io.MultiReader(bytes.NewReader(sniff[:n]), file)
+	if err := putArticleCoverObject(ctx.Request.Context(), objectKey, reader, fileHeader.Size, contentType); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"avatar_url": articleFileURL(objectKey)})
+}
 func GetFile(ctx *gin.Context) {
 	objectKey := strings.TrimPrefix(ctx.Param("objectKey"), "/")
-	if !isAllowedArticleObjectKey(objectKey) {
+	if !isAllowedObjectKey(objectKey) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid file path"})
 		return
 	}
@@ -128,8 +174,13 @@ func articleFileURL(objectKey string) string {
 	return fmt.Sprintf("/api/files/%s", objectKey)
 }
 
+func isAllowedObjectKey(objectKey string) bool {
+	if strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n") {
+		return false
+	}
+	return strings.HasPrefix(objectKey, articleCoverObjectPrefix) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
+}
+
 func isAllowedArticleObjectKey(objectKey string) bool {
-	return strings.HasPrefix(objectKey, articleCoverObjectPrefix) &&
-		!strings.Contains(objectKey, "..") &&
-		!strings.ContainsAny(objectKey, "\r\n")
+	return strings.HasPrefix(objectKey, articleCoverObjectPrefix) && isAllowedObjectKey(objectKey)
 }

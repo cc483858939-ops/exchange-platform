@@ -16,9 +16,12 @@ type publicAuthorResponse struct {
 }
 
 type publicUserResponse struct {
-	ID        uint      `json:"id"`
-	Username  string    `json:"username"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          uint      `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	Bio         string    `json:"bio"`
+	AvatarURL   string    `json:"avatar_url"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // articleResponse preserves existing article field names while omitting internal identity and soft-delete fields.
@@ -96,10 +99,10 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 		return publicUserResponse{}, errors.New("database is not initialized")
 	}
 	var user models.User
-	if err := global.Db.Select("id, username, created_at").First(&user, id).Error; err != nil {
+	if err := global.Db.Select("id, username, display_name, bio, avatar_url, created_at").First(&user, id).Error; err != nil {
 		return publicUserResponse{}, err
 	}
-	return publicUserResponse{ID: user.ID, Username: user.Username, CreatedAt: user.CreatedAt}, nil
+	return publicUserResponse{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Bio: user.Bio, AvatarURL: user.AvatarURL, CreatedAt: user.CreatedAt}, nil
 }
 
 func preloadArticleAuthor(query *gorm.DB) *gorm.DB {
