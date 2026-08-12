@@ -1,9 +1,17 @@
 <template>
   <main class="connections-view">
     <header class="connections-header">
-      <RouterLink v-if="profile" class="connections-header__identity" :to="{ name: 'UserProfile', params: { id: profile.id } }">
-        <strong>{{ displayName }}</strong>
-        <span>@{{ profile.username }}</span>
+      <RouterLink
+        v-if="profile"
+        class="connections-header__identity"
+        :to="{ name: 'UserProfile', params: { id: profile.id } }"
+        :aria-label="`Back to ${displayName}'s profile`"
+      >
+        <AppIcon name="arrow-left" :size="22" />
+        <span class="connections-header__copy">
+          <strong>{{ displayName }}</strong>
+          <span>@{{ profile.username }}</span>
+        </span>
       </RouterLink>
       <div v-else-if="profileLoading" class="connections-header__skeleton" aria-label="Loading profile"></div>
       <p v-else class="connections-header__error">{{ profileError || 'Profile could not be loaded.' }}</p>
@@ -46,6 +54,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
 import { followUser, getUser, getUserFollowers, getUserFollowing, unfollowUser, type UserConnectionItem, type UserConnectionPage } from '../services/userService';
 import { useAuthStore } from '../store/auth';
@@ -220,10 +229,13 @@ onBeforeUnmount(() => { invalidatePage(); });
 <style scoped>
 .connections-view { min-height: 100vh; background: var(--color-surface); color: var(--color-text); }
 .connections-header { padding: var(--space-5); border-bottom: 1px solid var(--color-border); }
-.connections-header__identity { display: grid; gap: 2px; color: inherit; text-decoration: none; }
+.connections-header__identity { display: flex; align-items: center; gap: var(--space-3); min-width: 0; color: inherit; text-decoration: none; }
+.connections-header__identity:focus-visible { outline: 2px solid var(--color-accent); outline-offset: var(--space-2); border-radius: var(--radius-sm); }
 .connections-header__identity:hover strong, .connections-header__identity:focus-visible strong { color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px; }
-.connections-header__identity strong { font-size: 20px; line-height: 1.25; }
-.connections-header__identity span { color: var(--color-text-secondary); font-size: 14px; }
+.connections-header__copy { display: grid; min-width: 0; gap: 2px; }
+.connections-header__copy strong, .connections-header__copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connections-header__copy strong { font-size: 20px; line-height: 1.25; }
+.connections-header__copy span { color: var(--color-text-secondary); font-size: 14px; }
 .connections-header__skeleton { width: 160px; height: 42px; border-radius: var(--radius-sm); background: var(--color-surface-subtle); }
 .connections-header__error { margin: 0; color: var(--color-danger); }
 .connections-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--color-border); }
@@ -236,6 +248,5 @@ onBeforeUnmount(() => { invalidatePage(); });
 .connections-more { min-height: 64px; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--color-border); }
 .connections-button { min-height: 36px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-4); background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
 .connections-button:hover, .connections-button:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
-@media (max-width: 799px) { .connections-header { padding-top: calc(var(--space-5) + var(--app-mobile-nav-offset, 0px)); } }
 @media (max-width: 380px) { .connections-header { padding-inline: var(--space-4); } .connections-tabs a { font-size: 13px; } }
 </style>

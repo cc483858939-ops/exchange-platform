@@ -286,7 +286,7 @@ func TestFollowConnectionListsIntegration(t *testing.T) {
 	ctx, recorder := newFollowConnectionListIntegrationContext(alice.ID, bob.ID, "followers", "")
 	GetUserFollowers(ctx)
 	followers := decodeFollowConnectionListPage(t, recorder)
-	if followers.HasMore || len(followers.Items) != 2 || followers.Items[0].User.ID != alice.ID || followers.Items[0].Following || followers.Items[1].User.ID != charlie.ID || followers.Items[1].Following {
+	if followers.HasMore || len(followers.Items) != 2 || followers.Items[0].User.ID != alice.ID || followers.Items[0].Following || followers.Items[1].User.ID != charlie.ID || !followers.Items[1].Following {
 		t.Fatalf("followers=%#v", followers)
 	}
 	ctx, recorder = newFollowConnectionListIntegrationContext(alice.ID, bob.ID, "following", "?limit=2")
