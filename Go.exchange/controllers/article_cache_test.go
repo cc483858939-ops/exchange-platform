@@ -1,13 +1,22 @@
 package controllers
 
 import (
+	"context"
+	"encoding/json"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"Go.exchange/global"
+	"Go.exchange/models"
+
 	"github.com/go-redis/redis/v7"
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // cacheTestPayload 定义测试用的数据结构
@@ -264,58 +273,181 @@ func TestHydrateArticleResponseAuthorsRejectsMissingAuthor(t *testing.T) {
 	}
 }
 
-func TestHydrateArticleDetailResponseReturnsHydratedCopy(t *testing.T) {
-	originalLoader := loadPublicAuthorsByIDs
-	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
-	loadPublicAuthorsByIDs = func(ids []uint) (map[uint]publicAuthorResponse, error) {
-		if len(ids) != 1 || ids[0] != 7 {
-			t.Fatalf("unexpected author IDs: %v", ids)
+func TestLoadArticleDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *testing.T) {
+	originalCacheLoader := loadArticleDetailCache
+	originalAuthorLoader := loadPublicAuthorsByIDs
+	originalDB := global.Db
+	t.Cleanup(func() {
+		loadArticleDetailCache = originalCacheLoader
+		loadPublicAuthorsByIDs = originalAuthorLoader
+		global.Db = originalDB
+	})
+
+	global.Db = nil
+	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
+		t.Fatal("cache hit must not hydrate article authors")
+		return nil, nil
+	}
+	cached := articleResponse{
+		ID:     123,
+		Title:  "cached article",
+		Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Cached Alice", AvatarURL: "cached.jpg"},
+	}
+	loadArticleDetailCache = func(key string, loader func() (articleResponse, error)) (articleResponse, error) {
+		if key != articleDetailCacheKey("123") {
+			t.Fatalf("unexpected article detail cache key: %q", key)
 		}
-		return map[uint]publicAuthorResponse{
-			7: {ID: 7, Username: "alice", DisplayName: "New Name", AvatarURL: "new.jpg"},
-		}, nil
+		payload, err := json.Marshal(cached)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loadJSONCacheWithStore(
+			key,
+			articleCacheTTL,
+			func(string) (string, error) { return string(payload), nil },
+			func(string, []byte, time.Duration) error { return nil },
+			loader,
+		)
 	}
 
-	input := articleResponse{
-		ID:           42,
-		Title:        "cached article",
-		Content:      "body",
-		LikeCount:    11,
-		CommentCount: 3,
-		Author:       publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old Name", AvatarURL: "old.jpg"},
-	}
-
-	hydrated, err := hydrateArticleDetailResponse(input)
+	returned, err := loadArticleDetail("123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hydrated.Author.ID != 7 || hydrated.Author.Username != "alice" || hydrated.Author.DisplayName != "New Name" || hydrated.Author.AvatarURL != "new.jpg" {
-		t.Fatalf("returned author was not hydrated: %#v", hydrated.Author)
-	}
-	if hydrated.ID != 42 || hydrated.Title != "cached article" || hydrated.Content != "body" || hydrated.LikeCount != 11 || hydrated.CommentCount != 3 {
-		t.Fatalf("non-author fields changed during detail hydration: %#v", hydrated)
+	if returned.Author != cached.Author {
+		t.Fatalf("cached author changed: got=%+v want=%+v", returned.Author, cached.Author)
 	}
 }
 
-func TestHydrateArticleDetailResponsePropagatesMissingAuthorError(t *testing.T) {
-	originalLoader := loadPublicAuthorsByIDs
-	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
-	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
-		return map[uint]publicAuthorResponse{}, nil
+func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testing.T) {
+	db := openCommentIntegrationDatabase(t)
+	fixture := newCommentIntegrationFixture(t, db)
+	fixture.Author.DisplayName = "Database Alice"
+	fixture.Author.AvatarURL = "database.jpg"
+	if err := db.Model(&models.User{}).Where("id = ?", fixture.Author.ID).Updates(map[string]any{
+		"display_name": fixture.Author.DisplayName,
+		"avatar_url":   fixture.Author.AvatarURL,
+	}).Error; err != nil {
+		t.Fatal(err)
 	}
 
-	input := articleResponse{
-		ID:     42,
-		Title:  "cached article",
-		Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old Name", AvatarURL: "old.jpg"},
+	queryLogger := &articleDetailSQLLogger{Interface: logger.Default}
+	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
+	originalCacheLoader := loadArticleDetailCache
+	t.Cleanup(func() { loadArticleDetailCache = originalCacheLoader })
+
+	articleCacheGroup = singleflight.Group{}
+	cache := map[string]string{}
+	var writes int
+	loadArticleDetailCache = func(key string, loader func() (articleResponse, error)) (articleResponse, error) {
+		return loadJSONCacheWithStore(
+			key,
+			articleCacheTTL,
+			func(key string) (string, error) {
+				value, ok := cache[key]
+				if !ok {
+					return "", redis.Nil
+				}
+				return value, nil
+			},
+			func(key string, payload []byte, _ time.Duration) error {
+				writes++
+				cache[key] = string(payload)
+				return nil
+			},
+			loader,
+		)
 	}
-	hydrated, err := hydrateArticleDetailResponse(input)
-	if err == nil {
-		t.Fatal("expected missing author error")
+
+	id := strconv.FormatUint(uint64(fixture.Article.ID), 10)
+	first, err := loadArticleDetail(id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if hydrated.Author.DisplayName == "Old Name" || hydrated.Author.AvatarURL == "old.jpg" {
-		t.Fatalf("returned stale author after hydration error: %#v", hydrated.Author)
+	second, err := loadArticleDetail(id)
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	wantAuthor := publicAuthorResponse{
+		ID:          fixture.Author.ID,
+		Username:    fixture.Author.Username,
+		DisplayName: fixture.Author.DisplayName,
+		AvatarURL:   fixture.Author.AvatarURL,
+	}
+	if first.Author != wantAuthor || second.Author != wantAuthor {
+		t.Fatalf("author summary was not preserved: first=%+v second=%+v want=%+v", first.Author, second.Author, wantAuthor)
+	}
+	if second.ID != first.ID || second.Title != first.Title || second.Content != first.Content {
+		t.Fatalf("cache hit changed the article response: first=%+v second=%+v", first, second)
+	}
+	if writes != 1 {
+		t.Fatalf("cache writes=%d want 1", writes)
+	}
+
+	cacheKey := articleDetailCacheKey(id)
+	payload, ok := cache[cacheKey]
+	if !ok {
+		t.Fatalf("cache key %q was not written", cacheKey)
+	}
+	expectedPayload, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload != string(expectedPayload) {
+		t.Fatalf("cache payload was not the complete article response: got=%s want=%s", payload, expectedPayload)
+	}
+	var cachedResponse articleResponse
+	if err := json.Unmarshal([]byte(payload), &cachedResponse); err != nil {
+		t.Fatal(err)
+	}
+	if cachedResponse.Author != wantAuthor {
+		t.Fatalf("cached AuthorSummary=%+v want=%+v", cachedResponse.Author, wantAuthor)
+	}
+
+	queries := queryLogger.snapshot()
+	articleQueries := 0
+	userQueries := 0
+	selectedAuthorQuery := false
+	for _, query := range queries {
+		normalized := strings.Join(strings.Fields(strings.ToLower(query)), "")
+		normalized = strings.ReplaceAll(normalized, string(rune(34)), "")
+		if strings.Contains(normalized, "fromarticles") {
+			articleQueries++
+		}
+		if strings.Contains(normalized, "fromusers") {
+			userQueries++
+			selectedAuthorQuery = selectedAuthorQuery || strings.Contains(normalized, "selectid,username,display_name,avatar_urlfromusers")
+		}
+	}
+	if articleQueries != 1 || userQueries != 1 {
+		t.Fatalf("expected one article query and one author preload query, got articles=%d users=%d queries=%v", articleQueries, userQueries, queries)
+	}
+	if !selectedAuthorQuery {
+		t.Fatalf("author preload selected more than the public summary fields: %v", queries)
+	}
+}
+
+type articleDetailSQLLogger struct {
+	logger.Interface
+	mu      sync.Mutex
+	queries []string
+}
+
+func (l *articleDetailSQLLogger) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	if fc == nil {
+		return
+	}
+	query, _ := fc()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.queries = append(l.queries, query)
+}
+
+func (l *articleDetailSQLLogger) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.queries...)
 }
 
 // TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading 测试缓存命中场景：

@@ -36,16 +36,12 @@ func loadArticleList() ([]articleResponse, error) {
 	return responses, nil
 }
 
-func hydrateArticleDetailResponse(response articleResponse) (articleResponse, error) {
-	responses := []articleResponse{response}
-	if err := hydrateArticleResponseAuthors(responses); err != nil {
-		return articleResponse{}, err
-	}
-	return responses[0], nil
+var loadArticleDetailCache = func(key string, loader func() (articleResponse, error)) (articleResponse, error) {
+	return loadJSONCache(key, loader)
 }
 
 func loadArticleDetail(id string) (articleResponse, error) {
-	response, err := loadJSONCache(articleDetailCacheKey(id), func() (articleResponse, error) {
+	return loadArticleDetailCache(articleDetailCacheKey(id), func() (articleResponse, error) {
 		if global.Db == nil {
 			return articleResponse{}, errors.New("database is not initialized")
 		}
@@ -58,8 +54,4 @@ func loadArticleDetail(id string) (articleResponse, error) {
 		}
 		return newArticleResponse(article)
 	})
-	if err != nil {
-		return articleResponse{}, err
-	}
-	return hydrateArticleDetailResponse(response)
 }
