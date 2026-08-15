@@ -66,6 +66,7 @@ export class RecommendationTelemetryClient {
   private retryTimer: number | null = null;
   private retryDelayMs = 1000;
   private inFlight = false;
+  private keepaliveInFlight = false;
   private pendingFlush = false;
   private stopped = true;
 
@@ -141,12 +142,12 @@ export class RecommendationTelemetryClient {
   }
 
   recordReadEnd(articleID: number, tracking: RecommendationTracking | undefined, payload: RecommendationReadEndPayload) {
-    if (!tracking?.token) return;
+    if (!tracking?.token) return false;
     const key = this.businessKey(articleID, tracking);
-    if (this.seenReadEnds.has(key)) return;
+    if (this.seenReadEnds.has(key)) return false;
     this.seenReadEnds.add(key);
     this.enqueue('read_end', tracking, payload);
-    void this.flush(false);
+    return true;
   }
 
   recordNotInterested(articleID: number, tracking?: RecommendationTracking) {
@@ -158,6 +159,11 @@ export class RecommendationTelemetryClient {
     void this.flush(false);
   }
   async flush(keepalive = false): Promise<void> {
+    if (keepalive) {
+      await this.flushKeepalive();
+      return;
+    }
+
     this.clearScheduledFlush();
     if (this.inFlight) {
       this.pendingFlush = true;
@@ -174,9 +180,7 @@ export class RecommendationTelemetryClient {
     const batch = this.queue.slice(0, maxBatchEvents);
     this.inFlight = true;
     try {
-      const response = keepalive
-        ? await this.sendKeepalive(batch, accessToken)
-        : await axiosClient.post<RecommendationEventBatchResponse>('/recommendation-events', { events: batch });
+      const response = await axiosClient.post<RecommendationEventBatchResponse>('/recommendation-events', { events: batch });
       this.applyBatchResponse(response.data);
       this.retryDelayMs = 1000;
       this.clearRetry();
@@ -194,6 +198,40 @@ export class RecommendationTelemetryClient {
         this.pendingFlush = false;
         this.scheduleFlush(0);
       } else if (this.queue.length > 0 && this.retryTimer === null) {
+        this.scheduleFlush(flushDelayMs);
+      }
+    }
+  }
+
+  private async flushKeepalive(): Promise<void> {
+    if (this.keepaliveInFlight || this.queue.length === 0) {
+      return;
+    }
+
+    const accessToken = this.getAccessToken();
+    if (!accessToken) {
+      return;
+    }
+
+    this.clearScheduledFlush();
+    const batch = this.queue.slice(0, maxBatchEvents);
+    this.keepaliveInFlight = true;
+    try {
+      const response = await this.sendKeepalive(batch, accessToken);
+      this.applyBatchResponse(response.data);
+      this.retryDelayMs = 1000;
+      this.clearRetry();
+    } catch (error) {
+      if (isAxiosError<RecommendationEventBatchResponse>(error) && error.response?.data?.results) {
+        this.applyBatchResponse(error.response.data);
+      } else if (isAxiosError(error) && [400, 404, 413].includes(error.response?.status ?? 0)) {
+        this.dropBatch(batch);
+      } else {
+        this.scheduleRetry();
+      }
+    } finally {
+      this.keepaliveInFlight = false;
+      if (this.queue.length > 0 && this.retryTimer === null) {
         this.scheduleFlush(flushDelayMs);
       }
     }
@@ -264,7 +302,10 @@ export class RecommendationTelemetryClient {
   };
 
   private handlePageHide = () => {
-    void this.flush(true);
+    // The detail page registers after this shared client. Defer the global
+    // flush until all synchronous pagehide producers have enqueued their
+    // final read_end events.
+    void Promise.resolve().then(() => this.flush(true));
   };
 
   private enqueue(eventType: RecommendationEventType, tracking: RecommendationTracking, readPayload?: RecommendationReadEndPayload) {

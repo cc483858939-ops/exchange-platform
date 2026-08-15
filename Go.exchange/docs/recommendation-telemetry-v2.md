@@ -29,4 +29,4 @@ Accepted facts are written with an outbox event, then projected through Kafka an
 
 ## Local configuration
 
-The root D:\code\mf\docker-compose.yml supplies the signing key through AI_API_KEY; it has no duplicate recommendation read-threshold overrides. Keep the key outside source control and rotate any key that was previously exposed in a committed configuration. Token TTL and rate limits remain server configuration; read classification is fixed by read_v1.
+The root D:\code\mf\docker-compose.yml supplies the recommendation signing key through RECOMMENDATION_TELEMETRY_SIGNING_KEY. AI_API_KEY belongs only to the article AI-processing worker. Keep signing keys outside source control and revoke or rotate any provider credential that was previously exposed in a committed configuration outside the repository. Token TTL and rate limits remain server configuration; read classification is fixed by read_v1.

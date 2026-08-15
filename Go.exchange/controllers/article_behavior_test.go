@@ -18,19 +18,6 @@ func TestRecordArticleBehaviorFromContextSkipsWithoutUserID(t *testing.T) {
 		t.Fatal("called")
 	}
 }
-func TestRecordArticleBehaviorFromContextRecordsUserID(t *testing.T) {
-	old, oldLog := recordArticleBehavior, articleBehaviorLogError
-	t.Cleanup(func() { recordArticleBehavior = old; articleBehaviorLogError = oldLog })
-	var user, article uint
-	recordArticleBehavior = func(u, a uint, _ string) error { user, article = u, a; return nil }
-	articleBehaviorLogError = func(*gin.Context, string, error) {}
-	c, _ := gin.CreateTestContext(nil)
-	c.Set("user_id", uint(11))
-	recordArticleBehaviorFromContext(c, 9, ArticleBehaviorActionLike)
-	if user != 11 || article != 9 {
-		t.Fatal(user, article)
-	}
-}
 func TestRecordArticleBehaviorFromContextLogsError(t *testing.T) {
 	old, oldLog := recordArticleBehavior, articleBehaviorLogError
 	t.Cleanup(func() { recordArticleBehavior = old; articleBehaviorLogError = oldLog })

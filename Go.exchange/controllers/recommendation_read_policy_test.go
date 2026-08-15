@@ -71,6 +71,11 @@ func TestEstimateArticleReadTime(t *testing.T) {
 		{name: "japanese", content: strings.Repeat("あ", 300), want: time.Minute},
 		{name: "korean", content: strings.Repeat("한", 300), want: time.Minute},
 		{name: "mixed", content: strings.Repeat("中", 150) + strings.Repeat("word ", 110), want: time.Minute},
+		{name: "Latin then CJK adjacency", content: strings.Repeat("hello中 ", 150), want: 70910 * time.Millisecond},
+		{name: "CJK then Latin adjacency", content: strings.Repeat("中hello ", 150), want: 70910 * time.Millisecond},
+		{name: "CJK between adjacent Latin words", content: strings.Repeat("OpenAI发布GPT ", 75), want: 70910 * time.Millisecond},
+		{name: "CJK between GPT and Latin release", content: strings.Repeat("GPT模型release ", 75), want: 70910 * time.Millisecond},
+		{name: "separated mixed content", content: strings.Repeat("hello 中 ", 150), want: 70910 * time.Millisecond},
 		{name: "minimum clamp", content: "one word", want: 3 * time.Second},
 		{name: "maximum clamp", content: strings.Repeat("中", 1000), want: 120 * time.Second},
 	}

@@ -31,12 +31,16 @@ describe('ArticleReadTracker', () => {
     expect(tracker.snapshot().scrollProgressPercent).toBe(maximum);
   });
 
-  it('does not advance progress from resize or reflow alone', () => {
+  it('rebases progress after resize and reflow without a scroll jump', () => {
     const tracker = new ArticleReadTracker(() => 0);
     tracker.start(geometry(2000), true);
-    tracker.updateGeometry({ articleTopDoc: -120, articleHeight: 1200 });
+    tracker.updateGeometry({ articleTopDoc: 0, articleHeight: 2000, currentViewportBottomDoc: 1200 });
     expect(tracker.snapshot().scrollProgressPercent).toBe(0);
-    tracker.updateGeometry({ articleTopDoc: 50, articleHeight: 3000 });
+    tracker.recordScroll(1201);
+    expect(tracker.snapshot().scrollProgressPercent).toBe(0);
+    tracker.updateGeometry({ articleTopDoc: -120, articleHeight: 1200, currentViewportBottomDoc: 1201 });
+    expect(tracker.snapshot().scrollProgressPercent).toBe(0);
+    tracker.recordScroll(1202);
     expect(tracker.snapshot().scrollProgressPercent).toBe(0);
   });
 

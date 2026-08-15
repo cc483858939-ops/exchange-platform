@@ -44,7 +44,16 @@ docker compose run --rm migrate
 
 ## Local Development
 
-Start the common local stack:
+On a first-time checkout, generate the ignored local JWT key pair from this directory before starting the API:
+
+```powershell
+cd D:\code\mf\Go.exchange
+go run ./cmd/gen-jwt-keys --kid local-dev-v1 --out .secrets/jwt
+```
+
+The Docker development image exposes the generated host files at the paths used by `Dockerfile.dev`. Worker mode does not load JWT configuration. `Go.exchange/.env.example` is a reference file only; root Compose does not load it automatically.
+
+Start the common local stack from the repository root:
 
 ```powershell
 cd D:\code\mf

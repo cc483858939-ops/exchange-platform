@@ -18,6 +18,9 @@ x-go-service: &go-service
     - kafka
     - minio
 
+x-go-environment: &go-environment
+  DATABASE_DSN: "${DATABASE_DSN:-host=db user=postgres password=1234 dbname=test port=5432 sslmode=disable TimeZone=Asia/Shanghai}"
+
 services:
   frontend:
     build:
@@ -38,6 +41,8 @@ services:
   migrate:
     <<: *go-service
     command: ["go", "run", "./cmd/migrate"]
+    environment:
+      <<: *go-environment
     depends_on:
       db:
         condition: service_healthy
@@ -55,6 +60,7 @@ services:
       minio:
         condition: service_started
     environment:
+      <<: *go-environment
       APP_RUNTIME_ROLE: api
       RECOMMENDATION_TELEMETRY_ENABLED: ${RECOMMENDATION_TELEMETRY_ENABLED:-true}
       RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT: ${RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT:-100}
@@ -78,6 +84,7 @@ services:
       minio:
         condition: service_started
     environment:
+      <<: *go-environment
       APP_RUNTIME_ROLE: worker
       LIKE_BEHAVIOR_BATCH_SIZE: ${LIKE_BEHAVIOR_BATCH_SIZE:-500}
       LIKE_BEHAVIOR_CLAIM_LEASE: ${LIKE_BEHAVIOR_CLAIM_LEASE:-30s}

@@ -122,11 +122,16 @@ APP_RUNTIME_ROLE=api
 
 ### 启动完整开发环境
 
-在项目根目录执行：
+首次启动先在 `Go.exchange` 目录生成未跟踪的本地 JWT 密钥：
 
-```bash
+```powershell
+cd Go.exchange
+go run ./cmd/gen-jwt-keys --kid local-dev-v1 --out .secrets/jwt
+cd ..
 docker compose up -d
 ```
+
+`Go.exchange/.env.example` 只是配置参考；从项目根目录运行 Compose 时不会自动加载它。
 
 启动服务包括：
 

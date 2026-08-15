@@ -279,6 +279,7 @@ const getCurrentArticleReadGeometry = () => {
   return {
     articleTopDoc: window.scrollY + rect.top,
     articleHeight: Math.max(rect.height, 1),
+    currentViewportBottomDoc: window.scrollY + window.innerHeight,
   };
 };
 
@@ -297,17 +298,16 @@ const handleReadScroll = () => {
 
 const finishRead = (exitType: string) => {
   if (!tracking || readEndSent || !trackedArticleID || !readTracker) {
-    return;
+    return false;
   }
 
   const payload = readTracker.finish(exitType);
   if (!payload) {
-    return;
+    return false;
   }
 
   readEndSent = true;
-  recommendationTelemetry.recordReadEnd(Number(trackedArticleID), tracking, payload);
-  void recommendationTelemetry.flush(false);
+  return recommendationTelemetry.recordReadEnd(Number(trackedArticleID), tracking, payload);
 };
 
 const handleVisibilityChange = () => {
@@ -324,19 +324,28 @@ const handlePageHide = () => {
   void recommendationTelemetry.flush(true);
 };
 
-const startRead = (id: string) => {
+const startRead = (id: string, detailVersion: number) => {
   disconnectReadGeometryObserver();
   readTracker = null;
-  tracking = consumePendingRecommendationAttribution(Number(id));
+  tracking = null;
   trackedArticleID = id;
   readEndSent = false;
 
-  if (!tracking) {
+  if (
+    detailVersion !== detailRequestVersion
+    || articleId.value !== id
+    || article.value?.ID !== Number(id)
+  ) {
     return;
   }
 
   const element = articleBodyRef.value;
   if (!element) {
+    return;
+  }
+
+  tracking = consumePendingRecommendationAttribution(Number(id));
+  if (!tracking) {
     return;
   }
 
@@ -423,7 +432,8 @@ const handleDeleteArticle = async () => {
     if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleID, viewerID)) {
       return false;
     }
-    finishRead('post_deleted');
+    finishRead('route_leave');
+    void recommendationTelemetry.flush(false);
     deletePending.value = false;
     deleteError.value = '';
     void router.replace({
@@ -741,6 +751,7 @@ const consumeReplyIntent = async () => {
 const loadDetail = async (id: string, isAuthenticated: boolean) => {
   const detailVersion = ++detailRequestVersion;
   finishRead('navigate_to_article');
+  void recommendationTelemetry.flush(false);
   resetArticleState();
   resetLikeState();
   resetCommentsState();
@@ -761,17 +772,27 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     if (detailVersion !== detailRequestVersion) {
       return;
     }
+    if (loadedArticle.ID !== Number(id)) {
+      throw new Error('article response id mismatch');
+    }
 
     article.value = loadedArticle;
     showCover.value = Boolean(loadedArticle.cover_image_url);
     likeCount.value = clampCount(loadedArticle.like_count);
     commentCount.value = clampCount(loadedArticle.comment_count);
+    articleLoading.value = false;
     await nextTick();
-    if (detailVersion !== detailRequestVersion) {
+    if (
+      detailVersion !== detailRequestVersion
+      || articleId.value !== id
+      || article.value?.ID !== Number(id)
+    ) {
       return;
     }
 
-    startRead(id);
+    if (articleBodyRef.value) {
+      startRead(id, detailVersion);
+    }
     void loadLikeState(id, detailVersion);
     void loadInitialComments(id, detailVersion);
   } catch (error) {

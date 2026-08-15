@@ -69,7 +69,10 @@ func estimateArticleReadTime(content string) time.Duration {
 	inLatinWord := false
 	for _, r := range content {
 		if isRecommendationReadCJKLike(r) {
-			inLatinWord = false
+			if inLatinWord {
+				latinWords++
+				inLatinWord = false
+			}
 			cjkCharacters++
 			continue
 		}

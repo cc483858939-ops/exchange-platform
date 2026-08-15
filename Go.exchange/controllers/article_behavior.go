@@ -9,10 +9,7 @@ import (
 	"strings"
 )
 
-const (
-	ArticleBehaviorActionView = "view"
-	ArticleBehaviorActionLike = "like"
-)
+const ArticleBehaviorActionView = "view"
 
 var recordArticleBehavior = func(userID uint, articleID uint, action string) error {
 	action = strings.TrimSpace(action)
