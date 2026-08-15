@@ -44,14 +44,16 @@ docker compose run --rm migrate
 
 ## Local Development
 
-On a first-time checkout, generate the ignored local JWT key pair from this directory before starting the API:
+The local development prerequisites are Docker, Docker Compose, and Go 1.25+ for first-time JWT key generation. Docker-only key generation has not been verified here, so the documented fallback runs the generator with host Go:
 
 ```powershell
 cd D:\code\mf\Go.exchange
 go run ./cmd/gen-jwt-keys --kid local-dev-v1 --out .secrets/jwt
 ```
 
-The Docker development image exposes the generated host files at the paths used by `Dockerfile.dev`. Worker mode does not load JWT configuration. `Go.exchange/.env.example` is a reference file only; root Compose does not load it automatically.
+The Docker development image exposes the generated host files at the paths used by `Dockerfile.dev`. Worker mode does not load JWT configuration.
+
+`Go.exchange/.env.example` is a reference template only; root Compose does not load it automatically. When running Compose from `D:\code\mf`, Docker Compose can take overrides from the shell environment, the repository-root `.env`, or an explicit `--env-file`. The `DATABASE_DSN` default in `docker-compose.yml` is used when no override is supplied.
 
 Start the common local stack from the repository root:
 

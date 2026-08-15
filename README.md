@@ -119,10 +119,13 @@ APP_RUNTIME_ROLE=api
 
 - Docker
 - Docker Compose
+- Go 1.25+ (required for first-time local JWT key generation)
 
 ### 启动完整开发环境
 
 首次启动先在 `Go.exchange` 目录生成未跟踪的本地 JWT 密钥：
+
+First-time local JWT key generation requires host Go 1.25+; Docker-only generation is not documented because it has not been verified.
 
 ```powershell
 cd Go.exchange
@@ -132,6 +135,7 @@ docker compose up -d
 ```
 
 `Go.exchange/.env.example` 只是配置参考；从项目根目录运行 Compose 时不会自动加载它。
+Compose does not load `Go.exchange/.env.example` automatically. When run from the repository root, override defaults via the shell environment, root `.env`, or an explicit `--env-file`; otherwise `docker-compose.yml` local defaults apply.
 
 启动服务包括：
 
