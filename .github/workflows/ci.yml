@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-unit:
+    name: Backend / Unit and Static
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Go.exchange
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: Go.exchange/go.mod
+          cache-dependency-path: Go.exchange/go.sum
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Check gofmt
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following Go files are not gofmt formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Backend baseline tests
+        run: go test ./... -count=1
+
+  backend-integration:
+    name: Backend / PostgreSQL and Redis Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: Go.exchange
+    env:
+      DATABASE_DSN: "host=127.0.0.1 user=postgres password=postgres dbname=goexchange_test port=5432 sslmode=disable TimeZone=UTC"
+      POSTGRES_TEST_DSN: "host=127.0.0.1 user=postgres password=postgres dbname=goexchange_test port=5432 sslmode=disable TimeZone=UTC"
+      REDIS_TEST_ADDR: "127.0.0.1:6379"
+      REDIS_TEST_DB: "15"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: goexchange_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d goexchange_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: Go.exchange/go.mod
+          cache-dependency-path: Go.exchange/go.sum
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Run first migration
+        run: go run ./cmd/migrate
+
+      - name: Run second migration
+        run: go run ./cmd/migrate
+
+      - name: Run integration tests
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+
+          go test -v ./... -count=1 -p 1 2>&1 | tee "$RUNNER_TEMP/go-integration.log"
+          test_status=${PIPESTATUS[0]}
+
+          missing_env=0
+          if grep -Fq "set POSTGRES_TEST_DSN to run" "$RUNNER_TEMP/go-integration.log"; then
+            echo "Required PostgreSQL integration tests were skipped because POSTGRES_TEST_DSN was unavailable."
+            missing_env=1
+          fi
+          if grep -Fq "set REDIS_TEST_ADDR to run Redis integration test" "$RUNNER_TEMP/go-integration.log"; then
+            echo "Required Redis integration tests were skipped because REDIS_TEST_ADDR was unavailable."
+            missing_env=1
+          fi
+
+          if [ "$test_status" -ne 0 ]; then
+            exit "$test_status"
+          fi
+          if [ "$missing_env" -ne 0 ]; then
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend / Test and Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Exchangeapp_frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: Exchangeapp_frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Frontend production build
+        run: npm run build
+
+  container-build:
+    name: Containers / Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build backend image
+        run: docker build -f Go.exchange/Dockerfile.prod -t goexchange-backend:ci Go.exchange
+
+      - name: Build frontend image
+        run: docker build -f Exchangeapp_frontend/Dockerfile -t goexchange-frontend:ci Exchangeapp_frontend
