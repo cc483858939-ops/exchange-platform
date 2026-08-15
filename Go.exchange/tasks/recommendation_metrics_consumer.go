@@ -142,10 +142,13 @@ func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEv
 	case models.RecommendationEventTypeClick:
 		clicks = 1
 	case models.RecommendationEventTypeReadEnd:
-		if fact.QualifiedRead {
-			qualifiedReads = 1
-		} else if fact.QuickBounce {
-			quickBounces = 1
+		if fact.ReadOutcome != nil {
+			switch *fact.ReadOutcome {
+			case "qualified":
+				qualifiedReads = 1
+			case "quick_bounce":
+				quickBounces = 1
+			}
 		}
 	case models.RecommendationEventTypeNotInterested:
 		notInterested = 1

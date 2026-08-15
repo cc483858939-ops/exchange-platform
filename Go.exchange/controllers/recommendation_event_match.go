@@ -4,10 +4,11 @@ import "Go.exchange/models"
 
 func recommendationReadPayloadMatches(existing, incoming models.RecommendationEvent) bool {
 	return equalInt64Pointers(existing.ForegroundTimeMS, incoming.ForegroundTimeMS) &&
-		equalIntPointers(existing.MaxScrollDepth, incoming.MaxScrollDepth) &&
+		equalIntPointers(existing.ScrollProgressPercent, incoming.ScrollProgressPercent) &&
 		equalStringPointers(existing.ExitType, incoming.ExitType) &&
-		existing.QualifiedRead == incoming.QualifiedRead &&
-		existing.QuickBounce == incoming.QuickBounce
+		equalInt64Pointers(existing.EstimatedReadTimeMS, incoming.EstimatedReadTimeMS) &&
+		equalStringPointers(existing.ReadPolicyVersion, incoming.ReadPolicyVersion) &&
+		equalStringPointers(existing.ReadOutcome, incoming.ReadOutcome)
 }
 
 func equalInt64Pointers(left, right *int64) bool {

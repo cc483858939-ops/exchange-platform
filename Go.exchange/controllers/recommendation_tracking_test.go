@@ -1,19 +1,41 @@
 package controllers
 
 import (
+	"bytes"
+	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestRecommendationTrackingTokenRoundTripAndTamper(t *testing.T) {
-	key := []byte("0123456789abcdef0123456789abcdef")
-	claims := recommendationTrackingClaims{
+func testRecommendationTrackingClaims(now time.Time) recommendationTrackingClaims {
+	return recommendationTrackingClaims{
 		UserID: 7, RequestID: "550e8400-e29b-41d4-a716-446655440000", ArticleID: 11,
 		Position: 2, Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
-		IssuedAtUnix:  time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC).Unix(),
-		ExpiresAtUnix: time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC).Unix(),
+		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
+		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
 	}
+}
+
+func tamperRecommendationTrackingClaim(token string, oldValue, newValue string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return token + "tampered"
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return token + "tampered"
+	}
+	payload = bytes.Replace(payload, []byte(oldValue), []byte(newValue), 1)
+	parts[1] = base64.RawURLEncoding.EncodeToString(payload)
+	return strings.Join(parts, ".")
+}
+
+func TestRecommendationTrackingTokenV2RoundTripAndClaimBinding(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	claims := testRecommendationTrackingClaims(now)
 	token, err := signRecommendationTrackingClaims(claims, key)
 	if err != nil {
 		t.Fatal(err)
@@ -25,44 +47,55 @@ func TestRecommendationTrackingTokenRoundTripAndTamper(t *testing.T) {
 	if decoded != claims {
 		t.Fatalf("decoded claims=%#v want %#v", decoded, claims)
 	}
-	if _, err := verifyRecommendationTrackingToken(token+"x", key); err == nil {
-		t.Fatal("expected tampered token to fail")
+	if _, err := verifyRecommendationTrackingToken(tamperRecommendationTrackingClaim(token, "\"estimated_read_time_ms\":3000", "\"estimated_read_time_ms\":4000"), key); err == nil {
+		t.Fatal("estimated read time tampering should invalidate signature")
+	}
+	if _, err := verifyRecommendationTrackingToken(tamperRecommendationTrackingClaim(token, "\"read_policy_version\":\"read_v1\"", "\"read_policy_version\":\"read_v2\""), key); err == nil {
+		t.Fatal("read policy tampering should invalidate signature")
+	}
+	v1 := strings.Replace(token, "v2.", "v1.", 1)
+	if _, err := verifyRecommendationTrackingToken(v1, key); err == nil {
+		t.Fatal("V1 token should be rejected")
+	}
+	missing := claims
+	missing.EstimatedReadTimeMS = 0
+	missingToken, err := signRecommendationTrackingClaims(missing, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyRecommendationTrackingToken(missingToken, key); err == nil {
+		t.Fatal("missing V2 estimated read time should be rejected")
 	}
 }
 
-func TestAttachRecommendationTrackingUsesFinalPositions(t *testing.T) {
+func TestAttachRecommendationTrackingUsesFinalPositionsAndReadClaims(t *testing.T) {
 	t.Setenv("RECOMMENDATION_TELEMETRY_ENABLED", "true")
 	t.Setenv("RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT", "100")
 	t.Setenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("RECOMMENDATION_TELEMETRY_TOKEN_TTL", "24h")
 
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
-	recommendations := []recommendedArticleResponse{{ID: 11}, {ID: 12}}
+	recommendations := []recommendedArticleResponse{
+		{ID: 11, Content: "tiny"},
+		{ID: 12, Content: strings.Repeat("word ", 400)},
+	}
 	requestID := "550e8400-e29b-41d4-a716-446655440001"
 	trackedCount, err := attachRecommendationTracking(7, requestID, userInterestProfile{}, recommendations, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if trackedCount != len(recommendations) {
-		t.Fatalf("trackedCount=%d", trackedCount)
-	}
-	if recommendations[0].Tracking == nil || recommendations[1].Tracking == nil {
-		t.Fatal("expected tracking metadata")
+	if trackedCount != len(recommendations) || recommendations[0].Tracking == nil || recommendations[1].Tracking == nil {
+		t.Fatalf("tracking count=%d recommendations=%#v", trackedCount, recommendations)
 	}
 	if recommendations[0].Tracking.Position != 1 || recommendations[1].Tracking.Position != 2 {
 		t.Fatalf("unexpected positions: %#v %#v", recommendations[0].Tracking, recommendations[1].Tracking)
 	}
-	if recommendations[0].Tracking.RequestID != requestID || recommendations[1].Tracking.RequestID != requestID {
-		t.Fatal("expected supplied request id for the returned list")
-	}
-	claims, err := verifyRecommendationTrackingToken(
-		recommendations[1].Tracking.Token,
-		[]byte("0123456789abcdef0123456789abcdef"),
-	)
+	claims, err := verifyRecommendationTrackingToken(recommendations[1].Tracking.Token, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims.ArticleID != 12 || claims.Position != 2 || claims.StrategyID != recommendationColdStartStrategyID {
-		t.Fatalf("unexpected claims: %#v", claims)
+	if claims.ArticleID != 12 || claims.Position != 2 || claims.StrategyID != recommendationColdStartStrategyID ||
+		claims.EstimatedReadTimeMS <= 0 || claims.ReadPolicyVersion != recommendationReadPolicyVersion {
+		t.Fatalf("unexpected V2 claims: %#v", claims)
 	}
 }

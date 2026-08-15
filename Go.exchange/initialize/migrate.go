@@ -47,7 +47,10 @@ func RunMigrations() error {
 		if err := applyRecommendationTelemetryConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyRecommendationRankerV2Indexes(tx); err != nil {
+		if err := applyArticleReactionConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyRecommendationRankerV3Indexes(tx); err != nil {
 			return err
 		}
 		if err := applyArticleAuthorConstraints(tx); err != nil {
@@ -135,16 +138,27 @@ WHERE deleted_at IS NULL
 	return nil
 }
 func applyRecommendationTelemetryConstraints(tx *gorm.DB) error {
-
 	statements := []string{
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_type",
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_foreground_time",
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_scroll_depth",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_scroll_progress",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_estimated_read_time",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_read_policy",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_read_outcome",
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_exit_type",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_read_payload",
+		"ALTER TABLE recommendation_events DROP COLUMN IF EXISTS max_scroll_depth",
+		"ALTER TABLE recommendation_events DROP COLUMN IF EXISTS qualified_read",
+		"ALTER TABLE recommendation_events DROP COLUMN IF EXISTS quick_bounce",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_type CHECK (event_type IN ('impression','click','read_end','not_interested'))",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_foreground_time CHECK (foreground_time_ms IS NULL OR foreground_time_ms BETWEEN 0 AND 21600000)",
-		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_scroll_depth CHECK (max_scroll_depth IS NULL OR max_scroll_depth BETWEEN 0 AND 100)",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_scroll_progress CHECK (scroll_progress_percent IS NULL OR scroll_progress_percent BETWEEN 0 AND 100)",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_estimated_read_time CHECK (estimated_read_time_ms IS NULL OR estimated_read_time_ms > 0)",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_read_policy CHECK (read_policy_version IS NULL OR btrim(read_policy_version) <> '')",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_read_outcome CHECK (read_outcome IS NULL OR read_outcome IN ('qualified','quick_bounce','neutral'))",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_exit_type CHECK (exit_type IS NULL OR exit_type IN ('back_to_recommendation','navigate_to_article','route_leave','page_hide','refresh','unknown'))",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_read_payload CHECK ((event_type = 'read_end' AND foreground_time_ms IS NOT NULL AND scroll_progress_percent IS NOT NULL AND exit_type IS NOT NULL AND estimated_read_time_ms IS NOT NULL AND read_policy_version IS NOT NULL AND read_outcome IS NOT NULL) OR (event_type <> 'read_end' AND foreground_time_ms IS NULL AND scroll_progress_percent IS NULL AND exit_type IS NULL AND estimated_read_time_ms IS NULL AND read_policy_version IS NULL AND read_outcome IS NULL))",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
@@ -154,14 +168,32 @@ func applyRecommendationTelemetryConstraints(tx *gorm.DB) error {
 	return nil
 }
 
-func applyRecommendationRankerV2Indexes(tx *gorm.DB) error {
+func applyArticleReactionConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"CREATE INDEX IF NOT EXISTS idx_recommendation_events_user_feedback_order ON recommendation_events (user_id, occurred_at DESC, received_at DESC, event_id DESC) WHERE event_type IN ('click', 'read_end', 'not_interested')",
-		"CREATE INDEX IF NOT EXISTS idx_recommendation_events_user_article_negative ON recommendation_events (user_id, article_id, occurred_at DESC) WHERE event_type = 'not_interested'",
+		"ALTER TABLE article_reaction ADD COLUMN IF NOT EXISTS state_changed_at TIMESTAMPTZ",
+		"UPDATE article_reaction SET state_changed_at = COALESCE(state_changed_at, updated_at, CURRENT_TIMESTAMP)",
+		"ALTER TABLE article_reaction ALTER COLUMN state_changed_at SET NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_article_reaction_user_liked_state_article ON article_reaction (user_id, liked, state_changed_at DESC, article_id)",
+		"CREATE INDEX IF NOT EXISTS idx_article_behavior_user_view_seen ON article_behaviors (user_id, action, last_seen_at DESC, id DESC) WHERE action = 'view'",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply recommendation ranker v2 index: %w", err)
+			return fmt.Errorf("apply article reaction constraint: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyRecommendationRankerV3Indexes(tx *gorm.DB) error {
+	statements := []string{
+		"DROP INDEX IF EXISTS idx_recommendation_events_user_feedback_order",
+		"DROP INDEX IF EXISTS idx_recommendation_events_user_article_negative",
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_events_user_feedback_article_order ON recommendation_events (user_id, article_id, event_type, occurred_at DESC, received_at DESC, event_id DESC) WHERE event_type IN ('click', 'read_end', 'not_interested')",
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_events_user_article_negative_order ON recommendation_events (user_id, article_id, occurred_at DESC, received_at DESC, event_id DESC) WHERE event_type = 'not_interested'",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation ranker v3 index: %w", err)
 		}
 	}
 	return nil

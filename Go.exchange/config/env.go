@@ -153,40 +153,6 @@ func RecommendationTelemetryEventsPerMinute() int {
 	return limit
 }
 
-func RecommendationQualifiedReadTime() time.Duration {
-	duration := envDuration("RECOMMENDATION_QUALIFIED_READ_TIME", 20*time.Second)
-	if duration < 0 {
-		return 0
-	}
-	return duration
-}
-
-func RecommendationQualifiedScrollPercent() int {
-	return recommendationTelemetryPercent("RECOMMENDATION_QUALIFIED_SCROLL_PERCENT", 50)
-}
-
-func RecommendationQuickBounceTime() time.Duration {
-	duration := envDuration("RECOMMENDATION_QUICK_BOUNCE_TIME", 5*time.Second)
-	if duration < 0 {
-		return 0
-	}
-	return duration
-}
-
-func RecommendationQuickBounceScrollPercent() int {
-	return recommendationTelemetryPercent("RECOMMENDATION_QUICK_BOUNCE_SCROLL_PERCENT", 25)
-}
-
-func recommendationTelemetryPercent(name string, defaultValue int) int {
-	value := envInt(name, defaultValue)
-	if value < 0 {
-		return 0
-	}
-	if value > 100 {
-		return 100
-	}
-	return value
-}
 func StorageEndpoint() string {
 	if endpoint := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); endpoint != "" {
 		return endpoint

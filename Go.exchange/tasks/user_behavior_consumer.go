@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
 	"sync"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const articleBehaviorRetentionLimit = 200
 const userBehaviorConsumerRetryDelay = 2 * time.Second
 
 func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup) {
@@ -94,49 +92,18 @@ func applyUserBehaviorEvent(event eventing.Envelope) error {
 		if err != nil || !firstDelivery {
 			return err
 		}
-		if err := applyArticleReactionProjection(tx, event.Type, payload); err != nil {
-			return err
-		}
 		now := event.OccurredAt
 		if now.IsZero() {
 			now = time.Now().UTC()
 		}
+		if err := applyArticleReactionProjection(tx, event.Type, payload, now); err != nil {
+			return err
+		}
 		if event.Type == eventing.EventTypeArticleLiked || event.Type == eventing.EventTypeArticleUnliked {
-			return applyLikeBehaviorProjection(tx, event.Type, payload, now)
+			return nil
 		}
 		return applyViewBehaviorProjection(tx, payload, now)
 	})
-}
-
-func applyLikeBehaviorProjection(tx *gorm.DB, eventType string, payload eventing.UserBehaviorPayload, now time.Time) error {
-	if payload.LikeVersion <= 0 {
-		return fmt.Errorf("like behavior requires a positive like_version")
-	}
-	liked := eventType == eventing.EventTypeArticleLiked
-	count := int64(0)
-	if liked {
-		count = 1
-	}
-	behavior := models.ArticleBehavior{
-		UserID: payload.UserID, ArticleID: payload.ArticleID, Action: "like",
-		Count: count, LastSeenAt: now, Active: liked, BehaviorVersion: payload.LikeVersion,
-	}
-	if err := tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}, {Name: "action"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"count": count, "last_seen_at": now, "active": liked,
-			"behavior_version": payload.LikeVersion, "updated_at": now,
-		}),
-		Where: clause.Where{Exprs: []clause.Expression{
-			clause.Lt{Column: clause.Column{Table: "article_behaviors", Name: "behavior_version"}, Value: payload.LikeVersion},
-		}},
-	}).Create(&behavior).Error; err != nil {
-		return err
-	}
-	if liked {
-		return enforceBehaviorProjectionRetention(tx, payload.UserID, "like")
-	}
-	return nil
 }
 
 func applyViewBehaviorProjection(tx *gorm.DB, payload eventing.UserBehaviorPayload, now time.Time) error {
@@ -153,49 +120,26 @@ func applyViewBehaviorProjection(tx *gorm.DB, payload eventing.UserBehaviorPaylo
 	}).Create(&behavior).Error; err != nil {
 		return err
 	}
-	return enforceBehaviorProjectionRetention(tx, payload.UserID, "view")
+	return nil
 }
 
-func applyArticleReactionProjection(tx *gorm.DB, eventType string, payload eventing.UserBehaviorPayload) error {
+func applyArticleReactionProjection(tx *gorm.DB, eventType string, payload eventing.UserBehaviorPayload, occurredAt time.Time) error {
 	if payload.LikeVersion <= 0 || (eventType != eventing.EventTypeArticleLiked && eventType != eventing.EventTypeArticleUnliked) {
 		return nil
 	}
 	liked := eventType == eventing.EventTypeArticleLiked
 	reaction := models.ArticleReaction{
 		UserID: payload.UserID, ArticleID: payload.ArticleID,
-		Reaction: models.ArticleReactionLike, Liked: liked, Version: payload.LikeVersion,
+		Reaction: models.ArticleReactionLike, Liked: liked, Version: payload.LikeVersion, StateChangedAt: occurredAt.UTC(),
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"reaction": models.ArticleReactionLike, "liked": liked,
-			"reaction_version": payload.LikeVersion, "updated_at": time.Now().UTC(),
+			"reaction_version": payload.LikeVersion, "state_changed_at": occurredAt.UTC(), "updated_at": time.Now().UTC(),
 		}),
 		Where: clause.Where{Exprs: []clause.Expression{
 			clause.Lt{Column: clause.Column{Table: "article_reaction", Name: "reaction_version"}, Value: payload.LikeVersion},
 		}},
 	}).Create(&reaction).Error
-}
-
-func enforceBehaviorProjectionRetention(tx *gorm.DB, userID uint, action string) error {
-	var behaviors []models.ArticleBehavior
-	if err := tx.Select("id,last_seen_at,active").
-		Where("user_id = ? AND action = ? AND active = ?", userID, action, true).
-		Find(&behaviors).Error; err != nil {
-		return err
-	}
-	sort.Slice(behaviors, func(i, j int) bool {
-		if !behaviors[i].LastSeenAt.Equal(behaviors[j].LastSeenAt) {
-			return behaviors[i].LastSeenAt.After(behaviors[j].LastSeenAt)
-		}
-		return behaviors[i].ID > behaviors[j].ID
-	})
-	if len(behaviors) <= articleBehaviorRetentionLimit {
-		return nil
-	}
-	ids := make([]uint, 0, len(behaviors)-articleBehaviorRetentionLimit)
-	for _, behavior := range behaviors[articleBehaviorRetentionLimit:] {
-		ids = append(ids, behavior.ID)
-	}
-	return tx.Model(&models.ArticleBehavior{}).Where("id IN ?", ids).Update("active", false).Error
 }

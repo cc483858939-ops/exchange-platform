@@ -18,10 +18,10 @@ import (
 
 const (
 	recommendationScene                  = "recommendation_page"
-	recommendationRankerVersion          = "rules_v2"
-	recommendationPersonalizedStrategyID = "personalized_rules_v2"
-	recommendationColdStartStrategyID    = "cold_start_rules_v2"
-	recommendationTrackingTokenVersion   = "v1"
+	recommendationRankerVersion          = "rules_v3"
+	recommendationPersonalizedStrategyID = "personalized_rules_v3"
+	recommendationColdStartStrategyID    = "cold_start_rules_v3"
+	recommendationTrackingTokenVersion   = "v2"
 	recommendationSigningKeyMinBytes     = 32
 )
 
@@ -37,16 +37,18 @@ type recommendationTrackingResponse struct {
 }
 
 type recommendationTrackingClaims struct {
-	UserID           uint   `json:"user_id"`
-	RequestID        string `json:"request_id"`
-	ArticleID        uint   `json:"article_id"`
-	Position         int    `json:"position"`
-	Scene            string `json:"scene"`
-	RankerVersion    string `json:"ranker_version"`
-	RankerConfigHash string `json:"ranker_config_hash"`
-	StrategyID       string `json:"strategy_id"`
-	IssuedAtUnix     int64  `json:"iat"`
-	ExpiresAtUnix    int64  `json:"exp"`
+	UserID              uint   `json:"user_id"`
+	RequestID           string `json:"request_id"`
+	ArticleID           uint   `json:"article_id"`
+	Position            int    `json:"position"`
+	Scene               string `json:"scene"`
+	RankerVersion       string `json:"ranker_version"`
+	RankerConfigHash    string `json:"ranker_config_hash"`
+	StrategyID          string `json:"strategy_id"`
+	IssuedAtUnix        int64  `json:"iat"`
+	ExpiresAtUnix       int64  `json:"exp"`
+	EstimatedReadTimeMS int64  `json:"estimated_read_time_ms"`
+	ReadPolicyVersion   string `json:"read_policy_version"`
 }
 
 func attachRecommendationTracking(userID uint, requestID string, profile userInterestProfile, recommendations []recommendedArticleResponse, now time.Time) (int, error) {
@@ -69,7 +71,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 	issuedAt := now.UTC()
 	expiresAt := issuedAt.Add(config.RecommendationTelemetryTokenTTL())
 	strategyID := recommendationStrategyID(profile)
-	configHash := recommendationRankerConfigHash(normalizedRulesV2RecommendationConfig())
+	configHash := recommendationRankerConfigHash(normalizedRulesV3RecommendationConfig())
 
 	for index := range recommendations {
 		claims := recommendationTrackingClaims{
@@ -77,6 +79,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 			Position: index + 1, Scene: recommendationScene,
 			RankerVersion: recommendationRankerVersion, RankerConfigHash: configHash,
 			StrategyID: strategyID, IssuedAtUnix: issuedAt.Unix(), ExpiresAtUnix: expiresAt.Unix(),
+			EstimatedReadTimeMS: estimateArticleReadTime(recommendations[index].Content).Milliseconds(), ReadPolicyVersion: recommendationReadPolicyVersion,
 		}
 		token, err := signRecommendationTrackingClaims(claims, key)
 		if err != nil {
@@ -112,8 +115,8 @@ func recommendationTelemetryRequestSelected(userID uint, requestID string, perce
 
 func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
 	canonical := fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_cap=%d|behavior_cap=%d|feedback_limit=%d|feedback_cap=%d",
-		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateCap, recommendationBehaviorCountCap, recommendationFeedbackEventLimit, recommendationFeedbackSignalCountCap,
+		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s",
+		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateCap, recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion,
 	)
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])[:12]
@@ -161,7 +164,7 @@ func verifyRecommendationTrackingToken(token string, key []byte) (recommendation
 	}
 	if claims.UserID == 0 || claims.ArticleID == 0 || claims.Position <= 0 ||
 		claims.Scene == "" || claims.RankerVersion == "" || claims.RankerConfigHash == "" || claims.StrategyID == "" ||
-		claims.IssuedAtUnix <= 0 || claims.ExpiresAtUnix <= claims.IssuedAtUnix {
+		claims.IssuedAtUnix <= 0 || claims.ExpiresAtUnix <= claims.IssuedAtUnix || claims.EstimatedReadTimeMS <= 0 || strings.TrimSpace(claims.ReadPolicyVersion) == "" {
 		return recommendationTrackingClaims{}, errors.New("incomplete tracking token claims")
 	}
 	if _, err := uuid.Parse(claims.RequestID); err != nil {

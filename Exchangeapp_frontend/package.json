@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -29,6 +30,7 @@
     "@vue/eslint-config-typescript": "^13.0.0",
     "typescript": "^5.2.2",
     "vite": "^5.4.0",
+    "vitest": "^4.1.10",
     "vue-tsc": "^2.0.6"
   },
   "main": "index.js",

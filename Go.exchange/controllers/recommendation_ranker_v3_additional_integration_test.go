@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func openRulesV2IntegrationDatabase(t *testing.T) *gorm.DB {
+func openRulesV3IntegrationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -33,7 +33,7 @@ func openRulesV2IntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func newRulesV2IntegrationEvent(userID, articleID uint, eventType, eventID string, occurredAt, receivedAt time.Time) models.RecommendationEvent {
+func newRulesV3IntegrationEvent(userID, articleID uint, eventType, eventID string, occurredAt, receivedAt time.Time) models.RecommendationEvent {
 	return models.RecommendationEvent{
 		EventID:          eventID,
 		UserID:           userID,
@@ -51,14 +51,14 @@ func newRulesV2IntegrationEvent(userID, articleID uint, eventType, eventID strin
 	}
 }
 
-func TestRulesV2FeedbackStableOrderIntegration(t *testing.T) {
-	db := openRulesV2IntegrationDatabase(t)
+func TestRulesV3FeedbackStableOrderIntegration(t *testing.T) {
+	db := openRulesV3IntegrationDatabase(t)
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	events := []models.RecommendationEvent{
-		newRulesV2IntegrationEvent(userID, 700001, models.RecommendationEventTypeClick, "00000000-0000-0000-0000-000000000003", now, now),
-		newRulesV2IntegrationEvent(userID, 700002, models.RecommendationEventTypeClick, "00000000-0000-0000-0000-000000000001", now, now),
-		newRulesV2IntegrationEvent(userID, 700003, models.RecommendationEventTypeClick, "00000000-0000-0000-0000-000000000002", now, now.Add(time.Microsecond)),
+		newRulesV3IntegrationEvent(userID, 700001, models.RecommendationEventTypeClick, "00000000-0000-0000-0000-000000000003", now, now),
+		newRulesV3IntegrationEvent(userID, 700002, models.RecommendationEventTypeClick, "00000000-0000-0000-0000-000000000001", now, now),
+		newRulesV3IntegrationEvent(userID, 700003, models.RecommendationEventTypeClick, "00000000-0000-0000-0000-000000000002", now, now.Add(time.Microsecond)),
 	}
 	if err := db.Create(&events).Error; err != nil {
 		t.Fatal(err)
@@ -86,8 +86,8 @@ func TestRulesV2FeedbackStableOrderIntegration(t *testing.T) {
 	}
 }
 
-func TestRulesV2CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
-	db := openRulesV2IntegrationDatabase(t)
+func TestRulesV3CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
+	db := openRulesV3IntegrationDatabase(t)
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	lookbackStart := now.AddDate(0, 0, -90)
@@ -105,9 +105,9 @@ func TestRulesV2CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
 	}
 
 	events := []models.RecommendationEvent{
-		newRulesV2IntegrationEvent(userID, completedSuppressed.ID, models.RecommendationEventTypeNotInterested, uuid.NewString(), now.Add(-time.Hour), now.Add(-time.Hour)),
-		newRulesV2IntegrationEvent(userID, fallbackSuppressed.ID, models.RecommendationEventTypeNotInterested, uuid.NewString(), now.Add(-time.Hour), now.Add(-time.Hour)),
-		newRulesV2IntegrationEvent(userID, expiredNegativeAllowed.ID, models.RecommendationEventTypeNotInterested, uuid.NewString(), now.AddDate(0, 0, -91), now.AddDate(0, 0, -91)),
+		newRulesV3IntegrationEvent(userID, completedSuppressed.ID, models.RecommendationEventTypeNotInterested, uuid.NewString(), now.Add(-time.Hour), now.Add(-time.Hour)),
+		newRulesV3IntegrationEvent(userID, fallbackSuppressed.ID, models.RecommendationEventTypeNotInterested, uuid.NewString(), now.Add(-time.Hour), now.Add(-time.Hour)),
+		newRulesV3IntegrationEvent(userID, expiredNegativeAllowed.ID, models.RecommendationEventTypeNotInterested, uuid.NewString(), now.AddDate(0, 0, -91), now.AddDate(0, 0, -91)),
 	}
 	if err := db.Create(&events).Error; err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestRulesV2CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 	})
 
-	candidates, err := loadRulesV2Candidates(userID, map[uint]struct{}{}, lookbackStart, now)
+	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, lookbackStart, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,8 +140,8 @@ func TestRulesV2CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
 	}
 }
 
-func TestRulesV2CandidateStableOrderIntegration(t *testing.T) {
-	db := openRulesV2IntegrationDatabase(t)
+func TestRulesV3CandidateStableOrderIntegration(t *testing.T) {
+	db := openRulesV3IntegrationDatabase(t)
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -161,7 +161,7 @@ func TestRulesV2CandidateStableOrderIntegration(t *testing.T) {
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 	})
 
-	candidates, err := loadRulesV2Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +184,8 @@ func TestRulesV2CandidateStableOrderIntegration(t *testing.T) {
 		t.Fatalf("completed candidates must precede fallback candidates: order=%v", positions)
 	}
 }
-func TestRulesV2CandidateLoadsCommentCountIntegration(t *testing.T) {
-	db := openRulesV2IntegrationDatabase(t)
+func TestRulesV3CandidateLoadsCommentCountIntegration(t *testing.T) {
+	db := openRulesV3IntegrationDatabase(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	author := createArticleIntegrationAuthor(t, db)
 	article := models.Article{
@@ -204,7 +204,7 @@ func TestRulesV2CandidateLoadsCommentCountIntegration(t *testing.T) {
 		db.Unscoped().Delete(&article)
 	})
 
-	candidates, err := loadRulesV2Candidates(uint(now.UnixNano()&0x3fffffff), map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	candidates, err := loadRulesV3Candidates(uint(now.UnixNano()&0x3fffffff), map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
 	if err != nil {
 		t.Fatal(err)
 	}

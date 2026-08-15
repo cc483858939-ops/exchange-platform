@@ -76,8 +76,8 @@ SELECT
   article_id,
   SUM(CASE WHEN event_type = 'impression' THEN 1 ELSE 0 END) AS impression_count,
   SUM(CASE WHEN event_type = 'click' THEN 1 ELSE 0 END) AS click_count,
-  SUM(CASE WHEN event_type = 'read_end' AND qualified_read = TRUE THEN 1 ELSE 0 END) AS qualified_read_count,
-  SUM(CASE WHEN event_type = 'read_end' AND quick_bounce = TRUE THEN 1 ELSE 0 END) AS quick_bounce_count,
+  SUM(CASE WHEN event_type = 'read_end' AND read_outcome = 'qualified' THEN 1 ELSE 0 END) AS qualified_read_count,
+  SUM(CASE WHEN event_type = 'read_end' AND read_outcome = 'quick_bounce' THEN 1 ELSE 0 END) AS quick_bounce_count,
   SUM(CASE WHEN event_type = 'not_interested' THEN 1 ELSE 0 END) AS not_interested_count,
   NOW() AS updated_at
 FROM recommendation_events

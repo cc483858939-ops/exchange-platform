@@ -14,10 +14,25 @@ import (
 	"github.com/google/uuid"
 )
 
+func signTestRecommendationToken(t *testing.T, userID, articleID uint, now time.Time, estimated int64, policy string) string {
+	t.Helper()
+	token, err := signRecommendationTrackingClaims(recommendationTrackingClaims{
+		UserID: userID, RequestID: uuid.NewString(), ArticleID: articleID, Position: 1,
+		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
+		EstimatedReadTimeMS: estimated, ReadPolicyVersion: policy,
+	}, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
 func TestRecordRecommendationEventsReturnsPartialResults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	key := "0123456789abcdef0123456789abcdef"
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	key := "0123456789abcdef0123456789abcdef"
 	t.Setenv("RECOMMENDATION_TELEMETRY_ENABLED", "true")
 	t.Setenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY", key)
 
@@ -38,15 +53,7 @@ func TestRecordRecommendationEventsReturnsPartialResults(t *testing.T) {
 		return []recommendationPersistenceResult{{Status: "accepted"}}, nil
 	}
 
-	token, err := signRecommendationTrackingClaims(recommendationTrackingClaims{
-		UserID: 7, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
-		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
-		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
-		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
-	}, []byte(key))
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
 	request := recommendationEventBatchRequest{Events: []recommendationEventInput{
 		{EventID: uuid.NewString(), EventType: models.RecommendationEventTypeImpression, TrackingToken: token, OccurredAt: now.Format(time.RFC3339Nano)},
 		{EventID: uuid.NewString(), EventType: models.RecommendationEventTypeClick, TrackingToken: token + "tampered", OccurredAt: now.Format(time.RFC3339Nano)},
@@ -59,7 +66,6 @@ func TestRecordRecommendationEventsReturnsPartialResults(t *testing.T) {
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	RecordRecommendationEvents(ctx)
-
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -67,26 +73,38 @@ func TestRecordRecommendationEventsReturnsPartialResults(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Accepted != 1 || response.Rejected != 1 || response.Duplicates != 0 {
+	if response.Accepted != 1 || response.Rejected != 1 || response.Duplicates != 0 ||
+		response.Results[1].Reason != "invalid_tracking_token" {
 		t.Fatalf("unexpected response: %#v", response)
 	}
-	if response.Results[1].Reason != "invalid_tracking_token" {
-		t.Fatalf("unexpected rejected result: %#v", response.Results[1])
+}
+
+func TestValidateRecommendationTelemetryEventUsesSignedReadContext(t *testing.T) {
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	key := []byte("0123456789abcdef0123456789abcdef")
+	token := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
+	foreground := int64(2000)
+	progress := 100
+	exitType := "route_leave"
+	event, reason := validateRecommendationTelemetryEvent(7, recommendationEventInput{
+		EventID: uuid.NewString(), EventType: models.RecommendationEventTypeReadEnd,
+		TrackingToken: token, OccurredAt: now.Format(time.RFC3339Nano),
+		ForegroundTimeMS: &foreground, ScrollProgressPercent: &progress, ExitType: &exitType,
+	}, now, key)
+	if reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+	if event.EstimatedReadTimeMS == nil || *event.EstimatedReadTimeMS != 3000 ||
+		event.ReadPolicyVersion == nil || *event.ReadPolicyVersion != recommendationReadPolicyVersion ||
+		event.ReadOutcome == nil || *event.ReadOutcome != recommendationReadOutcomeNeutral {
+		t.Fatalf("unexpected persisted read context: %#v", event)
 	}
 }
 
 func TestValidateRecommendationTelemetryEventRejectsUserMismatch(t *testing.T) {
-	key := []byte("0123456789abcdef0123456789abcdef")
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
-	token, err := signRecommendationTrackingClaims(recommendationTrackingClaims{
-		UserID: 8, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
-		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
-		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
-		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
-	}, key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	token := signTestRecommendationToken(t, 8, 11, now, 3000, recommendationReadPolicyVersion)
 	_, reason := validateRecommendationTelemetryEvent(7, recommendationEventInput{
 		EventID: uuid.NewString(), EventType: models.RecommendationEventTypeClick,
 		TrackingToken: token, OccurredAt: now.Format(time.RFC3339Nano),

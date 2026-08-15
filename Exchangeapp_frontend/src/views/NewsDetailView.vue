@@ -142,6 +142,7 @@ import { deleteArticle, getArticleById } from '../services/articleService';
 import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
+import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import type { Article } from '../types/Article';
@@ -193,9 +194,8 @@ let replyIntentRetryRequested = false;
 let tracking: RecommendationTracking | null = null;
 let trackedArticleID = '';
 let readEndSent = false;
-let foregroundStartedAt: number | null = null;
-let foregroundTimeMS = 0;
-let maxScrollDepth = 0;
+let readTracker: ArticleReadTracker | null = null;
+let readResizeObserver: ResizeObserver | null = null;
 
 const clampCount = (value: unknown) => {
   const count = Number(value);
@@ -264,46 +264,58 @@ const mergeComments = (items: ArticleComment[]) => {
   });
 };
 
-const pauseForeground = () => {
-  if (foregroundStartedAt !== null) {
-    foregroundTimeMS += Date.now() - foregroundStartedAt;
-    foregroundStartedAt = null;
-  }
+const disconnectReadGeometryObserver = () => {
+  readResizeObserver?.disconnect();
+  readResizeObserver = null;
 };
 
-const updateScrollDepth = () => {
+const getCurrentArticleReadGeometry = () => {
   const element = articleBodyRef.value;
   if (!element) {
-    return;
+    return null;
   }
 
   const rect = element.getBoundingClientRect();
-  const height = Math.max(rect.height, 1);
-  const visible = Math.min(height, Math.max(0, window.innerHeight - Math.max(rect.top, 0)));
-  maxScrollDepth = Math.max(maxScrollDepth, Math.min(100, Math.round((visible / height) * 100)));
+  return {
+    articleTopDoc: window.scrollY + rect.top,
+    articleHeight: Math.max(rect.height, 1),
+  };
+};
+
+const updateReadGeometry = () => {
+  const geometry = getCurrentArticleReadGeometry();
+  if (geometry) {
+    readTracker?.updateGeometry(geometry);
+  }
+};
+
+const handleReadScroll = () => {
+  if (readTracker) {
+    readTracker.recordScroll(window.scrollY + window.innerHeight);
+  }
 };
 
 const finishRead = (exitType: string) => {
-  if (!tracking || readEndSent || !trackedArticleID) {
+  if (!tracking || readEndSent || !trackedArticleID || !readTracker) {
     return;
   }
 
-  pauseForeground();
+  const payload = readTracker.finish(exitType);
+  if (!payload) {
+    return;
+  }
+
   readEndSent = true;
-  recommendationTelemetry.recordReadEnd(Number(trackedArticleID), tracking, {
-    foreground_time_ms: Math.max(0, Math.round(foregroundTimeMS)),
-    max_scroll_depth: maxScrollDepth,
-    exit_type: exitType,
-  });
+  recommendationTelemetry.recordReadEnd(Number(trackedArticleID), tracking, payload);
   void recommendationTelemetry.flush(false);
 };
 
 const handleVisibilityChange = () => {
   if (document.visibilityState === 'hidden') {
-    finishRead('page_hide');
+    readTracker?.pause();
     void recommendationTelemetry.flush(true);
   } else if (tracking && !readEndSent) {
-    foregroundStartedAt = Date.now();
+    readTracker?.resume();
   }
 };
 
@@ -313,17 +325,32 @@ const handlePageHide = () => {
 };
 
 const startRead = (id: string) => {
+  disconnectReadGeometryObserver();
+  readTracker = null;
   tracking = consumePendingRecommendationAttribution(Number(id));
   trackedArticleID = id;
   readEndSent = false;
-  foregroundStartedAt = null;
-  foregroundTimeMS = 0;
-  maxScrollDepth = 0;
 
-  if (tracking && document.visibilityState === 'visible') {
-    foregroundStartedAt = Date.now();
+  if (!tracking) {
+    return;
   }
-  updateScrollDepth();
+
+  const element = articleBodyRef.value;
+  if (!element) {
+    return;
+  }
+
+  const rect = element.getBoundingClientRect();
+  readTracker = new ArticleReadTracker();
+  readTracker.start(
+    createArticleReadGeometry({ top: rect.top, height: rect.height }, window.scrollY, window.innerHeight),
+    document.visibilityState === 'visible',
+  );
+
+  if (typeof ResizeObserver !== 'undefined') {
+    readResizeObserver = new ResizeObserver(updateReadGeometry);
+    readResizeObserver.observe(element);
+  }
 };
 
 const resetLikeState = () => {
@@ -739,6 +766,11 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     showCover.value = Boolean(loadedArticle.cover_image_url);
     likeCount.value = clampCount(loadedArticle.like_count);
     commentCount.value = clampCount(loadedArticle.comment_count);
+    await nextTick();
+    if (detailVersion !== detailRequestVersion) {
+      return;
+    }
+
     startRead(id);
     void loadLikeState(id, detailVersion);
     void loadInitialComments(id, detailVersion);
@@ -808,16 +840,18 @@ onBeforeRouteLeave(to => {
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  window.addEventListener('scroll', updateScrollDepth, { passive: true });
+  window.addEventListener('scroll', handleReadScroll, { passive: true });
+  window.addEventListener('resize', updateReadGeometry);
   window.addEventListener('pagehide', handlePageHide);
-  updateScrollDepth();
 });
 
 onBeforeUnmount(() => {
   finishRead('route_leave');
   void recommendationTelemetry.flush(false);
+  disconnectReadGeometryObserver();
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  window.removeEventListener('scroll', updateScrollDepth);
+  window.removeEventListener('scroll', handleReadScroll);
+  window.removeEventListener('resize', updateReadGeometry);
   window.removeEventListener('pagehide', handlePageHide);
 });
 </script>

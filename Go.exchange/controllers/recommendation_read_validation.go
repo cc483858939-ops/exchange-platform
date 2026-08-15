@@ -2,9 +2,7 @@ package controllers
 
 import (
 	"strings"
-	"time"
 
-	"Go.exchange/config"
 	"Go.exchange/models"
 )
 
@@ -18,39 +16,45 @@ func isRecommendationEventType(eventType string) bool {
 	}
 }
 
-func validateRecommendationReadPayload(eventType string, input recommendationEventInput) (*int64, *int, *string, bool, bool, string) {
+func validateRecommendationReadPayload(eventType string, input recommendationEventInput, estimatedReadTimeMS int64, readPolicyVersion string) (*int64, *int, *string, *int64, *string, *string, string) {
 	if eventType != models.RecommendationEventTypeReadEnd {
-		if input.ForegroundTimeMS != nil || input.MaxScrollDepth != nil || input.ExitType != nil {
-			return nil, nil, nil, false, false, "unexpected_read_payload"
+		if input.ForegroundTimeMS != nil || input.ScrollProgressPercent != nil || input.ExitType != nil {
+			return nil, nil, nil, nil, nil, nil, "unexpected_read_payload"
 		}
-		return nil, nil, nil, false, false, ""
+		return nil, nil, nil, nil, nil, nil, ""
 	}
 
-	if input.ForegroundTimeMS == nil || input.MaxScrollDepth == nil || input.ExitType == nil {
-		return nil, nil, nil, false, false, "missing_read_payload"
+	if input.ForegroundTimeMS == nil || input.ScrollProgressPercent == nil || input.ExitType == nil {
+		return nil, nil, nil, nil, nil, nil, "missing_read_payload"
 	}
 	foregroundTimeMS := *input.ForegroundTimeMS
-	if foregroundTimeMS < 0 || foregroundTimeMS > 6*time.Hour.Milliseconds() {
-		return nil, nil, nil, false, false, "invalid_foreground_time_ms"
+	if foregroundTimeMS < 0 || foregroundTimeMS > recommendationReadMaxForegroundMS {
+		return nil, nil, nil, nil, nil, nil, "invalid_foreground_time_ms"
 	}
-	maxScrollDepth := *input.MaxScrollDepth
-	if maxScrollDepth < 0 || maxScrollDepth > 100 {
-		return nil, nil, nil, false, false, "invalid_max_scroll_depth"
+	scrollProgressPercent := *input.ScrollProgressPercent
+	if scrollProgressPercent < 0 || scrollProgressPercent > recommendationReadMaxProgress {
+		return nil, nil, nil, nil, nil, nil, "invalid_scroll_progress_percent"
 	}
 	exitTypeValue := strings.TrimSpace(*input.ExitType)
 	if !isRecommendationExitType(exitTypeValue) {
-		return nil, nil, nil, false, false, "invalid_exit_type"
+		return nil, nil, nil, nil, nil, nil, "invalid_exit_type"
+	}
+	if estimatedReadTimeMS <= 0 {
+		return nil, nil, nil, nil, nil, nil, "invalid_estimated_read_time_ms"
+	}
+	if strings.TrimSpace(readPolicyVersion) != recommendationReadPolicyVersion {
+		return nil, nil, nil, nil, nil, nil, "unsupported_read_policy_version"
 	}
 
-	exitType := exitTypeValue
-	qualifiedRead := time.Duration(foregroundTimeMS)*time.Millisecond >= config.RecommendationQualifiedReadTime() ||
-		maxScrollDepth >= config.RecommendationQualifiedScrollPercent()
-	quickBounce := time.Duration(foregroundTimeMS)*time.Millisecond < config.RecommendationQuickBounceTime() &&
-		maxScrollDepth < config.RecommendationQuickBounceScrollPercent()
-	if qualifiedRead {
-		quickBounce = false
+	readOutcome, err := classifyRecommendationRead(foregroundTimeMS, scrollProgressPercent, estimatedReadTimeMS, readPolicyVersion)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, "invalid_read_classification"
 	}
-	return &foregroundTimeMS, &maxScrollDepth, &exitType, qualifiedRead, quickBounce, ""
+	exitType := exitTypeValue
+	policyVersion := readPolicyVersion
+	outcome := readOutcome
+	estimated := estimatedReadTimeMS
+	return &foregroundTimeMS, &scrollProgressPercent, &exitType, &estimated, &policyVersion, &outcome, ""
 }
 
 func isRecommendationExitType(exitType string) bool {

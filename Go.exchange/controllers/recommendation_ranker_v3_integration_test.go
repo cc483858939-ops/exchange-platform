@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestRulesV2FeedbackLoaderIntegration(t *testing.T) {
+func TestRulesV3FeedbackLoaderIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -32,7 +32,7 @@ func TestRulesV2FeedbackLoaderIntegration(t *testing.T) {
 	requestID := uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	author := createArticleIntegrationAuthor(t, db)
-	article := models.Article{Model: gorm.Model{ID: uint(time.Now().UnixNano() & 0x3fffffff)}, AuthorID: author.ID, Title: "ranker v2", Category: "backend", Tags: []string{"go"}}
+	article := models.Article{Model: gorm.Model{ID: uint(time.Now().UnixNano() & 0x3fffffff)}, AuthorID: author.ID, Title: "ranker v3", Category: "backend", Tags: []string{"go"}}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestRulesV2FeedbackLoaderIntegration(t *testing.T) {
 	}
 }
 
-func TestRulesV2FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
+func TestRulesV3FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -106,8 +106,8 @@ func TestRulesV2FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != recommendationFeedbackEventLimit-1 {
-		t.Fatalf("global cap=%d", len(loaded))
+	if len(loaded) != recommendationFeedbackArticleLimit {
+		t.Fatalf("distinct article budget=%d", len(loaded))
 	}
 	clicks := 0
 	for _, item := range loaded {
@@ -115,10 +115,10 @@ func TestRulesV2FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
 			clicks++
 		}
 	}
-	if clicks != recommendationFeedbackSignalCountCap {
-		t.Fatalf("per signal cap=%d", clicks)
+	if clicks != 1 {
+		t.Fatalf("duplicate article signals=%d", clicks)
 	}
-	candidates, err := loadRulesV2Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
 	if err != nil {
 		t.Fatal(err)
 	}

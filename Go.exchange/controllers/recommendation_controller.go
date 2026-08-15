@@ -62,8 +62,9 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 
 	var behaviors []models.ArticleBehavior
 	if err := global.Db.
-		Where("user_id = ? AND active = ? AND action IN ?", userID, true, []string{ArticleBehaviorActionView, ArticleBehaviorActionLike}).
-		Order("article_id ASC, action ASC, id ASC").
+		Where("user_id = ? AND action = ?", userID, ArticleBehaviorActionView).
+		Order("last_seen_at DESC, id DESC").
+		Limit(recommendationRecentViewArticleLimit).
 		Find(&behaviors).Error; err != nil {
 		return nil, err
 	}
@@ -81,7 +82,7 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 			continue
 		}
 		seenIDs[behavior.ArticleID] = struct{}{}
-		articleIDs = append(articleIDs, behavior.ArticleID) //得到去重之后的文章id
+		articleIDs = append(articleIDs, behavior.ArticleID)
 	}
 	if len(articleIDs) == 0 {
 		return nil, nil
@@ -93,12 +94,12 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 		Where("id IN ?", articleIDs).
 		Find(&articles).Error; err != nil {
 		return nil, err
-	} //查询文章类型
+	}
 
 	articleByID := make(map[uint]models.Article, len(articles))
 	for _, article := range articles {
 		articleByID[article.ID] = article
-	} //根据行为里面包含的文章ID可以快速查找到文章的详情
+	}
 
 	signals := make([]articleBehaviorSignal, 0, len(behaviors))
 	for _, behavior := range behaviors {
@@ -106,13 +107,14 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 		if !exists {
 			continue
 		}
-		signals = append(signals, articleBehaviorSignal{
-			Behavior: behavior,
-			Article:  article,
-		})
+		signals = append(signals, articleBehaviorSignal{Behavior: behavior, Article: article})
 	}
 	return signals, nil
-} //包括用户行为和文章类型，和文章的id
+}
+
+func strconvUint(id uint) string {
+	return strconv.FormatUint(uint64(id), 10)
+}
 
 func articleIDs(articles []models.Article) []uint {
 	ids := make([]uint, 0, len(articles))
@@ -133,7 +135,7 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	now := started.UTC()
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
-	cfg := normalizedRulesV2RecommendationConfig()
+	cfg := normalizedRulesV3RecommendationConfig()
 	lookbackStart := now.AddDate(0, 0, -cfg.FeedbackLookbackDays)
 	behaviors, err := loadRecommendationBehaviorSignals(userID)
 	if err != nil {
@@ -147,15 +149,21 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	profile := buildRulesV2InterestProfile(behaviors, feedback, now, cfg)
+	reactions, err := loadRecommendationReactionStates(userID)
+	if err != nil {
+		metrics.RecordRecommendationRequest("error", "unknown")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	profile := buildRulesV3InterestProfile(behaviors, feedback, reactions, now, cfg)
 	strategyID := recommendationStrategyID(profile)
-	candidates, err := loadRulesV2Candidates(userID, profile.InteractedArticleIDs, lookbackStart, now)
+	candidates, err := loadRulesV3Candidates(userID, profile.InteractedArticleIDs, lookbackStart, now)
 	if err != nil {
 		metrics.RecordRecommendationRequest("error", strategyID)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	recommendations := recommendRulesV2Articles(profile, candidates, now, cfg, limit)
+	recommendations := recommendRulesV3Articles(profile, candidates, now, cfg, limit)
 	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)

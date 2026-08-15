@@ -4,7 +4,7 @@ import type { RecommendationTracking } from '../types/Recommendation';
 
 export type RecommendationEventType = 'impression' | 'click' | 'read_end' | 'not_interested';
 
-export type RecommendationReadEndPayload = { foreground_time_ms: number; max_scroll_depth: number; exit_type: string; };
+export type RecommendationReadEndPayload = { foreground_time_ms: number; scroll_progress_percent: number; exit_type: string; };
 
 type QueuedRecommendationEvent = {
   event_id: string;
@@ -12,7 +12,7 @@ type QueuedRecommendationEvent = {
   tracking_token: string;
   occurred_at: string;
   foreground_time_ms?: number;
-  max_scroll_depth?: number;
+  scroll_progress_percent?: number;
   exit_type?: string;
 };
 
@@ -34,7 +34,7 @@ type ObservedRecommendation = {
   tracking: RecommendationTracking;
 };
 
-const storageKey = 'recommendation_telemetry_queue_v1';
+const storageKey = 'recommendation_telemetry_queue_v2';
 const maxBufferedEvents = 200;
 const maxBatchEvents = 50;
 const flushThreshold = 10;

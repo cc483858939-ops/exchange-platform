@@ -27,13 +27,13 @@ const (
 )
 
 type recommendationEventInput struct {
-	EventID          string  `json:"event_id"`
-	EventType        string  `json:"event_type"`
-	TrackingToken    string  `json:"tracking_token"`
-	OccurredAt       string  `json:"occurred_at"`
-	ForegroundTimeMS *int64  `json:"foreground_time_ms,omitempty"`
-	MaxScrollDepth   *int    `json:"max_scroll_depth,omitempty"`
-	ExitType         *string `json:"exit_type,omitempty"`
+	EventID               string  `json:"event_id"`
+	EventType             string  `json:"event_type"`
+	TrackingToken         string  `json:"tracking_token"`
+	OccurredAt            string  `json:"occurred_at"`
+	ForegroundTimeMS      *int64  `json:"foreground_time_ms,omitempty"`
+	ScrollProgressPercent *int    `json:"scroll_progress_percent,omitempty"`
+	ExitType              *string `json:"exit_type,omitempty"`
 }
 
 type recommendationEventBatchRequest struct {
@@ -170,11 +170,8 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 	if !isRecommendationEventType(eventType) {
 		return models.RecommendationEvent{}, "unsupported_event_type"
 	}
+
 	claims, err := verifyRecommendationTrackingToken(strings.TrimSpace(input.TrackingToken), key)
-	foregroundTimeMS, maxScrollDepth, exitType, qualifiedRead, quickBounce, reason := validateRecommendationReadPayload(eventType, input)
-	if reason != "" {
-		return models.RecommendationEvent{}, reason
-	}
 	if err != nil {
 		return models.RecommendationEvent{}, "invalid_tracking_token"
 	}
@@ -184,6 +181,7 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 	if claims.Scene != recommendationScene {
 		return models.RecommendationEvent{}, "unsupported_scene"
 	}
+
 	occurredAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.OccurredAt))
 	if err != nil {
 		return models.RecommendationEvent{}, "invalid_occurred_at"
@@ -198,16 +196,23 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 	if occurredAt.Before(issuedAt.Add(-skew)) || occurredAt.After(expiresAt) || occurredAt.After(now.Add(skew)) {
 		return models.RecommendationEvent{}, "occurred_at_out_of_range"
 	}
+
+	foregroundTimeMS, scrollProgressPercent, exitType, estimatedReadTimeMS, readPolicyVersion, readOutcome, reason :=
+		validateRecommendationReadPayload(eventType, input, claims.EstimatedReadTimeMS, claims.ReadPolicyVersion)
+	if reason != "" {
+		return models.RecommendationEvent{}, reason
+	}
 	return models.RecommendationEvent{
 		EventID: eventID, UserID: userID, RequestID: claims.RequestID,
 		ArticleID: claims.ArticleID, EventType: eventType, Scene: claims.Scene,
 		Position: claims.Position, RankerVersion: claims.RankerVersion,
 		RankerConfigHash: claims.RankerConfigHash, StrategyID: claims.StrategyID,
 		OccurredAt: occurredAt, ReceivedAt: now, ForegroundTimeMS: foregroundTimeMS,
-		MaxScrollDepth: maxScrollDepth, ExitType: exitType, QualifiedRead: qualifiedRead, QuickBounce: quickBounce, CreatedAt: now,
+		ScrollProgressPercent: scrollProgressPercent, ExitType: exitType,
+		EstimatedReadTimeMS: estimatedReadTimeMS, ReadPolicyVersion: readPolicyVersion,
+		ReadOutcome: readOutcome, CreatedAt: now,
 	}, ""
 }
-
 func persistRecommendationEvents(userID uint, events []models.RecommendationEvent) ([]recommendationPersistenceResult, error) {
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")

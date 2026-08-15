@@ -32,6 +32,7 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.LikeSnapshotGroupID = "like-snapshot-integration"
 	defer func() { global.Db = originalDB; config.AppConfig = originalConfig }()
+
 	author := models.User{Username: "like-projection-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&author).Error; err != nil {
 		t.Fatal(err)
@@ -40,87 +41,52 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
-	newer, _ := eventing.NewLikeSnapshotEnvelope(article.ID, 8, 2)
-	if err := applyLikeSnapshotEvent(newer); err != nil {
-		t.Fatal(err)
-	}
-	older, _ := eventing.NewLikeSnapshotEnvelope(article.ID, 1, 1)
-	if err := applyLikeSnapshotEvent(older); err != nil {
-		t.Fatal(err)
-	}
-	var loaded models.Article
-	if err := db.First(&loaded, article.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if loaded.LikeCount != 8 || loaded.LikeSyncVersion != 2 {
-		t.Fatalf("stale snapshot overwrote article: %+v", loaded)
-	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	like := eventing.UserBehaviorPayload{UserID: 11, ArticleID: article.ID, LikeVersion: 3}
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyArticleReactionProjection(tx, eventing.EventTypeArticleLiked, like)
+		return applyArticleReactionProjection(tx, eventing.EventTypeArticleLiked, like, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	staleUnlike := like
 	staleUnlike.LikeVersion = 2
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyArticleReactionProjection(tx, eventing.EventTypeArticleUnliked, staleUnlike)
+		return applyArticleReactionProjection(tx, eventing.EventTypeArticleUnliked, staleUnlike, now.Add(time.Second))
 	}); err != nil {
 		t.Fatal(err)
 	}
+
 	var reaction models.ArticleReaction
 	if err := db.First(&reaction, "user_id = ? AND article_id = ?", 11, article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if !reaction.Liked || reaction.Version != 3 {
+	if !reaction.Liked || reaction.Version != 3 || !reaction.StateChangedAt.Equal(now) {
 		t.Fatalf("stale reaction overwrote state: %+v", reaction)
 	}
+
 	freshUnlike := like
 	freshUnlike.LikeVersion = 4
+	unlikeAt := now.Add(2 * time.Second)
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyArticleReactionProjection(tx, eventing.EventTypeArticleUnliked, freshUnlike)
+		return applyArticleReactionProjection(tx, eventing.EventTypeArticleUnliked, freshUnlike, unlikeAt)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.First(&reaction, "user_id = ? AND article_id = ?", 11, article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if reaction.Liked || reaction.Version != 4 {
-		t.Fatalf("fresh reaction not applied: %+v", reaction)
+	if reaction.Liked || reaction.Version != 4 || !reaction.StateChangedAt.Equal(unlikeAt) {
+		t.Fatalf("fresh reaction not applied with event time: %+v", reaction)
 	}
 
-	now := time.Now().UTC()
-	behaviorLike := eventing.UserBehaviorPayload{UserID: 12, ArticleID: article.ID, LikeVersion: 5}
-	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyLikeBehaviorProjection(tx, eventing.EventTypeArticleLiked, behaviorLike, now)
-	}); err != nil {
+	var likeBehaviors int64
+	if err := db.Model(&models.ArticleBehavior{}).
+		Where("user_id = ? AND article_id = ? AND action = ?", 11, article.ID, "like").
+		Count(&likeBehaviors).Error; err != nil {
 		t.Fatal(err)
 	}
-	staleBehaviorUnlike := behaviorLike
-	staleBehaviorUnlike.LikeVersion = 4
-	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyLikeBehaviorProjection(tx, eventing.EventTypeArticleUnliked, staleBehaviorUnlike, now.Add(time.Second))
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var behavior models.ArticleBehavior
-	if err := db.First(&behavior, "user_id = ? AND article_id = ? AND action = ?", 12, article.ID, "like").Error; err != nil {
-		t.Fatal(err)
-	}
-	if !behavior.Active || behavior.BehaviorVersion != 5 || behavior.Count != 1 {
-		t.Fatalf("stale behavior overwrote state: %+v", behavior)
-	}
-	freshBehaviorUnlike := behaviorLike
-	freshBehaviorUnlike.LikeVersion = 6
-	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyLikeBehaviorProjection(tx, eventing.EventTypeArticleUnliked, freshBehaviorUnlike, now.Add(2*time.Second))
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.First(&behavior, behavior.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if behavior.Active || behavior.BehaviorVersion != 6 || behavior.Count != 0 {
-		t.Fatalf("fresh behavior not applied: %+v", behavior)
+	if likeBehaviors != 0 {
+		t.Fatalf("like projection should not create ArticleBehavior rows: %d", likeBehaviors)
 	}
 }

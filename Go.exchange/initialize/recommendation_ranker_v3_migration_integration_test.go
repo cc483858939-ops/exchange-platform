@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestRecommendationRankerV2IndexesIntegration(t *testing.T) {
+func TestRecommendationRankerV3IndexesIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -23,7 +23,7 @@ func TestRecommendationRankerV2IndexesIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRecommendationRankerV2Indexes(db); err != nil {
+	if err := applyRecommendationRankerV3Indexes(db); err != nil {
 		t.Fatal(err)
 	}
 
@@ -36,23 +36,23 @@ SELECT indexname, indexdef
 FROM pg_indexes
 WHERE schemaname = current_schema()
   AND tablename = 'recommendation_events'
-  AND indexname IN ('idx_recommendation_events_user_feedback_order', 'idx_recommendation_events_user_article_negative')
+  AND indexname IN ('idx_recommendation_events_user_feedback_article_order', 'idx_recommendation_events_user_article_negative_order')
 ORDER BY indexname
 `).Scan(&indexes).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(indexes) != 2 {
-		t.Fatalf("rules_v2 indexes=%d want=2", len(indexes))
+		t.Fatalf("rules_v3 indexes=%d want=2", len(indexes))
 	}
 
 	definitions := make(map[string]string, len(indexes))
 	for _, index := range indexes {
 		definitions[index.Name] = strings.ToLower(index.Definition)
 	}
-	assertIndexDefinitionContains(t, definitions["idx_recommendation_events_user_feedback_order"],
-		"user_id", "occurred_at desc", "received_at desc", "event_id desc", "where")
-	assertIndexDefinitionContains(t, definitions["idx_recommendation_events_user_article_negative"],
-		"user_id", "article_id", "occurred_at desc", "not_interested", "where")
+	assertIndexDefinitionContains(t, definitions["idx_recommendation_events_user_feedback_article_order"],
+		"user_id", "article_id", "event_type", "occurred_at desc", "received_at desc", "event_id desc", "where")
+	assertIndexDefinitionContains(t, definitions["idx_recommendation_events_user_article_negative_order"],
+		"user_id", "article_id", "occurred_at desc", "received_at desc", "event_id desc", "not_interested", "where")
 }
 
 func assertIndexDefinitionContains(t *testing.T, definition string, fragments ...string) {
