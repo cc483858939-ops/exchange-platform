@@ -1,10 +1,12 @@
-﻿.git
+.git
 .devcontainer
 .idea
+.secrets
 *.code-workspace
 bin/
 coverage/
 observability/
+output/
 go1.25.3.linux-amd64.tar.gz
 Dockerfile
 README.article-ai-processor.md

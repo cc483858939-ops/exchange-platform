@@ -8,6 +8,12 @@ data:
   REDIS_DB: "0"
   REDIS_POOL_SIZE: "200"
   REDIS_MIN_IDLE_CONNS: "20"
+  JWT_ISSUER: "go.exchange"
+  JWT_AUDIENCE: "go.exchange.api"
+  JWT_ACCESS_TTL: "15m"
+  JWT_REFRESH_IDLE_TTL: "168h"
+  JWT_REFRESH_ABSOLUTE_TTL: "720h"
+  JWT_CLOCK_SKEW: "30s"
   LIKE_SNAPSHOT_POLL_INTERVAL: "1s"
   LIKE_SNAPSHOT_BATCH_SIZE: "100"
   LIKE_CLAIM_LEASE: "30s"
@@ -15,11 +21,3 @@ data:
   LIKE_BEHAVIOR_CLAIM_LEASE: "30s"
   LIKE_BEHAVIOR_FLUSH_INTERVAL: "1s"
   LIKE_BEHAVIOR_PROJECTION_CONSUMERS: "6"
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: go-exchange-secrets
-type: Opaque
-stringData:
-  DATABASE_DSN: "root:1234@tcp(mysql:3306)/test?charset=utf8mb4&parseTime=True&loc=Local"

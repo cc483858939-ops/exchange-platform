@@ -23,7 +23,7 @@ spec:
             - configMapRef:
                 name: go-exchange-config
             - secretRef:
-                name: go-exchange-secrets
+                name: go-exchange-runtime-secrets
           env:
             - name: APP_RUNTIME_ROLE
               value: worker

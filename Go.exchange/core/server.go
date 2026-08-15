@@ -1,9 +1,13 @@
 package core
 
 import (
+	"Go.exchange/auth"
 	"Go.exchange/config"
+	"Go.exchange/controllers"
+	"Go.exchange/global"
 	"Go.exchange/router"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,41 +17,44 @@ import (
 	"time"
 )
 
-func StartHttpServer() *http.Server {
+func StartHttpServer(tokens auth.TokenService) (*http.Server, error) {
+	authController, err := controllers.NewAuthController(global.Db, tokens)
+	if err != nil {
+		return nil, fmt.Errorf("initialize auth controller: %w", err)
+	}
 	port := config.AppPort()
-	r := router.SetupRouter()
-	srv := &http.Server{
+	handler := router.SetupRouter(authController, tokens)
+	server := &http.Server{
 		Addr:    port,
-		Handler: r,
+		Handler: handler,
 	}
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Listen: %s\n", err)
 		}
-
 	}()
-	return srv
+	return server, nil
 }
 
-func WaitForShutdown(ctx context.Context, cancel context.CancelFunc, srv *http.Server, wg *sync.WaitGroup) {
+func WaitForShutdown(ctx context.Context, cancel context.CancelFunc, server *http.Server, waitGroup *sync.WaitGroup) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	shutdowCtx, shutdowCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdowCancel()
-	if err := srv.Shutdown(shutdowCtx); err != nil {
-		log.Printf("服务强制关闭")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server forced to shut down: %v", err)
 	}
 	cancel()
-	doneChan := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		wg.Wait()
-		close(doneChan)
+		waitGroup.Wait()
+		close(done)
 	}()
 	select {
-	case <-doneChan:
-		log.Println("任务执行完成")
-	case <-shutdowCtx.Done():
-		log.Printf("执行时间过长强制退出")
+	case <-done:
+		log.Println("background tasks stopped")
+	case <-shutdownCtx.Done():
+		log.Println("background task shutdown timed out")
 	}
 }

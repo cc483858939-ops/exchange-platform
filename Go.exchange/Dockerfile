@@ -19,6 +19,6 @@ WORKDIR /app
 COPY --from=builder /out/go-exchange /app/go-exchange
 COPY config /app/config
 
-EXPOSE 3000 6060
+EXPOSE 3000
 
 ENTRYPOINT ["/app/go-exchange"]

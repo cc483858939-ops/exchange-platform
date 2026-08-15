@@ -2,11 +2,12 @@ package config
 
 import (
 	"log"
+	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
 
-// AIConfig holds the runtime settings used by the async article analysis pipeline.
 type AIConfig struct {
 	BaseURL             string `mapstructure:"base_url"`
 	APIKey              string `mapstructure:"api_key"`
@@ -35,6 +36,7 @@ type KafkaConfig struct {
 	JobLeaseSeconds              int      `mapstructure:"job_lease_seconds"`
 	JobMaxAttempts               int      `mapstructure:"job_max_attempts"`
 }
+
 type RecommendationBehaviorWeights struct {
 	View          float64 `mapstructure:"view"`
 	Like          float64 `mapstructure:"like"`
@@ -103,6 +105,40 @@ func LoadConfig() {
 	AppConfig = &Config{}
 	if err := viper.Unmarshal(AppConfig); err != nil {
 		log.Fatalf("Unable to decode into struct: %v", err)
+	}
+	applySensitiveEnvironmentOverrides(AppConfig)
+}
+
+func applySensitiveEnvironmentOverrides(config *Config) {
+	if value := strings.TrimSpace(os.Getenv("DATABASE_DSN")); value != "" {
+		config.Database.Dsn = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AI_BASE_URL")); value != "" {
+		config.AI.BaseURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AI_API_KEY")); value != "" {
+		config.AI.APIKey = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AI_MODEL")); value != "" {
+		config.AI.Model = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AI_CHUNK_MODEL")); value != "" {
+		config.AI.ChunkModel = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AI_MAIN_MODEL")); value != "" {
+		config.AI.MainModel = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); value != "" {
+		config.Storage.Endpoint = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")); value != "" {
+		config.Storage.AccessKey = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")); value != "" {
+		config.Storage.SecretKey = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MINIO_BUCKET")); value != "" {
+		config.Storage.Bucket = value
 	}
 }
 

@@ -20,6 +20,11 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/home/vscode/go"
 ENV PATH="${GOPATH}/bin:${PATH}"
 
+# Non-secret local paths. The key is generated under the ignored .secrets tree.
+ENV JWT_ACTIVE_KID="local-dev-v1"
+ENV JWT_PRIVATE_KEY_FILE="/workspace/mf/Go.exchange/.secrets/jwt/private.pem"
+ENV JWT_VERIFY_KEYS_DIR="/workspace/mf/Go.exchange/.secrets/jwt/public"
+
 RUN mkdir -p /home/vscode/.cache/go-build /home/vscode/go/pkg/mod \
     && chown -R vscode:vscode /home/vscode/.cache /home/vscode/go
 

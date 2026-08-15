@@ -1,4 +1,4 @@
-﻿apiVersion: apps/v1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: go-exchange-api
@@ -23,7 +23,9 @@ spec:
             - configMapRef:
                 name: go-exchange-config
             - secretRef:
-                name: go-exchange-secrets
+                name: go-exchange-runtime-secrets
+            - secretRef:
+                name: go-exchange-api-auth-secrets
           env:
             - name: APP_RUNTIME_ROLE
               value: api

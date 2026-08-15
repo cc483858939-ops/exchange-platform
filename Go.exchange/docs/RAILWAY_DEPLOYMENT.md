@@ -26,7 +26,27 @@ MINIO_ACCESS_KEY=<minio-access-key>
 MINIO_SECRET_KEY=<minio-secret-key>
 MINIO_BUCKET=go-exchange
 MINIO_USE_SSL=false
+
+JWT_ACTIVE_KID=jwt-2026-01
+JWT_PRIVATE_KEY_B64=<base64-encoded-ed25519-pkcs8-private-pem>
+JWT_ISSUER=go.exchange
+JWT_AUDIENCE=go.exchange.api
+JWT_ACCESS_TTL=15m
+JWT_REFRESH_IDLE_TTL=168h
+JWT_REFRESH_ABSOLUTE_TTL=720h
+JWT_CLOCK_SKEW=30s
 ```
+
+Generate the key pair outside Railway and never commit it:
+
+```powershell
+go run ./cmd/gen-jwt-keys --kid jwt-2026-01 --out .secrets/jwt
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('.secrets/jwt/private.pem'))
+```
+
+Store the Base64 result as a Railway secret. Do not give the JWT private key
+to Worker or migration services. `JWT_VERIFY_KEYS_B64` is optional and is only
+needed while old public keys remain valid during a future rotation window.
 
 Use the actual Railway service names in reference variables. Do not set `PORT`:
 the application reads the port that Railway supplies.

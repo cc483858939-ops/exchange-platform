@@ -4,8 +4,7 @@ export type AuthIdentity = {
 };
 
 type TokenClaims = {
-  user_id?: unknown;
-  username?: unknown;
+  sub?: unknown;
 };
 
 const decodeBase64Url = (value: string): string => {
@@ -20,12 +19,10 @@ const readUserID = (value: unknown): number | null => {
   if (typeof value === 'number') {
     return Number.isSafeInteger(value) && value > 0 ? value : null;
   }
-
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
   }
-
   return null;
 };
 
@@ -35,21 +32,13 @@ export const decodeAuthIdentity = (token: string | null | undefined): AuthIdenti
     if (!rawToken) {
       return null;
     }
-
     const segments = rawToken.split('.');
     if (segments.length !== 3 || !segments[1]) {
       return null;
     }
-
     const claims = JSON.parse(decodeBase64Url(segments[1])) as TokenClaims;
-    const id = readUserID(claims.user_id);
-    const username = typeof claims.username === 'string' ? claims.username.trim() : '';
-
-    if (!id || !username) {
-      return null;
-    }
-
-    return { id, username };
+    const id = readUserID(claims.sub);
+    return id ? { id, username: '' } : null;
   } catch {
     return null;
   }

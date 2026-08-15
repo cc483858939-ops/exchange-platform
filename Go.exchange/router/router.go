@@ -1,6 +1,7 @@
 package router
 
 import (
+	"Go.exchange/auth"
 	"Go.exchange/controllers"
 	"Go.exchange/metrics"
 	"Go.exchange/middlewares"
@@ -10,10 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter() *gin.Engine {
-	r := gin.Default()
+func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier) *gin.Engine {
+	router := gin.Default()
 
-	r.Use(cors.New(cors.Config{
+	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
@@ -21,26 +22,26 @@ func SetupRouter() *gin.Engine {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-	r.Use(metrics.Middleware())
+	router.Use(metrics.Middleware())
 
-	r.GET("/healthz", controllers.Healthz)
-	r.GET("/readyz", controllers.Readyz)
-	r.GET("/metrics", gin.WrapH(metrics.Handler()))
+	router.GET("/healthz", controllers.Healthz)
+	router.GET("/readyz", controllers.Readyz)
+	router.GET("/metrics", gin.WrapH(metrics.Handler()))
 
-	auth := r.Group("/api/auth")
+	authRoutes := router.Group("/api/auth")
 	{
-		auth.POST("/login", controllers.Login)
-		auth.POST("/register", controllers.Register)
-		auth.POST("/refresh", controllers.RefreshToken)
+		authRoutes.POST("/login", authController.Login)
+		authRoutes.POST("/register", authController.Register)
+		authRoutes.POST("/refresh", authController.Refresh)
 	}
 
-	api := r.Group("/api")
+	api := router.Group("/api")
 	api.GET("/exchangeRates", controllers.GetExchangeRates)
 	api.GET("/exchange/currencies", controllers.GetExchangeCurrencies)
 	api.GET("/exchange/quote", controllers.GetExchangeQuote)
 	api.GET("/files/*objectKey", controllers.GetFile)
 
-	api.Use(middlewares.AuthMiddleWare())
+	api.Use(middlewares.AuthMiddleware(verifier))
 	{
 		api.GET("/recommendations/articles", controllers.GetArticleRecommendations)
 		api.POST("/recommendation-events", controllers.RecordRecommendationEvents)
@@ -69,5 +70,5 @@ func SetupRouter() *gin.Engine {
 		api.DELETE("/articles/:id/like", controllers.UnlikeArticle)
 	}
 
-	return r
+	return router
 }

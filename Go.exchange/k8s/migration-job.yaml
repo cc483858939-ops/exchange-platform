@@ -15,9 +15,9 @@ spec:
         - name: migrate
           image: your-registry/go-exchange:latest
           imagePullPolicy: IfNotPresent
-          command: ["go", "run", "./cmd/migrate"]
+          command: ["/app/go-exchange-migrate"]
           envFrom:
             - configMapRef:
                 name: go-exchange-config
             - secretRef:
-                name: go-exchange-secrets
+                name: go-exchange-runtime-secrets

@@ -1,22 +1,44 @@
 package controllers
 
 import (
+	"Go.exchange/auth"
+	"Go.exchange/models"
+	"Go.exchange/utils"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
-
-	"Go.exchange/global"
-	"Go.exchange/models"
-	"Go.exchange/utils"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+type stubTokenService struct{}
+
+func (stubTokenService) IssuePair(_ context.Context, userID uint) (auth.TokenPair, error) {
+	return auth.TokenPair{
+		UserID:           userID,
+		AccessToken:      "raw-access-token",
+		RefreshToken:     "rt1.00000000-0000-4000-8000-000000000000.test-secret",
+		TokenType:        "Bearer",
+		AccessExpiresIn:  15 * time.Minute,
+		RefreshExpiresIn: 7 * 24 * time.Hour,
+	}, nil
+}
+
+func (stubTokenService) RotateRefresh(_ context.Context, _ string) (auth.TokenPair, error) {
+	return auth.TokenPair{}, auth.ErrRefreshInvalid
+}
+
+func (stubTokenService) VerifyAccess(_ string) (*auth.AccessClaims, error) {
+	return nil, auth.ErrAccessTokenInvalid
+}
 
 func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
@@ -31,15 +53,10 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}); err != nil {
 		t.Fatal(err)
 	}
-
-	originalDB := global.Db
-	originalSaveRefreshToken := saveRefreshToken
-	global.Db = db
-	saveRefreshToken = func(uint, string) error { return nil }
-	t.Cleanup(func() {
-		global.Db = originalDB
-		saveRefreshToken = originalSaveRefreshToken
-	})
+	controller, err := NewAuthController(db, stubTokenService{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	username := "register-" + uuid.NewString()
 	password := "secret123"
@@ -55,9 +72,20 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(payload))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	Register(ctx)
+	controller.Register(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("register status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response authResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AccessToken != "raw-access-token" || response.TokenType != "Bearer" {
+		t.Fatalf("unexpected auth response: %+v", response)
+	}
+	if response.User.Username != username || response.User.ID == 0 {
+		t.Fatalf("unexpected response user: %+v", response.User)
 	}
 
 	var user models.User
@@ -67,14 +95,7 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		db.Unscoped().Delete(&user)
 	})
-
-	if user.Username != username {
-		t.Fatalf("username=%q, want %q", user.Username, username)
-	}
-	if user.Password == "" {
-		t.Fatal("stored password is empty")
-	}
-	if !utils.CheckPassword(password, user.Password) {
+	if user.Password == "" || !utils.CheckPassword(password, user.Password) {
 		t.Fatal("stored password hash does not match submitted password")
 	}
 }
@@ -86,11 +107,11 @@ func TestRegisterRequestBindsCredentials(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(payload))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	var req registerRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil {
+	var request registerRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
 		t.Fatalf("bind registration request: %v", err)
 	}
-	if req.Username != "alice" || req.Password != "secret123" {
-		t.Fatalf("bound request=%+v", req)
+	if request.Username != "alice" || request.Password != "secret123" {
+		t.Fatalf("bound request=%+v", request)
 	}
 }

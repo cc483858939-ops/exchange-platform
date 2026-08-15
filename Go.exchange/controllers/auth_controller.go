@@ -1,14 +1,11 @@
 package controllers
 
 import (
-	"Go.exchange/consts"
-	"Go.exchange/global"
+	"Go.exchange/auth"
 	"Go.exchange/models"
 	"Go.exchange/utils"
 	"errors"
-	"fmt" // 必须引入
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -19,192 +16,140 @@ type registerRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// SaveRefreshTokenToRedis 将 Refresh Token 存入 Redis
-func SaveRefreshTokenToRedis(userID uint, token string) error {
-	key := fmt.Sprintf(consts.Refresh, strconv.FormatUint(uint64(userID), 10))
-	//  return err 变量，
-	err := global.RedisDB.Set(key, token, utils.RefreshTokenDuration).Err()
-	return err
+type loginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
 }
 
-var saveRefreshToken = SaveRefreshTokenToRedis
-
-// Register 注册
-func Register(ctx *gin.Context) {
-	var req registerRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
-		return
-	}
-
-	// 1. 密码加密
-	hashedPwd, err := utils.HashPassword(req.Password)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
-		return
-	}
-	user := models.User{
-		Username: req.Username,
-		Password: hashedPwd,
-	}
-
-	// 2. 存入数据库
-	if err := global.Db.Create(&user).Error; err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "User already exists or database error"})
-		return
-	}
-
-	// 3. 生成双 Token
-	accessToken, refreshToken, err := utils.GenerateTokenPair(user.ID, user.Username)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 4. 存入 Redis
-	if err := saveRefreshToken(user.ID, refreshToken); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
-		return
-	}
-
-	ctx.JSON(http.StatusOK, gin.H{
-		"message":       "Registration successful",
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-	})
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
-// Login 登录
-func Login(ctx *gin.Context) {
-	var input struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
+type authUserResponse struct {
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+}
 
-	if err := ctx.ShouldBindJSON(&input); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
+type authResponse struct {
+	AccessToken      string           `json:"access_token"`
+	RefreshToken     string           `json:"refresh_token"`
+	TokenType        string           `json:"token_type"`
+	ExpiresIn        int64            `json:"expires_in"`
+	RefreshExpiresIn int64            `json:"refresh_expires_in"`
+	User             authUserResponse `json:"user"`
+}
+
+type AuthController struct {
+	db     *gorm.DB
+	tokens auth.TokenService
+}
+
+func NewAuthController(db *gorm.DB, tokens auth.TokenService) (*AuthController, error) {
+	if db == nil {
+		return nil, errors.New("auth database is required")
+	}
+	if tokens == nil {
+		return nil, errors.New("auth token service is required")
+	}
+	return &AuthController{db: db, tokens: tokens}, nil
+}
+
+func (c *AuthController) Register(ctx *gin.Context) {
+	var request registerRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
 		return
 	}
 
-	// 1. 查库
+	hashedPassword, err := utils.HashPassword(request.Password)
+	if err != nil {
+		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
+		return
+	}
+	user := models.User{Username: request.Username, Password: hashedPassword}
+	if err := c.db.WithContext(ctx.Request.Context()).Create(&user).Error; err != nil {
+		writeAuthError(ctx, http.StatusConflict, "AUTH_USERNAME_UNAVAILABLE", "Username is unavailable")
+		return
+	}
+
+	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID)
+	if err != nil {
+		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_TOKEN_ISSUE_FAILED", "Authentication failed")
+		return
+	}
+	writeAuthResponse(ctx, pair, user)
+}
+
+func (c *AuthController) Login(ctx *gin.Context) {
+	var request loginRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		return
+	}
+
 	var user models.User
-	if err := global.Db.Where("username = ?", input.Username).First(&user).Error; err != nil {
+	if err := c.db.WithContext(ctx.Request.Context()).Where("username = ?", request.Username).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid username or password"})
-		} else {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_CREDENTIALS_INVALID", "Invalid username or password")
+			return
+		}
+		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
+		return
+	}
+	if !utils.CheckPassword(request.Password, user.Password) {
+		writeAuthError(ctx, http.StatusUnauthorized, "AUTH_CREDENTIALS_INVALID", "Invalid username or password")
+		return
+	}
+
+	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID)
+	if err != nil {
+		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_TOKEN_ISSUE_FAILED", "Authentication failed")
+		return
+	}
+	writeAuthResponse(ctx, pair, user)
+}
+
+func (c *AuthController) Refresh(ctx *gin.Context) {
+	var request refreshRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		return
+	}
+
+	pair, err := c.tokens.RotateRefresh(ctx.Request.Context(), request.RefreshToken)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrRefreshExpired):
+			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_EXPIRED", "Authentication failed")
+		case errors.Is(err, auth.ErrRefreshReused):
+			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_REUSED", "Authentication failed")
+		case errors.Is(err, auth.ErrRefreshInvalid):
+			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
+		default:
+			writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
 		}
 		return
 	}
 
-	// 2. 校验密码
-	if !utils.CheckPassword(input.Password, user.Password) {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid username or password"})
+	var user models.User
+	if err := c.db.WithContext(ctx.Request.Context()).Select("id", "username").First(&user, pair.UserID).Error; err != nil {
+		writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
 		return
 	}
+	writeAuthResponse(ctx, pair, user)
+}
 
-	// 3. 生成双 Token (匹配 RefreshToken 逻辑)
-	accessToken, refreshToken, err := utils.GenerateTokenPair(user.ID, user.Username)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 4. 存入 Redis
-	if err := SaveRefreshTokenToRedis(user.ID, refreshToken); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
-		return
-	}
-
-	ctx.JSON(http.StatusOK, gin.H{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
+func writeAuthResponse(ctx *gin.Context, pair auth.TokenPair, user models.User) {
+	ctx.JSON(http.StatusOK, authResponse{
+		AccessToken:      pair.AccessToken,
+		RefreshToken:     pair.RefreshToken,
+		TokenType:        pair.TokenType,
+		ExpiresIn:        int64(pair.AccessExpiresIn.Seconds()),
+		RefreshExpiresIn: int64(pair.RefreshExpiresIn.Seconds()),
+		User:             authUserResponse{ID: user.ID, Username: user.Username},
 	})
 }
 
-// RefreshToken 刷新 Token
-func RefreshToken(ctx *gin.Context) {
-	var input struct {
-		RefreshToken string `json:"refresh_token"`
-	}
-	if err := ctx.ShouldBindJSON(&input); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
-		return
-	}
-
-	// 1. 解析与验签
-	_, claims, err := utils.ParseJWT(input.RefreshToken)
-	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid refresh token"})
-		return
-	}
-
-	// 2. 校验 Token 类型
-	if tokenType, ok := claims["type"].(string); !ok || tokenType != "refresh" {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token type"})
-		return
-	}
-
-	username, ok := claims["username"].(string)
-	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
-		return
-	}
-	userID, ok := jwtUserIDClaim(claims["user_id"])
-	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
-		return
-	}
-
-	// 3. Redis 校验
-	redisKey := fmt.Sprintf(consts.Refresh, strconv.FormatUint(uint64(userID), 10))
-	storedToken, err := global.RedisDB.Get(redisKey).Result()
-	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh token expired or logged out"})
-		return
-	}
-
-	// 4. 核心比对
-	if storedToken != input.RefreshToken {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Token mismatch"})
-		return
-	}
-
-	// 5. 生成新的双 Token (Rolling Update 机制)
-	newAccessToken, newRefreshToken, err := utils.GenerateTokenPair(userID, username)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Error generating token"})
-		return
-	}
-
-	// 6. 更新 Redis 中的旧 Token
-	if err := SaveRefreshTokenToRedis(userID, newRefreshToken); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Redis error"})
-		return
-	}
-
-	ctx.JSON(http.StatusOK, gin.H{
-		"access_token":  newAccessToken,
-		"refresh_token": newRefreshToken,
-	})
-}
-
-func jwtUserIDClaim(value interface{}) (uint, bool) {
-	switch userID := value.(type) {
-	case float64:
-		id := uint(userID)
-		return id, id > 0 && userID == float64(id)
-	case uint:
-		return userID, userID > 0
-	case int:
-		return uint(userID), userID > 0
-	case string:
-		parsed, err := strconv.ParseUint(userID, 10, 64)
-		if err != nil || parsed == 0 {
-			return 0, false
-		}
-		return uint(parsed), true
-	default:
-		return 0, false
-	}
+func writeAuthError(ctx *gin.Context, status int, code string, message string) {
+	ctx.JSON(status, gin.H{"code": code, "message": message})
 }

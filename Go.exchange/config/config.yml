@@ -3,13 +3,15 @@ app:
   port: ":3000"
 
 database:
-  dsn: "host=db user=postgres password=1234 dbname=test port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+  # Required at runtime through DATABASE_DSN.
+  dsn: ""
   maxidleconns: 11
   maxopenconns: 114
 
 ai:
   base_url: "https://api.deepseek.com"
-  api_key: "sk-1c2fe18dcd2246ab95c728d92cfcc415"
+  # Required by the Worker through AI_API_KEY. Never put a real key here.
+  api_key: ""
   model: "deepseek-chat"
   chunk_model: "deepseek-chat"
   main_model: "deepseek-chat"
@@ -34,6 +36,7 @@ kafka:
   outbox_poll_interval_seconds: 1
   job_lease_seconds: 120
   job_max_attempts: 5
+
 recommendation:
   behavior_weights:
     view: 0.5
@@ -49,9 +52,11 @@ recommendation:
   tag_weight: 2
   popularity_weight: 0.5
   freshness_weight: 1
+
 storage:
   endpoint: "minio:9000"
-  access_key: "minioadmin"
-  secret_key: "minioadmin"
+  # Required at runtime through MINIO_ACCESS_KEY and MINIO_SECRET_KEY.
+  access_key: ""
+  secret_key: ""
   bucket: "go-exchange"
   use_ssl: false

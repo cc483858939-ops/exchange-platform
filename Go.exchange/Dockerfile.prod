@@ -1,4 +1,4 @@
-﻿FROM golang:1.25.3-bookworm AS builder
+FROM golang:1.25.3-bookworm AS builder
 
 WORKDIR /src
 
@@ -21,6 +21,6 @@ COPY --from=builder /out/go-exchange /app/go-exchange
 COPY --from=builder /out/go-exchange-migrate /app/go-exchange-migrate
 COPY config /app/config
 
-EXPOSE 3000 6060
+EXPOSE 3000
 
 ENTRYPOINT ["/app/go-exchange"]

@@ -1,15 +1,15 @@
 package main
 
 import (
+	"Go.exchange/auth"
 	"Go.exchange/config"
 	"Go.exchange/core"
+	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/tasks"
 	"context"
 	"io/ioutil"
 	"log"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"sync"
@@ -26,27 +26,46 @@ func main() {
 
 	role := config.RuntimeRole()
 	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	startPprof()
+	var waitGroup sync.WaitGroup
 	log.Printf("starting go.exchange in %s mode", role)
 
 	switch role {
 	case config.RuntimeRoleAPI:
-		startAPI(ctx, cancel, &wg)
+		startAPI(ctx, cancel, &waitGroup, mustTokenManager())
 	case config.RuntimeRoleWorker:
-		startWorker(ctx, cancel, &wg)
+		startWorker(ctx, cancel, &waitGroup)
 	default:
-		startAll(ctx, cancel, &wg)
+		startAll(ctx, cancel, &waitGroup, mustTokenManager())
 	}
 }
 
-func startAPI(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGroup) {
-	srv := core.StartHttpServer()
-	core.WaitForShutdown(ctx, cancel, srv, wg)
+func mustTokenManager() *auth.Manager {
+	authConfig, err := auth.LoadConfigFromEnv()
+	if err != nil {
+		log.Fatalf("invalid JWT configuration: %v", err)
+	}
+	refreshStore, err := auth.NewRedisRefreshStore(global.RedisDB)
+	if err != nil {
+		log.Fatalf("initialize refresh store: %v", err)
+	}
+	manager, err := auth.NewManager(authConfig, refreshStore)
+	if err != nil {
+		log.Fatalf("initialize token manager: %v", err)
+	}
+	log.Printf("JWT signer initialized with kid=%s", authConfig.ActiveKID)
+	return manager
 }
 
-func startWorker(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGroup) {
-	tasks.StartAll(ctx, wg)
+func startAPI(ctx context.Context, cancel context.CancelFunc, waitGroup *sync.WaitGroup, tokens auth.TokenService) {
+	server, err := core.StartHttpServer(tokens)
+	if err != nil {
+		log.Fatalf("start HTTP server: %v", err)
+	}
+	core.WaitForShutdown(ctx, cancel, server, waitGroup)
+}
+
+func startWorker(ctx context.Context, cancel context.CancelFunc, waitGroup *sync.WaitGroup) {
+	tasks.StartAll(ctx, waitGroup)
 	healthServer := core.StartWorkerHealthServer(config.WorkerHealthAddr(), tasks.WorkerReady)
 	go func() {
 		<-ctx.Done()
@@ -54,23 +73,15 @@ func startWorker(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGr
 		defer shutdownCancel()
 		_ = healthServer.Shutdown(shutdownCtx)
 	}()
-	waitForWorkerShutdown(cancel, wg)
+	waitForWorkerShutdown(cancel, waitGroup)
 }
 
-func startAll(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGroup) {
-	tasks.StartAll(ctx, wg)
-	startAPI(ctx, cancel, wg)
+func startAll(ctx context.Context, cancel context.CancelFunc, waitGroup *sync.WaitGroup, tokens auth.TokenService) {
+	tasks.StartAll(ctx, waitGroup)
+	startAPI(ctx, cancel, waitGroup, tokens)
 }
 
-func startPprof() {
-	go func() {
-		if err := http.ListenAndServe("0.0.0.0:6060", nil); err != nil {
-			log.Println("Pprof error:", err)
-		}
-	}()
-}
-
-func waitForWorkerShutdown(cancel context.CancelFunc, wg *sync.WaitGroup) {
+func waitForWorkerShutdown(cancel context.CancelFunc, waitGroup *sync.WaitGroup) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(quit)
@@ -83,7 +94,7 @@ func waitForWorkerShutdown(cancel context.CancelFunc, wg *sync.WaitGroup) {
 
 	done := make(chan struct{})
 	go func() {
-		wg.Wait()
+		waitGroup.Wait()
 		close(done)
 	}()
 

@@ -1,68 +1,55 @@
 package middlewares
 
 import (
-	"Go.exchange/utils"
+	"Go.exchange/auth"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-func AuthMiddleWare() gin.HandlerFunc {
+func AuthMiddleware(verifier auth.AccessTokenVerifier) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		token := ctx.GetHeader("Authorization")
-		if token == "" {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Missing Authorization Header"})
+		rawToken, ok := bearerToken(ctx.GetHeader("Authorization"))
+		if !ok {
+			ctx.JSON(http.StatusUnauthorized, gin.H{
+				"code":    "AUTH_TOKEN_MISSING",
+				"message": "Authentication required",
+			})
 			ctx.Abort()
 			return
 		}
-		_, claims, err := utils.ParseJWT(token)
+
+		claims, err := verifier.VerifyAccess(rawToken)
 		if err != nil {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			ctx.JSON(http.StatusUnauthorized, gin.H{
+				"code":    "AUTH_TOKEN_INVALID",
+				"message": "Authentication failed",
+			})
 			ctx.Abort()
 			return
 		}
-		if tokenType, ok := claims["type"].(string); !ok || tokenType != "access" {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Please use access token"})
-			ctx.Abort()
-			return
-		}
-
-		username, ok := claims["username"].(string)
-		if !ok {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid claims"})
-			ctx.Abort()
-			return
-		}
-		userID, ok := jwtUserIDClaim(claims["user_id"])
-		if !ok {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid claims"})
+		userID, err := strconv.ParseUint(claims.Subject, 10, 64)
+		if err != nil || userID == 0 || uint64(uint(userID)) != userID {
+			ctx.JSON(http.StatusUnauthorized, gin.H{
+				"code":    "AUTH_TOKEN_INVALID",
+				"message": "Authentication failed",
+			})
 			ctx.Abort()
 			return
 		}
 
-		ctx.Set("user_id", userID)
-		ctx.Set("username", username)
+		ctx.Set("user_id", uint(userID))
+		ctx.Set("session_id", claims.SessionID)
 		ctx.Next()
 	}
 }
 
-func jwtUserIDClaim(value interface{}) (uint, bool) {
-	switch userID := value.(type) {
-	case float64:
-		id := uint(userID)
-		return id, id > 0 && userID == float64(id)
-	case uint:
-		return userID, userID > 0
-	case int:
-		return uint(userID), userID > 0
-	case string:
-		parsed, err := strconv.ParseUint(userID, 10, 64)
-		if err != nil || parsed == 0 {
-			return 0, false
-		}
-		return uint(parsed), true
-	default:
-		return 0, false
+func bearerToken(header string) (string, bool) {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
 	}
+	return parts[1], true
 }
