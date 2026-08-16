@@ -43,12 +43,28 @@ func TestRecommendationMetricsProjectionIsIdempotentIntegration(t *testing.T) {
 	occurredAt := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	payload := eventing.RecommendationEventsRecordedPayload{
 		UserID: 7,
-		Events: []eventing.RecommendationEventFact{{
-			EventID: uuid.NewString(), UserID: 7, RequestID: uuid.NewString(), ArticleID: 11,
-			EventType: models.RecommendationEventTypeImpression, Scene: "recommendation_page",
-			Position: 1, RankerVersion: "rules_v1", RankerConfigHash: "0123456789ab",
-			StrategyID: groupID, OccurredAt: occurredAt, ReceivedAt: occurredAt,
-		}},
+		Events: []eventing.RecommendationEventFact{
+			{
+				EventID: uuid.NewString(), UserID: 7, RequestID: uuid.NewString(), ArticleID: 11,
+				EventType: models.RecommendationEventTypeImpression, Scene: "recommendation_page",
+				Position: 1, RankerVersion: "rules_v1", RankerConfigHash: "0123456789ab",
+				StrategyID: groupID, OccurredAt: occurredAt, ReceivedAt: occurredAt,
+			},
+			{
+				EventID: uuid.NewString(), UserID: 7, RequestID: uuid.NewString(), ArticleID: 11,
+				EventType: models.RecommendationEventTypeFeedDwell, Scene: "recommendation_page",
+				Position: 1, RankerVersion: "rules_v1", RankerConfigHash: "0123456789ab",
+				StrategyID: groupID, OccurredAt: occurredAt, ReceivedAt: occurredAt,
+				FeedVisibleTimeMS: func() *int64 { value := int64(3000); return &value }(),
+			},
+			{
+				EventID: uuid.NewString(), UserID: 7, RequestID: uuid.NewString(), ArticleID: 11,
+				EventType: models.RecommendationEventTypeFeedDwell, Scene: "recommendation_page",
+				Position: 1, RankerVersion: "rules_v1", RankerConfigHash: "0123456789ab",
+				StrategyID: groupID, OccurredAt: occurredAt, ReceivedAt: occurredAt,
+				FeedVisibleTimeMS: func() *int64 { value := int64(5000); return &value }(),
+			},
+		},
 	}
 	body, _ := json.Marshal(payload)
 	event := eventing.Envelope{
@@ -67,7 +83,8 @@ func TestRecommendationMetricsProjectionIsIdempotentIntegration(t *testing.T) {
 	if err := db.Where("strategy_id = ?", groupID).First(&metric).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metric.ImpressionCount != 1 || metric.ClickCount != 0 {
+	if metric.ImpressionCount != 1 || metric.ClickCount != 0 ||
+		metric.FeedDwellCount != 2 || metric.FeedVisibleTimeMS != 8000 {
 		t.Fatalf("metric=%#v", metric)
 	}
 }

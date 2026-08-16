@@ -8,7 +8,8 @@ func recommendationReadPayloadMatches(existing, incoming models.RecommendationEv
 		equalStringPointers(existing.ExitType, incoming.ExitType) &&
 		equalInt64Pointers(existing.EstimatedReadTimeMS, incoming.EstimatedReadTimeMS) &&
 		equalStringPointers(existing.ReadPolicyVersion, incoming.ReadPolicyVersion) &&
-		equalStringPointers(existing.ReadOutcome, incoming.ReadOutcome)
+		equalStringPointers(existing.ReadOutcome, incoming.ReadOutcome) &&
+		equalInt64Pointers(existing.FeedVisibleTimeMS, incoming.FeedVisibleTimeMS)
 }
 
 func equalInt64Pointers(left, right *int64) bool {

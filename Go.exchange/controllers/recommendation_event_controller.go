@@ -34,6 +34,7 @@ type recommendationEventInput struct {
 	ForegroundTimeMS      *int64  `json:"foreground_time_ms,omitempty"`
 	ScrollProgressPercent *int    `json:"scroll_progress_percent,omitempty"`
 	ExitType              *string `json:"exit_type,omitempty"`
+	FeedVisibleTimeMS     *int64  `json:"feed_visible_time_ms,omitempty"`
 }
 
 type recommendationEventBatchRequest struct {
@@ -187,6 +188,10 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 		return models.RecommendationEvent{}, "invalid_occurred_at"
 	}
 	occurredAt = occurredAt.UTC()
+	feedVisibleTimeMS, feedReason := validateRecommendationFeedPayload(eventType, input)
+	if feedReason != "" {
+		return models.RecommendationEvent{}, feedReason
+	}
 	issuedAt := time.Unix(claims.IssuedAtUnix, 0).UTC()
 	expiresAt := time.Unix(claims.ExpiresAtUnix, 0).UTC()
 	skew := config.RecommendationTelemetryMaxClockSkew()
@@ -210,7 +215,7 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 		OccurredAt: occurredAt, ReceivedAt: now, ForegroundTimeMS: foregroundTimeMS,
 		ScrollProgressPercent: scrollProgressPercent, ExitType: exitType,
 		EstimatedReadTimeMS: estimatedReadTimeMS, ReadPolicyVersion: readPolicyVersion,
-		ReadOutcome: readOutcome, CreatedAt: now,
+		ReadOutcome: readOutcome, FeedVisibleTimeMS: feedVisibleTimeMS, CreatedAt: now,
 	}, ""
 }
 func persistRecommendationEvents(userID uint, events []models.RecommendationEvent) ([]recommendationPersistenceResult, error) {
@@ -295,7 +300,7 @@ func enforceRecommendationTelemetryRateLimit(userID uint, eventCount int) (bool,
 
 func recommendationEventTypeMetricLabel(eventType string) string {
 	switch strings.TrimSpace(eventType) {
-	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick, models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeNotInterested:
+	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick, models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeFeedDwell, models.RecommendationEventTypeNotInterested:
 		return eventType
 	default:
 		return "unknown"

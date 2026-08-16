@@ -47,6 +47,9 @@ func RunMigrations() error {
 		if err := applyRecommendationTelemetryConstraints(tx); err != nil {
 			return err
 		}
+		if err := applyRecommendationMetricsConstraints(tx); err != nil {
+			return err
+		}
 		if err := applyArticleReactionConstraints(tx); err != nil {
 			return err
 		}
@@ -150,18 +153,20 @@ func applyRecommendationTelemetryConstraints(tx *gorm.DB) error {
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_read_policy",
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_read_outcome",
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_exit_type",
+		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_feed_visible_time",
 		"ALTER TABLE recommendation_events DROP CONSTRAINT IF EXISTS chk_recommendation_event_read_payload",
 		"ALTER TABLE recommendation_events DROP COLUMN IF EXISTS max_scroll_depth",
 		"ALTER TABLE recommendation_events DROP COLUMN IF EXISTS qualified_read",
 		"ALTER TABLE recommendation_events DROP COLUMN IF EXISTS quick_bounce",
-		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_type CHECK (event_type IN ('impression','click','read_end','not_interested'))",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_type CHECK (event_type IN ('impression','click','read_end','feed_dwell','not_interested'))",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_foreground_time CHECK (foreground_time_ms IS NULL OR foreground_time_ms BETWEEN 0 AND 21600000)",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_scroll_progress CHECK (scroll_progress_percent IS NULL OR scroll_progress_percent BETWEEN 0 AND 100)",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_estimated_read_time CHECK (estimated_read_time_ms IS NULL OR estimated_read_time_ms > 0)",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_read_policy CHECK (read_policy_version IS NULL OR btrim(read_policy_version) <> '')",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_read_outcome CHECK (read_outcome IS NULL OR read_outcome IN ('qualified','quick_bounce','neutral'))",
 		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_exit_type CHECK (exit_type IS NULL OR exit_type IN ('back_to_recommendation','navigate_to_article','route_leave','page_hide','refresh','unknown'))",
-		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_read_payload CHECK ((event_type = 'read_end' AND foreground_time_ms IS NOT NULL AND scroll_progress_percent IS NOT NULL AND exit_type IS NOT NULL AND estimated_read_time_ms IS NOT NULL AND read_policy_version IS NOT NULL AND read_outcome IS NOT NULL) OR (event_type <> 'read_end' AND foreground_time_ms IS NULL AND scroll_progress_percent IS NULL AND exit_type IS NULL AND estimated_read_time_ms IS NULL AND read_policy_version IS NULL AND read_outcome IS NULL))",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_feed_visible_time CHECK (feed_visible_time_ms IS NULL OR feed_visible_time_ms BETWEEN 1 AND 21600000)",
+		"ALTER TABLE recommendation_events ADD CONSTRAINT chk_recommendation_event_read_payload CHECK ((event_type = 'read_end' AND foreground_time_ms IS NOT NULL AND scroll_progress_percent IS NOT NULL AND exit_type IS NOT NULL AND estimated_read_time_ms IS NOT NULL AND read_policy_version IS NOT NULL AND read_outcome IS NOT NULL AND feed_visible_time_ms IS NULL) OR (event_type = 'feed_dwell' AND feed_visible_time_ms IS NOT NULL AND foreground_time_ms IS NULL AND scroll_progress_percent IS NULL AND exit_type IS NULL AND estimated_read_time_ms IS NULL AND read_policy_version IS NULL AND read_outcome IS NULL) OR (event_type NOT IN ('read_end','feed_dwell') AND foreground_time_ms IS NULL AND scroll_progress_percent IS NULL AND exit_type IS NULL AND estimated_read_time_ms IS NULL AND read_policy_version IS NULL AND read_outcome IS NULL AND feed_visible_time_ms IS NULL))",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
@@ -209,6 +214,28 @@ func applyRecommendationRetrievalV1Indexes(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply recommendation retrieval v1 index: %w", err)
+		}
+	}
+	return nil
+}
+func applyRecommendationMetricsConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS feed_dwell_count BIGINT",
+		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS feed_visible_time_ms BIGINT",
+		"UPDATE recommendation_daily_metrics SET feed_dwell_count = 0 WHERE feed_dwell_count IS NULL",
+		"UPDATE recommendation_daily_metrics SET feed_visible_time_ms = 0 WHERE feed_visible_time_ms IS NULL",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_dwell_count SET DEFAULT 0",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_visible_time_ms SET DEFAULT 0",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_dwell_count SET NOT NULL",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_visible_time_ms SET NOT NULL",
+		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_feed_dwell_count",
+		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_feed_visible_time",
+		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_feed_dwell_count CHECK (feed_dwell_count >= 0)",
+		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_feed_visible_time CHECK (feed_visible_time_ms >= 0)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation metrics constraint: %w", err)
 		}
 	}
 	return nil

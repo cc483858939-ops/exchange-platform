@@ -9,7 +9,7 @@ import (
 func isRecommendationEventType(eventType string) bool {
 	switch eventType {
 	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick,
-		models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeNotInterested:
+		models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeFeedDwell, models.RecommendationEventTypeNotInterested:
 		return true
 	default:
 		return false
@@ -64,4 +64,26 @@ func isRecommendationExitType(exitType string) bool {
 	default:
 		return false
 	}
+}
+
+const recommendationFeedDwellMaxVisibleTimeMS int64 = 6 * 60 * 60 * 1000
+
+func validateRecommendationFeedPayload(eventType string, input recommendationEventInput) (*int64, string) {
+	if eventType != models.RecommendationEventTypeFeedDwell {
+		if input.FeedVisibleTimeMS != nil {
+			return nil, "unexpected_feed_payload"
+		}
+		return nil, ""
+	}
+	if input.ForegroundTimeMS != nil || input.ScrollProgressPercent != nil || input.ExitType != nil {
+		return nil, "unexpected_feed_payload"
+	}
+	if input.FeedVisibleTimeMS == nil {
+		return nil, "missing_feed_payload"
+	}
+	value := *input.FeedVisibleTimeMS
+	if value < 1 || value > recommendationFeedDwellMaxVisibleTimeMS {
+		return nil, "invalid_feed_visible_time_ms"
+	}
+	return &value, ""
 }

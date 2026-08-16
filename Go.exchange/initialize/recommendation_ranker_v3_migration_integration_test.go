@@ -96,19 +96,25 @@ SELECT column_name, character_maximum_length
 FROM information_schema.columns
 WHERE table_schema = current_schema()
   AND table_name = 'recommendation_events'
-  AND column_name IN ('read_policy_version', 'read_outcome')
+  AND column_name IN ('feed_visible_time_ms', 'read_policy_version', 'read_outcome')
 ORDER BY column_name
 `).Scan(&columns).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(columns) != 2 {
-		t.Fatalf("recommendation telemetry columns=%d want=2: %#v", len(columns), columns)
+	if len(columns) != 3 {
+		t.Fatalf("recommendation telemetry columns=%d want=3: %#v", len(columns), columns)
 	}
 	wantLengths := map[string]int{
 		"read_policy_version": 32,
 		"read_outcome":        16,
 	}
 	for _, column := range columns {
+		if column.Name == "feed_visible_time_ms" {
+			if column.Length != nil {
+				t.Fatalf("%s length=%v want numeric column", column.Name, column.Length)
+			}
+			continue
+		}
 		wantLength, ok := wantLengths[column.Name]
 		if !ok {
 			t.Fatalf("unexpected recommendation telemetry column %q", column.Name)
@@ -125,6 +131,7 @@ FROM pg_constraint c
 JOIN pg_class t ON t.oid = c.conrelid
 WHERE t.relname = 'recommendation_events'
   AND c.conname IN (
+      'chk_recommendation_event_feed_visible_time',
       'chk_recommendation_event_read_policy',
       'chk_recommendation_event_read_outcome',
       'chk_recommendation_event_read_payload'
@@ -138,6 +145,7 @@ ORDER BY c.conname
 		foundConstraints[constraint] = struct{}{}
 	}
 	for _, want := range []string{
+		"chk_recommendation_event_feed_visible_time",
 		"chk_recommendation_event_read_policy",
 		"chk_recommendation_event_read_outcome",
 		"chk_recommendation_event_read_payload",
@@ -146,8 +154,49 @@ ORDER BY c.conname
 			t.Fatalf("missing recommendation telemetry constraint %q; found=%v", want, constraints)
 		}
 	}
-	if len(foundConstraints) != 3 {
-		t.Fatalf("recommendation telemetry constraints=%v want exactly 3", constraints)
+	if len(foundConstraints) != 4 {
+		t.Fatalf("recommendation telemetry constraints=%v want exactly 4", constraints)
+	}
+
+	var metricColumns []struct {
+		Name     string `gorm:"column:column_name"`
+		Nullable string `gorm:"column:is_nullable"`
+	}
+	if err := db.Raw(`
+SELECT column_name, is_nullable
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'recommendation_daily_metrics'
+  AND column_name IN ('feed_dwell_count', 'feed_visible_time_ms')
+ORDER BY column_name
+`).Scan(&metricColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(metricColumns) != 2 {
+		t.Fatalf("recommendation metric columns=%d want=2: %#v", len(metricColumns), metricColumns)
+	}
+	for _, column := range metricColumns {
+		if column.Nullable != "NO" {
+			t.Fatalf("%s nullable=%q want NO", column.Name, column.Nullable)
+		}
+	}
+
+	var metricConstraints []string
+	if err := db.Raw(`
+SELECT c.conname
+FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+WHERE t.relname = 'recommendation_daily_metrics'
+  AND c.conname IN (
+      'chk_recommendation_metric_feed_dwell_count',
+      'chk_recommendation_metric_feed_visible_time'
+  )
+ORDER BY c.conname
+`).Scan(&metricConstraints).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(metricConstraints) != 2 {
+		t.Fatalf("recommendation metric constraints=%v want=2", len(metricConstraints))
 	}
 
 	var indexDefinition string

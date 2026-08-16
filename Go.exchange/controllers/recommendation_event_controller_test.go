@@ -113,3 +113,65 @@ func TestValidateRecommendationTelemetryEventRejectsUserMismatch(t *testing.T) {
 		t.Fatalf("reason=%q", reason)
 	}
 }
+
+func TestValidateRecommendationTelemetryEventFeedDwellPayload(t *testing.T) {
+	now := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	key := []byte("0123456789abcdef0123456789abcdef")
+	valid := int64(400)
+	zero := int64(0)
+	negative := int64(-1)
+	tooLong := recommendationFeedDwellMaxVisibleTimeMS + 1
+	foreground := int64(1000)
+	progress := 20
+	exitType := "route_leave"
+
+	tests := []struct {
+		name       string
+		eventType  string
+		feed       *int64
+		foreground *int64
+		progress   *int
+		exitType   *string
+		wantReason string
+	}{
+		{name: "valid", eventType: models.RecommendationEventTypeFeedDwell, feed: &valid},
+		{name: "missing payload", eventType: models.RecommendationEventTypeFeedDwell, wantReason: "missing_feed_payload"},
+		{name: "zero", eventType: models.RecommendationEventTypeFeedDwell, feed: &zero, wantReason: "invalid_feed_visible_time_ms"},
+		{name: "negative", eventType: models.RecommendationEventTypeFeedDwell, feed: &negative, wantReason: "invalid_feed_visible_time_ms"},
+		{name: "over six hours", eventType: models.RecommendationEventTypeFeedDwell, feed: &tooLong, wantReason: "invalid_feed_visible_time_ms"},
+		{name: "click payload", eventType: models.RecommendationEventTypeClick, feed: &valid, wantReason: "unexpected_feed_payload"},
+		{name: "read_end payload", eventType: models.RecommendationEventTypeReadEnd, feed: &valid, wantReason: "unexpected_feed_payload"},
+		{
+			name:      "feed with detail payload",
+			eventType: models.RecommendationEventTypeFeedDwell,
+			feed:      &valid, foreground: &foreground, progress: &progress, exitType: &exitType,
+			wantReason: "unexpected_feed_payload",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
+			event, reason := validateRecommendationTelemetryEvent(7, recommendationEventInput{
+				EventID: uuid.NewString(), EventType: tc.eventType,
+				TrackingToken: token, OccurredAt: now.Format(time.RFC3339Nano),
+				ForegroundTimeMS: tc.foreground, ScrollProgressPercent: tc.progress,
+				ExitType: tc.exitType, FeedVisibleTimeMS: tc.feed,
+			}, now, key)
+			if reason != tc.wantReason {
+				t.Fatalf("reason=%q want=%q event=%#v", reason, tc.wantReason, event)
+			}
+			if tc.wantReason == "" {
+				if event.EventType != models.RecommendationEventTypeFeedDwell ||
+					event.FeedVisibleTimeMS == nil || *event.FeedVisibleTimeMS != valid ||
+					event.ForegroundTimeMS != nil || event.ReadOutcome != nil {
+					t.Fatalf("unexpected feed event=%#v", event)
+				}
+			}
+		})
+	}
+
+	if got := recommendationEventTypeMetricLabel(models.RecommendationEventTypeFeedDwell); got != models.RecommendationEventTypeFeedDwell {
+		t.Fatalf("metric label=%q", got)
+	}
+}

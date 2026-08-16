@@ -7,6 +7,8 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/models"
+
+	"github.com/google/uuid"
 )
 
 func TestRecommendationEventsRecordedRoutesAndKeysByUser(t *testing.T) {
@@ -33,6 +35,29 @@ func TestRecommendationEventsRecordedRoutesAndKeysByUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload.UserID != 7 || len(payload.Events) != 1 || payload.Events[0].ArticleID != 11 {
+		t.Fatalf("payload=%#v", payload)
+	}
+}
+
+func TestRecommendationEventsRecordedCopiesFeedVisibleTime(t *testing.T) {
+	now := time.Now().UTC()
+	duration := int64(8234)
+	event, err := NewRecommendationEventsRecorded(7, []models.RecommendationEvent{{
+		EventID: uuid.NewString(), UserID: 7, RequestID: uuid.NewString(), ArticleID: 11,
+		EventType: models.RecommendationEventTypeFeedDwell, Scene: "recommendation_page",
+		Position: 1, RankerVersion: "rules_v3", RankerConfigHash: "0123456789ab",
+		StrategyID: "personalized_rules_v3", OccurredAt: now, ReceivedAt: now,
+		FeedVisibleTimeMS: &duration,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload RecommendationEventsRecordedPayload
+	if err := json.Unmarshal(EnvelopeFromOutbox(event).Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Events) != 1 || payload.Events[0].EventType != models.RecommendationEventTypeFeedDwell ||
+		payload.Events[0].FeedVisibleTimeMS == nil || *payload.Events[0].FeedVisibleTimeMS != duration {
 		t.Fatalf("payload=%#v", payload)
 	}
 }

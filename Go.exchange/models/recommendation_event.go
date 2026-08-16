@@ -6,6 +6,7 @@ const (
 	RecommendationEventTypeImpression    = "impression"
 	RecommendationEventTypeClick         = "click"
 	RecommendationEventTypeReadEnd       = "read_end"
+	RecommendationEventTypeFeedDwell     = "feed_dwell"
 	RecommendationEventTypeNotInterested = "not_interested"
 )
 
@@ -16,7 +17,7 @@ type RecommendationEvent struct {
 	UserID                uint      `json:"user_id" gorm:"not null;index:idx_recommendation_events_user_occurred,priority:1"`
 	RequestID             string    `json:"request_id" gorm:"type:uuid;not null;uniqueIndex:idx_recommendation_events_business,priority:1"`
 	ArticleID             uint      `json:"article_id" gorm:"not null;uniqueIndex:idx_recommendation_events_business,priority:2;index:idx_recommendation_events_article_occurred,priority:1"`
-	EventType             string    `json:"event_type" gorm:"size:16;not null;uniqueIndex:idx_recommendation_events_business,priority:3;check:chk_recommendation_event_type,event_type IN ('impression','click','read_end','not_interested')"`
+	EventType             string    `json:"event_type" gorm:"size:16;not null;uniqueIndex:idx_recommendation_events_business,priority:3;check:chk_recommendation_event_type,event_type IN ('impression','click','read_end','feed_dwell','not_interested')"`
 	Scene                 string    `json:"scene" gorm:"size:64;not null;index:idx_recommendation_events_dimension_occurred,priority:1"`
 	Position              int       `json:"position" gorm:"not null;check:chk_recommendation_event_position,position > 0"`
 	RankerVersion         string    `json:"ranker_version" gorm:"size:64;not null;index:idx_recommendation_events_dimension_occurred,priority:2"`
@@ -30,5 +31,6 @@ type RecommendationEvent struct {
 	EstimatedReadTimeMS   *int64    `json:"estimated_read_time_ms,omitempty" gorm:"column:estimated_read_time_ms"`
 	ReadPolicyVersion     *string   `json:"read_policy_version,omitempty" gorm:"column:read_policy_version;size:32"`
 	ReadOutcome           *string   `json:"read_outcome,omitempty" gorm:"column:read_outcome;size:16"`
+	FeedVisibleTimeMS     *int64    `json:"feed_visible_time_ms,omitempty" gorm:"column:feed_visible_time_ms;check:chk_recommendation_event_feed_visible_time,feed_visible_time_ms IS NULL OR feed_visible_time_ms BETWEEN 1 AND 21600000"`
 	CreatedAt             time.Time `json:"created_at" gorm:"not null"`
 }

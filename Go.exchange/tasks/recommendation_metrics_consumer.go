@@ -136,6 +136,7 @@ func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEv
 	occurredAt := fact.OccurredAt.UTC()
 	metricDate := time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC)
 	impressions, clicks, qualifiedReads, quickBounces, notInterested := int64(0), int64(0), int64(0), int64(0), int64(0)
+	feedDwellCount, feedVisibleTimeMS := int64(0), int64(0)
 	switch fact.EventType {
 	case models.RecommendationEventTypeImpression:
 		impressions = 1
@@ -152,13 +153,19 @@ func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEv
 		}
 	case models.RecommendationEventTypeNotInterested:
 		notInterested = 1
+	case models.RecommendationEventTypeFeedDwell:
+		feedDwellCount = 1
+		if fact.FeedVisibleTimeMS != nil {
+			feedVisibleTimeMS = *fact.FeedVisibleTimeMS
+		}
 	}
 	metric := models.RecommendationDailyMetric{
 		MetricDate: metricDate, Scene: fact.Scene, RankerVersion: fact.RankerVersion,
 		RankerConfigHash: fact.RankerConfigHash, StrategyID: fact.StrategyID,
 		Position: fact.Position, ArticleID: fact.ArticleID,
 		ImpressionCount: impressions, ClickCount: clicks, QualifiedReadCount: qualifiedReads,
-		QuickBounceCount: quickBounces, NotInterestedCount: notInterested, UpdatedAt: time.Now().UTC(),
+		QuickBounceCount: quickBounces, NotInterestedCount: notInterested,
+		FeedDwellCount: feedDwellCount, FeedVisibleTimeMS: feedVisibleTimeMS, UpdatedAt: time.Now().UTC(),
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
@@ -171,6 +178,8 @@ func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEv
 			"qualified_read_count": gorm.Expr("recommendation_daily_metrics.qualified_read_count + ?", qualifiedReads),
 			"quick_bounce_count":   gorm.Expr("recommendation_daily_metrics.quick_bounce_count + ?", quickBounces),
 			"not_interested_count": gorm.Expr("recommendation_daily_metrics.not_interested_count + ?", notInterested),
+			"feed_dwell_count":     gorm.Expr("recommendation_daily_metrics.feed_dwell_count + ?", feedDwellCount),
+			"feed_visible_time_ms": gorm.Expr("recommendation_daily_metrics.feed_visible_time_ms + ?", feedVisibleTimeMS),
 			"updated_at":           time.Now().UTC(),
 		}),
 	}).Create(&metric).Error

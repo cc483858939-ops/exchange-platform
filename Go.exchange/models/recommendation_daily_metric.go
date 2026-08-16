@@ -17,5 +17,7 @@ type RecommendationDailyMetric struct {
 	QualifiedReadCount int64     `json:"qualified_read_count" gorm:"not null;default:0;check:chk_recommendation_metric_qualified_reads,qualified_read_count >= 0"`
 	QuickBounceCount   int64     `json:"quick_bounce_count" gorm:"not null;default:0;check:chk_recommendation_metric_quick_bounces,quick_bounce_count >= 0"`
 	NotInterestedCount int64     `json:"not_interested_count" gorm:"not null;default:0;check:chk_recommendation_metric_not_interested,not_interested_count >= 0"`
+	FeedDwellCount     int64     `json:"feed_dwell_count" gorm:"not null;default:0;check:chk_recommendation_metric_feed_dwell_count,feed_dwell_count >= 0"`
+	FeedVisibleTimeMS  int64     `json:"feed_visible_time_ms" gorm:"not null;default:0;check:chk_recommendation_metric_feed_visible_time,feed_visible_time_ms >= 0"`
 	UpdatedAt          time.Time `json:"updated_at" gorm:"not null"`
 }

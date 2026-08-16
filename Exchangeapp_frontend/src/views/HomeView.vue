@@ -328,7 +328,6 @@ const invalidateAfterLogout = () => {
   resetFollowingFeed();
   resetForYou();
   recommendationCardElements.clear();
-  recommendationTelemetry.resetObservedCards();
   recommendationTelemetry.clearSession();
 };
 
@@ -715,7 +714,7 @@ const bindCurrentRecommendationCards = async () => {
   visibleForYouItems.value.forEach((item) => {
     const element = recommendationCardElements.get(item.article.id);
     if (element) {
-      recommendationTelemetry.observeCard(element, item.article.id, item.article.tracking);
+      recommendationTelemetry.observeFeedCard(element, item.article.id, item.article.tracking);
     }
   });
 };
@@ -797,10 +796,23 @@ const bindRecommendationCard = (
 ) => {
   if (element instanceof HTMLElement) {
     recommendationCardElements.set(item.article.id, element);
-    recommendationTelemetry.observeCard(element, item.article.id, item.article.tracking);
+    recommendationTelemetry.observeFeedCard(element, item.article.id, item.article.tracking);
     return;
   }
+
   recommendationCardElements.delete(item.article.id);
+  recommendationTelemetry.detachFeedCard(item.article.id, item.article.tracking);
+  queueMicrotask(() => {
+    if (recommendationCardElements.has(item.article.id)) {
+      return;
+    }
+    const stillRendered = visibleForYouItems.value.some(
+      visibleItem => visibleItem.article.id === item.article.id,
+    );
+    if (!stillRendered) {
+      recommendationTelemetry.unobserveFeedCard(item.article.id, item.article.tracking);
+    }
+  });
 };
 
 const handleRecommendationClick = (article: RecommendedArticle) => {
@@ -809,6 +821,13 @@ const handleRecommendationClick = (article: RecommendedArticle) => {
 };
 
 const removeHomeArticle = (articleId: number) => {
+  const recommendationItem = forYouFeed.items.find(item => item.article.id === articleId);
+  if (recommendationItem) {
+    recommendationTelemetry.unobserveFeedCard(
+      recommendationItem.article.id,
+      recommendationItem.article.tracking,
+    );
+  }
   followingFeed.items = followingFeed.items.filter((post) => post.id !== articleId);
   forYouFeed.items = forYouFeed.items.filter((item) => item.post.id !== articleId);
   followingLoadedArticleIds.delete(articleId);
@@ -885,6 +904,7 @@ const handleNotInterested = (articleId: number) => {
   }
 
   recommendationTelemetry.recordNotInterested(item.article.id, item.article.tracking);
+  recommendationTelemetry.unobserveFeedCard(item.article.id, item.article.tracking);
   forYouFeed.items = forYouFeed.items.filter((feedItem) => feedItem.article.id !== articleId);
   recommendationCardElements.delete(articleId);
 };

@@ -27,6 +27,7 @@ type RecommendationEventFact struct {
 	EstimatedReadTimeMS   *int64    `json:"estimated_read_time_ms,omitempty"`
 	ReadPolicyVersion     *string   `json:"read_policy_version,omitempty"`
 	ReadOutcome           *string   `json:"read_outcome,omitempty"`
+	FeedVisibleTimeMS     *int64    `json:"feed_visible_time_ms,omitempty"`
 }
 
 type RecommendationEventsRecordedPayload struct {
@@ -45,7 +46,7 @@ func NewRecommendationEventsRecorded(userID uint, events []models.Recommendation
 			ArticleID: event.ArticleID, EventType: event.EventType, Scene: event.Scene,
 			Position: event.Position, RankerVersion: event.RankerVersion,
 			RankerConfigHash: event.RankerConfigHash, StrategyID: event.StrategyID,
-			OccurredAt: event.OccurredAt, ReceivedAt: event.ReceivedAt, ForegroundTimeMS: event.ForegroundTimeMS, ScrollProgressPercent: event.ScrollProgressPercent, ExitType: event.ExitType, EstimatedReadTimeMS: event.EstimatedReadTimeMS, ReadPolicyVersion: event.ReadPolicyVersion, ReadOutcome: event.ReadOutcome,
+			OccurredAt: event.OccurredAt, ReceivedAt: event.ReceivedAt, ForegroundTimeMS: event.ForegroundTimeMS, ScrollProgressPercent: event.ScrollProgressPercent, ExitType: event.ExitType, EstimatedReadTimeMS: event.EstimatedReadTimeMS, ReadPolicyVersion: event.ReadPolicyVersion, ReadOutcome: event.ReadOutcome, FeedVisibleTimeMS: event.FeedVisibleTimeMS,
 		})
 	}
 	return NewOutboxEvent(
