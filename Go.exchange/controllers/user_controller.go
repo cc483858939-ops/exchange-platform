@@ -148,14 +148,13 @@ func searchUsersFromDB(viewerID uint, query string, limit, offset int) (userConn
 		WHEN candidate.display_name ILIKE ? ESCAPE '\' THEN 5
 		ELSE 6
 	END`
+	orderBy := clause.OrderBy{Expression: clause.Expr{SQL: rankSQL + ", LOWER(candidate.username) ASC, candidate.id ASC", Vars: []any{query, query, prefixPattern, prefixPattern, containsPattern, containsPattern}}}
 	queryDB := global.Db.Table("users AS candidate").
 		Select(`candidate.id AS user_id, candidate.username AS username, candidate.display_name AS display_name, candidate.bio AS bio, candidate.avatar_url AS avatar_url, candidate.created_at AS user_created_at, viewer_follow.id AS viewer_follow_id`).
 		Joins("LEFT JOIN user_follows AS viewer_follow ON viewer_follow.follower_id = ? AND viewer_follow.following_id = candidate.id", viewerID).
 		Where("candidate.deleted_at IS NULL").
 		Where("(candidate.username ILIKE ? ESCAPE '\\' OR candidate.display_name ILIKE ? ESCAPE '\\')", containsPattern, containsPattern).
-		Order(clause.Expr{SQL: rankSQL, Vars: []any{query, query, prefixPattern, prefixPattern, containsPattern, containsPattern}}).
-		Order("LOWER(candidate.username) ASC").
-		Order("candidate.id ASC").
+		Order(orderBy).
 		Limit(limit + 1).
 		Offset(offset)
 

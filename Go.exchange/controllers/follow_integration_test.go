@@ -100,6 +100,7 @@ func TestFollowGraphIntegration(t *testing.T) {
 	}
 
 	ctx, recorder = newFollowIntegrationContext(http.MethodGet, alice.ID, bob.ID)
+	GetUserFollowState(ctx)
 	state = decodeFollowIntegrationState(t, recorder)
 	if !state.Following || state.FollowerCount != 2 || state.FollowingCount != 1 {
 		t.Fatalf("Bob viewed by Alice state=%#v", state)
@@ -166,6 +167,7 @@ func TestFollowGraphIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, recorder = newFollowIntegrationContext(http.MethodGet, alice.ID, bob.ID)
+	GetUserFollowState(ctx)
 	state = decodeFollowIntegrationState(t, recorder)
 	if state.FollowerCount != 1 {
 		t.Fatalf("soft-deleted follower count=%d state=%#v", state.FollowerCount, state)

@@ -23,12 +23,18 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	}
 	store := NewStore(client)
 	articleID := uint(time.Now().UnixNano() & 0x3fffffff)
+	const userID uint = 11
+	pair := BehaviorPair(userID, articleID)
 	ctx := context.Background()
 	cleanup := func() {
 		client.Del(ReadyKey(articleID), CountKey(articleID), UsersKey(articleID), VersionKey(articleID))
 		client.SRem(DirtyKey, articleID)
 		client.ZRem(ProcessingKey, articleID)
 		client.HDel(ClaimsKey, strconv.FormatUint(uint64(articleID), 10))
+		client.SRem(BehaviorDirtyKey, pair)
+		client.HDel(BehaviorStateKey, pair)
+		client.ZRem(BehaviorProcessingKey, pair)
+		client.HDel(BehaviorClaimsKey, pair)
 	}
 	cleanup()
 	defer cleanup()
@@ -36,14 +42,14 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
-	first, err := store.Mutate(ctx, 11, articleID, true)
+	first, err := store.Mutate(ctx, userID, articleID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !first.Changed || !first.Liked || first.Count != 1 || first.Version != 1 {
 		t.Fatalf("first mutation=%+v", first)
 	}
-	duplicate, err := store.Mutate(ctx, 11, articleID, true)
+	duplicate, err := store.Mutate(ctx, userID, articleID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +81,7 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	if acked, err := store.AckClaim(ctx, newClaim); err != nil || !acked {
 		t.Fatalf("current ACK acked=%t err=%v", acked, err)
 	}
-	last, err := store.Mutate(ctx, 11, articleID, false)
+	last, err := store.Mutate(ctx, userID, articleID, false)
 	if err != nil {
 		t.Fatal(err)
 	}

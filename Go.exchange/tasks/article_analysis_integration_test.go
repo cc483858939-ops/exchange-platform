@@ -85,6 +85,16 @@ func TestFinishArticleAnalysisSuccessInvalidatesDetailCacheAfterCommitIntegratio
 	if invalidationCalls != 1 {
 		t.Fatalf("successful analysis invalidations=%d want 1", invalidationCalls)
 	}
+	var persistedArticle models.Article
+	if err := db.First(&persistedArticle, article.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persistedArticle.Summary != "committed summary" || persistedArticle.Category != "News" || persistedArticle.AnalysisState != "completed" || persistedArticle.AnalysisVersion != "v1" {
+		t.Fatalf("persisted article metadata=%#v", persistedArticle)
+	}
+	if len(persistedArticle.Tags) != 1 || persistedArticle.Tags[0] != "go" {
+		t.Fatalf("persisted article tags=%v want [go]", persistedArticle.Tags)
+	}
 
 	if err := db.Model(&models.ArticleAnalysisJob{}).Where("id = ?", job.ID).Update("state", models.ArticleAnalysisJobQueued).Error; err != nil {
 		t.Fatal(err)

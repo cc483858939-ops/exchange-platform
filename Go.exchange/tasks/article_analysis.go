@@ -193,13 +193,17 @@ func finishArticleAnalysisSuccess(job models.ArticleAnalysisJob, result ArticleA
 		if current.State != models.ArticleAnalysisJobLeased {
 			return fmt.Errorf("analysis job %d is no longer leased", current.ID)
 		}
-		if err := tx.Model(&models.Article{}).Where("id = ?", job.ArticleID).Updates(map[string]interface{}{
-			"summary":          result.Summary,
-			"tags":             result.Tags,
-			"category":         result.Category,
-			"analysis_state":   consts.ArticleAnalysisStateCompleted,
-			"analysis_version": consts.ArticleAnalysisVersionV1,
-		}).Error; err != nil {
+		updates := models.Article{
+			Summary:         result.Summary,
+			Tags:            result.Tags,
+			Category:        result.Category,
+			AnalysisState:   consts.ArticleAnalysisStateCompleted,
+			AnalysisVersion: consts.ArticleAnalysisVersionV1,
+		}
+		if err := tx.Model(&models.Article{}).
+			Where("id = ?", job.ArticleID).
+			Select("Summary", "Tags", "Category", "AnalysisState", "AnalysisVersion").
+			Updates(&updates).Error; err != nil {
 			return err
 		}
 		return tx.Model(&models.ArticleAnalysisJob{}).Where("id = ?", current.ID).Updates(map[string]interface{}{
