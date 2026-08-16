@@ -51,6 +51,39 @@ func newRulesV3IntegrationEvent(userID, articleID uint, eventType, eventID strin
 	}
 }
 
+func newRulesV3IntegrationReadEndEvent(userID, articleID uint, eventID string, occurredAt, receivedAt time.Time, outcome string) models.RecommendationEvent {
+	event := newRulesV3IntegrationEvent(
+		userID,
+		articleID,
+		models.RecommendationEventTypeReadEnd,
+		eventID,
+		occurredAt,
+		receivedAt,
+	)
+
+	foregroundTimeMS := int64(5_000)
+	scrollProgressPercent := 20
+	switch outcome {
+	case recommendationReadOutcomeQuickBounce:
+		foregroundTimeMS = 2_000
+		scrollProgressPercent = 5
+	case recommendationReadOutcomeQualified:
+		foregroundTimeMS = 60_000
+		scrollProgressPercent = 100
+	}
+	exitType := "route_leave"
+	estimatedReadTimeMS := int64(60_000)
+	readPolicyVersion := recommendationReadPolicyVersion
+
+	event.ForegroundTimeMS = &foregroundTimeMS
+	event.ScrollProgressPercent = &scrollProgressPercent
+	event.ExitType = &exitType
+	event.EstimatedReadTimeMS = &estimatedReadTimeMS
+	event.ReadPolicyVersion = &readPolicyVersion
+	event.ReadOutcome = &outcome
+	return event
+}
+
 func TestRulesV3FeedbackStableOrderIntegration(t *testing.T) {
 	db := openRulesV3IntegrationDatabase(t)
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
@@ -284,13 +317,17 @@ func TestRulesV3StaleReadEndSupersessionAcrossStoredSignalsIntegration(t *testin
 			t.Fatal(err)
 		}
 	}
-	quickBounce := recommendationReadOutcomeQuickBounce
-	neutral := recommendationReadOutcomeNeutral
-	readEndClick := newRulesV3IntegrationEvent(user.ID, articles[0].ID, models.RecommendationEventTypeReadEnd, uuid.NewString(), now.Add(-10*time.Minute), now.Add(-10*time.Minute))
-	readEndClick.ReadOutcome = &quickBounce
+	articleIDs := []uint{articles[0].ID, articles[1].ID}
+	t.Cleanup(func() {
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.RecommendationEvent{})
+		db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+	})
+
+	readEndClick := newRulesV3IntegrationReadEndEvent(user.ID, articles[0].ID, uuid.NewString(), now.Add(-10*time.Minute), now.Add(-10*time.Minute), recommendationReadOutcomeQuickBounce)
 	click := newRulesV3IntegrationEvent(user.ID, articles[0].ID, models.RecommendationEventTypeClick, uuid.NewString(), now.Add(-2*time.Minute), now.Add(-2*time.Minute))
-	readEndView := newRulesV3IntegrationEvent(user.ID, articles[1].ID, models.RecommendationEventTypeReadEnd, uuid.NewString(), now.Add(-10*time.Minute), now.Add(-10*time.Minute))
-	readEndView.ReadOutcome = &neutral
+	readEndView := newRulesV3IntegrationReadEndEvent(user.ID, articles[1].ID, uuid.NewString(), now.Add(-10*time.Minute), now.Add(-10*time.Minute), recommendationReadOutcomeNeutral)
 	if err := db.Create(&[]models.RecommendationEvent{readEndClick, click, readEndView}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -301,13 +338,6 @@ func TestRulesV3StaleReadEndSupersessionAcrossStoredSignalsIntegration(t *testin
 	if err := db.Create(&behaviors).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.ArticleBehavior{})
-		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.RecommendationEvent{})
-		articleIDs := []uint{articles[0].ID, articles[1].ID}
-		db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
-		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
-	})
 
 	loadedBehaviors, err := loadRecommendationBehaviorSignals(user.ID)
 	if err != nil {
