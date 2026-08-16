@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -55,17 +56,30 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	expiredAt := now.Add(-time.Hour)
+	pastPublishedAt := now
+	currentPublishedAt := now
+	futurePublishedAt := now.Add(time.Hour)
 	articles := []models.Article{
-		{AuthorID: target.ID, Title: "older", Preview: "p", LikeCount: 9, CommentCount: 4, Model: gorm.Model{CreatedAt: now.Add(-time.Hour)}},
-		{AuthorID: target.ID, Title: "newer", Content: "Canonical profile body", Preview: "p", LikeCount: 17, CommentCount: 8, Model: gorm.Model{CreatedAt: now}},
-		{AuthorID: target.ID, Title: "expired", Preview: "p", ExpiredAt: &expiredAt, Model: gorm.Model{CreatedAt: now.Add(time.Hour)}},
-		{AuthorID: other.ID, Title: "other", Preview: "p", Model: gorm.Model{CreatedAt: now.Add(2 * time.Hour)}},
+		{AuthorID: target.ID, Title: "older", Preview: "p", LikeCount: 9, CommentCount: 4, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &pastPublishedAt, Model: gorm.Model{CreatedAt: now.Add(-time.Hour)}},
+		{AuthorID: target.ID, Title: "newer", Content: "Canonical profile body", Preview: "p", LikeCount: 17, CommentCount: 8, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &currentPublishedAt, Model: gorm.Model{CreatedAt: now}},
+		{AuthorID: target.ID, Title: "expired", Preview: "p", PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &pastPublishedAt, ExpiredAt: &expiredAt, Model: gorm.Model{CreatedAt: now.Add(time.Hour)}},
+		{AuthorID: other.ID, Title: "other", Preview: "p", PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &currentPublishedAt, Model: gorm.Model{CreatedAt: now.Add(2 * time.Hour)}},
+		{AuthorID: target.ID, Title: "future", Preview: "p", PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &futurePublishedAt, Model: gorm.Model{CreatedAt: now.Add(3 * time.Hour)}},
+		{AuthorID: target.ID, Title: "nil published", Preview: "p", PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: nil, Model: gorm.Model{CreatedAt: now.Add(4 * time.Hour)}},
+		{AuthorID: target.ID, Title: "draft", Preview: "p", PublicationState: "draft", PublishedAt: &currentPublishedAt, Model: gorm.Model{CreatedAt: now.Add(5 * time.Hour)}},
+		{AuthorID: target.ID, Title: "deleted", Preview: "p", PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &currentPublishedAt, Model: gorm.Model{CreatedAt: now.Add(6 * time.Hour)}},
 	}
 	if err := db.Create(&articles).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Delete(&articles[7]).Error; err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		ids := []uint{articles[0].ID, articles[1].ID, articles[2].ID, articles[3].ID}
+		ids := make([]uint, 0, len(articles))
+		for _, article := range articles {
+			ids = append(ids, article.ID)
+		}
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 		db.Unscoped().Where("id IN ?", []uint{target.ID, other.ID}).Delete(&models.User{})
 	})
@@ -88,22 +102,35 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		}
 	}
 
-	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/articles?limit=20&offset=0", strconvUint(target.ID))
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/articles?limit=20", strconvUint(target.ID))
 	GetUserArticles(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("articles status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response []articleResponse
-	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+	var page articlePageResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(response) != 2 || response[0].Title != "newer" || response[0].Content != "Canonical profile body" || response[1].Title != "older" || response[0].LikeCount != 17 || response[0].CommentCount != 8 {
-		t.Fatalf("unexpected author articles: %#v", response)
+	if len(page.Items) != 2 || page.NextCursor != nil || page.Items[0].Title != "newer" || page.Items[0].Content != "Canonical profile body" || page.Items[1].Title != "older" || page.Items[0].LikeCount != 17 || page.Items[0].CommentCount != 8 {
+		t.Fatalf("unexpected author articles: %#v", page)
 	}
-	for _, article := range response {
+	for _, article := range page.Items {
 		if article.Author.ID != target.ID {
 			t.Fatalf("foreign author in profile response: %#v", article.Author)
 		}
+	}
+
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/articles?limit=1", strconvUint(target.ID))
+	GetUserArticles(ctx)
+	var firstPage articlePageResponse
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &firstPage) != nil || len(firstPage.Items) != 1 || firstPage.NextCursor == nil {
+		t.Fatalf("first cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), firstPage)
+	}
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/articles?limit=1&cursor="+*firstPage.NextCursor, strconvUint(target.ID))
+	GetUserArticles(ctx)
+	var secondPage articlePageResponse
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].Title != "older" || secondPage.NextCursor != nil {
+		t.Fatalf("second cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), secondPage)
 	}
 
 	for _, invalid := range []string{"0", "-1", "not-a-number"} {
@@ -113,10 +140,10 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 			t.Fatalf("invalid id %q status=%d", invalid, recorder.Code)
 		}
 	}
-	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/articles?offset=-1", strconvUint(target.ID))
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/articles?limit=-1", strconvUint(target.ID))
 	GetUserArticles(ctx)
 	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("invalid offset status=%d", recorder.Code)
+		t.Fatalf("invalid limit status=%d", recorder.Code)
 	}
 	ctx, recorder = newUserControllerContext("/api/users/999999999", "999999999")
 	GetUserByID(ctx)
@@ -124,7 +151,6 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		t.Fatalf("missing user status=%d", recorder.Code)
 	}
 }
-
 func TestEditableUserProfileIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {

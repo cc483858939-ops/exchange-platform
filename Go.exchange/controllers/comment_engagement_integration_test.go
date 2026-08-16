@@ -52,23 +52,17 @@ func TestCommentCountTransactionRollbackIntegration(t *testing.T) {
 	fixture := newCommentIntegrationFixture(t, db)
 
 	originalIncrement := incrementArticleCommentCount
-	originalListInvalidation := invalidateCommentArticleListCache
 	originalDetailInvalidation := invalidateCommentArticleDetailCache
 	incrementArticleCommentCount = func(*gorm.DB, uint) (int64, error) {
 		return 0, errors.New("forced comment count update failure")
 	}
-	listCalls, detailCalls := 0, 0
-	invalidateCommentArticleListCache = func() error {
-		listCalls++
-		return nil
-	}
+	detailCalls := 0
 	invalidateCommentArticleDetailCache = func(uint) error {
 		detailCalls++
 		return nil
 	}
 	t.Cleanup(func() {
 		incrementArticleCommentCount = originalIncrement
-		invalidateCommentArticleListCache = originalListInvalidation
 		invalidateCommentArticleDetailCache = originalDetailInvalidation
 	})
 
@@ -93,8 +87,8 @@ func TestCommentCountTransactionRollbackIntegration(t *testing.T) {
 	if comments != 0 || commentArticleCount(t, db, fixture.Article.ID) != 0 {
 		t.Fatalf("rollback comments=%d comment_count=%d", comments, commentArticleCount(t, db, fixture.Article.ID))
 	}
-	if listCalls != 0 || detailCalls != 0 {
-		t.Fatalf("cache invalidated after rolled-back create: list=%d detail=%d", listCalls, detailCalls)
+	if detailCalls != 0 {
+		t.Fatalf("cache invalidated after rolled-back create: detail=%d", detailCalls)
 	}
 }
 
@@ -109,20 +103,13 @@ func TestCommentCountUnderflowRollsBackIntegration(t *testing.T) {
 	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
 		t.Fatal("fixture should begin with a zero comment count")
 	}
-
-	originalListInvalidation := invalidateCommentArticleListCache
 	originalDetailInvalidation := invalidateCommentArticleDetailCache
-	listCalls, detailCalls := 0, 0
-	invalidateCommentArticleListCache = func() error {
-		listCalls++
-		return nil
-	}
+	detailCalls := 0
 	invalidateCommentArticleDetailCache = func(uint) error {
 		detailCalls++
 		return nil
 	}
 	t.Cleanup(func() {
-		invalidateCommentArticleListCache = originalListInvalidation
 		invalidateCommentArticleDetailCache = originalDetailInvalidation
 	})
 
@@ -144,29 +131,22 @@ func TestCommentCountUnderflowRollsBackIntegration(t *testing.T) {
 	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
 		t.Fatalf("comment count changed despite underflow rollback: %d", commentArticleCount(t, db, fixture.Article.ID))
 	}
-	if listCalls != 0 || detailCalls != 0 {
-		t.Fatalf("cache invalidated after rolled-back delete: list=%d detail=%d", listCalls, detailCalls)
+	if detailCalls != 0 {
+		t.Fatalf("cache invalidated after rolled-back delete: detail=%d", detailCalls)
 	}
 }
 
 func TestCommentCacheInvalidationIsBestEffortIntegration(t *testing.T) {
 	db := openCommentIntegrationDatabase(t)
 	fixture := newCommentIntegrationFixture(t, db)
-
-	originalListInvalidation := invalidateCommentArticleListCache
 	originalDetailInvalidation := invalidateCommentArticleDetailCache
-	listCalls, detailCalls, detailArticleIDs := 0, 0, make([]uint, 0, 2)
-	invalidateCommentArticleListCache = func() error {
-		listCalls++
-		return errors.New("list cache unavailable")
-	}
+	detailCalls, detailArticleIDs := 0, make([]uint, 0, 2)
 	invalidateCommentArticleDetailCache = func(articleID uint) error {
 		detailCalls++
 		detailArticleIDs = append(detailArticleIDs, articleID)
 		return errors.New("detail cache unavailable")
 	}
 	t.Cleanup(func() {
-		invalidateCommentArticleListCache = originalListInvalidation
 		invalidateCommentArticleDetailCache = originalDetailInvalidation
 	})
 
@@ -184,17 +164,13 @@ func TestCommentCacheInvalidationIsBestEffortIntegration(t *testing.T) {
 	if commentArticleCount(t, db, fixture.Article.ID) != 1 {
 		t.Fatalf("count after create=%d", commentArticleCount(t, db, fixture.Article.ID))
 	}
-	if listCalls != 1 || detailCalls != 1 {
-		t.Fatalf("create invalidation calls list=%d detail=%d", listCalls, detailCalls)
+	if detailCalls != 1 {
+		t.Fatalf("create invalidation calls detail=%d", detailCalls)
 	}
 
 	var response commentResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
-	}
-	invalidateCommentArticleListCache = func() error {
-		listCalls++
-		return nil
 	}
 	invalidateCommentArticleDetailCache = func(articleID uint) error {
 		detailCalls++
@@ -215,8 +191,8 @@ func TestCommentCacheInvalidationIsBestEffortIntegration(t *testing.T) {
 	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
 		t.Fatalf("count after delete=%d", commentArticleCount(t, db, fixture.Article.ID))
 	}
-	if listCalls != 2 || detailCalls != 2 || len(detailArticleIDs) != 2 || detailArticleIDs[0] != fixture.Article.ID || detailArticleIDs[1] != fixture.Article.ID {
-		t.Fatalf("delete invalidation calls list=%d detail=%d", listCalls, detailCalls)
+	if detailCalls != 2 || len(detailArticleIDs) != 2 || detailArticleIDs[0] != fixture.Article.ID || detailArticleIDs[1] != fixture.Article.ID {
+		t.Fatalf("delete invalidation calls detail=%d", detailCalls)
 	}
 }
 

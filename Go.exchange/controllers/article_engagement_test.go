@@ -31,18 +31,21 @@ func TestArticleResponseIncludesEngagementMetadata(t *testing.T) {
 }
 
 func TestArticleEngagementCacheSchemaVersion(t *testing.T) {
-	if articleListCacheKey != "articles:v3" {
-		t.Fatalf("article list cache key=%q", articleListCacheKey)
-	}
 	if articleDetailCacheKey("42") != "article:detail:v3:42" {
 		t.Fatalf("article detail cache key=%q", articleDetailCacheKey("42"))
 	}
-	if !strings.Contains(articleListSelectColumns, "like_count") || !strings.Contains(articleListSelectColumns, "comment_count") {
-		t.Fatalf("article list select columns=%q", articleListSelectColumns)
+	for _, column := range []string{
+		"id", "created_at", "updated_at", "author_id", "title", "content", "preview",
+		"cover_image_url", "summary", "tags", "category", "publication_state",
+		"analysis_state", "analysis_version", "published_at", "expired_at",
+		"like_count", "comment_count", "like_sync_version",
+	} {
+		if !strings.Contains(publicArticleSelectColumns, "articles."+column) {
+			t.Fatalf("public article select columns missing articles.%s: %q", column, publicArticleSelectColumns)
+		}
 	}
 }
-
-func TestArticleListSelectionIncludesEngagementMetadataIntegration(t *testing.T) {
+func TestPublicArticleSelectionIncludesEngagementMetadataIntegration(t *testing.T) {
 	db := openCommentIntegrationDatabase(t)
 	fixture := newCommentIntegrationFixture(t, db)
 	if err := db.Model(&fixture.Article).Updates(map[string]any{
@@ -53,9 +56,9 @@ func TestArticleListSelectionIncludesEngagementMetadataIntegration(t *testing.T)
 	}
 
 	responses, err := loadArticleResponses(
-		db.Select(articleListSelectColumns).
+		db.Select(publicArticleSelectColumns).
 			Where("id = ?", fixture.Article.ID).
-			Scopes(func(tx *gorm.DB) *gorm.DB { return visibleArticleScope(tx, time.Now()) }),
+			Scopes(func(tx *gorm.DB) *gorm.DB { return publicArticleScope(tx, time.Now().UTC()) }),
 	)
 	if err != nil {
 		t.Fatal(err)

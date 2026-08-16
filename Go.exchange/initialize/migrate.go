@@ -98,7 +98,7 @@ func applyArticleAuthorConstraints(tx *gorm.DB) error {
 			return fmt.Errorf("create article author foreign key: %w", err)
 		}
 	}
-	if err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_articles_author_created ON articles (author_id, created_at DESC, id DESC)").Error; err != nil {
+	if err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_articles_author_published ON articles (author_id, published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL").Error; err != nil {
 		return fmt.Errorf("create article author index: %w", err)
 	}
 	return nil

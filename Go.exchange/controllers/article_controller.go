@@ -58,7 +58,6 @@ var createArticleWithAnalysisJob = func(article *models.Article) error {
 	})
 }
 
-var invalidateArticleListCache = InvalidateArticleListCache
 var loadArticleAuthorForCreate = loadPublicAuthorByID
 var initializeArticleLikeState = func(articleID uint) error {
 	if global.RedisDB == nil {
@@ -139,9 +138,6 @@ func CreateArticle(ctx *gin.Context) {
 	if err := initializeArticleLikeState(article.ID); err != nil && global.Db != nil {
 		global.Db.Logger.Error(ctx, "failed to initialize article like state", err)
 	}
-	if err := invalidateArticleListCache(); err != nil && global.Db != nil {
-		global.Db.Logger.Error(ctx, "failed to invalidate article list cache", err)
-	}
 
 	article.Author = models.User{
 		Model:       gorm.Model{ID: author.ID},
@@ -155,20 +151,6 @@ func CreateArticle(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusCreated, response)
-}
-
-func GetArticle(ctx *gin.Context) {
-	articles, err := loadArticleList()
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	ctx.JSON(http.StatusOK, articles)
 }
 
 func GetArticleByID(ctx *gin.Context) {

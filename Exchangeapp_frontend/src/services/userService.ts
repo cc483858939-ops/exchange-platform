@@ -1,11 +1,12 @@
 import apiClient from '../axios';
 import type { Article } from '../types/Article';
+import type { ArticlePageResponse } from './articleService';
 import type { PublicUser } from '../types/User';
 import { normalizeResourceID } from './resourceId';
 
 export type UserArticleQuery = {
   limit?: number;
-  offset?: number;
+  cursor?: string;
 };
 export type UserConnectionItem = {
 	user: PublicUser;
@@ -38,9 +39,9 @@ export async function getUser(userId: number | string): Promise<PublicUser> {
 export async function getUserArticles(
   userId: number | string,
   options: UserArticleQuery = {},
-): Promise<Article[]> {
+): Promise<ArticlePageResponse> {
   const id = normalizeResourceID(userId, 'user');
-  const response = await apiClient.get<Article[]>(`/users/${id}/articles`, { params: options });
+  const response = await apiClient.get<ArticlePageResponse>(`/users/${id}/articles`, { params: options });
   return response.data;
 }
 

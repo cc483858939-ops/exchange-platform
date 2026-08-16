@@ -24,12 +24,6 @@ var (
 
 	deleteArticleInTransaction = deleteArticleInTransactionFromDB
 
-	invalidateArticleDeleteListCache = func() error {
-		if global.RedisDB == nil {
-			return nil
-		}
-		return InvalidateArticleListCache()
-	}
 	invalidateArticleDeleteDetailCache = func(articleID uint) error {
 		if global.RedisDB == nil {
 			return nil
@@ -142,9 +136,6 @@ func DeleteArticle(ctx *gin.Context) {
 		return
 	}
 
-	if err := invalidateArticleDeleteListCache(); err != nil {
-		log.Printf("[ArticleDelete] invalidate article list cache: %v", err)
-	}
 	if err := invalidateArticleDeleteDetailCache(articleID); err != nil {
 		log.Printf("[ArticleDelete] invalidate article detail cache for %d: %v", articleID, err)
 	}

@@ -4,36 +4,41 @@ import (
 	"errors"
 	"time"
 
+	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"gorm.io/gorm"
 )
 
-const articleListSelectColumns = "articles.id,articles.title,articles.content,articles.preview,articles.cover_image_url,articles.expired_at,articles.created_at,articles.updated_at,articles.deleted_at,articles.author_id,articles.like_count,articles.comment_count"
+const publicArticleSelectColumns = "articles.id,articles.created_at,articles.updated_at,articles.author_id,articles.title,articles.content,articles.preview,articles.cover_image_url,articles.summary,articles.tags,articles.category,articles.publication_state,articles.analysis_state,articles.analysis_version,articles.published_at,articles.expired_at,articles.like_count,articles.comment_count,articles.like_sync_version"
 
-func visibleArticleScope(query *gorm.DB, now time.Time) *gorm.DB {
-	return query.Where("expired_at > ? OR expired_at IS NULL", now)
+func publicArticleScope(query *gorm.DB, now time.Time) *gorm.DB {
+	now = now.UTC()
+	return query.
+		Where("articles.deleted_at IS NULL").
+		Where("articles.publication_state = ?", consts.ArticlePublicationStatePublished).
+		Where("articles.published_at IS NOT NULL").
+		Where("articles.published_at <= ?", now).
+		Where("(articles.expired_at IS NULL OR articles.expired_at > ?)", now)
 }
 
-func loadArticleList() ([]articleResponse, error) {
-	responses, err := loadJSONCache(articleListCacheKey, func() ([]articleResponse, error) {
-		if global.Db == nil {
-			return nil, errors.New("database is not initialized")
-		}
-		query := global.Db.
-			Select(articleListSelectColumns).
-			Scopes(func(tx *gorm.DB) *gorm.DB { return visibleArticleScope(tx, time.Now()) }).
-			Order("created_at DESC, id DESC")
-		return loadArticleResponses(query)
-	})
-	if err != nil {
-		return nil, err
+var invalidateArticleDetailCacheKey = func(key string) error {
+	if global.RedisDB == nil {
+		return nil
 	}
-	if err := hydrateArticleResponseAuthors(responses); err != nil {
-		return nil, err
+	return global.RedisDB.Del(key).Err()
+}
+
+func isPublicArticleResponseAt(article articleResponse, now time.Time) bool {
+	if article.PublicationState != consts.ArticlePublicationStatePublished || article.PublishedAt == nil {
+		return false
 	}
-	return responses, nil
+	now = now.UTC()
+	if article.PublishedAt.After(now) {
+		return false
+	}
+	return article.ExpiredAt == nil || article.ExpiredAt.After(now)
 }
 
 var loadArticleDetailCache = func(key string, loader func() (articleResponse, error)) (articleResponse, error) {
@@ -41,17 +46,26 @@ var loadArticleDetailCache = func(key string, loader func() (articleResponse, er
 }
 
 func loadArticleDetail(id string) (articleResponse, error) {
-	return loadArticleDetailCache(articleDetailCacheKey(id), func() (articleResponse, error) {
+	key := articleDetailCacheKey(id)
+	response, err := loadArticleDetailCache(key, func() (articleResponse, error) {
 		if global.Db == nil {
 			return articleResponse{}, errors.New("database is not initialized")
 		}
+		now := time.Now().UTC()
 		var article models.Article
-		err := preloadArticleAuthor(global.Db).
-			Where("id = ? AND (expired_at > ? OR expired_at IS NULL)", id, time.Now()).
+		err := publicArticleScope(preloadArticleAuthor(global.Db).Where("articles.id = ?", id), now).
 			First(&article).Error
 		if err != nil {
 			return articleResponse{}, err
 		}
 		return newArticleResponse(article)
 	})
+	if err != nil {
+		return articleResponse{}, err
+	}
+	if isPublicArticleResponseAt(response, time.Now().UTC()) {
+		return response, nil
+	}
+	_ = invalidateArticleDetailCacheKey(key)
+	return articleResponse{}, gorm.ErrRecordNotFound
 }

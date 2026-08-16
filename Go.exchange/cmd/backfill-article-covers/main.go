@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"Go.exchange/config"
-	"Go.exchange/controllers"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -60,11 +59,6 @@ func main() {
 		}
 	}
 
-	if !*dryRun && updated > 0 {
-		if err := controllers.InvalidateArticleListCache(); err != nil {
-			log.Printf("invalidate article list cache: %v", err)
-		}
-	}
 	log.Printf("article cover backfill completed: updated=%d skipped=%d dry_run=%t", updated, skipped, *dryRun)
 }
 

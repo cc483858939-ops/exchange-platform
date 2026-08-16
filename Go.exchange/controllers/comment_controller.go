@@ -124,7 +124,7 @@ func GetArticleComments(ctx *gin.Context) {
 	var article models.Article
 	if err := global.Db.
 		Select("id").
-		Scopes(func(tx *gorm.DB) *gorm.DB { return visibleArticleScope(tx, time.Now()) }).
+		Scopes(func(tx *gorm.DB) *gorm.DB { return publicArticleScope(tx, time.Now().UTC()) }).
 		First(&article, articleID).Error; err != nil {
 		writeCommentArticleLookupError(ctx, err)
 		return

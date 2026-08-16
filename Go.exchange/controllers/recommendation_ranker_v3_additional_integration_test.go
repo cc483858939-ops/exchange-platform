@@ -93,10 +93,10 @@ func TestRulesV3CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
 	lookbackStart := now.AddDate(0, 0, -90)
 	author := createArticleIntegrationAuthor(t, db)
 
-	completedSuppressed := models.Article{Title: "completed suppressed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	fallbackSuppressed := models.Article{Title: "fallback suppressed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
-	expiredNegativeAllowed := models.Article{Title: "expired negative allowed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
-	completedAllowed := models.Article{Title: "completed allowed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	completedSuppressed := models.Article{Title: "completed suppressed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	fallbackSuppressed := models.Article{Title: "fallback suppressed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
+	expiredNegativeAllowed := models.Article{Title: "expired negative allowed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
+	completedAllowed := models.Article{Title: "completed allowed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
 	articles := []*models.Article{&completedSuppressed, &fallbackSuppressed, &expiredNegativeAllowed, &completedAllowed}
 	for _, article := range articles {
 		if err := db.Create(article).Error; err != nil {
@@ -140,16 +140,63 @@ func TestRulesV3CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
 	}
 }
 
+func TestRulesV3CandidatesExcludeNonPublicArticlesIntegration(t *testing.T) {
+	db := openRulesV3IntegrationDatabase(t)
+	userID := uint(time.Now().UnixNano() & 0x3fffffff)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	author := createArticleIntegrationAuthor(t, db)
+	futurePublishedAt := now.Add(time.Hour)
+	expiredAt := now.Add(-time.Hour)
+	current := models.Article{Title: "current", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	future := models.Article{Title: "future", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &futurePublishedAt, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	nilPublished := models.Article{Title: "nil published", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	draft := models.Article{Title: "draft", AuthorID: author.ID, PublicationState: "draft", PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	expired := models.Article{Title: "expired", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, ExpiredAt: &expiredAt, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	deleted := models.Article{Title: "deleted", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	articles := []*models.Article{&current, &future, &nilPublished, &draft, &expired, &deleted}
+	for _, article := range articles {
+		if err := db.Create(article).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Delete(&deleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ids := make([]uint, 0, len(articles))
+		for _, article := range articles {
+			ids = append(ids, article.ID)
+		}
+		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
+	})
+
+	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[uint]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		seen[candidate.ID] = struct{}{}
+	}
+	if _, ok := seen[current.ID]; !ok {
+		t.Fatal("current public article is missing")
+	}
+	for _, article := range []*models.Article{&future, &nilPublished, &draft, &expired, &deleted} {
+		if _, ok := seen[article.ID]; ok {
+			t.Fatalf("non-public article %d was returned", article.ID)
+		}
+	}
+}
 func TestRulesV3CandidateStableOrderIntegration(t *testing.T) {
 	db := openRulesV3IntegrationDatabase(t)
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	author := createArticleIntegrationAuthor(t, db)
-	completedLowID := models.Article{Title: "completed low id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	completedHighID := models.Article{Title: "completed high id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	fallbackLowID := models.Article{Title: "fallback low id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
-	fallbackHighID := models.Article{Title: "fallback high id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
+	completedLowID := models.Article{Title: "completed low id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	completedHighID := models.Article{Title: "completed high id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	fallbackLowID := models.Article{Title: "fallback low id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
+	fallbackHighID := models.Article{Title: "fallback high id", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: "pending", LikeCount: 7, Model: gorm.Model{CreatedAt: now}}
 	articles := []*models.Article{&completedLowID, &completedHighID, &fallbackLowID, &fallbackHighID}
 	for _, article := range articles {
 		if err := db.Create(article).Error; err != nil {
@@ -192,6 +239,7 @@ func TestRulesV3CandidateLoadsCommentCountIntegration(t *testing.T) {
 		Title:            "comment count candidate",
 		AuthorID:         author.ID,
 		PublicationState: consts.ArticlePublicationStatePublished,
+		PublishedAt:      &now,
 		AnalysisState:    consts.ArticleAnalysisStateCompleted,
 		LikeCount:        17,
 		CommentCount:     8,

@@ -185,7 +185,7 @@ func claimArticleAnalysisJob(payload eventing.ArticleAnalysisRequestedPayload, w
 }
 
 func finishArticleAnalysisSuccess(job models.ArticleAnalysisJob, result ArticleAnalysisResult, now time.Time) error {
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.Transaction(func(tx *gorm.DB) error {
 		var current models.ArticleAnalysisJob
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, job.ID).Error; err != nil {
 			return err
@@ -210,6 +210,11 @@ func finishArticleAnalysisSuccess(job models.ArticleAnalysisJob, result ArticleA
 			"last_error":  "",
 		}).Error
 	})
+
+	if err == nil {
+		invalidateArticleDetailCacheBestEffort(job.ArticleID)
+	}
+	return err
 }
 func finishArticleAnalysisFailure(job models.ArticleAnalysisJob, analysisErr error, now time.Time) error {
 	errText := analysisErr.Error()
@@ -266,7 +271,7 @@ func finishArticleAnalysisFailure(job models.ArticleAnalysisJob, analysisErr err
 }
 
 func dispatchDueArticleAnalysisJobs(now time.Time) error {
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.Transaction(func(tx *gorm.DB) error {
 		var jobs []models.ArticleAnalysisJob
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where("state IN ? AND next_attempt_at <= ? AND (last_dispatched_at IS NULL OR last_dispatched_at < next_attempt_at)", []string{models.ArticleAnalysisJobQueued, models.ArticleAnalysisJobRetryWait}, now).
@@ -289,10 +294,11 @@ func dispatchDueArticleAnalysisJobs(now time.Time) error {
 		}
 		return nil
 	})
+	return err
 }
 
 func recoverExpiredArticleAnalysisLeases(now time.Time) error {
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.Transaction(func(tx *gorm.DB) error {
 		var expired []models.ArticleAnalysisJob
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where("state = ? AND lease_until < ?", models.ArticleAnalysisJobLeased, now).
@@ -316,6 +322,7 @@ func recoverExpiredArticleAnalysisLeases(now time.Time) error {
 		}
 		return nil
 	})
+	return err
 }
 
 func articleAnalysisRetryDelay(attempt int) time.Duration {

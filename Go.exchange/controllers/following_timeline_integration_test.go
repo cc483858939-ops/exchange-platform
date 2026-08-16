@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -30,7 +31,7 @@ func openFollowingTimelineIntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (followingTimelineResponse, int, string) {
+func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (articlePageResponse, int, string) {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -41,7 +42,7 @@ func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (follow
 	ctx.Request = httptest.NewRequest(http.MethodGet, path, nil)
 	ctx.Set("user_id", viewerID)
 	GetFollowingTimeline(ctx)
-	var response followingTimelineResponse
+	var response articlePageResponse
 	if recorder.Code == http.StatusOK {
 		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
@@ -113,13 +114,16 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	baseTime := time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)
 	expiredAt := baseTime.Add(-time.Hour)
 	createArticle := func(authorID uint, title, content string, createdAt time.Time, expiredAt *time.Time) models.Article {
+		publishedAt := createdAt
 		article := models.Article{
-			AuthorID:  authorID,
-			Title:     title,
-			Content:   content,
-			Preview:   "preview",
-			ExpiredAt: expiredAt,
-			Model:     gorm.Model{CreatedAt: createdAt},
+			AuthorID:         authorID,
+			Title:            title,
+			Content:          content,
+			Preview:          "preview",
+			PublicationState: consts.ArticlePublicationStatePublished,
+			PublishedAt:      &publishedAt,
+			ExpiredAt:        expiredAt,
+			Model:            gorm.Model{CreatedAt: createdAt},
 		}
 		if err := db.Create(&article).Error; err != nil {
 			t.Fatal(err)
@@ -137,6 +141,27 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	bOlder := createArticle(followedB.ID, "B older", "B older body", baseTime.Add(3*time.Minute), nil)
 	aOlder := createArticle(followedA.ID, "A older", "A older body", baseTime.Add(2*time.Minute), nil)
 	expired := createArticle(followedA.ID, "expired", "expired body", baseTime.Add(10*time.Minute), &expiredAt)
+	futurePublishedAt := time.Now().UTC().Add(24 * time.Hour)
+	future := models.Article{
+		AuthorID:         followedA.ID,
+		Title:            "future",
+		Content:          "future body",
+		Preview:          "preview",
+		PublicationState: consts.ArticlePublicationStatePublished,
+		PublishedAt:      &futurePublishedAt,
+		Model:            gorm.Model{CreatedAt: baseTime.Add(16 * time.Minute)},
+	}
+	if err := db.Create(&future).Error; err != nil {
+		t.Fatal(err)
+	}
+	nilPublished := createArticle(followedA.ID, "nil published", "nil body", baseTime.Add(17*time.Minute), nil)
+	if err := db.Model(&nilPublished).Update("published_at", nil).Error; err != nil {
+		t.Fatal(err)
+	}
+	draft := createArticle(followedA.ID, "draft", "draft body", baseTime.Add(18*time.Minute), nil)
+	if err := db.Model(&draft).Update("publication_state", "draft").Error; err != nil {
+		t.Fatal(err)
+	}
 	deleted := createArticle(followedA.ID, "deleted", "deleted body", baseTime.Add(11*time.Minute), nil)
 	if err := db.Delete(&deleted).Error; err != nil {
 		t.Fatal(err)
@@ -181,7 +206,7 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 			t.Fatalf("all ids=%v expected=%v", allIDs, expectedIDs)
 		}
 	}
-	for _, excluded := range []uint{expired.ID, deleted.ID, softFollowedPost.ID, unfollowedPost.ID, viewerPost.ID} {
+	for _, excluded := range []uint{expired.ID, future.ID, nilPublished.ID, draft.ID, deleted.ID, softFollowedPost.ID, unfollowedPost.ID, viewerPost.ID} {
 		if containsArticleID(page1.Items, excluded) || containsArticleID(page2.Items, excluded) || containsArticleID(page3.Items, excluded) {
 			t.Fatalf("excluded article %d appeared", excluded)
 		}

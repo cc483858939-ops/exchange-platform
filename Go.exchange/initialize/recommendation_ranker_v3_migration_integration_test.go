@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"gorm.io/driver/postgres"
@@ -66,6 +67,32 @@ func assertIndexDefinitionContains(t *testing.T, definition string, fragments ..
 		}
 	}
 }
+func TestRunMigrationsIsIdempotentIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+
+	if err := RunMigrations(); err != nil {
+		t.Fatalf("first migration run: %v", err)
+	}
+	if err := RunMigrations(); err != nil {
+		t.Fatalf("second migration run: %v", err)
+	}
+
+	var indexDefinition string
+	if err := db.Raw("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'articles' AND indexname = 'idx_articles_author_published'").Scan(&indexDefinition).Error; err != nil {
+		t.Fatal(err)
+	}
+	assertIndexDefinitionContains(t, strings.ToLower(indexDefinition), "author_id", "published_at desc", "id desc", "deleted_at is null", "publication_state", "published_at is not null")
+}
 func TestArticleAuthorConstraintsIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -120,9 +147,16 @@ SELECT indexdef
 FROM pg_indexes
 WHERE schemaname = current_schema()
   AND tablename = 'articles'
-  AND indexname = 'idx_articles_author_created'
+  AND indexname = 'idx_articles_author_published'
 `).Scan(&indexDefinition).Error; err != nil {
 		t.Fatal(err)
 	}
-	assertIndexDefinitionContains(t, strings.ToLower(indexDefinition), "author_id", "created_at desc", "id desc")
+	assertIndexDefinitionContains(t, strings.ToLower(indexDefinition), "author_id", "published_at desc", "id desc", "deleted_at is null", "publication_state", "published_at is not null")
+	var oldIndexCount int
+	if err := db.Raw("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'articles' AND indexname = 'idx_articles_author_created'").Scan(&oldIndexCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if oldIndexCount != 0 {
+		t.Fatalf("legacy article author index still exists: %d", oldIndexCount)
+	}
 }

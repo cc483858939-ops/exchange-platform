@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -288,10 +289,13 @@ func TestLoadArticleDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(
 		t.Fatal("cache hit must not hydrate article authors")
 		return nil, nil
 	}
+	now := time.Now().UTC()
 	cached := articleResponse{
-		ID:     123,
-		Title:  "cached article",
-		Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Cached Alice", AvatarURL: "cached.jpg"},
+		PublicationState: consts.ArticlePublicationStatePublished,
+		PublishedAt:      &now,
+		ID:               123,
+		Title:            "cached article",
+		Author:           publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Cached Alice", AvatarURL: "cached.jpg"},
 	}
 	loadArticleDetailCache = func(key string, loader func() (articleResponse, error)) (articleResponse, error) {
 		if key != articleDetailCacheKey("123") {
@@ -425,6 +429,165 @@ func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *tes
 	}
 	if !selectedAuthorQuery {
 		t.Fatalf("author preload selected more than the public summary fields: %v", queries)
+	}
+}
+
+func TestIsPublicArticleResponseAt(t *testing.T) {
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Minute)
+	future := now.Add(time.Minute)
+	expired := now.Add(-time.Minute)
+	cases := []struct {
+		name  string
+		state string
+		from  *time.Time
+		until *time.Time
+		want  bool
+	}{
+		{name: "published and current", state: consts.ArticlePublicationStatePublished, from: &past, want: true},
+		{name: "nil published at", state: consts.ArticlePublicationStatePublished, want: false},
+		{name: "unpublished", state: "draft", from: &past, want: false},
+		{name: "future", state: consts.ArticlePublicationStatePublished, from: &future, want: false},
+		{name: "expired", state: consts.ArticlePublicationStatePublished, from: &past, until: &expired, want: false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := articleResponse{
+				PublicationState: testCase.state,
+				PublishedAt:      testCase.from,
+				ExpiredAt:        testCase.until,
+			}
+			if got := isPublicArticleResponseAt(response, now); got != testCase.want {
+				t.Fatalf("public=%v want=%v response=%#v", got, testCase.want, response)
+			}
+		})
+	}
+}
+
+func TestLoadArticleDetailRejectsInvalidCachedResponseAndBestEffortDeletes(t *testing.T) {
+	originalCacheLoader := loadArticleDetailCache
+	originalInvalidator := invalidateArticleDetailCacheKey
+	originalDB := global.Db
+	t.Cleanup(func() {
+		loadArticleDetailCache = originalCacheLoader
+		invalidateArticleDetailCacheKey = originalInvalidator
+		global.Db = originalDB
+	})
+
+	global.Db = nil
+	now := time.Now().UTC()
+	future := now.Add(time.Hour)
+	loadArticleDetailCache = func(string, func() (articleResponse, error)) (articleResponse, error) {
+		return articleResponse{
+			ID:               42,
+			PublicationState: consts.ArticlePublicationStatePublished,
+			PublishedAt:      &future,
+			Author:           publicAuthorResponse{ID: 7, Username: "cached"},
+		}, nil
+	}
+	var deletedKey string
+	invalidateArticleDetailCacheKey = func(key string) error {
+		deletedKey = key
+		return gorm.ErrInvalidData
+	}
+
+	_, err := loadArticleDetail("42")
+	if err != gorm.ErrRecordNotFound {
+		t.Fatalf("invalid cached response error=%v want=%v", err, gorm.ErrRecordNotFound)
+	}
+	if deletedKey != articleDetailCacheKey("42") {
+		t.Fatalf("deleted key=%q", deletedKey)
+	}
+}
+
+func TestLoadArticleDetailMissFiltersNonPublicArticlesIntegration(t *testing.T) {
+	db := openCommentIntegrationDatabase(t)
+	fixture := newCommentIntegrationFixture(t, db)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	futurePublishedAt := now.Add(time.Hour)
+	expiredAt := now.Add(-time.Hour)
+	articles := []models.Article{
+		{
+			AuthorID:         fixture.Author.ID,
+			Title:            "detail-valid",
+			Preview:          "preview",
+			PublicationState: consts.ArticlePublicationStatePublished,
+			PublishedAt:      &now,
+		},
+		{
+			AuthorID:         fixture.Author.ID,
+			Title:            "detail-future",
+			Preview:          "preview",
+			PublicationState: consts.ArticlePublicationStatePublished,
+			PublishedAt:      &futurePublishedAt,
+		},
+		{
+			AuthorID:         fixture.Author.ID,
+			Title:            "detail-nil-published",
+			Preview:          "preview",
+			PublicationState: consts.ArticlePublicationStatePublished,
+		},
+		{
+			AuthorID:         fixture.Author.ID,
+			Title:            "detail-draft",
+			Preview:          "preview",
+			PublicationState: "draft",
+			PublishedAt:      &now,
+		},
+		{
+			AuthorID:         fixture.Author.ID,
+			Title:            "detail-expired",
+			Preview:          "preview",
+			PublicationState: consts.ArticlePublicationStatePublished,
+			PublishedAt:      &now,
+			ExpiredAt:        &expiredAt,
+		},
+		{
+			AuthorID:         fixture.Author.ID,
+			Title:            "detail-deleted",
+			Preview:          "preview",
+			PublicationState: consts.ArticlePublicationStatePublished,
+			PublishedAt:      &now,
+		},
+	}
+	if err := db.Create(&articles).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&articles[len(articles)-1]).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ids := make([]uint, 0, len(articles))
+		for _, article := range articles {
+			ids = append(ids, article.ID)
+		}
+		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
+	})
+
+	originalCacheLoader := loadArticleDetailCache
+	originalDB := global.Db
+	t.Cleanup(func() {
+		loadArticleDetailCache = originalCacheLoader
+		global.Db = originalDB
+	})
+	global.Db = db
+	loadArticleDetailCache = func(_ string, loader func() (articleResponse, error)) (articleResponse, error) {
+		return loader()
+	}
+
+	validID := strconv.FormatUint(uint64(articles[0].ID), 10)
+	response, err := loadArticleDetail(validID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ID != articles[0].ID || response.Author.ID != fixture.Author.ID {
+		t.Fatalf("valid detail response=%#v", response)
+	}
+	for _, article := range articles[1:] {
+		_, err := loadArticleDetail(strconv.FormatUint(uint64(article.ID), 10))
+		if err != gorm.ErrRecordNotFound {
+			t.Fatalf("non-public article %d error=%v want=%v", article.ID, err, gorm.ErrRecordNotFound)
+		}
 	}
 }
 

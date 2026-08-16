@@ -40,11 +40,11 @@ func TestGetFollowingTimelineReturnsCanonicalResponse(t *testing.T) {
 		}
 		return nil
 	}
-	loadFollowingTimelinePage = func(id uint, limit int, cursor *followingTimelineCursor) (followingTimelineResponse, error) {
+	loadFollowingTimelinePage = func(id uint, limit int, cursor *articleCursor) (articlePageResponse, error) {
 		if id != viewerID || limit != 20 || cursor != nil {
 			t.Fatalf("loader args id=%d limit=%d cursor=%v", id, limit, cursor)
 		}
-		return followingTimelineResponse{
+		return articlePageResponse{
 			Items:      []articleResponse{{ID: 101, Content: "Canonical following body", Author: publicAuthorResponse{ID: 9, Username: "alice"}}},
 			NextCursor: &nextCursor,
 		}, nil
@@ -55,7 +55,7 @@ func TestGetFollowingTimelineReturnsCanonicalResponse(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response followingTimelineResponse
+	var response articlePageResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
@@ -77,9 +77,9 @@ func TestFollowingTimelineDefaultsAndClampsLimit(t *testing.T) {
 	})
 	loadActiveFollowingViewer = func(uint) error { return nil }
 	var limits []int
-	loadFollowingTimelinePage = func(_ uint, limit int, _ *followingTimelineCursor) (followingTimelineResponse, error) {
+	loadFollowingTimelinePage = func(_ uint, limit int, _ *articleCursor) (articlePageResponse, error) {
 		limits = append(limits, limit)
-		return followingTimelineResponse{Items: []articleResponse{}}, nil
+		return articlePageResponse{Items: []articleResponse{}}, nil
 	}
 
 	ctx, recorder := newFollowingTimelineTestContext("/api/feed/following", &viewerID)
@@ -92,7 +92,7 @@ func TestFollowingTimelineDefaultsAndClampsLimit(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("clamped status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if len(limits) != 2 || limits[0] != defaultFollowingTimelineLimit || limits[1] != maxFollowingTimelineLimit {
+	if len(limits) != 2 || limits[0] != defaultArticleLimit || limits[1] != maxArticleLimit {
 		t.Fatalf("limits=%v", limits)
 	}
 }
@@ -106,9 +106,9 @@ func TestFollowingTimelineRejectsInvalidLimit(t *testing.T) {
 		loadFollowingTimelinePage = originalLoader
 	})
 	loadActiveFollowingViewer = func(uint) error { return nil }
-	loadFollowingTimelinePage = func(uint, int, *followingTimelineCursor) (followingTimelineResponse, error) {
+	loadFollowingTimelinePage = func(uint, int, *articleCursor) (articlePageResponse, error) {
 		t.Fatal("timeline loader should not be called")
-		return followingTimelineResponse{}, nil
+		return articlePageResponse{}, nil
 	}
 
 	for _, raw := range []string{"0", "-1", "not-a-number"} {
@@ -129,15 +129,15 @@ func TestFollowingTimelineAcceptsValidCursor(t *testing.T) {
 		loadFollowingTimelinePage = originalLoader
 	})
 	loadActiveFollowingViewer = func(uint) error { return nil }
-	want := followingTimelineCursor{CreatedAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC), ID: 42}
-	raw, err := encodeFollowingTimelineCursor(want)
+	want := articleCursor{Version: articleCursorVersion, PublishedAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC), ID: 42}
+	raw, err := encodeArticleCursor(want)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var received *followingTimelineCursor
-	loadFollowingTimelinePage = func(_ uint, _ int, cursor *followingTimelineCursor) (followingTimelineResponse, error) {
+	var received *articleCursor
+	loadFollowingTimelinePage = func(_ uint, _ int, cursor *articleCursor) (articlePageResponse, error) {
 		received = cursor
-		return followingTimelineResponse{Items: []articleResponse{}}, nil
+		return articlePageResponse{Items: []articleResponse{}}, nil
 	}
 
 	ctx, recorder := newFollowingTimelineTestContext("/api/feed/following?cursor="+raw, &viewerID)
@@ -145,17 +145,17 @@ func TestFollowingTimelineAcceptsValidCursor(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if received == nil || !received.CreatedAt.Equal(want.CreatedAt) || received.ID != want.ID {
+	if received == nil || !received.PublishedAt.Equal(want.PublishedAt) || received.ID != want.ID {
 		t.Fatalf("received cursor=%v", received)
 	}
 }
 
 func TestFollowingTimelineRejectsInvalidCursor(t *testing.T) {
-	zeroTime, err := json.Marshal(followingTimelineCursor{ID: 1})
+	zeroTime, err := json.Marshal(articleCursor{Version: articleCursorVersion, ID: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	zeroID, err := json.Marshal(followingTimelineCursor{CreatedAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)})
+	zeroID, err := json.Marshal(articleCursor{Version: articleCursorVersion, PublishedAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,9 +171,9 @@ func TestFollowingTimelineRejectsInvalidCursor(t *testing.T) {
 		originalActive := loadActiveFollowingViewer
 		originalLoader := loadFollowingTimelinePage
 		loadActiveFollowingViewer = func(uint) error { return nil }
-		loadFollowingTimelinePage = func(uint, int, *followingTimelineCursor) (followingTimelineResponse, error) {
+		loadFollowingTimelinePage = func(uint, int, *articleCursor) (articlePageResponse, error) {
 			t.Fatal("timeline loader should not be called")
-			return followingTimelineResponse{}, nil
+			return articlePageResponse{}, nil
 		}
 		ctx, recorder := newFollowingTimelineTestContext("/api/feed/following?cursor="+raw, &viewerID)
 		GetFollowingTimeline(ctx)
@@ -192,9 +192,9 @@ func TestFollowingTimelineHandlesMissingInactiveAndFailedViewer(t *testing.T) {
 		loadActiveFollowingViewer = originalActive
 		loadFollowingTimelinePage = originalLoader
 	})
-	loadFollowingTimelinePage = func(uint, int, *followingTimelineCursor) (followingTimelineResponse, error) {
+	loadFollowingTimelinePage = func(uint, int, *articleCursor) (articlePageResponse, error) {
 		t.Fatal("timeline loader should not be called")
-		return followingTimelineResponse{}, nil
+		return articlePageResponse{}, nil
 	}
 
 	ctx, recorder := newFollowingTimelineTestContext("/api/feed/following", nil)
@@ -219,8 +219,8 @@ func TestFollowingTimelineHandlesMissingInactiveAndFailedViewer(t *testing.T) {
 	}
 
 	loadActiveFollowingViewer = func(uint) error { return nil }
-	loadFollowingTimelinePage = func(uint, int, *followingTimelineCursor) (followingTimelineResponse, error) {
-		return followingTimelineResponse{}, errors.New("query failed")
+	loadFollowingTimelinePage = func(uint, int, *articleCursor) (articlePageResponse, error) {
+		return articlePageResponse{}, errors.New("query failed")
 	}
 	ctx, recorder = newFollowingTimelineTestContext("/api/feed/following", &viewerID)
 	GetFollowingTimeline(ctx)
@@ -233,26 +233,26 @@ func TestBuildFollowingTimelineResponseUsesLastReturnedItemForCursor(t *testing.
 	firstTime := time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)
 	secondTime := firstTime.Add(-time.Minute)
 	articles := []articleResponse{
-		{ID: 10, CreatedAt: firstTime},
-		{ID: 9, CreatedAt: secondTime},
-		{ID: 8, CreatedAt: secondTime},
+		{ID: 10, PublishedAt: &firstTime},
+		{ID: 9, PublishedAt: &secondTime},
+		{ID: 8, PublishedAt: &secondTime},
 	}
-	response, err := buildFollowingTimelineResponse(articles, 2)
+	response, err := buildArticlePageResponse(articles, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(response.Items) != 2 || response.Items[0].ID != 10 || response.Items[1].ID != 9 || response.NextCursor == nil {
 		t.Fatalf("response=%#v", response)
 	}
-	cursor, err := decodeFollowingTimelineCursor(*response.NextCursor)
+	cursor, err := decodeArticleCursor(*response.NextCursor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cursor.ID != 9 || !cursor.CreatedAt.Equal(secondTime) {
+	if cursor.ID != 9 || !cursor.PublishedAt.Equal(secondTime) {
 		t.Fatalf("cursor=%#v", cursor)
 	}
 
-	empty, err := buildFollowingTimelineResponse(nil, 2)
+	empty, err := buildArticlePageResponse(nil, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,20 +262,20 @@ func TestBuildFollowingTimelineResponseUsesLastReturnedItemForCursor(t *testing.
 }
 
 func TestFollowingTimelineCursorRoundTripAndValidation(t *testing.T) {
-	want := followingTimelineCursor{CreatedAt: time.Date(2026, 8, 10, 14, 0, 0, 123456000, time.UTC), ID: 42}
-	raw, err := encodeFollowingTimelineCursor(want)
+	want := articleCursor{Version: articleCursorVersion, PublishedAt: time.Date(2026, 8, 10, 14, 0, 0, 123456000, time.UTC), ID: 42}
+	raw, err := encodeArticleCursor(want)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := decodeFollowingTimelineCursor(raw)
+	got, err := decodeArticleCursor(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.CreatedAt.Equal(want.CreatedAt) || got.ID != want.ID {
+	if !got.PublishedAt.Equal(want.PublishedAt) || got.ID != want.ID {
 		t.Fatalf("got=%#v want=%#v", got, want)
 	}
 
-	if _, err := encodeFollowingTimelineCursor(followingTimelineCursor{}); err == nil {
+	if _, err := encodeArticleCursor(articleCursor{}); err == nil {
 		t.Fatal("expected zero cursor encoding error")
 	}
 }

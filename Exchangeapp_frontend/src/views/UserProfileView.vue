@@ -368,7 +368,7 @@ const articlesInitialLoading = ref(false);
 const articlesLoadingMore = ref(false);
 const articlesInitialError = ref('');
 const articlesLoadMoreError = ref('');
-const nextOffset = ref(0);
+const nextCursor = ref<string | null>(null);
 const hasMore = ref(false);
 
 const sentinelRef = ref<HTMLElement | null>(null);
@@ -985,7 +985,7 @@ const resetFeedState = () => {
   articlesLoadingMore.value = false;
   articlesInitialError.value = '';
   articlesLoadMoreError.value = '';
-  nextOffset.value = 0;
+  nextCursor.value = null;
   hasMore.value = false;
   loadedArticleIds.clear();
   disconnectObserver();
@@ -1015,20 +1015,20 @@ const loadInitialPosts = async (id: string, profileVersion: number) => {
   articlesInitialError.value = '';
   articlesLoadMoreError.value = '';
   articles.value = [];
-  nextOffset.value = 0;
+  nextCursor.value = null;
   hasMore.value = false;
   loadedArticleIds.clear();
   disconnectObserver();
 
   try {
-    const rawPage = await getUserArticles(id, { limit: pageSize, offset: 0 });
+    const rawPage = await getUserArticles(id, { limit: pageSize });
     if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
       return;
     }
 
-    const newPosts = appendArticles(rawPage);
-    nextOffset.value += rawPage.length;
-    hasMore.value = rawPage.length === pageSize;
+    const newPosts = appendArticles(rawPage.items);
+    nextCursor.value = rawPage.next_cursor;
+    hasMore.value = rawPage.next_cursor !== null;
     void hydrateProfileLikeStates(newPosts, profileVersion);
   } catch (error) {
     if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
@@ -1060,20 +1060,23 @@ const loadMorePosts = async () => {
     return;
   }
 
-  const offset = nextOffset.value;
+  const cursor = nextCursor.value;
+  if (cursor === null) {
+    return;
+  }
   const feedVersion = ++feedRequestVersion;
   articlesLoadingMore.value = true;
   articlesLoadMoreError.value = '';
 
   try {
-    const rawPage = await getUserArticles(id, { limit: pageSize, offset });
+    const rawPage = await getUserArticles(id, { limit: pageSize, cursor });
     if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
       return;
     }
 
-    const newPosts = appendArticles(rawPage);
-    nextOffset.value += rawPage.length;
-    hasMore.value = rawPage.length === pageSize;
+    const newPosts = appendArticles(rawPage.items);
+    nextCursor.value = rawPage.next_cursor;
+    hasMore.value = rawPage.next_cursor !== null;
     void hydrateProfileLikeStates(newPosts, profileVersion);
   } catch (error) {
     if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
@@ -1138,13 +1141,8 @@ const handleDeletePost = async (articleId: number) => {
     if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleId, ownerUserID)) {
       return false;
     }
-
-    const wasLoaded = articles.value.some((item) => item.id === articleId);
     articles.value = articles.value.filter((item) => item.id !== articleId);
     loadedArticleIds.delete(articleId);
-    if (wasLoaded) {
-      nextOffset.value = Math.max(0, nextOffset.value - 1);
-    }
     pendingDeleteArticleIds.delete(articleId);
     deleteErrors.delete(articleId);
     likePendingArticleIds.delete(articleId);

@@ -34,20 +34,17 @@ func stubArticleDeleteDependencies(t *testing.T, transactionErr error) {
 	t.Helper()
 	originalViewer := loadArticleDeleteViewer
 	originalTransaction := deleteArticleInTransaction
-	originalList := invalidateArticleDeleteListCache
 	originalDetail := invalidateArticleDeleteDetailCache
 	originalLikes := cleanupDeletedArticleLikeState
 	t.Cleanup(func() {
 		loadArticleDeleteViewer = originalViewer
 		deleteArticleInTransaction = originalTransaction
-		invalidateArticleDeleteListCache = originalList
 		invalidateArticleDeleteDetailCache = originalDetail
 		cleanupDeletedArticleLikeState = originalLikes
 	})
 
 	loadArticleDeleteViewer = func(uint) error { return nil }
 	deleteArticleInTransaction = func(uint, uint) error { return transactionErr }
-	invalidateArticleDeleteListCache = func() error { return nil }
 	invalidateArticleDeleteDetailCache = func(uint) error { return nil }
 	cleanupDeletedArticleLikeState = func(uint) error { return nil }
 }
@@ -112,12 +109,8 @@ func TestDeleteArticleMapsMissingAndForbiddenTransactions(t *testing.T) {
 
 func TestDeleteArticleOwnerReturnsNoContentAndCleansUpOnce(t *testing.T) {
 	viewerID := uint(7)
-	var listCalls, detailCalls, likeCalls int
+	var detailCalls, likeCalls int
 	stubArticleDeleteDependencies(t, nil)
-	invalidateArticleDeleteListCache = func() error {
-		listCalls++
-		return errors.New("cache unavailable")
-	}
 	invalidateArticleDeleteDetailCache = func(uint) error {
 		detailCalls++
 		return errors.New("detail cache unavailable")
@@ -133,8 +126,8 @@ func TestDeleteArticleOwnerReturnsNoContentAndCleansUpOnce(t *testing.T) {
 	if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	if listCalls != 1 || detailCalls != 1 || likeCalls != 1 {
-		t.Fatalf("cleanup calls list=%d detail=%d likes=%d", listCalls, detailCalls, likeCalls)
+	if detailCalls != 1 || likeCalls != 1 {
+		t.Fatalf("cleanup calls detail=%d likes=%d", detailCalls, likeCalls)
 	}
 }
 
@@ -150,7 +143,7 @@ func TestDeleteArticleDoesNotCleanUpRejectedRequest(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			stubArticleDeleteDependencies(t, testCase.err)
 			var calls int
-			invalidateArticleDeleteListCache = func() error { calls++; return nil }
+
 			invalidateArticleDeleteDetailCache = func(uint) error { calls++; return nil }
 			cleanupDeletedArticleLikeState = func(uint) error { calls++; return nil }
 			ctx, _ := newArticleDeleteContext("42", &viewerID)

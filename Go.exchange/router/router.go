@@ -58,7 +58,6 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.DELETE("/users/:id/follow", controllers.UnfollowUser)
 		api.GET("/feed/following", controllers.GetFollowingTimeline)
 		api.POST("/articles", controllers.CreateArticle)
-		api.GET("/articles", controllers.GetArticle)
 		api.GET("/articles/:id", controllers.GetArticleByID)
 		api.DELETE("/articles/:id", controllers.DeleteArticle)
 		api.GET("/articles/:id/comments", controllers.GetArticleComments)

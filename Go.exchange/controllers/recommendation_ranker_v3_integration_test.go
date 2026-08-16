@@ -74,8 +74,8 @@ func TestRulesV3FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	author := createArticleIntegrationAuthor(t, db)
-	completed := models.Article{Title: "completed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
-	fallback := models.Article{Title: "fallback", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
+	completed := models.Article{Title: "completed", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: consts.ArticleAnalysisStateCompleted, Model: gorm.Model{CreatedAt: now}}
+	fallback := models.Article{Title: "fallback", AuthorID: author.ID, PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now, AnalysisState: "pending", Model: gorm.Model{CreatedAt: now}}
 	if err := db.Create(&completed).Error; err != nil {
 		t.Fatal(err)
 	}

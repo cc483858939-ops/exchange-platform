@@ -184,12 +184,16 @@ GET /api/exchange/quote
 
 ```
 POST   /api/articles
-GET    /api/articles
+GET    /api/feed/following?limit=20&cursor=...
+GET    /api/users/:id/articles?limit=20&cursor=...
 GET    /api/articles/:id
+DELETE /api/articles/:id
 GET    /api/articles/:id/like
 PUT    /api/articles/:id/like
 DELETE /api/articles/:id/like
 ```
+
+following 和 user articles 都返回 {"items":[],"next_cursor":null}；cursor 为 opaque cursor。
 
 ### 推荐接口（需要认证）
 

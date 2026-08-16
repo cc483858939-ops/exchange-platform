@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -63,10 +64,13 @@ func newCommentIntegrationFixture(t *testing.T, db *gorm.DB) commentIntegrationF
 	if err := db.Create(&fixture.Other).Error; err != nil {
 		t.Fatal(err)
 	}
+	now := time.Now().UTC()
 	fixture.Article = models.Article{
-		AuthorID: fixture.Author.ID,
-		Title:    "comment fixture",
-		Preview:  "comment fixture",
+		AuthorID:         fixture.Author.ID,
+		Title:            "comment fixture",
+		Preview:          "comment fixture",
+		PublicationState: consts.ArticlePublicationStatePublished,
+		PublishedAt:      &now,
 	}
 	if err := db.Create(&fixture.Article).Error; err != nil {
 		t.Fatal(err)

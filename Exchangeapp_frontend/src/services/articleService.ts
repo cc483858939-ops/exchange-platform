@@ -18,15 +18,12 @@ export type FollowingTimelineQuery = {
   cursor?: string;
 };
 
-export type FollowingTimelineResponse = {
+export type ArticlePageResponse = {
   items: Article[];
   next_cursor: string | null;
 };
 
-export async function getArticles(): Promise<Article[]> {
-  const response = await apiClient.get<Article[]>('/articles');
-  return response.data;
-}
+export type FollowingTimelineResponse = ArticlePageResponse;
 
 export async function getFollowingTimeline(
   options: FollowingTimelineQuery = {},

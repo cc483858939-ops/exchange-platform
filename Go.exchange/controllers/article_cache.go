@@ -16,8 +16,6 @@ import (
 const articleCacheTTL = 10 * time.Minute
 
 var (
-	// articleListCacheKey 文章列表的 Redis Key
-	articleListCacheKey = "articles:v3"
 	// articleCacheGroup 用于防击穿的 Singleflight 分组
 	articleCacheGroup singleflight.Group
 )
@@ -33,13 +31,11 @@ func articleDetailCacheKey(id string) string {
 	return "article:detail:v3:" + id
 }
 
-// InvalidateArticleListCache 主动删除文章列表缓存。
-func InvalidateArticleListCache() error {
-	return global.RedisDB.Del(articleListCacheKey).Err()
-}
-
 // InvalidateArticleDetailCacheByID 主动删除指定文章的详情缓存。
 func InvalidateArticleDetailCacheByID(id uint) error {
+	if global.RedisDB == nil {
+		return nil
+	}
 	return global.RedisDB.Del(articleDetailCacheKey(strconv.FormatUint(uint64(id), 10))).Err()
 }
 

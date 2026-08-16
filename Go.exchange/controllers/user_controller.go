@@ -89,30 +89,6 @@ func parsePublicUserID(raw string) (uint, error) {
 	return uint(id), nil
 }
 
-func parseUserArticlePagination(ctx *gin.Context) (int, int, error) {
-	limit := defaultUserArticleLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, 0, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxUserArticleLimit {
-		limit = maxUserArticleLimit
-	}
-
-	offset := 0
-	if raw, exists := ctx.GetQuery("offset"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 0 {
-			return 0, 0, errors.New("invalid offset")
-		}
-		offset = parsed
-	}
-	return limit, offset, nil
-
-}
 func normalizeUserSearchQuery(raw string) (string, error) {
 	query := strings.TrimSpace(raw)
 	if strings.HasPrefix(query, "@") {
@@ -422,7 +398,7 @@ func GetUserArticles(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	limit, offset, err := parseUserArticlePagination(ctx)
+	limit, cursor, err := parseArticlePageQuery(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -435,17 +411,33 @@ func GetUserArticles(ctx *gin.Context) {
 		writeUserAPIError(ctx, errors.New("database is not initialized"))
 		return
 	}
+
+	now := time.Now().UTC()
 	query := global.Db.
-		Select(articleListSelectColumns).
-		Where("author_id = ?", id).
-		Scopes(func(tx *gorm.DB) *gorm.DB { return visibleArticleScope(tx, time.Now()) }).
-		Order("created_at DESC, id DESC").
-		Limit(limit).
-		Offset(offset)
-	articles, err := loadArticleResponses(query)
+		Model(&models.Article{}).
+		Select(publicArticleSelectColumns).
+		Where("articles.author_id = ?", id).
+		Scopes(func(tx *gorm.DB) *gorm.DB { return publicArticleScope(tx, now) })
+	if cursor != nil {
+		query = query.Where(
+			"(articles.published_at < ?) OR (articles.published_at = ? AND articles.id < ?)",
+			cursor.PublishedAt,
+			cursor.PublishedAt,
+			cursor.ID,
+		)
+	}
+	articles, err := loadArticleResponses(query.Order("articles.published_at DESC, articles.id DESC").Limit(limit + 1))
 	if err != nil {
 		writeUserAPIError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, articles)
+	page, err := buildArticlePageResponse(articles, limit)
+	if err != nil {
+		writeUserAPIError(ctx, err)
+		return
+	}
+	if page.Items == nil {
+		page.Items = make([]articleResponse, 0)
+	}
+	ctx.JSON(http.StatusOK, page)
 }

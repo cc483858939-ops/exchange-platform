@@ -103,11 +103,15 @@ Authenticated endpoints:
 - `GET /api/recommendations/articles`
 - `POST /api/uploads/article-cover`
 - `POST /api/articles`
-- `GET /api/articles`
+- GET /api/feed/following?limit=20&cursor=...
+- GET /api/users/:id/articles?limit=20&cursor=...
 - `GET /api/articles/:id`
+- `DELETE /api/articles/:id`
 - `GET /api/articles/:id/like`
 - `PUT /api/articles/:id/like`
 - `DELETE /api/articles/:id/like`
+
+Following and user-article endpoints return {"items":[],"next_cursor":null}; cursor values are opaque.
 
 ## Project Layout
 
@@ -133,7 +137,7 @@ Go.exchange/
 ## Design Notes
 
 - Redis is the hot path for article like counts; PostgreSQL stores the durable projection.
-- Article list/detail responses are cached in Redis.
+- Article detail responses are cached in Redis.
 - Article analysis is queued through Redis sets and processed by worker goroutines.
 - Article cover images are stored in MinIO and served through `/api/files/*objectKey`.
 - API and worker processes do not run `AutoMigrate`; schema changes belong to the `migrate` job.

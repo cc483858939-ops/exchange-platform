@@ -25,10 +25,8 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	gin.SetMode(gin.TestMode)
 	originalCreate := createArticleWithAnalysisJob
-	originalInvalidate := invalidateArticleListCache
 	defer func() {
 		createArticleWithAnalysisJob = originalCreate
-		invalidateArticleListCache = originalInvalidate
 	}()
 
 	var persisted models.Article
@@ -37,7 +35,6 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 		persisted = *article
 		return nil
 	}
-	invalidateArticleListCache = func() error { return nil }
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -71,10 +68,8 @@ func TestCreateArticleTrimsTextFields(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	gin.SetMode(gin.TestMode)
 	originalCreate := createArticleWithAnalysisJob
-	originalInvalidate := invalidateArticleListCache
 	defer func() {
 		createArticleWithAnalysisJob = originalCreate
-		invalidateArticleListCache = originalInvalidate
 	}()
 
 	var persisted models.Article
@@ -83,7 +78,6 @@ func TestCreateArticleTrimsTextFields(t *testing.T) {
 		persisted = *article
 		return nil
 	}
-	invalidateArticleListCache = func() error { return nil }
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -128,10 +122,8 @@ func TestCreateArticlePersistsWithoutCover(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	gin.SetMode(gin.TestMode)
 	originalCreate := createArticleWithAnalysisJob
-	originalInvalidate := invalidateArticleListCache
 	defer func() {
 		createArticleWithAnalysisJob = originalCreate
-		invalidateArticleListCache = originalInvalidate
 	}()
 
 	var persisted models.Article
@@ -140,7 +132,6 @@ func TestCreateArticlePersistsWithoutCover(t *testing.T) {
 		persisted = *article
 		return nil
 	}
-	invalidateArticleListCache = func() error { return nil }
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -203,9 +194,7 @@ func TestCreateArticleIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	originalCreate := createArticleWithAnalysisJob
 	t.Cleanup(func() { createArticleWithAnalysisJob = originalCreate })
-	originalInvalidate := invalidateArticleListCache
-	t.Cleanup(func() { invalidateArticleListCache = originalInvalidate })
-	invalidateArticleListCache = func() error { return nil }
+
 	var persisted models.Article
 	createArticleWithAnalysisJob = func(article *models.Article) error {
 		article.ID = 42

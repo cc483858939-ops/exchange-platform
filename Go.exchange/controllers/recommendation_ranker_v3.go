@@ -461,7 +461,7 @@ var loadRulesV3Candidates = func(userID uint, excluded map[uint]struct{}, lookba
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	columns := "id,title,content,preview,summary,cover_image_url,tags,category,publication_state,analysis_state,like_count,comment_count,created_at,updated_at,deleted_at,author_id"
+	columns := publicArticleSelectColumns
 	scoped := func(query *gorm.DB) *gorm.DB {
 		laterReaction := global.Db.Table("article_reaction AS ar").
 			Select("1").
@@ -470,11 +470,10 @@ var loadRulesV3Candidates = func(userID uint, excluded map[uint]struct{}, lookba
 			Select("1").
 			Where("re.user_id = ? AND re.article_id = articles.id AND re.event_type = ? AND re.occurred_at >= ?", userID, models.RecommendationEventTypeNotInterested, lookbackStart).
 			Where("NOT EXISTS (?)", laterReaction)
-		query = query.Where("publication_state = ?", consts.ArticlePublicationStatePublished).
-			Where("expired_at > ? OR expired_at IS NULL", now).
+		query = publicArticleScope(query, now).
 			Where("NOT EXISTS (?)", negative)
 		if ids := articleIDList(excluded); len(ids) > 0 {
-			query = query.Where("id NOT IN ?", ids)
+			query = query.Where("articles.id NOT IN ?", ids)
 		}
 		return query
 	}
