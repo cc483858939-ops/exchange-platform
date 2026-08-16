@@ -87,6 +87,69 @@ func TestRunMigrationsIsIdempotentIntegration(t *testing.T) {
 		t.Fatalf("second migration run: %v", err)
 	}
 
+	var columns []struct {
+		Name   string `gorm:"column:column_name"`
+		Length *int   `gorm:"column:character_maximum_length"`
+	}
+	if err := db.Raw(`
+SELECT column_name, character_maximum_length
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'recommendation_events'
+  AND column_name IN ('read_policy_version', 'read_outcome')
+ORDER BY column_name
+`).Scan(&columns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(columns) != 2 {
+		t.Fatalf("recommendation telemetry columns=%d want=2: %#v", len(columns), columns)
+	}
+	wantLengths := map[string]int{
+		"read_policy_version": 32,
+		"read_outcome":        16,
+	}
+	for _, column := range columns {
+		wantLength, ok := wantLengths[column.Name]
+		if !ok {
+			t.Fatalf("unexpected recommendation telemetry column %q", column.Name)
+		}
+		if column.Length == nil || *column.Length != wantLength {
+			t.Fatalf("%s length=%v want=%d", column.Name, column.Length, wantLength)
+		}
+	}
+
+	var constraints []string
+	if err := db.Raw(`
+SELECT c.conname
+FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+WHERE t.relname = 'recommendation_events'
+  AND c.conname IN (
+      'chk_recommendation_event_read_policy',
+      'chk_recommendation_event_read_outcome',
+      'chk_recommendation_event_read_payload'
+  )
+ORDER BY c.conname
+`).Scan(&constraints).Error; err != nil {
+		t.Fatal(err)
+	}
+	foundConstraints := make(map[string]struct{}, len(constraints))
+	for _, constraint := range constraints {
+		foundConstraints[constraint] = struct{}{}
+	}
+	for _, want := range []string{
+		"chk_recommendation_event_read_policy",
+		"chk_recommendation_event_read_outcome",
+		"chk_recommendation_event_read_payload",
+	} {
+		if _, ok := foundConstraints[want]; !ok {
+			t.Fatalf("missing recommendation telemetry constraint %q; found=%v", want, constraints)
+		}
+	}
+	if len(foundConstraints) != 3 {
+		t.Fatalf("recommendation telemetry constraints=%v want exactly 3", constraints)
+	}
+
 	var indexDefinition string
 	if err := db.Raw("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'articles' AND indexname = 'idx_articles_author_published'").Scan(&indexDefinition).Error; err != nil {
 		t.Fatal(err)

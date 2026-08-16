@@ -28,7 +28,7 @@ type RecommendationEvent struct {
 	ScrollProgressPercent *int      `json:"scroll_progress_percent,omitempty" gorm:"column:scroll_progress_percent"`
 	ExitType              *string   `json:"exit_type,omitempty" gorm:"size:32"`
 	EstimatedReadTimeMS   *int64    `json:"estimated_read_time_ms,omitempty" gorm:"column:estimated_read_time_ms"`
-	ReadPolicyVersion     *string   `json:"read_policy_version,omitempty" gorm:"column:read_policy_version,size:32"`
-	ReadOutcome           *string   `json:"read_outcome,omitempty" gorm:"column:read_outcome,size:16"`
+	ReadPolicyVersion     *string   `json:"read_policy_version,omitempty" gorm:"column:read_policy_version;size:32"`
+	ReadOutcome           *string   `json:"read_outcome,omitempty" gorm:"column:read_outcome;size:16"`
 	CreatedAt             time.Time `json:"created_at" gorm:"not null"`
 }
