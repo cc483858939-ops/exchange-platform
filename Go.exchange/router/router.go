@@ -1,17 +1,19 @@
 package router
 
 import (
+	"time"
+
 	"Go.exchange/auth"
 	"Go.exchange/controllers"
+	"Go.exchange/eventing"
 	"Go.exchange/metrics"
 	"Go.exchange/middlewares"
-	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier) *gin.Engine {
+func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher) *gin.Engine {
 	router := gin.Default()
 
 	router.Use(cors.New(cors.Config{
@@ -44,7 +46,8 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	api.Use(middlewares.AuthMiddleware(verifier))
 	{
 		api.GET("/recommendations/articles", controllers.GetArticleRecommendations)
-		api.POST("/recommendation-events", controllers.RecordRecommendationEvents)
+		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher))
+		api.POST("/article-view-events", controllers.NewArticleViewEventsHandler(publisher))
 		api.POST("/uploads/article-cover", controllers.UploadArticleCover)
 		api.POST("/uploads/profile-avatar", controllers.UploadProfileAvatar)
 		api.GET("/users/search", controllers.SearchUsers)

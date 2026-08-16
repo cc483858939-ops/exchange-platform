@@ -15,12 +15,17 @@ import (
 )
 
 const (
-	EventTypeArticleAnalysisRequested     = "article.analysis.requested"
-	EventTypeArticleAnalysisDead          = "article.analysis.dead"
-	EventTypeArticleViewed                = "article.viewed"
-	EventTypeArticleLiked                 = "article.liked"
-	EventTypeArticleUnliked               = "article.unliked"
-	EventTypeRecommendationEventsRecorded = "recommendation.events.recorded"
+	EventTypeArticleAnalysisRequested = "article.analysis.requested"
+	EventTypeArticleAnalysisDead      = "article.analysis.dead"
+	EventTypeArticleViewed            = "article.viewed"
+	EventTypeArticleLiked             = "article.liked"
+	EventTypeArticleUnliked           = "article.unliked"
+
+	EventTypeRecommendationImpression    = "recommendation.impression"
+	EventTypeRecommendationClick         = "recommendation.click"
+	EventTypeRecommendationReadEnd       = "recommendation.read_end"
+	EventTypeRecommendationFeedDwell     = "recommendation.feed_dwell"
+	EventTypeRecommendationNotInterested = "recommendation.not_interested"
 )
 
 type Envelope struct {
@@ -45,6 +50,130 @@ type UserBehaviorPayload struct {
 	Action      string `json:"action"`
 	Source      string `json:"source"`
 	LikeVersion int64  `json:"like_version,omitempty"`
+}
+
+type RecommendationBehaviorPayload struct {
+	UserID    uint   `json:"user_id"`
+	ArticleID uint   `json:"article_id"`
+	RequestID string `json:"request_id"`
+
+	Scene    string `json:"scene"`
+	Position int    `json:"position"`
+
+	RankerVersion    string `json:"ranker_version"`
+	RankerConfigHash string `json:"ranker_config_hash"`
+	StrategyID       string `json:"strategy_id"`
+
+	ReceivedAt time.Time `json:"received_at"`
+
+	ForegroundTimeMS      *int64  `json:"foreground_time_ms,omitempty"`
+	ScrollProgressPercent *int    `json:"scroll_progress_percent,omitempty"`
+	ExitType              *string `json:"exit_type,omitempty"`
+
+	EstimatedReadTimeMS *int64  `json:"estimated_read_time_ms,omitempty"`
+	ReadPolicyVersion   *string `json:"read_policy_version,omitempty"`
+	ReadOutcome         *string `json:"read_outcome,omitempty"`
+
+	FeedVisibleTimeMS *int64 `json:"feed_visible_time_ms,omitempty"`
+}
+
+const (
+	RecommendationBehaviorActionClick           = "recommendation_click"
+	RecommendationBehaviorActionReadQualified   = "recommendation_read_qualified"
+	RecommendationBehaviorActionReadQuickBounce = "recommendation_read_quick_bounce"
+	RecommendationBehaviorActionReadNeutral     = "recommendation_read_neutral"
+	RecommendationBehaviorActionNotInterested   = "recommendation_not_interested"
+)
+
+func RecommendationEventTypeForAction(action string) (string, bool) {
+	switch strings.TrimSpace(action) {
+	case "impression":
+		return EventTypeRecommendationImpression, true
+	case "click":
+		return EventTypeRecommendationClick, true
+	case "read_end":
+		return EventTypeRecommendationReadEnd, true
+	case "feed_dwell":
+		return EventTypeRecommendationFeedDwell, true
+	case "not_interested":
+		return EventTypeRecommendationNotInterested, true
+	default:
+		return "", false
+	}
+}
+
+func IsRecommendationEventType(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case EventTypeRecommendationImpression,
+		EventTypeRecommendationClick,
+		EventTypeRecommendationReadEnd,
+		EventTypeRecommendationFeedDwell,
+		EventTypeRecommendationNotInterested:
+		return true
+	default:
+		return false
+	}
+}
+
+func NewRecommendationBehaviorEnvelope(eventID, eventType string, occurredAt time.Time, payload RecommendationBehaviorPayload) (Envelope, error) {
+	eventID = strings.TrimSpace(eventID)
+	eventType = strings.TrimSpace(eventType)
+	if _, err := uuid.Parse(eventID); err != nil {
+		return Envelope{}, errors.New("recommendation event id must be a UUID")
+	}
+	if !IsRecommendationEventType(eventType) {
+		return Envelope{}, fmt.Errorf("unsupported recommendation event type %q", eventType)
+	}
+	if occurredAt.IsZero() {
+		return Envelope{}, errors.New("recommendation occurred_at is required")
+	}
+	if payload.UserID == 0 || payload.ArticleID == 0 || strings.TrimSpace(payload.RequestID) == "" ||
+		strings.TrimSpace(payload.Scene) == "" || payload.Position <= 0 ||
+		strings.TrimSpace(payload.RankerVersion) == "" || strings.TrimSpace(payload.RankerConfigHash) == "" ||
+		strings.TrimSpace(payload.StrategyID) == "" || payload.ReceivedAt.IsZero() {
+		return Envelope{}, errors.New("recommendation payload is missing required fields")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal recommendation behavior payload: %w", err)
+	}
+	return Envelope{
+		ID:            eventID,
+		Type:          eventType,
+		SchemaVersion: 1,
+		AggregateType: "user",
+		AggregateID:   strconv.FormatUint(uint64(payload.UserID), 10),
+		OccurredAt:    occurredAt.UTC(),
+		Payload:       body,
+	}, nil
+}
+
+func NewArticleViewedEnvelope(eventID string, userID, articleID uint, occurredAt time.Time, source string) (Envelope, error) {
+	eventID = strings.TrimSpace(eventID)
+	if _, err := uuid.Parse(eventID); err != nil {
+		return Envelope{}, errors.New("article view event id must be a UUID")
+	}
+	if userID == 0 || articleID == 0 {
+		return Envelope{}, errors.New("article view requires user and article")
+	}
+	if occurredAt.IsZero() {
+		return Envelope{}, errors.New("article view occurred_at is required")
+	}
+	body, err := json.Marshal(UserBehaviorPayload{
+		UserID: userID, ArticleID: articleID, Action: "view", Source: strings.TrimSpace(source),
+	})
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal article view payload: %w", err)
+	}
+	return Envelope{
+		ID:            eventID,
+		Type:          EventTypeArticleViewed,
+		SchemaVersion: 1,
+		AggregateType: "user",
+		AggregateID:   strconv.FormatUint(uint64(userID), 10),
+		OccurredAt:    occurredAt.UTC(),
+		Payload:       body,
+	}, nil
 }
 
 func NewOutboxEvent(eventType, aggregateType, aggregateID string, payload interface{}) (models.OutboxEvent, error) {
@@ -76,20 +205,6 @@ func NewArticleAnalysisRequested(job models.ArticleAnalysisJob, analysisVersion 
 		JobID:           job.ID,
 		ArticleID:       job.ArticleID,
 		AnalysisVersion: analysisVersion,
-	})
-}
-
-func NewUserBehavior(userID, articleID uint, action, source string) (models.OutboxEvent, error) {
-	return NewVersionedUserBehavior(userID, articleID, action, source, 0)
-}
-
-func NewVersionedUserBehavior(userID, articleID uint, action, source string, likeVersion int64) (models.OutboxEvent, error) {
-	return NewOutboxEvent(EventTypeForBehaviorAction(action), "article", strconv.FormatUint(uint64(articleID), 10), UserBehaviorPayload{
-		UserID:      userID,
-		ArticleID:   articleID,
-		Action:      strings.TrimSpace(action),
-		Source:      strings.TrimSpace(source),
-		LikeVersion: likeVersion,
 	})
 }
 
@@ -137,7 +252,11 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 		return strings.TrimSpace(kafkaConfig.UserBehaviorTopic), nil
 	case EventTypeArticleLikeSnapshot:
 		return strings.TrimSpace(kafkaConfig.LikeSnapshotTopic), nil
-	case EventTypeRecommendationEventsRecorded:
+	case EventTypeRecommendationImpression,
+		EventTypeRecommendationClick,
+		EventTypeRecommendationReadEnd,
+		EventTypeRecommendationFeedDwell,
+		EventTypeRecommendationNotInterested:
 		return strings.TrimSpace(kafkaConfig.RecommendationEventsTopic), nil
 	default:
 		return "", fmt.Errorf("unsupported event type %q", eventType)
@@ -156,8 +275,12 @@ func KeyForEvent(event Envelope) string {
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 {
 			return strconv.FormatUint(uint64(payload.UserID), 10)
 		}
-	case EventTypeRecommendationEventsRecorded:
-		var payload RecommendationEventsRecordedPayload
+	case EventTypeRecommendationImpression,
+		EventTypeRecommendationClick,
+		EventTypeRecommendationReadEnd,
+		EventTypeRecommendationFeedDwell,
+		EventTypeRecommendationNotInterested:
+		var payload RecommendationBehaviorPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 {
 			return strconv.FormatUint(uint64(payload.UserID), 10)
 		}

@@ -3,7 +3,7 @@ package models
 import "time"
 
 // RecommendationDailyMetric is a rebuildable projection over
-// RecommendationEvent facts.
+// direct Kafka recommendation behavior events.
 type RecommendationDailyMetric struct {
 	MetricDate         time.Time `json:"metric_date" gorm:"type:date;primaryKey"`
 	Scene              string    `json:"scene" gorm:"size:64;primaryKey"`

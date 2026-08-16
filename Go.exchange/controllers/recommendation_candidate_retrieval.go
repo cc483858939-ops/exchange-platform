@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"Go.exchange/consts"
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -73,13 +74,14 @@ func mergeRulesV3CandidateIDs(limit int, sources ...[]uint) []uint {
 }
 
 func scopedRulesV3CandidateQuery(query *gorm.DB, userID uint, excluded map[uint]struct{}, lookbackStart time.Time, now time.Time) *gorm.DB {
+	negative := global.Db.Table("article_behaviors AS ab").
+		Select("1").
+		Where("ab.user_id = ? AND ab.article_id = articles.id AND ab.action = ? AND ab.last_seen_at >= ?",
+			userID, eventing.RecommendationBehaviorActionNotInterested, lookbackStart)
 	laterReaction := global.Db.Table("article_reaction AS ar").
 		Select("1").
-		Where("ar.user_id = ? AND ar.article_id = articles.id AND ar.state_changed_at > re.occurred_at", userID)
-	negative := global.Db.Table("recommendation_events AS re").
-		Select("1").
-		Where("re.user_id = ? AND re.article_id = articles.id AND re.event_type = ? AND re.occurred_at >= ?", userID, models.RecommendationEventTypeNotInterested, lookbackStart).
-		Where("NOT EXISTS (?)", laterReaction)
+		Where("ar.user_id = ? AND ar.article_id = articles.id AND ar.state_changed_at > ab.last_seen_at", userID)
+	negative = negative.Where("NOT EXISTS (?)", laterReaction)
 	query = publicArticleScope(query, now).
 		Where("NOT EXISTS (?)", negative)
 	if ids := articleIDList(excluded); len(ids) > 0 {
@@ -87,7 +89,6 @@ func scopedRulesV3CandidateQuery(query *gorm.DB, userID uint, excluded map[uint]
 	}
 	return query
 }
-
 func loadRulesV3CategoryCandidateIDs(userID uint, profile userInterestProfile, lookbackStart time.Time, now time.Time) ([]uint, error) {
 	if profile.PersonalizedSignalCount == 0 {
 		return nil, nil

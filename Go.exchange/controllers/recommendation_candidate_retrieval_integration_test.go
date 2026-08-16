@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"Go.exchange/consts"
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -104,11 +105,11 @@ func TestRulesV3CandidateScopePreservesExclusionAndReactionOverrideIntegration(t
 		t.Fatal(err)
 	}
 	negativeAt := now.Add(-time.Hour)
-	events := []models.RecommendationEvent{
-		newRulesV3IntegrationEvent(userID, suppressed.ID, models.RecommendationEventTypeNotInterested, "00000000-0000-0000-0000-000000000101", negativeAt, negativeAt),
-		newRulesV3IntegrationEvent(userID, overridden.ID, models.RecommendationEventTypeNotInterested, "00000000-0000-0000-0000-000000000102", negativeAt, negativeAt),
+	negativeBehaviors := []models.ArticleBehavior{
+		{UserID: userID, ArticleID: suppressed.ID, Action: eventing.RecommendationBehaviorActionNotInterested, Count: 1, LastSeenAt: negativeAt, Active: true},
+		{UserID: userID, ArticleID: overridden.ID, Action: eventing.RecommendationBehaviorActionNotInterested, Count: 1, LastSeenAt: negativeAt, Active: true},
 	}
-	if err := db.Create(&events).Error; err != nil {
+	if err := db.Create(&negativeBehaviors).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&models.ArticleReaction{
@@ -123,7 +124,7 @@ func TestRulesV3CandidateScopePreservesExclusionAndReactionOverrideIntegration(t
 	}
 	t.Cleanup(func() {
 		ids := []uint{interacted.ID, suppressed.ID, overridden.ID}
-		db.Where("user_id = ? AND article_id IN ?", userID, ids).Delete(&models.RecommendationEvent{})
+		db.Where("user_id = ? AND article_id IN ?", userID, ids).Delete(&models.ArticleBehavior{})
 		db.Where("user_id = ? AND article_id IN ?", userID, ids).Delete(&models.ArticleReaction{})
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 	})

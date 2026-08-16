@@ -3,7 +3,7 @@ package models
 import "time"
 
 // RecommendationRequest records a successful recommendation response. It is
-// deliberately separate from RecommendationEvent: a response is a serving
+// deliberately separate from the recommendation behavior projection: a response is a serving
 // opportunity, whereas events are client-observed facts.
 type RecommendationRequest struct {
 	RequestID               string    `json:"request_id" gorm:"primaryKey;type:uuid"`

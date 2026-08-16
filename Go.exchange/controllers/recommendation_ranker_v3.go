@@ -4,21 +4,34 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/consts"
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
 )
 
 const (
-	recommendationFeedbackArticleLimit   = 500
-	recommendationRecentViewArticleLimit = 200
+	recommendationFeedbackEventTypeClick         = models.RecommendationEventTypeClick
+	recommendationFeedbackEventTypeReadEnd       = models.RecommendationEventTypeReadEnd
+	recommendationFeedbackEventTypeNotInterested = models.RecommendationEventTypeNotInterested
+	recommendationFeedbackArticleLimit           = 500
+	recommendationRecentViewArticleLimit         = 200
 )
 
+type recommendationFeedbackEvent struct {
+	EventID     string
+	ArticleID   uint
+	EventType   string
+	OccurredAt  time.Time
+	ReceivedAt  time.Time
+	ReadOutcome *string
+}
 type recommendationFeedbackSignal struct {
-	Event      models.RecommendationEvent
+	Event      recommendationFeedbackEvent
 	SignalType string
 	Article    *models.Article
 }
@@ -92,44 +105,38 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-
-	query := "WITH ranked AS (\n" +
-		"  SELECT re.*, ROW_NUMBER() OVER (\n" +
-		"    PARTITION BY re.article_id, re.event_type\n" +
-		"    ORDER BY re.occurred_at DESC, re.received_at DESC, re.event_id DESC\n" +
-		"  ) AS type_rank\n" +
-		"  FROM recommendation_events AS re\n" +
-		"  WHERE re.user_id = ? AND re.occurred_at >= ?\n" +
-		"    AND re.event_type IN ('click', 'read_end', 'not_interested')\n" +
-		"), latest_per_type AS (\n" +
-		"  SELECT * FROM ranked WHERE type_rank = 1\n" +
-		"), selected_articles AS (\n" +
-		"  SELECT article_id, MAX(occurred_at) AS latest_occurred_at\n" +
-		"  FROM latest_per_type\n" +
-		"  GROUP BY article_id\n" +
-		"  ORDER BY MAX(occurred_at) DESC, article_id DESC\n" +
-		"  LIMIT ?\n" +
-		")\n" +
-		"SELECT lpt.*\n" +
-		"FROM latest_per_type AS lpt\n" +
-		"JOIN selected_articles AS sa ON sa.article_id = lpt.article_id\n" +
-		"ORDER BY sa.latest_occurred_at DESC, lpt.occurred_at DESC, lpt.received_at DESC, lpt.event_id DESC"
-
-	var events []models.RecommendationEvent
-	if err := global.Db.Raw(query, userID, lookbackStart, recommendationFeedbackArticleLimit).Scan(&events).Error; err != nil {
+	actions := []string{
+		eventing.RecommendationBehaviorActionClick,
+		eventing.RecommendationBehaviorActionReadQualified,
+		eventing.RecommendationBehaviorActionReadQuickBounce,
+		eventing.RecommendationBehaviorActionReadNeutral,
+		eventing.RecommendationBehaviorActionNotInterested,
+	}
+	var behaviors []models.ArticleBehavior
+	if err := global.Db.Where("user_id = ? AND action IN ? AND last_seen_at >= ?", userID, actions, lookbackStart).
+		Order("last_seen_at DESC, id DESC").
+		Limit(recommendationFeedbackArticleLimit * len(actions)).
+		Find(&behaviors).Error; err != nil {
 		return nil, err
 	}
 
-	articleIDsByEvent := make(map[uint]struct{}, len(events))
-	for _, event := range events {
-		if event.ArticleID != 0 {
-			articleIDsByEvent[event.ArticleID] = struct{}{}
+	selectedArticleIDs := make(map[uint]struct{}, recommendationFeedbackArticleLimit)
+	for _, behavior := range behaviors {
+		if behavior.ArticleID == 0 {
+			continue
 		}
+		if _, exists := selectedArticleIDs[behavior.ArticleID]; exists {
+			continue
+		}
+		if len(selectedArticleIDs) >= recommendationFeedbackArticleLimit {
+			continue
+		}
+		selectedArticleIDs[behavior.ArticleID] = struct{}{}
 	}
-	articles := make(map[uint]models.Article, len(articleIDsByEvent))
-	if len(articleIDsByEvent) > 0 {
+	articles := make(map[uint]models.Article, len(selectedArticleIDs))
+	if len(selectedArticleIDs) > 0 {
 		var loaded []models.Article
-		if err := global.Db.Select("id,category,tags").Where("id IN ?", articleIDList(articleIDsByEvent)).Find(&loaded).Error; err != nil {
+		if err := global.Db.Select("id,category,tags").Where("id IN ?", articleIDList(selectedArticleIDs)).Find(&loaded).Error; err != nil {
 			return nil, err
 		}
 		for _, article := range loaded {
@@ -137,12 +144,43 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 		}
 	}
 
-	result := make([]recommendationFeedbackSignal, 0, len(events))
-	for _, event := range events {
-		signal := recommendationFeedbackSignal{
-			Event:      event,
-			SignalType: normalizeRecommendationFeedbackSignal(event),
+	result := make([]recommendationFeedbackSignal, 0, len(behaviors))
+	for _, behavior := range behaviors {
+		if _, selected := selectedArticleIDs[behavior.ArticleID]; !selected {
+			continue
 		}
+		event := recommendationFeedbackEvent{
+			EventID: strconv.FormatUint(uint64(behavior.ID), 10), ArticleID: behavior.ArticleID,
+			OccurredAt: behavior.LastSeenAt, ReceivedAt: behavior.UpdatedAt,
+		}
+		if event.ReceivedAt.IsZero() {
+			event.ReceivedAt = event.OccurredAt
+		}
+		signal := recommendationFeedbackSignal{Event: event}
+		switch behavior.Action {
+		case eventing.RecommendationBehaviorActionClick:
+			event.EventType = models.RecommendationEventTypeClick
+			signal.SignalType = "click"
+		case eventing.RecommendationBehaviorActionReadQualified,
+			eventing.RecommendationBehaviorActionReadQuickBounce,
+			eventing.RecommendationBehaviorActionReadNeutral:
+			event.EventType = models.RecommendationEventTypeReadEnd
+			outcome := recommendationReadOutcomeNeutral
+			switch behavior.Action {
+			case eventing.RecommendationBehaviorActionReadQualified:
+				outcome = recommendationReadOutcomeQualified
+			case eventing.RecommendationBehaviorActionReadQuickBounce:
+				outcome = recommendationReadOutcomeQuickBounce
+			}
+			event.ReadOutcome = &outcome
+			signal.SignalType = normalizeRecommendationFeedbackSignal(event)
+		case eventing.RecommendationBehaviorActionNotInterested:
+			event.EventType = models.RecommendationEventTypeNotInterested
+			signal.SignalType = "not_interested"
+		default:
+			continue
+		}
+		signal.Event = event
 		if article, ok := articles[event.ArticleID]; ok {
 			articleCopy := article
 			signal.Article = &articleCopy
@@ -151,7 +189,6 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 	}
 	return result, nil
 }
-
 var loadRecommendationReactionStates = func(userID uint) (map[uint]recommendationReactionState, error) {
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
@@ -204,13 +241,13 @@ var loadRecommendationReactionStates = func(userID uint) (map[uint]recommendatio
 	return states, nil
 }
 
-func normalizeRecommendationFeedbackSignal(event models.RecommendationEvent) string {
+func normalizeRecommendationFeedbackSignal(event recommendationFeedbackEvent) string {
 	switch event.EventType {
-	case models.RecommendationEventTypeClick:
+	case recommendationFeedbackEventTypeClick:
 		return "click"
-	case models.RecommendationEventTypeNotInterested:
+	case recommendationFeedbackEventTypeNotInterested:
 		return "not_interested"
-	case models.RecommendationEventTypeReadEnd:
+	case recommendationFeedbackEventTypeReadEnd:
 		if event.ReadOutcome == nil {
 			return "neutral_read"
 		}
@@ -227,7 +264,7 @@ func normalizeRecommendationFeedbackSignal(event models.RecommendationEvent) str
 	}
 }
 
-func recommendationEventAfter(candidate, current models.RecommendationEvent) bool {
+func recommendationEventAfter(candidate, current recommendationFeedbackEvent) bool {
 	if !candidate.OccurredAt.Equal(current.OccurredAt) {
 		return candidate.OccurredAt.After(current.OccurredAt)
 	}
@@ -237,7 +274,7 @@ func recommendationEventAfter(candidate, current models.RecommendationEvent) boo
 	return candidate.EventID > current.EventID
 }
 
-func setLatestRecommendationEvent(target **models.RecommendationEvent, candidate models.RecommendationEvent) {
+func setLatestRecommendationEvent(target **recommendationFeedbackEvent, candidate recommendationFeedbackEvent) {
 	if *target == nil || recommendationEventAfter(candidate, **target) {
 		candidateCopy := candidate
 		*target = &candidateCopy
@@ -245,16 +282,16 @@ func setLatestRecommendationEvent(target **models.RecommendationEvent, candidate
 }
 
 type recommendationArticleFeedbackState struct {
-	Click         *models.RecommendationEvent
-	ReadEnd       *models.RecommendationEvent
-	NotInterested *models.RecommendationEvent
+	Click         *recommendationFeedbackEvent
+	ReadEnd       *recommendationFeedbackEvent
+	NotInterested *recommendationFeedbackEvent
 }
 
 func resolveRecommendationPassiveOutcome(
 	state *recommendationArticleFeedbackState,
 	view models.ArticleBehavior,
 ) (signalType string, occurredAt time.Time) {
-	var click, readEnd *models.RecommendationEvent
+	var click, readEnd *recommendationFeedbackEvent
 	if state != nil {
 		click = state.Click
 		readEnd = state.ReadEnd
@@ -323,11 +360,11 @@ func canonicalizeRecommendationOutcomes(
 			feedbackByArticle[articleID] = state
 		}
 		switch item.Event.EventType {
-		case models.RecommendationEventTypeClick:
+		case recommendationFeedbackEventTypeClick:
 			setLatestRecommendationEvent(&state.Click, item.Event)
-		case models.RecommendationEventTypeReadEnd:
+		case recommendationFeedbackEventTypeReadEnd:
 			setLatestRecommendationEvent(&state.ReadEnd, item.Event)
-		case models.RecommendationEventTypeNotInterested:
+		case recommendationFeedbackEventTypeNotInterested:
 			setLatestRecommendationEvent(&state.NotInterested, item.Event)
 		}
 	}
@@ -347,7 +384,7 @@ func canonicalizeRecommendationOutcomes(
 	for articleID := range articleIDs {
 		state := feedbackByArticle[articleID]
 		reaction, hasReaction := reactions[articleID]
-		var notInterested *models.RecommendationEvent
+		var notInterested *recommendationFeedbackEvent
 		if state != nil {
 			notInterested = state.NotInterested
 		}

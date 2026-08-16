@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestRecommendationRankerV3IndexesIntegration(t *testing.T) {
+func TestRecommendationBehaviorProjectionSchemaIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -21,52 +21,22 @@ func TestRecommendationRankerV3IndexesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.ArticleBehavior{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRecommendationRankerV3Indexes(db); err != nil {
-		t.Fatal(err)
+	if !db.Migrator().HasTable(&models.ArticleBehavior{}) {
+		t.Fatal("article_behaviors projection table is missing")
 	}
 
-	var indexes []struct {
-		Name       string `gorm:"column:indexname"`
-		Definition string `gorm:"column:indexdef"`
-	}
-	if err := db.Raw(`
-SELECT indexname, indexdef
-FROM pg_indexes
-WHERE schemaname = current_schema()
-  AND tablename = 'recommendation_events'
-  AND indexname IN ('idx_recommendation_events_user_feedback_article_order', 'idx_recommendation_events_user_article_negative_order')
-ORDER BY indexname
-`).Scan(&indexes).Error; err != nil {
+	var uniqueIndexCount int
+	if err := db.Raw("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'article_behaviors' AND indexdef ILIKE 'CREATE UNIQUE INDEX%' AND indexdef ILIKE '%user_id%' AND indexdef ILIKE '%article_id%' AND indexdef ILIKE '%action%'").Scan(&uniqueIndexCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(indexes) != 2 {
-		t.Fatalf("rules_v3 indexes=%d want=2", len(indexes))
+	if uniqueIndexCount == 0 {
+		t.Fatal("article_behaviors unique user/article/action index is missing")
 	}
-
-	definitions := make(map[string]string, len(indexes))
-	for _, index := range indexes {
-		definitions[index.Name] = strings.ToLower(index.Definition)
-	}
-	assertIndexDefinitionContains(t, definitions["idx_recommendation_events_user_feedback_article_order"],
-		"user_id", "article_id", "event_type", "occurred_at desc", "received_at desc", "event_id desc", "where")
-	assertIndexDefinitionContains(t, definitions["idx_recommendation_events_user_article_negative_order"],
-		"user_id", "article_id", "occurred_at desc", "received_at desc", "event_id desc", "not_interested", "where")
 }
 
-func assertIndexDefinitionContains(t *testing.T, definition string, fragments ...string) {
-	t.Helper()
-	if definition == "" {
-		t.Fatal("index definition is missing")
-	}
-	for _, fragment := range fragments {
-		if !strings.Contains(definition, fragment) {
-			t.Fatalf("index definition %q does not contain %q", definition, fragment)
-		}
-	}
-}
 func TestRunMigrationsIsIdempotentIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -86,90 +56,18 @@ func TestRunMigrationsIsIdempotentIntegration(t *testing.T) {
 	if err := RunMigrations(); err != nil {
 		t.Fatalf("second migration run: %v", err)
 	}
-
-	var columns []struct {
-		Name   string `gorm:"column:column_name"`
-		Length *int   `gorm:"column:character_maximum_length"`
-	}
-	if err := db.Raw(`
-SELECT column_name, character_maximum_length
-FROM information_schema.columns
-WHERE table_schema = current_schema()
-  AND table_name = 'recommendation_events'
-  AND column_name IN ('feed_visible_time_ms', 'read_policy_version', 'read_outcome')
-ORDER BY column_name
-`).Scan(&columns).Error; err != nil {
-		t.Fatal(err)
-	}
-	if len(columns) != 3 {
-		t.Fatalf("recommendation telemetry columns=%d want=3: %#v", len(columns), columns)
-	}
-	wantLengths := map[string]int{
-		"read_policy_version": 32,
-		"read_outcome":        16,
-	}
-	for _, column := range columns {
-		if column.Name == "feed_visible_time_ms" {
-			if column.Length != nil {
-				t.Fatalf("%s length=%v want numeric column", column.Name, column.Length)
-			}
-			continue
-		}
-		wantLength, ok := wantLengths[column.Name]
-		if !ok {
-			t.Fatalf("unexpected recommendation telemetry column %q", column.Name)
-		}
-		if column.Length == nil || *column.Length != wantLength {
-			t.Fatalf("%s length=%v want=%d", column.Name, column.Length, wantLength)
-		}
-	}
-
-	var constraints []string
-	if err := db.Raw(`
-SELECT c.conname
-FROM pg_constraint c
-JOIN pg_class t ON t.oid = c.conrelid
-WHERE t.relname = 'recommendation_events'
-  AND c.conname IN (
-      'chk_recommendation_event_feed_visible_time',
-      'chk_recommendation_event_read_policy',
-      'chk_recommendation_event_read_outcome',
-      'chk_recommendation_event_read_payload'
-  )
-ORDER BY c.conname
-`).Scan(&constraints).Error; err != nil {
-		t.Fatal(err)
-	}
-	foundConstraints := make(map[string]struct{}, len(constraints))
-	for _, constraint := range constraints {
-		foundConstraints[constraint] = struct{}{}
-	}
-	for _, want := range []string{
-		"chk_recommendation_event_feed_visible_time",
-		"chk_recommendation_event_read_policy",
-		"chk_recommendation_event_read_outcome",
-		"chk_recommendation_event_read_payload",
-	} {
-		if _, ok := foundConstraints[want]; !ok {
-			t.Fatalf("missing recommendation telemetry constraint %q; found=%v", want, constraints)
-		}
-	}
-	if len(foundConstraints) != 4 {
-		t.Fatalf("recommendation telemetry constraints=%v want exactly 4", constraints)
+	if !db.Migrator().HasTable(&models.ArticleBehavior{}) {
+		t.Fatal("article_behaviors projection table is missing after migrations")
 	}
 
 	var metricColumns []struct {
-		Name     string `gorm:"column:column_name"`
-		Nullable string `gorm:"column:is_nullable"`
+		Name     string
+		Nullable string
 	}
-	if err := db.Raw(`
-SELECT column_name, is_nullable
-FROM information_schema.columns
-WHERE table_schema = current_schema()
-  AND table_name = 'recommendation_daily_metrics'
-  AND column_name IN ('feed_dwell_count', 'feed_visible_time_ms')
-ORDER BY column_name
-`).Scan(&metricColumns).Error; err != nil {
+	metricQuery := "SELECT column_name, is_nullable FROM information_schema.columns " +
+		"WHERE table_schema = current_schema() AND table_name = 'recommendation_daily_metrics' " +
+		"AND column_name IN ('feed_dwell_count', 'feed_visible_time_ms') ORDER BY column_name"
+	if err := db.Raw(metricQuery).Scan(&metricColumns).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(metricColumns) != 2 {
@@ -180,32 +78,9 @@ ORDER BY column_name
 			t.Fatalf("%s nullable=%q want NO", column.Name, column.Nullable)
 		}
 	}
-
-	var metricConstraints []string
-	if err := db.Raw(`
-SELECT c.conname
-FROM pg_constraint c
-JOIN pg_class t ON t.oid = c.conrelid
-WHERE t.relname = 'recommendation_daily_metrics'
-  AND c.conname IN (
-      'chk_recommendation_metric_feed_dwell_count',
-      'chk_recommendation_metric_feed_visible_time'
-  )
-ORDER BY c.conname
-`).Scan(&metricConstraints).Error; err != nil {
-		t.Fatal(err)
-	}
-	if len(metricConstraints) != 2 {
-		t.Fatalf("recommendation metric constraints=%v want=2", len(metricConstraints))
-	}
-
-	var indexDefinition string
-	if err := db.Raw("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'articles' AND indexname = 'idx_articles_author_published'").Scan(&indexDefinition).Error; err != nil {
-		t.Fatal(err)
-	}
-	assertIndexDefinitionContains(t, strings.ToLower(indexDefinition), "author_id", "published_at desc", "id desc", "deleted_at is null", "publication_state", "published_at is not null")
 	assertRecommendationRetrievalV1Indexes(t, db)
 }
+
 func TestArticleAuthorConstraintsIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -223,13 +98,9 @@ func TestArticleAuthorConstraintsIntegration(t *testing.T) {
 	}
 
 	var nullable string
-	if err := db.Raw(`
-SELECT is_nullable
-FROM information_schema.columns
-WHERE table_schema = current_schema()
-  AND table_name = 'articles'
-  AND column_name = 'author_id'
-`).Scan(&nullable).Error; err != nil {
+	nullableQuery := "SELECT is_nullable FROM information_schema.columns " +
+		"WHERE table_schema = current_schema() AND table_name = 'articles' AND column_name = 'author_id'"
+	if err := db.Raw(nullableQuery).Scan(&nullable).Error; err != nil {
 		t.Fatal(err)
 	}
 	if nullable != "NO" {
@@ -237,15 +108,11 @@ WHERE table_schema = current_schema()
 	}
 
 	var constraints []struct {
-		Definition string `gorm:"column:definition"`
+		Definition string
 	}
-	if err := db.Raw(`
-SELECT pg_get_constraintdef(c.oid) AS definition
-FROM pg_constraint c
-JOIN pg_class t ON t.oid = c.conrelid
-WHERE t.relname = 'articles'
-  AND c.contype = 'f'
-`).Scan(&constraints).Error; err != nil {
+	constraintQuery := "SELECT pg_get_constraintdef(c.oid) AS definition FROM pg_constraint c " +
+		"JOIN pg_class t ON t.oid = c.conrelid WHERE t.relname = 'articles' AND c.contype = 'f'"
+	if err := db.Raw(constraintQuery).Scan(&constraints).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(constraints) == 0 {
@@ -255,16 +122,13 @@ WHERE t.relname = 'articles'
 	assertIndexDefinitionContains(t, definition, "author_id", "references", "users", "on update cascade", "on delete restrict")
 
 	var indexDefinition string
-	if err := db.Raw(`
-SELECT indexdef
-FROM pg_indexes
-WHERE schemaname = current_schema()
-  AND tablename = 'articles'
-  AND indexname = 'idx_articles_author_published'
-`).Scan(&indexDefinition).Error; err != nil {
+	indexQuery := "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() " +
+		"AND tablename = 'articles' AND indexname = 'idx_articles_author_published'"
+	if err := db.Raw(indexQuery).Scan(&indexDefinition).Error; err != nil {
 		t.Fatal(err)
 	}
 	assertIndexDefinitionContains(t, strings.ToLower(indexDefinition), "author_id", "published_at desc", "id desc", "deleted_at is null", "publication_state", "published_at is not null")
+
 	var oldIndexCount int
 	if err := db.Raw("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'articles' AND indexname = 'idx_articles_author_created'").Scan(&oldIndexCount).Error; err != nil {
 		t.Fatal(err)
@@ -273,18 +137,18 @@ WHERE schemaname = current_schema()
 		t.Fatalf("legacy article author index still exists: %d", oldIndexCount)
 	}
 }
+
 func assertRecommendationRetrievalV1Indexes(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	var indexes []struct {
 		Name       string
 		Definition string
 	}
-	if err := db.Raw("SELECT indexname AS name, indexdef AS definition " +
-		"FROM pg_indexes " +
-		"WHERE schemaname = current_schema() " +
-		"AND tablename = 'articles' " +
+	query := "SELECT indexname AS name, indexdef AS definition FROM pg_indexes " +
+		"WHERE schemaname = current_schema() AND tablename = 'articles' " +
 		"AND indexname IN ('idx_articles_recommendation_category_created', 'idx_articles_recommendation_popular') " +
-		"ORDER BY indexname").Scan(&indexes).Error; err != nil {
+		"ORDER BY indexname"
+	if err := db.Raw(query).Scan(&indexes).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(indexes) != 2 {
@@ -298,4 +162,16 @@ func assertRecommendationRetrievalV1Indexes(t *testing.T, db *gorm.DB) {
 		"lower", "btrim", "created_at desc", "id desc", "deleted_at is null", "publication_state", "analysis_state", "published_at is not null")
 	assertIndexDefinitionContains(t, definitions["idx_articles_recommendation_popular"],
 		"like_count desc", "created_at desc", "id desc", "deleted_at is null", "publication_state", "analysis_state", "published_at is not null")
+}
+
+func assertIndexDefinitionContains(t *testing.T, definition string, fragments ...string) {
+	t.Helper()
+	if definition == "" {
+		t.Fatal("index definition is missing")
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(definition, fragment) {
+			t.Fatalf("index definition %q does not contain %q", definition, fragment)
+		}
+	}
 }

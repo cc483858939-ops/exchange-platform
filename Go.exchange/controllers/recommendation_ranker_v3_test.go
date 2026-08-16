@@ -37,8 +37,8 @@ func TestRulesV3CanonicalPrecedenceAndNeutralInteraction(t *testing.T) {
 	article := recommendationTestArticle(1, now, "backend", []string{"go"}, 0)
 	readOutcome := func(value string) *string { return &value }
 	feedback := []recommendationFeedbackSignal{
-		{Event: models.RecommendationEvent{ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: now.Add(-4 * time.Minute)}, SignalType: "click", Article: &article},
-		{Event: models.RecommendationEvent{ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd, ReadOutcome: readOutcome("qualified"), OccurredAt: now.Add(-3 * time.Minute)}, SignalType: "qualified_read", Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: now.Add(-4 * time.Minute)}, SignalType: "click", Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd, ReadOutcome: readOutcome("qualified"), OccurredAt: now.Add(-3 * time.Minute)}, SignalType: "qualified_read", Article: &article},
 	}
 	reactions := map[uint]recommendationReactionState{
 		1: {Liked: true, StateChangedAt: now.Add(-time.Minute)},
@@ -50,14 +50,14 @@ func TestRulesV3CanonicalPrecedenceAndNeutralInteraction(t *testing.T) {
 
 	neutral := "neutral"
 	neutralOutcomes := canonicalizeRecommendationOutcomes(nil, []recommendationFeedbackSignal{
-		{Event: models.RecommendationEvent{ArticleID: 2, EventType: models.RecommendationEventTypeClick, OccurredAt: now.Add(-time.Minute)}, Article: &article},
-		{Event: models.RecommendationEvent{ArticleID: 2, EventType: models.RecommendationEventTypeReadEnd, ReadOutcome: &neutral, OccurredAt: now}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 2, EventType: models.RecommendationEventTypeClick, OccurredAt: now.Add(-time.Minute)}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 2, EventType: models.RecommendationEventTypeReadEnd, ReadOutcome: &neutral, OccurredAt: now}, Article: &article},
 	}, nil)
 	if len(neutralOutcomes) != 1 || neutralOutcomes[0].SignalType != "neutral_read" {
 		t.Fatalf("neutral outcome=%#v", neutralOutcomes)
 	}
 	profile := buildRulesV3InterestProfile(nil, []recommendationFeedbackSignal{
-		{Event: models.RecommendationEvent{ArticleID: 2, EventType: models.RecommendationEventTypeReadEnd, ReadOutcome: &neutral, OccurredAt: now}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 2, EventType: models.RecommendationEventTypeReadEnd, ReadOutcome: &neutral, OccurredAt: now}, Article: &article},
 	}, nil, now, normalizedRulesV3RecommendationConfig())
 	if profile.PersonalizedSignalCount != 0 {
 		t.Fatalf("neutral read should have zero affinity: %#v", profile)
@@ -76,29 +76,29 @@ func TestRulesV3CanonicalExplicitReactionOrdering(t *testing.T) {
 	ni := "not_interested"
 
 	outcome := canonicalizeRecommendationOutcomes(nil, []recommendationFeedbackSignal{
-		{Event: models.RecommendationEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: niAt, ReadOutcome: nil}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: niAt, ReadOutcome: nil}, Article: &article},
 	}, map[uint]recommendationReactionState{1: {Liked: true, StateChangedAt: likeAt}})
 	if len(outcome) != 1 || outcome[0].SignalType != "like" {
 		t.Fatalf("later like should supersede NI: %#v", outcome)
 	}
 
 	outcome = canonicalizeRecommendationOutcomes(nil, []recommendationFeedbackSignal{
-		{Event: models.RecommendationEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: likeAt}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: likeAt}, Article: &article},
 	}, map[uint]recommendationReactionState{1: {Liked: true, StateChangedAt: niAt}})
 	if len(outcome) != 1 || outcome[0].SignalType != "not_interested" {
 		t.Fatalf("newer NI should suppress: %#v", outcome)
 	}
 
 	outcome = canonicalizeRecommendationOutcomes(nil, []recommendationFeedbackSignal{
-		{Event: models.RecommendationEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: niAt}, Article: &article},
-		{Event: models.RecommendationEvent{ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: unlikeAt}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: niAt}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: unlikeAt}, Article: &article},
 	}, map[uint]recommendationReactionState{1: {Liked: false, StateChangedAt: unlikeAt}})
 	if len(outcome) != 1 || outcome[0].SignalType != "click" {
 		t.Fatalf("unlike should not resurrect stale NI but passive click may apply: %#v", outcome)
 	}
 
 	outcome = canonicalizeRecommendationOutcomes(nil, []recommendationFeedbackSignal{
-		{Event: models.RecommendationEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: now}, Article: &article},
+		{Event: recommendationFeedbackEvent{ArticleID: 1, EventType: models.RecommendationEventTypeNotInterested, OccurredAt: now}, Article: &article},
 	}, map[uint]recommendationReactionState{1: {Liked: false, StateChangedAt: now.Add(-time.Hour)}})
 	if len(outcome) != 1 || outcome[0].SignalType != "not_interested" {
 		t.Fatalf("unlike before NI should not suppress NI: %#v", outcome)
@@ -113,7 +113,7 @@ func TestRulesV3DistinctLikedArticlesCountSeparately(t *testing.T) {
 	for id := uint(1); id <= 5; id++ {
 		article := recommendationTestArticle(id, now, "backend", []string{"go"}, 0)
 		feedback = append(feedback, recommendationFeedbackSignal{
-			Event:   models.RecommendationEvent{ArticleID: id, EventType: models.RecommendationEventTypeClick, OccurredAt: now},
+			Event:   recommendationFeedbackEvent{ArticleID: id, EventType: models.RecommendationEventTypeClick, OccurredAt: now},
 			Article: &article,
 		})
 		reactions[id] = recommendationReactionState{Liked: true, StateChangedAt: now}
@@ -187,14 +187,14 @@ func TestRulesV3StaleReadEndCanBeSupersededByLaterOpen(t *testing.T) {
 			openAt := now.Add(-time.Minute)
 			readOutcome := tc.readOutcome
 			state := &recommendationArticleFeedbackState{
-				ReadEnd: &models.RecommendationEvent{
+				ReadEnd: &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
 					ReadOutcome: &readOutcome, OccurredAt: readAt,
 				},
 			}
 			view := models.ArticleBehavior{}
 			if tc.openType == "click" {
-				state.Click = &models.RecommendationEvent{
+				state.Click = &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: openAt,
 				}
 			} else {
@@ -230,10 +230,10 @@ func TestRulesV3LaterReadEndStillTerminatesPassiveOutcome(t *testing.T) {
 			readAt := now.Add(-10 * time.Minute)
 			readOutcome := tc.readOutcome
 			state := &recommendationArticleFeedbackState{
-				Click: &models.RecommendationEvent{
+				Click: &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: clickAt,
 				},
-				ReadEnd: &models.RecommendationEvent{
+				ReadEnd: &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
 					ReadOutcome: &readOutcome, OccurredAt: readAt,
 				},
@@ -266,14 +266,14 @@ func TestRulesV3ClickRemainsPreferredOverLaterDetailView(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			state := &recommendationArticleFeedbackState{
-				Click: &models.RecommendationEvent{
+				Click: &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeClick,
 					OccurredAt: now.Add(-2 * time.Minute),
 				},
 			}
 			if tc.readAt != nil {
 				readOutcome := recommendationReadOutcomeNeutral
-				state.ReadEnd = &models.RecommendationEvent{
+				state.ReadEnd = &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
 					ReadOutcome: &readOutcome, OccurredAt: *tc.readAt,
 				}
@@ -306,14 +306,14 @@ func TestRulesV3ReadEndRequiresStrictlyLaterOpenToBeSuperseded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			readOutcome := recommendationReadOutcomeNeutral
 			state := &recommendationArticleFeedbackState{
-				ReadEnd: &models.RecommendationEvent{
+				ReadEnd: &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
 					ReadOutcome: &readOutcome, OccurredAt: now,
 				},
 			}
 			view := models.ArticleBehavior{}
 			if tc.openType == "click" {
-				state.Click = &models.RecommendationEvent{
+				state.Click = &recommendationFeedbackEvent{
 					ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: tc.openAt,
 				}
 			} else {
@@ -337,14 +337,14 @@ func TestRulesV3NewerClickRecoversFromStaleQuickBounceAffinity(t *testing.T) {
 	readOutcome := recommendationReadOutcomeQuickBounce
 	feedback := []recommendationFeedbackSignal{
 		{
-			Event: models.RecommendationEvent{
+			Event: recommendationFeedbackEvent{
 				ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
 				ReadOutcome: &readOutcome, OccurredAt: now.Add(-10 * time.Minute),
 			},
 			SignalType: "quick_bounce", Article: &article,
 		},
 		{
-			Event: models.RecommendationEvent{
+			Event: recommendationFeedbackEvent{
 				ArticleID: 1, EventType: models.RecommendationEventTypeClick,
 				OccurredAt: now.Add(-time.Minute),
 			},
@@ -366,7 +366,7 @@ func TestRulesV3NewerViewRecoversFromStaleNeutralRead(t *testing.T) {
 	article := recommendationTestArticle(1, now, "backend", []string{"go"}, 0)
 	readOutcome := recommendationReadOutcomeNeutral
 	feedback := []recommendationFeedbackSignal{{
-		Event: models.RecommendationEvent{
+		Event: recommendationFeedbackEvent{
 			ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
 			ReadOutcome: &readOutcome, OccurredAt: now.Add(-10 * time.Minute),
 		},

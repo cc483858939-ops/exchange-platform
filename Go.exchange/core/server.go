@@ -1,11 +1,6 @@
 package core
 
 import (
-	"Go.exchange/auth"
-	"Go.exchange/config"
-	"Go.exchange/controllers"
-	"Go.exchange/global"
-	"Go.exchange/router"
 	"context"
 	"fmt"
 	"log"
@@ -15,15 +10,22 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"Go.exchange/auth"
+	"Go.exchange/config"
+	"Go.exchange/controllers"
+	"Go.exchange/eventing"
+	"Go.exchange/global"
+	"Go.exchange/router"
 )
 
-func StartHttpServer(tokens auth.TokenService) (*http.Server, error) {
+func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher) (*http.Server, error) {
 	authController, err := controllers.NewAuthController(global.Db, tokens)
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth controller: %w", err)
 	}
 	port := config.AppPort()
-	handler := router.SetupRouter(authController, tokens)
+	handler := router.SetupRouter(authController, tokens, publisher)
 	server := &http.Server{
 		Addr:    port,
 		Handler: handler,

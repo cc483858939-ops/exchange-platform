@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,13 +17,49 @@ import (
 	"Go.exchange/metrics"
 	"Go.exchange/models"
 
+	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-const recommendationMetricsConsumerRetryDelay = 2 * time.Second
+const (
+	recommendationMetricsConsumerRetryDelay = 2 * time.Second
+	recommendationMetricsBatchSize          = 500
+	recommendationMetricsBatchWindow        = 50 * time.Millisecond
+)
 
 var errInvalidRecommendationMetricsEvent = errors.New("invalid recommendation metrics event")
+
+type recommendationMetricEvent struct {
+	Envelope eventing.Envelope
+	Payload  eventing.RecommendationBehaviorPayload
+}
+
+type recommendationMetricKey struct {
+	MetricDate       time.Time
+	Scene            string
+	RankerVersion    string
+	RankerConfigHash string
+	StrategyID       string
+	Position         int
+	ArticleID        uint
+}
+
+type recommendationMetricDelta struct {
+	ImpressionCount    int64
+	ClickCount         int64
+	QualifiedReadCount int64
+	QuickBounceCount   int64
+	NotInterestedCount int64
+	FeedDwellCount     int64
+	FeedVisibleTimeMS  int64
+}
+
+type recommendationMetricAggregate struct {
+	Key   recommendationMetricKey
+	Delta recommendationMetricDelta
+}
 
 func startRecommendationMetricsConsumer(ctx context.Context, wg *sync.WaitGroup) {
 	if config.AppConfig == nil ||
@@ -62,110 +99,347 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 	defer recommendationMetricsConsumers.Add(-1)
 	defer reader.Close()
 	for {
-		message, err := reader.FetchMessage(ctx)
+		first, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Printf("[RecommendationMetrics] fetch Kafka message: %v", err)
 			}
 			return
 		}
-		event, err := eventing.DecodeEnvelope(message.Value)
-		if err != nil {
-			metrics.RecordRecommendationTelemetryProjection("malformed_envelope")
-			log.Printf("[RecommendationMetrics] discard malformed envelope: %v", err)
-		} else if event.Type != eventing.EventTypeRecommendationEventsRecorded {
-			metrics.RecordRecommendationTelemetryProjection("ignored_event_type")
-		} else if event.SchemaVersion != 1 {
-			metrics.RecordRecommendationTelemetryProjection("unsupported_schema")
-			log.Printf("[RecommendationMetrics] discard event %s with schema version %d", event.ID, event.SchemaVersion)
-		} else if err := applyRecommendationMetricsEvent(event); err != nil {
-			if errors.Is(err, errInvalidRecommendationMetricsEvent) {
-				metrics.RecordRecommendationTelemetryProjection("invalid_payload")
-				log.Printf("[RecommendationMetrics] discard invalid event %s: %v", event.ID, err)
-			} else {
-				metrics.RecordRecommendationTelemetryProjection("retryable_error")
-				log.Printf("[RecommendationMetrics] apply event %s: %v", event.ID, err)
-				return
-			}
-		} else {
-			metrics.RecordRecommendationTelemetryProjection("applied")
+		batch := collectRecommendationMetricsBatch(ctx, reader, first)
+		if err := applyRecommendationMetricsBatch(batch); err != nil {
+			metrics.RecordRecommendationTelemetryProjection("retryable_error")
+			log.Printf("[RecommendationMetrics] apply batch of %d messages: %v", len(batch), err)
+			return
 		}
-		if err := reader.CommitMessages(ctx, message); err != nil {
+		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() == nil {
-				log.Printf("[RecommendationMetrics] commit Kafka message: %v", err)
+				log.Printf("[RecommendationMetrics] commit Kafka batch: %v", err)
 			}
 			return
 		}
 	}
 }
 
-func applyRecommendationMetricsEvent(event eventing.Envelope) error {
-	var payload eventing.RecommendationEventsRecordedPayload
-	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return fmt.Errorf("%w: decode payload: %v", errInvalidRecommendationMetricsEvent, err)
+func collectRecommendationMetricsBatch(ctx context.Context, reader *kafka.Reader, first kafka.Message) []kafka.Message {
+	batch := []kafka.Message{first}
+	if len(batch) >= recommendationMetricsBatchSize {
+		return batch
 	}
-	if payload.UserID == 0 || len(payload.Events) == 0 {
-		return fmt.Errorf("%w: payload requires user and events", errInvalidRecommendationMetricsEvent)
-	}
-	for _, fact := range payload.Events {
-		if fact.UserID != payload.UserID || fact.EventID == "" || fact.ArticleID == 0 || fact.RequestID == "" ||
-			fact.Position <= 0 || fact.Scene == "" || fact.RankerVersion == "" || fact.RankerConfigHash == "" || fact.StrategyID == "" ||
-			!validRecommendationMetricsFact(fact) || fact.OccurredAt.IsZero() {
-			return fmt.Errorf("%w: invalid fact %q", errInvalidRecommendationMetricsEvent, fact.EventID)
+	collectCtx, cancel := context.WithTimeout(ctx, recommendationMetricsBatchWindow)
+	defer cancel()
+	for len(batch) < recommendationMetricsBatchSize {
+		message, err := reader.FetchMessage(collectCtx)
+		if err != nil {
+			if collectCtx.Err() != nil || ctx.Err() != nil {
+				break
+			}
+			log.Printf("[RecommendationMetrics] collect Kafka message: %v", err)
+			break
 		}
+		batch = append(batch, message)
 	}
+	return batch
+}
+
+func applyRecommendationMetricsBatch(messages []kafka.Message) error {
+	records := make([]recommendationMetricEvent, 0, len(messages))
+	seenEventIDs := make(map[string]struct{}, len(messages))
+	for _, message := range messages {
+		record, err := decodeRecommendationMetricEvent(message.Value)
+		if err != nil {
+			metrics.RecordRecommendationTelemetryProjection("invalid_payload")
+			log.Printf("[RecommendationMetrics] discard invalid message: %v", err)
+			continue
+		}
+		if _, exists := seenEventIDs[record.Envelope.ID]; exists {
+			metrics.RecordRecommendationTelemetryProjection("duplicate_in_batch")
+			continue
+		}
+		seenEventIDs[record.Envelope.ID] = struct{}{}
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	return applyRecommendationMetricRecords(records)
+}
+
+func decodeRecommendationMetricEvent(raw []byte) (recommendationMetricEvent, error) {
+	event, err := eventing.DecodeEnvelope(raw)
+	if err != nil {
+		return recommendationMetricEvent{}, fmt.Errorf("%w: decode envelope: %v", errInvalidRecommendationMetricsEvent, err)
+	}
+	if _, err := uuid.Parse(event.ID); err != nil {
+		return recommendationMetricEvent{}, fmt.Errorf("%w: event id must be UUID", errInvalidRecommendationMetricsEvent)
+	}
+	if event.SchemaVersion != 1 {
+		return recommendationMetricEvent{}, fmt.Errorf("%w: unsupported schema version %d", errInvalidRecommendationMetricsEvent, event.SchemaVersion)
+	}
+	if !eventing.IsRecommendationEventType(event.Type) {
+		return recommendationMetricEvent{}, fmt.Errorf("%w: unsupported event type %q", errInvalidRecommendationMetricsEvent, event.Type)
+	}
+	if event.OccurredAt.IsZero() {
+		return recommendationMetricEvent{}, fmt.Errorf("%w: occurred_at is required", errInvalidRecommendationMetricsEvent)
+	}
+	var payload eventing.RecommendationBehaviorPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return recommendationMetricEvent{}, fmt.Errorf("%w: decode payload: %v", errInvalidRecommendationMetricsEvent, err)
+	}
+	if payload.UserID == 0 || payload.ArticleID == 0 || strings.TrimSpace(payload.RequestID) == "" ||
+		strings.TrimSpace(payload.Scene) == "" || payload.Position <= 0 ||
+		strings.TrimSpace(payload.RankerVersion) == "" || strings.TrimSpace(payload.RankerConfigHash) == "" ||
+		strings.TrimSpace(payload.StrategyID) == "" || payload.ReceivedAt.IsZero() ||
+		!validRecommendationMetricsPayload(event.Type, payload) {
+		return recommendationMetricEvent{}, fmt.Errorf("%w: invalid event %q", errInvalidRecommendationMetricsEvent, event.ID)
+	}
+	return recommendationMetricEvent{Envelope: event, Payload: payload}, nil
+}
+
+// applyRecommendationMetricsEvent remains a small single-event seam for unit
+// tests and operational callers; the Kafka loop always uses the batch path.
+func applyRecommendationMetricsEvent(event eventing.Envelope) error {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("%w: marshal envelope: %v", errInvalidRecommendationMetricsEvent, err)
+	}
+	record, err := decodeRecommendationMetricEvent(raw)
+	if err != nil {
+		return err
+	}
+	return applyRecommendationMetricRecords([]recommendationMetricEvent{record})
+}
+
+func applyRecommendationMetricRecords(records []recommendationMetricEvent) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
+	consumerName := ""
+	if config.AppConfig != nil {
+		consumerName = strings.TrimSpace(config.AppConfig.Kafka.RecommendationMetricsGroupID)
+	}
+	if consumerName == "" {
+		return errors.New("recommendation metrics consumer group is not configured")
+	}
 
 	return global.Db.Transaction(func(tx *gorm.DB) error {
-		firstDelivery, err := eventing.MarkInboxProcessed(tx, config.AppConfig.Kafka.RecommendationMetricsGroupID, event.ID)
-		if err != nil || !firstDelivery {
+		eventIDs := make([]string, 0, len(records))
+		for _, record := range records {
+			eventIDs = append(eventIDs, record.Envelope.ID)
+		}
+		firstDelivery, err := eventing.MarkInboxProcessedBatch(tx, consumerName, eventIDs)
+		if err != nil {
 			return err
 		}
-		for _, fact := range payload.Events {
-			if err := upsertRecommendationDailyMetric(tx, fact); err != nil {
-				return err
-			}
+		metricAggregates := aggregateRecommendationMetrics(records, firstDelivery)
+		if err := bulkUpsertRecommendationDailyMetrics(tx, metricAggregates); err != nil {
+			return err
 		}
-		return nil
+		behaviorAggregates := aggregateRecommendationBehavior(records, firstDelivery)
+		return bulkUpsertRecommendationBehavior(tx, behaviorAggregates)
 	})
 }
 
-func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEventFact) error {
-	occurredAt := fact.OccurredAt.UTC()
-	metricDate := time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC)
-	impressions, clicks, qualifiedReads, quickBounces, notInterested := int64(0), int64(0), int64(0), int64(0), int64(0)
-	feedDwellCount, feedVisibleTimeMS := int64(0), int64(0)
-	switch fact.EventType {
-	case models.RecommendationEventTypeImpression:
-		impressions = 1
-	case models.RecommendationEventTypeClick:
-		clicks = 1
-	case models.RecommendationEventTypeReadEnd:
-		if fact.ReadOutcome != nil {
-			switch *fact.ReadOutcome {
+func aggregateRecommendationMetrics(records []recommendationMetricEvent, firstDelivery map[string]struct{}) []recommendationMetricAggregate {
+	byKey := make(map[recommendationMetricKey]recommendationMetricDelta, len(records))
+	for _, record := range records {
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
+			continue
+		}
+		occurredAt := record.Envelope.OccurredAt.UTC()
+		key := recommendationMetricKey{
+			MetricDate: time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC),
+			Scene:      record.Payload.Scene, RankerVersion: record.Payload.RankerVersion,
+			RankerConfigHash: record.Payload.RankerConfigHash, StrategyID: record.Payload.StrategyID,
+			Position: record.Payload.Position, ArticleID: record.Payload.ArticleID,
+		}
+		delta := metricDeltaFor(record.Envelope.Type, record.Payload)
+		current := byKey[key]
+		current.ImpressionCount += delta.ImpressionCount
+		current.ClickCount += delta.ClickCount
+		current.QualifiedReadCount += delta.QualifiedReadCount
+		current.QuickBounceCount += delta.QuickBounceCount
+		current.NotInterestedCount += delta.NotInterestedCount
+		current.FeedDwellCount += delta.FeedDwellCount
+		current.FeedVisibleTimeMS += delta.FeedVisibleTimeMS
+		byKey[key] = current
+	}
+
+	keys := make([]recommendationMetricKey, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left, right := keys[i], keys[j]
+		if !left.MetricDate.Equal(right.MetricDate) {
+			return left.MetricDate.Before(right.MetricDate)
+		}
+		if left.Scene != right.Scene {
+			return left.Scene < right.Scene
+		}
+		if left.RankerVersion != right.RankerVersion {
+			return left.RankerVersion < right.RankerVersion
+		}
+		if left.RankerConfigHash != right.RankerConfigHash {
+			return left.RankerConfigHash < right.RankerConfigHash
+		}
+		if left.StrategyID != right.StrategyID {
+			return left.StrategyID < right.StrategyID
+		}
+		if left.Position != right.Position {
+			return left.Position < right.Position
+		}
+		return left.ArticleID < right.ArticleID
+	})
+	result := make([]recommendationMetricAggregate, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, recommendationMetricAggregate{Key: key, Delta: byKey[key]})
+	}
+	return result
+}
+
+func metricDeltaFor(eventType string, payload eventing.RecommendationBehaviorPayload) recommendationMetricDelta {
+	var delta recommendationMetricDelta
+	switch eventType {
+	case eventing.EventTypeRecommendationImpression:
+		delta.ImpressionCount = 1
+	case eventing.EventTypeRecommendationClick:
+		delta.ClickCount = 1
+	case eventing.EventTypeRecommendationReadEnd:
+		if payload.ReadOutcome != nil {
+			switch *payload.ReadOutcome {
 			case "qualified":
-				qualifiedReads = 1
+				delta.QualifiedReadCount = 1
 			case "quick_bounce":
-				quickBounces = 1
+				delta.QuickBounceCount = 1
 			}
 		}
-	case models.RecommendationEventTypeNotInterested:
-		notInterested = 1
-	case models.RecommendationEventTypeFeedDwell:
-		feedDwellCount = 1
-		if fact.FeedVisibleTimeMS != nil {
-			feedVisibleTimeMS = *fact.FeedVisibleTimeMS
+	case eventing.EventTypeRecommendationNotInterested:
+		delta.NotInterestedCount = 1
+	case eventing.EventTypeRecommendationFeedDwell:
+		delta.FeedDwellCount = 1
+		if payload.FeedVisibleTimeMS != nil {
+			delta.FeedVisibleTimeMS = *payload.FeedVisibleTimeMS
 		}
 	}
-	metric := models.RecommendationDailyMetric{
-		MetricDate: metricDate, Scene: fact.Scene, RankerVersion: fact.RankerVersion,
-		RankerConfigHash: fact.RankerConfigHash, StrategyID: fact.StrategyID,
-		Position: fact.Position, ArticleID: fact.ArticleID,
-		ImpressionCount: impressions, ClickCount: clicks, QualifiedReadCount: qualifiedReads,
-		QuickBounceCount: quickBounces, NotInterestedCount: notInterested,
-		FeedDwellCount: feedDwellCount, FeedVisibleTimeMS: feedVisibleTimeMS, UpdatedAt: time.Now().UTC(),
+	return delta
+}
+
+type recommendationBehaviorKey struct {
+	UserID    uint
+	ArticleID uint
+	Action    string
+}
+
+type recommendationBehaviorAggregate struct {
+	Key        recommendationBehaviorKey
+	Count      int64
+	LastSeenAt time.Time
+}
+
+func aggregateRecommendationBehavior(records []recommendationMetricEvent, firstDelivery map[string]struct{}) []recommendationBehaviorAggregate {
+	byKey := make(map[recommendationBehaviorKey]recommendationBehaviorAggregate, len(records))
+	for _, record := range records {
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
+			continue
+		}
+		action := recommendationBehaviorAction(record)
+		if action == "" {
+			continue
+		}
+		key := recommendationBehaviorKey{UserID: record.Payload.UserID, ArticleID: record.Payload.ArticleID, Action: action}
+		current := byKey[key]
+		current.Key = key
+		current.Count++
+		occurredAt := record.Envelope.OccurredAt.UTC()
+		if current.LastSeenAt.IsZero() || occurredAt.After(current.LastSeenAt) {
+			current.LastSeenAt = occurredAt
+		}
+		byKey[key] = current
+	}
+	keys := make([]recommendationBehaviorKey, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].UserID != keys[j].UserID {
+			return keys[i].UserID < keys[j].UserID
+		}
+		if keys[i].ArticleID != keys[j].ArticleID {
+			return keys[i].ArticleID < keys[j].ArticleID
+		}
+		return keys[i].Action < keys[j].Action
+	})
+	result := make([]recommendationBehaviorAggregate, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, byKey[key])
+	}
+	return result
+}
+
+func recommendationBehaviorAction(record recommendationMetricEvent) string {
+	switch record.Envelope.Type {
+	case eventing.EventTypeRecommendationClick:
+		return eventing.RecommendationBehaviorActionClick
+	case eventing.EventTypeRecommendationReadEnd:
+		if record.Payload.ReadOutcome == nil {
+			return eventing.RecommendationBehaviorActionReadNeutral
+		}
+		switch *record.Payload.ReadOutcome {
+		case "qualified":
+			return eventing.RecommendationBehaviorActionReadQualified
+		case "quick_bounce":
+			return eventing.RecommendationBehaviorActionReadQuickBounce
+		default:
+			return eventing.RecommendationBehaviorActionReadNeutral
+		}
+	case eventing.EventTypeRecommendationNotInterested:
+		return eventing.RecommendationBehaviorActionNotInterested
+	default:
+		return ""
+	}
+}
+
+func bulkUpsertRecommendationBehavior(tx *gorm.DB, aggregates []recommendationBehaviorAggregate) error {
+	if len(aggregates) == 0 {
+		return nil
+	}
+	updatedAt := time.Now().UTC()
+	rows := make([]models.ArticleBehavior, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		rows = append(rows, models.ArticleBehavior{
+			Model:  gorm.Model{CreatedAt: updatedAt, UpdatedAt: updatedAt},
+			UserID: aggregate.Key.UserID, ArticleID: aggregate.Key.ArticleID, Action: aggregate.Key.Action,
+			Count: aggregate.Count, LastSeenAt: aggregate.LastSeenAt, Active: true,
+		})
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}, {Name: "action"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"count":        gorm.Expr("article_behaviors.count + EXCLUDED.count"),
+			"last_seen_at": gorm.Expr("GREATEST(article_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
+			"active":       true,
+			"updated_at":   gorm.Expr("EXCLUDED.updated_at"),
+		}),
+	}).Create(&rows).Error
+}
+func bulkUpsertRecommendationDailyMetrics(tx *gorm.DB, aggregates []recommendationMetricAggregate) error {
+	if len(aggregates) == 0 {
+		return nil
+	}
+	updatedAt := time.Now().UTC()
+	metricsRows := make([]models.RecommendationDailyMetric, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		metricsRows = append(metricsRows, models.RecommendationDailyMetric{
+			MetricDate: aggregate.Key.MetricDate, Scene: aggregate.Key.Scene,
+			RankerVersion: aggregate.Key.RankerVersion, RankerConfigHash: aggregate.Key.RankerConfigHash,
+			StrategyID: aggregate.Key.StrategyID, Position: aggregate.Key.Position, ArticleID: aggregate.Key.ArticleID,
+			ImpressionCount: aggregate.Delta.ImpressionCount, ClickCount: aggregate.Delta.ClickCount,
+			QualifiedReadCount: aggregate.Delta.QualifiedReadCount, QuickBounceCount: aggregate.Delta.QuickBounceCount,
+			NotInterestedCount: aggregate.Delta.NotInterestedCount, FeedDwellCount: aggregate.Delta.FeedDwellCount,
+			FeedVisibleTimeMS: aggregate.Delta.FeedVisibleTimeMS,
+			UpdatedAt:         updatedAt,
+		})
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
@@ -173,14 +447,14 @@ func upsertRecommendationDailyMetric(tx *gorm.DB, fact eventing.RecommendationEv
 			{Name: "ranker_config_hash"}, {Name: "strategy_id"}, {Name: "position"}, {Name: "article_id"},
 		},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"impression_count":     gorm.Expr("recommendation_daily_metrics.impression_count + ?", impressions),
-			"click_count":          gorm.Expr("recommendation_daily_metrics.click_count + ?", clicks),
-			"qualified_read_count": gorm.Expr("recommendation_daily_metrics.qualified_read_count + ?", qualifiedReads),
-			"quick_bounce_count":   gorm.Expr("recommendation_daily_metrics.quick_bounce_count + ?", quickBounces),
-			"not_interested_count": gorm.Expr("recommendation_daily_metrics.not_interested_count + ?", notInterested),
-			"feed_dwell_count":     gorm.Expr("recommendation_daily_metrics.feed_dwell_count + ?", feedDwellCount),
-			"feed_visible_time_ms": gorm.Expr("recommendation_daily_metrics.feed_visible_time_ms + ?", feedVisibleTimeMS),
-			"updated_at":           time.Now().UTC(),
+			"impression_count":     gorm.Expr("recommendation_daily_metrics.impression_count + EXCLUDED.impression_count"),
+			"click_count":          gorm.Expr("recommendation_daily_metrics.click_count + EXCLUDED.click_count"),
+			"qualified_read_count": gorm.Expr("recommendation_daily_metrics.qualified_read_count + EXCLUDED.qualified_read_count"),
+			"quick_bounce_count":   gorm.Expr("recommendation_daily_metrics.quick_bounce_count + EXCLUDED.quick_bounce_count"),
+			"not_interested_count": gorm.Expr("recommendation_daily_metrics.not_interested_count + EXCLUDED.not_interested_count"),
+			"feed_dwell_count":     gorm.Expr("recommendation_daily_metrics.feed_dwell_count + EXCLUDED.feed_dwell_count"),
+			"feed_visible_time_ms": gorm.Expr("recommendation_daily_metrics.feed_visible_time_ms + EXCLUDED.feed_visible_time_ms"),
+			"updated_at":           gorm.Expr("EXCLUDED.updated_at"),
 		}),
-	}).Create(&metric).Error
+	}).Create(&metricsRows).Error
 }

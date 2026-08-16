@@ -1,4 +1,4 @@
-# Recommendation Telemetry v2
+# Recommendation Telemetry V3 Kafka-first
 
 The recommendation API serves deterministic rules_v3. Telemetry is an attribution and measurement protocol; affinity is derived server-side from the durable facts.
 
@@ -29,9 +29,9 @@ Feed dwell deliberately does not instrument Following items, recently published 
 
 ## Delivery and metrics
 
-Accepted facts are written with an outbox event, then projected through Kafka and ConsumerInbox into recommendation_daily_metrics. Feed metrics aggregate `feed_dwell_count` and total `feed_visible_time_ms` per metric dimension. The raw per-event duration remains in recommendation_events for future distribution or percentile analysis; the daily total and count must not be treated as a substitute for that distribution. Metrics use the server-derived qualified/quick-bounce outcomes and remain rebuildable from durable facts.
+Valid telemetry events are published as individual namespaced Kafka envelopes through `PublishBatch`; the synchronous API path does not write PostgreSQL or Outbox. The recommendation consumer validates one behavior per message, deduplicates through `ConsumerInbox`, and bulk-upserts `recommendation_daily_metrics` by the full metric dimension. Feed metrics aggregate `feed_dwell_count` and total `feed_visible_time_ms`. A compact `ArticleBehavior` projection retains click/read/not-interested ranking signals without restoring a raw telemetry sink.
 
-When frontend and backend deploy independently, rollout order is mandatory: deploy the database/backend event model and validation first, then outbox/Kafka and daily metrics consumer/rebuild support, and only then deploy the frontend Feed dwell emitter. A frontend that emits feed_dwell must not be deployed against a backend that still rejects the event type.
+When frontend and backend deploy independently, deploy the namespaced Kafka event contracts, direct ingestion endpoints, and consumer projection before enabling the frontend emitters.
 
 ## Local configuration
 

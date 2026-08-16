@@ -17,8 +17,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -48,21 +46,21 @@ type recommendationEventResult struct {
 }
 
 type recommendationEventBatchResponse struct {
-	Accepted   int                         `json:"accepted"`
-	Duplicates int                         `json:"duplicates"`
-	Rejected   int                         `json:"rejected"`
-	Results    []recommendationEventResult `json:"results"`
+	Accepted int                         `json:"accepted"`
+	Rejected int                         `json:"rejected"`
+	Results  []recommendationEventResult `json:"results"`
 }
 
-type recommendationPersistenceResult struct {
-	Status string
-	Reason string
+type validatedRecommendationEvent struct {
+	EventID    string
+	EventType  string
+	OccurredAt time.Time
+	Payload    eventing.RecommendationBehaviorPayload
 }
 
 var (
 	recommendationTelemetryNow             = func() time.Time { return time.Now().UTC() }
 	allowRecommendationTelemetryEvents     = enforceRecommendationTelemetryRateLimit
-	persistRecommendationEventBatch        = persistRecommendationEvents
 	recommendationTelemetryRateLimitScript = redis.NewScript(`
 local current = redis.call('INCRBY', KEYS[1], ARGV[1])
 if current == tonumber(ARGV[1]) then
@@ -72,7 +70,20 @@ return current
 `)
 )
 
+func NewRecommendationEventsHandler(publisher eventing.BatchPublisher) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		recordRecommendationEvents(ctx, publisher)
+	}
+}
+
+// RecordRecommendationEvents is retained as a direct handler entry point for
+// callers that do not use the router factory. Production routing injects the
+// process-lifetime publisher through NewRecommendationEventsHandler.
 func RecordRecommendationEvents(ctx *gin.Context) {
+	recordRecommendationEvents(ctx, nil)
+}
+
+func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	started := time.Now()
 	defer func() { metrics.ObserveRecommendationTelemetryIngestDuration(time.Since(started)) }()
 
@@ -117,7 +128,7 @@ func RecordRecommendationEvents(ctx *gin.Context) {
 	now := recommendationTelemetryNow().UTC()
 	key := []byte(config.RecommendationTelemetrySigningKey())
 	response := recommendationEventBatchResponse{Results: make([]recommendationEventResult, len(request.Events))}
-	validEvents := make([]models.RecommendationEvent, 0, len(request.Events))
+	validEvents := make([]validatedRecommendationEvent, 0, len(request.Events))
 	validIndexes := make([]int, 0, len(request.Events))
 	for index, input := range request.Events {
 		response.Results[index].EventID = strings.TrimSpace(input.EventID)
@@ -131,153 +142,107 @@ func RecordRecommendationEvents(ctx *gin.Context) {
 		validIndexes = append(validIndexes, index)
 	}
 
-	if len(validEvents) > 0 {
-		persistenceResults, err := persistRecommendationEventBatch(userID, validEvents)
-		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist recommendation events"})
-			return
-		}
-		for index, result := range persistenceResults {
-			responseIndex := validIndexes[index]
-			response.Results[responseIndex].Status = result.Status
-			response.Results[responseIndex].Reason = result.Reason
-		}
+	if len(validEvents) == 0 {
+		completeRecommendationEventResponse(&response, request.Events)
+		ctx.JSON(http.StatusUnprocessableEntity, response)
+		return
 	}
 
+	envelopes := make([]eventing.Envelope, 0, len(validEvents))
+	for _, event := range validEvents {
+		envelope, err := eventing.NewRecommendationBehaviorEnvelope(event.EventID, event.EventType, event.OccurredAt, event.Payload)
+		if err != nil {
+			ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid recommendation event"})
+			return
+		}
+		envelopes = append(envelopes, envelope)
+	}
+	if publisher == nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation event publisher unavailable"})
+		return
+	}
+	if err := publisher.PublishBatch(ctx.Request.Context(), envelopes); err != nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "failed to publish recommendation events"})
+		return
+	}
+
+	for _, inputIndex := range validIndexes {
+		response.Results[inputIndex].Status = "accepted"
+	}
+	completeRecommendationEventResponse(&response, request.Events)
+	ctx.JSON(http.StatusAccepted, response)
+}
+
+func completeRecommendationEventResponse(response *recommendationEventBatchResponse, inputs []recommendationEventInput) {
 	for index, result := range response.Results {
 		switch result.Status {
 		case "accepted":
 			response.Accepted++
-		case "duplicate":
-			response.Duplicates++
 		default:
 			response.Rejected++
 		}
-		metrics.RecordRecommendationTelemetryEvent(result.Status, recommendationEventTypeMetricLabel(request.Events[index].EventType), result.Reason)
+		metrics.RecordRecommendationTelemetryEvent(result.Status, recommendationEventTypeMetricLabel(inputs[index].EventType), result.Reason)
 	}
-	if response.Accepted+response.Duplicates == 0 {
-		ctx.JSON(http.StatusUnprocessableEntity, response)
-		return
-	}
-	ctx.JSON(http.StatusAccepted, response)
 }
 
-func validateRecommendationTelemetryEvent(userID uint, input recommendationEventInput, now time.Time, key []byte) (models.RecommendationEvent, string) {
+func validateRecommendationTelemetryEvent(userID uint, input recommendationEventInput, now time.Time, key []byte) (validatedRecommendationEvent, string) {
 	eventID := strings.TrimSpace(input.EventID)
 	if _, err := uuid.Parse(eventID); err != nil {
-		return models.RecommendationEvent{}, "invalid_event_id"
+		return validatedRecommendationEvent{}, "invalid_event_id"
 	}
-	eventType := strings.TrimSpace(input.EventType)
-	if !isRecommendationEventType(eventType) {
-		return models.RecommendationEvent{}, "unsupported_event_type"
+	httpEventType := strings.TrimSpace(input.EventType)
+	kafkaEventType, ok := eventing.RecommendationEventTypeForAction(httpEventType)
+	if !ok {
+		return validatedRecommendationEvent{}, "unsupported_event_type"
 	}
 
 	claims, err := verifyRecommendationTrackingToken(strings.TrimSpace(input.TrackingToken), key)
 	if err != nil {
-		return models.RecommendationEvent{}, "invalid_tracking_token"
+		return validatedRecommendationEvent{}, "invalid_tracking_token"
 	}
 	if claims.UserID != userID {
-		return models.RecommendationEvent{}, "user_mismatch"
+		return validatedRecommendationEvent{}, "user_mismatch"
 	}
 	if claims.Scene != recommendationScene {
-		return models.RecommendationEvent{}, "unsupported_scene"
+		return validatedRecommendationEvent{}, "unsupported_scene"
 	}
 
 	occurredAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.OccurredAt))
 	if err != nil {
-		return models.RecommendationEvent{}, "invalid_occurred_at"
+		return validatedRecommendationEvent{}, "invalid_occurred_at"
 	}
 	occurredAt = occurredAt.UTC()
-	feedVisibleTimeMS, feedReason := validateRecommendationFeedPayload(eventType, input)
+	feedVisibleTimeMS, feedReason := validateRecommendationFeedPayload(httpEventType, input)
 	if feedReason != "" {
-		return models.RecommendationEvent{}, feedReason
+		return validatedRecommendationEvent{}, feedReason
 	}
 	issuedAt := time.Unix(claims.IssuedAtUnix, 0).UTC()
 	expiresAt := time.Unix(claims.ExpiresAtUnix, 0).UTC()
 	skew := config.RecommendationTelemetryMaxClockSkew()
 	if now.After(expiresAt.Add(skew)) {
-		return models.RecommendationEvent{}, "token_expired"
+		return validatedRecommendationEvent{}, "token_expired"
 	}
 	if occurredAt.Before(issuedAt.Add(-skew)) || occurredAt.After(expiresAt) || occurredAt.After(now.Add(skew)) {
-		return models.RecommendationEvent{}, "occurred_at_out_of_range"
+		return validatedRecommendationEvent{}, "occurred_at_out_of_range"
 	}
 
 	foregroundTimeMS, scrollProgressPercent, exitType, estimatedReadTimeMS, readPolicyVersion, readOutcome, reason :=
-		validateRecommendationReadPayload(eventType, input, claims.EstimatedReadTimeMS, claims.ReadPolicyVersion)
+		validateRecommendationReadPayload(httpEventType, input, claims.EstimatedReadTimeMS, claims.ReadPolicyVersion)
 	if reason != "" {
-		return models.RecommendationEvent{}, reason
+		return validatedRecommendationEvent{}, reason
 	}
-	return models.RecommendationEvent{
-		EventID: eventID, UserID: userID, RequestID: claims.RequestID,
-		ArticleID: claims.ArticleID, EventType: eventType, Scene: claims.Scene,
-		Position: claims.Position, RankerVersion: claims.RankerVersion,
-		RankerConfigHash: claims.RankerConfigHash, StrategyID: claims.StrategyID,
-		OccurredAt: occurredAt, ReceivedAt: now, ForegroundTimeMS: foregroundTimeMS,
-		ScrollProgressPercent: scrollProgressPercent, ExitType: exitType,
-		EstimatedReadTimeMS: estimatedReadTimeMS, ReadPolicyVersion: readPolicyVersion,
-		ReadOutcome: readOutcome, FeedVisibleTimeMS: feedVisibleTimeMS, CreatedAt: now,
+	return validatedRecommendationEvent{
+		EventID: eventID, EventType: kafkaEventType, OccurredAt: occurredAt,
+		Payload: eventing.RecommendationBehaviorPayload{
+			UserID: userID, ArticleID: claims.ArticleID, RequestID: claims.RequestID,
+			Scene: claims.Scene, Position: claims.Position, RankerVersion: claims.RankerVersion,
+			RankerConfigHash: claims.RankerConfigHash, StrategyID: claims.StrategyID,
+			ReceivedAt: now, ForegroundTimeMS: foregroundTimeMS,
+			ScrollProgressPercent: scrollProgressPercent, ExitType: exitType,
+			EstimatedReadTimeMS: estimatedReadTimeMS, ReadPolicyVersion: readPolicyVersion,
+			ReadOutcome: readOutcome, FeedVisibleTimeMS: feedVisibleTimeMS,
+		},
 	}, ""
-}
-func persistRecommendationEvents(userID uint, events []models.RecommendationEvent) ([]recommendationPersistenceResult, error) {
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-	results := make([]recommendationPersistenceResult, len(events))
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
-		inserted := make([]models.RecommendationEvent, 0, len(events))
-		for index := range events {
-			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&events[index])
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected > 0 {
-				results[index] = recommendationPersistenceResult{Status: "accepted"}
-				inserted = append(inserted, events[index])
-				continue
-			}
-
-			var existing models.RecommendationEvent
-			err := tx.Where("event_id = ?", events[index].EventID).First(&existing).Error
-			switch {
-			case err == nil && recommendationEventMatches(existing, events[index]):
-				results[index] = recommendationPersistenceResult{Status: "duplicate"}
-			case err == nil:
-				results[index] = recommendationPersistenceResult{Status: "rejected", Reason: "event_id_conflict"}
-			case !errors.Is(err, gorm.ErrRecordNotFound):
-				return err
-			default:
-				if err := tx.Where(
-					"request_id = ? AND article_id = ? AND event_type = ?",
-					events[index].RequestID, events[index].ArticleID, events[index].EventType,
-				).First(&existing).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-					return err
-				}
-				results[index] = recommendationPersistenceResult{Status: "duplicate"}
-			}
-		}
-		if len(inserted) == 0 {
-			return nil
-		}
-		outboxEvent, err := eventing.NewRecommendationEventsRecorded(userID, inserted)
-		if err != nil {
-			return err
-		}
-		return eventing.AddOutboxEvent(tx, outboxEvent)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
-func recommendationEventMatches(existing, incoming models.RecommendationEvent) bool {
-	return existing.EventID == incoming.EventID && existing.UserID == incoming.UserID &&
-		existing.RequestID == incoming.RequestID && existing.ArticleID == incoming.ArticleID &&
-		existing.EventType == incoming.EventType && existing.Scene == incoming.Scene &&
-		existing.Position == incoming.Position && existing.RankerVersion == incoming.RankerVersion &&
-		existing.RankerConfigHash == incoming.RankerConfigHash && existing.StrategyID == incoming.StrategyID &&
-		existing.OccurredAt.Equal(incoming.OccurredAt) &&
-		recommendationReadPayloadMatches(existing, incoming)
 }
 
 func enforceRecommendationTelemetryRateLimit(userID uint, eventCount int) (bool, error) {
@@ -300,8 +265,10 @@ func enforceRecommendationTelemetryRateLimit(userID uint, eventCount int) (bool,
 
 func recommendationEventTypeMetricLabel(eventType string) string {
 	switch strings.TrimSpace(eventType) {
-	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick, models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeFeedDwell, models.RecommendationEventTypeNotInterested:
-		return eventType
+	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick,
+		models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeFeedDwell,
+		models.RecommendationEventTypeNotInterested:
+		return strings.TrimSpace(eventType)
 	default:
 		return "unknown"
 	}

@@ -4,41 +4,40 @@ import (
 	"strings"
 
 	"Go.exchange/eventing"
-	"Go.exchange/models"
 )
 
-func validRecommendationMetricsFact(fact eventing.RecommendationEventFact) bool {
-	switch fact.EventType {
-	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick, models.RecommendationEventTypeNotInterested:
-		return fact.ForegroundTimeMS == nil &&
-			fact.ScrollProgressPercent == nil &&
-			fact.ExitType == nil &&
-			fact.EstimatedReadTimeMS == nil &&
-			fact.ReadPolicyVersion == nil &&
-			fact.ReadOutcome == nil &&
-			fact.FeedVisibleTimeMS == nil
-	case models.RecommendationEventTypeReadEnd:
-		if fact.ForegroundTimeMS == nil || fact.ScrollProgressPercent == nil || fact.ExitType == nil ||
-			fact.EstimatedReadTimeMS == nil || fact.ReadPolicyVersion == nil || fact.ReadOutcome == nil ||
-			fact.FeedVisibleTimeMS != nil ||
-			*fact.ForegroundTimeMS < 0 || *fact.ForegroundTimeMS > 6*60*60*1000 ||
-			*fact.ScrollProgressPercent < 0 || *fact.ScrollProgressPercent > 100 ||
-			*fact.EstimatedReadTimeMS <= 0 || strings.TrimSpace(*fact.ReadPolicyVersion) == "" ||
-			!validRecommendationMetricsExitType(*fact.ExitType) ||
-			!validRecommendationMetricsReadOutcome(*fact.ReadOutcome) {
+func validRecommendationMetricsPayload(eventType string, payload eventing.RecommendationBehaviorPayload) bool {
+	switch eventType {
+	case eventing.EventTypeRecommendationImpression, eventing.EventTypeRecommendationClick, eventing.EventTypeRecommendationNotInterested:
+		return payload.ForegroundTimeMS == nil &&
+			payload.ScrollProgressPercent == nil &&
+			payload.ExitType == nil &&
+			payload.EstimatedReadTimeMS == nil &&
+			payload.ReadPolicyVersion == nil &&
+			payload.ReadOutcome == nil &&
+			payload.FeedVisibleTimeMS == nil
+	case eventing.EventTypeRecommendationReadEnd:
+		if payload.ForegroundTimeMS == nil || payload.ScrollProgressPercent == nil || payload.ExitType == nil ||
+			payload.EstimatedReadTimeMS == nil || payload.ReadPolicyVersion == nil || payload.ReadOutcome == nil ||
+			payload.FeedVisibleTimeMS != nil ||
+			*payload.ForegroundTimeMS < 0 || *payload.ForegroundTimeMS > 6*60*60*1000 ||
+			*payload.ScrollProgressPercent < 0 || *payload.ScrollProgressPercent > 100 ||
+			*payload.EstimatedReadTimeMS <= 0 || strings.TrimSpace(*payload.ReadPolicyVersion) == "" ||
+			!validRecommendationMetricsExitType(*payload.ExitType) ||
+			!validRecommendationMetricsReadOutcome(*payload.ReadOutcome) {
 			return false
 		}
-		return *fact.ReadPolicyVersion == "read_v1"
-	case models.RecommendationEventTypeFeedDwell:
-		if fact.FeedVisibleTimeMS == nil || *fact.FeedVisibleTimeMS < 1 || *fact.FeedVisibleTimeMS > 6*60*60*1000 {
+		return *payload.ReadPolicyVersion == "read_v1"
+	case eventing.EventTypeRecommendationFeedDwell:
+		if payload.FeedVisibleTimeMS == nil || *payload.FeedVisibleTimeMS < 1 || *payload.FeedVisibleTimeMS > 6*60*60*1000 {
 			return false
 		}
-		return fact.ForegroundTimeMS == nil &&
-			fact.ScrollProgressPercent == nil &&
-			fact.ExitType == nil &&
-			fact.EstimatedReadTimeMS == nil &&
-			fact.ReadPolicyVersion == nil &&
-			fact.ReadOutcome == nil
+		return payload.ForegroundTimeMS == nil &&
+			payload.ScrollProgressPercent == nil &&
+			payload.ExitType == nil &&
+			payload.EstimatedReadTimeMS == nil &&
+			payload.ReadPolicyVersion == nil &&
+			payload.ReadOutcome == nil
 	default:
 		return false
 	}

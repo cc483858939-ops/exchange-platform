@@ -76,7 +76,7 @@ func TestRulesV3ProfileUsesReactionAndIgnoresViewCount(t *testing.T) {
 	ai := recommendationTestArticle(2, now, "AI", []string{"LLM"}, 0)
 	profile := buildRulesV3InterestProfile([]articleBehaviorSignal{
 		{Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, Count: 999, Active: false, LastSeenAt: now}, Article: backend},
-	}, []recommendationFeedbackSignal{{Event: models.RecommendationEvent{ArticleID: 2, EventType: models.RecommendationEventTypeClick, OccurredAt: now}, Article: &ai}}, map[uint]recommendationReactionState{
+	}, []recommendationFeedbackSignal{{Event: recommendationFeedbackEvent{ArticleID: 2, EventType: models.RecommendationEventTypeClick, OccurredAt: now}, Article: &ai}}, map[uint]recommendationReactionState{
 		2: {Liked: true, StateChangedAt: now},
 	}, now, normalizedRulesV3RecommendationConfig())
 

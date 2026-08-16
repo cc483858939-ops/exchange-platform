@@ -1,44 +1,9 @@
 package controllers
 
-import (
-	"Go.exchange/eventing"
-	"Go.exchange/global"
-	"errors"
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
-	"strings"
-)
+import "github.com/gin-gonic/gin"
 
 const ArticleBehaviorActionView = "view"
 
-var recordArticleBehavior = func(userID uint, articleID uint, action string) error {
-	action = strings.TrimSpace(action)
-	if userID == 0 || articleID == 0 || action == "" {
-		return nil
-	}
-	if global.Db == nil {
-		return errors.New("database is not initialized")
-	}
-	event, err := eventing.NewUserBehavior(userID, articleID, action, "api")
-	if err != nil {
-		return err
-	}
-	return global.Db.Transaction(func(tx *gorm.DB) error { return eventing.AddOutboxEvent(tx, event) })
-}
-var articleBehaviorLogError = func(ctx *gin.Context, msg string, err error) {
-	if global.Db != nil {
-		global.Db.Logger.Error(ctx, msg, err)
-	}
-}
-
-func recordArticleBehaviorFromContext(ctx *gin.Context, articleID uint, action string) {
-	userID, ok := userIDFromContext(ctx)
-	if ok {
-		if err := recordArticleBehavior(userID, articleID, action); err != nil {
-			articleBehaviorLogError(ctx, "failed to record article behavior", err)
-		}
-	}
-}
 func userIDFromContext(ctx *gin.Context) (uint, bool) {
 	if ctx == nil {
 		return 0, false

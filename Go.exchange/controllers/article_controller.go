@@ -164,7 +164,5 @@ func GetArticleByID(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	recordArticleBehaviorFromContext(ctx, article.ID, ArticleBehaviorActionView)
 	ctx.JSON(http.StatusOK, article)
 }

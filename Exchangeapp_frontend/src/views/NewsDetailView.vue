@@ -142,6 +142,7 @@ import { deleteArticle, getArticleById } from '../services/articleService';
 import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
+import { enqueueArticleView } from '../services/articleViewTelemetry';
 import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
@@ -196,6 +197,13 @@ let trackedArticleID = '';
 let readEndSent = false;
 let readTracker: ArticleReadTracker | null = null;
 let readResizeObserver: ResizeObserver | null = null;
+type PendingArticleViewEvent = {
+  articleID: number;
+  eventID: string;
+};
+
+let pendingArticleViewEvent: PendingArticleViewEvent | null = null;
+
 
 const clampCount = (value: unknown) => {
   const count = Number(value);
@@ -205,6 +213,29 @@ const clampCount = (value: unknown) => {
 const isValidArticleID = (value: string) => {
   const parsed = Number(value);
   return /^\d+$/.test(value) && Number.isSafeInteger(parsed) && parsed > 0;
+};
+
+const createArticleViewEventID = () => {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+};
+
+const ensureArticleViewEventID = (id: string) => {
+  const articleID = Number(id);
+  if (!pendingArticleViewEvent || pendingArticleViewEvent.articleID !== articleID) {
+    pendingArticleViewEvent = {
+      articleID,
+      eventID: createArticleViewEventID(),
+    };
+  }
+  return pendingArticleViewEvent.eventID;
 };
 
 const formatArticleDate = (value: string) => {
@@ -790,6 +821,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       return;
     }
 
+    void enqueueArticleView(Number(id), ensureArticleViewEventID(id));
     if (articleBodyRef.value) {
       startRead(id, detailVersion);
     }

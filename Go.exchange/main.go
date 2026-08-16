@@ -1,12 +1,6 @@
 package main
 
 import (
-	"Go.exchange/auth"
-	"Go.exchange/config"
-	"Go.exchange/core"
-	"Go.exchange/global"
-	"Go.exchange/initialize"
-	"Go.exchange/tasks"
 	"context"
 	"io/ioutil"
 	"log"
@@ -15,6 +9,14 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"Go.exchange/auth"
+	"Go.exchange/config"
+	"Go.exchange/core"
+	"Go.exchange/eventing"
+	"Go.exchange/global"
+	"Go.exchange/initialize"
+	"Go.exchange/tasks"
 
 	"github.com/gin-gonic/gin"
 )
@@ -57,7 +59,17 @@ func mustTokenManager() *auth.Manager {
 }
 
 func startAPI(ctx context.Context, cancel context.CancelFunc, waitGroup *sync.WaitGroup, tokens auth.TokenService) {
-	server, err := core.StartHttpServer(tokens)
+	publisher, err := eventing.NewKafkaPublisher(config.AppConfig.Kafka)
+	if err != nil {
+		log.Fatalf("initialize API Kafka publisher: %v", err)
+	}
+	defer func() {
+		if err := publisher.Close(); err != nil {
+			log.Printf("close API Kafka publisher: %v", err)
+		}
+	}()
+
+	server, err := core.StartHttpServer(tokens, publisher)
 	if err != nil {
 		log.Fatalf("start HTTP server: %v", err)
 	}
