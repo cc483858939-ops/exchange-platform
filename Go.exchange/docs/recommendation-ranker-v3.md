@@ -6,9 +6,15 @@ The only serving ranker is rules_v3. A user's profile is built from one canonica
 
 1. not_interested, unless a current ArticleReaction has a strictly later StateChangedAt;
 2. the current liked reaction;
-3. the latest passive signal, preferring a qualified/neutral/quick-bounce read outcome, then click, then view.
+3. the passive outcome resolved by the read_end_recency_v2 policy:
+   - a read_end is terminal only until a strictly later recommendation click or ArticleBehavior view;
+   - a strictly later click supersedes the read_end;
+   - otherwise, a strictly later view supersedes the read_end;
+   - if both click and view are strictly later, click remains canonical;
+   - without a read_end, click remains preferred over view;
+   - equal timestamps do not supersede the read_end.
 
-A tie between not-interested and the reaction keeps not-interested. An unlike does not create a like behavior projection; its event time is retained in ArticleReaction.StateChangedAt. Neutral reads and views can establish interaction/exclusion without adding affinity. Repeated views and feedback counts do not multiply a signal.
+A tie between not-interested and the reaction keeps not-interested. An unlike does not create a like behavior projection; its event time is retained in ArticleReaction.StateChangedAt. Neutral reads and views can establish interaction/exclusion without adding affinity. Repeated views and feedback counts do not multiply a signal. The canonical policy version is read_end_recency_v2.
 
 The default magnitudes are configured in config/config.yml. Contributions apply one time per canonical article outcome and decay by the configured half-life. Category and distinct normalized tag sums are saturated with tanh; missing or invalid metadata is not silently converted into a partial profile.
 

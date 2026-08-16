@@ -24,7 +24,7 @@ func openRulesV3IntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleReaction{}, &models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleBehavior{}, &models.ArticleReaction{}, &models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
@@ -265,4 +265,67 @@ func TestRulesV3CandidateLoadsCommentCountIntegration(t *testing.T) {
 		}
 	}
 	t.Fatalf("candidate %d is missing", article.ID)
+}
+
+func TestRulesV3StaleReadEndSupersessionAcrossStoredSignalsIntegration(t *testing.T) {
+	db := openRulesV3IntegrationDatabase(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	user := models.User{Username: "stale-read-end-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	author := createArticleIntegrationAuthor(t, db)
+	articles := []*models.Article{
+		{AuthorID: author.ID, Title: "stale read end click", Category: "backend", Tags: []string{"go"}},
+		{AuthorID: author.ID, Title: "stale read end view", Category: "backend", Tags: []string{"go"}},
+	}
+	for _, article := range articles {
+		if err := db.Create(article).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	quickBounce := recommendationReadOutcomeQuickBounce
+	neutral := recommendationReadOutcomeNeutral
+	readEndClick := newRulesV3IntegrationEvent(user.ID, articles[0].ID, models.RecommendationEventTypeReadEnd, uuid.NewString(), now.Add(-10*time.Minute), now.Add(-10*time.Minute))
+	readEndClick.ReadOutcome = &quickBounce
+	click := newRulesV3IntegrationEvent(user.ID, articles[0].ID, models.RecommendationEventTypeClick, uuid.NewString(), now.Add(-2*time.Minute), now.Add(-2*time.Minute))
+	readEndView := newRulesV3IntegrationEvent(user.ID, articles[1].ID, models.RecommendationEventTypeReadEnd, uuid.NewString(), now.Add(-10*time.Minute), now.Add(-10*time.Minute))
+	readEndView.ReadOutcome = &neutral
+	if err := db.Create(&[]models.RecommendationEvent{readEndClick, click, readEndView}).Error; err != nil {
+		t.Fatal(err)
+	}
+	behaviors := []models.ArticleBehavior{
+		{UserID: user.ID, ArticleID: articles[0].ID, Action: ArticleBehaviorActionView, Count: 1, LastSeenAt: now.Add(-time.Minute), Active: true},
+		{UserID: user.ID, ArticleID: articles[1].ID, Action: ArticleBehaviorActionView, Count: 1, LastSeenAt: now.Add(-time.Minute), Active: true},
+	}
+	if err := db.Create(&behaviors).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.RecommendationEvent{})
+		articleIDs := []uint{articles[0].ID, articles[1].ID}
+		db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+	})
+
+	loadedBehaviors, err := loadRecommendationBehaviorSignals(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedFeedback, err := loadRecommendationFeedbackSignals(user.ID, now.AddDate(0, 0, -90))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcomes := canonicalizeRecommendationOutcomes(loadedBehaviors, loadedFeedback, nil)
+	byArticle := make(map[uint]userArticleOutcome, len(outcomes))
+	for _, outcome := range outcomes {
+		byArticle[outcome.ArticleID] = outcome
+	}
+	if got := byArticle[articles[0].ID]; got.SignalType != "click" || !got.OccurredAt.Equal(now.Add(-2*time.Minute)) {
+		t.Fatalf("click supersession outcome=%#v", got)
+	}
+	if got := byArticle[articles[1].ID]; got.SignalType != "view" || !got.OccurredAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("view supersession outcome=%#v", got)
+	}
 }

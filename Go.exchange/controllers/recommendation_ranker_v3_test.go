@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,10 +154,236 @@ func TestRulesV3WeightsStrategyAndConfigHash(t *testing.T) {
 	if recommendationStrategyID(userInterestProfile{PersonalizedSignalCount: 1}) != recommendationPersonalizedStrategyID {
 		t.Fatal("expected personalized strategy")
 	}
+	canonical := recommendationRankerConfigCanonicalString(cfg)
+	if !strings.Contains(canonical, "canonical_outcome=read_end_recency_v2") {
+		t.Fatal("canonical outcome version missing from config string")
+	}
 	baseHash := recommendationRankerConfigHash(cfg)
 	variant := cfg
 	variant.FeedbackLookbackDays++
 	if recommendationRankerConfigHash(variant) == baseHash {
 		t.Fatal("feedback lookback did not change V3 config hash")
+	}
+}
+
+func TestRulesV3StaleReadEndCanBeSupersededByLaterOpen(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		readOutcome string
+		openType    string
+		wantSignal  string
+	}{
+		{name: "quick bounce click", readOutcome: recommendationReadOutcomeQuickBounce, openType: "click", wantSignal: "click"},
+		{name: "neutral click", readOutcome: recommendationReadOutcomeNeutral, openType: "click", wantSignal: "click"},
+		{name: "qualified click", readOutcome: recommendationReadOutcomeQualified, openType: "click", wantSignal: "click"},
+		{name: "quick bounce view", readOutcome: recommendationReadOutcomeQuickBounce, openType: "view", wantSignal: "view"},
+		{name: "neutral view", readOutcome: recommendationReadOutcomeNeutral, openType: "view", wantSignal: "view"},
+		{name: "qualified view", readOutcome: recommendationReadOutcomeQualified, openType: "view", wantSignal: "view"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			readAt := now.Add(-10 * time.Minute)
+			openAt := now.Add(-time.Minute)
+			readOutcome := tc.readOutcome
+			state := &recommendationArticleFeedbackState{
+				ReadEnd: &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
+					ReadOutcome: &readOutcome, OccurredAt: readAt,
+				},
+			}
+			view := models.ArticleBehavior{}
+			if tc.openType == "click" {
+				state.Click = &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: openAt,
+				}
+			} else {
+				view = models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, LastSeenAt: openAt}
+			}
+
+			gotSignal, gotAt := resolveRecommendationPassiveOutcome(state, view)
+			if gotSignal != tc.wantSignal {
+				t.Fatalf("signal=%q want=%q", gotSignal, tc.wantSignal)
+			}
+			if !gotAt.Equal(openAt) {
+				t.Fatalf("occurred_at=%s want=%s", gotAt, openAt)
+			}
+		})
+	}
+}
+
+func TestRulesV3LaterReadEndStillTerminatesPassiveOutcome(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		readOutcome string
+		wantSignal  string
+	}{
+		{name: "quick bounce", readOutcome: recommendationReadOutcomeQuickBounce, wantSignal: "quick_bounce"},
+		{name: "neutral", readOutcome: recommendationReadOutcomeNeutral, wantSignal: "neutral_read"},
+		{name: "qualified", readOutcome: recommendationReadOutcomeQualified, wantSignal: "qualified_read"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clickAt := now.Add(-20 * time.Minute)
+			viewAt := now.Add(-15 * time.Minute)
+			readAt := now.Add(-10 * time.Minute)
+			readOutcome := tc.readOutcome
+			state := &recommendationArticleFeedbackState{
+				Click: &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: clickAt,
+				},
+				ReadEnd: &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
+					ReadOutcome: &readOutcome, OccurredAt: readAt,
+				},
+			}
+			view := models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, LastSeenAt: viewAt}
+
+			gotSignal, gotAt := resolveRecommendationPassiveOutcome(state, view)
+			if gotSignal != tc.wantSignal {
+				t.Fatalf("signal=%q want=%q", gotSignal, tc.wantSignal)
+			}
+			if !gotAt.Equal(readAt) {
+				t.Fatalf("occurred_at=%s want=%s", gotAt, readAt)
+			}
+		})
+	}
+}
+
+func TestRulesV3ClickRemainsPreferredOverLaterDetailView(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		readAt *time.Time
+	}{
+		{name: "without read end"},
+		{name: "after stale read end", readAt: func() *time.Time {
+			value := now.Add(-10 * time.Minute)
+			return &value
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			state := &recommendationArticleFeedbackState{
+				Click: &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeClick,
+					OccurredAt: now.Add(-2 * time.Minute),
+				},
+			}
+			if tc.readAt != nil {
+				readOutcome := recommendationReadOutcomeNeutral
+				state.ReadEnd = &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
+					ReadOutcome: &readOutcome, OccurredAt: *tc.readAt,
+				}
+			}
+			viewAt := now.Add(-time.Minute)
+			gotSignal, gotAt := resolveRecommendationPassiveOutcome(state, models.ArticleBehavior{
+				ArticleID: 1, Action: ArticleBehaviorActionView, LastSeenAt: viewAt,
+			})
+			if gotSignal != "click" || !gotAt.Equal(now.Add(-2*time.Minute)) {
+				t.Fatalf("signal=%q occurred_at=%s", gotSignal, gotAt)
+			}
+		})
+	}
+}
+
+func TestRulesV3ReadEndRequiresStrictlyLaterOpenToBeSuperseded(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		openType string
+		openAt   time.Time
+		want     string
+	}{
+		{name: "equal click", openType: "click", openAt: now, want: "neutral_read"},
+		{name: "equal view", openType: "view", openAt: now, want: "neutral_read"},
+		{name: "one nanosecond later click", openType: "click", openAt: now.Add(time.Nanosecond), want: "click"},
+		{name: "one nanosecond later view", openType: "view", openAt: now.Add(time.Nanosecond), want: "view"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			readOutcome := recommendationReadOutcomeNeutral
+			state := &recommendationArticleFeedbackState{
+				ReadEnd: &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
+					ReadOutcome: &readOutcome, OccurredAt: now,
+				},
+			}
+			view := models.ArticleBehavior{}
+			if tc.openType == "click" {
+				state.Click = &models.RecommendationEvent{
+					ArticleID: 1, EventType: models.RecommendationEventTypeClick, OccurredAt: tc.openAt,
+				}
+			} else {
+				view = models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, LastSeenAt: tc.openAt}
+			}
+			gotSignal, gotAt := resolveRecommendationPassiveOutcome(state, view)
+			wantAt := now
+			if tc.want != "neutral_read" {
+				wantAt = tc.openAt
+			}
+			if gotSignal != tc.want || !gotAt.Equal(wantAt) {
+				t.Fatalf("signal=%q occurred_at=%s want=%q at=%s", gotSignal, gotAt, tc.want, wantAt)
+			}
+		})
+	}
+}
+
+func TestRulesV3NewerClickRecoversFromStaleQuickBounceAffinity(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	article := recommendationTestArticle(1, now, "backend", []string{"go"}, 0)
+	readOutcome := recommendationReadOutcomeQuickBounce
+	feedback := []recommendationFeedbackSignal{
+		{
+			Event: models.RecommendationEvent{
+				ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
+				ReadOutcome: &readOutcome, OccurredAt: now.Add(-10 * time.Minute),
+			},
+			SignalType: "quick_bounce", Article: &article,
+		},
+		{
+			Event: models.RecommendationEvent{
+				ArticleID: 1, EventType: models.RecommendationEventTypeClick,
+				OccurredAt: now.Add(-time.Minute),
+			},
+			SignalType: "click", Article: &article,
+		},
+	}
+	outcomes := canonicalizeRecommendationOutcomes(nil, feedback, nil)
+	if len(outcomes) != 1 || outcomes[0].SignalType != "click" {
+		t.Fatalf("canonical outcomes=%#v", outcomes)
+	}
+	profile := buildRulesV3InterestProfile(nil, feedback, nil, now, normalizedRulesV3RecommendationConfig())
+	if profile.PersonalizedSignalCount != 1 || profile.Categories["backend"] <= 0 || profile.Tags["go"] <= 0 {
+		t.Fatalf("profile=%#v", profile)
+	}
+}
+
+func TestRulesV3NewerViewRecoversFromStaleNeutralRead(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	article := recommendationTestArticle(1, now, "backend", []string{"go"}, 0)
+	readOutcome := recommendationReadOutcomeNeutral
+	feedback := []recommendationFeedbackSignal{{
+		Event: models.RecommendationEvent{
+			ArticleID: 1, EventType: models.RecommendationEventTypeReadEnd,
+			ReadOutcome: &readOutcome, OccurredAt: now.Add(-10 * time.Minute),
+		},
+		SignalType: "neutral_read", Article: &article,
+	}}
+	behaviors := []articleBehaviorSignal{{
+		Behavior: models.ArticleBehavior{
+			ArticleID: 1, Action: ArticleBehaviorActionView, LastSeenAt: now.Add(-time.Minute),
+		},
+		Article: article,
+	}}
+	outcomes := canonicalizeRecommendationOutcomes(behaviors, feedback, nil)
+	if len(outcomes) != 1 || outcomes[0].SignalType != "view" || !outcomes[0].OccurredAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("canonical outcomes=%#v", outcomes)
+	}
+	profile := buildRulesV3InterestProfile(behaviors, feedback, nil, now, normalizedRulesV3RecommendationConfig())
+	if profile.PersonalizedSignalCount != 1 || profile.Categories["backend"] <= 0 || profile.Tags["go"] <= 0 {
+		t.Fatalf("profile=%#v", profile)
 	}
 }

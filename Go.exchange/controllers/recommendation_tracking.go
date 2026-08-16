@@ -17,12 +17,13 @@ import (
 )
 
 const (
-	recommendationScene                  = "recommendation_page"
-	recommendationRankerVersion          = "rules_v3"
-	recommendationPersonalizedStrategyID = "personalized_rules_v3"
-	recommendationColdStartStrategyID    = "cold_start_rules_v3"
-	recommendationTrackingTokenVersion   = "v2"
-	recommendationSigningKeyMinBytes     = 32
+	recommendationScene                   = "recommendation_page"
+	recommendationRankerVersion           = "rules_v3"
+	recommendationPersonalizedStrategyID  = "personalized_rules_v3"
+	recommendationColdStartStrategyID     = "cold_start_rules_v3"
+	recommendationTrackingTokenVersion    = "v2"
+	recommendationCanonicalOutcomeVersion = "read_end_recency_v2"
+	recommendationSigningKeyMinBytes      = 32
 )
 
 type recommendationTrackingResponse struct {
@@ -114,12 +115,16 @@ func recommendationTelemetryRequestSelected(userID uint, requestID string, perce
 }
 
 func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
-	canonical := fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_retrieval=%s|top_categories=%d|category_cap=%d|recent_cap=%d|popular_cap=%d|merged_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s",
-		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateRetrievalVersion, recommendationTopCategoryCount, recommendationCategoryCandidateCap, recommendationRecentCandidateCap, recommendationPopularCandidateCap, recommendationMergedCandidateCap, recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion,
-	)
+	canonical := recommendationRankerConfigCanonicalString(cfg)
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) string {
+	return fmt.Sprintf(
+		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_retrieval=%s|top_categories=%d|category_cap=%d|recent_cap=%d|popular_cap=%d|merged_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s|canonical_outcome=%s",
+		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateRetrievalVersion, recommendationTopCategoryCount, recommendationCategoryCandidateCap, recommendationRecentCandidateCap, recommendationPopularCandidateCap, recommendationMergedCandidateCap, recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion, recommendationCanonicalOutcomeVersion,
+	)
 }
 func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {
 	if len(key) < recommendationSigningKeyMinBytes {

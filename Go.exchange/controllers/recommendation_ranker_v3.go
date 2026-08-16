@@ -250,6 +250,33 @@ type recommendationArticleFeedbackState struct {
 	NotInterested *models.RecommendationEvent
 }
 
+func resolveRecommendationPassiveOutcome(
+	state *recommendationArticleFeedbackState,
+	view models.ArticleBehavior,
+) (signalType string, occurredAt time.Time) {
+	var click, readEnd *models.RecommendationEvent
+	if state != nil {
+		click = state.Click
+		readEnd = state.ReadEnd
+	}
+
+	if readEnd != nil {
+		if click != nil && click.OccurredAt.After(readEnd.OccurredAt) {
+			return "click", click.OccurredAt
+		}
+		if view.ArticleID != 0 && view.LastSeenAt.After(readEnd.OccurredAt) {
+			return "view", view.LastSeenAt
+		}
+		return normalizeRecommendationFeedbackSignal(*readEnd), readEnd.OccurredAt
+	}
+	if click != nil {
+		return "click", click.OccurredAt
+	}
+	if view.ArticleID != 0 {
+		return "view", view.LastSeenAt
+	}
+	return "", time.Time{}
+}
 func canonicalizeRecommendationOutcomes(
 	behaviors []articleBehaviorSignal,
 	feedback []recommendationFeedbackSignal,
@@ -337,15 +364,8 @@ func canonicalizeRecommendationOutcomes(
 		case notInterested == nil && hasReaction && reaction.Liked:
 			signalType = "like"
 			occurredAt = reaction.StateChangedAt
-		case state != nil && state.ReadEnd != nil:
-			signalType = normalizeRecommendationFeedbackSignal(*state.ReadEnd)
-			occurredAt = state.ReadEnd.OccurredAt
-		case state != nil && state.Click != nil:
-			signalType = "click"
-			occurredAt = state.Click.OccurredAt
-		case views[articleID].ArticleID != 0:
-			signalType = "view"
-			occurredAt = views[articleID].LastSeenAt
+		default:
+			signalType, occurredAt = resolveRecommendationPassiveOutcome(state, views[articleID])
 		}
 		if signalType == "" {
 			continue
