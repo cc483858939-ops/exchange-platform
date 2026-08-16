@@ -435,6 +435,62 @@ describe('RecommendationTelemetryClient Feed dwell', () => {
     })]);
   });
 
+  it('ignores stale intersection callbacks after a Feed element rebind', async () => {
+    const telemetry = createClient();
+    const oldCard = makeCard(makeRect(0, 0, 1000, 600));
+    const newCard = makeCard(makeRect(0, 0, 1000, 600));
+    const tracking = makeTracking();
+
+    mocks.fetch.mockImplementation(async (_url: string, request: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => responseFor(eventsFromFetch([_url, request])),
+    }));
+    telemetry.observeFeedCard(oldCard.element, 42, tracking);
+    const feedObserver = observer();
+    feedObserver.emit(oldCard.element);
+
+    telemetry.observeFeedCard(newCard.element, 42, tracking);
+    expect(feedObserver.unobserved).toContain(oldCard.element);
+
+    feedObserver.emit(oldCard.element);
+    vi.advanceTimersByTime(1100);
+    expect(await flushKeepaliveEvents()).toEqual([]);
+
+    feedObserver.emit(newCard.element);
+    vi.advanceTimersByTime(1000);
+    const events = await flushKeepaliveEvents();
+    expect(events.map(event => event.event_type)).toEqual(['impression']);
+  });
+
+  it('ignores stale intersection callbacks after Feed detach', async () => {
+    const telemetry = createClient();
+    const card = makeCard(makeRect(0, 0, 1000, 600));
+    const tracking = makeTracking();
+
+    mocks.fetch.mockImplementation(async (_url: string, request: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => responseFor(eventsFromFetch([_url, request])),
+    }));
+    telemetry.observeFeedCard(card.element, 42, tracking);
+    const feedObserver = observer();
+    feedObserver.emit(card.element);
+    clock = 1000;
+
+    telemetry.detachFeedCard(42, tracking);
+    feedObserver.emit(card.element);
+    vi.advanceTimersByTime(1100);
+    expect(await flushKeepaliveEvents()).toEqual([]);
+
+    clock = 4000;
+    expect(telemetry.finalizeFeedDwell(42, tracking)).toBe(true);
+    const events = await flushKeepaliveEvents();
+    expect(events).toEqual([expect.objectContaining({
+      event_type: 'feed_dwell',
+      feed_visible_time_ms: 1000,
+    })]);
+  });
   it('finalizes unfinished dwell before resetObservedCards disconnects', async () => {
     const telemetry = createClient();
     const card = makeCard(makeRect(0, 0, 1000, 600));

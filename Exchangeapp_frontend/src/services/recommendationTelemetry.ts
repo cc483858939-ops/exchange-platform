@@ -245,9 +245,8 @@ export class RecommendationTelemetryClient {
           this.settleFeedDwellState(state);
           this.activeFeedDwellKey = null;
         }
-        this.observer?.unobserve(state.element);
-        this.clearVisibilityTimer(state.element);
-        this.qualifyingElements.delete(state.element);
+        const oldElement = state.element;
+        this.forgetObservedElement(oldElement);
         state.intersecting = false;
       }
       state.articleID = articleID;
@@ -543,12 +542,19 @@ export class RecommendationTelemetryClient {
       this.activeFeedDwellKey = null;
     }
     if (state.element) {
-      this.observer?.unobserve(state.element);
-      this.clearVisibilityTimer(state.element);
-      this.qualifyingElements.delete(state.element);
+      const element = state.element;
+      this.forgetObservedElement(element);
     }
     state.element = null;
     state.intersecting = false;
+  }
+
+  private forgetObservedElement(element: Element) {
+    this.observer?.unobserve(element);
+    this.clearVisibilityTimer(element);
+    this.qualifyingElements.delete(element);
+    this.observed.delete(element);
+    this.feedDwellByElement.delete(element);
   }
 
   private reconcileActiveFeedDwell() {
