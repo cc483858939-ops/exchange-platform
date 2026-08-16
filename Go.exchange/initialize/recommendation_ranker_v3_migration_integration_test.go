@@ -155,6 +155,7 @@ ORDER BY c.conname
 		t.Fatal(err)
 	}
 	assertIndexDefinitionContains(t, strings.ToLower(indexDefinition), "author_id", "published_at desc", "id desc", "deleted_at is null", "publication_state", "published_at is not null")
+	assertRecommendationRetrievalV1Indexes(t, db)
 }
 func TestArticleAuthorConstraintsIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
@@ -222,4 +223,30 @@ WHERE schemaname = current_schema()
 	if oldIndexCount != 0 {
 		t.Fatalf("legacy article author index still exists: %d", oldIndexCount)
 	}
+}
+func assertRecommendationRetrievalV1Indexes(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	var indexes []struct {
+		Name       string
+		Definition string
+	}
+	if err := db.Raw("SELECT indexname AS name, indexdef AS definition " +
+		"FROM pg_indexes " +
+		"WHERE schemaname = current_schema() " +
+		"AND tablename = 'articles' " +
+		"AND indexname IN ('idx_articles_recommendation_category_created', 'idx_articles_recommendation_popular') " +
+		"ORDER BY indexname").Scan(&indexes).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(indexes) != 2 {
+		t.Fatalf("recommendation retrieval indexes=%d want=2", len(indexes))
+	}
+	definitions := make(map[string]string, len(indexes))
+	for _, index := range indexes {
+		definitions[index.Name] = strings.ToLower(index.Definition)
+	}
+	assertIndexDefinitionContains(t, definitions["idx_articles_recommendation_category_created"],
+		"lower", "btrim", "created_at desc", "id desc", "deleted_at is null", "publication_state", "analysis_state", "published_at is not null")
+	assertIndexDefinitionContains(t, definitions["idx_articles_recommendation_popular"],
+		"like_count desc", "created_at desc", "id desc", "deleted_at is null", "publication_state", "analysis_state", "published_at is not null")
 }

@@ -208,7 +208,7 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 	loadRecommendationReactionStates = func(uint) (map[uint]recommendationReactionState, error) {
 		return nil, nil
 	}
-	loadRulesV3Candidates = func(uint, map[uint]struct{}, time.Time, time.Time) ([]models.Article, error) {
+	loadRulesV3Candidates = func(uint, userInterestProfile, time.Time, time.Time, int) ([]models.Article, error) {
 		return []models.Article{
 			recommendationTestArticle(2, now.Add(-2*time.Hour), "Travel", []string{"Food"}, 0),
 			recommendationTestArticle(3, now.Add(-time.Hour), "Backend", []string{"Go"}, 0),
@@ -251,7 +251,7 @@ func TestGetArticleRecommendationsSerializesNilTagsAsArray(t *testing.T) {
 	loadRecommendationBehaviorSignals = func(uint) ([]articleBehaviorSignal, error) { return nil, nil }
 	loadRecommendationFeedbackSignals = func(uint, time.Time) ([]recommendationFeedbackSignal, error) { return nil, nil }
 	loadRecommendationReactionStates = func(uint) (map[uint]recommendationReactionState, error) { return nil, nil }
-	loadRulesV3Candidates = func(uint, map[uint]struct{}, time.Time, time.Time) ([]models.Article, error) {
+	loadRulesV3Candidates = func(uint, userInterestProfile, time.Time, time.Time, int) ([]models.Article, error) {
 		return []models.Article{recommendationTestArticle(2, now, "Travel", nil, 0)}, nil
 	}
 	recorder := httptest.NewRecorder()

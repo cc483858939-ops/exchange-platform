@@ -10,8 +10,6 @@ import (
 	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
-
-	"gorm.io/gorm"
 )
 
 const (
@@ -455,58 +453,6 @@ func uniqueRecommendationTags(tags []string) []string {
 		}
 	}
 	return result
-}
-
-var loadRulesV3Candidates = func(userID uint, excluded map[uint]struct{}, lookbackStart, now time.Time) ([]models.Article, error) {
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-	columns := publicArticleSelectColumns
-	scoped := func(query *gorm.DB) *gorm.DB {
-		laterReaction := global.Db.Table("article_reaction AS ar").
-			Select("1").
-			Where("ar.user_id = ? AND ar.article_id = articles.id AND ar.state_changed_at > re.occurred_at", userID)
-		negative := global.Db.Table("recommendation_events AS re").
-			Select("1").
-			Where("re.user_id = ? AND re.article_id = articles.id AND re.event_type = ? AND re.occurred_at >= ?", userID, models.RecommendationEventTypeNotInterested, lookbackStart).
-			Where("NOT EXISTS (?)", laterReaction)
-		query = publicArticleScope(query, now).
-			Where("NOT EXISTS (?)", negative)
-		if ids := articleIDList(excluded); len(ids) > 0 {
-			query = query.Where("articles.id NOT IN ?", ids)
-		}
-		return query
-	}
-	var completed []models.Article
-	if err := preloadArticleAuthor(scoped(global.Db.Select(columns))).
-		Where("analysis_state = ?", consts.ArticleAnalysisStateCompleted).
-		Order("created_at DESC, id DESC").
-		Limit(recommendationCandidateCap).
-		Find(&completed).Error; err != nil {
-		return nil, err
-	}
-	if len(completed) >= recommendationCandidateCap {
-		if err := ensureArticleAuthors(completed); err != nil {
-			return nil, err
-		}
-		return completed, nil
-	}
-	excludedIDs := append(articleIDList(excluded), articleIDs(completed)...)
-	query := preloadArticleAuthor(scoped(global.Db.Select(columns))).Where("analysis_state <> ?", consts.ArticleAnalysisStateCompleted)
-	if len(excludedIDs) > 0 {
-		query = query.Where("id NOT IN ?", excludedIDs)
-	}
-	var fallback []models.Article
-	if err := query.Order("like_count DESC, created_at DESC, id DESC").
-		Limit(recommendationCandidateCap - len(completed)).
-		Find(&fallback).Error; err != nil {
-		return nil, err
-	}
-	candidates := append(completed, fallback...)
-	if err := ensureArticleAuthors(candidates); err != nil {
-		return nil, err
-	}
-	return candidates, nil
 }
 
 func recommendRulesV3Articles(profile userInterestProfile, candidates []models.Article, now time.Time, cfg config.RecommendationConfig, limit int) []recommendedArticleResponse {

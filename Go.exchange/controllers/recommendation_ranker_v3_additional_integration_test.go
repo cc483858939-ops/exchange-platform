@@ -24,7 +24,7 @@ func openRulesV3IntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleReaction{}, &models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
@@ -118,7 +118,7 @@ func TestRulesV3CandidateNegativeSuppressionWindowIntegration(t *testing.T) {
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 	})
 
-	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, lookbackStart, now)
+	candidates, err := loadRulesV3Candidates(userID, userInterestProfile{}, lookbackStart, now, defaultRecommendationLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestRulesV3CandidatesExcludeNonPublicArticlesIntegration(t *testing.T) {
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 	})
 
-	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	candidates, err := loadRulesV3Candidates(userID, userInterestProfile{}, now.AddDate(0, 0, -90), now, defaultRecommendationLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestRulesV3CandidateStableOrderIntegration(t *testing.T) {
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 	})
 
-	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	candidates, err := loadRulesV3Candidates(userID, userInterestProfile{}, now.AddDate(0, 0, -90), now, defaultRecommendationLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestRulesV3CandidateLoadsCommentCountIntegration(t *testing.T) {
 		db.Unscoped().Delete(&article)
 	})
 
-	candidates, err := loadRulesV3Candidates(uint(now.UnixNano()&0x3fffffff), map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	candidates, err := loadRulesV3Candidates(uint(now.UnixNano()&0x3fffffff), userInterestProfile{}, now.AddDate(0, 0, -90), now, defaultRecommendationLimit)
 	if err != nil {
 		t.Fatal(err)
 	}

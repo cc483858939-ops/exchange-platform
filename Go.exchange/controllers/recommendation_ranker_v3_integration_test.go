@@ -23,7 +23,7 @@ func TestRulesV3FeedbackLoaderIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleReaction{}, &models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
@@ -66,7 +66,7 @@ func TestRulesV3FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.RecommendationEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleReaction{}, &models.RecommendationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
@@ -118,7 +118,7 @@ func TestRulesV3FeedbackLimitsAndCandidateSuppressionIntegration(t *testing.T) {
 	if clicks != 1 {
 		t.Fatalf("duplicate article signals=%d", clicks)
 	}
-	candidates, err := loadRulesV3Candidates(userID, map[uint]struct{}{}, now.AddDate(0, 0, -90), now)
+	candidates, err := loadRulesV3Candidates(userID, userInterestProfile{}, now.AddDate(0, 0, -90), now, defaultRecommendationLimit)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,6 +53,9 @@ func RunMigrations() error {
 		if err := applyRecommendationRankerV3Indexes(tx); err != nil {
 			return err
 		}
+		if err := applyRecommendationRetrievalV1Indexes(tx); err != nil {
+			return err
+		}
 		if err := applyArticleAuthorConstraints(tx); err != nil {
 			return err
 		}
@@ -194,6 +197,18 @@ func applyRecommendationRankerV3Indexes(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply recommendation ranker v3 index: %w", err)
+		}
+	}
+	return nil
+}
+func applyRecommendationRetrievalV1Indexes(tx *gorm.DB) error {
+	statements := []string{
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_category_created ON articles ((LOWER(BTRIM(category))), created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND analysis_state = 'completed' AND published_at IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_popular ON articles (like_count DESC, created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND analysis_state = 'completed' AND published_at IS NOT NULL",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation retrieval v1 index: %w", err)
 		}
 	}
 	return nil

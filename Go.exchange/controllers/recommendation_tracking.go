@@ -115,8 +115,8 @@ func recommendationTelemetryRequestSelected(userID uint, requestID string, perce
 
 func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
 	canonical := fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s",
-		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateCap, recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion,
+		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_retrieval=%s|top_categories=%d|category_cap=%d|recent_cap=%d|popular_cap=%d|merged_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s",
+		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateRetrievalVersion, recommendationTopCategoryCount, recommendationCategoryCandidateCap, recommendationRecentCandidateCap, recommendationPopularCandidateCap, recommendationMergedCandidateCap, recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion,
 	)
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])[:12]

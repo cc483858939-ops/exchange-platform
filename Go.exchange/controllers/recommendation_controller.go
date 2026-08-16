@@ -18,9 +18,14 @@ import (
 )
 
 const (
-	defaultRecommendationLimit = 20
-	maxRecommendationLimit     = 50
-	recommendationCandidateCap = 200
+	defaultRecommendationLimit              = 20
+	maxRecommendationLimit                  = 50
+	recommendationTopCategoryCount          = 8
+	recommendationCategoryCandidateCap      = 200
+	recommendationRecentCandidateCap        = 150
+	recommendationPopularCandidateCap       = 150
+	recommendationMergedCandidateCap        = 500
+	recommendationCandidateRetrievalVersion = "multi_source_v1"
 )
 
 type articleBehaviorSignal struct {
@@ -157,7 +162,7 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	}
 	profile := buildRulesV3InterestProfile(behaviors, feedback, reactions, now, cfg)
 	strategyID := recommendationStrategyID(profile)
-	candidates, err := loadRulesV3Candidates(userID, profile.InteractedArticleIDs, lookbackStart, now)
+	candidates, err := loadRulesV3Candidates(userID, profile, lookbackStart, now, limit)
 	if err != nil {
 		metrics.RecordRecommendationRequest("error", strategyID)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
