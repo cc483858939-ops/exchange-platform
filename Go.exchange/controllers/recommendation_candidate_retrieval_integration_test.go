@@ -203,6 +203,51 @@ func TestHydrateRulesV3CandidateArticlesRestoresIDOrderAndPublicScopeIntegration
 	}
 }
 
+func TestRulesV3CategoryCandidateIDsBindsTypedInterestValuesIntegration(t *testing.T) {
+	db := openRulesV3IntegrationDatabase(t)
+	userID := uint(time.Now().UnixNano() & 0x3fffffff)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	lookbackStart := now.AddDate(0, 0, -90)
+	author := createArticleIntegrationAuthor(t, db)
+
+	backend := candidateRetrievalArticle(author.ID, 0, "typed backend", " Backend ", now.Add(-10*time.Minute))
+	ai := candidateRetrievalArticle(author.ID, 0, "typed ai", "AI", now.Add(-5*time.Minute))
+	travel := candidateRetrievalArticle(author.ID, 0, "typed travel", "travel", now.Add(-time.Minute))
+	articles := []*models.Article{backend, ai, travel}
+	if err := db.CreateInBatches(articles, len(articles)).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ids := []uint{backend.ID, ai.ID, travel.ID}
+		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
+	})
+
+	profile := userInterestProfile{
+		Categories: map[string]float64{
+			"backend": 0.9,
+			"ai":      0.5,
+		},
+		Tags:                    map[string]float64{},
+		InteractedArticleIDs:    map[uint]struct{}{},
+		PersonalizedSignalCount: 2,
+	}
+	ids, err := loadRulesV3CategoryCandidateIDs(userID, profile, lookbackStart, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("category ids=%v want exactly backend and ai", ids)
+	}
+	if ids[0] != backend.ID || ids[1] != ai.ID {
+		t.Fatalf("category ids=%v want numeric affinity order [%d %d]", ids, backend.ID, ai.ID)
+	}
+	for _, id := range ids {
+		if id == travel.ID {
+			t.Fatalf("unrelated travel article %d was recalled", travel.ID)
+		}
+	}
+}
+
 type candidateRetrievalQueryCounter struct {
 	logger.Interface
 	mu             sync.Mutex

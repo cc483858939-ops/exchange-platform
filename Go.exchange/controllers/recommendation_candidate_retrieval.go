@@ -100,7 +100,8 @@ func loadRulesV3CategoryCandidateIDs(userID uint, profile userInterestProfile, l
 	values := make([]string, len(interests))
 	args := make([]interface{}, 0, len(interests)*2)
 	for index, interest := range interests {
-		values[index] = "(?, ?)"
+		// Explicit PostgreSQL casts keep pgx float64 affinities out of anonymous text VALUES columns.
+		values[index] = "(CAST(? AS text), CAST(? AS double precision))"
 		args = append(args, interest.Label, interest.Affinity)
 	}
 	interestRows := global.Db.Raw("VALUES "+strings.Join(values, ", "), args...)
