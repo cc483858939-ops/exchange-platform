@@ -16,7 +16,7 @@
     </span>
     <span class="author-copy">
       <span class="author-name">{{ displayName }}</span>
-      <span class="author-meta">@{{ username }}<span v-if="relativeTime"> · {{ relativeTime }}</span></span>
+      <span class="author-meta">@{{ username }}<span v-if="postDate"> · {{ postDate }}</span></span>
     </span>
   </RouterLink>
 </template>
@@ -24,7 +24,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { PublicAuthor } from '../types/User';
-import { formatRelativeTime } from '../utils/time';
+import { formatPostDate } from '../utils/time';
 
 const props = defineProps<{
   author: PublicAuthor;
@@ -36,7 +36,7 @@ const displayName = computed(() => props.author.display_name.trim() || username.
 const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperCase() || '?');
 const avatarURL = computed(() => props.author.avatar_url.trim());
 const avatarLoadFailed = ref(false);
-const relativeTime = computed(() => formatRelativeTime(props.createdAt));
+const postDate = computed(() => formatPostDate(props.createdAt));
 
 watch(() => [props.author.id, props.author.avatar_url], () => {
   avatarLoadFailed.value = false;

@@ -30,3 +30,23 @@ export function formatRelativeTime(value: string | Date | null | undefined, now 
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+export function formatPostDate(value: string | Date | null | undefined, now = new Date()): string {
+  if (!value) {
+    return '';
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const options: Intl.DateTimeFormatOptions = {
+    month: 'short',
+    day: 'numeric',
+  };
+  if (date.getFullYear() !== now.getFullYear()) {
+    options.year = 'numeric';
+  }
+
+  return new Intl.DateTimeFormat('en-US', options).format(date);
+}
