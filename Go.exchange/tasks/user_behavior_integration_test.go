@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -140,6 +141,156 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 			t.Fatal(err)
 		}
 		assertReaction(t, db, userTwoID, test.articleID, test.wantLiked, test.wantVersion, test.wantStateChangedAt)
+	}
+}
+
+func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}, &models.ArticleReaction{}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDB, originalConfig := global.Db, config.AppConfig
+	groupID := "test-public-view-count-" + uuid.NewString()
+	config.AppConfig = &config.Config{}
+	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
+	global.Db = db
+
+	viewerOne := models.User{Username: "view-count-one-" + uuid.NewString(), Password: "test"}
+	viewerTwo := models.User{Username: "view-count-two-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&viewerOne).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&viewerTwo).Error; err != nil {
+		t.Fatal(err)
+	}
+	articleOne := models.Article{AuthorID: viewerOne.ID, Title: "view one", Content: "view one", Preview: "view one"}
+	articleTwo := models.Article{AuthorID: viewerOne.ID, Title: "view two", Content: "view two", Preview: "view two"}
+	articleThree := models.Article{AuthorID: viewerOne.ID, Title: "view three", Content: "view three", Preview: "view three"}
+	if err := db.Create(&articleOne).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&articleTwo).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&articleThree).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
+		db.Unscoped().Where("article_id IN ?", []uint{articleOne.ID, articleTwo.ID, articleThree.ID}).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("id IN ?", []uint{articleOne.ID, articleTwo.ID, articleThree.ID}).Delete(&models.Article{})
+		db.Unscoped().Where("id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.User{})
+		global.Db, config.AppConfig = originalDB, originalConfig
+	})
+
+	base := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	firstBatch := []kafka.Message{
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-1", viewerOne.ID, articleOne.ID, base)),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-2", viewerOne.ID, articleOne.ID, base.Add(time.Second))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-3", viewerOne.ID, articleOne.ID, base.Add(2*time.Second))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-4", viewerOne.ID, articleTwo.ID, base)),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-5", viewerOne.ID, articleTwo.ID, base.Add(time.Second))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-6", viewerTwo.ID, articleOne.ID, base)),
+		userBehaviorMessage(t, mustLikeEvent("view-count-like", eventing.EventTypeArticleLiked, viewerOne.ID, articleThree.ID, 1, base)),
+	}
+	if err := applyUserBehaviorBatch(firstBatch); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyUserBehaviorBatch(firstBatch); err != nil {
+		t.Fatal(err)
+	}
+
+	assertViewBehaviorCount(t, db, viewerOne.ID, articleOne.ID, 3, base.Add(2*time.Second))
+	assertViewBehaviorCount(t, db, viewerOne.ID, articleTwo.ID, 2, base.Add(time.Second))
+	assertViewBehaviorCount(t, db, viewerTwo.ID, articleOne.ID, 1, base)
+	assertArticleViewCount(t, db, articleOne.ID, 4)
+	assertArticleViewCount(t, db, articleTwo.ID, 2)
+	assertArticleViewCount(t, db, articleThree.ID, 0)
+	var reaction models.ArticleReaction
+	if err := db.Where("user_id = ? AND article_id = ?", viewerOne.ID, articleThree.ID).First(&reaction).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDB, originalConfig, originalIncrement := global.Db, config.AppConfig, incrementArticleViewCounts
+	groupID := "test-public-view-rollback-" + uuid.NewString()
+	config.AppConfig = &config.Config{}
+	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
+	global.Db = db
+	incrementArticleViewCounts = func(*gorm.DB, map[uint]int64) error {
+		return errors.New("injected view count failure")
+	}
+	t.Cleanup(func() {
+		incrementArticleViewCounts = originalIncrement
+		global.Db, config.AppConfig = originalDB, originalConfig
+	})
+
+	author := models.User{Username: "view-rollback-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&author).Error; err != nil {
+		t.Fatal(err)
+	}
+	article := models.Article{AuthorID: author.ID, Title: "rollback", Content: "rollback", Preview: "rollback"}
+	if err := db.Create(&article).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
+		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Delete(&article)
+		db.Unscoped().Delete(&author)
+	})
+
+	err = applyUserBehaviorBatch([]kafka.Message{
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-rollback", author.ID, article.ID, time.Now().UTC())),
+	})
+	if err == nil {
+		t.Fatal("expected injected view count failure")
+	}
+	var inboxCount, behaviorCount int64
+	if err := db.Model(&models.ConsumerInbox{}).Where("consumer_name = ?", groupID).Count(&inboxCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.ArticleBehavior{}).Where("article_id = ?", article.ID).Count(&behaviorCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	var reloaded models.Article
+	if err := db.First(&reloaded, article.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount != 0 || behaviorCount != 0 || reloaded.ViewCount != 0 {
+		t.Fatalf("rollback inbox=%d behavior=%d article=%#v", inboxCount, behaviorCount, reloaded)
+	}
+}
+
+func assertArticleViewCount(t *testing.T, db *gorm.DB, articleID uint, want int64) {
+	t.Helper()
+	var article models.Article
+	if err := db.Select("view_count").First(&article, articleID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if article.ViewCount != want {
+		t.Fatalf("article %d view_count=%d want=%d", articleID, article.ViewCount, want)
 	}
 }
 

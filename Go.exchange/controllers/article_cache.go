@@ -28,7 +28,7 @@ type cacheSetter func(key string, payload []byte, expiration time.Duration) erro
 
 // articleDetailCacheKey 生成文章详情的 Redis Key
 func articleDetailCacheKey(id string) string {
-	return "article:detail:v3:" + id
+	return "article:detail:v4:" + id
 }
 
 // InvalidateArticleDetailCacheByID 主动删除指定文章的详情缓存。

@@ -1,10 +1,13 @@
 import { isAxiosError } from 'axios';
 import apiClient from '../axios';
 
+export type ArticleViewSource = 'article_detail' | 'feed';
+
 export type ArticleViewEvent = {
   event_id: string;
   article_id: number;
   occurred_at: string;
+  source: ArticleViewSource;
 };
 
 export type QueuedArticleViewEvent = ArticleViewEvent & {
@@ -25,15 +28,27 @@ type ArticleViewBatchResponse = {
 
 type CurrentUserIDGetter = () => number | null;
 
-const storageKey = 'article_view_telemetry_queue_v1';
+type FeedObservation = {
+  articleID: number;
+  intersectionRatio: number;
+  timer: number | null;
+  emitted: boolean;
+};
+
+const storageKey = 'article_view_telemetry_queue_v2';
 const maxBufferedEvents = 200;
 const maxBatchEvents = 50;
+const feedQualificationThreshold = 0.5;
+const feedQualificationDurationMS = 1000;
 const retryDelaysMS = [1000, 2000, 5000, 10000, 30000, 60000];
 
 let sharedClient: ArticleViewTelemetryClient | null = null;
 
 const isValidUserID = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+const isValidSource = (value: unknown): value is ArticleViewSource =>
+  value === 'article_detail' || value === 'feed';
 
 const isValidQueuedEvent = (value: unknown): value is QueuedArticleViewEvent => {
   if (!value || typeof value !== 'object') {
@@ -47,7 +62,8 @@ const isValidQueuedEvent = (value: unknown): value is QueuedArticleViewEvent => 
     && Number.isSafeInteger(event.article_id)
     && event.article_id > 0
     && typeof event.occurred_at === 'string'
-    && event.occurred_at.trim().length > 0;
+    && event.occurred_at.trim().length > 0
+    && isValidSource(event.source);
 };
 
 const getErrorStatus = (error: unknown): number | null => {
@@ -79,6 +95,18 @@ const getRetryAfterMS = (error: unknown): number => {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
 };
 
+export function createArticleViewEventID(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
 export class ArticleViewTelemetryClient {
   private queue: QueuedArticleViewEvent[] = [];
   private inFlight = false;
@@ -86,10 +114,20 @@ export class ArticleViewTelemetryClient {
   private retryTimer: number | null = null;
   private retryAttempt = 0;
   private stopped = true;
+  private feedObserver: IntersectionObserver | null = null;
+  private feedObservations = new Map<HTMLElement, FeedObservation>();
 
   private readonly handleOnline = () => {
     this.clearRetryTimer();
     void this.flush();
+  };
+
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') {
+      this.cancelFeedTimers();
+      return;
+    }
+    this.resumeVisibleFeedObservations();
   };
 
   constructor(private readonly getCurrentUserID: CurrentUserIDGetter) {
@@ -103,6 +141,8 @@ export class ArticleViewTelemetryClient {
     }
     this.stopped = false;
     window.addEventListener('online', this.handleOnline);
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    this.startFeedObserver();
     if (this.hasCurrentUserEvents()) {
       void this.flush();
     }
@@ -113,15 +153,28 @@ export class ArticleViewTelemetryClient {
       return;
     }
     window.removeEventListener('online', this.handleOnline);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.clearRetryTimer();
     this.pendingFlush = false;
+    this.teardownFeedObserver();
     this.stopped = true;
   }
 
-  enqueue(articleID: number, eventID: string, occurredAt = new Date().toISOString()): void {
+  enqueue(
+    articleID: number,
+    eventID: string,
+    source: ArticleViewSource,
+    occurredAt = new Date().toISOString(),
+  ): void {
     const ownerUserID = this.getCurrentUserID();
     const normalizedEventID = eventID.trim();
-    if (!isValidUserID(ownerUserID) || !Number.isSafeInteger(articleID) || articleID <= 0 || !normalizedEventID) {
+    if (
+      !isValidUserID(ownerUserID)
+      || !Number.isSafeInteger(articleID)
+      || articleID <= 0
+      || !normalizedEventID
+      || !isValidSource(source)
+    ) {
       return;
     }
     if (!this.queue.some(event => event.event_id === normalizedEventID)) {
@@ -130,11 +183,36 @@ export class ArticleViewTelemetryClient {
         event_id: normalizedEventID,
         article_id: articleID,
         occurred_at: occurredAt,
+        source,
       });
       this.queue = this.queue.slice(-maxBufferedEvents);
       this.persistQueue();
     }
     void this.flush();
+  }
+
+  observeFeedCard(element: HTMLElement, articleID: number): void {
+    if (this.stopped || !this.feedObserver || !Number.isSafeInteger(articleID) || articleID <= 0) {
+      return;
+    }
+    this.unobserveFeedCard(element);
+    const observation: FeedObservation = {
+      articleID,
+      intersectionRatio: 0,
+      timer: null,
+      emitted: false,
+    };
+    this.feedObservations.set(element, observation);
+    this.feedObserver.observe(element);
+  }
+
+  unobserveFeedCard(element: HTMLElement): void {
+    this.feedObserver?.unobserve(element);
+    const observation = this.feedObservations.get(element);
+    if (observation) {
+      this.cancelFeedTimer(observation);
+      this.feedObservations.delete(element);
+    }
   }
 
   async flush(): Promise<void> {
@@ -159,10 +237,11 @@ export class ArticleViewTelemetryClient {
     let terminal = false;
     try {
       const response = await apiClient.post<ArticleViewBatchResponse>('/article-view-events', {
-        events: batch.map(({ event_id, article_id, occurred_at }) => ({
+        events: batch.map(({ event_id, article_id, occurred_at, source }) => ({
           event_id,
           article_id,
           occurred_at,
+          source,
         })),
       });
       this.removeTerminalResults(batch, response.data, response.status);
@@ -202,6 +281,86 @@ export class ArticleViewTelemetryClient {
         void this.flush();
       }
     }
+  }
+
+  private startFeedObserver(): void {
+    if (typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+    this.feedObserver = new IntersectionObserver(
+      entries => entries.forEach(entry => this.handleFeedIntersection(entry)),
+      { threshold: [0, feedQualificationThreshold, 1] },
+    );
+  }
+
+  private handleFeedIntersection(entry: IntersectionObserverEntry): void {
+    const observation = this.feedObservations.get(entry.target as HTMLElement);
+    if (!observation) {
+      return;
+    }
+    observation.intersectionRatio = entry.intersectionRatio;
+    if (document.visibilityState !== 'visible' || observation.emitted) {
+      this.cancelFeedTimer(observation);
+      return;
+    }
+    if (observation.intersectionRatio >= feedQualificationThreshold) {
+      this.startFeedTimer(entry.target as HTMLElement, observation);
+    } else {
+      this.cancelFeedTimer(observation);
+    }
+  }
+
+  private startFeedTimer(element: HTMLElement, observation: FeedObservation): void {
+    if (observation.timer !== null || observation.emitted) {
+      return;
+    }
+    observation.timer = window.setTimeout(() => {
+      observation.timer = null;
+      if (
+        this.stopped
+        || document.visibilityState !== 'visible'
+        || observation.emitted
+        || observation.intersectionRatio < feedQualificationThreshold
+        || this.feedObservations.get(element) !== observation
+      ) {
+        return;
+      }
+      observation.emitted = true;
+      this.enqueue(observation.articleID, createArticleViewEventID(), 'feed');
+    }, feedQualificationDurationMS);
+  }
+
+  private cancelFeedTimer(observation: FeedObservation): void {
+    if (observation.timer !== null) {
+      window.clearTimeout(observation.timer);
+      observation.timer = null;
+    }
+  }
+
+  private cancelFeedTimers(): void {
+    for (const observation of this.feedObservations.values()) {
+      this.cancelFeedTimer(observation);
+    }
+  }
+
+  private resumeVisibleFeedObservations(): void {
+    if (document.visibilityState !== 'visible') {
+      return;
+    }
+    for (const [element, observation] of this.feedObservations) {
+      if (!observation.emitted && observation.intersectionRatio >= feedQualificationThreshold) {
+        this.startFeedTimer(element, observation);
+      }
+    }
+  }
+
+  private teardownFeedObserver(): void {
+    this.feedObserver?.disconnect();
+    this.feedObserver = null;
+    for (const observation of this.feedObservations.values()) {
+      this.cancelFeedTimer(observation);
+    }
+    this.feedObservations.clear();
   }
 
   private removeTerminalResults(
@@ -300,12 +459,18 @@ export class ArticleViewTelemetryClient {
   }
 }
 
-export function getArticleViewTelemetry(getCurrentUserID: CurrentUserIDGetter): ArticleViewTelemetryClient {
+export function initializeArticleViewTelemetry(
+  getCurrentUserID: CurrentUserIDGetter,
+): ArticleViewTelemetryClient {
   if (!sharedClient) {
     sharedClient = new ArticleViewTelemetryClient(getCurrentUserID);
     sharedClient.start();
   }
   return sharedClient;
+}
+
+export function getArticleViewTelemetry(): ArticleViewTelemetryClient {
+  return sharedClient ?? initializeArticleViewTelemetry(() => null);
 }
 
 export function resetArticleViewTelemetryForTests(): void {

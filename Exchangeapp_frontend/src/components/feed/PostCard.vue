@@ -1,5 +1,5 @@
 <template>
-  <article class="post-card">
+  <article ref="postCardRef" class="post-card">
     <div class="post-card__header">
       <AuthorIdentity :author="post.author" :created-at="post.createdAt" />
 
@@ -141,16 +141,27 @@
         </span>
         <span class="post-card__like-count">{{ post.likeCount }}</span>
       </button>
+      <span
+        class="post-card__metric post-card__views"
+        :aria-label="viewLabel"
+        :title="viewLabel"
+      >
+        <AppIcon name="analytics" :size="18" />
+        <span>{{ compactViewCount }}</span>
+        <span class="sr-only">{{ viewLabel }}</span>
+      </span>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import AppIcon from '../icons/AppIcon.vue';
+import { getArticleViewTelemetry } from '../../services/articleViewTelemetry';
+import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../../utils/engagementCount';
 
 const props = withDefaults(defineProps<{
   post: FeedPost;
@@ -175,6 +186,8 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const articleViewTelemetry = getArticleViewTelemetry();
+const postCardRef = ref<HTMLElement | null>(null);
 const showCover = ref(Boolean(props.post.coverImageUrl));
 const moreButtonRef = ref<HTMLButtonElement | null>(null);
 const menuRef = ref<HTMLDivElement | null>(null);
@@ -234,6 +247,15 @@ const replyLabel = computed(() => {
     + (props.post.commentCount === 1 ? ' reply' : ' replies');
   return 'Reply to post, ' + countLabel;
 });
+
+const compactViewCount = computed(() => formatCompactEngagementCount(props.post.viewCount));
+const viewLabel = computed(() => formatAccessibleEngagementCount(props.post.viewCount, 'views'));
+
+const observeCurrentPost = () => {
+  if (postCardRef.value) {
+    articleViewTelemetry.observeFeedCard(postCardRef.value, props.post.id);
+  }
+};
 
 const copyActionLabel = computed(() => {
   if (copyState.value === 'success') {
@@ -402,18 +424,30 @@ watch(
 
 watch(
   () => props.post.id,
-  () => {
+  (articleID, previousArticleID) => {
+    if (articleID === previousArticleID) {
+      return;
+    }
+    if (postCardRef.value) {
+      articleViewTelemetry.unobserveFeedCard(postCardRef.value);
+    }
+    observeCurrentPost();
     closeMore();
     clearLikeAnimationTimer();
     likeAnimation.value = null;
   },
 );
 
+onMounted(observeCurrentPost);
+
 const hideCover = () => {
   showCover.value = false;
 };
 
 onBeforeUnmount(() => {
+  if (postCardRef.value) {
+    articleViewTelemetry.unobserveFeedCard(postCardRef.value);
+  }
   clearLikeAnimationTimer();
   closeMore();
 });

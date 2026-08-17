@@ -10,6 +10,14 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router';
 import AppShell from './components/layout/AppShell.vue';
+import { initializeArticleViewTelemetry } from './services/articleViewTelemetry';
+import { useAuthStore } from './store/auth';
 
 const route = useRoute();
+const authStore = useAuthStore();
+
+initializeArticleViewTelemetry(() => {
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && id > 0 ? id : null;
+});
 </script>

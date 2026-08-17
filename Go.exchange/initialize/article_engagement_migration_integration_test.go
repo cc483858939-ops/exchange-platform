@@ -29,6 +29,9 @@ func TestArticleEngagementMigrationIntegration(t *testing.T) {
 	if err := RunMigrations(); err != nil {
 		t.Fatal(err)
 	}
+	if err := RunMigrations(); err != nil {
+		t.Fatal(err)
+	}
 
 	var column struct {
 		Nullable string `gorm:"column:is_nullable"`
@@ -45,6 +48,16 @@ WHERE table_schema = current_schema()
 	}
 	if column.Nullable != "NO" || !strings.Contains(column.Default, "0") {
 		t.Fatalf("articles.comment_count nullable=%q default=%q", column.Nullable, column.Default)
+	}
+	var viewColumn struct {
+		Nullable string `gorm:"column:is_nullable"`
+		Default  string `gorm:"column:column_default"`
+	}
+	if err := db.Raw("SELECT is_nullable, COALESCE(column_default, '') AS column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'articles' AND column_name = 'view_count'").Scan(&viewColumn).Error; err != nil {
+		t.Fatal(err)
+	}
+	if viewColumn.Nullable != "NO" || !strings.Contains(viewColumn.Default, "0") {
+		t.Fatalf("articles.view_count nullable=%q default=%q", viewColumn.Nullable, viewColumn.Default)
 	}
 
 	var definition string
@@ -78,5 +91,8 @@ WHERE conrelid = 'articles'::regclass
 
 	if err := db.Model(&article).Update("comment_count", -1).Error; err == nil {
 		t.Fatal("database accepted a negative article comment_count")
+	}
+	if err := db.Model(&article).Update("view_count", -1).Error; err == nil {
+		t.Fatal("database accepted a negative article view_count")
 	}
 }

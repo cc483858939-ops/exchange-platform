@@ -51,6 +51,7 @@ type recommendedArticleResponse struct {
 	Category      string                          `json:"category"`
 	LikeCount     int64                           `json:"like_count"`
 	CommentCount  int64                           `json:"comment_count"`
+	ViewCount     int64                           `json:"view_count"`
 	CreatedAt     time.Time                       `json:"created_at"`
 	Author        publicAuthorResponse            `json:"author"`
 	Score         float64                         `json:"score"`

@@ -24,6 +24,7 @@ export interface Article {
 
   like_count: number;
   comment_count: number;
+  view_count: number;
   like_sync_version: number;
 
   author: PublicAuthor;

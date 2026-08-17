@@ -209,10 +209,10 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 		return nil, nil
 	}
 	loadRulesV3Candidates = func(uint, userInterestProfile, time.Time, time.Time, int) ([]models.Article, error) {
-		return []models.Article{
-			recommendationTestArticle(2, now.Add(-2*time.Hour), "Travel", []string{"Food"}, 0),
-			recommendationTestArticle(3, now.Add(-time.Hour), "Backend", []string{"Go"}, 0),
-		}, nil
+		travel := recommendationTestArticle(2, now.Add(-2*time.Hour), "Travel", []string{"Food"}, 0)
+		backend := recommendationTestArticle(3, now.Add(-time.Hour), "Backend", []string{"Go"}, 0)
+		backend.ViewCount = 456
+		return []models.Article{travel, backend}, nil
 	}
 
 	recorder := httptest.NewRecorder()
@@ -230,7 +230,7 @@ func TestGetArticleRecommendationsReturnsSortedPayload(t *testing.T) {
 	}
 	if len(payload) != 2 || payload[0].Content != "content" ||
 		payload[0].Author.DisplayName != "Author Name" || payload[0].Author.AvatarURL != "author.jpg" ||
-		payload[0].ID != 3 {
+		payload[0].ID != 3 || payload[0].ViewCount != 456 {
 		t.Fatalf("unexpected recommendation payload=%#v", payload)
 	}
 }

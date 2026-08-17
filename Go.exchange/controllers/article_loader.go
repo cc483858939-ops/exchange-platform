@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const publicArticleSelectColumns = "articles.id,articles.created_at,articles.updated_at,articles.author_id,articles.title,articles.content,articles.preview,articles.cover_image_url,articles.summary,articles.tags,articles.category,articles.publication_state,articles.analysis_state,articles.analysis_version,articles.published_at,articles.expired_at,articles.like_count,articles.comment_count,articles.like_sync_version"
+const publicArticleSelectColumns = "articles.id,articles.created_at,articles.updated_at,articles.author_id,articles.title,articles.content,articles.preview,articles.cover_image_url,articles.summary,articles.tags,articles.category,articles.publication_state,articles.analysis_state,articles.analysis_version,articles.published_at,articles.expired_at,articles.like_count,articles.comment_count,articles.view_count,articles.like_sync_version"
 
 func publicArticleScope(query *gorm.DB, now time.Time) *gorm.DB {
 	now = now.UTC()

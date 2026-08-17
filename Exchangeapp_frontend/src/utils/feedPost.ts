@@ -15,6 +15,7 @@ export function articleToFeedPost(article: Article): FeedPost {
     createdAt: article.CreatedAt,
     likeCount: article.like_count ?? 0,
     commentCount: article.comment_count ?? 0,
+    viewCount: Math.max(0, article.view_count),
     liked: false,
     likeStatus: 'unknown',
   };
@@ -30,6 +31,7 @@ export function recommendationToFeedPost(article: RecommendedArticle): FeedPost 
     createdAt: article.created_at,
     likeCount: article.like_count ?? 0,
     commentCount: article.comment_count ?? 0,
+    viewCount: Math.max(0, article.view_count),
     liked: false,
     likeStatus: 'unknown',
   };

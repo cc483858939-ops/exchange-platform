@@ -116,6 +116,21 @@ func TestAggregateUserBehaviorViewsUsesMaximumOccurredAt(t *testing.T) {
 	}
 }
 
+func TestAggregateArticleViewCountDeltasCountsOnlyFirstDeliveryViews(t *testing.T) {
+	records := []userBehaviorEventRecord{
+		{Envelope: eventing.Envelope{ID: "view-1", Type: eventing.EventTypeArticleViewed}, Payload: eventing.UserBehaviorPayload{ArticleID: 10}},
+		{Envelope: eventing.Envelope{ID: "view-2", Type: eventing.EventTypeArticleViewed}, Payload: eventing.UserBehaviorPayload{ArticleID: 10}},
+		{Envelope: eventing.Envelope{ID: "view-3", Type: eventing.EventTypeArticleViewed}, Payload: eventing.UserBehaviorPayload{ArticleID: 10}},
+		{Envelope: eventing.Envelope{ID: "view-4", Type: eventing.EventTypeArticleViewed}, Payload: eventing.UserBehaviorPayload{ArticleID: 20}},
+		{Envelope: eventing.Envelope{ID: "like-1", Type: eventing.EventTypeArticleLiked}, Payload: eventing.UserBehaviorPayload{ArticleID: 10}},
+		{Envelope: eventing.Envelope{ID: "bad", Type: "unknown"}, Payload: eventing.UserBehaviorPayload{ArticleID: 10}},
+	}
+	deltas := aggregateArticleViewCountDeltas(records, map[string]struct{}{"view-1": {}, "view-2": {}, "view-4": {}})
+	if len(deltas) != 2 || deltas[10] != 2 || deltas[20] != 1 {
+		t.Fatalf("deltas=%#v", deltas)
+	}
+}
+
 func TestCollapseUserBehaviorReactionsUsesHighestVersionAndEarliestEqualTie(t *testing.T) {
 	now := time.Now().UTC()
 	records := []userBehaviorEventRecord{

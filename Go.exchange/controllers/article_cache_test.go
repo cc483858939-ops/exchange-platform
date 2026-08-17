@@ -187,11 +187,11 @@ func TestLoadJSONCacheWithStorePreservesArticleAuthorDTO(t *testing.T) {
 		}, nil
 	}
 
-	miss, err := loadJSONCacheWithStore("article:detail:v3:42", time.Minute, getter, setter, loader)
+	miss, err := loadJSONCacheWithStore("article:detail:v4:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hit, err := loadJSONCacheWithStore("article:detail:v3:42", time.Minute, getter, setter, loader)
+	hit, err := loadJSONCacheWithStore("article:detail:v4:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}

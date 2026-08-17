@@ -87,6 +87,7 @@ vi.mock('../services/recommendationTelemetry', () => ({
 }));
 
 vi.mock('../services/articleViewTelemetry', () => ({
+  createArticleViewEventID: () => '00000000-0000-4000-8000-000000000042',
   getArticleViewTelemetry: () => mocks.articleViewTelemetry,
 }));
 
@@ -108,6 +109,7 @@ const article = {
   expired_at: null,
   like_count: 3,
   comment_count: 0,
+  view_count: 1234,
   like_sync_version: 1,
   author: {
     id: 7,
@@ -172,7 +174,7 @@ describe('NewsDetailView attributed read lifecycle', () => {
     expect(mocks.assertBodyAtConsume).toHaveBeenCalledWith(expect.any(HTMLElement));
     expect(trackerStart).toHaveBeenCalledTimes(1);
     expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(42, expect.any(String));
+    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(42, expect.any(String), 'article_detail');
 
     mocks.routeLeave({ name: 'Home' });
     mounted.unmount();

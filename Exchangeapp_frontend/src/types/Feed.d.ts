@@ -13,6 +13,7 @@ export interface FeedPost {
   createdAt: string;
   likeCount: number;
   commentCount: number;
+  viewCount: number;
   liked: boolean;
   likeStatus: FeedLikeStatus;
 }

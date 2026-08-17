@@ -26,6 +26,7 @@ type articleViewEventInput struct {
 	EventID    string `json:"event_id"`
 	ArticleID  uint   `json:"article_id"`
 	OccurredAt string `json:"occurred_at"`
+	Source     string `json:"source"`
 }
 
 type articleViewEventBatchRequest struct {
@@ -48,6 +49,7 @@ type validatedArticleViewEvent struct {
 	EventID    string
 	ArticleID  uint
 	OccurredAt time.Time
+	Source     string
 }
 
 var (
@@ -128,7 +130,7 @@ func recordArticleViewEvents(ctx *gin.Context, publisher eventing.BatchPublisher
 
 	envelopes := make([]eventing.Envelope, 0, len(valid))
 	for _, event := range valid {
-		envelope, err := eventing.NewArticleViewedEnvelope(event.EventID, userID, event.ArticleID, event.OccurredAt, "article_detail")
+		envelope, err := eventing.NewArticleViewedEnvelope(event.EventID, userID, event.ArticleID, event.OccurredAt, event.Source)
 		if err != nil {
 			ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid article view event"})
 			return
@@ -189,6 +191,10 @@ func validateArticleViewEvent(input articleViewEventInput, now time.Time) (valid
 	if input.ArticleID == 0 {
 		return validatedArticleViewEvent{}, "invalid_article_id"
 	}
+	source := strings.TrimSpace(input.Source)
+	if source != "article_detail" && source != "feed" {
+		return validatedArticleViewEvent{}, "invalid_source"
+	}
 	occurredAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.OccurredAt))
 	if err != nil {
 		return validatedArticleViewEvent{}, "invalid_occurred_at"
@@ -197,5 +203,5 @@ func validateArticleViewEvent(input articleViewEventInput, now time.Time) (valid
 	if occurredAt.After(now.Add(config.RecommendationTelemetryMaxClockSkew())) {
 		return validatedArticleViewEvent{}, "occurred_at_in_future"
 	}
-	return validatedArticleViewEvent{EventID: eventID, ArticleID: input.ArticleID, OccurredAt: occurredAt}, ""
+	return validatedArticleViewEvent{EventID: eventID, ArticleID: input.ArticleID, OccurredAt: occurredAt, Source: source}, ""
 }

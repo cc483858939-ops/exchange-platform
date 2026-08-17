@@ -154,6 +154,23 @@
       />
     </template>
 
+    <template v-else-if="props.name === 'analytics'">
+      <path
+        d="M5 19.25V11m7 8.25V5m7 14.25v-9"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+      <path
+        d="M4 19.25h16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+    </template>
+
     <template v-else-if="props.name === 'eye-off'">
       <path
         d="M3.75 3.75 20.25 20.25M10.25 10.25a2.5 2.5 0 0 0 3.5 3.5M6.25 6.75C4.75 8 3.75 9.75 3.25 12c1.25 4.25 4.5 6.75 8.75 6.75 1.3 0 2.5-.25 3.55-.75M9 5.45A10.1 10.1 0 0 1 12 5.25c4.25 0 7.5 2.5 8.75 6.75a11.25 11.25 0 0 1-2.1 3.8"
@@ -271,6 +288,7 @@ type AppIconName =
   | 'heart'
   | 'more'
   | 'link'
+  | 'analytics'
   | 'eye-off'
   | 'trash'
   | 'arrow-left'

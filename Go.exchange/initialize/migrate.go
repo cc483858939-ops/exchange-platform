@@ -106,6 +106,11 @@ func applyArticleEngagementConstraints(tx *gorm.DB) error {
 	statements := []string{
 		"ALTER TABLE articles DROP CONSTRAINT IF EXISTS chk_articles_comment_count_nonnegative",
 		"ALTER TABLE articles ADD CONSTRAINT chk_articles_comment_count_nonnegative CHECK (comment_count >= 0)",
+		"UPDATE articles SET view_count = 0 WHERE view_count IS NULL",
+		"ALTER TABLE articles ALTER COLUMN view_count SET DEFAULT 0",
+		"ALTER TABLE articles ALTER COLUMN view_count SET NOT NULL",
+		"ALTER TABLE articles DROP CONSTRAINT IF EXISTS chk_articles_view_count_nonnegative",
+		"ALTER TABLE articles ADD CONSTRAINT chk_articles_view_count_nonnegative CHECK (view_count >= 0)",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {

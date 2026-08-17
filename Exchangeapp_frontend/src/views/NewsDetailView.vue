@@ -68,6 +68,16 @@
             <span>{{ commentCount }}</span>
             <span class="sr-only">Replies</span>
           </span>
+
+          <span
+            class="engagement-metric"
+            :aria-label="detailViewLabel"
+            :title="detailViewLabel"
+          >
+            <AppIcon name="analytics" :size="18" />
+            <span>{{ compactViewCount }}</span>
+            <span class="sr-only">{{ detailViewLabel }}</span>
+          </span>
         </div>
 
         <p v-if="likeError" class="detail-inline-error" role="status">{{ likeError }}</p>
@@ -142,13 +152,14 @@ import { deleteArticle, getArticleById } from '../services/articleService';
 import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
-import { getArticleViewTelemetry } from '../services/articleViewTelemetry';
+import { createArticleViewEventID, getArticleViewTelemetry } from '../services/articleViewTelemetry';
 import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import type { Article } from '../types/Article';
 import type { ArticleComment } from '../types/Comment';
 import type { RecommendationTracking } from '../types/Recommendation';
+import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
 
 const route = useRoute();
 const router = useRouter();
@@ -183,6 +194,7 @@ const commentError = ref('');
 const deletingCommentId = ref<number | null>(null);
 const composerRef = ref<InstanceType<typeof CommentComposer> | null>(null);
 const commentCount = ref(0);
+const viewCount = ref(0);
 
 let detailRequestVersion = 0;
 let deleteRequestVersion = 0;
@@ -197,14 +209,6 @@ let trackedArticleID = '';
 let readEndSent = false;
 let readTracker: ArticleReadTracker | null = null;
 let readResizeObserver: ResizeObserver | null = null;
-type PendingArticleViewEvent = {
-  articleID: number;
-  eventID: string;
-};
-
-let pendingArticleViewEvent: PendingArticleViewEvent | null = null;
-
-
 const clampCount = (value: unknown) => {
   const count = Number(value);
   return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
@@ -213,29 +217,6 @@ const clampCount = (value: unknown) => {
 const isValidArticleID = (value: string) => {
   const parsed = Number(value);
   return /^\d+$/.test(value) && Number.isSafeInteger(parsed) && parsed > 0;
-};
-
-const createArticleViewEventID = () => {
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
-    const random = Math.floor(Math.random() * 16);
-    const value = character === 'x' ? random : (random & 0x3) | 0x8;
-    return value.toString(16);
-  });
-};
-
-const ensureArticleViewEventID = (id: string) => {
-  const articleID = Number(id);
-  if (!pendingArticleViewEvent || pendingArticleViewEvent.articleID !== articleID) {
-    pendingArticleViewEvent = {
-      articleID,
-      eventID: createArticleViewEventID(),
-    };
-  }
-  return pendingArticleViewEvent.eventID;
 };
 
 const formatArticleDate = (value: string) => {
@@ -276,7 +257,10 @@ const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : null;
 });
-const articleViewTelemetry = getArticleViewTelemetry(() => currentViewerID.value);
+const articleViewTelemetry = getArticleViewTelemetry();
+
+const compactViewCount = computed(() => formatCompactEngagementCount(viewCount.value));
+const detailViewLabel = computed(() => formatAccessibleEngagementCount(viewCount.value, 'views'));
 
 const canDeleteArticle = computed(() => Boolean(
   article.value
@@ -424,6 +408,7 @@ const resetArticleState = () => {
   articleLoading.value = false;
   articleError.value = '';
   showCover.value = false;
+  viewCount.value = 0;
   deletePending.value = false;
   deleteError.value = '';
 };
@@ -812,6 +797,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     showCover.value = Boolean(loadedArticle.cover_image_url);
     likeCount.value = clampCount(loadedArticle.like_count);
     commentCount.value = clampCount(loadedArticle.comment_count);
+    viewCount.value = clampCount(loadedArticle.view_count);
     articleLoading.value = false;
     await nextTick();
     if (
@@ -822,7 +808,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       return;
     }
 
-    articleViewTelemetry.enqueue(Number(id), ensureArticleViewEventID(id));
+    articleViewTelemetry.enqueue(Number(id), createArticleViewEventID(), 'article_detail');
     if (articleBodyRef.value) {
       startRead(id, detailVersion);
     }

@@ -521,7 +521,7 @@ func recommendRulesV3Articles(profile userInterestProfile, candidates []models.A
 		result = append(result, recommendedArticleResponse{
 			ID: article.ID, Title: article.Title, Content: article.Content, Preview: article.Preview,
 			Summary: article.Summary, CoverImageURL: article.CoverImageURL, Tags: recommendationTags(article.Tags),
-			Category: article.Category, LikeCount: article.LikeCount, CommentCount: article.CommentCount,
+			Category: article.Category, LikeCount: article.LikeCount, CommentCount: article.CommentCount, ViewCount: article.ViewCount,
 			CreatedAt: article.CreatedAt, Author: publicAuthorFromUser(article.Author),
 			Score: scoreRulesV3Article(profile, article, now, cfg),
 		})

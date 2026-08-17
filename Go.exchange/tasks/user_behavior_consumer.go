@@ -236,9 +236,61 @@ func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
 			return err
 		}
 
+		viewCountDeltas := aggregateArticleViewCountDeltas(records, firstDelivery)
+		if err := incrementArticleViewCounts(tx, viewCountDeltas); err != nil {
+			return err
+		}
+
 		reactions := collapseUserBehaviorReactions(records, firstDelivery)
 		return bulkUpsertArticleReactions(tx, reactions)
 	})
+}
+
+var incrementArticleViewCounts = bulkIncrementArticleViewCounts
+
+func aggregateArticleViewCountDeltas(
+	records []userBehaviorEventRecord,
+	firstDelivery map[string]struct{},
+) map[uint]int64 {
+	deltas := make(map[uint]int64)
+	for _, record := range records {
+		if record.Envelope.Type != eventing.EventTypeArticleViewed {
+			continue
+		}
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok || record.Payload.ArticleID == 0 {
+			continue
+		}
+		deltas[record.Payload.ArticleID]++
+	}
+	return deltas
+}
+
+func bulkIncrementArticleViewCounts(tx *gorm.DB, deltas map[uint]int64) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+
+	articleIDs := make([]uint, 0, len(deltas))
+	for articleID := range deltas {
+		articleIDs = append(articleIDs, articleID)
+	}
+	sort.Slice(articleIDs, func(i, j int) bool {
+		return articleIDs[i] < articleIDs[j]
+	})
+
+	var cases strings.Builder
+	cases.WriteString("CASE id")
+	args := make([]interface{}, 0, len(articleIDs)*2)
+	for _, articleID := range articleIDs {
+		cases.WriteString(" WHEN ? THEN ?")
+		args = append(args, articleID, deltas[articleID])
+	}
+	cases.WriteString(" ELSE 0 END")
+
+	return tx.Model(&models.Article{}).
+		Where("id IN ?", articleIDs).
+		UpdateColumn("view_count", gorm.Expr("view_count + ("+cases.String()+")", args...)).
+		Error
 }
 
 func aggregateUserBehaviorViews(

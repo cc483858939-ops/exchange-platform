@@ -46,6 +46,7 @@ type articleResponse struct {
 	ExpiredAt        *time.Time           `json:"expired_at"`
 	LikeCount        int64                `json:"like_count"`
 	CommentCount     int64                `json:"comment_count"`
+	ViewCount        int64                `json:"view_count"`
 	LikeSyncVersion  int64                `json:"like_sync_version"`
 	Author           publicAuthorResponse `json:"author"`
 }
@@ -78,7 +79,7 @@ func newArticleResponse(article models.Article) (articleResponse, error) {
 		Category: article.Category, PublicationState: article.PublicationState,
 		AnalysisState: article.AnalysisState, AnalysisVersion: article.AnalysisVersion,
 		PublishedAt: article.PublishedAt, ExpiredAt: article.ExpiredAt,
-		LikeCount: article.LikeCount, CommentCount: article.CommentCount, LikeSyncVersion: article.LikeSyncVersion,
+		LikeCount: article.LikeCount, CommentCount: article.CommentCount, ViewCount: article.ViewCount, LikeSyncVersion: article.LikeSyncVersion,
 		Author: author,
 	}, nil
 }

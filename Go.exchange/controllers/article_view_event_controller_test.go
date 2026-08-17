@@ -39,7 +39,7 @@ func allowArticleViewTestEvents(t *testing.T, allow func(uint, int) (bool, error
 
 func validArticleViewInput(now time.Time) articleViewEventInput {
 	return articleViewEventInput{
-		EventID: uuid.NewString(), ArticleID: 42, OccurredAt: now.Format(time.RFC3339Nano),
+		EventID: uuid.NewString(), ArticleID: 42, OccurredAt: now.Format(time.RFC3339Nano), Source: "article_detail",
 	}
 }
 
@@ -58,7 +58,7 @@ func TestArticleViewEventsHandlerPublishesClientIDWithoutDB(t *testing.T) {
 	id := uuid.NewString()
 	publisher := &recommendationTestPublisher{}
 	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{{
-		EventID: id, ArticleID: 42, OccurredAt: now.Format(time.RFC3339Nano),
+		EventID: id, ArticleID: 42, OccurredAt: now.Format(time.RFC3339Nano), Source: "article_detail",
 	}}})
 	NewArticleViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusAccepted || publisher.calls != 1 || len(publisher.events) != 1 {
@@ -67,6 +67,57 @@ func TestArticleViewEventsHandlerPublishesClientIDWithoutDB(t *testing.T) {
 	if publisher.events[0].ID != id || publisher.events[0].Type != eventing.EventTypeArticleViewed ||
 		eventing.KeyForEvent(publisher.events[0]) != "7" {
 		t.Fatalf("published event=%#v", publisher.events[0])
+	}
+	var payload eventing.UserBehaviorPayload
+	if err := json.Unmarshal(publisher.events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Source != "article_detail" {
+		t.Fatalf("published source=%q", payload.Source)
+	}
+}
+
+func TestArticleViewEventsHandlerPublishesFeedSource(t *testing.T) {
+	now := time.Now().UTC()
+	allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
+	publisher := &recommendationTestPublisher{}
+	input := validArticleViewInput(now)
+	input.Source = "feed"
+	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{input}})
+	NewArticleViewEventsHandler(publisher)(ctx)
+	if recorder.Code != http.StatusAccepted || len(publisher.events) != 1 {
+		t.Fatalf("status=%d events=%d body=%s", recorder.Code, len(publisher.events), recorder.Body.String())
+	}
+	var payload eventing.UserBehaviorPayload
+	if err := json.Unmarshal(publisher.events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Source != "feed" {
+		t.Fatalf("published source=%q", payload.Source)
+	}
+}
+
+func TestArticleViewEventsHandlerRejectsMissingAndUnknownSource(t *testing.T) {
+	for _, source := range []string{"", "unknown"} {
+		t.Run(source, func(t *testing.T) {
+			now := time.Now().UTC()
+			allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
+			input := validArticleViewInput(now)
+			input.Source = source
+			publisher := &recommendationTestPublisher{}
+			ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{input}})
+			NewArticleViewEventsHandler(publisher)(ctx)
+			if recorder.Code != http.StatusUnprocessableEntity || publisher.calls != 0 {
+				t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
+			}
+			var response articleViewEventBatchResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Results) != 1 || response.Results[0].Reason != "invalid_source" {
+				t.Fatalf("response=%#v", response)
+			}
+		})
 	}
 }
 
