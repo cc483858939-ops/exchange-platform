@@ -95,6 +95,8 @@ services:
     <<: *go-service
     profiles:
       - devcontainer
+    environment:
+      <<: *go-environment
     volumes:
       - ./:/workspace/mf:cached
       - /var/run/docker.sock:/var/run/docker.sock
