@@ -86,5 +86,9 @@ WHERE schemaname = current_schema()
 `).Scan(&indexDefinition).Error; err != nil {
 		t.Fatal(err)
 	}
-	assertIndexDefinitionContains(t, strings.ToLower(indexDefinition), "article_id", "created_at desc", "id desc", "deleted_at is null")
+	for _, expected := range []string{"article_id", "created_at desc", "id desc", "deleted_at is null"} {
+		if !strings.Contains(strings.ToLower(indexDefinition), expected) {
+			t.Fatalf("index definition=%q missing %q", indexDefinition, expected)
+		}
+	}
 }

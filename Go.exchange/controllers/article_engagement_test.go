@@ -37,8 +37,8 @@ func TestArticleEngagementCacheSchemaVersion(t *testing.T) {
 	}
 	for _, column := range []string{
 		"id", "created_at", "updated_at", "author_id", "title", "content", "preview",
-		"cover_image_url", "summary", "tags", "category", "publication_state",
-		"analysis_state", "analysis_version", "published_at", "expired_at",
+		"cover_image_url", "publication_state",
+		"published_at", "expired_at",
 		"like_count", "comment_count", "view_count", "like_sync_version",
 	} {
 		if !strings.Contains(publicArticleSelectColumns, "articles."+column) {

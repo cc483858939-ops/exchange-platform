@@ -20,6 +20,12 @@ x-go-service: &go-service
 
 x-go-environment: &go-environment
   DATABASE_DSN: "${DATABASE_DSN:-host=db user=postgres password=1234 dbname=test port=5432 sslmode=disable TimeZone=Asia/Shanghai}"
+  EMBEDDING_ENABLED: "${EMBEDDING_ENABLED:-false}"
+  EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
+  EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+  EMBEDDING_MODEL: "${EMBEDDING_MODEL:-}"
+  EMBEDDING_VERSION: "${EMBEDDING_VERSION:-post_embedding_v1}"
+  EMBEDDING_TIMEOUT_SECONDS: "${EMBEDDING_TIMEOUT_SECONDS:-10}"
 
 services:
   frontend:
@@ -99,7 +105,6 @@ services:
       LIKE_BEHAVIOR_CLAIM_LEASE: ${LIKE_BEHAVIOR_CLAIM_LEASE:-30s}
       LIKE_BEHAVIOR_FLUSH_INTERVAL: ${LIKE_BEHAVIOR_FLUSH_INTERVAL:-1s}
       LIKE_BEHAVIOR_PROJECTION_CONSUMERS: ${LIKE_BEHAVIOR_PROJECTION_CONSUMERS:-6}
-      AI_API_KEY: ${AI_API_KEY:-}
   app:
     <<: *go-service
     profiles:
@@ -112,7 +117,7 @@ services:
     command: ["sleep", "infinity"]
 
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: "1234"

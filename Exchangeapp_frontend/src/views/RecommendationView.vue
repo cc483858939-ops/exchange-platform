@@ -83,17 +83,14 @@
           <div class="card-content">
             <AuthorIdentity :author="article.author" :created-at="article.created_at" />
             <div class="card-meta">
-              <span>{{ article.category || '未分类' }}</span>
               <span>{{ formatRelativeTime(article.created_at) }}</span>
             </div>
             <h3>{{ article.title }}</h3>
-            <p>{{ article.summary || article.preview }}</p>
-            <div class="tag-row">
-              <span v-for="tag in article.tags.slice(0, 3)" :key="tag">{{ tag }}</span>
-            </div>
+            <p>{{ article.preview }}</p>
             <div class="card-footer">
               <span>{{ article.like_count }} 点赞</span>
-              <button type="button" @click.stop="markNotInterested(article)">不感兴趣</button>`n              <button type="button" @click.stop="openArticle(article)">阅读</button>
+              <button type="button" @click.stop="markNotInterested(article)">不感兴趣</button>
+              <button type="button" @click.stop="openArticle(article)">阅读</button>
             </div>
           </div>
         </article>
@@ -131,13 +128,7 @@ const skeletons = [1, 2, 3, 4, 5, 6];
 let heroContext: ReturnType<typeof gsap.context> | null = null;
 let cardsContext: ReturnType<typeof gsap.context> | null = null;
 
-const heroTopics = computed(() => {
-  const topics = articles.value
-    .flatMap((article) => [article.category, ...article.tags])
-    .filter(Boolean)
-    .slice(0, 6);
-  return topics.length ? topics : ['趋势', '深度', '汇率', '宏观', '科技'];
-});
+const heroTopics = ['瓒嬪娍', '娣卞害', '姹囩巼', '瀹忚', '绉戞妧'];
 
 const topScoreLabel = computed(() => {
   if (!articles.value.length) {
@@ -146,13 +137,6 @@ const topScoreLabel = computed(() => {
   return formatScore(Math.max(...articles.value.map((article) => article.score)));
 });
 
-
-const normalizeRecommendationTags = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((tag): tag is string => typeof tag === 'string');
-};
 
 const fetchRecommendations = async () => {
   if (!authStore.isAuthenticated) {
@@ -166,10 +150,7 @@ const fetchRecommendations = async () => {
 
   try {
     const response = await axios.get<RecommendedArticle[]>('/recommendations/articles?limit=50');
-    articles.value = response.data.map((article) => ({
-      ...article,
-      tags: normalizeRecommendationTags(article.tags),
-    }));
+    articles.value = response.data;
     await nextTick();
     animateCards();
   } catch (error) {

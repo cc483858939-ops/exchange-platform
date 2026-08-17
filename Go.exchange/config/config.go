@@ -8,39 +8,27 @@ import (
 	"github.com/spf13/viper"
 )
 
-type AIConfig struct {
-	BaseURL             string `mapstructure:"base_url"`
-	APIKey              string `mapstructure:"api_key"`
-	Model               string `mapstructure:"model"`
-	ChunkModel          string `mapstructure:"chunk_model"`
-	MainModel           string `mapstructure:"main_model"`
-	TimeoutSeconds      int    `mapstructure:"timeout_seconds"`
-	ChunkSize           int    `mapstructure:"chunk_size"`
-	ChunkOverlap        int    `mapstructure:"chunk_overlap"`
-	MaxChunkParallelism int    `mapstructure:"max_chunk_parallelism"`
-	TopNTags            int    `mapstructure:"top_n_tags"`
+type EmbeddingConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	BaseURL        string `mapstructure:"base_url"`
+	APIKey         string `mapstructure:"api_key"`
+	Model          string `mapstructure:"model"`
+	Version        string `mapstructure:"version"`
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 }
 
 type KafkaConfig struct {
 	Brokers                        []string `mapstructure:"brokers"`
-	ArticleAnalysisTopic           string   `mapstructure:"article_analysis_topic"`
-	ArticleAnalysisDLQTopic        string   `mapstructure:"article_analysis_dlq_topic"`
 	UserBehaviorTopic              string   `mapstructure:"user_behavior_topic"`
 	LikeSnapshotTopic              string   `mapstructure:"like_snapshot_topic"`
 	RecommendationEventsTopic      string   `mapstructure:"recommendation_events_topic"`
 	TopicReplicationFactor         int      `mapstructure:"topic_replication_factor"`
-	ArticleAnalysisPartitions      int      `mapstructure:"article_analysis_partitions"`
-	ArticleAnalysisDLQPartitions   int      `mapstructure:"article_analysis_dlq_partitions"`
 	UserBehaviorPartitions         int      `mapstructure:"user_behavior_partitions"`
 	LikeSnapshotPartitions         int      `mapstructure:"like_snapshot_partitions"`
 	RecommendationEventsPartitions int      `mapstructure:"recommendation_events_partitions"`
-	ArticleAnalysisGroupID         string   `mapstructure:"article_analysis_group_id"`
 	UserBehaviorGroupID            string   `mapstructure:"user_behavior_group_id"`
 	LikeSnapshotGroupID            string   `mapstructure:"like_snapshot_group_id"`
 	RecommendationMetricsGroupID   string   `mapstructure:"recommendation_metrics_group_id"`
-	OutboxPollIntervalSecond       int      `mapstructure:"outbox_poll_interval_seconds"`
-	JobLeaseSeconds                int      `mapstructure:"job_lease_seconds"`
-	JobMaxAttempts                 int      `mapstructure:"job_max_attempts"`
 }
 
 type RecommendationBehaviorWeights struct {
@@ -53,14 +41,17 @@ type RecommendationBehaviorWeights struct {
 }
 
 type RecommendationConfig struct {
-	BehaviorWeights         RecommendationBehaviorWeights `mapstructure:"behavior_weights"`
-	SignalHalfLifeDays      float64                       `mapstructure:"signal_half_life_days"`
-	FeedbackLookbackDays    int                           `mapstructure:"feedback_lookback_days"`
-	InterestSaturationScale float64                       `mapstructure:"interest_saturation_scale"`
-	CategoryWeight          float64                       `mapstructure:"category_weight"`
-	TagWeight               float64                       `mapstructure:"tag_weight"`
-	PopularityWeight        float64                       `mapstructure:"popularity_weight"`
-	FreshnessWeight         float64                       `mapstructure:"freshness_weight"`
+	BehaviorWeights       RecommendationBehaviorWeights `mapstructure:"behavior_weights"`
+	SignalHalfLifeDays    float64                       `mapstructure:"signal_half_life_days"`
+	FeedbackLookbackDays  int                           `mapstructure:"feedback_lookback_days"`
+	SemanticWeight        float64                       `mapstructure:"semantic_weight"`
+	FreshnessWeight       float64                       `mapstructure:"freshness_weight"`
+	PopularityWeight      float64                       `mapstructure:"popularity_weight"`
+	FreshnessHalfLifeDays float64                       `mapstructure:"freshness_half_life_days"`
+}
+
+type OutboxConfig struct {
+	PollIntervalSeconds int `mapstructure:"poll_interval_seconds"`
 }
 
 type StorageConfig struct {
@@ -81,9 +72,10 @@ type Config struct {
 		MaxIdleconns int
 		MaxOpenConns int
 	}
-	AI             AIConfig
+	Embedding      EmbeddingConfig
 	Kafka          KafkaConfig
 	Recommendation RecommendationConfig
+	Outbox         OutboxConfig
 	Storage        StorageConfig
 }
 
@@ -115,39 +107,44 @@ func LoadConfig() {
 	applySensitiveEnvironmentOverrides(AppConfig)
 }
 
-func applySensitiveEnvironmentOverrides(config *Config) {
+func applySensitiveEnvironmentOverrides(cfg *Config) {
 	if brokers := parseCSVEnvironment("KAFKA_BROKERS"); len(brokers) > 0 {
-		config.Kafka.Brokers = brokers
+		cfg.Kafka.Brokers = brokers
 	}
 	if value := strings.TrimSpace(os.Getenv("DATABASE_DSN")); value != "" {
-		config.Database.Dsn = value
+		cfg.Database.Dsn = value
 	}
-	if value := strings.TrimSpace(os.Getenv("AI_BASE_URL")); value != "" {
-		config.AI.BaseURL = value
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_ENABLED")); value != "" {
+		cfg.Embedding.Enabled = strings.EqualFold(value, "true") || value == "1"
 	}
-	if value := strings.TrimSpace(os.Getenv("AI_API_KEY")); value != "" {
-		config.AI.APIKey = value
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL")); value != "" {
+		cfg.Embedding.BaseURL = value
 	}
-	if value := strings.TrimSpace(os.Getenv("AI_MODEL")); value != "" {
-		config.AI.Model = value
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_API_KEY")); value != "" {
+		cfg.Embedding.APIKey = value
 	}
-	if value := strings.TrimSpace(os.Getenv("AI_CHUNK_MODEL")); value != "" {
-		config.AI.ChunkModel = value
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")); value != "" {
+		cfg.Embedding.Model = value
 	}
-	if value := strings.TrimSpace(os.Getenv("AI_MAIN_MODEL")); value != "" {
-		config.AI.MainModel = value
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_VERSION")); value != "" {
+		cfg.Embedding.Version = value
+	}
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_TIMEOUT_SECONDS")); value != "" {
+		if parsed := parsePositiveInt(value); parsed > 0 {
+			cfg.Embedding.TimeoutSeconds = parsed
+		}
 	}
 	if value := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); value != "" {
-		config.Storage.Endpoint = value
+		cfg.Storage.Endpoint = value
 	}
 	if value := strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")); value != "" {
-		config.Storage.AccessKey = value
+		cfg.Storage.AccessKey = value
 	}
 	if value := strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")); value != "" {
-		config.Storage.SecretKey = value
+		cfg.Storage.SecretKey = value
 	}
 	if value := strings.TrimSpace(os.Getenv("MINIO_BUCKET")); value != "" {
-		config.Storage.Bucket = value
+		cfg.Storage.Bucket = value
 	}
 }
 
@@ -164,6 +161,18 @@ func parseCSVEnvironment(key string) []string {
 	}
 	return values
 }
+
+func parsePositiveInt(raw string) int {
+	value := 0
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		value = value*10 + int(r-'0')
+	}
+	return value
+}
+
 func InitDB() {
 	initDB()
 }

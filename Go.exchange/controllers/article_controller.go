@@ -9,7 +9,6 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/consts"
-	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/likes"
 	"Go.exchange/models"
@@ -26,7 +25,7 @@ type createArticleRequest struct {
 	CoverImageURL string     `json:"cover_image_url"`
 }
 
-var createArticleWithAnalysisJob = func(article *models.Article) error {
+var createArticleWithEmbeddingJob = func(article *models.Article) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
@@ -34,27 +33,18 @@ var createArticleWithAnalysisJob = func(article *models.Article) error {
 		if err := tx.Create(article).Error; err != nil {
 			return err
 		}
-
+		if config.AppConfig == nil || !config.AppConfig.Embedding.Enabled {
+			return nil
+		}
 		now := time.Now().UTC()
-		maxAttempts := config.AppConfig.Kafka.JobMaxAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = 5
-		}
-		job := models.ArticleAnalysisJob{
-			ArticleID:        article.ID,
-			State:            models.ArticleAnalysisJobQueued,
-			MaxAttempts:      maxAttempts,
-			NextAttemptAt:    now,
-			LastDispatchedAt: &now,
-		}
-		if err := tx.Create(&job).Error; err != nil {
-			return err
-		}
-		event, err := eventing.NewArticleAnalysisRequested(job, article.AnalysisVersion)
-		if err != nil {
-			return err
-		}
-		return eventing.AddOutboxEvent(tx, event)
+		return tx.Create(&models.ArticleEmbeddingJob{
+			ArticleID:     article.ID,
+			State:         models.ArticleEmbeddingJobQueued,
+			MaxAttempts:   5,
+			NextAttemptAt: now,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}).Error
 	})
 }
 
@@ -126,12 +116,10 @@ func CreateArticle(ctx *gin.Context) {
 		ExpiredAt:        req.ExpiredAt,
 		CoverImageURL:    coverImageURL,
 		PublicationState: consts.ArticlePublicationStatePublished,
-		AnalysisState:    consts.ArticleAnalysisStatePending,
-		AnalysisVersion:  consts.ArticleAnalysisVersionV1,
 		PublishedAt:      &now,
 	}
 
-	if err := createArticleWithAnalysisJob(&article); err != nil {
+	if err := createArticleWithEmbeddingJob(&article); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

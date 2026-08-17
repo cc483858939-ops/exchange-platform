@@ -1,14 +1,14 @@
 package controllers
 
 import (
+	"Go.exchange/consts"
+	"Go.exchange/models"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"Go.exchange/consts"
-	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,20 +21,22 @@ func stubCreateArticleAuthor(t *testing.T) {
 	}
 }
 
-func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	gin.SetMode(gin.TestMode)
-	originalCreate := createArticleWithAnalysisJob
-	defer func() {
-		createArticleWithAnalysisJob = originalCreate
-	}()
-
-	var persisted models.Article
-	createArticleWithAnalysisJob = func(article *models.Article) error {
-		article.ID = 42
-		persisted = *article
+func stubArticleCreatePersistence(t *testing.T, persisted *models.Article, id uint) {
+	original := createArticleWithEmbeddingJob
+	t.Cleanup(func() { createArticleWithEmbeddingJob = original })
+	createArticleWithEmbeddingJob = func(article *models.Article) error {
+		article.ID = id
+		if persisted != nil {
+			*persisted = *article
+		}
 		return nil
 	}
+}
+
+func TestCreateArticleBuildsPublishedRecordForEmbeddingJob(t *testing.T) {
+	stubCreateArticleAuthor(t)
+	stubArticleCreatePersistence(t, nil, 42)
+	gin.SetMode(gin.TestMode)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -47,169 +49,109 @@ func TestCreateArticleBuildsPublishedPendingAnalysisRecord(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if persisted.PublicationState != consts.ArticlePublicationStatePublished {
-		t.Fatalf("publication state=%q", persisted.PublicationState)
+	var response articleResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
 	}
-	if persisted.AnalysisState != consts.ArticleAnalysisStatePending {
-		t.Fatalf("analysis state=%q", persisted.AnalysisState)
-	}
-	if persisted.AnalysisVersion != consts.ArticleAnalysisVersionV1 || persisted.PublishedAt == nil {
-		t.Fatalf("expected clean-cut analysis metadata, got %#v", persisted)
-	}
-	if persisted.AuthorID != 7 {
-		t.Fatalf("author_id=%d", persisted.AuthorID)
-	}
-	if persisted.Title != "" || persisted.Preview != "" || persisted.Content != "c" || persisted.CoverImageURL != "" {
-		t.Fatalf("unexpected content fields: title=%q preview=%q content=%q cover=%q", persisted.Title, persisted.Preview, persisted.Content, persisted.CoverImageURL)
+	if response.ID != 42 || response.PublicationState != consts.ArticlePublicationStatePublished || response.Title != "" || response.Content != "c" {
+		t.Fatalf("response=%#v", response)
 	}
 }
 
 func TestCreateArticleTrimsTextFields(t *testing.T) {
 	stubCreateArticleAuthor(t)
-	gin.SetMode(gin.TestMode)
-	originalCreate := createArticleWithAnalysisJob
-	defer func() {
-		createArticleWithAnalysisJob = originalCreate
-	}()
-
 	var persisted models.Article
-	createArticleWithAnalysisJob = func(article *models.Article) error {
-		article.ID = 43
-		persisted = *article
-		return nil
-	}
+	stubArticleCreatePersistence(t, &persisted, 43)
+	gin.SetMode(gin.TestMode)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"  title  \",\"content\":\"  canonical body  \",\"preview\":\"  summary  \"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-
 	CreateArticle(ctx)
 
-	if recorder.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if persisted.Title != "title" || persisted.Content != "canonical body" || persisted.Preview != "summary" {
-		t.Fatalf("unexpected normalized fields: title=%q content=%q preview=%q", persisted.Title, persisted.Content, persisted.Preview)
+	if recorder.Code != http.StatusCreated || persisted.Title != "title" || persisted.Content != "canonical body" || persisted.Preview != "summary" {
+		t.Fatalf("status=%d article=%#v", recorder.Code, persisted)
 	}
 }
+
 func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	gin.SetMode(gin.TestMode)
-	originalCreate := createArticleWithAnalysisJob
-	defer func() { createArticleWithAnalysisJob = originalCreate }()
-
+	originalCreate := createArticleWithEmbeddingJob
+	t.Cleanup(func() { createArticleWithEmbeddingJob = originalCreate })
 	called := false
-	createArticleWithAnalysisJob = func(*models.Article) error {
-		called = true
-		return errors.New("must not persist")
-	}
+	createArticleWithEmbeddingJob = func(*models.Article) error { called = true; return errors.New("must not persist") }
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\",\"cover_image_url\":\"https://invalid\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\",\"cover_image_url\":\"https://invalid\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-
 	CreateArticle(ctx)
 
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t", recorder.Code, called)
 	}
 }
+
 func TestCreateArticlePersistsWithoutCover(t *testing.T) {
 	stubCreateArticleAuthor(t)
+	stubArticleCreatePersistence(t, nil, 42)
 	gin.SetMode(gin.TestMode)
-	originalCreate := createArticleWithAnalysisJob
-	defer func() {
-		createArticleWithAnalysisJob = originalCreate
-	}()
-
-	var persisted models.Article
-	createArticleWithAnalysisJob = func(article *models.Article) error {
-		article.ID = 42
-		persisted = *article
-		return nil
-	}
-
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-
 	CreateArticle(ctx)
-
-	if recorder.Code != http.StatusCreated {
+	if recorder.Code != http.StatusCreated || !bytes.Contains(recorder.Body.Bytes(), []byte("\"cover_image_url\":\"\"")) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if persisted.CoverImageURL != "" {
-		t.Fatalf("cover image URL=%q", persisted.CoverImageURL)
-	}
-	if !bytes.Contains(recorder.Body.Bytes(), []byte("\"cover_image_url\":\"\"")) {
-		t.Fatalf("response missing empty cover image URL: %s", recorder.Body.String())
-	}
 }
+
 func TestCreateArticleRejectsWhitespaceOnlyContent(t *testing.T) {
 	stubCreateArticleAuthor(t)
 	gin.SetMode(gin.TestMode)
-	originalCreate := createArticleWithAnalysisJob
-	defer func() { createArticleWithAnalysisJob = originalCreate }()
-
+	originalCreate := createArticleWithEmbeddingJob
+	t.Cleanup(func() { createArticleWithEmbeddingJob = originalCreate })
 	called := false
-	createArticleWithAnalysisJob = func(*models.Article) error {
-		called = true
-		return errors.New("must not persist")
-	}
-
+	createArticleWithEmbeddingJob = func(*models.Article) error { called = true; return errors.New("must not persist") }
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\" \t\n \"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\" \\t\\n \"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-
 	CreateArticle(ctx)
-
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t body=%s", recorder.Code, called, recorder.Body.String())
 	}
 }
+
 func TestCreateArticleRejectsMissingUserContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\",\"cover_image_url\":\"/api/files/article-covers/cover.png\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-
 	CreateArticle(ctx)
-
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
 func TestCreateArticleIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	stubCreateArticleAuthor(t)
-	originalCreate := createArticleWithAnalysisJob
-	t.Cleanup(func() { createArticleWithAnalysisJob = originalCreate })
-
 	var persisted models.Article
-	createArticleWithAnalysisJob = func(article *models.Article) error {
-		article.ID = 42
-		persisted = *article
-		return nil
-	}
-
+	stubArticleCreatePersistence(t, &persisted, 42)
+	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"t\",\"content\":\"c\",\"preview\":\"p\",\"cover_image_url\":\"/api/files/article-covers/cover.png\",\"author_id\":999,\"author\":{\"id\":999}}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\",\"author_id\":999,\"author\":{\"id\":999}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-
 	CreateArticle(ctx)
-
 	if recorder.Code != http.StatusCreated || persisted.AuthorID != 7 {
 		t.Fatalf("status=%d author_id=%d body=%s", recorder.Code, persisted.AuthorID, recorder.Body.String())
 	}

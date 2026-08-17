@@ -16,12 +16,7 @@ export interface RecommendedArticle {
   id: number;
   title: string;
   content: string;
-  preview: string;
-  summary: string;
-  cover_image_url: string;
-  tags: string[];
-  category: string;
-  like_count: number;
+  preview: string;  cover_image_url: string;  like_count: number;
   comment_count: number;
   view_count: number;
   created_at: string;

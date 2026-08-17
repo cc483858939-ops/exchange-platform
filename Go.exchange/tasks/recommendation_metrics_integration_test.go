@@ -48,7 +48,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	base := eventing.RecommendationBehaviorPayload{
 		UserID: userID, ArticleID: 11, RequestID: uuid.NewString(),
 		Scene: "recommendation_page", Position: 1,
-		RankerVersion: "rules_v3", RankerConfigHash: "0123456789ab",
+		RankerVersion: "embedding_v1", RankerConfigHash: "0123456789ab",
 		StrategyID: groupID, ReceivedAt: baseAt,
 	}
 

@@ -14,12 +14,8 @@ import (
 
 func validKafkaTopicConfig() config.KafkaConfig {
 	return config.KafkaConfig{
-		Brokers:              []string{"kafka:9092"},
-		ArticleAnalysisTopic: "analysis", ArticleAnalysisDLQTopic: "analysis-dlq",
-		UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation",
-		TopicReplicationFactor:    1,
-		ArticleAnalysisPartitions: 3, ArticleAnalysisDLQPartitions: 3, UserBehaviorPartitions: 12,
-		LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12,
+		Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation",
+		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12,
 	}
 }
 
@@ -28,12 +24,10 @@ func TestRequiredKafkaTopics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 5 {
-		t.Fatalf("topics=%d want=5", len(specs))
+	if len(specs) != 3 {
+		t.Fatalf("topics=%d want=3", len(specs))
 	}
 	want := []TopicSpec{
-		{Name: "analysis", Partitions: 3, ReplicationFactor: 1},
-		{Name: "analysis-dlq", Partitions: 3, ReplicationFactor: 1},
 		{Name: "behavior", Partitions: 12, ReplicationFactor: 1},
 		{Name: "snapshot", Partitions: 6, ReplicationFactor: 1},
 		{Name: "recommendation", Partitions: 12, ReplicationFactor: 1},
@@ -52,7 +46,7 @@ func TestRequiredKafkaTopicsRejectsInvalidConfiguration(t *testing.T) {
 	}{
 		{name: "empty brokers", edit: func(cfg *config.KafkaConfig) { cfg.Brokers = nil }},
 		{name: "empty topic", edit: func(cfg *config.KafkaConfig) { cfg.UserBehaviorTopic = " " }},
-		{name: "duplicate topic", edit: func(cfg *config.KafkaConfig) { cfg.UserBehaviorTopic = cfg.ArticleAnalysisTopic }},
+		{name: "duplicate topic", edit: func(cfg *config.KafkaConfig) { cfg.UserBehaviorTopic = cfg.RecommendationEventsTopic }},
 		{name: "invalid partitions", edit: func(cfg *config.KafkaConfig) { cfg.UserBehaviorPartitions = 0 }},
 		{name: "invalid replication factor", edit: func(cfg *config.KafkaConfig) { cfg.TopicReplicationFactor = 0 }},
 	}

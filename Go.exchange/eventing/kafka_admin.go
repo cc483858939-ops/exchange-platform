@@ -36,8 +36,6 @@ func RequiredKafkaTopics(cfg config.KafkaConfig) ([]TopicSpec, error) {
 	}
 
 	specs := []TopicSpec{
-		{Name: cfg.ArticleAnalysisTopic, Partitions: cfg.ArticleAnalysisPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
-		{Name: cfg.ArticleAnalysisDLQTopic, Partitions: cfg.ArticleAnalysisDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.UserBehaviorTopic, Partitions: cfg.UserBehaviorPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.LikeSnapshotTopic, Partitions: cfg.LikeSnapshotPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.RecommendationEventsTopic, Partitions: cfg.RecommendationEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},

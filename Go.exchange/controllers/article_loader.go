@@ -11,12 +11,11 @@ import (
 	"gorm.io/gorm"
 )
 
-const publicArticleSelectColumns = "articles.id,articles.created_at,articles.updated_at,articles.author_id,articles.title,articles.content,articles.preview,articles.cover_image_url,articles.summary,articles.tags,articles.category,articles.publication_state,articles.analysis_state,articles.analysis_version,articles.published_at,articles.expired_at,articles.like_count,articles.comment_count,articles.view_count,articles.like_sync_version"
+const publicArticleSelectColumns = "articles.id,articles.created_at,articles.updated_at,articles.author_id,articles.title,articles.content,articles.preview,articles.cover_image_url,articles.publication_state,articles.published_at,articles.expired_at,articles.like_count,articles.comment_count,articles.view_count,articles.like_sync_version"
 
 func publicArticleScope(query *gorm.DB, now time.Time) *gorm.DB {
 	now = now.UTC()
-	return query.
-		Where("articles.deleted_at IS NULL").
+	return query.Where("articles.deleted_at IS NULL").
 		Where("articles.publication_state = ?", consts.ArticlePublicationStatePublished).
 		Where("articles.published_at IS NOT NULL").
 		Where("articles.published_at <= ?", now).
@@ -53,8 +52,7 @@ func loadArticleDetail(id string) (articleResponse, error) {
 		}
 		now := time.Now().UTC()
 		var article models.Article
-		err := publicArticleScope(preloadArticleAuthor(global.Db).Where("articles.id = ?", id), now).
-			First(&article).Error
+		err := publicArticleScope(preloadArticleAuthor(global.Db).Where("articles.id = ?", id), now).First(&article).Error
 		if err != nil {
 			return articleResponse{}, err
 		}

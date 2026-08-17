@@ -22,7 +22,7 @@ func TestAggregateRecommendationMetricsPreservesFullMetricDimensions(t *testing.
 	base := eventing.RecommendationBehaviorPayload{
 		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(),
 		Scene: "recommendation_page", Position: 1,
-		RankerVersion: "rules_v3", RankerConfigHash: "config-a",
+		RankerVersion: "embedding_v1", RankerConfigHash: "config-a",
 		StrategyID: "strategy-a", ReceivedAt: now,
 	}
 	records := make([]recommendationMetricEvent, 0, 4)

@@ -34,19 +34,19 @@ func refreshPipelineMetrics() {
 		return
 	}
 	states := []string{
-		models.ArticleAnalysisJobQueued,
-		models.ArticleAnalysisJobLeased,
-		models.ArticleAnalysisJobRetryWait,
-		models.ArticleAnalysisJobSucceeded,
-		models.ArticleAnalysisJobDead,
+		models.ArticleEmbeddingJobQueued,
+		models.ArticleEmbeddingJobLeased,
+		models.ArticleEmbeddingJobRetryWait,
+		models.ArticleEmbeddingJobSucceeded,
+		models.ArticleEmbeddingJobDead,
 	}
 	for _, state := range states {
 		var count int64
-		if err := global.Db.Model(&models.ArticleAnalysisJob{}).Where("state = ?", state).Count(&count).Error; err != nil {
-			log.Printf("[Metrics] count article analysis state %s: %v", state, err)
+		if err := global.Db.Model(&models.ArticleEmbeddingJob{}).Where("state = ?", state).Count(&count).Error; err != nil {
+			log.Printf("[Metrics] count article embedding state %s: %v", state, err)
 			return
 		}
-		metrics.SetArticleAnalysisJobs(state, float64(count))
+		metrics.SetArticleEmbeddingJobs(state, float64(count))
 	}
 	var pendingOutbox int64
 	if err := global.Db.Model(&models.OutboxEvent{}).Where("published_at IS NULL").Count(&pendingOutbox).Error; err != nil {

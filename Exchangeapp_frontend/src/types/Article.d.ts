@@ -10,15 +10,7 @@ export interface Article {
   content: string;
   preview: string;
   cover_image_url: string;
-
-  summary: string;
-  tags: string[] | null;
-  category: string;
-
   publication_state: string;
-  analysis_state: string;
-  analysis_version: string;
-
   published_at: string | null;
   expired_at: string | null;
 

@@ -15,11 +15,9 @@ import (
 )
 
 const (
-	EventTypeArticleAnalysisRequested = "article.analysis.requested"
-	EventTypeArticleAnalysisDead      = "article.analysis.dead"
-	EventTypeArticleViewed            = "article.viewed"
-	EventTypeArticleLiked             = "article.liked"
-	EventTypeArticleUnliked           = "article.unliked"
+	EventTypeArticleViewed  = "article.viewed"
+	EventTypeArticleLiked   = "article.liked"
+	EventTypeArticleUnliked = "article.unliked"
 
 	EventTypeRecommendationImpression    = "recommendation.impression"
 	EventTypeRecommendationClick         = "recommendation.click"
@@ -36,12 +34,6 @@ type Envelope struct {
 	AggregateID   string          `json:"aggregate_id"`
 	OccurredAt    time.Time       `json:"occurred_at"`
 	Payload       json.RawMessage `json:"payload"`
-}
-
-type ArticleAnalysisRequestedPayload struct {
-	JobID           uint   `json:"job_id"`
-	ArticleID       uint   `json:"article_id"`
-	AnalysisVersion string `json:"analysis_version"`
 }
 
 type UserBehaviorPayload struct {
@@ -200,14 +192,6 @@ func NewOutboxEvent(eventType, aggregateType, aggregateID string, payload interf
 	}, nil
 }
 
-func NewArticleAnalysisRequested(job models.ArticleAnalysisJob, analysisVersion string) (models.OutboxEvent, error) {
-	return NewOutboxEvent(EventTypeArticleAnalysisRequested, "article", strconv.FormatUint(uint64(job.ArticleID), 10), ArticleAnalysisRequestedPayload{
-		JobID:           job.ID,
-		ArticleID:       job.ArticleID,
-		AnalysisVersion: analysisVersion,
-	})
-}
-
 func EventTypeForBehaviorAction(action string) string {
 	switch strings.TrimSpace(action) {
 	case "like":
@@ -244,10 +228,6 @@ func DecodeEnvelope(raw []byte) (Envelope, error) {
 
 func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, error) {
 	switch eventType {
-	case EventTypeArticleAnalysisRequested:
-		return strings.TrimSpace(kafkaConfig.ArticleAnalysisTopic), nil
-	case EventTypeArticleAnalysisDead:
-		return strings.TrimSpace(kafkaConfig.ArticleAnalysisDLQTopic), nil
 	case EventTypeArticleViewed, EventTypeArticleLiked, EventTypeArticleUnliked:
 		return strings.TrimSpace(kafkaConfig.UserBehaviorTopic), nil
 	case EventTypeArticleLikeSnapshot:

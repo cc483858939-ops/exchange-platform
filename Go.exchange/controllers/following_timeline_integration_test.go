@@ -132,10 +132,6 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	}
 
 	newerContentOnly := createArticle(followedA.ID, "", "Canonical following body", baseTime.Add(5*time.Minute), nil)
-	newerContentOnly.AnalysisState = "pending"
-	if err := db.Model(&newerContentOnly).Update("analysis_state", "pending").Error; err != nil {
-		t.Fatal(err)
-	}
 	bTie := createArticle(followedB.ID, "B tie", "B tie body", baseTime.Add(4*time.Minute), nil)
 	aTie := createArticle(followedA.ID, "A tie", "A tie body", baseTime.Add(4*time.Minute), nil)
 	bOlder := createArticle(followedB.ID, "B older", "B older body", baseTime.Add(3*time.Minute), nil)

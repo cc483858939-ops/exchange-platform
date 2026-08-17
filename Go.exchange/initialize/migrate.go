@@ -22,12 +22,17 @@ func RunMigrations() error {
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}
 
+		if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+			return fmt.Errorf("enable pgvector extension: %w", err)
+		}
+
 		if err := tx.AutoMigrate(
 			&models.User{},
 			&models.UserFollow{},
 			&models.Article{},
 			&models.Comment{},
-			&models.ArticleAnalysisJob{},
+			&models.ArticleEmbedding{},
+			&models.ArticleEmbeddingJob{},
 			&models.OutboxEvent{},
 			&models.ConsumerInbox{},
 			&models.ArticleBehavior{},
@@ -39,6 +44,9 @@ func RunMigrations() error {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
 
+		if err := applyLegacyAISchemaCleanup(tx); err != nil {
+			return err
+		}
 		if err := applyUserFollowConstraints(tx); err != nil {
 			return err
 		}
@@ -157,10 +165,30 @@ func applyArticleReactionConstraints(tx *gorm.DB) error {
 	return nil
 }
 
+func applyLegacyAISchemaCleanup(tx *gorm.DB) error {
+	statements := []string{
+		"DROP TABLE IF EXISTS article_analysis_jobs",
+		"ALTER TABLE articles DROP COLUMN IF EXISTS summary",
+		"ALTER TABLE articles DROP COLUMN IF EXISTS tags",
+		"ALTER TABLE articles DROP COLUMN IF EXISTS category",
+		"ALTER TABLE articles DROP COLUMN IF EXISTS analysis_state",
+		"ALTER TABLE articles DROP COLUMN IF EXISTS analysis_version",
+		"DROP INDEX IF EXISTS idx_articles_recommendation",
+		"DROP INDEX IF EXISTS idx_articles_recommendation_category_created",
+		"DROP INDEX IF EXISTS idx_articles_recommendation_popular",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("remove legacy AI schema: %w", err)
+		}
+	}
+	return nil
+}
+
 func applyRecommendationRetrievalV1Indexes(tx *gorm.DB) error {
 	statements := []string{
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_category_created ON articles ((LOWER(BTRIM(category))), created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND analysis_state = 'completed' AND published_at IS NOT NULL",
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_popular ON articles (like_count DESC, created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND analysis_state = 'completed' AND published_at IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_recent ON articles (created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_popular ON articles (like_count DESC, created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {

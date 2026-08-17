@@ -18,9 +18,9 @@ import (
 
 const (
 	recommendationScene                   = "recommendation_page"
-	recommendationRankerVersion           = "rules_v3"
-	recommendationPersonalizedStrategyID  = "personalized_rules_v3"
-	recommendationColdStartStrategyID     = "cold_start_rules_v3"
+	recommendationRankerVersion           = "embedding_v1"
+	recommendationPersonalizedStrategyID  = "embedding_feed_v1"
+	recommendationColdStartStrategyID     = "embedding_feed_v1"
 	recommendationTrackingTokenVersion    = "v2"
 	recommendationCanonicalOutcomeVersion = "read_end_recency_v2"
 	recommendationSigningKeyMinBytes      = 32
@@ -72,7 +72,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 	issuedAt := now.UTC()
 	expiresAt := issuedAt.Add(config.RecommendationTelemetryTokenTTL())
 	strategyID := recommendationStrategyID(profile)
-	configHash := recommendationRankerConfigHash(normalizedRulesV3RecommendationConfig())
+	configHash := recommendationRankerConfigHash(normalizedEmbeddingRecommendationConfig())
 
 	for index := range recommendations {
 		claims := recommendationTrackingClaims{
@@ -96,10 +96,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 }
 
 func recommendationStrategyID(profile userInterestProfile) string {
-	if profile.PersonalizedSignalCount > 0 {
-		return recommendationPersonalizedStrategyID
-	}
-	return recommendationColdStartStrategyID
+	return recommendationPersonalizedStrategyID
 }
 
 func recommendationTelemetryRequestSelected(userID uint, requestID string, percent int) bool {
@@ -122,8 +119,15 @@ func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
 
 func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) string {
 	return fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|half_life=%g|lookback=%d|saturation=%g|category=%g|tag=%g|popularity=%g|freshness=%g|candidate_retrieval=%s|top_categories=%d|category_cap=%d|recent_cap=%d|popular_cap=%d|merged_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s|canonical_outcome=%s",
-		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click, cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.InterestSaturationScale, cfg.CategoryWeight, cfg.TagWeight, cfg.PopularityWeight, cfg.FreshnessWeight, recommendationCandidateRetrievalVersion, recommendationTopCategoryCount, recommendationCategoryCandidateCap, recommendationRecentCandidateCap, recommendationPopularCandidateCap, recommendationMergedCandidateCap, recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion, recommendationCanonicalOutcomeVersion,
+		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|semantic=%g|freshness=%g|popularity=%g|freshness_half_life=%g|candidate_retrieval=%s|semantic_cap=%d|recent_cap=%d|popular_cap=%d|cold_start_recent_cap=%d|cold_start_popular_cap=%d|merged_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s|canonical_outcome=%s",
+		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click,
+		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested,
+		cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.SemanticWeight, cfg.FreshnessWeight,
+		cfg.PopularityWeight, cfg.FreshnessHalfLifeDays, recommendationCandidateRetrievalVersion,
+		recommendationSemanticCandidateCap, recommendationRecentCandidateCap, recommendationPopularCandidateCap,
+		recommendationColdStartRecentCap, recommendationColdStartPopularCap, recommendationMergedCandidateCap,
+		recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion,
+		recommendationCanonicalOutcomeVersion,
 	)
 }
 func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {

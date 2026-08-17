@@ -8,7 +8,7 @@ import (
 func StartAll(ctx context.Context, wg *sync.WaitGroup) {
 	startExchangeRateRefresh(ctx, wg)
 	startOutboxRelay(ctx, wg)
-	startArticleAnalysisWorkers(ctx, wg)
+	startArticleEmbeddingWorkers(ctx, wg)
 	startUserBehaviorProjectionConsumer(ctx, wg)
 	startRecommendationMetricsConsumer(ctx, wg)
 	startLikeStateRelay(ctx, wg)

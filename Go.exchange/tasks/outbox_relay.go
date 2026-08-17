@@ -40,8 +40,8 @@ func startOutboxRelay(ctx context.Context, wg *sync.WaitGroup) {
 		}()
 
 		interval := time.Second
-		if config.AppConfig.Kafka.OutboxPollIntervalSecond > 0 {
-			interval = time.Duration(config.AppConfig.Kafka.OutboxPollIntervalSecond) * time.Second
+		if config.AppConfig.Outbox.PollIntervalSeconds > 0 {
+			interval = time.Duration(config.AppConfig.Outbox.PollIntervalSeconds) * time.Second
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()

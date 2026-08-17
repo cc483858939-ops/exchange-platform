@@ -67,7 +67,7 @@ jobs:
       REDIS_TEST_DB: "15"
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -187,7 +187,7 @@ jobs:
         run: |
           kafka_container="$(docker ps --filter ancestor=bitnamilegacy/kafka:latest --format '{{.ID}}' | head -n 1)"
           topic_count="$(docker exec "$kafka_container" kafka-topics.sh --bootstrap-server localhost:9092 --list | wc -l)"
-          test "$topic_count" -eq 5
+          test "$topic_count" -eq 3
   frontend:
     name: Frontend / Test and Build
     runs-on: ubuntu-latest

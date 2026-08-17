@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -165,7 +164,7 @@ func openArticleDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleAnalysisJob{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -187,43 +186,11 @@ func TestDeleteArticleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id IN (SELECT id FROM articles WHERE author_id IN (?, ?))", owner.ID, other.ID).Delete(&models.ArticleAnalysisJob{})
 		db.Unscoped().Where("author_id IN ?", []uint{owner.ID, other.ID}).Delete(&models.Article{})
 		db.Unscoped().Where("id IN ?", []uint{owner.ID, other.ID}).Delete(&models.User{})
 	})
 
-	deleteWithJob := func(state string) (models.Article, models.ArticleAnalysisJob) {
-		article := models.Article{
-			AuthorID: owner.ID,
-			Title:    "delete fixture",
-			Content:  "delete fixture body",
-			Preview:  "delete fixture",
-		}
-		if err := db.Create(&article).Error; err != nil {
-			t.Fatal(err)
-		}
-		job := models.ArticleAnalysisJob{
-			ArticleID:     article.ID,
-			State:         state,
-			NextAttemptAt: time.Now().UTC(),
-			LeasedBy:      "worker",
-		}
-		if state == models.ArticleAnalysisJobLeased {
-			leaseUntil := time.Now().UTC().Add(time.Hour)
-			job.LeaseUntil = &leaseUntil
-		}
-		if err := db.Create(&job).Error; err != nil {
-			t.Fatal(err)
-		}
-		return article, job
-	}
-
-	forbiddenArticle := models.Article{
-		AuthorID: owner.ID,
-		Title:    "forbidden fixture",
-		Content:  "forbidden body",
-		Preview:  "forbidden",
-	}
+	forbiddenArticle := models.Article{AuthorID: owner.ID, Title: "forbidden fixture", Content: "forbidden body", Preview: "forbidden"}
 	if err := db.Create(&forbiddenArticle).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -233,68 +200,24 @@ func TestDeleteArticleIntegration(t *testing.T) {
 		t.Fatalf("forbidden status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	queuedArticle, queuedJob := deleteWithJob(models.ArticleAnalysisJobQueued)
-	retryArticle, retryJob := deleteWithJob(models.ArticleAnalysisJobRetryWait)
-	leasedArticle, leasedJob := deleteWithJob(models.ArticleAnalysisJobLeased)
-	succeededArticle, succeededJob := deleteWithJob(models.ArticleAnalysisJobSucceeded)
-	deadArticle, deadJob := deleteWithJob(models.ArticleAnalysisJobDead)
-	noJobArticle := models.Article{AuthorID: owner.ID, Title: "no job", Content: "no job body", Preview: "no job"}
-	if err := db.Create(&noJobArticle).Error; err != nil {
+	article := models.Article{AuthorID: owner.ID, Title: "delete fixture", Content: "delete fixture body", Preview: "delete fixture"}
+	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
-
 	deleteOne := func(articleID, viewerID uint) int {
 		ctx, recorder := newArticleDeleteContext(strconvArticleID(articleID), &viewerID)
 		DeleteArticle(ctx)
 		ctx.Writer.WriteHeaderNow()
 		return recorder.Code
 	}
-	for _, article := range []models.Article{queuedArticle, retryArticle, leasedArticle, succeededArticle, deadArticle, noJobArticle} {
-		if status := deleteOne(article.ID, owner.ID); status != http.StatusNoContent {
-			t.Fatalf("article=%d status=%d", article.ID, status)
-		}
+	if status := deleteOne(article.ID, owner.ID); status != http.StatusNoContent {
+		t.Fatalf("article=%d status=%d", article.ID, status)
 	}
-	if status := deleteOne(queuedArticle.ID, owner.ID); status != http.StatusNotFound {
+	if status := deleteOne(article.ID, owner.ID); status != http.StatusNotFound {
 		t.Fatalf("repeat delete status=%d", status)
 	}
-
-	var canceledQueued, canceledRetry models.ArticleAnalysisJob
-	if err := db.First(&canceledQueued, queuedJob.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.First(&canceledRetry, retryJob.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, job := range []models.ArticleAnalysisJob{canceledQueued, canceledRetry} {
-		if job.State != models.ArticleAnalysisJobCanceled || job.LeaseUntil != nil || job.LeasedBy != "" || job.FinishedAt == nil || job.LastError != "article deleted" {
-			t.Fatalf("canceled job=%#v", job)
-		}
-	}
-
-	for _, fixture := range []struct {
-		name string
-		id   uint
-		job  models.ArticleAnalysisJob
-	}{
-		{name: "leased", id: leasedArticle.ID, job: leasedJob},
-		{name: "succeeded", id: succeededArticle.ID, job: succeededJob},
-		{name: "dead", id: deadArticle.ID, job: deadJob},
-	} {
-		var got models.ArticleAnalysisJob
-		if err := db.First(&got, fixture.job.ID).Error; err != nil {
-			t.Fatal(err)
-		}
-		if got.State != fixture.job.State || got.LeasedBy != fixture.job.LeasedBy {
-			t.Fatalf("%s job changed before=%#v after=%#v", fixture.name, fixture.job, got)
-		}
-		var visible models.Article
-		if err := db.First(&visible, fixture.id).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
-			t.Fatalf("%s visible article err=%v", fixture.name, err)
-		}
-	}
-
 	var deleted models.Article
-	if err := db.Unscoped().First(&deleted, queuedArticle.ID).Error; err != nil || !deleted.DeletedAt.Valid {
+	if err := db.Unscoped().First(&deleted, article.ID).Error; err != nil || !deleted.DeletedAt.Valid {
 		t.Fatalf("soft deleted article=%#v err=%v", deleted, err)
 	}
 
@@ -306,10 +229,7 @@ func TestDeleteArticleIntegration(t *testing.T) {
 	statuses := make(chan int, 2)
 	for range 2 {
 		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			statuses <- deleteOne(raceArticle.ID, owner.ID)
-		}()
+		go func() { defer waitGroup.Done(); statuses <- deleteOne(raceArticle.ID, owner.ID) }()
 	}
 	waitGroup.Wait()
 	close(statuses)
@@ -328,7 +248,6 @@ func TestDeleteArticleIntegration(t *testing.T) {
 		t.Fatalf("race successes=%d notFound=%d", successes, notFound)
 	}
 }
-
 func strconvArticleID(id uint) string {
 	return strconv.FormatUint(uint64(id), 10)
 }

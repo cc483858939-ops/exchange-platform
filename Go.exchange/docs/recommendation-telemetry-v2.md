@@ -1,6 +1,6 @@
 # Recommendation Telemetry V3 Kafka-first
 
-The recommendation API serves deterministic rules_v3. Telemetry is an attribution and measurement protocol; affinity is derived server-side from the durable facts.
+The recommendation API serves deterministic embedding_feed_v1. Telemetry is an attribution and measurement protocol; affinity is derived server-side from the durable facts.
 
 ## Contract
 
@@ -35,4 +35,4 @@ When frontend and backend deploy independently, deploy the namespaced Kafka even
 
 ## Local configuration
 
-The root D:\code\mf\docker-compose.yml supplies the recommendation signing key through RECOMMENDATION_TELEMETRY_SIGNING_KEY. AI_API_KEY belongs only to the article AI-processing worker. Keep signing keys outside source control and revoke or rotate any provider credential that was previously exposed in a committed configuration outside the repository. Token TTL and rate limits remain server configuration; read classification is fixed by read_v1. Feed dwell is raw telemetry only and is not currently consumed by rules_v3 or personalization.
+The root D:\code\mf\docker-compose.yml supplies the recommendation signing key through RECOMMENDATION_TELEMETRY_SIGNING_KEY. EMBEDDING_API_KEY is consumed only by the asynchronous article embedding worker. Keep signing keys outside source control and revoke or rotate any provider credential that was previously exposed in a committed configuration outside the repository. Token TTL and rate limits remain server configuration; read classification is fixed by read_v1. Feed dwell is raw telemetry only and is not currently consumed by embedding_feed_v1 or personalization.

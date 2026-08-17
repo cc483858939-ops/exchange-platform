@@ -20,24 +20,33 @@ import (
 const (
 	defaultRecommendationLimit              = 20
 	maxRecommendationLimit                  = 50
-	recommendationTopCategoryCount          = 8
-	recommendationCategoryCandidateCap      = 200
+	recommendationSemanticCandidateCap      = 200
 	recommendationRecentCandidateCap        = 150
 	recommendationPopularCandidateCap       = 150
+	recommendationColdStartRecentCap        = 200
+	recommendationColdStartPopularCap       = 200
 	recommendationMergedCandidateCap        = 500
-	recommendationCandidateRetrievalVersion = "multi_source_v1"
+	recommendationFeedbackArticleLimit      = 500
+	recommendationRecentViewArticleLimit    = 200
+	recommendationCandidateRetrievalVersion = "semantic_multi_source_v1"
 )
 
 type articleBehaviorSignal struct {
 	Behavior models.ArticleBehavior
-	Article  models.Article
 }
 
 type userInterestProfile struct {
-	Categories              map[string]float64
-	Tags                    map[string]float64
+	Vector                  []float32
 	InteractedArticleIDs    map[uint]struct{}
 	PersonalizedSignalCount int
+}
+
+type embeddingCandidate struct {
+	ArticleID          uint
+	SemanticSimilarity float64
+	FromSemantic       bool
+	FromRecent         bool
+	FromPopular        bool
 }
 
 type recommendedArticleResponse struct {
@@ -45,10 +54,7 @@ type recommendedArticleResponse struct {
 	Title         string                          `json:"title"`
 	Content       string                          `json:"content"`
 	Preview       string                          `json:"preview"`
-	Summary       string                          `json:"summary"`
 	CoverImageURL string                          `json:"cover_image_url"`
-	Tags          []string                        `json:"tags"`
-	Category      string                          `json:"category"`
 	LikeCount     int64                           `json:"like_count"`
 	CommentCount  int64                           `json:"comment_count"`
 	ViewCount     int64                           `json:"view_count"`
@@ -65,7 +71,6 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-
 	var behaviors []models.ArticleBehavior
 	if err := global.Db.
 		Where("user_id = ? AND action = ?", userID, ArticleBehaviorActionView).
@@ -74,46 +79,11 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSign
 		Find(&behaviors).Error; err != nil {
 		return nil, err
 	}
-	if len(behaviors) == 0 {
-		return nil, nil
-	}
-
-	articleIDs := make([]uint, 0, len(behaviors))
-	seenIDs := make(map[uint]struct{}, len(behaviors))
-	for _, behavior := range behaviors {
-		if behavior.ArticleID == 0 {
-			continue
-		}
-		if _, exists := seenIDs[behavior.ArticleID]; exists {
-			continue
-		}
-		seenIDs[behavior.ArticleID] = struct{}{}
-		articleIDs = append(articleIDs, behavior.ArticleID)
-	}
-	if len(articleIDs) == 0 {
-		return nil, nil
-	}
-
-	var articles []models.Article
-	if err := global.Db.
-		Select("id,tags,category").
-		Where("id IN ?", articleIDs).
-		Find(&articles).Error; err != nil {
-		return nil, err
-	}
-
-	articleByID := make(map[uint]models.Article, len(articles))
-	for _, article := range articles {
-		articleByID[article.ID] = article
-	}
-
 	signals := make([]articleBehaviorSignal, 0, len(behaviors))
 	for _, behavior := range behaviors {
-		article, exists := articleByID[behavior.ArticleID]
-		if !exists {
-			continue
+		if behavior.ArticleID != 0 {
+			signals = append(signals, articleBehaviorSignal{Behavior: behavior})
 		}
-		signals = append(signals, articleBehaviorSignal{Behavior: behavior, Article: article})
 	}
 	return signals, nil
 }
@@ -131,6 +101,7 @@ func articleIDs(articles []models.Article) []uint {
 	}
 	return ids
 }
+
 func GetArticleRecommendations(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
@@ -141,35 +112,47 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	now := started.UTC()
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
-	cfg := normalizedRulesV3RecommendationConfig()
+	cfg := normalizedEmbeddingRecommendationConfig()
 	lookbackStart := now.AddDate(0, 0, -cfg.FeedbackLookbackDays)
+
 	behaviors, err := loadRecommendationBehaviorSignals(userID)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", "unknown")
+		metrics.RecordRecommendationRequest("error", recommendationStrategyID(userInterestProfile{}))
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	feedback, err := loadRecommendationFeedbackSignals(userID, lookbackStart)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", "unknown")
+		metrics.RecordRecommendationRequest("error", recommendationStrategyID(userInterestProfile{}))
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	reactions, err := loadRecommendationReactionStates(userID)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", "unknown")
+		metrics.RecordRecommendationRequest("error", recommendationStrategyID(userInterestProfile{}))
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	profile := buildRulesV3InterestProfile(behaviors, feedback, reactions, now, cfg)
+	profile, err := buildEmbeddingInterestProfile(behaviors, feedback, reactions, now, cfg)
+	if err != nil {
+		metrics.RecordRecommendationRequest("error", recommendationStrategyID(profile))
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	strategyID := recommendationStrategyID(profile)
-	candidates, err := loadRulesV3Candidates(userID, profile, lookbackStart, now, limit)
+	candidates, err := loadEmbeddingFeedCandidates(userID, profile, lookbackStart, now)
 	if err != nil {
 		metrics.RecordRecommendationRequest("error", strategyID)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	recommendations := recommendRulesV3Articles(profile, candidates, now, cfg, limit)
+	articles, err := hydrateEmbeddingCandidates(candidates, now)
+	if err != nil {
+		metrics.RecordRecommendationRequest("error", strategyID)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	recommendations := rankEmbeddingCandidates(profile, candidates, articles, now, cfg, limit)
 	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
@@ -185,18 +168,25 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	metrics.ObserveRecommendationCandidateCount(len(candidates))
 	metrics.ObserveRecommendationResultCount(len(recommendations))
 	metrics.ObserveRecommendationGenerationDuration(strategyID, duration)
-	requestRecord := models.RecommendationRequest{RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID, RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg), RequestedLimit: limit, CandidateCount: len(candidates), ResultCount: len(recommendations), TrackedResultCount: trackedCount, PersonalizedSignalCount: profile.PersonalizedSignalCount, FallbackReason: recommendationFallbackReason(profile.PersonalizedSignalCount, len(recommendations), limit), GenerationLatencyMS: duration.Milliseconds(), CreatedAt: now}
+	requestRecord := models.RecommendationRequest{
+		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
+		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg),
+		RequestedLimit: limit, CandidateCount: len(candidates), ResultCount: len(recommendations),
+		TrackedResultCount: trackedCount, PersonalizedSignalCount: profile.PersonalizedSignalCount,
+		FallbackReason:      recommendationFallbackReason(profile.PersonalizedSignalCount, len(recommendations), limit),
+		GenerationLatencyMS: duration.Milliseconds(), CreatedAt: now,
+	}
 	if err := persistRecommendationRequest(requestRecord); err != nil {
 		log.Printf("[RecommendationTelemetry] persist request %s: %v", requestID, err)
 		metrics.RecordRecommendationRequestLogFailure()
 	}
 	ctx.JSON(http.StatusOK, recommendations)
 }
+
 func parseRecommendationLimit(raw string) int {
 	if strings.TrimSpace(raw) == "" {
 		return defaultRecommendationLimit
 	}
-
 	limit, err := strconv.Atoi(raw)
 	if err != nil || limit <= 0 {
 		return defaultRecommendationLimit
@@ -207,42 +197,16 @@ func parseRecommendationLimit(raw string) int {
 	return limit
 }
 
-func freshnessScore(createdAt time.Time, now time.Time) float64 {
-	age := now.Sub(createdAt)
-	switch {
-	case age <= 7*24*time.Hour:
-		return 1
-	case age <= 30*24*time.Hour:
-		return 0.5
-	default:
-		return 0
-	}
-} //根据时间算分
-
-func normalizeRecommendationLabel(label string) string {
-	return strings.ToLower(strings.TrimSpace(label))
-}
-
-func recommendationTags(tags []string) []string {
-	if len(tags) == 0 {
-		return []string{}
-	}
-	return tags
-}
-
 func articleIDList(set map[uint]struct{}) []uint {
 	if len(set) == 0 {
 		return nil
 	}
-
 	ids := make([]uint, 0, len(set))
 	for id := range set {
 		if id != 0 {
 			ids = append(ids, id)
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
-} //把文章id转化成数组
+}

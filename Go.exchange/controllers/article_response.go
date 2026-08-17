@@ -27,7 +27,6 @@ type publicUserResponse struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// articleResponse preserves existing article field names while omitting internal identity and soft-delete fields.
 type articleResponse struct {
 	ID               uint                 `json:"ID"`
 	CreatedAt        time.Time            `json:"CreatedAt"`
@@ -36,12 +35,7 @@ type articleResponse struct {
 	Content          string               `json:"content"`
 	Preview          string               `json:"preview"`
 	CoverImageURL    string               `json:"cover_image_url"`
-	Summary          string               `json:"summary"`
-	Tags             []string             `json:"tags"`
-	Category         string               `json:"category"`
 	PublicationState string               `json:"publication_state"`
-	AnalysisState    string               `json:"analysis_state"`
-	AnalysisVersion  string               `json:"analysis_version"`
 	PublishedAt      *time.Time           `json:"published_at"`
 	ExpiredAt        *time.Time           `json:"expired_at"`
 	LikeCount        int64                `json:"like_count"`
@@ -52,12 +46,7 @@ type articleResponse struct {
 }
 
 func publicAuthorFromUser(user models.User) publicAuthorResponse {
-	return publicAuthorResponse{
-		ID:          user.ID,
-		Username:    user.Username,
-		DisplayName: user.DisplayName,
-		AvatarURL:   user.AvatarURL,
-	}
+	return publicAuthorResponse{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, AvatarURL: user.AvatarURL}
 }
 
 func publicAuthorFromArticle(article models.Article) (publicAuthorResponse, error) {
@@ -75,12 +64,10 @@ func newArticleResponse(article models.Article) (articleResponse, error) {
 	return articleResponse{
 		ID: article.ID, CreatedAt: article.CreatedAt, UpdatedAt: article.UpdatedAt,
 		Title: article.Title, Content: article.Content, Preview: article.Preview,
-		CoverImageURL: article.CoverImageURL, Summary: article.Summary, Tags: article.Tags,
-		Category: article.Category, PublicationState: article.PublicationState,
-		AnalysisState: article.AnalysisState, AnalysisVersion: article.AnalysisVersion,
+		CoverImageURL: article.CoverImageURL, PublicationState: article.PublicationState,
 		PublishedAt: article.PublishedAt, ExpiredAt: article.ExpiredAt,
-		LikeCount: article.LikeCount, CommentCount: article.CommentCount, ViewCount: article.ViewCount, LikeSyncVersion: article.LikeSyncVersion,
-		Author: author,
+		LikeCount: article.LikeCount, CommentCount: article.CommentCount, ViewCount: article.ViewCount,
+		LikeSyncVersion: article.LikeSyncVersion, Author: author,
 	}, nil
 }
 
@@ -129,7 +116,6 @@ func loadPublicAuthorsByIDsFromDB(ids []uint) (map[uint]publicAuthorResponse, er
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-
 	var users []models.User
 	if err := global.Db.Select("id, username, display_name, avatar_url").Where("id IN ?", uniqueIDs).Find(&users).Error; err != nil {
 		return nil, err
@@ -182,9 +168,7 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 }
 
 func preloadArticleAuthor(query *gorm.DB) *gorm.DB {
-	return query.Preload("Author", func(tx *gorm.DB) *gorm.DB {
-		return tx.Select("id, username, display_name, avatar_url")
-	})
+	return query.Preload("Author", func(tx *gorm.DB) *gorm.DB { return tx.Select("id, username, display_name, avatar_url") })
 }
 
 func loadArticleResponses(query *gorm.DB) ([]articleResponse, error) {

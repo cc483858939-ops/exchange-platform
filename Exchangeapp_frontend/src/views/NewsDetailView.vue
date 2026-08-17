@@ -33,7 +33,7 @@
         </figure>
 
         <div class="article-detail__meta">
-          <span>{{ article.category || 'Article' }}</span>
+          <span>Article</span>
           <span v-if="article.CreatedAt">{{ formatArticleDate(article.CreatedAt) }}</span>
           <button
             v-if="canDeleteArticle"

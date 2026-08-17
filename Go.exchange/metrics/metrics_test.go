@@ -30,16 +30,12 @@ func TestMiddlewareRecordsHTTPMetricsAndSkipsMetricsEndpoint(t *testing.T) {
 	}
 }
 func TestHandlerExposesPipelineMetrics(t *testing.T) {
-	SetArticleAnalysisJobs("queued", 7)
 	SetOutboxPending(11)
 	RecordRecommendationTelemetryEvent("accepted", "impression", "")
 	RecordRecommendationTelemetryProjection("applied")
 	r := httptest.NewRecorder()
 	Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := r.Body.String()
-	if !strings.Contains(body, `go_exchange_article_analysis_jobs{state="queued"} 7`) {
-		t.Fatal(body)
-	}
 	if !strings.Contains(body, "go_exchange_outbox_pending_events 11") {
 		t.Fatal(body)
 	}

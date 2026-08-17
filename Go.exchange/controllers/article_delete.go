@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/likes"
@@ -59,15 +58,6 @@ func deleteArticleInTransactionFromDB(articleID, viewerID uint) error {
 	}
 
 	return global.Db.Transaction(func(tx *gorm.DB) error {
-		var analysisJob models.ArticleAnalysisJob
-		jobResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("article_id = ?", articleID).
-			First(&analysisJob)
-		if jobResult.Error != nil && !errors.Is(jobResult.Error, gorm.ErrRecordNotFound) {
-			return jobResult.Error
-		}
-		jobExists := jobResult.Error == nil
-
 		var article models.Article
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&article, articleID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -77,19 +67,6 @@ func deleteArticleInTransactionFromDB(articleID, viewerID uint) error {
 		}
 		if article.AuthorID != viewerID {
 			return errArticleDeleteForbidden
-		}
-
-		deletionTime := time.Now().UTC()
-		if jobExists && (analysisJob.State == models.ArticleAnalysisJobQueued || analysisJob.State == models.ArticleAnalysisJobRetryWait) {
-			if err := tx.Model(&analysisJob).Updates(map[string]interface{}{
-				"state":       models.ArticleAnalysisJobCanceled,
-				"lease_until": nil,
-				"leased_by":   "",
-				"finished_at": deletionTime,
-				"last_error":  "article deleted",
-			}).Error; err != nil {
-				return err
-			}
 		}
 
 		if err := tx.Delete(&article).Error; err != nil {

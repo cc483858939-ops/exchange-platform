@@ -14,16 +14,13 @@ func testRecommendationPayload() RecommendationBehaviorPayload {
 	now := time.Now().UTC()
 	return RecommendationBehaviorPayload{
 		UserID: 7, ArticleID: 11, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
-		RankerVersion: "rules_v3", RankerConfigHash: "0123456789ab", StrategyID: "personalized_rules_v3", ReceivedAt: now,
+		RankerVersion: "embedding_v1", RankerConfigHash: "0123456789ab", StrategyID: "embedding_feed_v1", ReceivedAt: now,
 	}
 }
 
 func TestRecommendationBehaviorEnvelopeRoutesByUserAndPreservesClientID(t *testing.T) {
 	configValue := config.KafkaConfig{RecommendationEventsTopic: "recommendation-events"}
-	for _, eventType := range []string{
-		EventTypeRecommendationImpression, EventTypeRecommendationClick, EventTypeRecommendationReadEnd,
-		EventTypeRecommendationFeedDwell, EventTypeRecommendationNotInterested,
-	} {
+	for _, eventType := range []string{EventTypeRecommendationImpression, EventTypeRecommendationClick, EventTypeRecommendationReadEnd, EventTypeRecommendationFeedDwell, EventTypeRecommendationNotInterested} {
 		id := uuid.NewString()
 		event, err := NewRecommendationBehaviorEnvelope(id, eventType, time.Unix(10, 0), testRecommendationPayload())
 		if err != nil {
@@ -67,15 +64,9 @@ func TestRecommendationBehaviorEnvelopeRejectsMissingStructuralFields(t *testing
 		t.Fatal("expected missing position error")
 	}
 }
+
 func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
-	cfg := config.KafkaConfig{
-		Brokers:              []string{"kafka:9092"},
-		ArticleAnalysisTopic: "analysis", ArticleAnalysisDLQTopic: "analysis-dlq",
-		UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation",
-		TopicReplicationFactor:    1,
-		ArticleAnalysisPartitions: 3, ArticleAnalysisDLQPartitions: 3, UserBehaviorPartitions: 12,
-		LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12,
-	}
+	cfg := config.KafkaConfig{Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12}
 	specs, err := RequiredKafkaTopics(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -84,14 +75,7 @@ func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
 	for _, spec := range specs {
 		provisioned[spec.Name] = struct{}{}
 	}
-	for _, eventType := range []string{
-		EventTypeArticleAnalysisRequested, EventTypeArticleAnalysisDead,
-		EventTypeArticleViewed, EventTypeArticleLiked, EventTypeArticleUnliked,
-		EventTypeArticleLikeSnapshot,
-		EventTypeRecommendationImpression, EventTypeRecommendationClick,
-		EventTypeRecommendationReadEnd, EventTypeRecommendationFeedDwell,
-		EventTypeRecommendationNotInterested,
-	} {
+	for _, eventType := range []string{EventTypeArticleViewed, EventTypeArticleLiked, EventTypeArticleUnliked, EventTypeArticleLikeSnapshot, EventTypeRecommendationImpression, EventTypeRecommendationClick, EventTypeRecommendationReadEnd, EventTypeRecommendationFeedDwell, EventTypeRecommendationNotInterested} {
 		topic, err := TopicForEvent(cfg, eventType)
 		if err != nil {
 			t.Fatalf("event type %q: %v", eventType, err)
