@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => ({
     recordReadEnd: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
   },
-  enqueueArticleView: vi.fn().mockResolvedValue(undefined),
+  articleViewTelemetry: {
+    enqueue: vi.fn(),
+  },
   routeLeave: vi.fn(),
   router: {
     back: vi.fn(),
@@ -85,7 +87,7 @@ vi.mock('../services/recommendationTelemetry', () => ({
 }));
 
 vi.mock('../services/articleViewTelemetry', () => ({
-  enqueueArticleView: mocks.enqueueArticleView,
+  getArticleViewTelemetry: () => mocks.articleViewTelemetry,
 }));
 
 const article = {
@@ -169,8 +171,8 @@ describe('NewsDetailView attributed read lifecycle', () => {
     expect(mounted.find('.article-detail__body').exists()).toBe(true);
     expect(mocks.assertBodyAtConsume).toHaveBeenCalledWith(expect.any(HTMLElement));
     expect(trackerStart).toHaveBeenCalledTimes(1);
-    expect(mocks.enqueueArticleView).toHaveBeenCalledTimes(1);
-    expect(mocks.enqueueArticleView).toHaveBeenCalledWith(42, expect.any(String));
+    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(42, expect.any(String));
 
     mocks.routeLeave({ name: 'Home' });
     mounted.unmount();

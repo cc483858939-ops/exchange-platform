@@ -3,8 +3,11 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,13 +16,52 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/models"
 
+	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-const userBehaviorConsumerRetryDelay = 2 * time.Second
+const (
+	userBehaviorConsumerRetryDelay = 2 * time.Second
+	userBehaviorBatchSize          = 500
+	userBehaviorBatchWindow        = 50 * time.Millisecond
+)
+
+type userBehaviorMessageReader interface {
+	FetchMessage(context.Context) (kafka.Message, error)
+	CommitMessages(context.Context, ...kafka.Message) error
+	Close() error
+}
+
+type userBehaviorEventRecord struct {
+	Envelope eventing.Envelope
+	Payload  eventing.UserBehaviorPayload
+}
+
+type userBehaviorPair struct {
+	UserID    uint
+	ArticleID uint
+}
+
+type userBehaviorViewAggregate struct {
+	Key        userBehaviorPair
+	Count      int64
+	LastSeenAt time.Time
+}
+
+type userBehaviorReactionCandidate struct {
+	Key      userBehaviorPair
+	Envelope eventing.Envelope
+	Payload  eventing.UserBehaviorPayload
+	Liked    bool
+}
 
 func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup) {
+	if config.AppConfig == nil ||
+		strings.TrimSpace(config.AppConfig.Kafka.UserBehaviorTopic) == "" ||
+		strings.TrimSpace(config.AppConfig.Kafka.UserBehaviorGroupID) == "" {
+		return
+	}
 	for workerID := 1; workerID <= config.LikeBehaviorProjectionConsumers(); workerID++ {
 		wg.Add(1)
 		go func(id int) {
@@ -41,7 +83,11 @@ func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 }
 
 func runUserBehaviorProjectionConsumer(ctx context.Context) {
-	reader, err := eventing.NewKafkaReader(config.AppConfig.Kafka, config.AppConfig.Kafka.UserBehaviorTopic, config.AppConfig.Kafka.UserBehaviorGroupID)
+	reader, err := eventing.NewKafkaReader(
+		config.AppConfig.Kafka,
+		config.AppConfig.Kafka.UserBehaviorTopic,
+		config.AppConfig.Kafka.UserBehaviorGroupID,
+	)
 	if err != nil {
 		log.Printf("[BehaviorProjection] create Kafka reader: %v", err)
 		return
@@ -49,97 +95,320 @@ func runUserBehaviorProjectionConsumer(ctx context.Context) {
 	userBehaviorConsumers.Add(1)
 	defer userBehaviorConsumers.Add(-1)
 	defer reader.Close()
+	if err := consumeUserBehaviorMessages(ctx, reader, applyUserBehaviorBatch); err != nil && ctx.Err() == nil {
+		log.Printf("[BehaviorProjection] consumer stopped: %v", err)
+	}
+}
+
+func consumeUserBehaviorMessages(
+	ctx context.Context,
+	reader userBehaviorMessageReader,
+	applyBatch func([]kafka.Message) error,
+) error {
 	for {
-		message, err := reader.FetchMessage(ctx)
+		first, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Printf("[BehaviorProjection] fetch Kafka message: %v", err)
 			}
-			return
+			return err
 		}
-		event, err := eventing.DecodeEnvelope(message.Value)
-		if err != nil {
-			log.Printf("[BehaviorProjection] discard malformed Kafka message: %v", err)
-		} else if isUserBehaviorEvent(event.Type) {
-			if err := applyUserBehaviorEvent(event); err != nil {
-				log.Printf("[BehaviorProjection] apply event: %v", err)
-				return
-			}
+		batch := collectUserBehaviorBatch(ctx, reader, first)
+		if err := applyBatch(batch); err != nil {
+			return fmt.Errorf("apply user behavior batch of %d messages: %w", len(batch), err)
 		}
-		if err := reader.CommitMessages(ctx, message); err != nil {
+		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() == nil {
-				log.Printf("[BehaviorProjection] commit Kafka message: %v", err)
+				log.Printf("[BehaviorProjection] commit Kafka batch: %v", err)
 			}
-			return
+			return err
 		}
 	}
+}
+
+func collectUserBehaviorBatch(ctx context.Context, reader userBehaviorMessageReader, first kafka.Message) []kafka.Message {
+	batch := []kafka.Message{first}
+	if len(batch) >= userBehaviorBatchSize {
+		return batch
+	}
+	collectCtx, cancel := context.WithTimeout(ctx, userBehaviorBatchWindow)
+	defer cancel()
+	for len(batch) < userBehaviorBatchSize {
+		message, err := reader.FetchMessage(collectCtx)
+		if err != nil {
+			if collectCtx.Err() != nil || ctx.Err() != nil {
+				break
+			}
+			log.Printf("[BehaviorProjection] collect Kafka message: %v", err)
+			break
+		}
+		batch = append(batch, message)
+	}
+	return batch
+}
+
+func applyUserBehaviorBatch(messages []kafka.Message) error {
+	records := make([]userBehaviorEventRecord, 0, len(messages))
+	seenEventIDs := make(map[string]struct{}, len(messages))
+	for _, message := range messages {
+		record, err := decodeUserBehaviorEvent(message.Value)
+		if err != nil {
+			log.Printf("[BehaviorProjection] discard malformed or unsupported Kafka message: %v", err)
+			continue
+		}
+		if _, exists := seenEventIDs[record.Envelope.ID]; exists {
+			log.Printf("[BehaviorProjection] discard duplicate event in fetched batch: %s", record.Envelope.ID)
+			continue
+		}
+		seenEventIDs[record.Envelope.ID] = struct{}{}
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	return applyUserBehaviorRecords(records)
+}
+
+func decodeUserBehaviorEvent(raw []byte) (userBehaviorEventRecord, error) {
+	event, err := eventing.DecodeEnvelope(raw)
+	if err != nil {
+		return userBehaviorEventRecord{}, err
+	}
+	if !isUserBehaviorEvent(event.Type) {
+		return userBehaviorEventRecord{}, fmt.Errorf("unsupported user behavior event type %q", event.Type)
+	}
+	var payload eventing.UserBehaviorPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return userBehaviorEventRecord{}, fmt.Errorf("decode user behavior payload: %w", err)
+	}
+	if payload.UserID == 0 || payload.ArticleID == 0 {
+		return userBehaviorEventRecord{}, errors.New("user behavior payload requires user_id and article_id")
+	}
+	if (event.Type == eventing.EventTypeArticleLiked || event.Type == eventing.EventTypeArticleUnliked) &&
+		payload.LikeVersion <= 0 {
+		return userBehaviorEventRecord{}, errors.New("like behavior payload requires positive like_version")
+	}
+	return userBehaviorEventRecord{Envelope: event, Payload: payload}, nil
 }
 
 func isUserBehaviorEvent(eventType string) bool {
-	return eventType == eventing.EventTypeArticleViewed || eventType == eventing.EventTypeArticleLiked || eventType == eventing.EventTypeArticleUnliked
+	return eventType == eventing.EventTypeArticleViewed ||
+		eventType == eventing.EventTypeArticleLiked ||
+		eventType == eventing.EventTypeArticleUnliked
 }
 
+// applyUserBehaviorEvent remains a single-event seam for existing operational and
+// focused tests. Kafka consumption always uses applyUserBehaviorBatch.
 func applyUserBehaviorEvent(event eventing.Envelope) error {
-	var payload eventing.UserBehaviorPayload
-	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return fmt.Errorf("decode user behavior payload: %w", err)
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return err
 	}
-	if payload.UserID == 0 || payload.ArticleID == 0 {
-		return fmt.Errorf("user behavior payload requires user_id and article_id")
+	return applyUserBehaviorBatch([]kafka.Message{{Value: raw}})
+}
+
+// ConsumerInbox retention must be coordinated with Kafka retention, the replay
+// window, and a future rebuild strategy before automatic cleanup is introduced.
+func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
+	if global.Db == nil {
+		return errors.New("database is not initialized")
 	}
+	consumerName := ""
+	if config.AppConfig != nil {
+		consumerName = strings.TrimSpace(config.AppConfig.Kafka.UserBehaviorGroupID)
+	}
+	if consumerName == "" {
+		return errors.New("user behavior consumer group is not configured")
+	}
+
 	return global.Db.Transaction(func(tx *gorm.DB) error {
-		firstDelivery, err := eventing.MarkInboxProcessed(tx, config.AppConfig.Kafka.UserBehaviorGroupID, event.ID)
-		if err != nil || !firstDelivery {
+		eventIDs := make([]string, 0, len(records))
+		for _, record := range records {
+			eventIDs = append(eventIDs, record.Envelope.ID)
+		}
+		firstDelivery, err := eventing.MarkInboxProcessedBatch(tx, consumerName, eventIDs)
+		if err != nil {
 			return err
 		}
-		now := event.OccurredAt
-		if now.IsZero() {
-			now = time.Now().UTC()
-		}
-		if err := applyArticleReactionProjection(tx, event.Type, payload, now); err != nil {
+
+		viewAggregates := aggregateUserBehaviorViews(records, firstDelivery)
+		if err := bulkUpsertArticleViewBehavior(tx, viewAggregates); err != nil {
 			return err
 		}
-		if event.Type == eventing.EventTypeArticleLiked || event.Type == eventing.EventTypeArticleUnliked {
-			return nil
-		}
-		return applyViewBehaviorProjection(tx, payload, now)
+
+		reactions := collapseUserBehaviorReactions(records, firstDelivery)
+		return bulkUpsertArticleReactions(tx, reactions)
 	})
 }
 
-func applyViewBehaviorProjection(tx *gorm.DB, payload eventing.UserBehaviorPayload, now time.Time) error {
-	behavior := models.ArticleBehavior{
-		UserID: payload.UserID, ArticleID: payload.ArticleID, Action: "view",
-		Count: 1, LastSeenAt: now, Active: true,
+func aggregateUserBehaviorViews(
+	records []userBehaviorEventRecord,
+	firstDelivery map[string]struct{},
+) []userBehaviorViewAggregate {
+	byPair := make(map[userBehaviorPair]userBehaviorViewAggregate)
+	for _, record := range records {
+		if record.Envelope.Type != eventing.EventTypeArticleViewed {
+			continue
+		}
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
+			continue
+		}
+		key := userBehaviorPair{UserID: record.Payload.UserID, ArticleID: record.Payload.ArticleID}
+		current := byPair[key]
+		current.Key = key
+		current.Count++
+		occurredAt := userBehaviorOccurredAt(record.Envelope)
+		if current.LastSeenAt.IsZero() || occurredAt.After(current.LastSeenAt) {
+			current.LastSeenAt = occurredAt
+		}
+		byPair[key] = current
 	}
-	if err := tx.Clauses(clause.OnConflict{
+
+	keys := make([]userBehaviorPair, 0, len(byPair))
+	for key := range byPair {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].UserID != keys[j].UserID {
+			return keys[i].UserID < keys[j].UserID
+		}
+		return keys[i].ArticleID < keys[j].ArticleID
+	})
+	result := make([]userBehaviorViewAggregate, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, byPair[key])
+	}
+	return result
+}
+
+func userBehaviorOccurredAt(event eventing.Envelope) time.Time {
+	if event.OccurredAt.IsZero() {
+		return time.Now().UTC()
+	}
+	return event.OccurredAt.UTC()
+}
+
+func bulkUpsertArticleViewBehavior(tx *gorm.DB, aggregates []userBehaviorViewAggregate) error {
+	if len(aggregates) == 0 {
+		return nil
+	}
+	updatedAt := time.Now().UTC()
+	rows := make([]models.ArticleBehavior, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		rows = append(rows, models.ArticleBehavior{
+			Model:      gorm.Model{CreatedAt: updatedAt, UpdatedAt: updatedAt},
+			UserID:     aggregate.Key.UserID,
+			ArticleID:  aggregate.Key.ArticleID,
+			Action:     "view",
+			Count:      aggregate.Count,
+			LastSeenAt: aggregate.LastSeenAt,
+			Active:     true,
+		})
+	}
+	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}, {Name: "action"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"count":        gorm.Expr("article_behaviors.count + ?", 1),
-			"last_seen_at": now, "active": true, "updated_at": now,
+			"count":        gorm.Expr("article_behaviors.count + EXCLUDED.count"),
+			"last_seen_at": gorm.Expr("GREATEST(article_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
+			"active":       true,
+			"updated_at":   gorm.Expr("EXCLUDED.updated_at"),
 		}),
-	}).Create(&behavior).Error; err != nil {
-		return err
+	}).Create(&rows).Error
+}
+
+func collapseUserBehaviorReactions(
+	records []userBehaviorEventRecord,
+	firstDelivery map[string]struct{},
+) []userBehaviorReactionCandidate {
+	byPair := make(map[userBehaviorPair]userBehaviorReactionCandidate)
+	for _, record := range records {
+		if record.Envelope.Type != eventing.EventTypeArticleLiked &&
+			record.Envelope.Type != eventing.EventTypeArticleUnliked {
+			continue
+		}
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
+			continue
+		}
+		key := userBehaviorPair{UserID: record.Payload.UserID, ArticleID: record.Payload.ArticleID}
+		candidate := userBehaviorReactionCandidate{
+			Key:      key,
+			Envelope: record.Envelope,
+			Payload:  record.Payload,
+			Liked:    record.Envelope.Type == eventing.EventTypeArticleLiked,
+		}
+		current, exists := byPair[key]
+		if !exists || candidate.Payload.LikeVersion > current.Payload.LikeVersion {
+			byPair[key] = candidate
+			continue
+		}
+		if candidate.Payload.LikeVersion == current.Payload.LikeVersion && candidate.Liked != current.Liked {
+			log.Printf(
+				"[BehaviorProjection] conflicting equal like_version user=%d article=%d version=%d; keeping earliest Kafka event",
+				key.UserID, key.ArticleID, candidate.Payload.LikeVersion,
+			)
+		}
 	}
-	return nil
+
+	keys := make([]userBehaviorPair, 0, len(byPair))
+	for key := range byPair {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].UserID != keys[j].UserID {
+			return keys[i].UserID < keys[j].UserID
+		}
+		return keys[i].ArticleID < keys[j].ArticleID
+	})
+	result := make([]userBehaviorReactionCandidate, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, byPair[key])
+	}
+	return result
 }
 
 func applyArticleReactionProjection(tx *gorm.DB, eventType string, payload eventing.UserBehaviorPayload, occurredAt time.Time) error {
-	if payload.LikeVersion <= 0 || (eventType != eventing.EventTypeArticleLiked && eventType != eventing.EventTypeArticleUnliked) {
+	if eventType != eventing.EventTypeArticleLiked && eventType != eventing.EventTypeArticleUnliked {
 		return nil
 	}
-	liked := eventType == eventing.EventTypeArticleLiked
-	reaction := models.ArticleReaction{
-		UserID: payload.UserID, ArticleID: payload.ArticleID,
-		Reaction: models.ArticleReactionLike, Liked: liked, Version: payload.LikeVersion, StateChangedAt: occurredAt.UTC(),
+	if payload.LikeVersion <= 0 {
+		return nil
+	}
+	candidate := userBehaviorReactionCandidate{
+		Key:      userBehaviorPair{UserID: payload.UserID, ArticleID: payload.ArticleID},
+		Envelope: eventing.Envelope{Type: eventType, OccurredAt: occurredAt},
+		Payload:  payload,
+		Liked:    eventType == eventing.EventTypeArticleLiked,
+	}
+	return bulkUpsertArticleReactions(tx, []userBehaviorReactionCandidate{candidate})
+}
+func bulkUpsertArticleReactions(tx *gorm.DB, candidates []userBehaviorReactionCandidate) error {
+	if len(candidates) == 0 {
+		return nil
+	}
+	updatedAt := time.Now().UTC()
+	rows := make([]models.ArticleReaction, 0, len(candidates))
+	for _, candidate := range candidates {
+		rows = append(rows, models.ArticleReaction{
+			UserID:         candidate.Key.UserID,
+			ArticleID:      candidate.Key.ArticleID,
+			Reaction:       models.ArticleReactionLike,
+			Liked:          candidate.Liked,
+			Version:        candidate.Payload.LikeVersion,
+			UpdatedAt:      updatedAt,
+			StateChangedAt: userBehaviorOccurredAt(candidate.Envelope),
+		})
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"reaction": models.ArticleReactionLike, "liked": liked,
-			"reaction_version": payload.LikeVersion, "state_changed_at": occurredAt.UTC(), "updated_at": time.Now().UTC(),
+			"reaction":         gorm.Expr("EXCLUDED.reaction"),
+			"liked":            gorm.Expr("EXCLUDED.liked"),
+			"reaction_version": gorm.Expr("EXCLUDED.reaction_version"),
+			"state_changed_at": gorm.Expr("EXCLUDED.state_changed_at"),
+			"updated_at":       gorm.Expr("EXCLUDED.updated_at"),
 		}),
 		Where: clause.Where{Exprs: []clause.Expression{
-			clause.Lt{Column: clause.Column{Table: "article_reaction", Name: "reaction_version"}, Value: payload.LikeVersion},
+			clause.Expr{SQL: "article_reaction.reaction_version < EXCLUDED.reaction_version"},
 		}},
-	}).Create(&reaction).Error
+	}).Create(&rows).Error
 }

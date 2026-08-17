@@ -19,3 +19,17 @@ func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 		t.Fatalf("storage credentials were not overridden")
 	}
 }
+func TestArticleViewEventsPerMinuteUsesDefaultAndClamps(t *testing.T) {
+	t.Setenv("ARTICLE_VIEW_EVENTS_PER_MINUTE", "")
+	if got := ArticleViewEventsPerMinute(); got != 300 {
+		t.Fatalf("default limit=%d want=300", got)
+	}
+	t.Setenv("ARTICLE_VIEW_EVENTS_PER_MINUTE", "0")
+	if got := ArticleViewEventsPerMinute(); got != 1 {
+		t.Fatalf("clamped limit=%d want=1", got)
+	}
+	t.Setenv("ARTICLE_VIEW_EVENTS_PER_MINUTE", "450")
+	if got := ArticleViewEventsPerMinute(); got != 450 {
+		t.Fatalf("configured limit=%d want=450", got)
+	}
+}

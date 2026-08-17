@@ -142,7 +142,7 @@ import { deleteArticle, getArticleById } from '../services/articleService';
 import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
-import { enqueueArticleView } from '../services/articleViewTelemetry';
+import { getArticleViewTelemetry } from '../services/articleViewTelemetry';
 import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
@@ -276,6 +276,7 @@ const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : null;
 });
+const articleViewTelemetry = getArticleViewTelemetry(() => currentViewerID.value);
 
 const canDeleteArticle = computed(() => Boolean(
   article.value
@@ -821,7 +822,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       return;
     }
 
-    void enqueueArticleView(Number(id), ensureArticleViewEventID(id));
+    articleViewTelemetry.enqueue(Number(id), ensureArticleViewEventID(id));
     if (articleBodyRef.value) {
       startRead(id, detailVersion);
     }

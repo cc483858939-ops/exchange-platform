@@ -153,6 +153,14 @@ func RecommendationTelemetryEventsPerMinute() int {
 	return limit
 }
 
+func ArticleViewEventsPerMinute() int {
+	limit := envInt("ARTICLE_VIEW_EVENTS_PER_MINUTE", 300)
+	if limit < 1 {
+		return 1
+	}
+	return limit
+}
+
 func StorageEndpoint() string {
 	if endpoint := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); endpoint != "" {
 		return endpoint
