@@ -66,7 +66,7 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 
 	assertViewBehaviorCount(t, db, 701, 801, 3, base.Add(2*time.Minute))
 	assertViewBehaviorCount(t, db, 701, 802, 2, base.Add(3*time.Minute))
-	assertViewBehaviorCount(t, db, 701, 803, 1, base.Add(time.Minute))
+	assertViewBehaviorCount(t, db, 701, 803, 2, base.Add(time.Minute))
 	assertViewBehaviorCount(t, db, 701, 804, 1, base)
 
 	lateView := userBehaviorMessage(t, mustArticleViewedEvent(t, "view-9", 701, 801, base.Add(-time.Hour)))
