@@ -28,6 +28,20 @@ x-go-environment: &go-environment
   EMBEDDING_TIMEOUT_SECONDS: "${EMBEDDING_TIMEOUT_SECONDS:-10}"
 
 services:
+  embedding:
+    image: ollama/ollama:latest
+    gpus: all
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - "D:/code/docker-data/goexchange-ollama-data:/root/.ollama"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
   frontend:
     build:
       context: ./Exchangeapp_frontend
