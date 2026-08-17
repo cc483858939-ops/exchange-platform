@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { ArticleReadTracker } from '../services/articleReadTracker';
 import NewsDetailView from './NewsDetailView.vue';
+import { formatCompactEngagementCount } from '../utils/engagementCount';
 
 const mocks = vi.hoisted(() => ({
   getArticleById: vi.fn(),
@@ -151,30 +152,57 @@ describe('NewsDetailView attributed read lifecycle', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders before consuming attribution, starts tracking, and ends once on route termination', async () => {
-    const trackerStart = vi.spyOn(ArticleReadTracker.prototype, 'start');
-
-    mounted = mount(NewsDetailView, {
-      attachTo: document.body,
-      global: {
-        stubs: {
-          AppIcon: { template: '<span />' },
-          AuthorIdentity: { template: '<span />' },
-          CommentComposer: { template: '<div />' },
-          CommentList: { template: '<div />' },
-          RouterLink: { template: '<a><slot /></a>' },
-        },
+  const mountDetail = () => mount(NewsDetailView, {
+    attachTo: document.body,
+    global: {
+      stubs: {
+        AppIcon: { template: '<span />' },
+        AuthorIdentity: { template: '<span />' },
+        CommentComposer: { template: '<div />' },
+        CommentList: { template: '<div />' },
+        RouterLink: { template: '<a><slot /></a>' },
       },
-    });
+    },
+  });
 
+  it('does not enqueue a View when the article request fails', async () => {
+    mocks.getArticleById.mockRejectedValueOnce(new Error('offline'));
+
+    mounted = mountDetail();
     await flushPromises();
 
+    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue a View when the response ID mismatches the route', async () => {
+    mocks.getArticleById.mockResolvedValueOnce({ ...article, ID: 43 });
+
+    mounted = mountDetail();
+    await flushPromises();
+
+    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('renders the server View count without optimistic increment and keeps one lifecycle event', async () => {
+    const trackerStart = vi.spyOn(ArticleReadTracker.prototype, 'start');
+
+    mounted = mountDetail();
+    await flushPromises();
+
+    const viewMetric = mounted.find('.article-detail__engagement .engagement-metric[aria-label]');
+    expect(viewMetric.attributes('aria-label')).toBe('1,234 views');
+    expect(viewMetric.findAll('span')[1]?.text()).toBe(formatCompactEngagementCount(1234));
     expect(mounted.find('.detail-state').exists()).toBe(false);
     expect(mounted.find('.article-detail__body').exists()).toBe(true);
     expect(mocks.assertBodyAtConsume).toHaveBeenCalledWith(expect.any(HTMLElement));
     expect(trackerStart).toHaveBeenCalledTimes(1);
     expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
     expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(42, expect.any(String), 'article_detail');
+
+    await flushPromises();
+    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
+    expect(viewMetric.attributes('aria-label')).toBe('1,234 views');
+    expect(viewMetric.findAll('span')[1]?.text()).toBe(formatCompactEngagementCount(1234));
 
     mocks.routeLeave({ name: 'Home' });
     mounted.unmount();

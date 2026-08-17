@@ -156,14 +156,21 @@
 
     <template v-else-if="props.name === 'analytics'">
       <path
-        d="M5 19.25V11m7 8.25V5m7 14.25v-9"
+        d="M5 18v-4"
         fill="none"
         stroke="currentColor"
         stroke-width="1.8"
         stroke-linecap="round"
       />
       <path
-        d="M4 19.25h16"
+        d="M12 18V9"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+      <path
+        d="M19 18V5"
         fill="none"
         stroke="currentColor"
         stroke-width="1.8"

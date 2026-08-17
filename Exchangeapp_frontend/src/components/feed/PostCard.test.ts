@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { mount, RouterLinkStub } from '@vue/test-utils';
 import PostCard from './PostCard.vue';
 import type { FeedPost } from '../../types/Feed';
 import { formatCompactEngagementCount } from '../../utils/engagementCount';
@@ -9,6 +9,7 @@ import { formatCompactEngagementCount } from '../../utils/engagementCount';
 const mocks = vi.hoisted(() => ({
   observeFeedCard: vi.fn(),
   unobserveFeedCard: vi.fn(),
+  enqueue: vi.fn(),
 }));
 
 vi.mock('../../services/articleViewTelemetry', () => ({
@@ -56,17 +57,32 @@ describe('PostCard View metric and telemetry lifecycle', () => {
           props: ['name'],
           template: '<span class="test-icon" :data-icon="name" />',
         },
-        RouterLink: { template: '<a><slot /></a>' },
+        RouterLink: RouterLinkStub,
       },
     },
   });
 
-  it('renders a compact accessible View metric with the analytics icon', () => {
-    const wrapper = mountPostCard();
+  it('renders a navigable compact View metric with the analytics icon and destination', async () => {
+    const post = basePost();
+    const wrapper = mountPostCard(post);
+    const views = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-card__views'));
 
-    expect(wrapper.find('.post-card__views').text()).toContain(formatCompactEngagementCount(1234));
-    expect(wrapper.find('.post-card__views').attributes('aria-label')).toBe('1,234 views');
+    expect(views?.props('to')).toEqual({
+      name: 'NewsDetail',
+      params: { id: '42' },
+    });
+    expect(views?.text()).toContain(formatCompactEngagementCount(1234));
+    expect(views?.attributes('aria-label')).toBe('Open post, 1,234 views');
     expect(wrapper.find('[data-icon="analytics"]').exists()).toBe(true);
+
+    await views?.trigger('click');
+
+    expect(wrapper.emitted('articleClick')).toEqual([[post]]);
+    expect(wrapper.emitted('toggleLike') ?? []).toHaveLength(0);
+    expect(wrapper.emitted('notInterested') ?? []).toHaveLength(0);
+    expect(wrapper.emitted('deletePost') ?? []).toHaveLength(0);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it('observes on mount, replaces stale observation on id change, and unobserves on unmount', async () => {

@@ -43,6 +43,7 @@ describe('ArticleViewTelemetryClient', () => {
   let currentUserID: number | null = 7;
 
   beforeEach(() => {
+    currentUserID = 7;
     vi.useFakeTimers();
     vi.clearAllTimers();
     vi.resetAllMocks();
@@ -57,6 +58,38 @@ describe('ArticleViewTelemetryClient', () => {
     sessionStorage.clear();
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it('returns queue acceptance for valid and invalid events', async () => {
+    const first = event(1);
+    mocks.post.mockRejectedValue(new Error('offline'));
+
+    expect(client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at)).toBe(true);
+    await settle();
+
+    expect(client.enqueue(0, event(2).event_id, 'article_detail')).toBe(false);
+    expect(client.enqueue(42, '', 'article_detail')).toBe(false);
+    currentUserID = null;
+    expect(client.enqueue(42, event(3).event_id, 'article_detail')).toBe(false);
+    currentUserID = 7;
+    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toHaveLength(1);
+  });
+
+  it('deduplicates compatible event IDs and rejects conflicting identities', async () => {
+    const first = event(1);
+    mocks.post.mockRejectedValue(new Error('offline'));
+
+    expect(client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at)).toBe(true);
+    await settle();
+    const saved = JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]');
+
+    expect(client.enqueue(first.article_id, first.event_id, 'article_detail', '2026-08-17T00:00:00.000Z')).toBe(true);
+    expect(client.enqueue(first.article_id + 1, first.event_id, 'article_detail')).toBe(false);
+    expect(client.enqueue(first.article_id, first.event_id, 'feed')).toBe(false);
+    currentUserID = 8;
+    expect(client.enqueue(first.article_id, first.event_id, 'article_detail')).toBe(false);
+
+    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual(saved);
   });
 
   it('retains network failures and schedules the first retry', async () => {
@@ -409,6 +442,76 @@ describe('ArticleViewTelemetryClient', () => {
       });
     } else {
       delete (globalThis as Partial<typeof globalThis>).IntersectionObserver;
+    }
+  });
+
+  it('does not poison a feed observation after unauthenticated qualification', async () => {
+    const originalObserver = globalThis.IntersectionObserver;
+    const observers: FakeIntersectionObserver[] = [];
+    class FakeIntersectionObserver {
+      callback: IntersectionObserverCallback;
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      emit(target: HTMLElement, ratio: number): void {
+        this.callback(
+          [{ target, intersectionRatio: ratio } as unknown as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+    }
+    Object.defineProperty(globalThis, 'IntersectionObserver', {
+      configurable: true,
+      writable: true,
+      value: FakeIntersectionObserver,
+    });
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('visible');
+    let feedClient: ArticleViewTelemetryClient | null = null;
+
+    try {
+      currentUserID = null;
+      feedClient = new ArticleViewTelemetryClient(() => currentUserID);
+      mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+        successResponse(body.events));
+      feedClient.start();
+      const card = document.createElement('article');
+      feedClient.observeFeedCard(card, 47);
+      observers[0].emit(card, 0.8);
+      await vi.advanceTimersByTimeAsync(1000);
+      await settle();
+
+      expect(mocks.post).not.toHaveBeenCalled();
+      expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual([]);
+
+      currentUserID = 7;
+      observers[0].emit(card, 0.49);
+      observers[0].emit(card, 0.8);
+      await vi.advanceTimersByTimeAsync(1000);
+      await settle();
+
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+      expect(mocks.post.mock.calls[0][1].events[0]).toMatchObject({
+        article_id: 47,
+        source: 'feed',
+      });
+    } finally {
+      feedClient?.stop();
+      visibility.mockRestore();
+      currentUserID = 7;
+      if (originalObserver) {
+        Object.defineProperty(globalThis, 'IntersectionObserver', {
+          configurable: true,
+          writable: true,
+          value: originalObserver,
+        });
+      } else {
+        delete (globalThis as Partial<typeof globalThis>).IntersectionObserver;
+      }
     }
   });
 

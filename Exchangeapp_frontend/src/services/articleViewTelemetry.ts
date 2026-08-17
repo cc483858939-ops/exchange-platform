@@ -165,7 +165,7 @@ export class ArticleViewTelemetryClient {
     eventID: string,
     source: ArticleViewSource,
     occurredAt = new Date().toISOString(),
-  ): void {
+  ): boolean {
     const ownerUserID = this.getCurrentUserID();
     const normalizedEventID = eventID.trim();
     if (
@@ -175,20 +175,32 @@ export class ArticleViewTelemetryClient {
       || !normalizedEventID
       || !isValidSource(source)
     ) {
-      return;
+      return false;
     }
-    if (!this.queue.some(event => event.event_id === normalizedEventID)) {
-      this.queue.push({
-        owner_user_id: ownerUserID,
-        event_id: normalizedEventID,
-        article_id: articleID,
-        occurred_at: occurredAt,
-        source,
-      });
-      this.queue = this.queue.slice(-maxBufferedEvents);
-      this.persistQueue();
+
+    const existingEvent = this.queue.find(event => event.event_id === normalizedEventID);
+    if (existingEvent) {
+      const isSameLogicalEvent = existingEvent.owner_user_id === ownerUserID
+        && existingEvent.article_id === articleID
+        && existingEvent.source === source;
+      if (!isSameLogicalEvent) {
+        return false;
+      }
+      void this.flush();
+      return true;
     }
+
+    this.queue.push({
+      owner_user_id: ownerUserID,
+      event_id: normalizedEventID,
+      article_id: articleID,
+      occurred_at: occurredAt,
+      source,
+    });
+    this.queue = this.queue.slice(-maxBufferedEvents);
+    this.persistQueue();
     void this.flush();
+    return true;
   }
 
   observeFeedCard(element: HTMLElement, articleID: number): void {
@@ -325,8 +337,14 @@ export class ArticleViewTelemetryClient {
       ) {
         return;
       }
-      observation.emitted = true;
-      this.enqueue(observation.articleID, createArticleViewEventID(), 'feed');
+      const accepted = this.enqueue(
+        observation.articleID,
+        createArticleViewEventID(),
+        'feed',
+      );
+      if (accepted) {
+        observation.emitted = true;
+      }
     }, feedQualificationDurationMS);
   }
 

@@ -141,15 +141,19 @@
         </span>
         <span class="post-card__like-count">{{ post.likeCount }}</span>
       </button>
-      <span
+      <RouterLink
         class="post-card__metric post-card__views"
-        :aria-label="viewLabel"
-        :title="viewLabel"
+        :to="{
+          name: 'NewsDetail',
+          params: { id: String(post.id) },
+        }"
+        :aria-label="viewActionLabel"
+        :title="viewActionLabel"
+        @click="emit('articleClick', post)"
       >
         <AppIcon name="analytics" :size="18" />
         <span>{{ compactViewCount }}</span>
-        <span class="sr-only">{{ viewLabel }}</span>
-      </span>
+      </RouterLink>
     </div>
   </article>
 </template>
@@ -250,6 +254,7 @@ const replyLabel = computed(() => {
 
 const compactViewCount = computed(() => formatCompactEngagementCount(props.post.viewCount));
 const viewLabel = computed(() => formatAccessibleEngagementCount(props.post.viewCount, 'views'));
+const viewActionLabel = computed(() => 'Open post, ' + viewLabel.value);
 
 const observeCurrentPost = () => {
   if (postCardRef.value) {
@@ -591,7 +596,8 @@ onBeforeUnmount(() => {
 }
 
 .post-card__like,
-.post-card__reply {
+.post-card__reply,
+.post-card__views {
   min-width: 40px;
   min-height: 40px;
   margin: -8px 0;
@@ -608,7 +614,8 @@ onBeforeUnmount(() => {
   transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
 }
 
-.post-card__reply {
+.post-card__reply,
+.post-card__views {
   color: inherit;
   text-decoration: none;
   transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
@@ -709,6 +716,8 @@ onBeforeUnmount(() => {
 
 .post-card__reply:hover,
 .post-card__reply:focus-visible,
+.post-card__views:hover,
+.post-card__views:focus-visible,
 .post-card__more-button:hover,
 .post-card__more-button:focus-visible {
   background: var(--color-surface-subtle);
@@ -717,6 +726,7 @@ onBeforeUnmount(() => {
 
 .post-card__like:active:not(:disabled),
 .post-card__reply:active,
+.post-card__views:active,
 .post-card__more-button:active {
   transform: scale(0.97);
 }
@@ -736,6 +746,7 @@ onBeforeUnmount(() => {
 }
 
 .post-card__reply .app-icon,
+.post-card__views .app-icon,
 .post-card__like-icon .app-icon {
   width: 18px;
   height: 18px;
@@ -926,6 +937,7 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .post-card__like,
   .post-card__reply,
+  .post-card__views,
   .post-card__more-button {
     transition: none;
   }
