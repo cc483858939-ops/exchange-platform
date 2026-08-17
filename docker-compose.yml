@@ -47,6 +47,15 @@ services:
       db:
         condition: service_healthy
 
+  kafka-init:
+    <<: *go-service
+    command: ["go", "run", "./cmd/kafka-init"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: "${KAFKA_BROKERS:-}"
+    restart: "no"
   api:
     <<: *go-service
     command: ["go", "run", "main.go"]
@@ -55,8 +64,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_started
-      kafka:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
       minio:
         condition: service_started
     environment:
@@ -79,8 +88,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_started
-      kafka:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
       minio:
         condition: service_started
     environment:
@@ -155,6 +164,13 @@ services:
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
       - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=false
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     volumes:
       - kafka_data:/bitnami/kafka
     restart: unless-stopped

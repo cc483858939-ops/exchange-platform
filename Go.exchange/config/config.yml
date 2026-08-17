@@ -29,6 +29,12 @@ kafka:
   user_behavior_topic: "goexchange.user.behavior.v1"
   like_snapshot_topic: "goexchange.article.like.snapshot.v1"
   recommendation_events_topic: "goexchange.recommendation.events.v1"
+  topic_replication_factor: 1
+  article_analysis_partitions: 3
+  article_analysis_dlq_partitions: 3
+  user_behavior_partitions: 12
+  like_snapshot_partitions: 6
+  recommendation_events_partitions: 12
   article_analysis_group_id: "goexchange-article-analysis-v1"
   user_behavior_group_id: "goexchange-user-behavior-projection-v1"
   like_snapshot_group_id: "goexchange-like-snapshot-projection-v1"

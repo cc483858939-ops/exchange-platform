@@ -133,6 +133,61 @@ jobs:
             exit 1
           fi
 
+  kafka-bootstrap:
+    name: Kafka / Topic Bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Go.exchange
+    env:
+      KAFKA_BROKERS: "127.0.0.1:9092"
+    services:
+      kafka:
+        image: bitnamilegacy/kafka:latest
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_CFG_NODE_ID: 0
+          KAFKA_CFG_PROCESS_ROLES: controller,broker
+          KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+          KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+          KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+          KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+        options: >-
+          --health-cmd "kafka-topics.sh --bootstrap-server localhost:9092 --list"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 10s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: Go.exchange/go.mod
+          cache-dependency-path: Go.exchange/go.sum
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Provision topics first time
+        run: go run ./cmd/kafka-init
+
+      - name: Provision topics idempotently
+        run: go run ./cmd/kafka-init
+
+      - name: Assert broker exposes all provisioned topics
+        shell: bash
+        run: |
+          kafka_container="$(docker ps --filter ancestor=bitnamilegacy/kafka:latest --format '{{.ID}}' | head -n 1)"
+          topic_count="$(docker exec "$kafka_container" kafka-topics.sh --bootstrap-server localhost:9092 --list | wc -l)"
+          test "$topic_count" -eq 5
   frontend:
     name: Frontend / Test and Build
     runs-on: ubuntu-latest

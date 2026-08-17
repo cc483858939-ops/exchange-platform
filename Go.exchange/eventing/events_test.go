@@ -67,3 +67,37 @@ func TestRecommendationBehaviorEnvelopeRejectsMissingStructuralFields(t *testing
 		t.Fatal("expected missing position error")
 	}
 }
+func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
+	cfg := config.KafkaConfig{
+		Brokers:              []string{"kafka:9092"},
+		ArticleAnalysisTopic: "analysis", ArticleAnalysisDLQTopic: "analysis-dlq",
+		UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation",
+		TopicReplicationFactor:    1,
+		ArticleAnalysisPartitions: 3, ArticleAnalysisDLQPartitions: 3, UserBehaviorPartitions: 12,
+		LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12,
+	}
+	specs, err := RequiredKafkaTopics(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisioned := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		provisioned[spec.Name] = struct{}{}
+	}
+	for _, eventType := range []string{
+		EventTypeArticleAnalysisRequested, EventTypeArticleAnalysisDead,
+		EventTypeArticleViewed, EventTypeArticleLiked, EventTypeArticleUnliked,
+		EventTypeArticleLikeSnapshot,
+		EventTypeRecommendationImpression, EventTypeRecommendationClick,
+		EventTypeRecommendationReadEnd, EventTypeRecommendationFeedDwell,
+		EventTypeRecommendationNotInterested,
+	} {
+		topic, err := TopicForEvent(cfg, eventType)
+		if err != nil {
+			t.Fatalf("event type %q: %v", eventType, err)
+		}
+		if _, ok := provisioned[topic]; !ok {
+			t.Fatalf("event type %q resolves to unprovisioned topic %q", eventType, topic)
+		}
+	}
+}

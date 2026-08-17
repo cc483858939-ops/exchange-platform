@@ -22,19 +22,25 @@ type AIConfig struct {
 }
 
 type KafkaConfig struct {
-	Brokers                      []string `mapstructure:"brokers"`
-	ArticleAnalysisTopic         string   `mapstructure:"article_analysis_topic"`
-	ArticleAnalysisDLQTopic      string   `mapstructure:"article_analysis_dlq_topic"`
-	UserBehaviorTopic            string   `mapstructure:"user_behavior_topic"`
-	LikeSnapshotTopic            string   `mapstructure:"like_snapshot_topic"`
-	RecommendationEventsTopic    string   `mapstructure:"recommendation_events_topic"`
-	ArticleAnalysisGroupID       string   `mapstructure:"article_analysis_group_id"`
-	UserBehaviorGroupID          string   `mapstructure:"user_behavior_group_id"`
-	LikeSnapshotGroupID          string   `mapstructure:"like_snapshot_group_id"`
-	RecommendationMetricsGroupID string   `mapstructure:"recommendation_metrics_group_id"`
-	OutboxPollIntervalSecond     int      `mapstructure:"outbox_poll_interval_seconds"`
-	JobLeaseSeconds              int      `mapstructure:"job_lease_seconds"`
-	JobMaxAttempts               int      `mapstructure:"job_max_attempts"`
+	Brokers                        []string `mapstructure:"brokers"`
+	ArticleAnalysisTopic           string   `mapstructure:"article_analysis_topic"`
+	ArticleAnalysisDLQTopic        string   `mapstructure:"article_analysis_dlq_topic"`
+	UserBehaviorTopic              string   `mapstructure:"user_behavior_topic"`
+	LikeSnapshotTopic              string   `mapstructure:"like_snapshot_topic"`
+	RecommendationEventsTopic      string   `mapstructure:"recommendation_events_topic"`
+	TopicReplicationFactor         int      `mapstructure:"topic_replication_factor"`
+	ArticleAnalysisPartitions      int      `mapstructure:"article_analysis_partitions"`
+	ArticleAnalysisDLQPartitions   int      `mapstructure:"article_analysis_dlq_partitions"`
+	UserBehaviorPartitions         int      `mapstructure:"user_behavior_partitions"`
+	LikeSnapshotPartitions         int      `mapstructure:"like_snapshot_partitions"`
+	RecommendationEventsPartitions int      `mapstructure:"recommendation_events_partitions"`
+	ArticleAnalysisGroupID         string   `mapstructure:"article_analysis_group_id"`
+	UserBehaviorGroupID            string   `mapstructure:"user_behavior_group_id"`
+	LikeSnapshotGroupID            string   `mapstructure:"like_snapshot_group_id"`
+	RecommendationMetricsGroupID   string   `mapstructure:"recommendation_metrics_group_id"`
+	OutboxPollIntervalSecond       int      `mapstructure:"outbox_poll_interval_seconds"`
+	JobLeaseSeconds                int      `mapstructure:"job_lease_seconds"`
+	JobMaxAttempts                 int      `mapstructure:"job_max_attempts"`
 }
 
 type RecommendationBehaviorWeights struct {
@@ -110,6 +116,9 @@ func LoadConfig() {
 }
 
 func applySensitiveEnvironmentOverrides(config *Config) {
+	if brokers := parseCSVEnvironment("KAFKA_BROKERS"); len(brokers) > 0 {
+		config.Kafka.Brokers = brokers
+	}
 	if value := strings.TrimSpace(os.Getenv("DATABASE_DSN")); value != "" {
 		config.Database.Dsn = value
 	}
@@ -142,6 +151,19 @@ func applySensitiveEnvironmentOverrides(config *Config) {
 	}
 }
 
+func parseCSVEnvironment(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	values := make([]string, 0)
+	for _, value := range strings.Split(raw, ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
 func InitDB() {
 	initDB()
 }

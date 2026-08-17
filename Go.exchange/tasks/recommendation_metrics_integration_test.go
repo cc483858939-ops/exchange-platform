@@ -35,16 +35,18 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.RecommendationMetricsGroupID = groupID
 	global.Db = db
+
+	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Where("strategy_id LIKE ?", groupID+"%").Delete(&models.RecommendationDailyMetric{})
-		db.Where("user_id = ?", 7).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("user_id = ?", userID).Delete(&models.ArticleBehavior{})
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
 	baseAt := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
-		UserID: 7, ArticleID: 11, RequestID: uuid.NewString(),
+		UserID: userID, ArticleID: 11, RequestID: uuid.NewString(),
 		Scene: "recommendation_page", Position: 1,
 		RankerVersion: "rules_v3", RankerConfigHash: "0123456789ab",
 		StrategyID: groupID, ReceivedAt: baseAt,
@@ -116,7 +118,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 
 	var clickBehavior models.ArticleBehavior
-	if err := db.Where("user_id = ? AND article_id = ? AND action = ?", 7, 11, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
+	if err := db.Where("user_id = ? AND article_id = ? AND action = ?", userID, 11, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
 		t.Fatal(err)
 	}
 	if clickBehavior.Count != 1 {

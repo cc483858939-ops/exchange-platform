@@ -1,6 +1,7 @@
 package initialize
 
 import (
+	"database/sql"
 	"os"
 	"strings"
 	"testing"
@@ -61,10 +62,11 @@ func TestRunMigrationsIsIdempotentIntegration(t *testing.T) {
 	}
 
 	var metricColumns []struct {
-		Name     string
-		Nullable string
+		Name     string `gorm:"column:name"`
+		Nullable string `gorm:"column:nullable"`
 	}
-	metricQuery := "SELECT column_name, is_nullable FROM information_schema.columns " +
+	metricQuery := "SELECT column_name AS name, is_nullable AS nullable " +
+		"FROM information_schema.columns " +
 		"WHERE table_schema = current_schema() AND table_name = 'recommendation_daily_metrics' " +
 		"AND column_name IN ('feed_dwell_count', 'feed_visible_time_ms') ORDER BY column_name"
 	if err := db.Raw(metricQuery).Scan(&metricColumns).Error; err != nil {
@@ -78,6 +80,23 @@ func TestRunMigrationsIsIdempotentIntegration(t *testing.T) {
 			t.Fatalf("%s nullable=%q want NO", column.Name, column.Nullable)
 		}
 	}
+	var reactionColumn struct {
+		Nullable string         `gorm:"column:nullable"`
+		Default  sql.NullString `gorm:"column:column_default"`
+	}
+	reactionQuery := "SELECT is_nullable AS nullable, column_default AS column_default " +
+		"FROM information_schema.columns " +
+		"WHERE table_schema = current_schema() AND table_name = 'article_reaction' AND column_name = 'liked'"
+	if err := db.Raw(reactionQuery).Scan(&reactionColumn).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reactionColumn.Nullable != "NO" {
+		t.Fatalf("article_reaction.liked nullable=%q want NO", reactionColumn.Nullable)
+	}
+	if reactionColumn.Default.Valid {
+		t.Fatalf("article_reaction.liked default=%q want NULL", reactionColumn.Default.String)
+	}
+
 	assertRecommendationRetrievalV1Indexes(t, db)
 }
 

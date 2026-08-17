@@ -43,6 +43,23 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	}
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	directReaction := models.ArticleReaction{
+		UserID: 12, ArticleID: article.ID + 1, Reaction: models.ArticleReactionLike,
+		Liked: false, Version: 1, StateChangedAt: now,
+	}
+	if err := db.Create(&directReaction).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Where("user_id = ? AND article_id = ?", directReaction.UserID, directReaction.ArticleID).Delete(&models.ArticleReaction{})
+	})
+	var reloadedDirect models.ArticleReaction
+	if err := db.First(&reloadedDirect, "user_id = ? AND article_id = ?", directReaction.UserID, directReaction.ArticleID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reloadedDirect.Liked {
+		t.Fatalf("direct Liked=false persistence returned true: %+v", reloadedDirect)
+	}
 	like := eventing.UserBehaviorPayload{UserID: 11, ArticleID: article.ID, LikeVersion: 3}
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		return applyArticleReactionProjection(tx, eventing.EventTypeArticleLiked, like, now)

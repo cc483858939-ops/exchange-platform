@@ -35,26 +35,29 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
 	global.Db = db
+
+	userOneID := uint(time.Now().UnixNano() & 0x3fffffff)
+	userTwoID := userOneID + 1
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
-		db.Where("user_id IN ?", []uint{701, 702}).Delete(&models.ArticleBehavior{})
-		db.Where("user_id IN ?", []uint{701, 702}).Delete(&models.ArticleReaction{})
+		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.ArticleReaction{})
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
 	base := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	viewMessages := make([]kafka.Message, 0, 8)
 	viewMessages = append(viewMessages,
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-1", 701, 801, base.Add(2*time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-2", 701, 801, base)),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-3", 701, 801, base.Add(time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-4", 701, 802, base.Add(time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-5", 701, 802, base.Add(3*time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-6", 701, 803, base)),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-1", userOneID, 801, base.Add(2*time.Minute))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-2", userOneID, 801, base)),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-3", userOneID, 801, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-4", userOneID, 802, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-5", userOneID, 802, base.Add(3*time.Minute))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-6", userOneID, 803, base)),
 		kafka.Message{Value: []byte("{malformed")},
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-7", 701, 803, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-7", userOneID, 803, base.Add(time.Minute))),
 	)
-	duplicate := userBehaviorMessage(t, mustArticleViewedEvent(t, "view-8", 701, 804, base))
+	duplicate := userBehaviorMessage(t, mustArticleViewedEvent(t, "view-8", userOneID, 804, base))
 	viewMessages = append(viewMessages, duplicate, duplicate)
 
 	if err := applyUserBehaviorBatch(viewMessages); err != nil {
@@ -64,50 +67,80 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		t.Fatal(err)
 	}
 
-	assertViewBehaviorCount(t, db, 701, 801, 3, base.Add(2*time.Minute))
-	assertViewBehaviorCount(t, db, 701, 802, 2, base.Add(3*time.Minute))
-	assertViewBehaviorCount(t, db, 701, 803, 2, base.Add(time.Minute))
-	assertViewBehaviorCount(t, db, 701, 804, 1, base)
+	assertViewBehaviorCount(t, db, userOneID, 801, 3, base.Add(2*time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, 802, 2, base.Add(3*time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, 803, 2, base.Add(time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, 804, 1, base)
 
-	lateView := userBehaviorMessage(t, mustArticleViewedEvent(t, "view-9", 701, 801, base.Add(-time.Hour)))
+	lateView := userBehaviorMessage(t, mustArticleViewedEvent(t, "view-9", userOneID, 801, base.Add(-time.Hour)))
 	if err := applyUserBehaviorBatch([]kafka.Message{lateView}); err != nil {
 		t.Fatal(err)
 	}
-	assertViewBehaviorCount(t, db, 701, 801, 4, base.Add(2*time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, 801, 4, base.Add(2*time.Minute))
 
 	reactionMessages := []kafka.Message{
-		userBehaviorMessage(t, mustLikeEvent("reaction-v5", eventing.EventTypeArticleLiked, 701, 805, 5, base)),
-		userBehaviorMessage(t, mustLikeEvent("reaction-v7", eventing.EventTypeArticleUnliked, 701, 805, 7, base.Add(time.Minute))),
-		userBehaviorMessage(t, mustLikeEvent("reaction-v6", eventing.EventTypeArticleLiked, 701, 805, 6, base.Add(2*time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v5", eventing.EventTypeArticleLiked, userOneID, 805, 5, base)),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v7", eventing.EventTypeArticleUnliked, userOneID, 805, 7, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v6", eventing.EventTypeArticleLiked, userOneID, 805, 6, base.Add(2*time.Minute))),
 	}
 	if err := applyUserBehaviorBatch(reactionMessages); err != nil {
 		t.Fatal(err)
 	}
-	assertReaction(t, db, 701, 805, false, 7, base.Add(time.Minute))
+	assertReaction(t, db, userOneID, 805, false, 7, base.Add(time.Minute))
 
 	if err := db.Create(&models.ArticleReaction{
-		UserID: 702, ArticleID: 806, Reaction: models.ArticleReactionLike,
+		UserID: userTwoID, ArticleID: 806, Reaction: models.ArticleReactionLike,
 		Liked: true, Version: 10, UpdatedAt: base, StateChangedAt: base,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	staleReactions := []kafka.Message{
-		userBehaviorMessage(t, mustLikeEvent("reaction-v8", eventing.EventTypeArticleLiked, 702, 806, 8, base.Add(time.Minute))),
-		userBehaviorMessage(t, mustLikeEvent("reaction-v9", eventing.EventTypeArticleUnliked, 702, 806, 9, base.Add(2*time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v8", eventing.EventTypeArticleLiked, userTwoID, 806, 8, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v9", eventing.EventTypeArticleUnliked, userTwoID, 806, 9, base.Add(2*time.Minute))),
 	}
 	if err := applyUserBehaviorBatch(staleReactions); err != nil {
 		t.Fatal(err)
 	}
-	assertReaction(t, db, 702, 806, true, 10, base)
+	assertReaction(t, db, userTwoID, 806, true, 10, base)
 
 	tieReactions := []kafka.Message{
-		userBehaviorMessage(t, mustLikeEvent("reaction-tie-like", eventing.EventTypeArticleLiked, 702, 807, 12, base)),
-		userBehaviorMessage(t, mustLikeEvent("reaction-tie-unlike", eventing.EventTypeArticleUnliked, 702, 807, 12, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-tie-like", eventing.EventTypeArticleLiked, userTwoID, 807, 12, base)),
+		userBehaviorMessage(t, mustLikeEvent("reaction-tie-unlike", eventing.EventTypeArticleUnliked, userTwoID, 807, 12, base.Add(time.Minute))),
 	}
 	if err := applyUserBehaviorBatch(tieReactions); err != nil {
 		t.Fatal(err)
 	}
-	assertReaction(t, db, 702, 807, true, 12, base)
+	assertReaction(t, db, userTwoID, 807, true, 12, base)
+
+	reactionMatrix := []struct {
+		articleID          uint
+		initialLiked       bool
+		initialVersion     int64
+		incomingType       string
+		incomingVersion    int64
+		wantLiked          bool
+		wantVersion        int64
+		wantStateChangedAt time.Time
+	}{
+		{articleID: 808, initialLiked: false, initialVersion: 10, incomingType: eventing.EventTypeArticleLiked, incomingVersion: 11, wantLiked: true, wantVersion: 11, wantStateChangedAt: base.Add(time.Minute)},
+		{articleID: 809, initialLiked: true, initialVersion: 10, incomingType: eventing.EventTypeArticleUnliked, incomingVersion: 11, wantLiked: false, wantVersion: 11, wantStateChangedAt: base.Add(time.Minute)},
+		{articleID: 810, initialLiked: false, initialVersion: 12, incomingType: eventing.EventTypeArticleLiked, incomingVersion: 11, wantLiked: false, wantVersion: 12, wantStateChangedAt: base},
+		{articleID: 811, initialLiked: true, initialVersion: 12, incomingType: eventing.EventTypeArticleUnliked, incomingVersion: 11, wantLiked: true, wantVersion: 12, wantStateChangedAt: base},
+	}
+	for _, test := range reactionMatrix {
+		if err := db.Create(&models.ArticleReaction{
+			UserID: userTwoID, ArticleID: test.articleID, Reaction: models.ArticleReactionLike,
+			Liked: test.initialLiked, Version: test.initialVersion, UpdatedAt: base, StateChangedAt: base,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := applyUserBehaviorBatch([]kafka.Message{
+			userBehaviorMessage(t, mustLikeEvent(uuid.NewString(), test.incomingType, userTwoID, test.articleID, test.incomingVersion, base.Add(time.Minute))),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertReaction(t, db, userTwoID, test.articleID, test.wantLiked, test.wantVersion, test.wantStateChangedAt)
+	}
 }
 
 func mustArticleViewedEvent(t *testing.T, id string, userID, articleID uint, occurredAt time.Time) eventing.Envelope {

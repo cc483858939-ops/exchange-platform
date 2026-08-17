@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"os"
+	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -37,9 +39,9 @@ func TestRulesV3FeedbackStableOrderUsesProjectionTimestampsIntegration(t *testin
 	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	behaviors := []models.ArticleBehavior{
-		{Model: gorm.Model{ID: 3}, UserID: userID, ArticleID: 700001, Action: eventing.RecommendationBehaviorActionClick, Count: 1, LastSeenAt: now, Active: true},
-		{Model: gorm.Model{ID: 1}, UserID: userID, ArticleID: 700002, Action: eventing.RecommendationBehaviorActionClick, Count: 1, LastSeenAt: now, Active: true},
-		{Model: gorm.Model{ID: 2}, UserID: userID, ArticleID: 700003, Action: eventing.RecommendationBehaviorActionClick, Count: 1, LastSeenAt: now, Active: true},
+		{UserID: userID, ArticleID: 700001, Action: eventing.RecommendationBehaviorActionClick, Count: 1, LastSeenAt: now, Active: true},
+		{UserID: userID, ArticleID: 700002, Action: eventing.RecommendationBehaviorActionClick, Count: 1, LastSeenAt: now, Active: true},
+		{UserID: userID, ArticleID: 700003, Action: eventing.RecommendationBehaviorActionClick, Count: 1, LastSeenAt: now, Active: true},
 	}
 	if err := db.Create(&behaviors).Error; err != nil {
 		t.Fatal(err)
@@ -52,13 +54,17 @@ func TestRulesV3FeedbackStableOrderUsesProjectionTimestampsIntegration(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"2", "3", "1"}
-	if len(loaded) != len(want) {
-		t.Fatalf("loaded=%d want=%d", len(loaded), len(want))
+	expected := append([]models.ArticleBehavior(nil), behaviors...)
+	sort.Slice(expected, func(i, j int) bool {
+		return expected[i].ID > expected[j].ID
+	})
+	if len(loaded) != len(expected) {
+		t.Fatalf("loaded=%d want=%d", len(loaded), len(expected))
 	}
-	for index, eventID := range want {
-		if loaded[index].Event.EventID != eventID {
-			t.Fatalf("order[%d]=%s want=%s", index, loaded[index].Event.EventID, eventID)
+	for index, behavior := range expected {
+		want := strconv.FormatUint(uint64(behavior.ID), 10)
+		if loaded[index].Event.EventID != want {
+			t.Fatalf("order[%d]=%s want=%s generated_id=%d", index, loaded[index].Event.EventID, want, behavior.ID)
 		}
 	}
 }

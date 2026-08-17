@@ -137,6 +137,7 @@ WHERE deleted_at IS NULL
 }
 func applyArticleReactionConstraints(tx *gorm.DB) error {
 	statements := []string{
+		"ALTER TABLE article_reaction ALTER COLUMN liked DROP DEFAULT",
 		"ALTER TABLE article_reaction ADD COLUMN IF NOT EXISTS state_changed_at TIMESTAMPTZ",
 		"UPDATE article_reaction SET state_changed_at = COALESCE(state_changed_at, updated_at, CURRENT_TIMESTAMP)",
 		"ALTER TABLE article_reaction ALTER COLUMN state_changed_at SET NOT NULL",
