@@ -34,7 +34,7 @@ services:
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
-      - "D:/code/docker-data/goexchange-ollama-data:/root/.ollama"
+      - ollama-data:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -251,3 +251,6 @@ volumes:
   minio-data:
     external: true
     name: mf_minio-data
+
+  ollama-data:
+    name: goexchange_ollama-data
