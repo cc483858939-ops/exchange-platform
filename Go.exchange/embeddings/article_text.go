@@ -4,9 +4,6 @@ import "crypto/sha256"
 
 // BuildArticleEmbeddingText returns the canonical text used for article embeddings.
 func BuildArticleEmbeddingText(title, content string) string {
-	if title == "" {
-		return content
-	}
 	return title + "\n\n" + content
 }
 

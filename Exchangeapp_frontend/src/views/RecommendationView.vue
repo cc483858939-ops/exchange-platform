@@ -5,7 +5,7 @@
         <p class="hero-kicker">AI 推荐流</p>
         <h1>把你真正关心的文章排到前面</h1>
         <p class="hero-text">
-          推荐页会结合你的浏览、点赞和文章标签，优先展示更接近当前兴趣的内容。
+          推荐页会结合你的浏览、点赞和阅读反馈，优先展示与你近期兴趣更相关的内容。
         </p>
         <div class="hero-actions">
           <button class="primary-action" type="button" :disabled="!authStore.isAuthenticated" @click="fetchRecommendations">
@@ -37,7 +37,7 @@
     <section v-else class="recommendation-body">
       <div class="body-heading">
         <h2>为你排序</h2>
-        <p>分数越高，说明文章的分类、标签、热度和新鲜度越贴近你的近期习惯。</p>
+        <p>分数综合考虑内容相关度、新鲜度和热度。</p>
       </div>
 
       <div v-if="loading" class="masonry-grid" aria-label="推荐加载中">
@@ -128,7 +128,7 @@ const skeletons = [1, 2, 3, 4, 5, 6];
 let heroContext: ReturnType<typeof gsap.context> | null = null;
 let cardsContext: ReturnType<typeof gsap.context> | null = null;
 
-const heroTopics = ['瓒嬪娍', '娣卞害', '姹囩巼', '瀹忚', '绉戞妧'];
+const heroTopics = ['趋势', '深度', '汇率', '宏观', '科技'];
 
 const topScoreLabel = computed(() => {
   if (!articles.value.length) {

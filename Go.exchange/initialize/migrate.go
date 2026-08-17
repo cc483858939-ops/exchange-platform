@@ -47,6 +47,9 @@ func RunMigrations() error {
 		if err := applyLegacyAISchemaCleanup(tx); err != nil {
 			return err
 		}
+		if err := applyArticleEmbeddingConstraints(tx); err != nil {
+			return err
+		}
 		if err := applyUserFollowConstraints(tx); err != nil {
 			return err
 		}
@@ -77,6 +80,19 @@ WHERE reaction_version = 0
 		}
 		return nil
 	})
+}
+
+func applyArticleEmbeddingConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE article_embeddings DROP CONSTRAINT IF EXISTS chk_article_embeddings_vector_dimensions",
+		"ALTER TABLE article_embeddings ADD CONSTRAINT chk_article_embeddings_vector_dimensions CHECK (vector_dims(embedding) = dimensions)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply article embedding constraint: %w", err)
+		}
+	}
+	return nil
 }
 
 func applyUserFollowConstraints(tx *gorm.DB) error {

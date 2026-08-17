@@ -17,6 +17,8 @@ type EmbeddingConfig struct {
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 }
 
+const DefaultEmbeddingVersion = "post_embedding_v1"
+
 type KafkaConfig struct {
 	Brokers                        []string `mapstructure:"brokers"`
 	UserBehaviorTopic              string   `mapstructure:"user_behavior_topic"`
@@ -80,6 +82,17 @@ type Config struct {
 }
 
 var AppConfig *Config
+
+// ActiveEmbeddingVersion returns the one embedding-space identity used by
+// workers, profile construction, and semantic recall.
+func ActiveEmbeddingVersion() string {
+	if AppConfig != nil {
+		if version := strings.TrimSpace(AppConfig.Embedding.Version); version != "" {
+			return version
+		}
+	}
+	return DefaultEmbeddingVersion
+}
 
 func InitConfig() {
 	LoadConfig()

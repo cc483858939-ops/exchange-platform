@@ -24,7 +24,7 @@ func TestNormalizedEmbeddingRecommendationConfigDefaults(t *testing.T) {
 
 func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVectors(t *testing.T) {
 	original := loadRecommendationArticleEmbeddings
-	loadRecommendationArticleEmbeddings = func(ids []uint) (map[uint][]float32, error) {
+	loadRecommendationArticleEmbeddings = func(ids []uint, version string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
 	}
 	t.Cleanup(func() { loadRecommendationArticleEmbeddings = original })
@@ -49,6 +49,36 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 	}
 	if math.Abs(float64(profile.Vector[0])) > 0.4 || profile.Vector[1] < 0.8 {
 		t.Fatalf("vector=%v", profile.Vector)
+	}
+}
+
+func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) {
+	originalConfig := config.AppConfig
+	originalLoader := loadRecommendationArticleEmbeddings
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "v2"}}
+	var gotVersion string
+	loadRecommendationArticleEmbeddings = func(_ []uint, version string) (map[uint][]float32, error) {
+		gotVersion = version
+		return map[uint][]float32{1: {1, 0}}, nil
+	}
+	t.Cleanup(func() {
+		config.AppConfig = originalConfig
+		loadRecommendationArticleEmbeddings = originalLoader
+	})
+
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	_, err := buildEmbeddingInterestProfile(
+		[]articleBehaviorSignal{{Behavior: models.ArticleBehavior{ArticleID: 1, Action: ArticleBehaviorActionView, LastSeenAt: now}}},
+		nil,
+		nil,
+		now,
+		normalizedEmbeddingRecommendationConfig(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotVersion != "v2" {
+		t.Fatalf("version=%q want=v2", gotVersion)
 	}
 }
 

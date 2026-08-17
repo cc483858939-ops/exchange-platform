@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -132,6 +133,10 @@ func processArticleEmbeddingJob(ctx context.Context, job models.ArticleEmbedding
 	if embedder == nil {
 		return errors.New("embedding provider is nil")
 	}
+	activeVersion := config.ActiveEmbeddingVersion()
+	if strings.TrimSpace(activeVersion) == "" {
+		return errors.New("active embedding version is required")
+	}
 	var article models.Article
 	if err := global.Db.First(&article, job.ArticleID).Error; err != nil {
 		markArticleEmbeddingJobFailure(job, err)
@@ -141,7 +146,7 @@ func processArticleEmbeddingJob(ctx context.Context, job models.ArticleEmbedding
 	contentHash := embeddings.ArticleEmbeddingContentHash(article.Title, article.Content)
 	var existing models.ArticleEmbedding
 	lookupErr := global.Db.Where("article_id = ?", job.ArticleID).First(&existing).Error
-	if lookupErr == nil && existing.ContentHash == contentHash {
+	if lookupErr == nil && existing.ContentHash == contentHash && existing.Version == activeVersion {
 		return markArticleEmbeddingJobSucceeded(job)
 	}
 	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -153,7 +158,7 @@ func processArticleEmbeddingJob(ctx context.Context, job models.ArticleEmbedding
 		markArticleEmbeddingJobFailure(job, err)
 		return err
 	}
-	if len(result.Vectors) != 1 || len(result.Vectors[0]) == 0 {
+	if len(result.Vectors) != 1 || len(result.Vectors[0]) == 0 || !validArticleEmbeddingVector(result.Vectors[0]) {
 		err = errors.New("embedding provider returned an invalid single vector")
 		markArticleEmbeddingJobFailure(job, err)
 		return err
@@ -162,22 +167,23 @@ func processArticleEmbeddingJob(ctx context.Context, job models.ArticleEmbedding
 	if modelName == "" && config.AppConfig != nil {
 		modelName = strings.TrimSpace(config.AppConfig.Embedding.Model)
 	}
-	version := "post_embedding_v1"
-	if config.AppConfig != nil && strings.TrimSpace(config.AppConfig.Embedding.Version) != "" {
-		version = strings.TrimSpace(config.AppConfig.Embedding.Version)
+	if modelName == "" {
+		err = errors.New("embedding provider returned an empty model")
+		markArticleEmbeddingJobFailure(job, err)
+		return err
 	}
 	vector := pgvector.NewVector(result.Vectors[0])
 	now := time.Now().UTC()
 	err = global.Db.Transaction(func(tx *gorm.DB) error {
 		embedding := models.ArticleEmbedding{
-			ArticleID: job.ArticleID, Version: version, Model: modelName,
+			ArticleID: job.ArticleID, Version: activeVersion, Model: modelName,
 			Dimensions: len(result.Vectors[0]), Embedding: vector, ContentHash: contentHash,
 			CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "article_id"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
-				"version": version, "model": modelName, "dimensions": len(result.Vectors[0]),
+				"version": activeVersion, "model": modelName, "dimensions": len(result.Vectors[0]),
 				"embedding": vector, "content_hash": contentHash, "updated_at": now,
 			}),
 		}).Create(&embedding).Error; err != nil {
@@ -240,6 +246,18 @@ func markArticleEmbeddingJobFailure(job models.ArticleEmbeddingJob, cause error)
 			"state": state, "next_attempt_at": nextAttemptAt, "lease_until": nil, "leased_by": "",
 			"last_error": lastError, "finished_at": finishedAt, "updated_at": now,
 		}).Error
+}
+
+func validArticleEmbeddingVector(vector []float32) bool {
+	if len(vector) == 0 {
+		return false
+	}
+	for _, value := range vector {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return false
+		}
+	}
+	return true
 }
 
 func minInt(left, right int) int {

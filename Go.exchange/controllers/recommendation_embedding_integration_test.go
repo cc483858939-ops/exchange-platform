@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -29,9 +30,13 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleEmbedding{}, &models.ArticleBehavior{}, &models.ArticleReaction{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
+	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "post_embedding_v1"}}
+	t.Cleanup(func() {
+		global.Db = originalDB
+		config.AppConfig = originalConfig
+	})
 
 	user := models.User{Username: "semantic-owner-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&user).Error; err != nil {
@@ -77,5 +82,73 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	}
 	if candidates[0].SemanticSimilarity < .99 {
 		t.Fatalf("similarity=%f", candidates[0].SemanticSimilarity)
+	}
+}
+
+func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleEmbedding{}); err != nil {
+		t.Fatal(err)
+	}
+	originalDB, originalConfig := global.Db, config.AppConfig
+	global.Db = db
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "v2"}}
+	t.Cleanup(func() {
+		global.Db = originalDB
+		config.AppConfig = originalConfig
+	})
+
+	user := models.User{Username: "semantic-version-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	oldArticle := models.Article{AuthorID: user.ID, Title: "old", Content: "old", PublicationState: "published", PublishedAt: &now}
+	activeArticle := models.Article{AuthorID: user.ID, Title: "active", Content: "active", PublicationState: "published", PublishedAt: &now}
+	if err := db.Create(&oldArticle).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&activeArticle).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		articleID uint
+		version   string
+	}{
+		{oldArticle.ID, "v1"},
+		{activeArticle.ID, "v2"},
+	} {
+		if err := db.Create(&models.ArticleEmbedding{
+			ArticleID: item.articleID, Version: item.version, Model: "test", Dimensions: 2,
+			Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: item.version,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		ids := []uint{oldArticle.ID, activeArticle.ID}
+		db.Unscoped().Where("article_id IN ?", ids).Delete(&models.ArticleEmbedding{})
+		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
+		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+	})
+
+	candidates, err := loadSemanticEmbeddingCandidates(user.ID, userInterestProfile{
+		Vector: []float32{1, 0},
+	}, now.Add(-time.Hour), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].ArticleID != activeArticle.ID {
+		t.Fatalf("candidates=%#v", candidates)
 	}
 }

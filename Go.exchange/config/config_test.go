@@ -29,3 +29,21 @@ func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 		t.Fatalf("Kafka brokers=%v want=%v", got, want)
 	}
 }
+
+func TestActiveEmbeddingVersionUsesConfiguredValueAndDefault(t *testing.T) {
+	original := AppConfig
+	t.Cleanup(func() { AppConfig = original })
+
+	AppConfig = nil
+	if got := ActiveEmbeddingVersion(); got != DefaultEmbeddingVersion {
+		t.Fatalf("default version=%q want=%q", got, DefaultEmbeddingVersion)
+	}
+	AppConfig = &Config{Embedding: EmbeddingConfig{Version: "  post_embedding_v2  "}}
+	if got := ActiveEmbeddingVersion(); got != "post_embedding_v2" {
+		t.Fatalf("configured version=%q", got)
+	}
+	AppConfig = &Config{}
+	if got := ActiveEmbeddingVersion(); got != DefaultEmbeddingVersion {
+		t.Fatalf("empty version=%q want=%q", got, DefaultEmbeddingVersion)
+	}
+}

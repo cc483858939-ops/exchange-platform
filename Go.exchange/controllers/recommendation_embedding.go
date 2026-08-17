@@ -324,7 +324,7 @@ func normalizedEmbeddingRecommendationConfig() config.RecommendationConfig {
 	return cfg
 }
 
-var loadRecommendationArticleEmbeddings = func(articleIDs []uint) (map[uint][]float32, error) {
+var loadRecommendationArticleEmbeddings = func(articleIDs []uint, version string) (map[uint][]float32, error) {
 	result := make(map[uint][]float32)
 	if len(articleIDs) == 0 {
 		return result, nil
@@ -333,7 +333,7 @@ var loadRecommendationArticleEmbeddings = func(articleIDs []uint) (map[uint][]fl
 		return nil, errors.New("database is not initialized")
 	}
 	var rows []models.ArticleEmbedding
-	if err := global.Db.Select("article_id, embedding").Where("article_id IN ?", articleIDs).Find(&rows).Error; err != nil {
+	if err := global.Db.Select("article_id, embedding").Where("article_id IN ? AND version = ?", articleIDs, version).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -355,7 +355,7 @@ func buildEmbeddingInterestProfile(behaviors []articleBehaviorSignal, feedback [
 		profile.InteractedArticleIDs[outcome.ArticleID] = struct{}{}
 		ids = append(ids, outcome.ArticleID)
 	}
-	embeddingsByArticle, err := loadRecommendationArticleEmbeddings(ids)
+	embeddingsByArticle, err := loadRecommendationArticleEmbeddings(ids, config.ActiveEmbeddingVersion())
 	if err != nil {
 		return profile, err
 	}
@@ -468,7 +468,7 @@ func loadSemanticEmbeddingCandidates(userID uint, profile userInterestProfile, l
 		global.Db.Table("article_embeddings AS ae").
 			Select("ae.article_id, 1 - (ae.embedding <=> ?) AS semantic_similarity", queryVector).
 			Joins("JOIN articles ON articles.id = ae.article_id").
-			Where("ae.dimensions = ?", len(profile.Vector)),
+			Where("ae.version = ? AND ae.dimensions = ?", config.ActiveEmbeddingVersion(), len(profile.Vector)),
 		userID, profile.InteractedArticleIDs, lookbackStart, now,
 	)
 	var rows []semanticCandidateRow

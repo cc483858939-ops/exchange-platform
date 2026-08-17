@@ -10,7 +10,7 @@ func TestBuildArticleEmbeddingTextUsesOnlyTitleAndContent(t *testing.T) {
 	if got := BuildArticleEmbeddingText(" Title ", "Body"); got != " Title \n\nBody" {
 		t.Fatalf("text=%q", got)
 	}
-	if got := BuildArticleEmbeddingText("", "Body"); got != "Body" {
+	if got := BuildArticleEmbeddingText("", "Body"); got != "\n\nBody" {
 		t.Fatalf("empty title text=%q", got)
 	}
 }
