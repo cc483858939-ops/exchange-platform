@@ -86,6 +86,11 @@ func recommendationEligibilityQuery(query *gorm.DB, userID uint, profile userInt
 			userID, ArticleBehaviorActionReply)
 	negative = negative.Where("NOT EXISTS (?)", laterLike).Where("NOT EXISTS (?)", laterReply)
 	query = publicArticleScope(query, now).
+		Where(
+			"EXISTS (SELECT 1 FROM users AS recommendation_authors "+
+				"WHERE recommendation_authors.id = articles.author_id "+
+				"AND recommendation_authors.deleted_at IS NULL)",
+		).
 		Where("articles.author_id <> ?", userID).
 		Where("NOT EXISTS (?)", negative)
 
@@ -292,15 +297,24 @@ func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.T
 	if err := preloadArticleAuthor(query).Find(&articles).Error; err != nil {
 		return nil, err
 	}
-	if err := ensureArticleAuthors(articles); err != nil {
-		return nil, err
+	validArticles := make([]models.Article, 0, len(articles))
+	validArticleIDs := make([]uint, 0, len(articles))
+	for _, article := range articles {
+		if _, err := publicAuthorFromArticle(article); err != nil {
+			continue
+		}
+		validArticles = append(validArticles, article)
+		validArticleIDs = append(validArticleIDs, article.ID)
 	}
-	embeddings, err := loadRecommendationArticleEmbeddings(ids, config.ActiveEmbeddingVersion())
+	if len(validArticleIDs) == 0 {
+		return nil, nil
+	}
+	embeddings, err := loadRecommendationArticleEmbeddings(validArticleIDs, config.ActiveEmbeddingVersion())
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[uint]models.Article, len(articles))
-	for _, article := range articles {
+	byID := make(map[uint]models.Article, len(validArticles))
+	for _, article := range validArticles {
 		byID[article.ID] = article
 	}
 	result := make([]hydratedRecommendationCandidate, 0, len(candidates))
