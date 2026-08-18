@@ -11,6 +11,7 @@ import (
 
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type servedArticle struct {
@@ -143,7 +144,12 @@ func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfi
 		userID, profile, served, now, softOnly,
 	)
 	var rows []semanticCandidateRow
-	if err := query.Order(gorm.Expr("ae.embedding <=> ? ASC", queryVector)).Limit(cap).Scan(&rows).Error; err != nil {
+	if err := query.Clauses(clause.OrderBy{
+		Expression: clause.Expr{
+			SQL:  "ae.embedding <=> ? ASC",
+			Vars: []interface{}{queryVector},
+		},
+	}).Limit(cap).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	result := make([]embeddingCandidate, 0, len(rows))

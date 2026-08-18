@@ -84,8 +84,14 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) == 0 || candidates[0].ArticleID != nearest.ID {
-		t.Fatalf("candidates=%#v", candidates)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates=%#v, want exactly 2 eligible semantic candidates", candidates)
+	}
+	if candidates[0].ArticleID != nearest.ID {
+		t.Fatalf("first candidate=%d similarity=%f, want nearest=%d; candidates=%#v", candidates[0].ArticleID, candidates[0].PositiveSemanticSimilarity, nearest.ID, candidates)
+	}
+	if candidates[1].ArticleID != orthogonal.ID {
+		t.Fatalf("second candidate=%d, want orthogonal=%d; candidates=%#v", candidates[1].ArticleID, orthogonal.ID, candidates)
 	}
 	for _, candidate := range candidates {
 		if candidate.ArticleID == interacted.ID {
