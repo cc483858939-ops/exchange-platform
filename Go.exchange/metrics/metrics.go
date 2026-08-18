@@ -14,7 +14,10 @@ var (
 	registry                              = prometheus.NewRegistry()
 	httpRequestsTotal                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_http_requests_total", Help: "Total number of HTTP requests handled by the Gin server."}, []string{"method", "route", "status"})
 	httpRequestDuration                   = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_http_request_duration_seconds", Help: "HTTP request latency in seconds.", Buckets: prometheus.DefBuckets}, []string{"method", "route", "status"})
-	articleEmbeddingJobs                  = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_article_embedding_jobs", Help: "Current article embedding jobs by state."}, []string{"state"})
+	articleEmbeddingEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_events_total", Help: "Article embedding event outcomes."}, []string{"result"})
+	articleEmbeddingFailures              = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_failures_total", Help: "Article embedding processing failures by stage."}, []string{"stage"})
+	articleEmbeddingPublishFailures       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_publish_failures_total", Help: "Article embedding publish failures by source."}, []string{"source"})
+	articleEmbeddingProcessingDuration    = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_article_embedding_processing_duration_seconds", Help: "Article embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
 	outboxPending                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_pending_events", Help: "Current unpublished outbox event count."})
 	likePipelineDepth                     = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
 	recommendationTelemetryEvents         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
@@ -38,12 +41,21 @@ var (
 
 func init() {
 	registry.MustRegister(
-		httpRequestsTotal, httpRequestDuration, articleEmbeddingJobs, outboxPending, likePipelineDepth,
+		httpRequestsTotal, httpRequestDuration, articleEmbeddingEvents, articleEmbeddingFailures, articleEmbeddingPublishFailures, articleEmbeddingProcessingDuration, outboxPending, likePipelineDepth,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
 		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
 	)
+	for _, result := range []string{"generated", "up_to_date", "article_missing", "article_unavailable", "invalid_event", "provider_non_retryable"} {
+		articleEmbeddingEvents.WithLabelValues(result)
+	}
+	for _, stage := range []string{"decode", "article_load", "provider", "db_upsert", "kafka_commit"} {
+		articleEmbeddingFailures.WithLabelValues(stage)
+	}
+	for _, source := range []string{"article_create", "requeue"} {
+		articleEmbeddingPublishFailures.WithLabelValues(source)
+	}
 }
 
 func Middleware() gin.HandlerFunc {
@@ -65,8 +77,17 @@ func Middleware() gin.HandlerFunc {
 }
 
 func Handler() http.Handler { return promhttp.HandlerFor(registry, promhttp.HandlerOpts{}) }
-func SetArticleEmbeddingJobs(state string, value float64) {
-	articleEmbeddingJobs.WithLabelValues(state).Set(value)
+func RecordArticleEmbeddingEvent(result string) {
+	articleEmbeddingEvents.WithLabelValues(result).Inc()
+}
+func RecordArticleEmbeddingFailure(stage string) {
+	articleEmbeddingFailures.WithLabelValues(stage).Inc()
+}
+func RecordArticleEmbeddingPublishFailure(source string) {
+	articleEmbeddingPublishFailures.WithLabelValues(source).Inc()
+}
+func ObserveArticleEmbeddingProcessingDuration(duration time.Duration) {
+	articleEmbeddingProcessingDuration.Observe(duration.Seconds())
 }
 func SetOutboxPending(value float64) { outboxPending.Set(value) }
 func SetLikePipelineDepth(stage string, value float64) {

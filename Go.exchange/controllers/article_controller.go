@@ -3,17 +3,21 @@ package controllers
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/consts"
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/likes"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -25,27 +29,11 @@ type createArticleRequest struct {
 	CoverImageURL string     `json:"cover_image_url"`
 }
 
-var createArticleWithEmbeddingJob = func(article *models.Article) error {
+var persistArticle = func(article *models.Article) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
-	return global.Db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(article).Error; err != nil {
-			return err
-		}
-		if config.AppConfig == nil || !config.AppConfig.Embedding.Enabled {
-			return nil
-		}
-		now := time.Now().UTC()
-		return tx.Create(&models.ArticleEmbeddingJob{
-			ArticleID:     article.ID,
-			State:         models.ArticleEmbeddingJobQueued,
-			MaxAttempts:   5,
-			NextAttemptAt: now,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}).Error
-	})
+	return global.Db.Create(article).Error
 }
 
 var loadArticleAuthorForCreate = loadPublicAuthorByID
@@ -71,7 +59,17 @@ func normalizeArticleCoverImageURL(raw string) (string, error) {
 	return coverImageURL, nil
 }
 
+func NewCreateArticleHandler(publisher eventing.BatchPublisher) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		createArticle(ctx, publisher)
+	}
+}
+
 func CreateArticle(ctx *gin.Context) {
+	createArticle(ctx, nil)
+}
+
+func createArticle(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
@@ -119,9 +117,22 @@ func CreateArticle(ctx *gin.Context) {
 		PublishedAt:      &now,
 	}
 
-	if err := createArticleWithEmbeddingJob(&article); err != nil {
+	if err := persistArticle(&article); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if config.AppConfig != nil && config.AppConfig.Embedding.Enabled {
+		event, eventErr := eventing.NewArticleEmbeddingRequestedEnvelope(uuid.NewString(), article.ID, time.Now().UTC())
+		if eventErr != nil {
+			metrics.RecordArticleEmbeddingPublishFailure("article_create")
+			log.Printf("[ArticleEmbedding] create event: %v", eventErr)
+		} else if publisher == nil {
+			metrics.RecordArticleEmbeddingPublishFailure("article_create")
+			log.Printf("[ArticleEmbedding] article create publisher is unavailable for article %d", article.ID)
+		} else if publishErr := publisher.PublishBatch(ctx.Request.Context(), []eventing.Envelope{event}); publishErr != nil {
+			metrics.RecordArticleEmbeddingPublishFailure("article_create")
+			log.Printf("[ArticleEmbedding] publish article %d request: %v", article.ID, publishErr)
+		}
 	}
 	if err := initializeArticleLikeState(article.ID); err != nil && global.Db != nil {
 		global.Db.Logger.Error(ctx, "failed to initialize article like state", err)

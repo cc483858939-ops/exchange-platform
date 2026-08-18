@@ -9,7 +9,7 @@ Go.exchange is a Go + Gin backend for article publishing, article reactions, rec
 - Cache and async state: Redis + Lua scripts
 - Object storage: MinIO
 - Authentication: JWT access tokens and Redis-backed refresh tokens
-- Background workers: like-count persistence, recommendation projection, and article embedding jobs
+- Background workers: like-count persistence, recommendation projection, and Kafka-first article embedding consumption
 - Observability: Prometheus metrics, Grafana dashboard, health checks, pprof
 - Local orchestration: Docker Compose
 

@@ -167,7 +167,7 @@ For You 必须拥有：
 
 已有：
 
-- Article、ArticleEmbedding、ArticleEmbeddingJob、pgvector。
+- Article、ArticleEmbedding、pgvector。
 - ArticleReaction、ArticleBehavior。
 - recommendation events。
 - signed tracking token v2。

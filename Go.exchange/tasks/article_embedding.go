@@ -2,7 +2,9 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"strings"
@@ -10,242 +12,221 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/consts"
 	"Go.exchange/embeddings"
+	"Go.exchange/eventing"
 	"Go.exchange/global"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 
-	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
+	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 const (
-	embeddingWorkerPollInterval = time.Second
-	embeddingJobLeaseDuration   = 2 * time.Minute
-	embeddingDefaultMaxAttempts = 5
+	articleEmbeddingRetryDelay           = 2 * time.Second
+	articleEmbeddingConsumerRestartDelay = articleEmbeddingRetryDelay
 )
+
+type articleEmbeddingMessageReader interface {
+	FetchMessage(context.Context) (kafka.Message, error)
+	CommitMessages(context.Context, ...kafka.Message) error
+	Close() error
+}
 
 var newArticleEmbedder = func(cfg config.EmbeddingConfig) (embeddings.Embedder, error) {
 	return embeddings.NewOpenAICompatibleEmbedder(cfg)
 }
 
-func startArticleEmbeddingWorkers(ctx context.Context, wg *sync.WaitGroup) {
-	if config.AppConfig == nil || !config.AppConfig.Embedding.Enabled {
+var newArticleEmbeddingReader = func(cfg config.KafkaConfig, topic, groupID string) (articleEmbeddingMessageReader, error) {
+	return eventing.NewKafkaReader(cfg, topic, groupID)
+}
+
+func startArticleEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
+	if config.AppConfig == nil || !config.AppConfig.Embedding.Enabled ||
+		strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingTopic) == "" ||
+		strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingGroupID) == "" {
 		return
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runArticleEmbeddingWorker(ctx)
+		for {
+			runArticleEmbeddingConsumer(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(articleEmbeddingConsumerRestartDelay):
+			}
+		}
 	}()
 }
 
-func runArticleEmbeddingWorker(ctx context.Context) {
-	if global.Db == nil || config.AppConfig == nil {
+func runArticleEmbeddingConsumer(ctx context.Context) {
+	if config.AppConfig == nil {
 		return
 	}
 	embedder, err := newArticleEmbedder(config.AppConfig.Embedding)
 	if err != nil {
-		log.Printf("[ArticleEmbedding] worker disabled: %v", err)
+		log.Printf("[ArticleEmbedding] create embedder: %v", err)
 		return
 	}
-	workerID := uuid.NewString()
-	ticker := time.NewTicker(embeddingWorkerPollInterval)
-	defer ticker.Stop()
-	for {
-		if err := recoverExpiredEmbeddingLeases(global.Db, time.Now().UTC()); err != nil {
-			log.Printf("[ArticleEmbedding] recover leases: %v", err)
+	topic := strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingTopic)
+	groupID := strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingGroupID)
+	reader, err := newArticleEmbeddingReader(config.AppConfig.Kafka, topic, groupID)
+	if err != nil {
+		log.Printf("[ArticleEmbedding] create Kafka reader: %v", err)
+		return
+	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			log.Printf("[ArticleEmbedding] close Kafka reader: %v", closeErr)
 		}
-		job, err := claimArticleEmbeddingJob(global.Db, time.Now().UTC(), workerID, embeddingJobLeaseDuration)
-		if err != nil {
-			log.Printf("[ArticleEmbedding] claim job: %v", err)
-		} else if job != nil {
-			if err := processArticleEmbeddingJob(ctx, *job, embedder); err != nil && ctx.Err() == nil {
-				log.Printf("[ArticleEmbedding] process job %d: %v", job.ID, err)
-			}
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	}()
+	if err := consumeArticleEmbeddingMessages(ctx, reader, embedder); err != nil && ctx.Err() == nil {
+		log.Printf("[ArticleEmbedding] consume: %v", err)
 	}
 }
 
-func recoverExpiredEmbeddingLeases(db *gorm.DB, now time.Time) error {
-	if db == nil {
-		return errors.New("database is not initialized")
-	}
-	return db.Model(&models.ArticleEmbeddingJob{}).
-		Where("state = ? AND lease_until IS NOT NULL AND lease_until <= ?", models.ArticleEmbeddingJobLeased, now).
-		Updates(map[string]interface{}{
-			"state": models.ArticleEmbeddingJobRetryWait, "lease_until": nil, "leased_by": "",
-			"next_attempt_at": now, "last_error": "embedding lease expired",
-		}).Error
-}
-
-func claimArticleEmbeddingJob(db *gorm.DB, now time.Time, workerID string, lease time.Duration) (*models.ArticleEmbeddingJob, error) {
-	if db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-	if strings.TrimSpace(workerID) == "" || lease <= 0 {
-		return nil, errors.New("embedding worker claim parameters are invalid")
-	}
-	var job models.ArticleEmbeddingJob
-	found := false
-	err := db.Transaction(func(tx *gorm.DB) error {
-		result := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("state IN ? AND next_attempt_at <= ?", []string{models.ArticleEmbeddingJobQueued, models.ArticleEmbeddingJobRetryWait}, now).
-			Order("next_attempt_at ASC, id ASC").
-			First(&job)
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		if result.Error != nil {
-			return result.Error
-		}
-		leaseUntil := now.Add(lease)
-		if err := tx.Model(&job).Updates(map[string]interface{}{
-			"state": models.ArticleEmbeddingJobLeased, "attempt_count": gorm.Expr("attempt_count + 1"),
-			"lease_until": leaseUntil, "leased_by": workerID, "updated_at": now,
-		}).Error; err != nil {
-			return err
-		}
-		job.State = models.ArticleEmbeddingJobLeased
-		job.AttemptCount++
-		job.LeaseUntil = &leaseUntil
-		job.LeasedBy = workerID
-		found = true
-		return nil
-	})
-	if err != nil || !found {
-		return nil, err
-	}
-	return &job, nil
-}
-
-func processArticleEmbeddingJob(ctx context.Context, job models.ArticleEmbeddingJob, embedder embeddings.Embedder) error {
-	if global.Db == nil {
-		return errors.New("database is not initialized")
+func consumeArticleEmbeddingMessages(ctx context.Context, reader articleEmbeddingMessageReader, embedder embeddings.Embedder) error {
+	if reader == nil {
+		return errors.New("article embedding message reader is nil")
 	}
 	if embedder == nil {
-		return errors.New("embedding provider is nil")
+		return errors.New("article embedding provider is nil")
 	}
+	for {
+		message, err := reader.FetchMessage(ctx)
+		if err != nil {
+			return err
+		}
+		started := time.Now()
+		processErr := processArticleEmbeddingMessage(ctx, message, embedder)
+		metrics.ObserveArticleEmbeddingProcessingDuration(time.Since(started))
+		if processErr != nil {
+			return processErr
+		}
+		if err := reader.CommitMessages(ctx, message); err != nil {
+			metrics.RecordArticleEmbeddingFailure("kafka_commit")
+			return err
+		}
+	}
+}
+
+func processArticleEmbeddingMessage(ctx context.Context, message kafka.Message, embedder embeddings.Embedder) error {
+	articleID, err := decodeArticleEmbeddingRequest(message.Value)
+	if err != nil {
+		log.Printf("[ArticleEmbedding] discard poison message: %v", err)
+		metrics.RecordArticleEmbeddingFailure("decode")
+		metrics.RecordArticleEmbeddingEvent("invalid_event")
+		return nil
+	}
+	if global.Db == nil {
+		err := errors.New("database is not initialized")
+		metrics.RecordArticleEmbeddingFailure("article_load")
+		return err
+	}
+
+	var article models.Article
+	if err := global.Db.First(&article, articleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			metrics.RecordArticleEmbeddingEvent("article_missing")
+			return nil
+		}
+		metrics.RecordArticleEmbeddingFailure("article_load")
+		return err
+	}
+	if article.PublicationState != consts.ArticlePublicationStatePublished || article.PublishedAt == nil {
+		metrics.RecordArticleEmbeddingEvent("article_unavailable")
+		return nil
+	}
+
 	activeVersion := config.ActiveEmbeddingVersion()
 	if strings.TrimSpace(activeVersion) == "" {
 		return errors.New("active embedding version is required")
 	}
-	var article models.Article
-	if err := global.Db.First(&article, job.ArticleID).Error; err != nil {
-		markArticleEmbeddingJobFailure(job, err)
-		return err
-	}
 	text := embeddings.BuildArticleEmbeddingText(article.Title, article.Content)
 	contentHash := embeddings.ArticleEmbeddingContentHash(article.Title, article.Content)
+
 	var existing models.ArticleEmbedding
-	lookupErr := global.Db.Where("article_id = ?", job.ArticleID).First(&existing).Error
-	if lookupErr == nil && existing.ContentHash == contentHash && existing.Version == activeVersion {
-		return markArticleEmbeddingJobSucceeded(job)
+	lookupErr := global.Db.Where("article_id = ?", articleID).First(&existing).Error
+	if lookupErr == nil && existing.Version == activeVersion && existing.ContentHash == contentHash {
+		metrics.RecordArticleEmbeddingEvent("up_to_date")
+		return nil
 	}
 	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
-		markArticleEmbeddingJobFailure(job, lookupErr)
+		metrics.RecordArticleEmbeddingFailure("db_upsert")
 		return lookupErr
 	}
+
 	result, err := embedder.Embed(ctx, []string{text})
 	if err != nil {
-		markArticleEmbeddingJobFailure(job, err)
-		return err
-	}
-	if len(result.Vectors) != 1 || len(result.Vectors[0]) == 0 || !validArticleEmbeddingVector(result.Vectors[0]) {
-		err = errors.New("embedding provider returned an invalid single vector")
-		markArticleEmbeddingJobFailure(job, err)
-		return err
-	}
-	modelName := strings.TrimSpace(result.Model)
-	if modelName == "" && config.AppConfig != nil {
-		modelName = strings.TrimSpace(config.AppConfig.Embedding.Model)
-	}
-	if modelName == "" {
-		err = errors.New("embedding provider returned an empty model")
-		markArticleEmbeddingJobFailure(job, err)
-		return err
-	}
-	vector := pgvector.NewVector(result.Vectors[0])
-	now := time.Now().UTC()
-	err = global.Db.Transaction(func(tx *gorm.DB) error {
-		embedding := models.ArticleEmbedding{
-			ArticleID: job.ArticleID, Version: activeVersion, Model: modelName,
-			Dimensions: len(result.Vectors[0]), Embedding: vector, ContentHash: contentHash,
-			CreatedAt: now, UpdatedAt: now,
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "article_id"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"version": activeVersion, "model": modelName, "dimensions": len(result.Vectors[0]),
-				"embedding": vector, "content_hash": contentHash, "updated_at": now,
-			}),
-		}).Create(&embedding).Error; err != nil {
+		if embeddings.IsRetryableProviderError(err) {
+			metrics.RecordArticleEmbeddingFailure("provider")
 			return err
 		}
-		return tx.Model(&models.ArticleEmbeddingJob{}).
-			Where("id = ? AND state = ? AND leased_by = ?", job.ID, models.ArticleEmbeddingJobLeased, job.LeasedBy).
-			Updates(map[string]interface{}{
-				"state": models.ArticleEmbeddingJobSucceeded, "lease_until": nil, "leased_by": "",
-				"last_error": "", "finished_at": now, "updated_at": now,
-			}).Error
-	})
+		log.Printf("[ArticleEmbedding] permanent provider error article=%d: %v", articleID, err)
+		metrics.RecordArticleEmbeddingFailure("provider")
+		metrics.RecordArticleEmbeddingEvent("provider_non_retryable")
+		return nil
+	}
+	if len(result.Vectors) != 1 || !validArticleEmbeddingVector(result.Vectors[0]) {
+		metrics.RecordArticleEmbeddingFailure("provider")
+		return errors.New("embedding provider returned an invalid single vector")
+	}
+	modelName := strings.TrimSpace(result.Model)
+	if modelName == "" {
+		metrics.RecordArticleEmbeddingFailure("provider")
+		return errors.New("embedding provider returned an empty model")
+	}
+	dimensions := len(result.Vectors[0])
+	if dimensions <= 0 {
+		metrics.RecordArticleEmbeddingFailure("provider")
+		return errors.New("embedding provider returned invalid dimensions")
+	}
+
+	now := time.Now().UTC()
+	vector := pgvector.NewVector(result.Vectors[0])
+	embedding := models.ArticleEmbedding{
+		ArticleID: articleID, Version: activeVersion, Model: modelName,
+		Dimensions: dimensions, Embedding: vector, ContentHash: contentHash,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := global.Db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "article_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"version": activeVersion, "model": modelName, "dimensions": dimensions,
+			"embedding": vector, "content_hash": contentHash, "updated_at": now,
+		}),
+	}).Create(&embedding).Error; err != nil {
+		metrics.RecordArticleEmbeddingFailure("db_upsert")
+		return err
+	}
+	metrics.RecordArticleEmbeddingEvent("generated")
+	return nil
+}
+
+func decodeArticleEmbeddingRequest(raw []byte) (uint, error) {
+	event, err := eventing.DecodeEnvelope(raw)
 	if err != nil {
-		markArticleEmbeddingJobFailure(job, err)
+		return 0, err
 	}
-	return err
-}
-
-func markArticleEmbeddingJobSucceeded(job models.ArticleEmbeddingJob) error {
-	now := time.Now().UTC()
-	return global.Db.Model(&models.ArticleEmbeddingJob{}).
-		Where("id = ? AND state = ? AND leased_by = ?", job.ID, models.ArticleEmbeddingJobLeased, job.LeasedBy).
-		Updates(map[string]interface{}{
-			"state": models.ArticleEmbeddingJobSucceeded, "lease_until": nil, "leased_by": "",
-			"last_error": "", "finished_at": now, "updated_at": now,
-		}).Error
-}
-
-func markArticleEmbeddingJobFailure(job models.ArticleEmbeddingJob, cause error) error {
-	if global.Db == nil {
-		return errors.New("database is not initialized")
+	if event.Type != eventing.EventTypeArticleEmbeddingRequested {
+		return 0, fmt.Errorf("unexpected article embedding event type %q", event.Type)
 	}
-	now := time.Now().UTC()
-	lastError := "embedding job failed"
-	if cause != nil {
-		lastError = cause.Error()
-		if len(lastError) > 2000 {
-			lastError = lastError[:2000]
-		}
+	var payload eventing.ArticleEmbeddingRequestedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return 0, fmt.Errorf("decode article embedding payload: %w", err)
 	}
-	state := models.ArticleEmbeddingJobRetryWait
-	backoffExponent := job.AttemptCount - 1
-	if backoffExponent < 0 {
-		backoffExponent = 0
+	if payload.ArticleID == 0 {
+		return 0, errors.New("article embedding payload article_id is required")
 	}
-	nextAttemptAt := now.Add(time.Duration(1<<minInt(backoffExponent, 6)) * time.Second)
-	var finishedAt *time.Time
-	maxAttempts := job.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = embeddingDefaultMaxAttempts
-	}
-	if job.AttemptCount >= maxAttempts {
-		state = models.ArticleEmbeddingJobDead
-		nextAttemptAt = now
-		finishedAt = &now
-	}
-	return global.Db.Model(&models.ArticleEmbeddingJob{}).
-		Where("id = ? AND state = ? AND leased_by = ?", job.ID, models.ArticleEmbeddingJobLeased, job.LeasedBy).
-		Updates(map[string]interface{}{
-			"state": state, "next_attempt_at": nextAttemptAt, "lease_until": nil, "leased_by": "",
-			"last_error": lastError, "finished_at": finishedAt, "updated_at": now,
-		}).Error
+	return payload.ArticleID, nil
 }
 
 func validArticleEmbeddingVector(vector []float32) bool {
@@ -258,11 +239,4 @@ func validArticleEmbeddingVector(vector []float32) bool {
 		}
 	}
 	return true
-}
-
-func minInt(left, right int) int {
-	if left < right {
-		return left
-	}
-	return right
 }

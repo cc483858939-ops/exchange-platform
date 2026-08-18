@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,6 +21,40 @@ type OpenAICompatibleEmbedder struct {
 	apiKey   string
 	model    string
 	client   *http.Client
+}
+
+type ProviderHTTPError struct {
+	StatusCode int
+}
+
+func (e *ProviderHTTPError) Error() string {
+	return fmt.Sprintf("embedding provider returned status %d", e.StatusCode)
+}
+
+func IsRetryableProviderError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var httpErr *ProviderHTTPError
+	if errors.As(err, &httpErr) {
+		switch {
+		case httpErr.StatusCode == http.StatusRequestTimeout,
+			httpErr.StatusCode == http.StatusTooManyRequests,
+			httpErr.StatusCode >= http.StatusInternalServerError:
+			return true
+		case httpErr.StatusCode >= http.StatusBadRequest && httpErr.StatusCode < http.StatusInternalServerError:
+			return false
+		default:
+			return true
+		}
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return true
+	}
+	// Provider response decoding and validation errors are retryable because
+	// they indicate a transient or unclassified provider contract failure.
+	return true
 }
 
 type embeddingRequest struct {
@@ -97,7 +132,7 @@ func (e *OpenAICompatibleEmbedder) Embed(ctx context.Context, texts []string) (E
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return EmbedResult{}, fmt.Errorf("embedding provider returned status %d", response.StatusCode)
+		return EmbedResult{}, &ProviderHTTPError{StatusCode: response.StatusCode}
 	}
 	var payload embeddingResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {

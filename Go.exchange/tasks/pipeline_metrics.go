@@ -33,21 +33,8 @@ func refreshPipelineMetrics() {
 	if global.Db == nil {
 		return
 	}
-	states := []string{
-		models.ArticleEmbeddingJobQueued,
-		models.ArticleEmbeddingJobLeased,
-		models.ArticleEmbeddingJobRetryWait,
-		models.ArticleEmbeddingJobSucceeded,
-		models.ArticleEmbeddingJobDead,
-	}
-	for _, state := range states {
-		var count int64
-		if err := global.Db.Model(&models.ArticleEmbeddingJob{}).Where("state = ?", state).Count(&count).Error; err != nil {
-			log.Printf("[Metrics] count article embedding state %s: %v", state, err)
-			return
-		}
-		metrics.SetArticleEmbeddingJobs(state, float64(count))
-	}
+	// Article embedding state is represented by Kafka consumer lag and outcome
+	// counters; it is no longer stored in a database job table.
 	var pendingOutbox int64
 	if err := global.Db.Model(&models.OutboxEvent{}).Where("published_at IS NULL").Count(&pendingOutbox).Error; err != nil {
 		log.Printf("[Metrics] count pending outbox: %v", err)

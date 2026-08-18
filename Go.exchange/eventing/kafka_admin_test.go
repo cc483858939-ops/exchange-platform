@@ -14,8 +14,8 @@ import (
 
 func validKafkaTopicConfig() config.KafkaConfig {
 	return config.KafkaConfig{
-		Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation",
-		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12,
+		Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", ArticleEmbeddingTopic: "embedding",
+		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, ArticleEmbeddingPartitions: 6,
 	}
 }
 
@@ -24,13 +24,14 @@ func TestRequiredKafkaTopics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 3 {
-		t.Fatalf("topics=%d want=3", len(specs))
+	if len(specs) != 4 {
+		t.Fatalf("topics=%d want=4", len(specs))
 	}
 	want := []TopicSpec{
 		{Name: "behavior", Partitions: 12, ReplicationFactor: 1},
 		{Name: "snapshot", Partitions: 6, ReplicationFactor: 1},
 		{Name: "recommendation", Partitions: 12, ReplicationFactor: 1},
+		{Name: "embedding", Partitions: 6, ReplicationFactor: 1},
 	}
 	for index := range want {
 		if specs[index] != want[index] {

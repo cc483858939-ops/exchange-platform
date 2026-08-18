@@ -3,6 +3,7 @@ package embeddings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -62,6 +63,10 @@ func TestOpenAICompatibleEmbedderRejectsProviderFailuresWithoutLeakingKey(t *tes
 	_, err := embedder.Embed(context.Background(), []string{"text"})
 	if err == nil || strings.Contains(err.Error(), "secret-key") || !strings.Contains(err.Error(), "status 502") {
 		t.Fatalf("err=%v", err)
+	}
+	var providerErr *ProviderHTTPError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("typed provider error=%T %#v", err, err)
 	}
 }
 

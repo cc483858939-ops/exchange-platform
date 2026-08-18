@@ -24,13 +24,16 @@ type KafkaConfig struct {
 	UserBehaviorTopic              string   `mapstructure:"user_behavior_topic"`
 	LikeSnapshotTopic              string   `mapstructure:"like_snapshot_topic"`
 	RecommendationEventsTopic      string   `mapstructure:"recommendation_events_topic"`
+	ArticleEmbeddingTopic          string   `mapstructure:"article_embedding_topic"`
 	TopicReplicationFactor         int      `mapstructure:"topic_replication_factor"`
 	UserBehaviorPartitions         int      `mapstructure:"user_behavior_partitions"`
 	LikeSnapshotPartitions         int      `mapstructure:"like_snapshot_partitions"`
 	RecommendationEventsPartitions int      `mapstructure:"recommendation_events_partitions"`
+	ArticleEmbeddingPartitions     int      `mapstructure:"article_embedding_partitions"`
 	UserBehaviorGroupID            string   `mapstructure:"user_behavior_group_id"`
 	LikeSnapshotGroupID            string   `mapstructure:"like_snapshot_group_id"`
 	RecommendationMetricsGroupID   string   `mapstructure:"recommendation_metrics_group_id"`
+	ArticleEmbeddingGroupID        string   `mapstructure:"article_embedding_group_id"`
 }
 
 type RecommendationBehaviorWeights struct {

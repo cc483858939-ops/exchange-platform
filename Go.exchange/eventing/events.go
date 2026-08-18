@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	EventTypeArticleViewed  = "article.viewed"
-	EventTypeArticleLiked   = "article.liked"
-	EventTypeArticleUnliked = "article.unliked"
+	EventTypeArticleViewed             = "article.viewed"
+	EventTypeArticleLiked              = "article.liked"
+	EventTypeArticleUnliked            = "article.unliked"
+	EventTypeArticleEmbeddingRequested = "article.embedding.requested"
 
 	EventTypeRecommendationImpression    = "recommendation.impression"
 	EventTypeRecommendationClick         = "recommendation.click"
@@ -42,6 +43,10 @@ type UserBehaviorPayload struct {
 	Action      string `json:"action"`
 	Source      string `json:"source"`
 	LikeVersion int64  `json:"like_version,omitempty"`
+}
+
+type ArticleEmbeddingRequestedPayload struct {
+	ArticleID uint `json:"article_id"`
 }
 
 type RecommendationBehaviorPayload struct {
@@ -168,6 +173,32 @@ func NewArticleViewedEnvelope(eventID string, userID, articleID uint, occurredAt
 	}, nil
 }
 
+func NewArticleEmbeddingRequestedEnvelope(eventID string, articleID uint, occurredAt time.Time) (Envelope, error) {
+	eventID = strings.TrimSpace(eventID)
+	if _, err := uuid.Parse(eventID); err != nil {
+		return Envelope{}, errors.New("article embedding event id must be a UUID")
+	}
+	if articleID == 0 {
+		return Envelope{}, errors.New("article embedding requires an article")
+	}
+	if occurredAt.IsZero() {
+		return Envelope{}, errors.New("article embedding occurred_at is required")
+	}
+	body, err := json.Marshal(ArticleEmbeddingRequestedPayload{ArticleID: articleID})
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal article embedding payload: %w", err)
+	}
+	return Envelope{
+		ID:            eventID,
+		Type:          EventTypeArticleEmbeddingRequested,
+		SchemaVersion: 1,
+		AggregateType: "article",
+		AggregateID:   strconv.FormatUint(uint64(articleID), 10),
+		OccurredAt:    occurredAt.UTC(),
+		Payload:       body,
+	}, nil
+}
+
 func NewOutboxEvent(eventType, aggregateType, aggregateID string, payload interface{}) (models.OutboxEvent, error) {
 	eventType = strings.TrimSpace(eventType)
 	aggregateType = strings.TrimSpace(aggregateType)
@@ -238,6 +269,8 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 		EventTypeRecommendationFeedDwell,
 		EventTypeRecommendationNotInterested:
 		return strings.TrimSpace(kafkaConfig.RecommendationEventsTopic), nil
+	case EventTypeArticleEmbeddingRequested:
+		return strings.TrimSpace(kafkaConfig.ArticleEmbeddingTopic), nil
 	default:
 		return "", fmt.Errorf("unsupported event type %q", eventType)
 	}
@@ -263,6 +296,11 @@ func KeyForEvent(event Envelope) string {
 		var payload RecommendationBehaviorPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 {
 			return strconv.FormatUint(uint64(payload.UserID), 10)
+		}
+	case EventTypeArticleEmbeddingRequested:
+		var payload ArticleEmbeddingRequestedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ArticleID > 0 {
+			return strconv.FormatUint(uint64(payload.ArticleID), 10)
 		}
 	}
 	return event.AggregateID

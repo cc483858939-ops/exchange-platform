@@ -32,7 +32,6 @@ func RunMigrations() error {
 			&models.Article{},
 			&models.Comment{},
 			&models.ArticleEmbedding{},
-			&models.ArticleEmbeddingJob{},
 			&models.OutboxEvent{},
 			&models.ConsumerInbox{},
 			&models.ArticleBehavior{},

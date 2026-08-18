@@ -21,13 +21,16 @@ kafka:
   user_behavior_topic: "goexchange.user.behavior.v1"
   like_snapshot_topic: "goexchange.article.like.snapshot.v1"
   recommendation_events_topic: "goexchange.recommendation.events.v1"
+  article_embedding_topic: "goexchange.article.embedding.v1"
   topic_replication_factor: 1
   user_behavior_partitions: 12
   like_snapshot_partitions: 6
   recommendation_events_partitions: 12
+  article_embedding_partitions: 6
   user_behavior_group_id: "goexchange-user-behavior-projection-v1"
   like_snapshot_group_id: "goexchange-like-snapshot-projection-v1"
   recommendation_metrics_group_id: "goexchange-recommendation-metrics-v1"
+  article_embedding_group_id: "goexchange-article-embedding-v1"
 
 outbox:
   poll_interval_seconds: 1

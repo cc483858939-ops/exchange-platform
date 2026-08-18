@@ -66,7 +66,7 @@ func TestRecommendationBehaviorEnvelopeRejectsMissingStructuralFields(t *testing
 }
 
 func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
-	cfg := config.KafkaConfig{Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12}
+	cfg := config.KafkaConfig{Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", ArticleEmbeddingTopic: "embedding", TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, ArticleEmbeddingPartitions: 6}
 	specs, err := RequiredKafkaTopics(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
 	for _, spec := range specs {
 		provisioned[spec.Name] = struct{}{}
 	}
-	for _, eventType := range []string{EventTypeArticleViewed, EventTypeArticleLiked, EventTypeArticleUnliked, EventTypeArticleLikeSnapshot, EventTypeRecommendationImpression, EventTypeRecommendationClick, EventTypeRecommendationReadEnd, EventTypeRecommendationFeedDwell, EventTypeRecommendationNotInterested} {
+	for _, eventType := range []string{EventTypeArticleViewed, EventTypeArticleLiked, EventTypeArticleUnliked, EventTypeArticleEmbeddingRequested, EventTypeArticleLikeSnapshot, EventTypeRecommendationImpression, EventTypeRecommendationClick, EventTypeRecommendationReadEnd, EventTypeRecommendationFeedDwell, EventTypeRecommendationNotInterested} {
 		topic, err := TopicForEvent(cfg, eventType)
 		if err != nil {
 			t.Fatalf("event type %q: %v", eventType, err)
@@ -83,5 +83,40 @@ func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
 		if _, ok := provisioned[topic]; !ok {
 			t.Fatalf("event type %q resolves to unprovisioned topic %q", eventType, topic)
 		}
+	}
+}
+
+func TestArticleEmbeddingRequestedEnvelopeUsesArticleKey(t *testing.T) {
+	now := time.Date(2026, 8, 18, 1, 2, 3, 4, time.FixedZone("CST", 8*60*60))
+	event, err := NewArticleEmbeddingRequestedEnvelope(uuid.NewString(), 42, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.SchemaVersion != 1 || event.AggregateType != "article" || event.AggregateID != "42" || KeyForEvent(event) != "42" || !event.OccurredAt.Equal(now.UTC()) {
+		t.Fatalf("event=%#v key=%q", event, KeyForEvent(event))
+	}
+	var payload ArticleEmbeddingRequestedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.ArticleID != 42 {
+		t.Fatalf("payload=%#v err=%v", payload, err)
+	}
+}
+
+func TestArticleEmbeddingRequestedEnvelopeRejectsInvalidFields(t *testing.T) {
+	now := time.Now()
+	for _, test := range []struct {
+		name       string
+		id         string
+		articleID  uint
+		occurredAt time.Time
+	}{
+		{name: "id", id: "bad", articleID: 1, occurredAt: now},
+		{name: "article", id: uuid.NewString(), articleID: 0, occurredAt: now},
+		{name: "occurred at", id: uuid.NewString(), articleID: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewArticleEmbeddingRequestedEnvelope(test.id, test.articleID, test.occurredAt); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }
