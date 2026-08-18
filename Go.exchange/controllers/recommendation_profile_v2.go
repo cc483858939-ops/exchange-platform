@@ -242,15 +242,6 @@ func applyCandidateCaps(target *config.RecommendationCandidateCaps, set config.R
 	}
 }
 
-// Kept as the existing test seam; it now returns the one normalized V2 contract.
-func normalizedEmbeddingRecommendationConfig() config.RecommendationConfig {
-	return config.RecommendationConfig{
-		BehaviorWeights:    config.RecommendationBehaviorWeights{View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, QuickBounce: -3, NotInterested: -6},
-		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, SemanticWeight: 4, FreshnessWeight: 2,
-		PopularityWeight: 0.5, FreshnessHalfLifeDays: 2,
-	}
-}
-
 type userInterestProfile struct {
 	Vector                        []float32
 	PositiveVector                []float32

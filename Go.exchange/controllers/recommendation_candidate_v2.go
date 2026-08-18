@@ -331,13 +331,3 @@ func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.T
 	}
 	return result, nil
 }
-
-// Legacy test seam retained while production uses loadRecommendationCandidateSet.
-func loadSemanticEmbeddingCandidates(userID uint, profile userInterestProfile, lookbackStart, now time.Time) ([]embeddingCandidate, error) {
-	_ = lookbackStart
-	if len(profile.PositiveVector) == 0 {
-		profile.PositiveVector = profile.Vector
-	}
-	cfg := normalizedRecommendationConfig()
-	return loadRecommendationSemanticCandidates(0, profile, map[uint]servedArticle{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
-}

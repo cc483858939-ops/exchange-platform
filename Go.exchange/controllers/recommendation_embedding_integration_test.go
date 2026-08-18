@@ -38,37 +38,49 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 		config.AppConfig = originalConfig
 	})
 
-	user := models.User{Username: "semantic-owner-" + uuid.NewString(), Password: "test"}
-	if err := db.Create(&user).Error; err != nil {
+	viewer := models.User{Username: "semantic-viewer-" + uuid.NewString(), Password: "test"}
+	author := models.User{Username: "semantic-author-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&viewer).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&author).Error; err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	makeArticle := func(title string) models.Article {
-		article := models.Article{AuthorID: user.ID, Title: title, Content: title + " body", PublicationState: "published", PublishedAt: &now, Model: gorm.Model{CreatedAt: now}}
+	makeArticle := func(authorID uint, title string) models.Article {
+		article := models.Article{AuthorID: authorID, Title: title, Content: title + " body", PublicationState: "published", PublishedAt: &now, Model: gorm.Model{CreatedAt: now}}
 		if err := db.Create(&article).Error; err != nil {
 			t.Fatal(err)
 		}
 		return article
 	}
-	nearest, orthogonal, interacted := makeArticle("nearest"), makeArticle("orthogonal"), makeArticle("interacted")
+	nearest := makeArticle(author.ID, "nearest")
+	orthogonal := makeArticle(author.ID, "orthogonal")
+	interacted := makeArticle(author.ID, "interacted")
+	selfArticle := makeArticle(viewer.ID, "self")
 	for _, item := range []struct {
 		article models.Article
 		vector  []float32
-	}{{nearest, []float32{1, 0}}, {orthogonal, []float32{0, 1}}, {interacted, []float32{1, 0}}} {
+	}{{nearest, []float32{1, 0}}, {orthogonal, []float32{0, 1}}, {interacted, []float32{1, 0}}, {selfArticle, []float32{1, 0}}} {
 		if err := db.Create(&models.ArticleEmbedding{ArticleID: item.article.ID, Version: "post_embedding_v1", Model: "test", Dimensions: 2, Embedding: pgvector.NewVector(item.vector), ContentHash: item.article.Title}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Create(&models.ArticleBehavior{UserID: user.ID, ArticleID: interacted.ID, Action: ArticleBehaviorActionView, LastSeenAt: now}).Error; err != nil {
+	if err := db.Create(&models.ArticleBehavior{UserID: viewer.ID, ArticleID: interacted.ID, Action: ArticleBehaviorActionView, LastSeenAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id IN ?", []uint{nearest.ID, orthogonal.ID, interacted.ID}).Delete(&models.ArticleEmbedding{})
-		db.Unscoped().Where("id IN ?", []uint{nearest.ID, orthogonal.ID, interacted.ID}).Delete(&models.Article{})
-		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+		articleIDs := []uint{nearest.ID, orthogonal.ID, interacted.ID, selfArticle.ID}
+		db.Unscoped().Where("article_id IN ?", articleIDs).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("article_id IN ?", articleIDs).Delete(&models.ArticleReaction{})
+		db.Unscoped().Where("article_id IN ?", articleIDs).Delete(&models.ArticleEmbedding{})
+		db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+		db.Unscoped().Where("id IN ?", []uint{viewer.ID, author.ID}).Delete(&models.User{})
 	})
 
-	candidates, err := loadSemanticEmbeddingCandidates(user.ID, userInterestProfile{Vector: []float32{1, 0}, InteractedArticleIDs: map[uint]struct{}{interacted.ID: {}}}, now.Add(-time.Hour), now)
+	cfg := defaultRecommendationConfig()
+	profile := userInterestProfile{PositiveVector: []float32{1, 0}, InteractedArticleIDs: map[uint]struct{}{interacted.ID: {}}}
+	candidates, err := loadRecommendationSemanticCandidates(viewer.ID, profile, map[uint]servedArticle{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +90,9 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	for _, candidate := range candidates {
 		if candidate.ArticleID == interacted.ID {
 			t.Fatal("interacted article was recalled")
+		}
+		if candidate.ArticleID == selfArticle.ID {
+			t.Fatal("self-authored article was recalled")
 		}
 	}
 	if candidates[0].SemanticSimilarity < .99 {
@@ -97,7 +112,7 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleEmbedding{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleEmbedding{}, &models.ArticleBehavior{}, &models.ArticleReaction{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
@@ -108,13 +123,17 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 		config.AppConfig = originalConfig
 	})
 
-	user := models.User{Username: "semantic-version-" + uuid.NewString(), Password: "test"}
-	if err := db.Create(&user).Error; err != nil {
+	viewer := models.User{Username: "semantic-version-viewer-" + uuid.NewString(), Password: "test"}
+	author := models.User{Username: "semantic-version-author-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&viewer).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&author).Error; err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	oldArticle := models.Article{AuthorID: user.ID, Title: "old", Content: "old", PublicationState: "published", PublishedAt: &now}
-	activeArticle := models.Article{AuthorID: user.ID, Title: "active", Content: "active", PublicationState: "published", PublishedAt: &now}
+	oldArticle := models.Article{AuthorID: author.ID, Title: "old", Content: "old", PublicationState: "published", PublishedAt: &now}
+	activeArticle := models.Article{AuthorID: author.ID, Title: "active", Content: "active", PublicationState: "published", PublishedAt: &now}
 	if err := db.Create(&oldArticle).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -137,14 +156,17 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		ids := []uint{oldArticle.ID, activeArticle.ID}
+		db.Unscoped().Where("article_id IN ?", ids).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("article_id IN ?", ids).Delete(&models.ArticleReaction{})
 		db.Unscoped().Where("article_id IN ?", ids).Delete(&models.ArticleEmbedding{})
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
-		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+		db.Unscoped().Where("id IN ?", []uint{viewer.ID, author.ID}).Delete(&models.User{})
 	})
 
-	candidates, err := loadSemanticEmbeddingCandidates(user.ID, userInterestProfile{
-		Vector: []float32{1, 0},
-	}, now.Add(-time.Hour), now)
+	cfg := defaultRecommendationConfig()
+	candidates, err := loadRecommendationSemanticCandidates(viewer.ID, userInterestProfile{
+		PositiveVector: []float32{1, 0},
+	}, map[uint]servedArticle{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {
 		t.Fatal(err)
 	}

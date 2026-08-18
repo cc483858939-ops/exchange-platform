@@ -33,6 +33,17 @@ func TestMergeEmbeddingCandidatesContinuesMetadataAggregationAfterCap(t *testing
 	}
 }
 
+func TestMergeEmbeddingCandidatesPreservesSourceFlagsAndCap(t *testing.T) {
+	merged := mergeEmbeddingCandidates(4,
+		[]embeddingCandidate{{ArticleID: 1, SemanticSimilarity: .9, FromSemantic: true}, {ArticleID: 2, FromSemantic: true}},
+		[]embeddingCandidate{{ArticleID: 1, FromRecent: true}, {ArticleID: 3, FromRecent: true}},
+		[]embeddingCandidate{{ArticleID: 2, FromPopular: true}},
+	)
+	if len(merged) != 3 || merged[0].ArticleID != 1 || !merged[0].FromSemantic || !merged[0].FromRecent || merged[1].ArticleID != 2 || !merged[1].FromPopular {
+		t.Fatalf("merged=%#v", merged)
+	}
+}
+
 func TestRecommendationCandidateCapsUsesPersonalizedAndColdStart(t *testing.T) {
 	cfg := defaultRecommendationConfig()
 	cfg.Candidates.Personalized.Merged = 2

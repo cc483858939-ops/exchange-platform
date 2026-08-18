@@ -21,8 +21,7 @@ type recommendationFeedbackEvent struct {
 }
 
 type recommendationFeedbackSignal struct {
-	Event      recommendationFeedbackEvent
-	SignalType string
+	Event recommendationFeedbackEvent
 }
 
 type recommendationReactionState struct {
@@ -40,11 +39,6 @@ type userArticleOutcome struct {
 	PositiveSignals []userArticleSignal
 	NegativeSignal  *userArticleSignal
 	PassiveSignal   *userArticleSignal
-
-	// SignalType and OccurredAt retain the compact representation used by the
-	// old unit seam; the V2 runtime reads the structured fields above.
-	SignalType string
-	OccurredAt time.Time
 }
 
 const (
@@ -109,10 +103,9 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 		if event.ReceivedAt.IsZero() {
 			event.ReceivedAt = event.OccurredAt
 		}
-		signal := recommendationFeedbackSignal{Event: event}
 		switch behavior.Action {
 		case eventing.RecommendationBehaviorActionClick:
-			event.EventType, signal.SignalType = recommendationFeedbackEventTypeClick, "click"
+			event.EventType = recommendationFeedbackEventTypeClick
 		case eventing.RecommendationBehaviorActionReadQualified,
 			eventing.RecommendationBehaviorActionReadQuickBounce,
 			eventing.RecommendationBehaviorActionReadNeutral:
@@ -120,20 +113,17 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 			outcome := recommendationReadOutcomeNeutral
 			switch behavior.Action {
 			case eventing.RecommendationBehaviorActionReadQualified:
-				outcome, signal.SignalType = recommendationReadOutcomeQualified, "qualified_read"
+				outcome = recommendationReadOutcomeQualified
 			case eventing.RecommendationBehaviorActionReadQuickBounce:
-				outcome, signal.SignalType = recommendationReadOutcomeQuickBounce, "quick_bounce"
-			default:
-				signal.SignalType = "neutral_read"
+				outcome = recommendationReadOutcomeQuickBounce
 			}
 			event.ReadOutcome = &outcome
 		case eventing.RecommendationBehaviorActionNotInterested:
-			event.EventType, signal.SignalType = recommendationFeedbackEventTypeNotInterested, "not_interested"
+			event.EventType = recommendationFeedbackEventTypeNotInterested
 		default:
 			continue
 		}
-		signal.Event = event
-		result = append(result, signal)
+		result = append(result, recommendationFeedbackSignal{Event: event})
 	}
 	return result, nil
 }
@@ -299,17 +289,12 @@ func canonicalizeRecommendationOutcomes(behaviors []articleBehaviorSignal, feedb
 		switch {
 		case len(positive) > 0:
 			outcome.PositiveSignals = positive
-			outcome.SignalType, outcome.OccurredAt = positive[0].SignalType, positive[0].OccurredAt
 		case notInterested != nil:
 			signal := userArticleSignal{SignalType: "not_interested", OccurredAt: notInterested.OccurredAt}
 			outcome.NegativeSignal = &signal
-			outcome.SignalType, outcome.OccurredAt = signal.SignalType, signal.OccurredAt
 		case passiveType == "quick_bounce":
 			signal := userArticleSignal{SignalType: passiveType, OccurredAt: passiveAt}
 			outcome.NegativeSignal = &signal
-			outcome.SignalType, outcome.OccurredAt = signal.SignalType, signal.OccurredAt
-		case passiveType != "":
-			outcome.SignalType, outcome.OccurredAt = passiveType, passiveAt
 		}
 		if len(outcome.PositiveSignals) > 0 || outcome.NegativeSignal != nil || outcome.PassiveSignal != nil {
 			outcomes = append(outcomes, outcome)
