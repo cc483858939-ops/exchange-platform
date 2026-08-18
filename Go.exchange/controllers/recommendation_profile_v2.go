@@ -40,25 +40,25 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 		return cfg
 	}
 	set := config.AppConfig.Recommendation
-	if set.BehaviorWeights.View != 0 {
+	if recommendationSettingProvided("behavior_weights.view", set.BehaviorWeights.View != 0) {
 		cfg.BehaviorWeights.View = set.BehaviorWeights.View
 	}
-	if set.BehaviorWeights.Like != 0 {
+	if recommendationSettingProvided("behavior_weights.like", set.BehaviorWeights.Like != 0) {
 		cfg.BehaviorWeights.Like = set.BehaviorWeights.Like
 	}
-	if set.BehaviorWeights.Click != 0 {
+	if recommendationSettingProvided("behavior_weights.click", set.BehaviorWeights.Click != 0) {
 		cfg.BehaviorWeights.Click = set.BehaviorWeights.Click
 	}
-	if set.BehaviorWeights.QualifiedRead != 0 {
+	if recommendationSettingProvided("behavior_weights.qualified_read", set.BehaviorWeights.QualifiedRead != 0) {
 		cfg.BehaviorWeights.QualifiedRead = set.BehaviorWeights.QualifiedRead
 	}
-	if set.BehaviorWeights.Reply > 0 {
+	if set.BehaviorWeights.Reply >= 0 && recommendationSettingProvided("behavior_weights.reply", set.BehaviorWeights.Reply > 0) {
 		cfg.BehaviorWeights.Reply = set.BehaviorWeights.Reply
 	}
-	if set.BehaviorWeights.QuickBounce != 0 {
+	if recommendationSettingProvided("behavior_weights.quick_bounce", set.BehaviorWeights.QuickBounce != 0) {
 		cfg.BehaviorWeights.QuickBounce = set.BehaviorWeights.QuickBounce
 	}
-	if set.BehaviorWeights.NotInterested != 0 {
+	if recommendationSettingProvided("behavior_weights.not_interested", set.BehaviorWeights.NotInterested != 0) {
 		cfg.BehaviorWeights.NotInterested = set.BehaviorWeights.NotInterested
 	}
 	if set.SignalHalfLifeDays > 0 {
@@ -67,46 +67,46 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.FeedbackLookbackDays > 0 {
 		cfg.FeedbackLookbackDays = set.FeedbackLookbackDays
 	}
-	if set.PositiveSignalCoexistBonus >= 0 && set.PositiveSignalCoexistBonus != 0 {
+	if set.PositiveSignalCoexistBonus >= 0 && recommendationSettingProvided("positive_signal_coexist_bonus", set.PositiveSignalCoexistBonus != 0) {
 		cfg.PositiveSignalCoexistBonus = set.PositiveSignalCoexistBonus
 	}
 	if set.PositiveArticleWeightCap > 0 {
 		cfg.PositiveArticleWeightCap = set.PositiveArticleWeightCap
 	}
-	if set.SemanticWeight >= 0 && set.SemanticWeight != 0 {
+	if set.SemanticWeight >= 0 && recommendationSettingProvided("semantic_weight", set.SemanticWeight != 0) {
 		cfg.SemanticWeight = set.SemanticWeight
 	}
-	if set.NegativeSemanticWeight >= 0 && set.NegativeSemanticWeight != 0 {
+	if set.NegativeSemanticWeight >= 0 && recommendationSettingProvided("negative_semantic_weight", set.NegativeSemanticWeight != 0) {
 		cfg.NegativeSemanticWeight = set.NegativeSemanticWeight
 	}
 	if set.NegativeConfidenceSaturationScale > 0 {
 		cfg.NegativeConfidenceSaturationScale = set.NegativeConfidenceSaturationScale
 	}
-	if set.FreshnessWeight >= 0 && set.FreshnessWeight != 0 {
+	if set.FreshnessWeight >= 0 && recommendationSettingProvided("freshness_weight", set.FreshnessWeight != 0) {
 		cfg.FreshnessWeight = set.FreshnessWeight
 	}
 	if set.FreshnessHalfLifeDays > 0 {
 		cfg.FreshnessHalfLifeDays = set.FreshnessHalfLifeDays
 	}
-	if set.PopularityWeight >= 0 && set.PopularityWeight != 0 {
+	if set.PopularityWeight >= 0 && recommendationSettingProvided("popularity_weight", set.PopularityWeight != 0) {
 		cfg.PopularityWeight = set.PopularityWeight
 	}
-	if set.PopularityCommentFactor >= 0 && set.PopularityCommentFactor != 0 {
+	if set.PopularityCommentFactor >= 0 && recommendationSettingProvided("popularity_comment_factor", set.PopularityCommentFactor != 0) {
 		cfg.PopularityCommentFactor = set.PopularityCommentFactor
 	}
-	if set.AuthorAffinityWeight >= 0 && set.AuthorAffinityWeight != 0 {
+	if set.AuthorAffinityWeight >= 0 && recommendationSettingProvided("author_affinity_weight", set.AuthorAffinityWeight != 0) {
 		cfg.AuthorAffinityWeight = set.AuthorAffinityWeight
 	}
 	if set.AuthorAffinitySaturationScale > 0 {
 		cfg.AuthorAffinitySaturationScale = set.AuthorAffinitySaturationScale
 	}
-	if set.FollowingBonus >= 0 && set.FollowingBonus != 0 {
+	if set.FollowingBonus >= 0 && recommendationSettingProvided("following_bonus", set.FollowingBonus != 0) {
 		cfg.FollowingBonus = set.FollowingBonus
 	}
-	if set.OutOfNetworkMinRatio >= 0 && set.OutOfNetworkMinRatio <= 1 && set.OutOfNetworkMinRatio != 0 {
+	if set.OutOfNetworkMinRatio >= 0 && set.OutOfNetworkMinRatio <= 1 && recommendationSettingProvided("out_of_network_min_ratio", set.OutOfNetworkMinRatio != 0) {
 		cfg.OutOfNetworkMinRatio = set.OutOfNetworkMinRatio
 	}
-	if set.NovelAuthorMinRatio >= 0 && set.NovelAuthorMinRatio <= 1 && set.NovelAuthorMinRatio != 0 {
+	if set.NovelAuthorMinRatio >= 0 && set.NovelAuthorMinRatio <= 1 && recommendationSettingProvided("novel_author_min_ratio", set.NovelAuthorMinRatio != 0) {
 		cfg.NovelAuthorMinRatio = set.NovelAuthorMinRatio
 	}
 	if set.ServedHardExclusionMinutes > 0 {
@@ -118,8 +118,8 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.ServedHistoryLimit > 0 {
 		cfg.ServedHistoryLimit = set.ServedHistoryLimit
 	}
-	if set.Diversity.Enabled {
-		cfg.Diversity.Enabled = true
+	if recommendationSettingProvided("diversity.enabled", set.Diversity.Enabled) {
+		cfg.Diversity.Enabled = set.Diversity.Enabled
 	}
 	if set.Diversity.AuthorWindowSize > 0 {
 		cfg.Diversity.AuthorWindowSize = set.Diversity.AuthorWindowSize
@@ -127,10 +127,10 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Diversity.MaxSameAuthorInWindow > 0 {
 		cfg.Diversity.MaxSameAuthorInWindow = set.Diversity.MaxSameAuthorInWindow
 	}
-	if set.Diversity.SemanticDuplicateThreshold >= -1 && set.Diversity.SemanticDuplicateThreshold <= 1 && set.Diversity.SemanticDuplicateThreshold != 0 {
+	if set.Diversity.SemanticDuplicateThreshold >= -1 && set.Diversity.SemanticDuplicateThreshold <= 1 && recommendationSettingProvided("diversity.semantic_duplicate_threshold", set.Diversity.SemanticDuplicateThreshold != 0) {
 		cfg.Diversity.SemanticDuplicateThreshold = set.Diversity.SemanticDuplicateThreshold
 	}
-	if set.Diversity.SemanticDuplicatePenalty >= 0 && set.Diversity.SemanticDuplicatePenalty != 0 {
+	if set.Diversity.SemanticDuplicatePenalty >= 0 && recommendationSettingProvided("diversity.semantic_duplicate_penalty", set.Diversity.SemanticDuplicatePenalty != 0) {
 		cfg.Diversity.SemanticDuplicatePenalty = set.Diversity.SemanticDuplicatePenalty
 	}
 	if set.Trace.ResultRetentionDays > 0 {
@@ -218,6 +218,10 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 		cfg.Trace.CleanupBatchSize = 5000
 	}
 	return cfg
+}
+
+func recommendationSettingProvided(path string, legacyProvided bool) bool {
+	return legacyProvided || (config.AppConfig != nil && config.AppConfig.HasRecommendationSetting(path))
 }
 
 func applyCandidateCaps(target *config.RecommendationCandidateCaps, set config.RecommendationCandidateCaps) {
@@ -410,12 +414,16 @@ func validEmbeddingVector(vector []float32) bool {
 	if len(vector) == 0 {
 		return false
 	}
+	hasNonZero := false
 	for _, value := range vector {
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
 			return false
 		}
+		if value != 0 {
+			hasNonZero = true
+		}
 	}
-	return true
+	return hasNonZero
 }
 
 func normalizeEmbedding(vector []float32) []float32 {

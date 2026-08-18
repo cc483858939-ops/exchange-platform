@@ -119,14 +119,67 @@ type Config struct {
 		MaxIdleconns int
 		MaxOpenConns int
 	}
-	Embedding      EmbeddingConfig
-	Kafka          KafkaConfig
-	Recommendation RecommendationConfig
-	Outbox         OutboxConfig
-	Storage        StorageConfig
+	Embedding              EmbeddingConfig
+	Kafka                  KafkaConfig
+	Recommendation         RecommendationConfig
+	RecommendationPresence map[string]bool `mapstructure:"-" json:"-" yaml:"-"`
+	Outbox                 OutboxConfig
+	Storage                StorageConfig
 }
 
 var AppConfig *Config
+
+var recommendationPresenceKeys = []string{
+	"behavior_weights.view",
+	"behavior_weights.like",
+	"behavior_weights.click",
+	"behavior_weights.qualified_read",
+	"behavior_weights.reply",
+	"behavior_weights.quick_bounce",
+	"behavior_weights.not_interested",
+
+	"positive_signal_coexist_bonus",
+
+	"semantic_weight",
+	"negative_semantic_weight",
+	"freshness_weight",
+	"popularity_weight",
+	"popularity_comment_factor",
+
+	"author_affinity_weight",
+	"following_bonus",
+
+	"out_of_network_min_ratio",
+	"novel_author_min_ratio",
+
+	"diversity.enabled",
+	"diversity.semantic_duplicate_threshold",
+	"diversity.semantic_duplicate_penalty",
+}
+
+func recommendationSettingPresence(v *viper.Viper) map[string]bool {
+	result := make(map[string]bool)
+	if v == nil {
+		return result
+	}
+	for _, relativePath := range recommendationPresenceKeys {
+		if v.InConfig("recommendation." + relativePath) {
+			result[relativePath] = true
+		}
+	}
+	return result
+}
+
+func (c *Config) HasRecommendationSetting(path string) bool {
+	if c == nil {
+		return false
+	}
+	path = strings.ToLower(strings.TrimSpace(path))
+	if path == "" {
+		return false
+	}
+	return c.RecommendationPresence[path]
+}
 
 // ActiveEmbeddingVersion returns the one embedding-space identity used by
 // workers, profile construction, and semantic recall.
@@ -162,6 +215,7 @@ func LoadConfig() {
 	if err := viper.Unmarshal(AppConfig); err != nil {
 		log.Fatalf("Unable to decode into struct: %v", err)
 	}
+	AppConfig.RecommendationPresence = recommendationSettingPresence(viper.GetViper())
 	applySensitiveEnvironmentOverrides(AppConfig)
 }
 

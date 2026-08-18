@@ -1,6 +1,68 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+)
+
+func TestRecommendationSettingPresenceDetectsExplicitZeroAndFalse(t *testing.T) {
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(strings.NewReader(`
+recommendation:
+  following_bonus: 0
+  out_of_network_min_ratio: 0
+  diversity:
+    enabled: false
+    semantic_duplicate_penalty: 0
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	presence := recommendationSettingPresence(v)
+	for _, key := range []string{
+		"following_bonus",
+		"out_of_network_min_ratio",
+		"diversity.enabled",
+		"diversity.semantic_duplicate_penalty",
+	} {
+		if !presence[key] {
+			t.Fatalf("presence[%q]=false, want true", key)
+		}
+	}
+	if presence["semantic_weight"] {
+		t.Fatal("semantic_weight must be absent")
+	}
+}
+
+func TestRecommendationSettingPresenceIgnoresViperDefaults(t *testing.T) {
+	v := viper.New()
+	v.SetDefault("recommendation.following_bonus", 0.5)
+
+	presence := recommendationSettingPresence(v)
+	if presence["following_bonus"] {
+		t.Fatal("Viper default must not count as config-file presence")
+	}
+}
+
+func TestHasRecommendationSetting(t *testing.T) {
+	var nilConfig *Config
+	if nilConfig.HasRecommendationSetting("following_bonus") {
+		t.Fatal("nil Config must report false")
+	}
+	if (&Config{}).HasRecommendationSetting("following_bonus") {
+		t.Fatal("nil presence map must report false")
+	}
+	cfg := &Config{RecommendationPresence: map[string]bool{"following_bonus": true}}
+	if !cfg.HasRecommendationSetting("  FOLLOWING_BONUS ") {
+		t.Fatal("known key should be case and whitespace normalized")
+	}
+	if cfg.HasRecommendationSetting("unknown") || cfg.HasRecommendationSetting(" ") {
+		t.Fatal("unknown and empty keys must report false")
+	}
+}
 
 func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 	t.Setenv("DATABASE_DSN", "postgres://runtime")
