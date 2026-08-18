@@ -41,8 +41,14 @@ func recommendationTraceCleanupConfig() config.RecommendationTraceConfig {
 	if set.ResultRetentionDays > 0 {
 		cfg.ResultRetentionDays = set.ResultRetentionDays
 	}
-	if set.RequestRetentionDays >= cfg.ResultRetentionDays {
+	if set.RequestRetentionDays > 0 {
 		cfg.RequestRetentionDays = set.RequestRetentionDays
+	}
+	if cfg.RequestRetentionDays < cfg.ResultRetentionDays {
+		cfg.RequestRetentionDays = cfg.ResultRetentionDays
+	}
+	if cfg.RequestRetentionDays < 90 {
+		cfg.RequestRetentionDays = 90
 	}
 	if set.CleanupIntervalHours > 0 {
 		cfg.CleanupIntervalHours = set.CleanupIntervalHours
