@@ -46,7 +46,7 @@ func TestCreateArticleBuildsPublishedRecord(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	CreateArticle(ctx)
+	createArticle(ctx, nil)
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -71,7 +71,7 @@ func TestCreateArticleTrimsTextFields(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"  title  \",\"content\":\"  canonical body  \",\"preview\":\"  summary  \"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	CreateArticle(ctx)
+	createArticle(ctx, nil)
 
 	if recorder.Code != http.StatusCreated || persisted.Title != "title" || persisted.Content != "canonical body" || persisted.Preview != "summary" {
 		t.Fatalf("status=%d article=%#v", recorder.Code, persisted)
@@ -91,7 +91,7 @@ func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\",\"cover_image_url\":\"https://invalid\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	CreateArticle(ctx)
+	createArticle(ctx, nil)
 
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t", recorder.Code, called)
@@ -107,7 +107,7 @@ func TestCreateArticlePersistsWithoutCover(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	CreateArticle(ctx)
+	createArticle(ctx, nil)
 	if recorder.Code != http.StatusCreated || !bytes.Contains(recorder.Body.Bytes(), []byte("\"cover_image_url\":\"\"")) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -125,7 +125,7 @@ func TestCreateArticleRejectsWhitespaceOnlyContent(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\" \\t\\n \"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	CreateArticle(ctx)
+	createArticle(ctx, nil)
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t body=%s", recorder.Code, called, recorder.Body.String())
 	}
@@ -137,7 +137,7 @@ func TestCreateArticleRejectsMissingUserContext(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	CreateArticle(ctx)
+	createArticle(ctx, nil)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -153,7 +153,7 @@ func TestCreateArticleIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\",\"author_id\":999,\"author\":{\"id\":999}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	CreateArticle(ctx)
+	createArticle(ctx, nil)
 	if recorder.Code != http.StatusCreated || persisted.AuthorID != 7 {
 		t.Fatalf("status=%d author_id=%d body=%s", recorder.Code, persisted.AuthorID, recorder.Body.String())
 	}

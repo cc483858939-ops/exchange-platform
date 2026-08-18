@@ -1,12 +1,12 @@
-//go:build legacy_article_embedding_job_tests
-
 package main
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
+	"Go.exchange/embeddings"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -36,73 +36,52 @@ func TestRequeueArticleEmbeddingsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	var baselineIDs []uint
-	if err := db.Table("articles AS a").Select("a.id").Joins("LEFT JOIN article_embeddings AS ae ON ae.article_id = a.id").Where("a.deleted_at IS NULL AND ae.version IS DISTINCT FROM ?", "v2").Pluck("a.id", &baselineIDs).Error; err != nil {
-		t.Fatal(err)
-	}
+	publishedAt := now.Add(-time.Minute)
 	articles := []models.Article{
-		{AuthorID: user.ID, Title: "no embedding", Content: "body", PublicationState: "published"},
-		{AuthorID: user.ID, Title: "old version", Content: "body", PublicationState: "published"},
-		{AuthorID: user.ID, Title: "active version", Content: "body", PublicationState: "published"},
+		{AuthorID: user.ID, Title: "missing", Content: "body", PublicationState: "published", PublishedAt: &publishedAt},
+		{AuthorID: user.ID, Title: "current", Content: "body", PublicationState: "published", PublishedAt: &publishedAt},
+		{AuthorID: user.ID, Title: "stale version", Content: "body", PublicationState: "published", PublishedAt: &publishedAt},
+		{AuthorID: user.ID, Title: "stale content", Content: "body", PublicationState: "published", PublishedAt: &publishedAt},
+		{AuthorID: user.ID, Title: "draft", Content: "body", PublicationState: "draft", PublishedAt: &publishedAt},
+		{AuthorID: user.ID, Title: "not published", Content: "body", PublicationState: "published"},
+		{AuthorID: user.ID, Title: "deleted", Content: "body", PublicationState: "published", PublishedAt: &publishedAt},
 	}
 	if err := db.Create(&articles).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&models.ArticleEmbedding{
-		ArticleID: articles[1].ID, Version: "v1", Model: "test", Dimensions: 2,
-		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: "old",
-	}).Error; err != nil {
+	currentHash := embeddings.ArticleEmbeddingContentHash(articles[1].Title, articles[1].Content)
+	embeddingsToCreate := []models.ArticleEmbedding{
+		{ArticleID: articles[1].ID, Version: "v2", Model: "test", Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: currentHash},
+		{ArticleID: articles[2].ID, Version: "v1", Model: "test", Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: "old"},
+		{ArticleID: articles[3].ID, Version: "v2", Model: "test", Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: "old"},
+	}
+	for _, embedding := range embeddingsToCreate {
+		if err := db.Create(&embedding).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Delete(&articles[6]).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&models.ArticleEmbedding{
-		ArticleID: articles[2].ID, Version: "v2", Model: "test", Dimensions: 2,
-		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: "active",
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
-	finishedAt := now.Add(-time.Hour)
 	t.Cleanup(func() {
-		ids := []uint{articles[0].ID, articles[1].ID, articles[2].ID}
+		ids := make([]uint, 0, len(articles))
+		for _, article := range articles {
+			ids = append(ids, article.ID)
+		}
 		db.Unscoped().Where("article_id IN ?", ids).Delete(&models.ArticleEmbedding{})
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 
-	_ = now
-	_ = db
-	_ = baselineIDs
-	_ = articles
-	return
-	/*
-		count, err := requeueArticleEmbeddings(db, nil, "v2", now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if count != len(baselineIDs)+2 {
-			t.Fatalf("requeued=%d want=%d", count, len(baselineIDs)+2)
-		}
-
-		var missingJob, oldJob, activeJob models.LegacyEmbeddingProjection
-		for _, item := range []struct {
-			id  uint
-			dst *models.LegacyEmbeddingProjection
-		}{{articles[0].ID, &missingJob}, {articles[1].ID, &oldJob}, {articles[2].ID, &activeJob}} {
-			if err := db.First(item.dst, "article_id = ?", item.id).Error; err != nil {
-				t.Fatal(err)
-			}
-		}
-		for _, job := range []*models.LegacyEmbeddingProjection{&missingJob, &oldJob} {
-			if job.State != models.LegacyEmbeddingQueued || job.AttemptCount != 0 ||
-				job.MaxAttempts != requeueArticleEmbeddingMaxAttempts || job.LeasedBy != "" ||
-				job.LastError != "" || job.FinishedAt != nil {
-				t.Fatalf("requeued job=%#v", job)
-			}
-			delta := job.NextAttemptAt.Sub(now)
-			if delta < -time.Millisecond || delta > time.Millisecond {
-				t.Fatalf("requeued next_attempt_at=%v want=%v", job.NextAttemptAt, now)
-			}
-		}
-		if activeJob.State != models.LegacyEmbeddingSucceeded || activeJob.AttemptCount != 1 || activeJob.FinishedAt == nil {
-			t.Fatalf("active job changed=%#v", activeJob)
-		}*/
+	publisher := &reconciliationTestPublisher{}
+	stats, err := requeueArticleEmbeddings(context.Background(), db, publisher, "v2", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Scanned != 4 || stats.Missing != 1 || stats.StaleVersion != 1 || stats.StaleContent != 1 || stats.Published != 3 {
+		t.Fatalf("stats=%+v", stats)
+	}
+	if publisher.calls != 1 || len(publisher.events) != 3 {
+		t.Fatalf("publisher calls=%d events=%d", publisher.calls, len(publisher.events))
+	}
 }

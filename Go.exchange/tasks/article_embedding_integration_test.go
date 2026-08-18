@@ -1,29 +1,19 @@
-//go:build legacy_article_embedding_job_tests
-
 package tasks
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
-	"Go.exchange/config"
-	"Go.exchange/embeddings"
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
-
-type integrationEmbedder struct{ calls int }
-
-func (e *integrationEmbedder) Embed(_ context.Context, _ []string) (embeddings.EmbedResult, error) {
-	e.calls++
-	return embeddings.EmbedResult{Vectors: [][]float32{{1, 2}}, Model: "integration-model"}, nil
-}
 
 func openArticleEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -44,12 +34,8 @@ func openArticleEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestLegacyArticleEmbeddingLifecycleIntegration(t *testing.T) {
+func TestArticleEmbeddingGORMStoreIntegration(t *testing.T) {
 	db := openArticleEmbeddingIntegrationDatabase(t)
-	originalDB, originalConfig := global.Db, config.AppConfig
-	global.Db = db
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true, Model: "configured-model", Version: "post_embedding_v1"}}
-	t.Cleanup(func() { global.Db, config.AppConfig = originalDB, originalConfig })
 
 	user := models.User{Username: "embedding-owner-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&user).Error; err != nil {
@@ -65,14 +51,43 @@ func TestLegacyArticleEmbeddingLifecycleIntegration(t *testing.T) {
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 
-	_ = time.Now().UTC()
-	embedder := &integrationEmbedder{}
-	_ = embedder
-	var persisted models.ArticleEmbedding
-	if err := db.First(&persisted, "article_id = ?", article.ID).Error; err != nil {
+	store := gormArticleEmbeddingStore{db: db}
+	loadedArticle, err := store.GetArticle(context.Background(), article.ID)
+	if err != nil || loadedArticle.ID != article.ID {
+		t.Fatalf("article=%#v err=%v", loadedArticle, err)
+	}
+	if _, err := store.GetEmbedding(context.Background(), article.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("missing embedding err=%v", err)
+	}
+
+	first := models.ArticleEmbedding{
+		ArticleID: article.ID, Version: "v1", Model: "test-model",
+		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 2}),
+		ContentHash: "hash-v1", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.UpsertEmbedding(context.Background(), first); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Dimensions != 2 || len(persisted.Embedding.Slice()) != 2 || persisted.ContentHash == "" {
+	second := first
+	second.Version = "v2"
+	second.ContentHash = "hash-v2"
+	second.Embedding = pgvector.NewVector([]float32{3, 4})
+	second.UpdatedAt = time.Now().UTC()
+	if err := store.UpsertEmbedding(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.GetEmbedding(context.Background(), article.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Version != "v2" || persisted.ContentHash != "hash-v2" || len(persisted.Embedding.Slice()) != 2 {
 		t.Fatalf("embedding=%#v", persisted)
+	}
+	var count int64
+	if err := db.Model(&models.ArticleEmbedding{}).Where("article_id = ?", article.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows=%d want=1", count)
 	}
 }

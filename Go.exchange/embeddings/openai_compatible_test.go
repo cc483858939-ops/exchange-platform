@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,6 +68,39 @@ func TestOpenAICompatibleEmbedderRejectsProviderFailuresWithoutLeakingKey(t *tes
 	var providerErr *ProviderHTTPError
 	if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusBadGateway {
 		t.Fatalf("typed provider error=%T %#v", err, err)
+	}
+}
+
+func TestIsRetryableProviderError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{name: "nil", err: nil, retryable: false},
+		{name: "canceled", err: context.Canceled, retryable: false},
+		{name: "deadline", err: context.DeadlineExceeded, retryable: true},
+		{name: "network timeout", err: &net.DNSError{IsTimeout: true}, retryable: true},
+		{name: "400", err: &ProviderHTTPError{StatusCode: http.StatusBadRequest}, retryable: false},
+		{name: "413", err: &ProviderHTTPError{StatusCode: http.StatusRequestEntityTooLarge}, retryable: false},
+		{name: "422", err: &ProviderHTTPError{StatusCode: http.StatusUnprocessableEntity}, retryable: false},
+		{name: "401", err: &ProviderHTTPError{StatusCode: http.StatusUnauthorized}, retryable: true},
+		{name: "403", err: &ProviderHTTPError{StatusCode: http.StatusForbidden}, retryable: true},
+		{name: "404", err: &ProviderHTTPError{StatusCode: http.StatusNotFound}, retryable: true},
+		{name: "408", err: &ProviderHTTPError{StatusCode: http.StatusRequestTimeout}, retryable: true},
+		{name: "409", err: &ProviderHTTPError{StatusCode: http.StatusConflict}, retryable: true},
+		{name: "425", err: &ProviderHTTPError{StatusCode: http.StatusTooEarly}, retryable: true},
+		{name: "429", err: &ProviderHTTPError{StatusCode: http.StatusTooManyRequests}, retryable: true},
+		{name: "500", err: &ProviderHTTPError{StatusCode: http.StatusInternalServerError}, retryable: true},
+		{name: "503", err: &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable}, retryable: true},
+		{name: "unknown", err: errors.New("provider response was malformed"), retryable: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsRetryableProviderError(test.err); got != test.retryable {
+				t.Fatalf("retryable=%t want=%t", got, test.retryable)
+			}
+		})
 	}
 }
 

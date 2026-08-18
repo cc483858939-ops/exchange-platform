@@ -65,10 +65,6 @@ func NewCreateArticleHandler(publisher eventing.BatchPublisher) gin.HandlerFunc 
 	}
 }
 
-func CreateArticle(ctx *gin.Context) {
-	createArticle(ctx, nil)
-}
-
 func createArticle(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {

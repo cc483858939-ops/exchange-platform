@@ -32,21 +32,19 @@ func (e *ProviderHTTPError) Error() string {
 }
 
 func IsRetryableProviderError(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || errors.Is(err, context.Canceled) {
 		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	var httpErr *ProviderHTTPError
 	if errors.As(err, &httpErr) {
-		switch {
-		case httpErr.StatusCode == http.StatusRequestTimeout,
-			httpErr.StatusCode == http.StatusTooManyRequests,
-			httpErr.StatusCode >= http.StatusInternalServerError:
-			return true
-		case httpErr.StatusCode >= http.StatusBadRequest && httpErr.StatusCode < http.StatusInternalServerError:
+		switch httpErr.StatusCode {
+		case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
 			return false
-		default:
-			return true
 		}
+		return true
 	}
 	var networkErr net.Error
 	if errors.As(err, &networkErr) {

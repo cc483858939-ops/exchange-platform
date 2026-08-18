@@ -37,6 +37,30 @@ type requeueArticle struct {
 	EmbeddingContentHash *string
 }
 
+type articleEmbeddingReconciliationScanner interface {
+	ListPage(context.Context, uint, int) ([]requeueArticle, error)
+}
+
+type gormArticleEmbeddingReconciliationScanner struct {
+	db *gorm.DB
+}
+
+func (s gormArticleEmbeddingReconciliationScanner) ListPage(ctx context.Context, lastID uint, pageSize int) ([]requeueArticle, error) {
+	if s.db == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	var rows []requeueArticle
+	err := s.db.WithContext(ctx).
+		Table("articles AS a").
+		Select("a.id, a.title, a.content, ae.article_id AS embedding_article_id, ae.version AS embedding_version, ae.content_hash AS embedding_content_hash").
+		Joins("LEFT JOIN article_embeddings AS ae ON ae.article_id = a.id").
+		Where("a.deleted_at IS NULL AND a.publication_state = ? AND a.published_at IS NOT NULL AND a.id > ?", "published", lastID).
+		Order("a.id ASC").
+		Limit(pageSize).
+		Scan(&rows).Error
+	return rows, err
+}
+
 func main() {
 	config.InitDatabaseConfig()
 
@@ -50,7 +74,7 @@ func main() {
 	}
 	defer publisher.Close()
 
-	stats, err := requeueArticleEmbeddings(global.Db, publisher, config.ActiveEmbeddingVersion(), time.Now().UTC())
+	stats, err := requeueArticleEmbeddings(context.Background(), global.Db, publisher, config.ActiveEmbeddingVersion(), time.Now().UTC())
 	if err != nil {
 		log.Fatalf("failed to requeue article embeddings: %v", err)
 	}
@@ -58,10 +82,20 @@ func main() {
 		stats.Scanned, stats.Missing, stats.StaleVersion, stats.StaleContent, stats.Published)
 }
 
-func requeueArticleEmbeddings(db *gorm.DB, publisher eventing.BatchPublisher, activeVersion string, now time.Time) (requeueStats, error) {
-	stats := requeueStats{}
+func requeueArticleEmbeddings(ctx context.Context, db *gorm.DB, publisher eventing.BatchPublisher, activeVersion string, now time.Time) (requeueStats, error) {
 	if db == nil {
-		return stats, errors.New("database is not initialized")
+		return requeueStats{}, errors.New("database is not initialized")
+	}
+	return reconcileArticleEmbeddings(ctx, gormArticleEmbeddingReconciliationScanner{db: db}, publisher, activeVersion, now)
+}
+
+func reconcileArticleEmbeddings(ctx context.Context, scanner articleEmbeddingReconciliationScanner, publisher eventing.BatchPublisher, activeVersion string, now time.Time) (requeueStats, error) {
+	stats := requeueStats{}
+	if scanner == nil {
+		return stats, errors.New("article embedding reconciliation scanner is nil")
+	}
+	if ctx == nil {
+		return stats, errors.New("article embedding reconciliation context is nil")
 	}
 	activeVersion = strings.TrimSpace(activeVersion)
 	if activeVersion == "" {
@@ -73,14 +107,8 @@ func requeueArticleEmbeddings(db *gorm.DB, publisher eventing.BatchPublisher, ac
 
 	var lastID uint
 	for {
-		var rows []requeueArticle
-		if err := db.Table("articles AS a").
-			Select("a.id, a.title, a.content, ae.article_id AS embedding_article_id, ae.version AS embedding_version, ae.content_hash AS embedding_content_hash").
-			Joins("LEFT JOIN article_embeddings AS ae ON ae.article_id = a.id").
-			Where("a.deleted_at IS NULL AND a.publication_state = ? AND a.published_at IS NOT NULL AND a.id > ?", "published", lastID).
-			Order("a.id ASC").
-			Limit(requeueArticleEmbeddingPageSize).
-			Scan(&rows).Error; err != nil {
+		rows, err := scanner.ListPage(ctx, lastID, requeueArticleEmbeddingPageSize)
+		if err != nil {
 			return stats, fmt.Errorf("scan articles requiring embeddings: %w", err)
 		}
 		if len(rows) == 0 {
@@ -113,16 +141,13 @@ func requeueArticleEmbeddings(db *gorm.DB, publisher eventing.BatchPublisher, ac
 				metrics.RecordArticleEmbeddingPublishFailure("requeue")
 				return stats, errors.New("article embedding publisher is nil")
 			}
-			if err := publisher.PublishBatch(context.Background(), events); err != nil {
+			if err := publisher.PublishBatch(ctx, events); err != nil {
 				metrics.RecordArticleEmbeddingPublishFailure("requeue")
 				return stats, fmt.Errorf("publish article embedding reconciliation page: %w", err)
 			}
 			stats.Published += len(events)
 		}
 		lastID = rows[len(rows)-1].ID
-		if len(rows) < requeueArticleEmbeddingPageSize {
-			break
-		}
 	}
 	return stats, nil
 }

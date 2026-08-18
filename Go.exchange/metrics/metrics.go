@@ -50,7 +50,7 @@ func init() {
 	for _, result := range []string{"generated", "up_to_date", "article_missing", "article_unavailable", "invalid_event", "provider_non_retryable"} {
 		articleEmbeddingEvents.WithLabelValues(result)
 	}
-	for _, stage := range []string{"decode", "article_load", "provider", "db_upsert", "kafka_commit"} {
+	for _, stage := range []string{"decode", "db_read", "provider", "db_upsert", "kafka_commit"} {
 		articleEmbeddingFailures.WithLabelValues(stage)
 	}
 	for _, source := range []string{"article_create", "requeue"} {
