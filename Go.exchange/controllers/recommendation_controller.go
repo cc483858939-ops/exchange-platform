@@ -125,7 +125,7 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		}
 		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg)
 		selected = selectRecommendationCandidates(rankedSoft, selected, limit, cfg, now, recommendationSelectionSoft)
-		freshSet = mergeCandidateSets(freshSet, softSet)
+		freshSet = mergeCandidateSets(freshSet, softSet, recommendationCandidateCaps(profile, cfg).Merged)
 	}
 
 	recommendations := selectedRecommendationResponses(selected)

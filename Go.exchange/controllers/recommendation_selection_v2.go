@@ -119,12 +119,21 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 			}
 			return true
 		}
-		index, chosen, ok := chooseRecommendationCandidate(candidates, result, available, preferNovel, cfg, mode, now)
+		_, chosen, ok := chooseRecommendationCandidate(candidates, result, available, preferNovel, cfg, mode, true)
 		if !ok {
-			index, chosen, ok = chooseRecommendationCandidate(candidates, result, available, secondary, cfg, mode, now)
+			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, secondary, cfg, mode, true)
 		}
 		if !ok {
-			index, chosen, ok = chooseRecommendationCandidate(candidates, result, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, mode, now)
+			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, mode, true)
+		}
+		if !ok {
+			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, preferNovel, cfg, mode, false)
+		}
+		if !ok {
+			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, secondary, cfg, mode, false)
+		}
+		if !ok {
+			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, mode, false)
 		}
 		if !ok {
 			break
@@ -135,12 +144,11 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 			Candidate: chosen.Candidate, Article: chosen.Article, Embedding: chosen.Embedding,
 			Breakdown: chosen.Breakdown, IsInNetwork: chosen.IsInNetwork, IsNovelAuthor: chosen.IsNovelAuthor,
 		})
-		_ = index
 	}
 	return result
 }
 
-func chooseRecommendationCandidate(candidates []hydratedRecommendationCandidate, selected []selectedRecommendation, available func(hydratedRecommendationCandidate) bool, preferred func(hydratedRecommendationCandidate) bool, cfg config.RecommendationConfig, mode recommendationSelectionMode, now time.Time) (int, hydratedRecommendationCandidate, bool) {
+func chooseRecommendationCandidate(candidates []hydratedRecommendationCandidate, selected []selectedRecommendation, available func(hydratedRecommendationCandidate) bool, preferred func(hydratedRecommendationCandidate) bool, cfg config.RecommendationConfig, mode recommendationSelectionMode, enforceAuthorWindow bool) (int, hydratedRecommendationCandidate, bool) {
 	bestIndex := -1
 	var best hydratedRecommendationCandidate
 	found := false
@@ -150,7 +158,7 @@ func chooseRecommendationCandidate(candidates []hydratedRecommendationCandidate,
 		}
 		evaluated := candidate
 		evaluated.Breakdown.DiversityPenalty = recommendationDiversityPenalty(evaluated, selected, cfg)
-		if !recommendationAuthorWindowAllows(evaluated, selected, cfg) {
+		if enforceAuthorWindow && !recommendationAuthorWindowAllows(evaluated, selected, cfg) {
 			continue
 		}
 		if !found || recommendationSelectionBefore(evaluated, best, mode) {
@@ -159,18 +167,6 @@ func chooseRecommendationCandidate(candidates []hydratedRecommendationCandidate,
 	}
 	if found {
 		return bestIndex, best, true
-	}
-	// A shortage may relax only the author rule; public, NI, interacted, self,
-	// and hard-served eligibility was already enforced by the source query.
-	for index, candidate := range candidates {
-		if !available(candidate) || !preferred(candidate) {
-			continue
-		}
-		evaluated := candidate
-		evaluated.Breakdown.DiversityPenalty = recommendationDiversityPenalty(evaluated, selected, cfg)
-		if !found || recommendationSelectionBefore(evaluated, best, mode) {
-			found, bestIndex, best = true, index, evaluated
-		}
 	}
 	return bestIndex, best, found
 }

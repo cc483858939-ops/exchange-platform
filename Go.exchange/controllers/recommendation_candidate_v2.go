@@ -201,10 +201,7 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 	if global.Db == nil {
 		return recommendationCandidateSet{}, errors.New("database is not initialized")
 	}
-	caps := cfg.Candidates.Personalized
-	if len(profile.PositiveVector) == 0 {
-		caps = cfg.Candidates.ColdStart
-	}
+	caps := recommendationCandidateCaps(profile, cfg)
 	semantic, err := loadRecommendationSemanticCandidates(userID, profile, served, now, cfg, softOnly, caps.Semantic)
 	if err != nil {
 		return recommendationCandidateSet{}, err
@@ -236,6 +233,13 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 	}, nil
 }
 
+func recommendationCandidateCaps(profile userInterestProfile, cfg config.RecommendationConfig) config.RecommendationCandidateCaps {
+	if len(profile.PositiveVector) == 0 {
+		return cfg.Candidates.ColdStart
+	}
+	return cfg.Candidates.Personalized
+}
+
 func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embeddingCandidate {
 	if limit <= 0 {
 		return nil
@@ -262,19 +266,19 @@ func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embe
 				}
 				continue
 			}
+			if len(merged) >= limit {
+				continue
+			}
 			byID[candidate.ArticleID] = len(merged)
 			merged = append(merged, candidate)
-			if len(merged) == limit {
-				return merged
-			}
 		}
 	}
 	return merged
 }
 
-func mergeCandidateSets(first, second recommendationCandidateSet) recommendationCandidateSet {
+func mergeCandidateSets(first, second recommendationCandidateSet, mergedLimit int) recommendationCandidateSet {
 	return recommendationCandidateSet{
-		Candidates:     mergeEmbeddingCandidates(500, first.Candidates, second.Candidates),
+		Candidates:     mergeEmbeddingCandidates(mergedLimit, first.Candidates, second.Candidates),
 		SemanticCount:  first.SemanticCount + second.SemanticCount,
 		FollowingCount: first.FollowingCount + second.FollowingCount,
 		RecentCount:    first.RecentCount + second.RecentCount,
