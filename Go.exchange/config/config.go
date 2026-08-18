@@ -38,18 +38,63 @@ type RecommendationBehaviorWeights struct {
 	Like          float64 `mapstructure:"like"`
 	Click         float64 `mapstructure:"click"`
 	QualifiedRead float64 `mapstructure:"qualified_read"`
+	Reply         float64 `mapstructure:"reply"`
 	QuickBounce   float64 `mapstructure:"quick_bounce"`
 	NotInterested float64 `mapstructure:"not_interested"`
 }
 
+type RecommendationDiversityConfig struct {
+	Enabled                    bool    `mapstructure:"enabled"`
+	AuthorWindowSize           int     `mapstructure:"author_window_size"`
+	MaxSameAuthorInWindow      int     `mapstructure:"max_same_author_in_window"`
+	SemanticDuplicateThreshold float64 `mapstructure:"semantic_duplicate_threshold"`
+	SemanticDuplicatePenalty   float64 `mapstructure:"semantic_duplicate_penalty"`
+}
+
+type RecommendationTraceConfig struct {
+	ResultRetentionDays  int `mapstructure:"result_retention_days"`
+	RequestRetentionDays int `mapstructure:"request_retention_days"`
+	CleanupIntervalHours int `mapstructure:"cleanup_interval_hours"`
+	CleanupBatchSize     int `mapstructure:"cleanup_batch_size"`
+}
+
+type RecommendationCandidateCaps struct {
+	Semantic  int `mapstructure:"semantic"`
+	Following int `mapstructure:"following"`
+	Recent    int `mapstructure:"recent"`
+	Popular   int `mapstructure:"popular"`
+	Merged    int `mapstructure:"merged"`
+}
+
+type RecommendationCandidatesConfig struct {
+	Personalized RecommendationCandidateCaps `mapstructure:"personalized"`
+	ColdStart    RecommendationCandidateCaps `mapstructure:"cold_start"`
+}
+
 type RecommendationConfig struct {
-	BehaviorWeights       RecommendationBehaviorWeights `mapstructure:"behavior_weights"`
-	SignalHalfLifeDays    float64                       `mapstructure:"signal_half_life_days"`
-	FeedbackLookbackDays  int                           `mapstructure:"feedback_lookback_days"`
-	SemanticWeight        float64                       `mapstructure:"semantic_weight"`
-	FreshnessWeight       float64                       `mapstructure:"freshness_weight"`
-	PopularityWeight      float64                       `mapstructure:"popularity_weight"`
-	FreshnessHalfLifeDays float64                       `mapstructure:"freshness_half_life_days"`
+	BehaviorWeights                   RecommendationBehaviorWeights  `mapstructure:"behavior_weights"`
+	SignalHalfLifeDays                float64                        `mapstructure:"signal_half_life_days"`
+	FeedbackLookbackDays              int                            `mapstructure:"feedback_lookback_days"`
+	PositiveSignalCoexistBonus        float64                        `mapstructure:"positive_signal_coexist_bonus"`
+	PositiveArticleWeightCap          float64                        `mapstructure:"positive_article_weight_cap"`
+	SemanticWeight                    float64                        `mapstructure:"semantic_weight"`
+	NegativeSemanticWeight            float64                        `mapstructure:"negative_semantic_weight"`
+	NegativeConfidenceSaturationScale float64                        `mapstructure:"negative_confidence_saturation_scale"`
+	FreshnessWeight                   float64                        `mapstructure:"freshness_weight"`
+	FreshnessHalfLifeDays             float64                        `mapstructure:"freshness_half_life_days"`
+	PopularityWeight                  float64                        `mapstructure:"popularity_weight"`
+	PopularityCommentFactor           float64                        `mapstructure:"popularity_comment_factor"`
+	AuthorAffinityWeight              float64                        `mapstructure:"author_affinity_weight"`
+	AuthorAffinitySaturationScale     float64                        `mapstructure:"author_affinity_saturation_scale"`
+	FollowingBonus                    float64                        `mapstructure:"following_bonus"`
+	OutOfNetworkMinRatio              float64                        `mapstructure:"out_of_network_min_ratio"`
+	NovelAuthorMinRatio               float64                        `mapstructure:"novel_author_min_ratio"`
+	ServedHardExclusionMinutes        int                            `mapstructure:"served_hard_exclusion_minutes"`
+	ServedSoftLookbackDays            int                            `mapstructure:"served_soft_lookback_days"`
+	ServedHistoryLimit                int                            `mapstructure:"served_history_limit"`
+	Diversity                         RecommendationDiversityConfig  `mapstructure:"diversity"`
+	Trace                             RecommendationTraceConfig      `mapstructure:"trace"`
+	Candidates                        RecommendationCandidatesConfig `mapstructure:"candidates"`
 }
 
 type OutboxConfig struct {

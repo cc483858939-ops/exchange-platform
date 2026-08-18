@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"sort"
@@ -9,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
 
@@ -20,33 +18,24 @@ import (
 const (
 	defaultRecommendationLimit              = 20
 	maxRecommendationLimit                  = 50
-	recommendationSemanticCandidateCap      = 200
-	recommendationRecentCandidateCap        = 150
-	recommendationPopularCandidateCap       = 150
-	recommendationColdStartRecentCap        = 200
-	recommendationColdStartPopularCap       = 200
-	recommendationMergedCandidateCap        = 500
 	recommendationFeedbackArticleLimit      = 500
 	recommendationRecentViewArticleLimit    = 200
-	recommendationCandidateRetrievalVersion = "semantic_multi_source_v1"
+	recommendationCandidateRetrievalVersion = "social_semantic_multi_source_v2"
 )
 
 type articleBehaviorSignal struct {
 	Behavior models.ArticleBehavior
 }
 
-type userInterestProfile struct {
-	Vector                  []float32
-	InteractedArticleIDs    map[uint]struct{}
-	PersonalizedSignalCount int
-}
-
 type embeddingCandidate struct {
 	ArticleID          uint
 	SemanticSimilarity float64
 	FromSemantic       bool
+	FromFollowing      bool
 	FromRecent         bool
 	FromPopular        bool
+	WasSoftServed      bool
+	LastServedAt       time.Time
 }
 
 type recommendedArticleResponse struct {
@@ -64,44 +53,6 @@ type recommendedArticleResponse struct {
 	Tracking      *recommendationTrackingResponse `json:"tracking,omitempty"`
 }
 
-var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSignal, error) {
-	if userID == 0 {
-		return nil, nil
-	}
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-	var behaviors []models.ArticleBehavior
-	if err := global.Db.
-		Where("user_id = ? AND action = ?", userID, ArticleBehaviorActionView).
-		Order("last_seen_at DESC, id DESC").
-		Limit(recommendationRecentViewArticleLimit).
-		Find(&behaviors).Error; err != nil {
-		return nil, err
-	}
-	signals := make([]articleBehaviorSignal, 0, len(behaviors))
-	for _, behavior := range behaviors {
-		if behavior.ArticleID != 0 {
-			signals = append(signals, articleBehaviorSignal{Behavior: behavior})
-		}
-	}
-	return signals, nil
-}
-
-func strconvUint(id uint) string {
-	return strconv.FormatUint(uint64(id), 10)
-}
-
-func articleIDs(articles []models.Article) []uint {
-	ids := make([]uint, 0, len(articles))
-	for _, article := range articles {
-		if article.ID != 0 {
-			ids = append(ids, article.ID)
-		}
-	}
-	return ids
-}
-
 func GetArticleRecommendations(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
@@ -112,75 +63,177 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	now := started.UTC()
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
-	cfg := normalizedEmbeddingRecommendationConfig()
+	cfg := normalizedRecommendationConfig()
 	lookbackStart := now.AddDate(0, 0, -cfg.FeedbackLookbackDays)
 
 	behaviors, err := loadRecommendationBehaviorSignals(userID)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", recommendationStrategyID(userInterestProfile{}))
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		recommendationErrorResponse(ctx, err, "")
 		return
 	}
 	feedback, err := loadRecommendationFeedbackSignals(userID, lookbackStart)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", recommendationStrategyID(userInterestProfile{}))
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		recommendationErrorResponse(ctx, err, "")
 		return
 	}
 	reactions, err := loadRecommendationReactionStates(userID)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", recommendationStrategyID(userInterestProfile{}))
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		recommendationErrorResponse(ctx, err, "")
 		return
 	}
 	profile, err := buildEmbeddingInterestProfile(behaviors, feedback, reactions, now, cfg)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", recommendationStrategyID(profile))
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 		return
 	}
-	strategyID := recommendationStrategyID(profile)
-	candidates, err := loadEmbeddingFeedCandidates(userID, profile, lookbackStart, now)
+	if err := populateRecommendationAuthorContext(userID, &profile, cfg); err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
+		return
+	}
+
+	served, err := loadRecommendationServedHistory(userID, now, cfg)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", strategyID)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		log.Printf("[Recommendation] served history for user %d: %v", userID, err)
+		metrics.RecordRecommendationServedHistoryLoadFailure()
+		served = map[uint]servedArticle{}
 	}
-	articles, err := hydrateEmbeddingCandidates(candidates, now)
+	freshSet, err := loadRecommendationCandidateSet(userID, profile, served, now, cfg, false)
 	if err != nil {
-		metrics.RecordRecommendationRequest("error", strategyID)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 		return
 	}
-	recommendations := rankEmbeddingCandidates(profile, candidates, articles, now, cfg, limit)
+	recordRecallMetrics(freshSet)
+	freshHydrated, err := hydrateRecommendationCandidates(freshSet.Candidates, now)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
+		return
+	}
+	rankedFresh := rankRecommendationCandidates(profile, freshHydrated, now, cfg)
+	selected := selectRecommendationCandidates(rankedFresh, nil, limit, cfg, now, recommendationSelectionFresh)
+
+	if len(selected) < limit {
+		softSet, softErr := loadRecommendationCandidateSet(userID, profile, served, now, cfg, true)
+		if softErr != nil {
+			recommendationErrorResponse(ctx, softErr, recommendationStrategyID(profile))
+			return
+		}
+		recordRecallMetrics(softSet)
+		softHydrated, softErr := hydrateRecommendationCandidates(softSet.Candidates, now)
+		if softErr != nil {
+			recommendationErrorResponse(ctx, softErr, recommendationStrategyID(profile))
+			return
+		}
+		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg)
+		selected = selectRecommendationCandidates(rankedSoft, selected, limit, cfg, now, recommendationSelectionSoft)
+		freshSet = mergeCandidateSets(freshSet, softSet)
+	}
+
+	recommendations := selectedRecommendationResponses(selected)
 	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
 	}
 	metrics.AddRecommendationTrackingResults("tracked", trackedCount)
 	metrics.AddRecommendationTrackingResults("untracked", len(recommendations)-trackedCount)
+	recordResultMetrics(selected)
+
+	duration := time.Since(started)
+	strategyID := recommendationStrategyID(profile)
 	outcome := "success"
 	if len(recommendations) == 0 {
 		outcome = "empty"
 	}
-	duration := time.Since(started)
 	metrics.RecordRecommendationRequest(outcome, strategyID)
-	metrics.ObserveRecommendationCandidateCount(len(candidates))
+	metrics.ObserveRecommendationCandidateCount(len(freshSet.Candidates))
 	metrics.ObserveRecommendationResultCount(len(recommendations))
 	metrics.ObserveRecommendationGenerationDuration(strategyID, duration)
+
 	requestRecord := models.RecommendationRequest{
 		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
 		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg),
-		RequestedLimit: limit, CandidateCount: len(candidates), ResultCount: len(recommendations),
+		RequestedLimit: limit, CandidateCount: len(freshSet.Candidates), ResultCount: len(recommendations),
 		TrackedResultCount: trackedCount, PersonalizedSignalCount: profile.PersonalizedSignalCount,
-		FallbackReason:      recommendationFallbackReason(profile.PersonalizedSignalCount, len(recommendations), limit),
-		GenerationLatencyMS: duration.Milliseconds(), CreatedAt: now,
+		SemanticCandidateCount: freshSet.SemanticCount, FollowingCandidateCount: freshSet.FollowingCount,
+		RecentCandidateCount: freshSet.RecentCount, PopularCandidateCount: freshSet.PopularCount,
+		MergedCandidateCount: len(freshSet.Candidates), PositiveSignalCount: profile.PositiveSignalCount,
+		NegativeSignalCount: profile.NegativeSignalCount, InNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsInNetwork }),
+		OutOfNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return !item.IsInNetwork }),
+		NovelAuthorResultCount:  countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsNovelAuthor }),
+		SoftServedFallbackCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.Candidate.WasSoftServed }),
+		PersonalizationMode:     recommendationPersonalizationMode(profile, freshSet.FollowingCount),
+		FallbackReason:          recommendationFallbackReason(profile.PositiveSignalCount, len(recommendations), limit),
+		GenerationLatencyMS:     duration.Milliseconds(), CreatedAt: now,
 	}
-	if err := persistRecommendationRequest(requestRecord); err != nil {
-		log.Printf("[RecommendationTelemetry] persist request %s: %v", requestID, err)
-		metrics.RecordRecommendationRequestLogFailure()
+	traces := buildRecommendationResultTraces(requestRecord, selected, now, cfg)
+	if err := persistRecommendationServingTrace(requestRecord, traces); err != nil {
+		log.Printf("[RecommendationTelemetry] persist serving trace %s: %v", requestID, err)
+		metrics.RecordRecommendationTracePersistFailure()
 	}
 	ctx.JSON(http.StatusOK, recommendations)
+}
+
+func recommendationErrorResponse(ctx *gin.Context, err error, strategyID string) {
+	if strategyID == "" {
+		strategyID = recommendationStrategyID(userInterestProfile{})
+	}
+	metrics.RecordRecommendationRequest("error", strategyID)
+	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+}
+
+func recommendationPersonalizationMode(profile userInterestProfile, followingCount int) string {
+	if len(profile.PositiveVector) > 0 {
+		return "semantic_social"
+	}
+	if followingCount > 0 {
+		return "social_only"
+	}
+	return "cold_start"
+}
+
+func recordRecallMetrics(set recommendationCandidateSet) {
+	metrics.AddRecommendationRecallCandidates("semantic", set.SemanticCount)
+	metrics.AddRecommendationRecallCandidates("following", set.FollowingCount)
+	metrics.AddRecommendationRecallCandidates("recent", set.RecentCount)
+	metrics.AddRecommendationRecallCandidates("popular", set.PopularCount)
+	metrics.AddRecommendationRecallCandidates("merged", len(set.Candidates))
+}
+
+func recordResultMetrics(selected []selectedRecommendation) {
+	for _, item := range selected {
+		if item.Candidate.FromSemantic {
+			metrics.AddRecommendationResultsBySource("semantic", 1)
+		}
+		if item.Candidate.FromFollowing {
+			metrics.AddRecommendationResultsBySource("following", 1)
+		}
+		if item.Candidate.FromRecent {
+			metrics.AddRecommendationResultsBySource("recent", 1)
+		}
+		if item.Candidate.FromPopular {
+			metrics.AddRecommendationResultsBySource("popular", 1)
+		}
+		if item.IsInNetwork {
+			metrics.AddRecommendationResultsByClass("in_network", 1)
+		} else {
+			metrics.AddRecommendationResultsByClass("out_of_network", 1)
+		}
+		if item.IsNovelAuthor {
+			metrics.AddRecommendationResultsByClass("novel_author", 1)
+		}
+		if item.Candidate.WasSoftServed {
+			metrics.AddRecommendationResultsByClass("soft_served_fallback", 1)
+		}
+	}
+}
+
+func countSelectedClass(items []selectedRecommendation, predicate func(selectedRecommendation) bool) int {
+	count := 0
+	for _, item := range items {
+		if predicate(item) {
+			count++
+		}
+	}
+	return count
 }
 
 func parseRecommendationLimit(raw string) int {
@@ -195,6 +248,18 @@ func parseRecommendationLimit(raw string) int {
 		return maxRecommendationLimit
 	}
 	return limit
+}
+
+func strconvUint(id uint) string { return strconv.FormatUint(uint64(id), 10) }
+
+func articleIDs(articles []models.Article) []uint {
+	ids := make([]uint, 0, len(articles))
+	for _, article := range articles {
+		if article.ID != 0 {
+			ids = append(ids, article.ID)
+		}
+	}
+	return ids
 }
 
 func articleIDList(set map[uint]struct{}) []uint {

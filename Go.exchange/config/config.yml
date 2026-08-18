@@ -38,6 +38,7 @@ recommendation:
     like: 6
     click: 1.5
     qualified_read: 3
+    reply: 5
     quick_bounce: -3
     not_interested: -6
   signal_half_life_days: 14
@@ -46,6 +47,42 @@ recommendation:
   freshness_weight: 2
   popularity_weight: 0.5
   freshness_half_life_days: 2
+  positive_signal_coexist_bonus: 1
+  positive_article_weight_cap: 7
+  negative_semantic_weight: 1.5
+  negative_confidence_saturation_scale: 12
+  popularity_comment_factor: 0.5
+  author_affinity_weight: 1
+  author_affinity_saturation_scale: 6
+  following_bonus: 0.5
+  out_of_network_min_ratio: 0.30
+  novel_author_min_ratio: 0.10
+  served_hard_exclusion_minutes: 30
+  served_soft_lookback_days: 7
+  served_history_limit: 1000
+  diversity:
+    enabled: true
+    author_window_size: 8
+    max_same_author_in_window: 2
+    semantic_duplicate_threshold: 0.92
+    semantic_duplicate_penalty: 1
+  trace:
+    result_retention_days: 30
+    request_retention_days: 90
+    cleanup_interval_hours: 6
+    cleanup_batch_size: 5000
+  candidates:
+    personalized:
+      semantic: 200
+      following: 150
+      recent: 150
+      popular: 150
+      merged: 500
+    cold_start:
+      following: 200
+      recent: 200
+      popular: 200
+      merged: 500
 
 storage:
   endpoint: "minio:9000"

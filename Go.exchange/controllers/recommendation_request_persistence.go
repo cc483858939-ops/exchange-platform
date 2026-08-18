@@ -1,25 +1,48 @@
 package controllers
 
 import (
+	"context"
 	"errors"
+	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"gorm.io/gorm"
 )
 
-var persistRecommendationRequest = func(request models.RecommendationRequest) error {
+const recommendationTracePersistTimeout = 5 * time.Second
+
+var persistRecommendationServingTrace = persistRecommendationServingTraceToDB
+
+func persistRecommendationServingTraceToDB(request models.RecommendationRequest, results []models.RecommendationResultTrace) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
-	return global.Db.Create(&request).Error
+	ctx, cancel := context.WithTimeout(context.Background(), recommendationTracePersistTimeout)
+	defer cancel()
+	return global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&request).Error; err != nil {
+			return err
+		}
+		if len(results) == 0 {
+			return nil
+		}
+		return tx.Create(&results).Error
+	})
+}
+
+// Kept only for callers outside the V2 handler while the persistence seam is
+// migrated; production serving uses the request+result transaction above.
+var persistRecommendationRequest = func(request models.RecommendationRequest) error {
+	return persistRecommendationServingTraceToDB(request, nil)
 }
 
 func recommendationFallbackReason(signalCount, resultCount, requestedLimit int) string {
 	if signalCount == 0 {
-		return "no_user_behavior"
+		return "no_positive_profile"
 	}
 	if resultCount < requestedLimit {
-		return "insufficient_candidates"
+		return "insufficient_fresh_candidates"
 	}
 	return ""
 }

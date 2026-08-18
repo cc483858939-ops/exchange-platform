@@ -9,6 +9,7 @@ import (
 	"Go.exchange/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -34,17 +35,38 @@ var (
 	}
 )
 
+func upsertReplyArticleBehavior(tx *gorm.DB, userID, articleID uint, occurredAt time.Time) error {
+	if userID == 0 || articleID == 0 {
+		return errors.New("reply behavior requires user and article")
+	}
+	behavior := models.ArticleBehavior{
+		Model:  gorm.Model{CreatedAt: occurredAt, UpdatedAt: occurredAt},
+		UserID: userID, ArticleID: articleID, Action: ArticleBehaviorActionReply,
+		Count: 1, LastSeenAt: occurredAt, Active: true,
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}, {Name: "action"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"count":        gorm.Expr("article_behaviors.count + EXCLUDED.count"),
+			"last_seen_at": gorm.Expr("GREATEST(article_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
+			"active":       true,
+			"updated_at":   occurredAt,
+		}),
+	}).Create(&behavior).Error
+}
+
 func createCommentWithCount(articleID, userID uint, content string) (models.Comment, error) {
 	if global.Db == nil {
 		return models.Comment{}, errors.New("database is not initialized")
 	}
 
 	comment := models.Comment{ArticleID: articleID, UserID: userID, Content: content}
+	occurredAt := time.Now().UTC()
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
 		var article models.Article
 		if err := tx.
 			Select("id").
-			Scopes(func(query *gorm.DB) *gorm.DB { return publicArticleScope(query, time.Now().UTC()) }).
+			Scopes(func(query *gorm.DB) *gorm.DB { return publicArticleScope(query, occurredAt) }).
 			First(&article, articleID).Error; err != nil {
 			return err
 		}
@@ -58,6 +80,9 @@ func createCommentWithCount(articleID, userID uint, content string) (models.Comm
 		if rowsAffected != 1 {
 			return errCommentCountConsistency
 		}
+		if err := upsertReplyArticleBehavior(tx, userID, articleID, occurredAt); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -65,7 +90,6 @@ func createCommentWithCount(articleID, userID uint, content string) (models.Comm
 	}
 	return comment, nil
 }
-
 func deleteCommentWithCount(commentID, userID uint) (models.Comment, error) {
 	if global.Db == nil {
 		return models.Comment{}, errors.New("database is not initialized")

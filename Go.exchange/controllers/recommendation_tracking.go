@@ -18,11 +18,13 @@ import (
 
 const (
 	recommendationScene                   = "recommendation_page"
-	recommendationRankerVersion           = "embedding_v1"
-	recommendationPersonalizedStrategyID  = "embedding_feed_v1"
-	recommendationColdStartStrategyID     = "embedding_feed_v1"
+	recommendationRankerVersion           = "rules_v2"
+	recommendationPersonalizedStrategyID  = "for_you_rules_v2"
+	recommendationColdStartStrategyID     = "for_you_rules_v2"
 	recommendationTrackingTokenVersion    = "v2"
-	recommendationCanonicalOutcomeVersion = "read_end_recency_v2"
+	recommendationCanonicalOutcomeVersion = "multi_signal_capped_v2"
+	recommendationPassiveRecencyPolicy    = "read_end_recency_v2"
+	recommendationSelectionPolicyVersion  = "network_balance_diversity_v1"
 	recommendationSigningKeyMinBytes      = 32
 )
 
@@ -72,7 +74,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 	issuedAt := now.UTC()
 	expiresAt := issuedAt.Add(config.RecommendationTelemetryTokenTTL())
 	strategyID := recommendationStrategyID(profile)
-	configHash := recommendationRankerConfigHash(normalizedEmbeddingRecommendationConfig())
+	configHash := recommendationRankerConfigHash(normalizedRecommendationConfig())
 
 	for index := range recommendations {
 		claims := recommendationTrackingClaims{
@@ -118,16 +120,25 @@ func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
 }
 
 func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) string {
+	p := cfg.Candidates.Personalized
+	c := cfg.Candidates.ColdStart
 	return fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|semantic=%g|freshness=%g|popularity=%g|freshness_half_life=%g|candidate_retrieval=%s|semantic_cap=%d|recent_cap=%d|popular_cap=%d|cold_start_recent_cap=%d|cold_start_popular_cap=%d|merged_cap=%d|feedback_article_limit=%d|view_article_limit=%d|read_policy=%s|canonical_outcome=%s",
+		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|freshness=%g|freshness_half_life=%g|popularity=%g|comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|novel_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
 		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click,
-		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.QuickBounce, cfg.BehaviorWeights.NotInterested,
-		cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays, cfg.SemanticWeight, cfg.FreshnessWeight,
-		cfg.PopularityWeight, cfg.FreshnessHalfLifeDays, recommendationCandidateRetrievalVersion,
-		recommendationSemanticCandidateCap, recommendationRecentCandidateCap, recommendationPopularCandidateCap,
-		recommendationColdStartRecentCap, recommendationColdStartPopularCap, recommendationMergedCandidateCap,
-		recommendationFeedbackArticleLimit, recommendationRecentViewArticleLimit, recommendationReadPolicyVersion,
-		recommendationCanonicalOutcomeVersion,
+		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.Reply, cfg.BehaviorWeights.QuickBounce,
+		cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays,
+		cfg.PositiveSignalCoexistBonus, cfg.PositiveArticleWeightCap, cfg.SemanticWeight,
+		cfg.NegativeSemanticWeight, cfg.NegativeConfidenceSaturationScale, cfg.FreshnessWeight,
+		cfg.FreshnessHalfLifeDays, cfg.PopularityWeight, cfg.PopularityCommentFactor,
+		cfg.AuthorAffinityWeight, cfg.AuthorAffinitySaturationScale, cfg.FollowingBonus,
+		cfg.OutOfNetworkMinRatio, cfg.NovelAuthorMinRatio, cfg.ServedHardExclusionMinutes,
+		cfg.ServedSoftLookbackDays, cfg.ServedHistoryLimit, cfg.Diversity.Enabled,
+		cfg.Diversity.AuthorWindowSize, cfg.Diversity.MaxSameAuthorInWindow,
+		cfg.Diversity.SemanticDuplicateThreshold, cfg.Diversity.SemanticDuplicatePenalty,
+		p.Semantic, p.Following, p.Recent, p.Popular, p.Merged,
+		c.Following, c.Recent, c.Popular, c.Merged, recommendationCandidateRetrievalVersion,
+		recommendationCanonicalOutcomeVersion, recommendationPassiveRecencyPolicy,
+		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, config.ActiveEmbeddingVersion(),
 	)
 }
 func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {

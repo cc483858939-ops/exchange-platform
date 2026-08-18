@@ -16,4 +16,5 @@ func StartAll(ctx context.Context, wg *sync.WaitGroup) {
 	startLikeSnapshotProjectionConsumer(ctx, wg)
 	startWorkerReadinessProbe(ctx, wg)
 	startPipelineMetrics(ctx, wg)
+	startRecommendationTraceCleanup(ctx, wg)
 }

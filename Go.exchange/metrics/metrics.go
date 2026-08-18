@@ -27,6 +27,13 @@ var (
 	recommendationCandidateCount          = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_candidate_count", Help: "Candidate count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50, 100, 200}})
 	recommendationResultCount             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_result_count", Help: "Result count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50}})
 	recommendationGenerationDuration      = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_generation_duration_seconds", Help: "Recommendation generation duration.", Buckets: prometheus.DefBuckets}, []string{"strategy_id"})
+	recommendationRecallCandidates        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_recall_candidates_total", Help: "Distinct recommendation candidates by source."}, []string{"source"})
+	recommendationResultsBySource         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_source_total", Help: "Returned recommendation results by source."}, []string{"source"})
+	recommendationResultsByClass          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_class_total", Help: "Returned recommendation results by class."}, []string{"class"})
+	recommendationServedHistoryFailures   = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_served_history_load_failures_total", Help: "Recommendation served-history load failures."})
+	recommendationTracePersistFailures    = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_persist_failures_total", Help: "Recommendation serving trace persistence failures."})
+	recommendationTraceCleanupFailures    = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_failures_total", Help: "Recommendation serving trace cleanup failures."})
+	recommendationTraceCleanupRows        = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_rows_total", Help: "Recommendation serving trace rows cleaned up."})
 )
 
 func init() {
@@ -35,7 +42,7 @@ func init() {
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
-		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration,
+		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
 	)
 }
 
@@ -92,4 +99,28 @@ func ObserveRecommendationCandidateCount(count int) {
 func ObserveRecommendationResultCount(count int) { recommendationResultCount.Observe(float64(count)) }
 func ObserveRecommendationGenerationDuration(strategyID string, duration time.Duration) {
 	recommendationGenerationDuration.WithLabelValues(strategyID).Observe(duration.Seconds())
+}
+
+func AddRecommendationRecallCandidates(source string, count int) {
+	if count > 0 {
+		recommendationRecallCandidates.WithLabelValues(source).Add(float64(count))
+	}
+}
+func AddRecommendationResultsBySource(source string, count int) {
+	if count > 0 {
+		recommendationResultsBySource.WithLabelValues(source).Add(float64(count))
+	}
+}
+func AddRecommendationResultsByClass(class string, count int) {
+	if count > 0 {
+		recommendationResultsByClass.WithLabelValues(class).Add(float64(count))
+	}
+}
+func RecordRecommendationServedHistoryLoadFailure() { recommendationServedHistoryFailures.Inc() }
+func RecordRecommendationTracePersistFailure()      { recommendationTracePersistFailures.Inc() }
+func RecordRecommendationTraceCleanupFailure()      { recommendationTraceCleanupFailures.Inc() }
+func AddRecommendationTraceCleanupRows(count int) {
+	if count > 0 {
+		recommendationTraceCleanupRows.Add(float64(count))
+	}
 }

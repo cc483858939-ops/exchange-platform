@@ -2,7 +2,10 @@ package controllers
 
 import "github.com/gin-gonic/gin"
 
-const ArticleBehaviorActionView = "view"
+const (
+	ArticleBehaviorActionView  = "view"
+	ArticleBehaviorActionReply = "reply"
+)
 
 func userIDFromContext(ctx *gin.Context) (uint, bool) {
 	if ctx == nil {

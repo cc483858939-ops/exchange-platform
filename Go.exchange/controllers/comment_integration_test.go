@@ -39,7 +39,7 @@ func openCommentIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.Comment{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.Comment{}, &models.ArticleBehavior{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.Db
@@ -77,6 +77,7 @@ func newCommentIntegrationFixture(t *testing.T, db *gorm.DB) commentIntegrationF
 	}
 	t.Cleanup(func() {
 		db.Unscoped().Where("article_id = ?", fixture.Article.ID).Delete(&models.Comment{})
+		db.Unscoped().Where("article_id = ? OR user_id IN ?", fixture.Article.ID, []uint{fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.ArticleBehavior{})
 		db.Unscoped().Delete(&fixture.Article)
 		db.Unscoped().Where("id IN ?", []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.User{})
 	})

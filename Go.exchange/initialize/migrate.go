@@ -39,6 +39,7 @@ func RunMigrations() error {
 			&models.ArticleReaction{},
 			&models.RecommendationDailyMetric{},
 			&models.RecommendationRequest{},
+			&models.RecommendationResultTrace{},
 			&models.ExchangeRate{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
@@ -59,7 +60,10 @@ func RunMigrations() error {
 		if err := applyArticleReactionConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyRecommendationRetrievalV1Indexes(tx); err != nil {
+		if err := applyRecommendationRetrievalV2Indexes(tx); err != nil {
+			return err
+		}
+		if err := applyRecommendationTraceConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyArticleAuthorConstraints(tx); err != nil {
@@ -201,14 +205,14 @@ func applyLegacyAISchemaCleanup(tx *gorm.DB) error {
 	return nil
 }
 
-func applyRecommendationRetrievalV1Indexes(tx *gorm.DB) error {
+func applyRecommendationRetrievalV2Indexes(tx *gorm.DB) error {
 	statements := []string{
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_recent ON articles (created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_popular ON articles (like_count DESC, created_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_recent ON articles (published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_popular ON articles (like_count DESC, comment_count DESC, published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply recommendation retrieval v1 index: %w", err)
+			return fmt.Errorf("apply recommendation retrieval v2 index: %w", err)
 		}
 	}
 	return nil
@@ -231,6 +235,28 @@ func applyRecommendationMetricsConstraints(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply recommendation metrics constraint: %w", err)
+		}
+	}
+	return nil
+}
+func applyRecommendationTraceConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_fallback",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_fallback CHECK (fallback_reason IN ('', 'no_positive_profile', 'insufficient_fresh_candidates'))",
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_personalization_mode",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_personalization_mode CHECK (personalization_mode IN ('semantic_social', 'social_only', 'cold_start'))",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_recommendation_result_trace_request_article ON recommendation_result_traces (request_id, article_id)",
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_article ON recommendation_result_traces (article_id)",
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_created ON recommendation_result_traces (created_at)",
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_expires ON recommendation_result_traces (expires_at)",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS fk_recommendation_result_traces_request",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT fk_recommendation_result_traces_request FOREIGN KEY (request_id) REFERENCES recommendation_requests(request_id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS fk_recommendation_result_traces_article",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT fk_recommendation_result_traces_article FOREIGN KEY (article_id) REFERENCES articles(id) ON UPDATE CASCADE ON DELETE CASCADE",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation trace constraint: %w", err)
 		}
 	}
 	return nil
