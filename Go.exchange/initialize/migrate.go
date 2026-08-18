@@ -47,6 +47,9 @@ func RunMigrations() error {
 		if err := applyLegacyAISchemaCleanup(tx); err != nil {
 			return err
 		}
+		if err := applyLegacyArticleEmbeddingJobCleanup(tx); err != nil {
+			return err
+		}
 		if err := applyArticleEmbeddingConstraints(tx); err != nil {
 			return err
 		}
@@ -200,6 +203,13 @@ func applyLegacyAISchemaCleanup(tx *gorm.DB) error {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("remove legacy AI schema: %w", err)
 		}
+	}
+	return nil
+}
+
+func applyLegacyArticleEmbeddingJobCleanup(tx *gorm.DB) error {
+	if err := tx.Exec("DROP TABLE IF EXISTS article_embedding_jobs").Error; err != nil {
+		return fmt.Errorf("drop legacy article embedding jobs: %w", err)
 	}
 	return nil
 }

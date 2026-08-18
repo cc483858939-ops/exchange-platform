@@ -67,3 +67,32 @@ func TestArticleEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 		t.Fatalf("database rejected matching vector dimensions: %v", err)
 	}
 }
+
+func TestLegacyArticleEmbeddingJobCleanupIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+
+	if err := db.Exec("CREATE TABLE IF NOT EXISTS article_embedding_jobs (id BIGSERIAL PRIMARY KEY)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := RunMigrations(); err != nil {
+		t.Fatal(err)
+	}
+
+	var exists bool
+	if err := db.Raw("SELECT to_regclass('public.article_embedding_jobs') IS NOT NULL").Scan(&exists).Error; err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("article_embedding_jobs still exists after legacy cleanup")
+	}
+}
