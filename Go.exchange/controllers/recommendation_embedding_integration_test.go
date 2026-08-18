@@ -95,8 +95,8 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 			t.Fatal("self-authored article was recalled")
 		}
 	}
-	if candidates[0].SemanticSimilarity < .99 {
-		t.Fatalf("similarity=%f", candidates[0].SemanticSimilarity)
+	if candidates[0].PositiveSemanticSimilarity < .99 {
+		t.Fatalf("similarity=%f", candidates[0].PositiveSemanticSimilarity)
 	}
 }
 

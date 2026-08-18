@@ -33,11 +33,11 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 	if _, ok := profile.InteractedArticleIDs[3]; !ok {
 		t.Fatal("missing-vector article must remain excluded")
 	}
-	if profile.PersonalizedSignalCount != 2 || len(profile.Vector) != 2 {
+	if profile.PersonalizedSignalCount != 2 || len(profile.PositiveVector) != 2 {
 		t.Fatalf("profile=%#v", profile)
 	}
-	if math.Abs(float64(profile.Vector[0])) > 0.4 || profile.Vector[1] < 0.8 {
-		t.Fatalf("vector=%v", profile.Vector)
+	if math.Abs(float64(profile.PositiveVector[0])) > 0.4 || profile.PositiveVector[1] < 0.8 {
+		t.Fatalf("vector=%v", profile.PositiveVector)
 	}
 }
 

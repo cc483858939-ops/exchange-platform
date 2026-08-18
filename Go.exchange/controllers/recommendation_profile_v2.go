@@ -243,7 +243,6 @@ func applyCandidateCaps(target *config.RecommendationCandidateCaps, set config.R
 }
 
 type userInterestProfile struct {
-	Vector                        []float32
 	PositiveVector                []float32
 	NegativeVector                []float32
 	NegativeConfidence            float64
@@ -331,7 +330,6 @@ func buildEmbeddingInterestProfile(behaviors []articleBehaviorSignal, feedback [
 	if len(profile.NegativeVector) > 0 && cfg.NegativeConfidenceSaturationScale > 0 {
 		profile.NegativeConfidence = math.Tanh(negativeEvidence / cfg.NegativeConfidenceSaturationScale)
 	}
-	profile.Vector = profile.PositiveVector
 	profile.PersonalizedSignalCount = profile.PositiveSignalCount + profile.NegativeSignalCount
 	return profile, nil
 }

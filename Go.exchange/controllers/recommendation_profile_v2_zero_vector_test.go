@@ -51,7 +51,7 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.
 		t.Fatal(err)
 	}
 	if profile.PositiveSignalCount != 0 || profile.PersonalizedSignalCount != 0 ||
-		len(profile.PositiveVector) != 0 || len(profile.Vector) != 0 {
+		len(profile.PositiveVector) != 0 {
 		t.Fatalf("zero positive vector contributed: %#v", profile)
 	}
 	if _, ok := profile.InteractedArticleIDs[1]; !ok {

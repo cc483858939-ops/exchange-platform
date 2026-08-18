@@ -28,14 +28,14 @@ type articleBehaviorSignal struct {
 }
 
 type embeddingCandidate struct {
-	ArticleID          uint
-	SemanticSimilarity float64
-	FromSemantic       bool
-	FromFollowing      bool
-	FromRecent         bool
-	FromPopular        bool
-	WasSoftServed      bool
-	LastServedAt       time.Time
+	ArticleID                  uint
+	PositiveSemanticSimilarity float64
+	FromSemantic               bool
+	FromFollowing              bool
+	FromRecent                 bool
+	FromPopular                bool
+	WasSoftServed              bool
+	LastServedAt               time.Time
 }
 
 type recommendedArticleResponse struct {

@@ -20,7 +20,7 @@ func TestRecommendationRankerUsesSemanticFreshnessAndPopularityBreakdown(t *test
 		LikeCount:   3,
 	}
 	candidate := hydratedRecommendationCandidate{
-		Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, SemanticSimilarity: .75},
+		Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: .75},
 		Article:   article,
 	}
 
@@ -49,8 +49,8 @@ func TestRecommendationRankerUsesDeterministicTieBreak(t *testing.T) {
 	cfg := defaultRecommendationConfig()
 	publishedAt := ptrTime(now.Add(-time.Hour))
 	ranked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, SemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 10, PublishedAt: publishedAt}},
-		{Candidate: embeddingCandidate{ArticleID: 3, FromSemantic: true, SemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 10, PublishedAt: publishedAt}},
+		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 10, PublishedAt: publishedAt}},
+		{Candidate: embeddingCandidate{ArticleID: 3, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 10, PublishedAt: publishedAt}},
 	}, now, cfg)
 	if len(ranked) != 2 || ranked[0].Article.ID != 3 || ranked[1].Article.ID != 1 {
 		t.Fatalf("ranked=%#v, want IDs [3 1]", ranked)

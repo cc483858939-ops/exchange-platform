@@ -144,7 +144,7 @@ jobs:
       KAFKA_BROKERS: "127.0.0.1:9092"
     services:
       kafka:
-        image: bitnamilegacy/kafka:latest
+        image: bitnamilegacy/kafka:4.0.0-debian-12-r10
         ports:
           - 9092:9092
         env:
@@ -185,7 +185,7 @@ jobs:
       - name: Assert broker exposes all provisioned topics
         shell: bash
         run: |
-          kafka_container="$(docker ps --filter ancestor=bitnamilegacy/kafka:latest --format '{{.ID}}' | head -n 1)"
+          kafka_container="$(docker ps --filter ancestor=bitnamilegacy/kafka:4.0.0-debian-12-r10 --format '{{.ID}}' | head -n 1)"
           topic_count="$(docker exec "$kafka_container" kafka-topics.sh --bootstrap-server localhost:9092 --list | wc -l)"
           test "$topic_count" -eq 3
   frontend:

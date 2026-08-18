@@ -31,12 +31,6 @@ func persistRecommendationServingTraceToDB(request models.RecommendationRequest,
 	})
 }
 
-// Kept only for callers outside the V2 handler while the persistence seam is
-// migrated; production serving uses the request+result transaction above.
-var persistRecommendationRequest = func(request models.RecommendationRequest) error {
-	return persistRecommendationServingTraceToDB(request, nil)
-}
-
 func recommendationFallbackReason(signalCount, resultCount, requestedLimit int) string {
 	if signalCount == 0 {
 		return "no_positive_profile"

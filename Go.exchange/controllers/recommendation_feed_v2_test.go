@@ -113,8 +113,8 @@ func TestRecommendationRankerPenalizesNegativeSimilarityWithConfidence(t *testin
 	cfg := normalizedRecommendationConfig()
 	profile := userInterestProfile{NegativeVector: []float32{1, 0}, NegativeConfidence: 1, AuthorAffinity: map[uint]float64{}, FollowingAuthorIDs: map[uint]struct{}{}}
 	candidates := []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, SemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 1}, AuthorID: 1, PublishedAt: ptrTime(now)}, Embedding: []float32{0, 1}},
-		{Candidate: embeddingCandidate{ArticleID: 2, FromSemantic: true, SemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 2}, AuthorID: 2, PublishedAt: ptrTime(now)}, Embedding: []float32{1, 0}},
+		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 1}, AuthorID: 1, PublishedAt: ptrTime(now)}, Embedding: []float32{0, 1}},
+		{Candidate: embeddingCandidate{ArticleID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 2}, AuthorID: 2, PublishedAt: ptrTime(now)}, Embedding: []float32{1, 0}},
 	}
 	ranked := rankRecommendationCandidates(profile, candidates, now, cfg)
 	if len(ranked) != 2 || ranked[0].Article.ID != 1 || ranked[0].Breakdown.NegativeSemantic != 0 || ranked[1].Breakdown.NegativeSemantic < .99 {

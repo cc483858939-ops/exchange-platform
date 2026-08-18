@@ -15,7 +15,7 @@ func TestMergeEmbeddingCandidatesContinuesMetadataAggregationAfterCap(t *testing
 		},
 		[]embeddingCandidate{
 			{ArticleID: 3, FromPopular: true},
-			{ArticleID: 1, FromSemantic: true, SemanticSimilarity: 0.9},
+			{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: 0.9},
 		},
 		[]embeddingCandidate{
 			{ArticleID: 2, FromPopular: true, WasSoftServed: true, LastServedAt: now.Add(-time.Hour)},
@@ -25,7 +25,7 @@ func TestMergeEmbeddingCandidatesContinuesMetadataAggregationAfterCap(t *testing
 	if len(merged) != 2 || merged[0].ArticleID != 1 || merged[1].ArticleID != 2 {
 		t.Fatalf("merged=%#v, want IDs [1 2]", merged)
 	}
-	if !merged[0].FromRecent || !merged[0].FromSemantic || merged[0].SemanticSimilarity != 0.9 {
+	if !merged[0].FromRecent || !merged[0].FromSemantic || merged[0].PositiveSemanticSimilarity != 0.9 {
 		t.Fatalf("article 1 metadata=%#v", merged[0])
 	}
 	if !merged[1].FromFollowing || !merged[1].FromPopular || !merged[1].WasSoftServed || !merged[1].LastServedAt.Equal(now.Add(-time.Hour)) {
@@ -35,7 +35,7 @@ func TestMergeEmbeddingCandidatesContinuesMetadataAggregationAfterCap(t *testing
 
 func TestMergeEmbeddingCandidatesPreservesSourceFlagsAndCap(t *testing.T) {
 	merged := mergeEmbeddingCandidates(4,
-		[]embeddingCandidate{{ArticleID: 1, SemanticSimilarity: .9, FromSemantic: true}, {ArticleID: 2, FromSemantic: true}},
+		[]embeddingCandidate{{ArticleID: 1, PositiveSemanticSimilarity: .9, FromSemantic: true}, {ArticleID: 2, FromSemantic: true}},
 		[]embeddingCandidate{{ArticleID: 1, FromRecent: true}, {ArticleID: 3, FromRecent: true}},
 		[]embeddingCandidate{{ArticleID: 2, FromPopular: true}},
 	)

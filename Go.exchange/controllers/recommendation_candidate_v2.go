@@ -126,8 +126,8 @@ func recommendationEligibilityQuery(query *gorm.DB, userID uint, profile userInt
 }
 
 type semanticCandidateRow struct {
-	ArticleID          uint
-	SemanticSimilarity float64
+	ArticleID                  uint
+	PositiveSemanticSimilarity float64
 }
 
 func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfile, served map[uint]servedArticle, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
@@ -137,7 +137,7 @@ func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfi
 	queryVector := pgvector.NewVector(profile.PositiveVector)
 	query := recommendationEligibilityQuery(
 		global.Db.Table("article_embeddings AS ae").
-			Select("ae.article_id, 1 - (ae.embedding <=> ?) AS semantic_similarity", queryVector).
+			Select("ae.article_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
 			Joins("JOIN articles ON articles.id = ae.article_id").
 			Where("ae.version = ? AND ae.dimensions = ?", config.ActiveEmbeddingVersion(), len(profile.PositiveVector)),
 		userID, profile, served, now, softOnly,
@@ -148,7 +148,7 @@ func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfi
 	}
 	result := make([]embeddingCandidate, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, embeddingCandidate{ArticleID: row.ArticleID, SemanticSimilarity: clampRecommendationSimilarity(row.SemanticSimilarity), FromSemantic: true})
+		result = append(result, embeddingCandidate{ArticleID: row.ArticleID, PositiveSemanticSimilarity: clampRecommendationSimilarity(row.PositiveSemanticSimilarity), FromSemantic: true})
 	}
 	return result, nil
 }
@@ -262,7 +262,7 @@ func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embe
 					current.LastServedAt = candidate.LastServedAt
 				}
 				if candidate.FromSemantic {
-					current.SemanticSimilarity = candidate.SemanticSimilarity
+					current.PositiveSemanticSimilarity = candidate.PositiveSemanticSimilarity
 				}
 				continue
 			}
