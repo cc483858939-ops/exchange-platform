@@ -109,3 +109,25 @@ func TestActiveEmbeddingVersionUsesConfiguredValueAndDefault(t *testing.T) {
 		t.Fatalf("empty version=%q want=%q", got, DefaultEmbeddingVersion)
 	}
 }
+
+func TestRecommendationProfileMaterializationDefaultsAllNonPositiveValues(t *testing.T) {
+	got := (RecommendationProfileMaterializationConfig{}).Normalized()
+	want := RecommendationProfileMaterializationConfig{
+		DebounceSeconds:          DefaultRecommendationProfileDebounceSeconds,
+		PollIntervalSeconds:      DefaultRecommendationProfilePollIntervalSeconds,
+		BatchSize:                DefaultRecommendationProfileBatchSize,
+		RebuildIntervalHours:     DefaultRecommendationProfileRebuildIntervalHours,
+		StaleScanIntervalSeconds: DefaultRecommendationProfileStaleScanIntervalSeconds,
+		StaleEnqueueBatchSize:    DefaultRecommendationProfileStaleEnqueueBatchSize,
+	}
+	if got != want {
+		t.Fatalf("normalized profile materialization=%+v want=%+v", got, want)
+	}
+	configured := (RecommendationProfileMaterializationConfig{
+		DebounceSeconds: -1, PollIntervalSeconds: 0, BatchSize: 12, RebuildIntervalHours: 3,
+		StaleScanIntervalSeconds: -5, StaleEnqueueBatchSize: 7,
+	}).Normalized()
+	if configured.DebounceSeconds != want.DebounceSeconds || configured.PollIntervalSeconds != want.PollIntervalSeconds || configured.BatchSize != 12 || configured.RebuildIntervalHours != 3 || configured.StaleScanIntervalSeconds != want.StaleScanIntervalSeconds || configured.StaleEnqueueBatchSize != 7 {
+		t.Fatalf("partial defaults=%+v", configured)
+	}
+}

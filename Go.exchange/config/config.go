@@ -85,31 +85,75 @@ type RecommendationCandidatesConfig struct {
 	ColdStart    RecommendationCandidateCaps `mapstructure:"cold_start"`
 }
 
+// RecommendationProfileMaterializationConfig controls the nearline profile
+// projection worker. These values affect scheduling only; they are
+// deliberately excluded from the profile and ranker configuration hashes.
+type RecommendationProfileMaterializationConfig struct {
+	DebounceSeconds          int `mapstructure:"debounce_seconds"`
+	PollIntervalSeconds      int `mapstructure:"poll_interval_seconds"`
+	BatchSize                int `mapstructure:"batch_size"`
+	RebuildIntervalHours     int `mapstructure:"rebuild_interval_hours"`
+	StaleScanIntervalSeconds int `mapstructure:"stale_scan_interval_seconds"`
+	StaleEnqueueBatchSize    int `mapstructure:"stale_enqueue_batch_size"`
+}
+
+const (
+	DefaultRecommendationProfileDebounceSeconds          = 2
+	DefaultRecommendationProfilePollIntervalSeconds      = 1
+	DefaultRecommendationProfileBatchSize                = 50
+	DefaultRecommendationProfileRebuildIntervalHours     = 6
+	DefaultRecommendationProfileStaleScanIntervalSeconds = 60
+	DefaultRecommendationProfileStaleEnqueueBatchSize    = 500
+)
+
+func (c RecommendationProfileMaterializationConfig) Normalized() RecommendationProfileMaterializationConfig {
+	if c.DebounceSeconds <= 0 {
+		c.DebounceSeconds = DefaultRecommendationProfileDebounceSeconds
+	}
+	if c.PollIntervalSeconds <= 0 {
+		c.PollIntervalSeconds = DefaultRecommendationProfilePollIntervalSeconds
+	}
+	if c.BatchSize <= 0 {
+		c.BatchSize = DefaultRecommendationProfileBatchSize
+	}
+	if c.RebuildIntervalHours <= 0 {
+		c.RebuildIntervalHours = DefaultRecommendationProfileRebuildIntervalHours
+	}
+	if c.StaleScanIntervalSeconds <= 0 {
+		c.StaleScanIntervalSeconds = DefaultRecommendationProfileStaleScanIntervalSeconds
+	}
+	if c.StaleEnqueueBatchSize <= 0 {
+		c.StaleEnqueueBatchSize = DefaultRecommendationProfileStaleEnqueueBatchSize
+	}
+	return c
+}
+
 type RecommendationConfig struct {
-	BehaviorWeights                   RecommendationBehaviorWeights      `mapstructure:"behavior_weights"`
-	SemanticRecall                    RecommendationSemanticRecallConfig `mapstructure:"semantic_recall"`
-	Trending                          RecommendationTrendingConfig       `mapstructure:"trending"`
-	SignalHalfLifeDays                float64                            `mapstructure:"signal_half_life_days"`
-	FeedbackLookbackDays              int                                `mapstructure:"feedback_lookback_days"`
-	PositiveSignalCoexistBonus        float64                            `mapstructure:"positive_signal_coexist_bonus"`
-	PositiveArticleWeightCap          float64                            `mapstructure:"positive_article_weight_cap"`
-	SemanticWeight                    float64                            `mapstructure:"semantic_weight"`
-	NegativeSemanticWeight            float64                            `mapstructure:"negative_semantic_weight"`
-	NegativeConfidenceSaturationScale float64                            `mapstructure:"negative_confidence_saturation_scale"`
-	FreshnessWeight                   float64                            `mapstructure:"freshness_weight"`
-	FreshnessHalfLifeDays             float64                            `mapstructure:"freshness_half_life_days"`
-	TrendingWeight                    float64                            `mapstructure:"trending_weight"`
-	AuthorAffinityWeight              float64                            `mapstructure:"author_affinity_weight"`
-	AuthorAffinitySaturationScale     float64                            `mapstructure:"author_affinity_saturation_scale"`
-	FollowingBonus                    float64                            `mapstructure:"following_bonus"`
-	OutOfNetworkMinRatio              float64                            `mapstructure:"out_of_network_min_ratio"`
-	NovelAuthorMinRatio               float64                            `mapstructure:"novel_author_min_ratio"`
-	ServedHardExclusionMinutes        int                                `mapstructure:"served_hard_exclusion_minutes"`
-	ServedSoftLookbackDays            int                                `mapstructure:"served_soft_lookback_days"`
-	ServedHistoryLimit                int                                `mapstructure:"served_history_limit"`
-	Diversity                         RecommendationDiversityConfig      `mapstructure:"diversity"`
-	Trace                             RecommendationTraceConfig          `mapstructure:"trace"`
-	Candidates                        RecommendationCandidatesConfig     `mapstructure:"candidates"`
+	BehaviorWeights                   RecommendationBehaviorWeights              `mapstructure:"behavior_weights"`
+	SemanticRecall                    RecommendationSemanticRecallConfig         `mapstructure:"semantic_recall"`
+	Trending                          RecommendationTrendingConfig               `mapstructure:"trending"`
+	SignalHalfLifeDays                float64                                    `mapstructure:"signal_half_life_days"`
+	FeedbackLookbackDays              int                                        `mapstructure:"feedback_lookback_days"`
+	PositiveSignalCoexistBonus        float64                                    `mapstructure:"positive_signal_coexist_bonus"`
+	PositiveArticleWeightCap          float64                                    `mapstructure:"positive_article_weight_cap"`
+	SemanticWeight                    float64                                    `mapstructure:"semantic_weight"`
+	NegativeSemanticWeight            float64                                    `mapstructure:"negative_semantic_weight"`
+	NegativeConfidenceSaturationScale float64                                    `mapstructure:"negative_confidence_saturation_scale"`
+	FreshnessWeight                   float64                                    `mapstructure:"freshness_weight"`
+	FreshnessHalfLifeDays             float64                                    `mapstructure:"freshness_half_life_days"`
+	TrendingWeight                    float64                                    `mapstructure:"trending_weight"`
+	AuthorAffinityWeight              float64                                    `mapstructure:"author_affinity_weight"`
+	AuthorAffinitySaturationScale     float64                                    `mapstructure:"author_affinity_saturation_scale"`
+	FollowingBonus                    float64                                    `mapstructure:"following_bonus"`
+	OutOfNetworkMinRatio              float64                                    `mapstructure:"out_of_network_min_ratio"`
+	NovelAuthorMinRatio               float64                                    `mapstructure:"novel_author_min_ratio"`
+	ServedHardExclusionMinutes        int                                        `mapstructure:"served_hard_exclusion_minutes"`
+	ServedSoftLookbackDays            int                                        `mapstructure:"served_soft_lookback_days"`
+	ServedHistoryLimit                int                                        `mapstructure:"served_history_limit"`
+	Diversity                         RecommendationDiversityConfig              `mapstructure:"diversity"`
+	Trace                             RecommendationTraceConfig                  `mapstructure:"trace"`
+	Candidates                        RecommendationCandidatesConfig             `mapstructure:"candidates"`
+	ProfileMaterialization            RecommendationProfileMaterializationConfig `mapstructure:"profile_materialization"`
 }
 
 type OutboxConfig struct {

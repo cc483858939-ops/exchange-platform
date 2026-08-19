@@ -9,7 +9,7 @@ Go.exchange is a Go + Gin backend for article publishing, article reactions, rec
 - Cache and async state: Redis + Lua scripts
 - Object storage: MinIO
 - Authentication: JWT access tokens and Redis-backed refresh tokens
-- Background workers: like-count persistence, recommendation projection, and Kafka-first article embedding consumption
+- Background workers: like-count persistence, recommendation projection, nearline profile materialization, and Kafka-first article embedding consumption
 - Observability: Prometheus metrics, Grafana dashboard, health checks, pprof
 - Local orchestration: Docker Compose
 
@@ -41,6 +41,20 @@ Manual migration command:
 cd D:\code\mf
 docker compose run --rm migrate
 ```
+
+## Recommendation profile materialization
+
+The For You endpoint reads `user_reco_profiles` by user primary key. View,
+reaction, feedback, reply, and actual article-embedding changes invalidate the
+durable `user_reco_profile_dirty` queue in their source transactions. The
+worker rebuilds canonical `user_article_reco_states`, nullable pgvector
+interest profiles, and raw candidate-author affinity atomically. A compatible
+stale profile remains usable while recovery is queued; misses and incompatible
+profiles use cold start.
+
+The active contract is documented in
+`docs/recommendation-feed-v4.md`; telemetry request profile fields are covered
+by `docs/recommendation-telemetry-v2.md`.
 
 ## Local Development
 

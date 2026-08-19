@@ -11,6 +11,10 @@ type RecommendationRequest struct {
 	StrategyID              string    `json:"strategy_id" gorm:"size:64;not null;index:idx_recommendation_requests_dimension_created,priority:2"`
 	RankerVersion           string    `json:"ranker_version" gorm:"size:64;not null;index:idx_recommendation_requests_dimension_created,priority:3"`
 	RankerConfigHash        string    `json:"ranker_config_hash" gorm:"size:32;not null;index:idx_recommendation_requests_dimension_created,priority:4"`
+	ProfileVersion          string    `json:"profile_version" gorm:"size:64;not null;default:''"`
+	ProfileConfigHash       string    `json:"profile_config_hash" gorm:"size:32;not null;default:''"`
+	ProfileStatus           string    `json:"profile_status" gorm:"size:16;not null;default:'miss';check:chk_recommendation_request_profile_status,profile_status IN ('hit','stale','miss','incompatible')"`
+	ProfileAgeMS            int64     `json:"profile_age_ms" gorm:"not null;default:0;check:chk_recommendation_request_profile_age,profile_age_ms >= 0"`
 	RequestedLimit          int       `json:"requested_limit" gorm:"not null;check:chk_recommendation_request_limit,requested_limit > 0"`
 	CandidateCount          int       `json:"candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_candidates,candidate_count >= 0"`
 	ResultCount             int       `json:"result_count" gorm:"not null;default:0;check:chk_recommendation_request_results,result_count >= 0"`

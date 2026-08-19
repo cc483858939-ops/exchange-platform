@@ -41,6 +41,12 @@ func refreshPipelineMetrics() {
 		return
 	}
 	metrics.SetOutboxPending(float64(pendingOutbox))
+	var dirtyProfiles int64
+	if err := global.Db.Model(&models.UserRecoProfileDirty{}).Count(&dirtyProfiles).Error; err != nil {
+		log.Printf("[Metrics] count dirty recommendation profiles: %v", err)
+	} else {
+		metrics.SetRecommendationProfileDirtyQueueDepth(float64(dirtyProfiles))
+	}
 	if global.RedisDB != nil {
 		if dirty, err := global.RedisDB.SCard(likes.DirtyKey).Result(); err == nil {
 			metrics.SetLikePipelineDepth("dirty", float64(dirty))

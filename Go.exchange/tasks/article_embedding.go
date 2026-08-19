@@ -19,6 +19,7 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -39,6 +40,10 @@ type articleEmbeddingStore interface {
 	GetArticle(context.Context, uint) (models.Article, error)
 	GetEmbedding(context.Context, uint) (models.ArticleEmbedding, error)
 	UpsertEmbedding(context.Context, models.ArticleEmbedding) error
+}
+
+type atomicArticleEmbeddingStore interface {
+	UpsertEmbeddingAndInvalidateProfiles(context.Context, models.ArticleEmbedding, time.Time) error
 }
 
 type gormArticleEmbeddingStore struct {
@@ -74,6 +79,35 @@ func (s gormArticleEmbeddingStore) UpsertEmbedding(ctx context.Context, embeddin
 			"embedding": embedding.Embedding, "content_hash": embedding.ContentHash, "updated_at": embedding.UpdatedAt,
 		}),
 	}).Create(&embedding).Error
+}
+
+// UpsertEmbeddingAndInvalidateProfiles commits the active embedding and its
+// authoritative user fan-out in one transaction. The fan-out intentionally
+// reads source behavior and reaction tables because the canonical state table
+// may not exist yet for a first interaction.
+func (s gormArticleEmbeddingStore) UpsertEmbeddingAndInvalidateProfiles(ctx context.Context, embedding models.ArticleEmbedding, now time.Time) error {
+	if s.db == nil {
+		return errors.New("database is not initialized")
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "article_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"version": embedding.Version, "model": embedding.Model, "dimensions": embedding.Dimensions,
+				"embedding": embedding.Embedding, "content_hash": embedding.ContentHash, "updated_at": embedding.UpdatedAt,
+			}),
+		}).Create(&embedding).Error; err != nil {
+			return err
+		}
+		var users []uint
+		if err := tx.Raw(`
+SELECT user_id FROM article_behaviors WHERE article_id = ?
+UNION
+SELECT user_id FROM article_reaction WHERE article_id = ?`, embedding.ArticleID, embedding.ArticleID).Scan(&users).Error; err != nil {
+			return err
+		}
+		return recommendation.InvalidateProfiles(tx, users, "article_embedding_changed", now)
+	})
 }
 
 var newArticleEmbedder = func(cfg config.EmbeddingConfig) (embeddings.Embedder, error) {
@@ -246,9 +280,15 @@ func processArticleEmbeddingMessage(ctx context.Context, message kafka.Message, 
 		Dimensions: dimensions, Embedding: vector, ContentHash: contentHash,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if err := store.UpsertEmbedding(ctx, embedding); err != nil {
+	var upsertErr error
+	if atomicStore, ok := store.(atomicArticleEmbeddingStore); ok {
+		upsertErr = atomicStore.UpsertEmbeddingAndInvalidateProfiles(ctx, embedding, now)
+	} else {
+		upsertErr = store.UpsertEmbedding(ctx, embedding)
+	}
+	if upsertErr != nil {
 		metrics.RecordArticleEmbeddingFailure("db_upsert")
-		return err
+		return upsertErr
 	}
 	metrics.RecordArticleEmbeddingEvent("generated")
 	return nil

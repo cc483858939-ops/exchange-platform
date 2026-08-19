@@ -15,6 +15,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
@@ -242,8 +243,30 @@ func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
 		}
 
 		reactions := collapseUserBehaviorReactions(records, firstDelivery)
-		return bulkUpsertArticleReactions(tx, reactions)
+		if err := bulkUpsertArticleReactions(tx, reactions); err != nil {
+			return err
+		}
+		return recommendation.InvalidateProfiles(tx, userBehaviorProfileInvalidationUsers(records, firstDelivery), "user_behavior_projection", time.Now().UTC())
 	})
+}
+
+func userBehaviorProfileInvalidationUsers(records []userBehaviorEventRecord, firstDelivery map[string]struct{}) []uint {
+	seen := make(map[uint]struct{})
+	for _, record := range records {
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok || record.Payload.UserID == 0 || record.Payload.ArticleID == 0 {
+			continue
+		}
+		switch record.Envelope.Type {
+		case eventing.EventTypeArticleViewed, eventing.EventTypeArticleLiked, eventing.EventTypeArticleUnliked:
+			seen[record.Payload.UserID] = struct{}{}
+		}
+	}
+	users := make([]uint, 0, len(seen))
+	for userID := range seen {
+		users = append(users, userID)
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i] < users[j] })
+	return users
 }
 
 var incrementArticleViewCounts = bulkIncrementArticleViewCounts

@@ -7,6 +7,7 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -81,6 +82,9 @@ func createCommentWithCount(articleID, userID uint, content string) (models.Comm
 			return errCommentCountConsistency
 		}
 		if err := upsertReplyArticleBehavior(tx, userID, articleID, occurredAt); err != nil {
+			return err
+		}
+		if err := recommendation.InvalidateProfiles(tx, []uint{userID}, "reply_created", occurredAt); err != nil {
 			return err
 		}
 		return nil

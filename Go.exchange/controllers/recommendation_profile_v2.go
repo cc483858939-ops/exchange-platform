@@ -8,6 +8,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 )
 
 func defaultRecommendationConfig() config.RecommendationConfig {
@@ -32,6 +33,14 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 		Candidates: config.RecommendationCandidatesConfig{
 			Personalized: config.RecommendationCandidateCaps{Semantic: 200, Following: 150, Recent: 150, Trending: 150, Merged: 500},
 			ColdStart:    config.RecommendationCandidateCaps{Following: 200, Recent: 200, Trending: 200, Merged: 500},
+		},
+		ProfileMaterialization: config.RecommendationProfileMaterializationConfig{
+			DebounceSeconds:          config.DefaultRecommendationProfileDebounceSeconds,
+			PollIntervalSeconds:      config.DefaultRecommendationProfilePollIntervalSeconds,
+			BatchSize:                config.DefaultRecommendationProfileBatchSize,
+			RebuildIntervalHours:     config.DefaultRecommendationProfileRebuildIntervalHours,
+			StaleScanIntervalSeconds: config.DefaultRecommendationProfileStaleScanIntervalSeconds,
+			StaleEnqueueBatchSize:    config.DefaultRecommendationProfileStaleEnqueueBatchSize,
 		},
 	}
 }
@@ -161,6 +170,7 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	}
 	applyCandidateCaps(&cfg.Candidates.Personalized, set.Candidates.Personalized)
 	applyCandidateCaps(&cfg.Candidates.ColdStart, set.Candidates.ColdStart)
+	cfg.ProfileMaterialization = set.ProfileMaterialization.Normalized()
 
 	if cfg.BehaviorWeights.Reply < 0 {
 		cfg.BehaviorWeights.Reply = 5
@@ -286,6 +296,11 @@ type userInterestProfile struct {
 	PositiveAffinityContributions map[uint]float64
 	AuthorAffinity                map[uint]float64
 	FollowingAuthorIDs            map[uint]struct{}
+	ProfileVersion                string
+	ProfileConfigHash             string
+	ProfileStatus                 string
+	ProfileAgeMS                  int64
+	MaterializedInteractionsReady bool
 }
 
 var loadRecommendationArticleEmbeddings = func(articleIDs []uint, version string) (map[uint][]float32, error) {
@@ -307,209 +322,94 @@ var loadRecommendationArticleEmbeddings = func(articleIDs []uint, version string
 }
 
 func buildEmbeddingInterestProfile(behaviors []articleBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
-	if cfg.PositiveArticleWeightCap <= 0 {
-		cfg.PositiveArticleWeightCap = 7
-	}
-	if cfg.NegativeConfidenceSaturationScale <= 0 {
-		cfg.NegativeConfidenceSaturationScale = 12
-	}
-	if cfg.SignalHalfLifeDays <= 0 {
-		cfg.SignalHalfLifeDays = 14
-	}
-
 	profile := userInterestProfile{
 		InteractedArticleIDs: make(map[uint]struct{}), PositiveContributions: make(map[uint]float64), PositiveAffinityContributions: make(map[uint]float64),
 	}
-	for articleID := range reactions {
-		if articleID != 0 {
-			profile.InteractedArticleIDs[articleID] = struct{}{}
-		}
+	behaviorRows := make([]models.ArticleBehavior, 0, len(behaviors))
+	for _, item := range behaviors {
+		behaviorRows = append(behaviorRows, item.Behavior)
 	}
-	outcomes := canonicalizeRecommendationOutcomes(behaviors, feedback, reactions)
-	ids := make([]uint, 0, len(outcomes))
-	for _, outcome := range outcomes {
-		profile.InteractedArticleIDs[outcome.ArticleID] = struct{}{}
-		ids = append(ids, outcome.ArticleID)
+	feedbackRows := make([]recommendation.FeedbackEvent, 0, len(feedback))
+	for _, item := range feedback {
+		feedbackRows = append(feedbackRows, recommendation.FeedbackEvent{
+			EventID: item.Event.EventID, ArticleID: item.Event.ArticleID, EventType: item.Event.EventType,
+			OccurredAt: item.Event.OccurredAt, ReceivedAt: item.Event.ReceivedAt, ReadOutcome: item.Event.ReadOutcome,
+		})
 	}
-	embeddingsByArticle, err := loadRecommendationArticleEmbeddings(ids, config.ActiveEmbeddingVersion())
+	reactionRows := make(map[uint]recommendation.ReactionState, len(reactions))
+	for articleID, reaction := range reactions {
+		reactionRows[articleID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
+	}
+	canonical := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
+	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, config.ActiveEmbeddingVersion(), func(ids []uint, version string) (map[uint][]float32, error) {
+		return loadRecommendationArticleEmbeddings(ids, version)
+	})
 	if err != nil {
 		return profile, err
 	}
-	negativeEvidence := 0.0
-	for _, outcome := range outcomes {
-		positiveStrength := recommendationPositiveArticleStrength(outcome, now, cfg)
-		if positiveStrength > 0 {
-			profile.PositiveContributions[outcome.ArticleID] = positiveStrength
-			if affinityStrength := recommendationAuthorAffinityContribution(outcome, now, cfg); affinityStrength > 0 {
-				profile.PositiveAffinityContributions[outcome.ArticleID] = affinityStrength
-			}
-		}
-		vector := embeddingsByArticle[outcome.ArticleID]
-		if !validEmbeddingVector(vector) {
-			continue
-		}
-		if positiveStrength > 0 && addEmbeddingContribution(&profile.PositiveVector, vector, positiveStrength) {
-			profile.PositiveSignalCount++
-		}
-		negativeStrength := recommendationNegativeArticleStrength(outcome, now, cfg)
-		if negativeStrength > 0 && addEmbeddingContribution(&profile.NegativeVector, vector, negativeStrength) {
-			negativeEvidence += negativeStrength
-			profile.NegativeSignalCount++
-		}
+	for _, articleID := range built.InteractedArticleIDs {
+		profile.InteractedArticleIDs[articleID] = struct{}{}
 	}
-	profile.PositiveVector = normalizeEmbedding(profile.PositiveVector)
-	profile.NegativeVector = normalizeEmbedding(profile.NegativeVector)
+	profile.PositiveVector = built.PositiveVector
+	profile.NegativeVector = built.NegativeVector
+	profile.PositiveSignalCount = built.PositiveSignalCount
+	profile.NegativeSignalCount = built.NegativeSignalCount
+	profile.PersonalizedSignalCount = built.PersonalizedSignalCount
+	profile.PositiveContributions = built.PositiveContributions
+	profile.PositiveAffinityContributions = built.PositiveAffinityContributions
 	if len(profile.NegativeVector) > 0 && cfg.NegativeConfidenceSaturationScale > 0 {
-		profile.NegativeConfidence = math.Tanh(negativeEvidence / cfg.NegativeConfidenceSaturationScale)
+		profile.NegativeConfidence = math.Tanh(built.NegativeEvidence / cfg.NegativeConfidenceSaturationScale)
 	}
-	profile.PersonalizedSignalCount = profile.PositiveSignalCount + profile.NegativeSignalCount
 	return profile, nil
 }
 
 func addEmbeddingContribution(target *[]float32, vector []float32, strength float64) bool {
-	if strength <= 0 || !validEmbeddingVector(vector) {
-		return false
-	}
-	if len(*target) == 0 {
-		*target = make([]float32, len(vector))
-	}
-	if len(*target) != len(vector) {
-		return false
-	}
-	for index, value := range vector {
-		(*target)[index] += float32(float64(value) * strength)
-	}
-	return true
+	return recommendation.AddEmbeddingContribution(target, vector, strength)
 }
 
 func recommendationPositiveArticleStrength(outcome userArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
-	if len(outcome.PositiveSignals) > 0 {
-		decayed := make([]float64, len(outcome.PositiveSignals))
-		primaryIndex, primary := 0, 0.0
-		for index, signal := range outcome.PositiveSignals {
-			decayed[index] = embeddingSignalWeight(cfg, signal.SignalType) * recommendationSignalDecay(now, signal.OccurredAt, cfg.SignalHalfLifeDays)
-			if decayed[index] > primary {
-				primaryIndex, primary = index, decayed[index]
-			}
-		}
-		coexist := 0.0
-		for index, signal := range outcome.PositiveSignals {
-			if index != primaryIndex {
-				coexist += cfg.PositiveSignalCoexistBonus * recommendationSignalDecay(now, signal.OccurredAt, cfg.SignalHalfLifeDays)
-			}
-		}
-		return math.Min(cfg.PositiveArticleWeightCap, primary+coexist)
-	}
-	if outcome.PassiveSignal == nil {
-		return 0
-	}
-	if outcome.PassiveSignal.SignalType == "quick_bounce" || outcome.PassiveSignal.SignalType == "neutral_read" || outcome.PassiveSignal.SignalType == "not_interested" {
-		return 0
-	}
-	return math.Max(0, embeddingSignalWeight(cfg, outcome.PassiveSignal.SignalType)*recommendationSignalDecay(now, outcome.PassiveSignal.OccurredAt, cfg.SignalHalfLifeDays))
+	return recommendation.PositiveArticleStrength(sharedUserArticleOutcome(outcome), now, cfg)
 }
 
 func recommendationAuthorAffinityContribution(outcome userArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
-	if len(outcome.PositiveSignals) > 0 {
-		return recommendationPositiveArticleStrength(outcome, now, cfg)
-	}
-	if outcome.PassiveSignal == nil {
-		return 0
-	}
-	if outcome.PassiveSignal.SignalType != "click" && outcome.PassiveSignal.SignalType != "qualified_read" {
-		return 0
-	}
-	return math.Max(0, embeddingSignalWeight(cfg, outcome.PassiveSignal.SignalType)*recommendationSignalDecay(now, outcome.PassiveSignal.OccurredAt, cfg.SignalHalfLifeDays))
+	return recommendation.AuthorAffinityContribution(sharedUserArticleOutcome(outcome), now, cfg)
 }
 func recommendationNegativeArticleStrength(outcome userArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
-	if outcome.NegativeSignal == nil {
-		return 0
-	}
-	if outcome.NegativeSignal.SignalType != "quick_bounce" && outcome.NegativeSignal.SignalType != "not_interested" {
-		return 0
-	}
-	return math.Abs(embeddingSignalWeight(cfg, outcome.NegativeSignal.SignalType)) * recommendationSignalDecay(now, outcome.NegativeSignal.OccurredAt, cfg.SignalHalfLifeDays)
+	return recommendation.NegativeArticleStrength(sharedUserArticleOutcome(outcome), now, cfg)
 }
 
 func validEmbeddingVector(vector []float32) bool {
-	if len(vector) == 0 {
-		return false
-	}
-	hasNonZero := false
-	for _, value := range vector {
-		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			return false
-		}
-		if value != 0 {
-			hasNonZero = true
-		}
-	}
-	return hasNonZero
+	return recommendation.ValidEmbeddingVector(vector)
 }
 
 func normalizeEmbedding(vector []float32) []float32 {
-	if !validEmbeddingVector(vector) {
-		return nil
-	}
-	norm := 0.0
-	for _, value := range vector {
-		norm += float64(value) * float64(value)
-	}
-	if norm <= 0 {
-		return nil
-	}
-	length := float32(math.Sqrt(norm))
-	result := make([]float32, len(vector))
-	for index, value := range vector {
-		result[index] = value / length
-	}
-	return result
+	return recommendation.NormalizeEmbedding(vector)
 }
 
 func embeddingSignalWeight(cfg config.RecommendationConfig, signal string) float64 {
-	switch signal {
-	case "view":
-		return cfg.BehaviorWeights.View
-	case "click":
-		return cfg.BehaviorWeights.Click
-	case "qualified_read":
-		return cfg.BehaviorWeights.QualifiedRead
-	case "reply":
-		return cfg.BehaviorWeights.Reply
-	case "quick_bounce":
-		return cfg.BehaviorWeights.QuickBounce
-	case "like":
-		return cfg.BehaviorWeights.Like
-	case "not_interested":
-		return cfg.BehaviorWeights.NotInterested
-	default:
-		return 0
-	}
+	return recommendation.EmbeddingSignalWeight(cfg, signal)
 }
 
 func recommendationSignalDecay(now, occurred time.Time, halfLifeDays float64) float64 {
-	if occurred.IsZero() || occurred.After(now) || halfLifeDays <= 0 {
-		return 1
-	}
-	age := now.Sub(occurred).Hours() / 24
-	return math.Exp(-math.Ln2 * age / halfLifeDays)
+	return recommendation.SignalDecay(now, occurred, halfLifeDays)
 }
 
 func cosineSimilarity(left, right []float32) float64 {
-	if !validEmbeddingVector(left) || !validEmbeddingVector(right) || len(left) != len(right) {
-		return 0
+	return recommendation.CosineSimilarity(left, right)
+}
+
+func sharedUserArticleOutcome(outcome userArticleOutcome) recommendation.UserArticleOutcome {
+	converted := recommendation.UserArticleOutcome{ArticleID: outcome.ArticleID}
+	for _, signal := range outcome.PositiveSignals {
+		converted.PositiveSignals = append(converted.PositiveSignals, recommendation.UserArticleSignal{SignalType: signal.SignalType, OccurredAt: signal.OccurredAt})
 	}
-	dot, leftNorm, rightNorm := 0.0, 0.0, 0.0
-	for index := range left {
-		dot += float64(left[index]) * float64(right[index])
-		leftNorm += float64(left[index]) * float64(left[index])
-		rightNorm += float64(right[index]) * float64(right[index])
+	if outcome.NegativeSignal != nil {
+		converted.NegativeSignal = &recommendation.UserArticleSignal{SignalType: outcome.NegativeSignal.SignalType, OccurredAt: outcome.NegativeSignal.OccurredAt}
 	}
-	if leftNorm <= 0 || rightNorm <= 0 {
-		return 0
+	if outcome.PassiveSignal != nil {
+		converted.PassiveSignal = &recommendation.UserArticleSignal{SignalType: outcome.PassiveSignal.SignalType, OccurredAt: outcome.PassiveSignal.OccurredAt}
 	}
-	value := dot / math.Sqrt(leftNorm*rightNorm)
-	return clampRecommendationSimilarity(value)
+	return converted
 }
 
 func clampRecommendationSimilarity(value float64) float64 {

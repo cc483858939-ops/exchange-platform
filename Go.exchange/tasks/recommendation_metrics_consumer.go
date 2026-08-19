@@ -16,6 +16,7 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
@@ -236,8 +237,29 @@ func applyRecommendationMetricRecords(records []recommendationMetricEvent) error
 			return err
 		}
 		behaviorAggregates := aggregateRecommendationBehavior(records, firstDelivery)
-		return bulkUpsertRecommendationBehavior(tx, behaviorAggregates)
+		if err := bulkUpsertRecommendationBehavior(tx, behaviorAggregates); err != nil {
+			return err
+		}
+		return recommendation.InvalidateProfiles(tx, recommendationMetricProfileInvalidationUsers(records, firstDelivery), "recommendation_feedback_projection", time.Now().UTC())
 	})
+}
+
+func recommendationMetricProfileInvalidationUsers(records []recommendationMetricEvent, firstDelivery map[string]struct{}) []uint {
+	seen := make(map[uint]struct{})
+	for _, record := range records {
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok || record.Payload.UserID == 0 {
+			continue
+		}
+		if recommendationBehaviorAction(record) != "" {
+			seen[record.Payload.UserID] = struct{}{}
+		}
+	}
+	users := make([]uint, 0, len(seen))
+	for userID := range seen {
+		users = append(users, userID)
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i] < users[j] })
+	return users
 }
 
 func aggregateRecommendationMetrics(records []recommendationMetricEvent, firstDelivery map[string]struct{}) []recommendationMetricAggregate {

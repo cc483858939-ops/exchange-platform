@@ -10,6 +10,7 @@ import (
 
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -18,9 +19,9 @@ import (
 const (
 	defaultRecommendationLimit              = 20
 	maxRecommendationLimit                  = 50
-	recommendationFeedbackArticleLimit      = 500
-	recommendationRecentViewArticleLimit    = 200
-	recommendationCandidateRetrievalVersion = "social_semantic_multi_source_v3"
+	recommendationFeedbackArticleLimit      = recommendation.ProfileReplyLimit
+	recommendationRecentViewArticleLimit    = recommendation.ProfileRecentViewLimit
+	recommendationCandidateRetrievalVersion = "social_semantic_materialized_profile_v4"
 )
 
 type articleBehaviorSignal struct {
@@ -64,32 +65,13 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	cfg := normalizedRecommendationConfig()
-	lookbackStart := now.AddDate(0, 0, -cfg.FeedbackLookbackDays)
 
-	behaviors, err := loadRecommendationBehaviorSignals(userID)
-	if err != nil {
-		recommendationErrorResponse(ctx, err, "")
-		return
-	}
-	feedback, err := loadRecommendationFeedbackSignals(userID, lookbackStart)
-	if err != nil {
-		recommendationErrorResponse(ctx, err, "")
-		return
-	}
-	reactions, err := loadRecommendationReactionStates(userID)
-	if err != nil {
-		recommendationErrorResponse(ctx, err, "")
-		return
-	}
-	profile, err := buildEmbeddingInterestProfile(behaviors, feedback, reactions, now, cfg)
+	profile, err := loadMaterializedUserInterestProfile(userID, now, cfg)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 		return
 	}
-	if err := populateRecommendationAuthorContext(userID, &profile, cfg); err != nil {
-		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
-		return
-	}
+	loadedAuthors := make(map[uint]struct{})
 
 	served, err := loadRecommendationServedHistory(userID, now, cfg)
 	if err != nil {
@@ -108,6 +90,10 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 		return
 	}
+	if err := loadMaterializedCandidateAuthorContext(userID, &profile, freshHydrated, loadedAuthors, cfg); err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
+		return
+	}
 	rankedFresh := rankRecommendationCandidates(profile, freshHydrated, now, cfg)
 	selected := selectRecommendationCandidates(rankedFresh, nil, limit, cfg, now, recommendationSelectionFresh)
 
@@ -121,6 +107,10 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		softHydrated, softErr := hydrateRecommendationCandidates(softSet.Candidates, now)
 		if softErr != nil {
 			recommendationErrorResponse(ctx, softErr, recommendationStrategyID(profile))
+			return
+		}
+		if err := loadMaterializedCandidateAuthorContext(userID, &profile, softHydrated, loadedAuthors, cfg); err != nil {
+			recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 			return
 		}
 		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg)
@@ -151,6 +141,8 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	requestRecord := models.RecommendationRequest{
 		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
 		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg),
+		ProfileVersion: profile.ProfileVersion, ProfileConfigHash: profile.ProfileConfigHash,
+		ProfileStatus: profile.ProfileStatus, ProfileAgeMS: profile.ProfileAgeMS,
 		RequestedLimit: limit, CandidateCount: len(freshSet.Candidates), ResultCount: len(recommendations),
 		TrackedResultCount: trackedCount, PersonalizedSignalCount: profile.PersonalizedSignalCount,
 		SemanticCandidateCount: freshSet.SemanticCount, FollowingCandidateCount: freshSet.FollowingCount,

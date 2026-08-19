@@ -1,10 +1,18 @@
-# Recommendation Telemetry V3 Kafka-first
+# Recommendation Telemetry V2 Kafka-first
 
-The recommendation API serves deterministic embedding_feed_v1. Telemetry is an attribution and measurement protocol; affinity is derived server-side from the durable facts.
+The recommendation API serves deterministic `rules_v3` recommendations from
+`materialized_profile_v1`. Telemetry remains an attribution and measurement
+protocol; affinity is derived server-side from durable materialized facts.
 
 ## Contract
 
 Each successful GET /api/recommendations/articles creates one UUID request ID. The same ID is embedded in every signed card token and recorded in recommendation_requests. Request persistence is best effort and does not change a successful recommendation response.
+
+Each request record also records `profile_version`, `profile_config_hash`,
+`profile_status` (`hit`, `stale`, `miss`, or `incompatible`), and non-negative
+`profile_age_ms`. Hit and stale requests record the compatible profile actually
+used for ranking; miss and incompatible requests use a cold-start profile and
+do not claim incompatible vectors.
 
 POST /api/recommendation-events accepts impression, click, read_end, feed_dwell, and not_interested. The v2 tracking token binds the authenticated user, article, request, position, ranker, strategy, token lifetime, estimated_read_time_ms, and read_policy_version. The client cannot choose those values.
 
@@ -35,4 +43,4 @@ When frontend and backend deploy independently, deploy the namespaced Kafka even
 
 ## Local configuration
 
-The root D:\code\mf\docker-compose.yml supplies the recommendation signing key through RECOMMENDATION_TELEMETRY_SIGNING_KEY. EMBEDDING_API_KEY is consumed only by the asynchronous Kafka article embedding consumer. Keep signing keys outside source control and revoke or rotate any provider credential that was previously exposed in a committed configuration outside the repository. Token TTL and rate limits remain server configuration; read classification is fixed by read_v1. Feed dwell is raw telemetry only and is not currently consumed by embedding_feed_v1 or personalization.
+The root D:\code\mf\docker-compose.yml supplies the recommendation signing key through RECOMMENDATION_TELEMETRY_SIGNING_KEY. EMBEDDING_API_KEY is consumed only by the asynchronous Kafka article embedding consumer. Keep signing keys outside source control and revoke or rotate any provider credential that was previously exposed in a committed configuration outside the repository. Token TTL and rate limits remain server configuration; read classification is fixed by read_v1. Feed dwell is raw telemetry only and is not currently consumed by the materialized profile or personalization.

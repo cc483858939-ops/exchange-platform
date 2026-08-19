@@ -39,6 +39,10 @@ func RunMigrations() error {
 			&models.RecommendationDailyMetric{},
 			&models.RecommendationRequest{},
 			&models.RecommendationResultTrace{},
+			&models.UserArticleRecoState{},
+			&models.UserRecoProfile{},
+			&models.UserAuthorAffinity{},
+			&models.UserRecoProfileDirty{},
 			&models.ExchangeRate{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
@@ -71,6 +75,9 @@ func RunMigrations() error {
 		if err := applyRecommendationTraceConstraints(tx); err != nil {
 			return err
 		}
+		if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
+			return err
+		}
 		if err := applyArticleAuthorConstraints(tx); err != nil {
 			return err
 		}
@@ -89,6 +96,52 @@ WHERE reaction_version = 0
 		}
 		return nil
 	})
+}
+
+func applyRecommendationProfileMaterializationSchema(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_profile_status",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_profile_status CHECK (profile_status IN ('hit','stale','miss','incompatible'))",
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_profile_age",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_profile_age CHECK (profile_age_ms >= 0)",
+		"CREATE INDEX IF NOT EXISTS idx_user_article_reco_states_article_user ON user_article_reco_states (article_id, user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_user_reco_profile_dirty_due ON user_reco_profile_dirty (next_attempt_at, dirty_at, user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_user_reco_profiles_next_rebuild ON user_reco_profiles (next_rebuild_at, user_id)",
+		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS fk_user_article_reco_states_user",
+		"ALTER TABLE user_article_reco_states ADD CONSTRAINT fk_user_article_reco_states_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS fk_user_article_reco_states_article",
+		"ALTER TABLE user_article_reco_states ADD CONSTRAINT fk_user_article_reco_states_article FOREIGN KEY (article_id) REFERENCES articles(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_reco_profiles DROP CONSTRAINT IF EXISTS fk_user_reco_profiles_user",
+		"ALTER TABLE user_reco_profiles ADD CONSTRAINT fk_user_reco_profiles_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_author_affinities DROP CONSTRAINT IF EXISTS fk_user_author_affinities_user",
+		"ALTER TABLE user_author_affinities ADD CONSTRAINT fk_user_author_affinities_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_author_affinities DROP CONSTRAINT IF EXISTS fk_user_author_affinities_author",
+		"ALTER TABLE user_author_affinities ADD CONSTRAINT fk_user_author_affinities_author FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_reco_profile_dirty DROP CONSTRAINT IF EXISTS fk_user_reco_profile_dirty_user",
+		"ALTER TABLE user_reco_profile_dirty ADD CONSTRAINT fk_user_reco_profile_dirty_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS chk_user_article_reco_states_passive_signal",
+		"ALTER TABLE user_article_reco_states ADD CONSTRAINT chk_user_article_reco_states_passive_signal CHECK (passive_signal IN ('', 'view', 'click', 'qualified_read', 'neutral_read', 'quick_bounce'))",
+		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS chk_user_article_reco_states_negative_signal",
+		"ALTER TABLE user_article_reco_states ADD CONSTRAINT chk_user_article_reco_states_negative_signal CHECK (negative_signal IN ('', 'quick_bounce', 'not_interested'))",
+		"ALTER TABLE user_reco_profiles DROP CONSTRAINT IF EXISTS chk_user_reco_profiles_dimensions",
+		"ALTER TABLE user_reco_profiles ADD CONSTRAINT chk_user_reco_profiles_dimensions CHECK ((positive_vector IS NULL AND negative_vector IS NULL AND dimensions = 0) OR ((positive_vector IS NOT NULL OR negative_vector IS NOT NULL) AND dimensions > 0 AND (positive_vector IS NULL OR vector_dims(positive_vector) = dimensions) AND (negative_vector IS NULL OR vector_dims(negative_vector) = dimensions)))",
+		"ALTER TABLE user_reco_profiles DROP CONSTRAINT IF EXISTS chk_user_reco_profiles_counts",
+		"ALTER TABLE user_reco_profiles ADD CONSTRAINT chk_user_reco_profiles_counts CHECK (negative_evidence >= 0 AND positive_signal_count >= 0 AND negative_signal_count >= 0 AND personalized_signal_count >= 0)",
+		"ALTER TABLE user_author_affinities DROP CONSTRAINT IF EXISTS chk_user_author_affinities_raw_nonnegative",
+		"ALTER TABLE user_author_affinities ADD CONSTRAINT chk_user_author_affinities_raw_nonnegative CHECK (raw_affinity >= 0)",
+		"ALTER TABLE user_reco_profile_dirty DROP CONSTRAINT IF EXISTS chk_user_reco_profile_dirty_reason",
+		"ALTER TABLE user_reco_profile_dirty ADD CONSTRAINT chk_user_reco_profile_dirty_reason CHECK (char_length(reason) <= 64)",
+		"ALTER TABLE user_reco_profile_dirty DROP CONSTRAINT IF EXISTS chk_user_reco_profile_dirty_error",
+		"ALTER TABLE user_reco_profile_dirty ADD CONSTRAINT chk_user_reco_profile_dirty_error CHECK (char_length(last_error) <= 512)",
+		"ALTER TABLE user_reco_profile_dirty DROP CONSTRAINT IF EXISTS chk_user_reco_profile_dirty_version",
+		"ALTER TABLE user_reco_profile_dirty ADD CONSTRAINT chk_user_reco_profile_dirty_version CHECK (dirty_version >= 1 AND attempts >= 0)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation profile materialization schema: %w", err)
+		}
+	}
+	return nil
 }
 
 func applyArticleEmbeddingConstraints(tx *gorm.DB) error {

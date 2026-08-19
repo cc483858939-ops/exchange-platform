@@ -2,13 +2,13 @@ package controllers
 
 import (
 	"errors"
-	"sort"
 	"strconv"
 	"time"
 
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 )
 
 type recommendationFeedbackEvent struct {
@@ -215,91 +215,35 @@ func resolveRecommendationPassiveOutcome(state *recommendationArticleFeedbackSta
 }
 
 func canonicalizeRecommendationOutcomes(behaviors []articleBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState) []userArticleOutcome {
-	views := make(map[uint]models.ArticleBehavior)
-	replies := make(map[uint]models.ArticleBehavior)
-	feedbackByArticle := make(map[uint]*recommendationArticleFeedbackState)
-	articleIDs := make(map[uint]struct{})
+	behaviorRows := make([]models.ArticleBehavior, 0, len(behaviors))
 	for _, item := range behaviors {
-		articleID := item.Behavior.ArticleID
-		if articleID == 0 {
-			continue
-		}
-		articleIDs[articleID] = struct{}{}
-		switch item.Behavior.Action {
-		case ArticleBehaviorActionView:
-			current, exists := views[articleID]
-			if !exists || item.Behavior.LastSeenAt.After(current.LastSeenAt) ||
-				(item.Behavior.LastSeenAt.Equal(current.LastSeenAt) && item.Behavior.ID > current.ID) {
-				views[articleID] = item.Behavior
-			}
-		case ArticleBehaviorActionReply:
-			current, exists := replies[articleID]
-			if !exists || item.Behavior.LastSeenAt.After(current.LastSeenAt) ||
-				(item.Behavior.LastSeenAt.Equal(current.LastSeenAt) && item.Behavior.ID > current.ID) {
-				replies[articleID] = item.Behavior
-			}
-		}
+		behaviorRows = append(behaviorRows, item.Behavior)
 	}
+	feedbackRows := make([]recommendation.FeedbackEvent, 0, len(feedback))
 	for _, item := range feedback {
-		articleID := item.Event.ArticleID
-		if articleID == 0 {
-			continue
-		}
-		articleIDs[articleID] = struct{}{}
-		state := feedbackByArticle[articleID]
-		if state == nil {
-			state = &recommendationArticleFeedbackState{}
-			feedbackByArticle[articleID] = state
-		}
-		switch item.Event.EventType {
-		case recommendationFeedbackEventTypeClick:
-			setLatestRecommendationEvent(&state.Click, item.Event)
-		case recommendationFeedbackEventTypeReadEnd:
-			setLatestRecommendationEvent(&state.ReadEnd, item.Event)
-		case recommendationFeedbackEventTypeNotInterested:
-			setLatestRecommendationEvent(&state.NotInterested, item.Event)
-		}
+		feedbackRows = append(feedbackRows, recommendation.FeedbackEvent{
+			EventID: item.Event.EventID, ArticleID: item.Event.ArticleID, EventType: item.Event.EventType,
+			OccurredAt: item.Event.OccurredAt, ReceivedAt: item.Event.ReceivedAt, ReadOutcome: item.Event.ReadOutcome,
+		})
 	}
-	for articleID := range reactions {
-		if articleID != 0 {
-			articleIDs[articleID] = struct{}{}
-		}
+	reactionRows := make(map[uint]recommendation.ReactionState, len(reactions))
+	for articleID, reaction := range reactions {
+		reactionRows[articleID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
 	}
-
-	outcomes := make([]userArticleOutcome, 0, len(articleIDs))
-	for articleID := range articleIDs {
-		state := feedbackByArticle[articleID]
-		reaction, hasReaction := reactions[articleID]
-		var notInterested *recommendationFeedbackEvent
-		if state != nil {
-			notInterested = state.NotInterested
+	result := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
+	outcomes := make([]userArticleOutcome, 0, len(result.Outcomes))
+	for _, item := range result.Outcomes {
+		outcome := userArticleOutcome{ArticleID: item.ArticleID}
+		for _, signal := range item.PositiveSignals {
+			outcome.PositiveSignals = append(outcome.PositiveSignals, userArticleSignal{SignalType: signal.SignalType, OccurredAt: signal.OccurredAt})
 		}
-		positive := make([]userArticleSignal, 0, 2)
-		if hasReaction && reaction.Liked && (notInterested == nil || reaction.StateChangedAt.After(notInterested.OccurredAt)) {
-			positive = append(positive, userArticleSignal{SignalType: "like", OccurredAt: reaction.StateChangedAt})
+		if item.NegativeSignal != nil {
+			outcome.NegativeSignal = &userArticleSignal{SignalType: item.NegativeSignal.SignalType, OccurredAt: item.NegativeSignal.OccurredAt}
 		}
-		if reply, ok := replies[articleID]; ok && (notInterested == nil || reply.LastSeenAt.After(notInterested.OccurredAt)) {
-			positive = append(positive, userArticleSignal{SignalType: "reply", OccurredAt: reply.LastSeenAt})
+		if item.PassiveSignal != nil {
+			outcome.PassiveSignal = &userArticleSignal{SignalType: item.PassiveSignal.SignalType, OccurredAt: item.PassiveSignal.OccurredAt}
 		}
-		passiveType, passiveAt := resolveRecommendationPassiveOutcome(state, views[articleID])
-		outcome := userArticleOutcome{ArticleID: articleID}
-		if passiveType != "" {
-			outcome.PassiveSignal = &userArticleSignal{SignalType: passiveType, OccurredAt: passiveAt}
-		}
-		switch {
-		case len(positive) > 0:
-			outcome.PositiveSignals = positive
-		case notInterested != nil:
-			signal := userArticleSignal{SignalType: "not_interested", OccurredAt: notInterested.OccurredAt}
-			outcome.NegativeSignal = &signal
-		case passiveType == "quick_bounce":
-			signal := userArticleSignal{SignalType: passiveType, OccurredAt: passiveAt}
-			outcome.NegativeSignal = &signal
-		}
-		if len(outcome.PositiveSignals) > 0 || outcome.NegativeSignal != nil || outcome.PassiveSignal != nil {
-			outcomes = append(outcomes, outcome)
-		}
+		outcomes = append(outcomes, outcome)
 	}
-	sort.Slice(outcomes, func(i, j int) bool { return outcomes[i].ArticleID < outcomes[j].ArticleID })
 	return outcomes
 }

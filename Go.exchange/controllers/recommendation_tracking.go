@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 )
@@ -19,10 +20,10 @@ import (
 const (
 	recommendationScene                   = "recommendation_page"
 	recommendationRankerVersion           = "rules_v3"
-	recommendationPersonalizedStrategyID  = "for_you_rules_v3"
-	recommendationColdStartStrategyID     = "for_you_rules_v3"
+	recommendationPersonalizedStrategyID  = "for_you_materialized_profile_v4"
+	recommendationColdStartStrategyID     = "for_you_materialized_profile_v4"
 	recommendationTrackingTokenVersion    = "v2"
-	recommendationCanonicalOutcomeVersion = "multi_signal_capped_v2"
+	recommendationCanonicalOutcomeVersion = recommendation.CanonicalOutcomeVersion
 	recommendationPassiveRecencyPolicy    = "read_end_recency_v2"
 	recommendationSelectionPolicyVersion  = "network_balance_diversity_v1"
 	recommendationSigningKeyMinBytes      = 32
@@ -98,6 +99,9 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 }
 
 func recommendationStrategyID(profile userInterestProfile) string {
+	if len(profile.PositiveVector) == 0 && profile.ProfileStatus == recommendationProfileStatusMiss {
+		return recommendationColdStartStrategyID
+	}
 	return recommendationPersonalizedStrategyID
 }
 
@@ -123,7 +127,7 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 	p := cfg.Candidates.Personalized
 	c := cfg.Candidates.ColdStart
 	return fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|freshness=%g|freshness_half_life=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|novel_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
+		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|freshness=%g|freshness_half_life=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|novel_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|materialized_profile=%s|profile_config=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
 		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click,
 		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.Reply, cfg.BehaviorWeights.QuickBounce,
 		cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays,
@@ -138,6 +142,7 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 		cfg.Diversity.SemanticDuplicateThreshold, cfg.Diversity.SemanticDuplicatePenalty,
 		p.Semantic, p.Following, p.Recent, p.Trending, p.Merged,
 		c.Following, c.Recent, c.Trending, c.Merged, recommendationCandidateRetrievalVersion,
+		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion()),
 		recommendationCanonicalOutcomeVersion, recommendationPassiveRecencyPolicy,
 		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, config.ActiveEmbeddingVersion(),
 	)

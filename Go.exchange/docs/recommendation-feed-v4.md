@@ -1,32 +1,58 @@
-# Recommendation Feed V3
+# Recommendation Feed V4
 
 This document records the implemented X-like `For You` pipeline. The serving
-contract is frozen at `rules_v3`, `for_you_rules_v3`,
-`social_semantic_multi_source_v3`, `multi_signal_capped_v2`,
+contract is frozen at `rules_v3`, `for_you_materialized_profile_v4`,
+`social_semantic_materialized_profile_v4`, `materialized_profile_v1`,
+`multi_signal_capped_v2`,
 `read_end_recency_v2`, and `read_v1`. The tracking token protocol remains v2.
 
 ## Pipeline
 
-1. Load public, active article behavior and feedback signals. Likes and replies
-   are independent positive facts; quick-bounce and negative-interest signals
-   build a separate negative vector. A later click/view/reply supersedes a
-   passive `read_end`; an equal timestamp retains `read_end`.
-2. Build capped positive and negative interest vectors from active embeddings,
-   preserving interaction IDs even when an embedding is unavailable.
-3. Recall Recent Semantic and Evergreen Semantic candidates with reserved
+1. Source projections invalidate `user_reco_profile_dirty` in the same
+   transaction as view/like/feedback/reply changes. Article embedding changes
+   use authoritative behavior and reaction fan-out.
+2. A nearline materializer reconstructs bounded source history, canonicalizes
+   multi-signal outcomes, writes `user_article_reco_states`, and replaces the
+   profile vectors/evidence and raw author affinity atomically.
+3. HTTP serving reads one profile row by user primary key. Compatible stale
+   profiles remain usable while a durable recovery enqueue is retained; misses
+   and incompatible profiles use a cold-start profile.
+4. Recall Recent Semantic and Evergreen Semantic candidates with reserved
    capacity, alongside Following, Recent, and Trending sources. All source
    queries share public-scope, author, interaction, negative-interest, and
    served-history eligibility.
-4. Hydrate authors and embeddings in batches, then rank by positive semantic
+5. Hydrate authors and embeddings in batches, then rank by positive semantic
    similarity, confidence-weighted negative similarity, interaction affinity,
    follow bonus, freshness, time-decayed Trending, and deterministic article
    tie-breakers.
-5. Select fresh candidates first, using network/novel-author balance, author
+6. Select fresh candidates first, using network/novel-author balance, author
    sliding-window diversity, and candidate-level embedding diversity. Fill
    remaining positions from the soft-served pool without duplicates.
-6. Persist request metadata and per-position result traces in one bounded
+7. Persist request metadata and per-position result traces in one bounded
    transaction. A periodic cleanup task removes expired traces and requests in
    bounded batches; cleanup failures remain non-fatal and observable.
+
+## Materialized profile
+
+The profile identity is `materialized_profile_v1`; canonical outcomes remain
+`multi_signal_capped_v2`. The materializer stores nullable positive and
+negative pgvector columns, signal counts, negative evidence, `ComputedAt`, and
+`NextRebuildAt`. A valid cold-start profile may contain NULL/NULL vectors with
+`Dimensions = 0`.
+
+`UserRecoProfileDirty` is a per-user versioned queue. True source invalidation
+increments `DirtyVersion` and resets retry metadata. Serving recovery and
+periodic rebase use an insert-if-absent enqueue and never reset an existing
+retry. Each batch uses a deterministic PostgreSQL transaction advisory lock;
+lock contention is skipped, and one-user failures retry with capped exponential
+backoff without stopping the batch.
+
+The canonical state table contains every interacted article, including a
+reaction-only unliked row. Candidate exclusion uses that state table only for
+compatible hit/stale profiles; miss and incompatible profiles retain the
+explicit current not-interested/later-like/later-reply eligibility checks.
+Affinity and following lookups are scoped to hydrated candidate authors, with
+raw affinity saturated at rank time.
 
 ## Semantic recall
 
@@ -84,7 +110,8 @@ availability: feed serving continues when trace persistence or served-history
 loading fails, while bounded failure counters are emitted.
 
 The PostgreSQL migration creates retrieval indexes, trace keys and indexes,
-request checks, and explicit cascade foreign keys. It also removes the legacy
-source columns and retrieval index idempotently. The acceptance path uses a
-disposable PostgreSQL 16 database with pgvector; Redis/Kafka/embedding runtime
-health is not substituted with fake DSNs or SQLite.
+profile/state/dirty tables, vector dimension checks, request profile telemetry
+checks, and explicit cascade foreign keys. It also removes the legacy source
+columns and retrieval index idempotently. The acceptance path uses a disposable
+PostgreSQL 16 database with pgvector; Redis/Kafka/embedding runtime health is
+not substituted with fake DSNs or SQLite.

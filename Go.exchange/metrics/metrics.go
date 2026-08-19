@@ -11,32 +11,37 @@ import (
 )
 
 var (
-	registry                              = prometheus.NewRegistry()
-	httpRequestsTotal                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_http_requests_total", Help: "Total number of HTTP requests handled by the Gin server."}, []string{"method", "route", "status"})
-	httpRequestDuration                   = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_http_request_duration_seconds", Help: "HTTP request latency in seconds.", Buckets: prometheus.DefBuckets}, []string{"method", "route", "status"})
-	articleEmbeddingEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_events_total", Help: "Article embedding event outcomes."}, []string{"result"})
-	articleEmbeddingFailures              = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_failures_total", Help: "Article embedding processing failures by stage."}, []string{"stage"})
-	articleEmbeddingPublishFailures       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_publish_failures_total", Help: "Article embedding publish failures by source."}, []string{"source"})
-	articleEmbeddingProcessingDuration    = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_article_embedding_processing_duration_seconds", Help: "Article embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
-	outboxPending                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_pending_events", Help: "Current unpublished outbox event count."})
-	likePipelineDepth                     = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
-	recommendationTelemetryEvents         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
-	recommendationTelemetryBatchSize      = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
-	recommendationTelemetryIngestDuration = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
-	recommendationTelemetryProjection     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_projection_total", Help: "Recommendation telemetry projection outcomes."}, []string{"status"})
-	recommendationRequests                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_requests_total", Help: "Recommendation requests by outcome and strategy."}, []string{"outcome", "strategy_id"})
-	recommendationRequestLogFailures      = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_request_log_failures_total", Help: "Recommendation request records that failed to persist."})
-	recommendationTrackingResults         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_tracking_results_total", Help: "Returned recommendation results by tracking availability."}, []string{"status"})
-	recommendationCandidateCount          = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_candidate_count", Help: "Candidate count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50, 100, 200}})
-	recommendationResultCount             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_result_count", Help: "Result count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50}})
-	recommendationGenerationDuration      = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_generation_duration_seconds", Help: "Recommendation generation duration.", Buckets: prometheus.DefBuckets}, []string{"strategy_id"})
-	recommendationRecallCandidates        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_recall_candidates_total", Help: "Distinct recommendation candidates by source."}, []string{"source"})
-	recommendationResultsBySource         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_source_total", Help: "Returned recommendation results by source."}, []string{"source"})
-	recommendationResultsByClass          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_class_total", Help: "Returned recommendation results by class."}, []string{"class"})
-	recommendationServedHistoryFailures   = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_served_history_load_failures_total", Help: "Recommendation served-history load failures."})
-	recommendationTracePersistFailures    = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_persist_failures_total", Help: "Recommendation serving trace persistence failures."})
-	recommendationTraceCleanupFailures    = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_failures_total", Help: "Recommendation serving trace cleanup failures."})
-	recommendationTraceCleanupRows        = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_rows_total", Help: "Recommendation serving trace rows cleaned up."})
+	registry                                     = prometheus.NewRegistry()
+	httpRequestsTotal                            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_http_requests_total", Help: "Total number of HTTP requests handled by the Gin server."}, []string{"method", "route", "status"})
+	httpRequestDuration                          = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_http_request_duration_seconds", Help: "HTTP request latency in seconds.", Buckets: prometheus.DefBuckets}, []string{"method", "route", "status"})
+	articleEmbeddingEvents                       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_events_total", Help: "Article embedding event outcomes."}, []string{"result"})
+	articleEmbeddingFailures                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_failures_total", Help: "Article embedding processing failures by stage."}, []string{"stage"})
+	articleEmbeddingPublishFailures              = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_publish_failures_total", Help: "Article embedding publish failures by source."}, []string{"source"})
+	articleEmbeddingProcessingDuration           = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_article_embedding_processing_duration_seconds", Help: "Article embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
+	outboxPending                                = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_pending_events", Help: "Current unpublished outbox event count."})
+	likePipelineDepth                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
+	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
+	recommendationTelemetryBatchSize             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
+	recommendationTelemetryIngestDuration        = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
+	recommendationTelemetryProjection            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_projection_total", Help: "Recommendation telemetry projection outcomes."}, []string{"status"})
+	recommendationRequests                       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_requests_total", Help: "Recommendation requests by outcome and strategy."}, []string{"outcome", "strategy_id"})
+	recommendationRequestLogFailures             = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_request_log_failures_total", Help: "Recommendation request records that failed to persist."})
+	recommendationTrackingResults                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_tracking_results_total", Help: "Returned recommendation results by tracking availability."}, []string{"status"})
+	recommendationCandidateCount                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_candidate_count", Help: "Candidate count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50, 100, 200}})
+	recommendationResultCount                    = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_result_count", Help: "Result count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50}})
+	recommendationGenerationDuration             = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_generation_duration_seconds", Help: "Recommendation generation duration.", Buckets: prometheus.DefBuckets}, []string{"strategy_id"})
+	recommendationRecallCandidates               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_recall_candidates_total", Help: "Distinct recommendation candidates by source."}, []string{"source"})
+	recommendationResultsBySource                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_source_total", Help: "Returned recommendation results by source."}, []string{"source"})
+	recommendationResultsByClass                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_class_total", Help: "Returned recommendation results by class."}, []string{"class"})
+	recommendationServedHistoryFailures          = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_served_history_load_failures_total", Help: "Recommendation served-history load failures."})
+	recommendationTracePersistFailures           = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_persist_failures_total", Help: "Recommendation serving trace persistence failures."})
+	recommendationTraceCleanupFailures           = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_failures_total", Help: "Recommendation serving trace cleanup failures."})
+	recommendationTraceCleanupRows               = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_rows_total", Help: "Recommendation serving trace rows cleaned up."})
+	recommendationProfileLoad                    = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_profile_load_total", Help: "Materialized recommendation profile load outcomes."}, []string{"status"})
+	recommendationProfileAge                     = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_profile_age_seconds", Help: "Age in seconds of materialized profiles used for serving.", Buckets: prometheus.DefBuckets})
+	recommendationProfileMaterialization         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_profile_materialization_total", Help: "Recommendation profile materialization outcomes."}, []string{"result"})
+	recommendationProfileMaterializationDuration = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_profile_materialization_duration_seconds", Help: "Recommendation profile materialization duration in seconds.", Buckets: prometheus.DefBuckets})
+	recommendationProfileDirtyQueueDepth         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_recommendation_profile_dirty_queue_depth", Help: "Current recommendation profile dirty queue depth."})
 )
 
 func init() {
@@ -46,6 +51,7 @@ func init() {
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
 		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
+		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
 	)
 	for _, result := range []string{"generated", "up_to_date", "article_missing", "article_unavailable", "invalid_event", "provider_non_retryable"} {
 		articleEmbeddingEvents.WithLabelValues(result)
@@ -55,6 +61,12 @@ func init() {
 	}
 	for _, source := range []string{"article_create", "requeue"} {
 		articleEmbeddingPublishFailures.WithLabelValues(source)
+	}
+	for _, status := range []string{"hit", "stale", "miss", "incompatible", "error"} {
+		recommendationProfileLoad.WithLabelValues(status)
+	}
+	for _, result := range []string{"success", "error", "lock_skipped"} {
+		recommendationProfileMaterialization.WithLabelValues(result)
 	}
 }
 
@@ -144,4 +156,26 @@ func AddRecommendationTraceCleanupRows(count int) {
 	if count > 0 {
 		recommendationTraceCleanupRows.Add(float64(count))
 	}
+}
+
+func RecordRecommendationProfileLoad(status string) {
+	recommendationProfileLoad.WithLabelValues(status).Inc()
+}
+
+func ObserveRecommendationProfileAge(age time.Duration) {
+	if age >= 0 {
+		recommendationProfileAge.Observe(age.Seconds())
+	}
+}
+
+func RecordRecommendationProfileMaterialization(result string) {
+	recommendationProfileMaterialization.WithLabelValues(result).Inc()
+}
+
+func ObserveRecommendationProfileMaterializationDuration(duration time.Duration) {
+	recommendationProfileMaterializationDuration.Observe(duration.Seconds())
+}
+
+func SetRecommendationProfileDirtyQueueDepth(value float64) {
+	recommendationProfileDirtyQueueDepth.Set(value)
 }

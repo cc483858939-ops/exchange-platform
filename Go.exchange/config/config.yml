@@ -92,6 +92,13 @@ recommendation:
       recent: 200
       trending: 200
       merged: 500
+  profile_materialization:
+    debounce_seconds: 2
+    poll_interval_seconds: 1
+    batch_size: 50
+    rebuild_interval_hours: 6
+    stale_scan_interval_seconds: 60
+    stale_enqueue_batch_size: 500
 
 storage:
   endpoint: "minio:9000"

@@ -74,7 +74,7 @@ func loadRecommendationServedHistory(userID uint, now time.Time, cfg config.Reco
 	return history, nil
 }
 
-func recommendationEligibilityQuery(query *gorm.DB, userID uint, profile userInterestProfile, served map[uint]servedArticle, now time.Time, softOnly bool) *gorm.DB {
+func recommendationEligibilityQuery(query *gorm.DB, userID uint, served map[uint]servedArticle, now time.Time, softOnly bool, useMaterializedInteractions bool) *gorm.DB {
 	negative := global.Db.Table("article_behaviors AS ni").
 		Select("1").
 		Where("ni.user_id = ? AND ni.article_id = articles.id AND ni.action = ? AND ni.active = TRUE",
@@ -95,11 +95,14 @@ func recommendationEligibilityQuery(query *gorm.DB, userID uint, profile userInt
 		).
 		Where("articles.author_id <> ?", userID).
 		Where("NOT EXISTS (?)", negative)
-
-	excluded := make(map[uint]struct{}, len(profile.InteractedArticleIDs)+len(served))
-	for id := range profile.InteractedArticleIDs {
-		excluded[id] = struct{}{}
+	if useMaterializedInteractions {
+		interacted := global.Db.Table("user_article_reco_states AS rs").
+			Select("1").
+			Where("rs.user_id = ? AND rs.article_id = articles.id AND rs.interacted = TRUE", userID)
+		query = query.Where("NOT EXISTS (?)", interacted)
 	}
+
+	excluded := make(map[uint]struct{}, len(served))
 	for id, item := range served {
 		if softOnly {
 			if item.Soft && !item.Hard {
@@ -123,6 +126,16 @@ func recommendationEligibilityQuery(query *gorm.DB, userID uint, profile userInt
 	}
 	if ids := articleIDList(excluded); len(ids) > 0 {
 		query = query.Where("articles.id NOT IN ?", ids)
+	}
+	return query
+}
+
+func applyLegacyProfileInteractionExclusion(query *gorm.DB, profile userInterestProfile) *gorm.DB {
+	if profile.MaterializedInteractionsReady {
+		return query
+	}
+	if ids := articleIDList(profile.InteractedArticleIDs); len(ids) > 0 {
+		return query.Where("articles.id NOT IN ?", ids)
 	}
 	return query
 }
@@ -200,8 +213,9 @@ func loadRecommendationSemanticPool(userID uint, profile userInterestProfile, se
 			Select("ae.article_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
 			Joins("JOIN articles ON articles.id = ae.article_id").
 			Where("ae.version = ? AND ae.dimensions = ?", config.ActiveEmbeddingVersion(), len(profile.PositiveVector)),
-		userID, profile, served, now, softOnly,
+		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	)
+	query = applyLegacyProfileInteractionExclusion(query, profile)
 	if comparison != "" {
 		query = query.Where("articles.published_at "+comparison+" ?", cutoff)
 	}
@@ -233,8 +247,9 @@ func loadRecommendationFollowingCandidates(userID uint, profile userInterestProf
 		global.Db.Table("articles").
 			Select("articles.id").
 			Joins("JOIN user_follows AS uf ON uf.following_id = articles.author_id AND uf.follower_id = ?", userID),
-		userID, profile, served, now, softOnly,
+		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	)
+	query = applyLegacyProfileInteractionExclusion(query, profile)
 	var ids []uint
 	if err := query.Order("articles.published_at DESC, articles.id DESC").Limit(cap).Pluck("articles.id", &ids).Error; err != nil {
 		return nil, err
@@ -250,7 +265,8 @@ func loadRecommendationSourceCandidates(userID uint, profile userInterestProfile
 	if cap <= 0 {
 		return nil, nil
 	}
-	query := recommendationEligibilityQuery(global.Db.Table("articles").Select("articles.id"), userID, profile, served, now, softOnly)
+	query := recommendationEligibilityQuery(global.Db.Table("articles").Select("articles.id"), userID, served, now, softOnly, profile.MaterializedInteractionsReady)
+	query = applyLegacyProfileInteractionExclusion(query, profile)
 	var ids []uint
 	if err := query.Order(order).Limit(cap).Pluck("articles.id", &ids).Error; err != nil {
 		return nil, err
@@ -309,9 +325,10 @@ func loadRecommendationTrendingCandidates(userID uint, profile userInterestProfi
 	cutoff := now.AddDate(0, 0, -cfg.Trending.MaxAgeDays)
 	query := recommendationEligibilityQuery(
 		global.Db.Table("articles").Select("articles.id"),
-		userID, profile, served, now, softOnly,
+		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	).Where("articles.published_at >= ?", cutoff).
 		Where("articles.like_count > 0 OR articles.comment_count > 0")
+	query = applyLegacyProfileInteractionExclusion(query, profile)
 	order := gorm.Expr(`
 (
     LN(1 + GREATEST(articles.like_count, 0))
