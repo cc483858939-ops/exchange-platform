@@ -69,9 +69,14 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 	if row.NegativeVector != nil {
 		profile.NegativeVector = append([]float32(nil), row.NegativeVector.Slice()...)
 	}
-	if len(profile.NegativeVector) > 0 && cfg.NegativeConfidenceSaturationScale > 0 {
-		profile.NegativeConfidence = math.Tanh(row.NegativeEvidence / cfg.NegativeConfidenceSaturationScale)
-	}
+	profile.NegativeConfidence = materializedNegativeConfidence(
+		row.NegativeEvidence,
+		row.ComputedAt,
+		now,
+		cfg.SignalHalfLifeDays,
+		cfg.NegativeConfidenceSaturationScale,
+		len(profile.NegativeVector) > 0,
+	)
 	age := now.Sub(row.ComputedAt)
 	if age < 0 {
 		age = 0
@@ -83,6 +88,43 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 		queueMaterializedProfileRecovery(userID, "serving_stale", now)
 	}
 	return profile, nil
+}
+
+func materializedNegativeConfidence(
+	negativeEvidence float64,
+	computedAt time.Time,
+	now time.Time,
+	signalHalfLifeDays float64,
+	saturationScale float64,
+	hasNegativeVector bool,
+) float64 {
+	if !hasNegativeVector || negativeEvidence <= 0 ||
+		math.IsNaN(negativeEvidence) || math.IsInf(negativeEvidence, 0) ||
+		computedAt.IsZero() || now.IsZero() ||
+		signalHalfLifeDays <= 0 || math.IsNaN(signalHalfLifeDays) || math.IsInf(signalHalfLifeDays, 0) ||
+		saturationScale <= 0 || math.IsNaN(saturationScale) || math.IsInf(saturationScale, 0) {
+		return 0
+	}
+
+	elapsedDays := 0.0
+	if computedAt.Before(now) {
+		elapsedDays = now.Sub(computedAt).Hours() / 24
+		if elapsedDays < 0 || math.IsNaN(elapsedDays) || math.IsInf(elapsedDays, 0) {
+			return 0
+		}
+	}
+	currentNegativeEvidence := negativeEvidence * math.Exp(-math.Ln2*elapsedDays/signalHalfLifeDays)
+	if currentNegativeEvidence <= 0 || math.IsNaN(currentNegativeEvidence) || math.IsInf(currentNegativeEvidence, 0) {
+		return 0
+	}
+	confidence := math.Tanh(currentNegativeEvidence / saturationScale)
+	if math.IsNaN(confidence) || math.IsInf(confidence, 0) || confidence < 0 {
+		return 0
+	}
+	if confidence >= 1 {
+		return math.Nextafter(1, 0)
+	}
+	return confidence
 }
 
 func queueMaterializedProfileRecovery(userID uint, reason string, now time.Time) {

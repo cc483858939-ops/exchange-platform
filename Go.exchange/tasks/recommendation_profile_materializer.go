@@ -221,8 +221,8 @@ func materializeRecommendationProfileUser(userID uint, now time.Time, settings c
 		if err := replaceMaterializedAuthorAffinity(tx, userID, affinity, now); err != nil {
 			return err
 		}
-		result := tx.Where("user_id = ? AND dirty_version = ?", userID, dirty.DirtyVersion).Delete(&models.UserRecoProfileDirty{})
-		return result.Error
+		_, err = deleteMaterializedProfileClaim(tx, userID, dirty.DirtyVersion)
+		return err
 	})
 	metrics.ObserveRecommendationProfileMaterializationDuration(time.Since(started))
 	if lockSkipped || errors.Is(err, errRecommendationProfileLockSkipped) {
@@ -240,6 +240,14 @@ func materializeRecommendationProfileUser(userID uint, now time.Time, settings c
 		}
 	}
 	return err
+}
+
+func deleteMaterializedProfileClaim(tx *gorm.DB, userID uint, dirtyVersion int64) (int64, error) {
+	if tx == nil {
+		return 0, errors.New("database is not initialized")
+	}
+	result := tx.Where("user_id = ? AND dirty_version = ?", userID, dirtyVersion).Delete(&models.UserRecoProfileDirty{})
+	return result.RowsAffected, result.Error
 }
 
 func loadMaterializerEmbeddings(tx *gorm.DB, outcomes []recommendation.UserArticleOutcome, version string) (map[uint][]float32, error) {
