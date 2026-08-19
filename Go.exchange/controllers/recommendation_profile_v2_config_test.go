@@ -51,8 +51,8 @@ func TestNormalizedRecommendationConfigExplicitZeroOverrides(t *testing.T) {
 		{name: "semantic_weight", path: "semantic_weight", set: func(cfg *config.RecommendationConfig) { cfg.SemanticWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticWeight }},
 		{name: "negative_semantic_weight", path: "negative_semantic_weight", set: func(cfg *config.RecommendationConfig) { cfg.NegativeSemanticWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.NegativeSemanticWeight }},
 		{name: "freshness_weight", path: "freshness_weight", set: func(cfg *config.RecommendationConfig) { cfg.FreshnessWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.FreshnessWeight }},
-		{name: "popularity_weight", path: "popularity_weight", set: func(cfg *config.RecommendationConfig) { cfg.PopularityWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.PopularityWeight }},
-		{name: "popularity_comment_factor", path: "popularity_comment_factor", set: func(cfg *config.RecommendationConfig) { cfg.PopularityCommentFactor = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.PopularityCommentFactor }},
+		{name: "trending_weight", path: "trending_weight", set: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.TrendingWeight }},
+		{name: "trending.comment_factor", path: "trending.comment_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.CommentFactor = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.CommentFactor }},
 		{name: "author_affinity_weight", path: "author_affinity_weight", set: func(cfg *config.RecommendationConfig) { cfg.AuthorAffinityWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.AuthorAffinityWeight }},
 		{name: "following_bonus", path: "following_bonus", set: func(cfg *config.RecommendationConfig) { cfg.FollowingBonus = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.FollowingBonus }},
 		{name: "diversity.semantic_duplicate_threshold", path: "diversity.semantic_duplicate_threshold", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicateThreshold = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicateThreshold }},
@@ -71,6 +71,40 @@ func TestNormalizedRecommendationConfigExplicitZeroOverrides(t *testing.T) {
 			}
 			if got := tc.get(normalizedRecommendationConfig()); got != 0 {
 				t.Fatalf("normalized %s=%v, want 0", tc.path, got)
+			}
+		})
+	}
+}
+
+func TestNormalizedRecommendationConfigTrendingAndSemanticRecallValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		set  func(*config.RecommendationConfig)
+		get  func(config.RecommendationConfig) float64
+		want float64
+	}{
+		{name: "recent window zero", path: "semantic_recall.recent_window_days", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentWindowDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.SemanticRecall.RecentWindowDays) }, want: 30},
+		{name: "recent ratio zero", path: "semantic_recall.recent_ratio", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticRecall.RecentRatio }, want: 0.80},
+		{name: "recent ratio one", path: "semantic_recall.recent_ratio", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticRecall.RecentRatio }, want: 0.80},
+		{name: "max age zero", path: "trending.max_age_days", set: func(cfg *config.RecommendationConfig) { cfg.Trending.MaxAgeDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Trending.MaxAgeDays) }, want: 7},
+		{name: "half life zero", path: "trending.half_life_hours", set: func(cfg *config.RecommendationConfig) { cfg.Trending.HalfLifeHours = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.HalfLifeHours }, want: 24},
+		{name: "comment factor negative", path: "trending.comment_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.CommentFactor = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.CommentFactor }, want: 0.5},
+		{name: "trending weight negative", path: "trending_weight", set: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.TrendingWeight }, want: 0.5},
+	}
+
+	original := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = original })
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			set := config.RecommendationConfig{}
+			tc.set(&set)
+			config.AppConfig = &config.Config{
+				Recommendation:         set,
+				RecommendationPresence: map[string]bool{tc.path: true},
+			}
+			if got := tc.get(normalizedRecommendationConfig()); got != tc.want {
+				t.Fatalf("normalized %s=%v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}

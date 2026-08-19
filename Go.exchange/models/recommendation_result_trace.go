@@ -12,7 +12,7 @@ type RecommendationResultTrace struct {
 	FromSemantic            bool      `json:"from_semantic" gorm:"not null;default:false"`
 	FromFollowing           bool      `json:"from_following" gorm:"not null;default:false"`
 	FromRecent              bool      `json:"from_recent" gorm:"not null;default:false"`
-	FromPopular             bool      `json:"from_popular" gorm:"not null;default:false"`
+	FromTrending            bool      `json:"from_trending" gorm:"not null;default:false"`
 	IsInNetwork             bool      `json:"is_in_network" gorm:"not null;default:false"`
 	IsNovelAuthor           bool      `json:"is_novel_author" gorm:"not null;default:false"`
 	WasSoftServedFallback   bool      `json:"was_soft_served_fallback" gorm:"not null;default:false"`
@@ -23,7 +23,7 @@ type RecommendationResultTrace struct {
 	FollowingBonusApplied   float64   `json:"following_bonus_applied" gorm:"not null;default:0"`
 	SemanticComponent       float64   `json:"semantic_component" gorm:"not null;default:0"`
 	FreshnessComponent      float64   `json:"freshness_component" gorm:"not null;default:0"`
-	PopularityComponent     float64   `json:"popularity_component" gorm:"not null;default:0"`
+	TrendingComponent       float64   `json:"trending_component" gorm:"not null;default:0"`
 	AuthorAffinityComponent float64   `json:"author_affinity_component" gorm:"not null;default:0"`
 	DiversityPenalty        float64   `json:"diversity_penalty" gorm:"not null;default:0"`
 	BaseScore               float64   `json:"base_score" gorm:"not null;default:0"`

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"Go.exchange/config"
 )
 
 func testRecommendationTrackingClaims(now time.Time) recommendationTrackingClaims {
@@ -15,6 +17,34 @@ func testRecommendationTrackingClaims(now time.Time) recommendationTrackingClaim
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
 		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
+	}
+}
+
+func TestRecommendationRankerConfigHashIncludesV3ServingSettings(t *testing.T) {
+	base := defaultRecommendationConfig()
+	tests := []struct {
+		name   string
+		mutate func(*config.RecommendationConfig)
+	}{
+		{name: "semantic recent window", mutate: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentWindowDays++ }},
+		{name: "semantic recent ratio", mutate: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 0.75 }},
+		{name: "trending weight", mutate: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight++ }},
+		{name: "trending max age", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.MaxAgeDays++ }},
+		{name: "trending half life", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.HalfLifeHours++ }},
+		{name: "trending comment factor", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.CommentFactor++ }},
+		{name: "personalized trending cap", mutate: func(cfg *config.RecommendationConfig) { cfg.Candidates.Personalized.Trending++ }},
+		{name: "cold-start trending cap", mutate: func(cfg *config.RecommendationConfig) { cfg.Candidates.ColdStart.Trending++ }},
+	}
+
+	baseHash := recommendationRankerConfigHash(base)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mutated := base
+			tc.mutate(&mutated)
+			if got := recommendationRankerConfigHash(mutated); got == baseHash {
+				t.Fatalf("hash=%q unchanged from base %q", got, baseHash)
+			}
+		})
 	}
 }
 

@@ -44,17 +44,23 @@ recommendation:
     reply: 5
     quick_bounce: -3
     not_interested: -6
+  semantic_recall:
+    recent_window_days: 30
+    recent_ratio: 0.80
+  trending:
+    max_age_days: 7
+    half_life_hours: 24
+    comment_factor: 0.5
   signal_half_life_days: 14
   feedback_lookback_days: 90
   semantic_weight: 4
   freshness_weight: 2
-  popularity_weight: 0.5
+  trending_weight: 0.5
   freshness_half_life_days: 2
   positive_signal_coexist_bonus: 1
   positive_article_weight_cap: 7
   negative_semantic_weight: 1.5
   negative_confidence_saturation_scale: 12
-  popularity_comment_factor: 0.5
   author_affinity_weight: 1
   author_affinity_saturation_scale: 6
   following_bonus: 0.5
@@ -79,12 +85,12 @@ recommendation:
       semantic: 200
       following: 150
       recent: 150
-      popular: 150
+      trending: 150
       merged: 500
     cold_start:
       following: 200
       recent: 200
-      popular: 200
+      trending: 200
       merged: 500
 
 storage:

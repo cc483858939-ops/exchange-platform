@@ -17,15 +17,15 @@ multi-source recall + multi-signal ranking + embedding-based semantic personaliz
 ### 个性化推荐
 
 - **For You Feed**：面向当前用户生成个性化文章推荐结果。
-- **Multi-source recall**：从 Semantic、Following、Recent、Popular 四类来源召回候选，并进行合并与去重。
+- **Multi-source recall**：从 Recent Semantic、Evergreen Semantic、Following、Recent、Trending 五类来源召回候选，并进行合并与去重。
 - **正负兴趣信号**：分别构建用户正向兴趣向量与负向兴趣向量；点赞、回复、点击和阅读结果等行为可参与兴趣建模。
 - **Embedding 语义个性化**：使用用户兴趣向量与文章 embedding 的 similarity 计算语义相关性，支持正向与负向语义信号。
-- **Multi-signal ranking**：综合 semantic similarity、interaction affinity、follow bonus、freshness、popularity 等信号，并使用确定性的文章 ID 作为最终 tie-breaker。
+- **Multi-signal ranking**：综合 semantic similarity、interaction affinity、follow bonus、freshness、time-decayed trending 等信号，并使用确定性的文章 ID 作为最终 tie-breaker。
 - **过滤与历史控制**：过滤自身文章、已交互内容、负向兴趣内容和不符合公开范围的内容，并结合已推荐历史进行 fresh/soft-served 控制。
 - **多样性选择**：通过作者窗口、作者多样性、网络内外平衡和 embedding 内容相似度惩罚，降低推荐结果重复。
 - **推荐元数据与追踪**：每次推荐请求生成 request metadata；结果可持久化 `RecommendationResultTrace`，推荐卡片可携带绑定请求、文章、位置和 ranker 上下文的 tracking token。
 
-推荐链路的详细实现契约见 [Recommendation Feed V2](Go.exchange/docs/recommendation-feed-v2.md)。
+推荐链路的详细实现契约见 [Recommendation Feed V3](Go.exchange/docs/recommendation-feed-v3.md)。
 
 ## 推荐系统架构
 
@@ -36,7 +36,7 @@ flowchart TD
     C --> C1[Semantic]
     C --> C2[Following]
     C --> C3[Recent]
-    C --> C4[Popular]
+    C --> C4[Trending]
     C1 --> D[Multi-Signal Ranking]
     C2 --> D
     C3 --> D
@@ -362,5 +362,5 @@ npm run dev
 
 推荐系统的详细设计和 telemetry 边界：
 
-- [Go.exchange/docs/recommendation-feed-v2.md](Go.exchange/docs/recommendation-feed-v2.md)
+- [Go.exchange/docs/recommendation-feed-v3.md](Go.exchange/docs/recommendation-feed-v3.md)
 - [Go.exchange/docs/recommendation-telemetry-v2.md](Go.exchange/docs/recommendation-telemetry-v2.md)

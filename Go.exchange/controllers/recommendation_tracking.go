@@ -18,9 +18,9 @@ import (
 
 const (
 	recommendationScene                   = "recommendation_page"
-	recommendationRankerVersion           = "rules_v2"
-	recommendationPersonalizedStrategyID  = "for_you_rules_v2"
-	recommendationColdStartStrategyID     = "for_you_rules_v2"
+	recommendationRankerVersion           = "rules_v3"
+	recommendationPersonalizedStrategyID  = "for_you_rules_v3"
+	recommendationColdStartStrategyID     = "for_you_rules_v3"
 	recommendationTrackingTokenVersion    = "v2"
 	recommendationCanonicalOutcomeVersion = "multi_signal_capped_v2"
 	recommendationPassiveRecencyPolicy    = "read_end_recency_v2"
@@ -123,20 +123,21 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 	p := cfg.Candidates.Personalized
 	c := cfg.Candidates.ColdStart
 	return fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|freshness=%g|freshness_half_life=%g|popularity=%g|comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|novel_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
+		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|freshness=%g|freshness_half_life=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|novel_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
 		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click,
 		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.Reply, cfg.BehaviorWeights.QuickBounce,
 		cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays,
 		cfg.PositiveSignalCoexistBonus, cfg.PositiveArticleWeightCap, cfg.SemanticWeight,
 		cfg.NegativeSemanticWeight, cfg.NegativeConfidenceSaturationScale, cfg.FreshnessWeight,
-		cfg.FreshnessHalfLifeDays, cfg.PopularityWeight, cfg.PopularityCommentFactor,
+		cfg.FreshnessHalfLifeDays, cfg.SemanticRecall.RecentWindowDays, cfg.SemanticRecall.RecentRatio,
+		cfg.TrendingWeight, cfg.Trending.MaxAgeDays, cfg.Trending.HalfLifeHours, cfg.Trending.CommentFactor,
 		cfg.AuthorAffinityWeight, cfg.AuthorAffinitySaturationScale, cfg.FollowingBonus,
 		cfg.OutOfNetworkMinRatio, cfg.NovelAuthorMinRatio, cfg.ServedHardExclusionMinutes,
 		cfg.ServedSoftLookbackDays, cfg.ServedHistoryLimit, cfg.Diversity.Enabled,
 		cfg.Diversity.AuthorWindowSize, cfg.Diversity.MaxSameAuthorInWindow,
 		cfg.Diversity.SemanticDuplicateThreshold, cfg.Diversity.SemanticDuplicatePenalty,
-		p.Semantic, p.Following, p.Recent, p.Popular, p.Merged,
-		c.Following, c.Recent, c.Popular, c.Merged, recommendationCandidateRetrievalVersion,
+		p.Semantic, p.Following, p.Recent, p.Trending, p.Merged,
+		c.Following, c.Recent, c.Trending, c.Merged, recommendationCandidateRetrievalVersion,
 		recommendationCanonicalOutcomeVersion, recommendationPassiveRecencyPolicy,
 		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, config.ActiveEmbeddingVersion(),
 	)

@@ -134,7 +134,7 @@ func TestRecommendationSelectionUsesFreshThenSoftWithoutDuplicate(t *testing.T) 
 		Breakdown: recommendationScoreBreakdown{BaseScore: 2},
 	}}
 	soft := []hydratedRecommendationCandidate{{
-		Candidate: embeddingCandidate{ArticleID: 2, FromPopular: true, WasSoftServed: true, LastServedAt: now.Add(-time.Hour)},
+		Candidate: embeddingCandidate{ArticleID: 2, FromTrending: true, WasSoftServed: true, LastServedAt: now.Add(-time.Hour)},
 		Article:   models.Article{Model: gorm.Model{ID: 2}, AuthorID: 2, PublishedAt: ptrTime(now.Add(-time.Minute))},
 		Breakdown: recommendationScoreBreakdown{BaseScore: 1},
 	}}

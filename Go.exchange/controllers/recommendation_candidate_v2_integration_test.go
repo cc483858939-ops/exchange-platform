@@ -152,7 +152,7 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 	hydrated, err := hydrateRecommendationCandidates(
 		[]embeddingCandidate{
 			{ArticleID: validArticle.ID, FromRecent: true},
-			{ArticleID: badArticle.ID, FromPopular: true},
+			{ArticleID: badArticle.ID, FromTrending: true},
 		},
 		now,
 	)

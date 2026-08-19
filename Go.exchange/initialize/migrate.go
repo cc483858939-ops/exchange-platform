@@ -62,7 +62,10 @@ func RunMigrations() error {
 		if err := applyArticleReactionConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyRecommendationRetrievalV2Indexes(tx); err != nil {
+		if err := applyRecommendationTrendingSchemaCleanup(tx); err != nil {
+			return err
+		}
+		if err := applyRecommendationRetrievalV3Indexes(tx); err != nil {
 			return err
 		}
 		if err := applyRecommendationTraceConstraints(tx); err != nil {
@@ -197,7 +200,6 @@ func applyLegacyAISchemaCleanup(tx *gorm.DB) error {
 		"ALTER TABLE articles DROP COLUMN IF EXISTS analysis_version",
 		"DROP INDEX IF EXISTS idx_articles_recommendation",
 		"DROP INDEX IF EXISTS idx_articles_recommendation_category_created",
-		"DROP INDEX IF EXISTS idx_articles_recommendation_popular",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
@@ -214,14 +216,32 @@ func applyLegacyArticleEmbeddingJobCleanup(tx *gorm.DB) error {
 	return nil
 }
 
-func applyRecommendationRetrievalV2Indexes(tx *gorm.DB) error {
+func applyRecommendationTrendingSchemaCleanup(tx *gorm.DB) error {
 	statements := []string{
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_recent ON articles (published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_popular ON articles (like_count DESC, comment_count DESC, published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_popular_candidates",
+		"ALTER TABLE recommendation_requests DROP COLUMN IF EXISTS popular_candidate_count",
+		"ALTER TABLE recommendation_result_traces DROP COLUMN IF EXISTS from_popular",
+		"ALTER TABLE recommendation_result_traces DROP COLUMN IF EXISTS popularity_component",
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_trending_candidates",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_trending_candidates CHECK (trending_candidate_count >= 0)",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply recommendation retrieval v2 index: %w", err)
+			return fmt.Errorf("apply recommendation trending schema cleanup: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyRecommendationRetrievalV3Indexes(tx *gorm.DB) error {
+	statements := []string{
+		"DROP INDEX IF EXISTS idx_articles_recommendation_popular",
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_recent ON articles (published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_trending ON articles (published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL AND (like_count > 0 OR comment_count > 0)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation retrieval v3 index: %w", err)
 		}
 	}
 	return nil

@@ -17,7 +17,7 @@ type recommendationScoreBreakdown struct {
 	FollowingBonusApplied   float64
 	SemanticComponent       float64
 	FreshnessComponent      float64
-	PopularityComponent     float64
+	TrendingComponent       float64
 	AuthorAffinityComponent float64
 	DiversityPenalty        float64
 	BaseScore               float64
@@ -46,8 +46,7 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 			ageDays = 0
 		}
 		freshness := math.Exp(-math.Ln2 * ageDays / cfg.FreshnessHalfLifeDays)
-		popularity := math.Log1p(math.Max(0, float64(candidate.Article.LikeCount))) +
-			cfg.PopularityCommentFactor*math.Log1p(math.Max(0, float64(candidate.Article.CommentCount)))
+		trendingRaw := recommendationTrendingRaw(candidate.Article, now, cfg)
 		interactionAffinity := clampUnit(profile.AuthorAffinity[candidate.Article.AuthorID])
 		followingBonus := 0.0
 		_, followed := profile.FollowingAuthorIDs[candidate.Article.AuthorID]
@@ -62,11 +61,11 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 			InteractionAffinity: interactionAffinity, FollowingBonusApplied: followingBonus,
 			SemanticComponent:       cfg.SemanticWeight * semanticRaw,
 			FreshnessComponent:      cfg.FreshnessWeight * freshness,
-			PopularityComponent:     cfg.PopularityWeight * popularity,
+			TrendingComponent:       cfg.TrendingWeight * trendingRaw,
 			AuthorAffinityComponent: cfg.AuthorAffinityWeight * authorScore,
 		}
 		candidate.Breakdown.BaseScore = candidate.Breakdown.SemanticComponent +
-			candidate.Breakdown.FreshnessComponent + candidate.Breakdown.PopularityComponent +
+			candidate.Breakdown.FreshnessComponent + candidate.Breakdown.TrendingComponent +
 			candidate.Breakdown.AuthorAffinityComponent
 		candidate.Breakdown.FinalScore = candidate.Breakdown.BaseScore
 	}
@@ -74,6 +73,24 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 		return recommendationCandidateBaseBefore(candidates[i], candidates[j])
 	})
 	return candidates
+}
+
+func recommendationTrendingRaw(article models.Article, now time.Time, cfg config.RecommendationConfig) float64 {
+	articleTime := recommendationArticleTime(article)
+	ageHours := now.Sub(articleTime).Hours()
+	if ageHours < 0 {
+		ageHours = 0
+	}
+	if cfg.Trending.MaxAgeDays <= 0 || ageHours > float64(cfg.Trending.MaxAgeDays)*24 || cfg.Trending.HalfLifeHours <= 0 {
+		return 0
+	}
+	engagement := math.Log1p(math.Max(0, float64(article.LikeCount))) +
+		cfg.Trending.CommentFactor*math.Log1p(math.Max(0, float64(article.CommentCount)))
+	if engagement <= 0 {
+		return 0
+	}
+	decay := math.Exp(-math.Ln2 * ageHours / cfg.Trending.HalfLifeHours)
+	return engagement * decay
 }
 
 func recommendationCandidateBaseBefore(left, right hydratedRecommendationCandidate) bool {

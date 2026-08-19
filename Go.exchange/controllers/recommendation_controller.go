@@ -20,7 +20,7 @@ const (
 	maxRecommendationLimit                  = 50
 	recommendationFeedbackArticleLimit      = 500
 	recommendationRecentViewArticleLimit    = 200
-	recommendationCandidateRetrievalVersion = "social_semantic_multi_source_v2"
+	recommendationCandidateRetrievalVersion = "social_semantic_multi_source_v3"
 )
 
 type articleBehaviorSignal struct {
@@ -33,7 +33,7 @@ type embeddingCandidate struct {
 	FromSemantic               bool
 	FromFollowing              bool
 	FromRecent                 bool
-	FromPopular                bool
+	FromTrending               bool
 	WasSoftServed              bool
 	LastServedAt               time.Time
 }
@@ -154,7 +154,7 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		RequestedLimit: limit, CandidateCount: len(freshSet.Candidates), ResultCount: len(recommendations),
 		TrackedResultCount: trackedCount, PersonalizedSignalCount: profile.PersonalizedSignalCount,
 		SemanticCandidateCount: freshSet.SemanticCount, FollowingCandidateCount: freshSet.FollowingCount,
-		RecentCandidateCount: freshSet.RecentCount, PopularCandidateCount: freshSet.PopularCount,
+		RecentCandidateCount: freshSet.RecentCount, TrendingCandidateCount: freshSet.TrendingCount,
 		MergedCandidateCount: len(freshSet.Candidates), PositiveSignalCount: profile.PositiveSignalCount,
 		NegativeSignalCount: profile.NegativeSignalCount, InNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsInNetwork }),
 		OutOfNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return !item.IsInNetwork }),
@@ -194,7 +194,7 @@ func recordRecallMetrics(set recommendationCandidateSet) {
 	metrics.AddRecommendationRecallCandidates("semantic", set.SemanticCount)
 	metrics.AddRecommendationRecallCandidates("following", set.FollowingCount)
 	metrics.AddRecommendationRecallCandidates("recent", set.RecentCount)
-	metrics.AddRecommendationRecallCandidates("popular", set.PopularCount)
+	metrics.AddRecommendationRecallCandidates("trending", set.TrendingCount)
 	metrics.AddRecommendationRecallCandidates("merged", len(set.Candidates))
 }
 
@@ -209,8 +209,8 @@ func recordResultMetrics(selected []selectedRecommendation) {
 		if item.Candidate.FromRecent {
 			metrics.AddRecommendationResultsBySource("recent", 1)
 		}
-		if item.Candidate.FromPopular {
-			metrics.AddRecommendationResultsBySource("popular", 1)
+		if item.Candidate.FromTrending {
+			metrics.AddRecommendationResultsBySource("trending", 1)
 		}
 		if item.IsInNetwork {
 			metrics.AddRecommendationResultsByClass("in_network", 1)

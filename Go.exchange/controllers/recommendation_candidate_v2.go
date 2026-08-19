@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"errors"
+	"math"
 	"time"
 
 	"Go.exchange/config"
@@ -25,7 +26,7 @@ type recommendationCandidateSet struct {
 	SemanticCount  int
 	FollowingCount int
 	RecentCount    int
-	PopularCount   int
+	TrendingCount  int
 }
 
 type hydratedRecommendationCandidate struct {
@@ -131,8 +132,66 @@ type semanticCandidateRow struct {
 	PositiveSemanticSimilarity float64
 }
 
+func recommendationSemanticQuota(cap int, recentRatio float64) (int, int) {
+	if cap <= 0 {
+		return 0, 0
+	}
+	if cap == 1 {
+		return 1, 0
+	}
+	if recentRatio <= 0 || recentRatio >= 1 {
+		recentRatio = 0.80
+	}
+	recentCap := int(math.Round(float64(cap) * recentRatio))
+	if recentCap < 1 {
+		recentCap = 1
+	}
+	if recentCap > cap-1 {
+		recentCap = cap - 1
+	}
+	return recentCap, cap - recentCap
+}
+
 func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfile, served map[uint]servedArticle, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
 	if len(profile.PositiveVector) == 0 || cap <= 0 {
+		return nil, nil
+	}
+
+	recentCap, evergreenCap := recommendationSemanticQuota(cap, cfg.SemanticRecall.RecentRatio)
+	cutoff := now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays)
+	recent, err := loadRecommendationSemanticPool(userID, profile, served, now, softOnly, cutoff, ">=", recentCap, nil)
+	if err != nil {
+		return nil, err
+	}
+	selectedIDs := make(map[uint]struct{}, len(recent)+evergreenCap)
+	for _, candidate := range recent {
+		selectedIDs[candidate.ArticleID] = struct{}{}
+	}
+
+	evergreen, err := loadRecommendationSemanticPool(userID, profile, served, now, softOnly, cutoff, "<", evergreenCap, selectedIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]embeddingCandidate, 0, cap)
+	result = append(result, recent...)
+	for _, candidate := range evergreen {
+		selectedIDs[candidate.ArticleID] = struct{}{}
+	}
+	result = append(result, evergreen...)
+
+	remaining := cap - len(result)
+	if remaining > 0 {
+		backfill, err := loadRecommendationSemanticPool(userID, profile, served, now, softOnly, time.Time{}, "", remaining, selectedIDs)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, backfill...)
+	}
+	return result, nil
+}
+
+func loadRecommendationSemanticPool(userID uint, profile userInterestProfile, served map[uint]servedArticle, now time.Time, softOnly bool, cutoff time.Time, comparison string, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+	if cap <= 0 {
 		return nil, nil
 	}
 	queryVector := pgvector.NewVector(profile.PositiveVector)
@@ -143,10 +202,17 @@ func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfi
 			Where("ae.version = ? AND ae.dimensions = ?", config.ActiveEmbeddingVersion(), len(profile.PositiveVector)),
 		userID, profile, served, now, softOnly,
 	)
+	if comparison != "" {
+		query = query.Where("articles.published_at "+comparison+" ?", cutoff)
+	}
+	if ids := articleIDList(excluded); len(ids) > 0 {
+		query = query.Where("articles.id NOT IN ?", ids)
+	}
+
 	var rows []semanticCandidateRow
 	if err := query.Clauses(clause.OrderBy{
 		Expression: clause.Expr{
-			SQL:  "ae.embedding <=> ? ASC",
+			SQL:  "ae.embedding <=> ? ASC, articles.id DESC",
 			Vars: []interface{}{queryVector},
 		},
 	}).Limit(cap).Scan(&rows).Error; err != nil {
@@ -195,8 +261,6 @@ func loadRecommendationSourceCandidates(userID uint, profile userInterestProfile
 		switch source {
 		case "recent":
 			candidate.FromRecent = true
-		case "popular":
-			candidate.FromPopular = true
 		}
 		result = append(result, candidate)
 	}
@@ -220,13 +284,12 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
-	popularOrder := gorm.Expr("((LN(1 + GREATEST(articles.like_count, 0))) + ? * (LN(1 + GREATEST(articles.comment_count, 0)))) DESC, articles.published_at DESC, articles.id DESC", cfg.PopularityCommentFactor)
-	popular, err := loadRecommendationSourceCandidates(userID, profile, served, now, cfg, softOnly, popularOrder, caps.Popular, "popular")
+	trending, err := loadRecommendationTrendingCandidates(userID, profile, served, now, cfg, softOnly, caps.Trending)
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
 
-	merged := mergeEmbeddingCandidates(caps.Merged, semantic, following, recent, popular)
+	merged := mergeEmbeddingCandidates(caps.Merged, semantic, following, recent, trending)
 	for index := range merged {
 		if item, ok := served[merged[index].ArticleID]; ok {
 			merged[index].LastServedAt = item.LastServedAt
@@ -235,8 +298,43 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 	}
 	return recommendationCandidateSet{
 		Candidates: merged, SemanticCount: len(semantic), FollowingCount: len(following),
-		RecentCount: len(recent), PopularCount: len(popular),
+		RecentCount: len(recent), TrendingCount: len(trending),
 	}, nil
+}
+
+func loadRecommendationTrendingCandidates(userID uint, profile userInterestProfile, served map[uint]servedArticle, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
+	if cap <= 0 {
+		return nil, nil
+	}
+	cutoff := now.AddDate(0, 0, -cfg.Trending.MaxAgeDays)
+	query := recommendationEligibilityQuery(
+		global.Db.Table("articles").Select("articles.id"),
+		userID, profile, served, now, softOnly,
+	).Where("articles.published_at >= ?", cutoff).
+		Where("articles.like_count > 0 OR articles.comment_count > 0")
+	order := gorm.Expr(`
+(
+    LN(1 + GREATEST(articles.like_count, 0))
+    + ? * LN(1 + GREATEST(articles.comment_count, 0))
+)
+*
+EXP(
+    -LN(2)
+    * GREATEST(EXTRACT(EPOCH FROM (? - articles.published_at)) / 3600.0, 0)
+    / ?
+)
+DESC,
+articles.published_at DESC,
+articles.id DESC`, cfg.Trending.CommentFactor, now.UTC(), cfg.Trending.HalfLifeHours)
+	var ids []uint
+	if err := query.Order(order).Limit(cap).Pluck("articles.id", &ids).Error; err != nil {
+		return nil, err
+	}
+	result := make([]embeddingCandidate, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, embeddingCandidate{ArticleID: id, FromTrending: true})
+	}
+	return result, nil
 }
 
 func recommendationCandidateCaps(profile userInterestProfile, cfg config.RecommendationConfig) config.RecommendationCandidateCaps {
@@ -262,7 +360,7 @@ func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embe
 				current.FromSemantic = current.FromSemantic || candidate.FromSemantic
 				current.FromFollowing = current.FromFollowing || candidate.FromFollowing
 				current.FromRecent = current.FromRecent || candidate.FromRecent
-				current.FromPopular = current.FromPopular || candidate.FromPopular
+				current.FromTrending = current.FromTrending || candidate.FromTrending
 				current.WasSoftServed = current.WasSoftServed || candidate.WasSoftServed
 				if current.LastServedAt.IsZero() || (!candidate.LastServedAt.IsZero() && candidate.LastServedAt.Before(current.LastServedAt)) {
 					current.LastServedAt = candidate.LastServedAt
@@ -288,7 +386,7 @@ func mergeCandidateSets(first, second recommendationCandidateSet, mergedLimit in
 		SemanticCount:  first.SemanticCount + second.SemanticCount,
 		FollowingCount: first.FollowingCount + second.FollowingCount,
 		RecentCount:    first.RecentCount + second.RecentCount,
-		PopularCount:   first.PopularCount + second.PopularCount,
+		TrendingCount:  first.TrendingCount + second.TrendingCount,
 	}
 }
 

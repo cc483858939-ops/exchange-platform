@@ -15,13 +15,13 @@ func buildRecommendationResultTraces(request models.RecommendationRequest, selec
 		result = append(result, models.RecommendationResultTrace{
 			RequestID: request.RequestID, Position: index + 1, ArticleID: item.Article.ID, AuthorID: item.Article.AuthorID,
 			FromSemantic: item.Candidate.FromSemantic, FromFollowing: item.Candidate.FromFollowing,
-			FromRecent: item.Candidate.FromRecent, FromPopular: item.Candidate.FromPopular,
+			FromRecent: item.Candidate.FromRecent, FromTrending: item.Candidate.FromTrending,
 			IsInNetwork: item.IsInNetwork, IsNovelAuthor: item.IsNovelAuthor,
 			WasSoftServedFallback: item.Candidate.WasSoftServed,
 			PositiveSemantic:      breakdown.PositiveSemantic, NegativeSemantic: breakdown.NegativeSemantic,
 			NegativeConfidence: breakdown.NegativeConfidence, InteractionAffinity: breakdown.InteractionAffinity,
 			FollowingBonusApplied: breakdown.FollowingBonusApplied, SemanticComponent: breakdown.SemanticComponent,
-			FreshnessComponent: breakdown.FreshnessComponent, PopularityComponent: breakdown.PopularityComponent,
+			FreshnessComponent: breakdown.FreshnessComponent, TrendingComponent: breakdown.TrendingComponent,
 			AuthorAffinityComponent: breakdown.AuthorAffinityComponent, DiversityPenalty: breakdown.DiversityPenalty,
 			BaseScore: breakdown.BaseScore, FinalScore: breakdown.FinalScore, CreatedAt: now, ExpiresAt: expiresAt,
 		})

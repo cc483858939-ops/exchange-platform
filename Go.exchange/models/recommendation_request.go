@@ -19,7 +19,7 @@ type RecommendationRequest struct {
 	SemanticCandidateCount  int       `json:"semantic_candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_semantic_candidates,semantic_candidate_count >= 0"`
 	FollowingCandidateCount int       `json:"following_candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_following_candidates,following_candidate_count >= 0"`
 	RecentCandidateCount    int       `json:"recent_candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_recent_candidates,recent_candidate_count >= 0"`
-	PopularCandidateCount   int       `json:"popular_candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_popular_candidates,popular_candidate_count >= 0"`
+	TrendingCandidateCount  int       `json:"trending_candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_trending_candidates,trending_candidate_count >= 0"`
 	MergedCandidateCount    int       `json:"merged_candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_merged_candidates,merged_candidate_count >= 0"`
 	PositiveSignalCount     int       `json:"positive_signal_count" gorm:"not null;default:0;check:chk_recommendation_request_positive_signals,positive_signal_count >= 0"`
 	NegativeSignalCount     int       `json:"negative_signal_count" gorm:"not null;default:0;check:chk_recommendation_request_negative_signals,negative_signal_count >= 0"`

@@ -15,10 +15,12 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 		BehaviorWeights: config.RecommendationBehaviorWeights{
 			View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6,
 		},
+		SemanticRecall:     config.RecommendationSemanticRecallConfig{RecentWindowDays: 30, RecentRatio: 0.80},
+		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 7, HalfLifeHours: 24, CommentFactor: 0.5},
 		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90,
 		PositiveSignalCoexistBonus: 1, PositiveArticleWeightCap: 7,
 		SemanticWeight: 4, NegativeSemanticWeight: 1.5, NegativeConfidenceSaturationScale: 12,
-		FreshnessWeight: 2, FreshnessHalfLifeDays: 2, PopularityWeight: 0.5, PopularityCommentFactor: 0.5,
+		FreshnessWeight: 2, FreshnessHalfLifeDays: 2, TrendingWeight: 0.5,
 		AuthorAffinityWeight: 1, AuthorAffinitySaturationScale: 6, FollowingBonus: 0.5,
 		OutOfNetworkMinRatio: 0.30, NovelAuthorMinRatio: 0.10,
 		ServedHardExclusionMinutes: 30, ServedSoftLookbackDays: 7, ServedHistoryLimit: 1000,
@@ -28,8 +30,8 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 		},
 		Trace: config.RecommendationTraceConfig{ResultRetentionDays: 30, RequestRetentionDays: 90, CleanupIntervalHours: 6, CleanupBatchSize: 5000},
 		Candidates: config.RecommendationCandidatesConfig{
-			Personalized: config.RecommendationCandidateCaps{Semantic: 200, Following: 150, Recent: 150, Popular: 150, Merged: 500},
-			ColdStart:    config.RecommendationCandidateCaps{Following: 200, Recent: 200, Popular: 200, Merged: 500},
+			Personalized: config.RecommendationCandidateCaps{Semantic: 200, Following: 150, Recent: 150, Trending: 150, Merged: 500},
+			ColdStart:    config.RecommendationCandidateCaps{Following: 200, Recent: 200, Trending: 200, Merged: 500},
 		},
 	}
 }
@@ -88,11 +90,23 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.FreshnessHalfLifeDays > 0 {
 		cfg.FreshnessHalfLifeDays = set.FreshnessHalfLifeDays
 	}
-	if set.PopularityWeight >= 0 && recommendationSettingProvided("popularity_weight", set.PopularityWeight != 0) {
-		cfg.PopularityWeight = set.PopularityWeight
+	if recommendationSettingProvided("trending_weight", set.TrendingWeight != 0) {
+		cfg.TrendingWeight = set.TrendingWeight
 	}
-	if set.PopularityCommentFactor >= 0 && recommendationSettingProvided("popularity_comment_factor", set.PopularityCommentFactor != 0) {
-		cfg.PopularityCommentFactor = set.PopularityCommentFactor
+	if recommendationSettingProvided("trending.comment_factor", set.Trending.CommentFactor != 0) {
+		cfg.Trending.CommentFactor = set.Trending.CommentFactor
+	}
+	if set.SemanticRecall.RecentWindowDays > 0 {
+		cfg.SemanticRecall.RecentWindowDays = set.SemanticRecall.RecentWindowDays
+	}
+	if recommendationSettingProvided("semantic_recall.recent_ratio", set.SemanticRecall.RecentRatio != 0) {
+		cfg.SemanticRecall.RecentRatio = set.SemanticRecall.RecentRatio
+	}
+	if set.Trending.MaxAgeDays > 0 {
+		cfg.Trending.MaxAgeDays = set.Trending.MaxAgeDays
+	}
+	if set.Trending.HalfLifeHours > 0 {
+		cfg.Trending.HalfLifeHours = set.Trending.HalfLifeHours
 	}
 	if set.AuthorAffinityWeight >= 0 && recommendationSettingProvided("author_affinity_weight", set.AuthorAffinityWeight != 0) {
 		cfg.AuthorAffinityWeight = set.AuthorAffinityWeight
@@ -217,6 +231,24 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if cfg.Trace.CleanupBatchSize <= 0 {
 		cfg.Trace.CleanupBatchSize = 5000
 	}
+	if cfg.SemanticRecall.RecentWindowDays <= 0 {
+		cfg.SemanticRecall.RecentWindowDays = 30
+	}
+	if cfg.SemanticRecall.RecentRatio <= 0 || cfg.SemanticRecall.RecentRatio >= 1 {
+		cfg.SemanticRecall.RecentRatio = 0.80
+	}
+	if cfg.Trending.MaxAgeDays <= 0 {
+		cfg.Trending.MaxAgeDays = 7
+	}
+	if cfg.Trending.HalfLifeHours <= 0 {
+		cfg.Trending.HalfLifeHours = 24
+	}
+	if cfg.Trending.CommentFactor < 0 {
+		cfg.Trending.CommentFactor = 0.5
+	}
+	if cfg.TrendingWeight < 0 {
+		cfg.TrendingWeight = 0.5
+	}
 	return cfg
 }
 
@@ -234,8 +266,8 @@ func applyCandidateCaps(target *config.RecommendationCandidateCaps, set config.R
 	if set.Recent > 0 {
 		target.Recent = set.Recent
 	}
-	if set.Popular > 0 {
-		target.Popular = set.Popular
+	if set.Trending > 0 {
+		target.Trending = set.Trending
 	}
 	if set.Merged > 0 {
 		target.Merged = set.Merged
