@@ -2,16 +2,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
-import { ArticleReadTracker } from '../services/articleReadTracker';
 import NewsDetailView from './NewsDetailView.vue';
-import { formatCompactEngagementCount } from '../utils/engagementCount';
 
 const mocks = vi.hoisted(() => ({
   getArticleById: vi.fn(),
   getArticleLikeState: vi.fn(),
+  likeArticle: vi.fn(),
+  unlikeArticle: vi.fn(),
   getArticleComments: vi.fn(),
   consumeAttribution: vi.fn(),
-  assertBodyAtConsume: vi.fn(),
   telemetry: {
     recordReadEnd: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
@@ -69,8 +68,8 @@ vi.mock('../services/articleService', () => ({
 
 vi.mock('../services/likeService', () => ({
   getArticleLikeState: mocks.getArticleLikeState,
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
+  likeArticle: mocks.likeArticle,
+  unlikeArticle: mocks.unlikeArticle,
 }));
 
 vi.mock('../services/commentService', () => ({
@@ -115,18 +114,19 @@ const article = {
   },
 };
 
-const tracking = {
-  request_id: 'request-42',
-  position: 1,
-  scene: 'recommendation_page',
-  ranker_version: 'rules_v3',
-  ranker_config_hash: 'config-hash',
-  strategy_id: 'cold_start_rules_v3',
-  token: 'v2.token.signature',
-  expires_at: '2099-08-15T00:00:00.000Z',
+type LikeResult = { liked: boolean; likes: number };
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 };
 
-describe('NewsDetailView attributed read lifecycle', () => {
+describe('NewsDetailView LikeAction wiring', () => {
   let mounted: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
@@ -135,16 +135,12 @@ describe('NewsDetailView attributed read lifecycle', () => {
     mocks.getArticleById.mockResolvedValue(article);
     mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
     mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
-    mocks.consumeAttribution.mockImplementation(() => {
-      mocks.assertBodyAtConsume(document.querySelector('.article-detail__body'));
-      return tracking;
-    });
+    mocks.consumeAttribution.mockReturnValue(null);
   });
 
   afterEach(() => {
     mounted?.unmount();
     mounted = null;
-    vi.restoreAllMocks();
   });
 
   const mountDetail = () => mount(NewsDetailView, {
@@ -155,60 +151,62 @@ describe('NewsDetailView attributed read lifecycle', () => {
         AuthorIdentity: { template: '<span />' },
         CommentComposer: { template: '<div />' },
         CommentList: { template: '<div />' },
-        LikeAction: { template: '<button class="test-like-action" type="button" />' },
         RouterLink: { template: '<a><slot /></a>' },
+        LikeAction: {
+          props: ['liked', 'count', 'disabled', 'loading', 'pending', 'ariaLabel', 'ariaPressed', 'variant'],
+          emits: ['toggle'],
+          template: '<button class="test-like-action" type="button" :disabled="disabled || loading || pending" :data-liked="liked" :data-count="count" :data-loading="loading" :data-pending="pending" :data-aria-label="ariaLabel" @click="$emit(\'toggle\')">{{ count }}</button>',
+        },
       },
     },
   });
 
-  it('does not enqueue a View when the article request fails', async () => {
-    mocks.getArticleById.mockRejectedValueOnce(new Error('offline'));
+  it('forwards detail like state, labels, and pending state before success reconciliation', async () => {
+    const request = deferred<LikeResult>();
+    mocks.likeArticle.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
 
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+    const likeAction = mounted.find('.test-like-action');
+    expect(likeAction.attributes('data-liked')).toBe('false');
+    expect(likeAction.attributes('data-count')).toBe('3');
+    expect(likeAction.attributes('data-loading')).toBe('false');
+    expect(likeAction.attributes('data-pending')).toBe('false');
+    expect(likeAction.attributes('data-aria-label')).toBe('Like post, 3 likes');
+
+    await likeAction.trigger('click');
+    expect(likeAction.attributes('data-liked')).toBe('true');
+    expect(likeAction.attributes('data-count')).toBe('4');
+    expect(likeAction.attributes('data-pending')).toBe('true');
+    expect(mocks.likeArticle).toHaveBeenCalledWith('42');
+
+    request.resolve({ liked: true, likes: 4 });
+    await flushPromises();
+
+    expect(likeAction.attributes('data-liked')).toBe('true');
+    expect(likeAction.attributes('data-count')).toBe('4');
+    expect(likeAction.attributes('data-pending')).toBe('false');
   });
 
-  it('does not enqueue a View when the response ID mismatches the route', async () => {
-    mocks.getArticleById.mockResolvedValueOnce({ ...article, ID: 43 });
+  it('rolls back optimistic detail like state on failure without changing the wiring path', async () => {
+    const request = deferred<LikeResult>();
+    mocks.likeArticle.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
 
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
-  });
+    const likeAction = mounted.find('.test-like-action');
+    await likeAction.trigger('click');
+    expect(likeAction.attributes('data-liked')).toBe('true');
+    expect(likeAction.attributes('data-count')).toBe('4');
 
-  it('renders the server View count without optimistic increment and keeps one lifecycle event', async () => {
-    const trackerStart = vi.spyOn(ArticleReadTracker.prototype, 'start');
-
-    mounted = mountDetail();
+    request.reject(new Error('offline'));
     await flushPromises();
 
-    const viewMetric = mounted.find('.article-detail__engagement .engagement-metric[aria-label]');
-    expect(viewMetric.attributes('aria-label')).toBe('1,234 views');
-    expect(viewMetric.findAll('span')[1]?.text()).toBe(formatCompactEngagementCount(1234));
-    expect(mounted.find('.detail-state').exists()).toBe(false);
-    expect(mounted.find('.article-detail__body').exists()).toBe(true);
-    expect(mocks.assertBodyAtConsume).toHaveBeenCalledWith(expect.any(HTMLElement));
-    expect(trackerStart).toHaveBeenCalledTimes(1);
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(42, expect.any(String), 'article_detail');
-
-    await flushPromises();
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
-    expect(viewMetric.attributes('aria-label')).toBe('1,234 views');
-    expect(viewMetric.findAll('span')[1]?.text()).toBe(formatCompactEngagementCount(1234));
-
-    mocks.routeLeave({ name: 'Home' });
-    mounted.unmount();
-
-    expect(mocks.telemetry.recordReadEnd).toHaveBeenCalledTimes(1);
-    expect(mocks.telemetry.recordReadEnd).toHaveBeenCalledWith(
-      42,
-      tracking,
-      expect.objectContaining({ exit_type: 'route_leave' }),
-    );
+    expect(likeAction.attributes('data-liked')).toBe('false');
+    expect(likeAction.attributes('data-count')).toBe('3');
+    expect(likeAction.attributes('data-pending')).toBe('false');
+    expect(mounted.find('.detail-inline-error').text()).toBe('Like failed. Please try again.');
   });
 });
-

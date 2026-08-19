@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, RouterLinkStub } from '@vue/test-utils';
 import PostCard from './PostCard.vue';
+import LikeAction from '../engagement/LikeAction.vue';
 import type { FeedPost } from '../../types/Feed';
 import { formatCompactEngagementCount } from '../../utils/engagementCount';
 
@@ -53,6 +54,11 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     global: {
       stubs: {
         AuthorIdentity: { template: '<span class="author-identity" />' },
+        LikeAction: {
+          props: ['liked', 'count', 'disabled', 'loading', 'pending', 'ariaLabel', 'ariaPressed', 'variant'],
+          emits: ['toggle'],
+          template: '<button class="stub-like-action" type="button" :disabled="disabled || loading || pending" @click="$emit(\'toggle\')">{{ count }}</button>',
+        },
         AppIcon: {
           props: ['name'],
           template: '<span class="test-icon" :data-icon="name" />',
@@ -97,5 +103,60 @@ describe('PostCard View metric and telemetry lifecycle', () => {
 
     wrapper.unmount();
     expect(mocks.unobserveFeedCard).toHaveBeenCalledWith(root);
+  });
+
+  it('maps like state to LikeAction and forwards its activation to the parent contract', async () => {
+    const post = { ...basePost(), liked: true };
+    const wrapper = mountPostCard(post);
+    const likeAction = wrapper.findComponent(LikeAction);
+
+    expect(likeAction.props('liked')).toBe(true);
+    expect(likeAction.props('count')).toBe(12);
+    expect(likeAction.props('ariaPressed')).toBe(true);
+    expect(likeAction.props('loading')).toBe(false);
+    expect(likeAction.props('disabled')).toBe(false);
+    expect(likeAction.props('pending')).toBe(false);
+
+    await likeAction.trigger('click');
+
+    expect(wrapper.emitted('toggleLike')).toEqual([[42]]);
+  });
+
+  it('maps unknown and unavailable like status without changing parent mutation logic', async () => {
+    const wrapper = mountPostCard();
+    const likeAction = wrapper.findComponent(LikeAction);
+
+    await wrapper.setProps({ post: { ...basePost(), likeStatus: 'unknown' } });
+    expect(likeAction.props('loading')).toBe(true);
+    expect(likeAction.props('ariaPressed')).toBe(null);
+
+    await wrapper.setProps({ post: { ...basePost(), likeStatus: 'unavailable' } });
+    expect(likeAction.props('disabled')).toBe(true);
+    expect(likeAction.props('loading')).toBe(false);
+    expect(likeAction.props('ariaPressed')).toBe(null);
+  });
+
+  it('forwards likePending as pending while preserving the optimistic visual props', () => {
+    const wrapper = mount(PostCard, {
+      props: { post: { ...basePost(), liked: true }, likePending: true },
+      global: {
+        stubs: {
+          AuthorIdentity: { template: '<span class="author-identity" />' },
+          LikeAction: {
+            props: ['liked', 'count', 'disabled', 'loading', 'pending', 'ariaLabel', 'ariaPressed', 'variant'],
+            template: '<button class="stub-like-action" type="button">{{ count }}</button>',
+          },
+          AppIcon: {
+            props: ['name'],
+            template: '<span class="test-icon" :data-icon="name" />',
+          },
+          RouterLink: RouterLinkStub,
+        },
+      },
+    });
+    const likeAction = wrapper.findComponent(LikeAction);
+
+    expect(likeAction.props('pending')).toBe(true);
+    expect(likeAction.props('liked')).toBe(true);
   });
 });

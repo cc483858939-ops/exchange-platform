@@ -49,19 +49,17 @@
         </div>
 
         <div class="article-detail__engagement" aria-label="Article engagement">
-          <button
-            class="engagement-action"
-            :class="{ 'engagement-action--liked': liked }"
-            type="button"
-            :disabled="!authStore.isAuthenticated || likeStateLoading || likeSubmitting"
-            :aria-pressed="liked"
-            :aria-busy="likeStateLoading || likeSubmitting"
-            @click="toggleLike"
-          >
-            <AppIcon name="heart" :size="18" :filled="liked" />
-            <span>{{ likeCount }}</span>
-            <span class="sr-only">{{ liked ? 'Unlike' : 'Like' }}</span>
-          </button>
+          <LikeAction
+            :key="article.ID"
+            :liked="liked"
+            :count="likeCount"
+            :disabled="!authStore.isAuthenticated"
+            :loading="likeStateLoading"
+            :pending="likeSubmitting"
+            :ariaLabel="detailLikeLabel"
+            variant="detail"
+            @toggle="toggleLike"
+          />
 
           <span class="engagement-metric">
             <AppIcon name="reply" :size="18" />
@@ -144,6 +142,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
+import LikeAction from '../components/engagement/LikeAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import CommentComposer from '../components/comments/CommentComposer.vue';
 import CommentList from '../components/comments/CommentList.vue';
@@ -261,6 +260,13 @@ const articleViewTelemetry = getArticleViewTelemetry();
 
 const compactViewCount = computed(() => formatCompactEngagementCount(viewCount.value));
 const detailViewLabel = computed(() => formatAccessibleEngagementCount(viewCount.value, 'views'));
+const detailLikeLabel = computed(() => {
+  const count = String(likeCount.value)
+    + (likeCount.value === 1 ? ' like' : ' likes');
+  return liked.value
+    ? 'Unlike post, ' + count
+    : 'Like post, ' + count;
+});
 
 const canDeleteArticle = computed(() => Boolean(
   article.value
@@ -1033,7 +1039,6 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--color-border);
 }
 
-.engagement-action,
 .engagement-metric {
   display: inline-flex;
   align-items: center;
@@ -1043,26 +1048,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-.engagement-action {
-  border: 0;
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-2);
-  background: transparent;
-  cursor: pointer;
-}
-
-.engagement-action:hover:not(:disabled),
-.engagement-action--liked {
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
-  color: var(--color-accent);
-}
-
-.engagement-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.engagement-action .app-icon,
 .engagement-metric .app-icon {
   flex: 0 0 auto;
 }

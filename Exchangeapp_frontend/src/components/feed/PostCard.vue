@@ -112,35 +112,18 @@
         <AppIcon name="reply" :size="18" />
         <span>{{ post.commentCount }}</span>
       </RouterLink>
-      <button
-        class="post-card__metric post-card__like"
-        :class="{
-          'post-card__like--active': post.likeStatus === 'ready' && post.liked,
-          'post-card__like--animating-like': likeAnimation === 'like',
-          'post-card__like--animating-unlike': likeAnimation === 'unlike',
-        }"
-        type="button"
-        :disabled="likeDisabled"
-        :aria-pressed="post.likeStatus === 'ready' ? post.liked : undefined"
-        :aria-label="likeLabel"
-        @click.stop="handleLikeActivation"
-      >
-        <span class="post-card__like-icon" aria-hidden="true">
-          <AppIcon
-            name="heart"
-            :size="18"
-            :filled="post.likeStatus === 'ready' && post.liked"
-          />
-          <span class="post-card__like-burst" aria-hidden="true">
-            <span
-              v-for="particle in 6"
-              :key="particle"
-              class="post-card__like-particle"
-            ></span>
-          </span>
-        </span>
-        <span class="post-card__like-count">{{ post.likeCount }}</span>
-      </button>
+      <LikeAction
+        :key="post.id"
+        :liked="post.likeStatus === 'ready' ? post.liked : false"
+        :count="post.likeCount"
+        :disabled="likeUnavailable"
+        :loading="likeLoading"
+        :pending="likePending"
+        :ariaLabel="likeLabel"
+        :aria-pressed="post.likeStatus === 'ready' ? post.liked : null"
+        variant="compact"
+        @toggle="handleLikeActivation"
+      />
       <RouterLink
         class="post-card__metric post-card__views"
         :to="{
@@ -163,6 +146,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
+import LikeAction from '../engagement/LikeAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
 import { getArticleViewTelemetry } from '../../services/articleViewTelemetry';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../../utils/engagementCount';
@@ -200,37 +184,15 @@ const moreOpen = ref(false);
 type CopyState = 'idle' | 'success' | 'error';
 const copyState = ref<CopyState>('idle');
 let copyRequestVersion = 0;
-type LikeAnimation = 'like' | 'unlike' | null;
-const likeAnimation = ref<LikeAnimation>(null);
-let likeAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 
-const likeDisabled = computed(() =>
-  props.post.likeStatus !== 'ready' || props.likePending,
-);
-
-const clearLikeAnimationTimer = () => {
-  if (likeAnimationTimer !== null) {
-    clearTimeout(likeAnimationTimer);
-    likeAnimationTimer = null;
-  }
-};
-
-const startLikeAnimation = (animation: Exclude<LikeAnimation, null>) => {
-  clearLikeAnimationTimer();
-  likeAnimation.value = animation;
-  likeAnimationTimer = setTimeout(() => {
-    likeAnimation.value = null;
-    likeAnimationTimer = null;
-  }, animation === 'like' ? 320 : 200);
-};
+const likeLoading = computed(() => props.post.likeStatus === 'unknown');
+const likeUnavailable = computed(() => props.post.likeStatus === 'unavailable');
 
 const handleLikeActivation = () => {
-  if (likeDisabled.value) {
+  if (props.post.likeStatus !== 'ready' || props.likePending) {
     return;
   }
 
-  const wasLiked = props.post.liked;
-  startLikeAnimation(wasLiked ? 'unlike' : 'like');
   emit('toggleLike', props.post.id);
 };
 
@@ -438,8 +400,6 @@ watch(
     }
     observeCurrentPost();
     closeMore();
-    clearLikeAnimationTimer();
-    likeAnimation.value = null;
   },
 );
 
@@ -453,7 +413,6 @@ onBeforeUnmount(() => {
   if (postCardRef.value) {
     articleViewTelemetry.unobserveFeedCard(postCardRef.value);
   }
-  clearLikeAnimationTimer();
   closeMore();
 });
 </script>
@@ -462,7 +421,6 @@ onBeforeUnmount(() => {
 .post-card {
   --post-avatar-size: 40px;
   --post-column-gap: 12px;
-  --post-like-color: #f91880;
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -595,7 +553,6 @@ onBeforeUnmount(() => {
   gap: var(--space-1);
 }
 
-.post-card__like,
 .post-card__reply,
 .post-card__views {
   min-width: 40px;
@@ -603,15 +560,6 @@ onBeforeUnmount(() => {
   margin: -8px 0;
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-2);
-}
-
-.post-card__like {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
 }
 
 .post-card__reply,
@@ -708,12 +656,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.post-card__like:hover:not(:disabled),
-.post-card__like:focus-visible {
-  background: var(--color-surface-subtle);
-  color: var(--post-like-color);
-}
-
 .post-card__reply:hover,
 .post-card__reply:focus-visible,
 .post-card__views:hover,
@@ -724,30 +666,14 @@ onBeforeUnmount(() => {
   color: var(--color-accent);
 }
 
-.post-card__like:active:not(:disabled),
 .post-card__reply:active,
 .post-card__views:active,
 .post-card__more-button:active {
   transform: scale(0.97);
 }
 
-.post-card__like:disabled {
-  cursor: default;
-  opacity: 0.72;
-}
-
-.post-card__like--animating-like:disabled,
-.post-card__like--animating-unlike:disabled {
-  opacity: 1;
-}
-
-.post-card__like--active {
-  color: var(--post-like-color);
-}
-
 .post-card__reply .app-icon,
-.post-card__views .app-icon,
-.post-card__like-icon .app-icon {
+.post-card__views .app-icon {
   width: 18px;
   height: 18px;
 }
@@ -755,163 +681,6 @@ onBeforeUnmount(() => {
 .post-card__more-button .app-icon {
   width: 20px;
   height: 20px;
-}
-
-.post-card__like-icon {
-  position: relative;
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  align-items: center;
-  justify-content: center;
-  overflow: visible;
-}
-
-.post-card__like-burst {
-  position: absolute;
-  inset: 50% auto auto 50%;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-}
-
-.post-card__like-particle {
-  position: absolute;
-  top: -1.25px;
-  left: -1.25px;
-  width: 2.5px;
-  height: 2.5px;
-  border-radius: 50%;
-  background: var(--post-like-color);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.post-card__like-particle:nth-child(1) {
-  --particle-x: 0px;
-  --particle-y: -9px;
-}
-
-.post-card__like-particle:nth-child(2) {
-  --particle-x: 8px;
-  --particle-y: -5px;
-}
-
-.post-card__like-particle:nth-child(3) {
-  --particle-x: 8px;
-  --particle-y: 5px;
-}
-
-.post-card__like-particle:nth-child(4) {
-  --particle-x: 0px;
-  --particle-y: 9px;
-}
-
-.post-card__like-particle:nth-child(5) {
-  --particle-x: -8px;
-  --particle-y: 5px;
-}
-
-.post-card__like-particle:nth-child(6) {
-  --particle-x: -8px;
-  --particle-y: -5px;
-}
-
-@keyframes post-like-burst-pop {
-  0% {
-    transform: scale(1);
-  }
-
-  15% {
-    transform: scale(0.92);
-  }
-
-  48% {
-    transform: scale(1.4);
-  }
-
-  72% {
-    transform: scale(0.98);
-  }
-
-  100% {
-    transform: scale(1);
-  }
-}
-
-@keyframes post-unlike-release {
-  0% {
-    transform: scale(1);
-  }
-
-  42% {
-    transform: scale(0.88);
-  }
-
-  100% {
-    transform: scale(1);
-  }
-}
-
-@keyframes post-like-count-in {
-  0% {
-    transform: translateY(2px);
-    opacity: 0.7;
-  }
-
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes post-unlike-count-out {
-  0% {
-    transform: translateY(-1px);
-    opacity: 0.7;
-  }
-
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes post-like-particle-burst {
-  0% {
-    transform: translate(0, 0) scale(0.55);
-    opacity: 0;
-  }
-
-  18% {
-    opacity: 0.85;
-  }
-
-  100% {
-    transform: translate(var(--particle-x), var(--particle-y)) scale(0.7);
-    opacity: 0;
-  }
-}
-
-.post-card__like--animating-like .post-card__like-icon {
-  animation: post-like-burst-pop 280ms ease-out both;
-}
-
-.post-card__like--animating-unlike .post-card__like-icon {
-  animation: post-unlike-release 170ms ease-out both;
-}
-
-.post-card__like--animating-like .post-card__like-particle {
-  animation: post-like-particle-burst 220ms ease-out 60ms both;
-}
-
-.post-card__like--animating-like .post-card__like-count {
-  animation: post-like-count-in 160ms ease-out both;
-}
-
-.post-card__like--animating-unlike .post-card__like-count {
-  animation: post-unlike-count-out 130ms ease-out both;
 }
 
 @media (max-width: 420px) {
@@ -935,27 +704,10 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .post-card__like,
   .post-card__reply,
   .post-card__views,
   .post-card__more-button {
     transition: none;
-  }
-
-  .post-card__like--animating-like .post-card__like-icon,
-  .post-card__like--animating-unlike .post-card__like-icon,
-  .post-card__like--animating-like .post-card__like-count,
-  .post-card__like--animating-unlike .post-card__like-count {
-    animation: none;
-  }
-
-  .post-card__like--animating-like:disabled,
-  .post-card__like--animating-unlike:disabled {
-    opacity: 0.72;
-  }
-
-  .post-card__like-particle {
-    display: none;
   }
 }
 </style>
