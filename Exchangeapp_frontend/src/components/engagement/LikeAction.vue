@@ -246,9 +246,12 @@ onBeforeUnmount(() => {
   padding-inline: var(--space-2);
 }
 
-.like-action:hover:not(:disabled),
-.like-action:focus-visible,
 .like-action--liked {
+  color: var(--color-like);
+}
+
+.like-action:hover:not(:disabled),
+.like-action:focus-visible {
   background: color-mix(in srgb, var(--color-like) 9%, transparent);
   color: var(--color-like);
 }
