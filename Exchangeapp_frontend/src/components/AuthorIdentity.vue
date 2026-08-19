@@ -24,6 +24,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { PublicAuthor } from '../types/User';
+import { useNow } from '../composables/useNow';
 import { formatPostDate } from '../utils/time';
 
 const props = defineProps<{
@@ -36,7 +37,8 @@ const displayName = computed(() => props.author.display_name.trim() || username.
 const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperCase() || '?');
 const avatarURL = computed(() => props.author.avatar_url.trim());
 const avatarLoadFailed = ref(false);
-const postDate = computed(() => formatPostDate(props.createdAt));
+const now = useNow();
+const postDate = computed(() => formatPostDate(props.createdAt, now.value));
 
 watch(() => [props.author.id, props.author.avatar_url], () => {
   avatarLoadFailed.value = false;

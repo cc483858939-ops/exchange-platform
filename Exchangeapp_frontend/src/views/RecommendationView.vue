@@ -82,9 +82,6 @@
 
           <div class="card-content">
             <AuthorIdentity :author="article.author" :created-at="article.created_at" />
-            <div class="card-meta">
-              <span>{{ formatPostDate(article.created_at) }}</span>
-            </div>
             <h3>{{ article.title }}</h3>
             <p>{{ article.preview }}</p>
             <div class="card-footer">
@@ -111,7 +108,6 @@ import { savePendingRecommendationAttribution } from '../services/recommendation
 import { useAuthStore } from '../store/auth';
 import type { RecommendedArticle } from '../types/Recommendation';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
-import { formatPostDate } from '../utils/time';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -561,7 +557,6 @@ onBeforeUnmount(() => {
 }
 }
 
-.card-meta,
 .card-footer {
   display: flex;
   align-items: center;
