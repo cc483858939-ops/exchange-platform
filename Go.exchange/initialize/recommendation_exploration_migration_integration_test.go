@@ -1,6 +1,7 @@
 package initialize
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -8,9 +9,38 @@ import (
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func requirePostgresErrorCode(t *testing.T, caseName string, err error, wantCode string, wantConstraints ...string) *pgconn.PgError {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("case=%q expected PostgreSQL error code=%s, got nil", caseName, wantCode)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("case=%q expected PostgreSQL driver error code=%s, got %T: %v", caseName, wantCode, err, err)
+	}
+	if pgErr.Code != wantCode {
+		t.Fatalf("case=%q expected PostgreSQL code=%s, got code=%s constraint=%s: %v", caseName, wantCode, pgErr.Code, pgErr.ConstraintName, err)
+	}
+	if len(wantConstraints) > 0 {
+		for _, wantConstraint := range wantConstraints {
+			if pgErr.ConstraintName == wantConstraint {
+				return pgErr
+			}
+		}
+		t.Fatalf("case=%q expected constraint in %v, got code=%s constraint=%s", caseName, wantConstraints, pgErr.Code, pgErr.ConstraintName)
+	}
+	return pgErr
+}
+
+func requirePostgresCheckViolation(t *testing.T, caseName string, err error, wantConstraints ...string) *pgconn.PgError {
+	t.Helper()
+	return requirePostgresErrorCode(t, caseName, err, "23514", wantConstraints...)
+}
 
 func TestRecommendationExplorationSchemaMigrationIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
@@ -76,6 +106,8 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 		{AuthorID: user.ID, Title: "exploration migration one", Content: "body", Preview: "body", PublicationState: "published"},
 		{AuthorID: user.ID, Title: "exploration migration two", Content: "body", Preview: "body", PublicationState: "published"},
 		{AuthorID: user.ID, Title: "exploration migration three", Content: "body", Preview: "body", PublicationState: "published"},
+		{AuthorID: user.ID, Title: "exploration migration semantic zero", Content: "body", Preview: "body", PublicationState: "published"},
+		{AuthorID: user.ID, Title: "exploration migration semantic one", Content: "body", Preview: "body", PublicationState: "published"},
 	}
 	for index := range articles {
 		if err := db.Create(&articles[index]).Error; err != nil {
@@ -109,6 +141,8 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 		{1, articles[0].ID, false, "ranked", "", 0},
 		{2, articles[1].ID, true, "ranked", "", 0},
 		{3, articles[2].ID, true, "exploration", "recent", .5},
+		{4, articles[3].ID, true, "exploration", "recent", 0},
+		{5, articles[4].ID, true, "exploration", "recent", 1},
 	}
 	for _, state := range traceStates {
 		trace := models.RecommendationResultTrace{
@@ -127,48 +161,60 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 		mode        string
 		reason      string
 		semantic    float64
+		constraints []string
 	}{
-		{"false exploration reason", false, "exploration", "recent", 0},
-		{"ranked reason", true, "ranked", "recent", 0},
-		{"exploration empty reason", true, "exploration", "", .5},
-		{"unsupported reason", true, "exploration", "unsupported", .5},
-		{"ranked semantic", true, "ranked", "", .5},
-		{"negative semantic", true, "exploration", "recent", -.1},
-		{"over one semantic", true, "exploration", "recent", 1.1},
+		{"false exploration reason", false, "exploration", "recent", .5, []string{"chk_recommendation_result_trace_provenance"}},
+		{"ranked reason", true, "ranked", "recent", 0, []string{"chk_recommendation_result_trace_provenance"}},
+		{"exploration empty reason", true, "exploration", "", .5, []string{"chk_recommendation_result_trace_provenance"}},
+		{"unsupported reason", true, "exploration", "unsupported", .5, []string{
+			"chk_recommendation_result_trace_exploration_reason", "chk_recommendation_result_trace_provenance",
+		}},
+		{"ranked semantic", true, "ranked", "", .5, []string{"chk_recommendation_result_trace_provenance"}},
+		{"negative semantic", true, "exploration", "recent", -.1, []string{"chk_recommendation_result_trace_exploration_semantic"}},
+		{"over one semantic", true, "exploration", "recent", 1.1, []string{"chk_recommendation_result_trace_exploration_semantic"}},
 	}
+	invalidTraceArticles := make([]models.Article, len(invalidTraceStates))
+	for index := range invalidTraceArticles {
+		invalidTraceArticles[index] = models.Article{
+			AuthorID: user.ID, Title: "invalid exploration migration " + uuid.NewString(),
+			Content: "body", Preview: "body", PublicationState: "published",
+		}
+		if err := db.Create(&invalidTraceArticles[index]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Each invalid case gets its own persisted article so the expected failure
+	// can only come from a provenance CHECK, not the trace uniqueness constraint.
 	for index, state := range invalidTraceStates {
 		result := db.Exec(`
 INSERT INTO recommendation_result_traces (request_id, position, article_id, author_id, exploration_opportunity, selection_mode, exploration_reason, exploration_semantic, created_at, expires_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`, request.RequestID, 10+index, articles[0].ID, user.ID, state.opportunity, state.mode, state.reason, state.semantic, time.Now().UTC(), time.Now().UTC().Add(time.Hour))
-		if result.Error == nil {
-			t.Fatalf("invalid trace state %q was accepted", state.name)
-		}
+		`, request.RequestID, 10+index, invalidTraceArticles[index].ID, user.ID, state.opportunity, state.mode, state.reason, state.semantic, time.Now().UTC(), time.Now().UTC().Add(time.Hour))
+		requirePostgresCheckViolation(t, state.name, result.Error, state.constraints...)
 	}
 
 	invalidRequests := []struct {
-		name   string
-		mutate func(*models.RecommendationRequest)
+		name       string
+		constraint string
+		mutate     func(*models.RecommendationRequest)
 	}{
-		{"target negative", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = -1 }},
-		{"target exceeds limit", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = value.RequestedLimit + 1 }},
-		{"opportunity negative", func(value *models.RecommendationRequest) { value.ExplorationOpportunityCount = -1 }},
-		{"opportunity exceeds target", func(value *models.RecommendationRequest) {
+		{"target negative", "chk_recommendation_request_exploration_target", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = -1 }},
+		{"target exceeds limit", "chk_recommendation_request_exploration_target", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = value.RequestedLimit + 1 }},
+		{"opportunity negative", "chk_recommendation_request_exploration_opportunity", func(value *models.RecommendationRequest) { value.ExplorationOpportunityCount = -1 }},
+		{"opportunity exceeds target", "chk_recommendation_request_exploration_opportunity", func(value *models.RecommendationRequest) {
 			value.ExplorationOpportunityCount = value.ExplorationTargetCount + 1
 		}},
-		{"result negative", func(value *models.RecommendationRequest) { value.ExplorationResultCount = -1 }},
-		{"result exceeds opportunity", func(value *models.RecommendationRequest) {
+		{"result negative", "chk_recommendation_request_exploration_result", func(value *models.RecommendationRequest) { value.ExplorationResultCount = -1 }},
+		{"result exceeds opportunity", "chk_recommendation_request_exploration_result", func(value *models.RecommendationRequest) {
 			value.ExplorationResultCount = value.ExplorationOpportunityCount + 1
 		}},
-		{"result exceeds result count", func(value *models.RecommendationRequest) { value.ResultCount = 0 }},
+		{"result exceeds result count", "chk_recommendation_request_exploration_result", func(value *models.RecommendationRequest) { value.ResultCount = 0 }},
 	}
 	for _, invalid := range invalidRequests {
 		value := request
 		value.RequestID = uuid.NewString()
 		invalid.mutate(&value)
-		if err := db.Create(&value).Error; err == nil {
-			t.Fatalf("invalid request state %q was accepted", invalid.name)
-		}
+		requirePostgresCheckViolation(t, invalid.name, db.Create(&value).Error, invalid.constraint)
 	}
 
 	metricDate := time.Now().UTC()
@@ -204,19 +250,20 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		opportunity bool
 		mode        string
 		reason      string
+		constraints []string
 	}{
-		{"false exploration reason", false, "exploration", "recent"},
-		{"ranked reason", true, "ranked", "recent"},
-		{"exploration empty reason", true, "exploration", ""},
-		{"unsupported reason", true, "exploration", "unsupported"},
+		{"false exploration reason", false, "exploration", "recent", []string{"chk_recommendation_metric_provenance"}},
+		{"ranked reason", true, "ranked", "recent", []string{"chk_recommendation_metric_provenance"}},
+		{"exploration empty reason", true, "exploration", "", []string{"chk_recommendation_metric_provenance"}},
+		{"unsupported reason", true, "exploration", "unsupported", []string{
+			"chk_recommendation_metric_exploration_reason", "chk_recommendation_metric_provenance",
+		}},
 	}
 	for index, state := range invalidMetricStates {
 		result := db.Exec(`
 INSERT INTO recommendation_daily_metrics (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, article_id, updated_at)
 VALUES (CURRENT_DATE, ?, 'rules_v4', ?, ?, ?, ?, ?, ?, ?, ?)
 `, request.Scene, "hash-invalid-"+uuid.NewString(), strategyID, state.opportunity, state.mode, state.reason, 10+index, articles[0].ID, metricDate)
-		if result.Error == nil {
-			t.Fatalf("invalid metric state %q was accepted", state.name)
-		}
+		requirePostgresCheckViolation(t, state.name, result.Error, state.constraints...)
 	}
 }
