@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/eventing"
 	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
@@ -19,13 +20,13 @@ import (
 
 const (
 	recommendationScene                   = "recommendation_page"
-	recommendationRankerVersion           = "rules_v3"
-	recommendationPersonalizedStrategyID  = "for_you_materialized_profile_v4"
-	recommendationColdStartStrategyID     = "for_you_materialized_profile_v4"
-	recommendationTrackingTokenVersion    = "v2"
+	recommendationRankerVersion           = "rules_v4"
+	recommendationPersonalizedStrategyID  = "for_you_materialized_profile_v5"
+	recommendationColdStartStrategyID     = "for_you_materialized_profile_v5"
+	recommendationTrackingTokenVersion    = "v3"
 	recommendationCanonicalOutcomeVersion = recommendation.CanonicalOutcomeVersion
 	recommendationPassiveRecencyPolicy    = "read_end_recency_v2"
-	recommendationSelectionPolicyVersion  = "network_balance_diversity_v1"
+	recommendationSelectionPolicyVersion  = "network_balance_exploration_v2"
 	recommendationSigningKeyMinBytes      = 32
 )
 
@@ -53,11 +54,18 @@ type recommendationTrackingClaims struct {
 	ExpiresAtUnix       int64  `json:"exp"`
 	EstimatedReadTimeMS int64  `json:"estimated_read_time_ms"`
 	ReadPolicyVersion   string `json:"read_policy_version"`
+
+	ExplorationOpportunity bool   `json:"exploration_opportunity"`
+	SelectionMode          string `json:"selection_mode"`
+	ExplorationReason      string `json:"exploration_reason"`
 }
 
-func attachRecommendationTracking(userID uint, requestID string, profile userInterestProfile, recommendations []recommendedArticleResponse, now time.Time) (int, error) {
+func attachRecommendationTracking(userID uint, requestID string, profile userInterestProfile, selected []selectedRecommendation, recommendations []recommendedArticleResponse, now time.Time) (int, error) {
 	if len(recommendations) == 0 || !config.RecommendationTelemetryEnabled() {
 		return 0, nil
+	}
+	if len(selected) != len(recommendations) {
+		return 0, errors.New("recommendation tracking selection and response lengths differ")
 	}
 
 	if _, err := uuid.Parse(requestID); err != nil {
@@ -78,12 +86,20 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 	configHash := recommendationRankerConfigHash(normalizedRecommendationConfig())
 
 	for index := range recommendations {
+		if selected[index].Article.ID != recommendations[index].ID {
+			return 0, errors.New("recommendation tracking selection and response ids differ")
+		}
+		if err := eventing.ValidateRecommendationProvenance(selected[index].ExplorationOpportunity, string(selected[index].SelectionMode), selected[index].ExplorationReason); err != nil {
+			return 0, err
+		}
 		claims := recommendationTrackingClaims{
 			UserID: userID, RequestID: requestID, ArticleID: recommendations[index].ID,
 			Position: index + 1, Scene: recommendationScene,
 			RankerVersion: recommendationRankerVersion, RankerConfigHash: configHash,
 			StrategyID: strategyID, IssuedAtUnix: issuedAt.Unix(), ExpiresAtUnix: expiresAt.Unix(),
 			EstimatedReadTimeMS: estimateArticleReadTime(recommendations[index].Content).Milliseconds(), ReadPolicyVersion: recommendationReadPolicyVersion,
+			ExplorationOpportunity: selected[index].ExplorationOpportunity,
+			SelectionMode:          string(selected[index].SelectionMode), ExplorationReason: selected[index].ExplorationReason,
 		}
 		token, err := signRecommendationTrackingClaims(claims, key)
 		if err != nil {
@@ -127,19 +143,19 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 	p := cfg.Candidates.Personalized
 	c := cfg.Candidates.ColdStart
 	return fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|freshness=%g|freshness_half_life=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|novel_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|materialized_profile=%s|profile_config=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
+		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|exploration_ratio=%g|exploration_max_slots=%d|exploration_recent_window_days=%d|exploration_novel_article_max_age_days=%d|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|materialized_profile=%s|profile_config=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
 		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click,
 		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.Reply, cfg.BehaviorWeights.QuickBounce,
 		cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays,
 		cfg.PositiveSignalCoexistBonus, cfg.PositiveArticleWeightCap, cfg.SemanticWeight,
-		cfg.NegativeSemanticWeight, cfg.NegativeConfidenceSaturationScale, cfg.FreshnessWeight,
-		cfg.FreshnessHalfLifeDays, cfg.SemanticRecall.RecentWindowDays, cfg.SemanticRecall.RecentRatio,
+		cfg.NegativeSemanticWeight, cfg.NegativeConfidenceSaturationScale, cfg.SemanticRecall.RecentWindowDays, cfg.SemanticRecall.RecentRatio,
 		cfg.TrendingWeight, cfg.Trending.MaxAgeDays, cfg.Trending.HalfLifeHours, cfg.Trending.CommentFactor,
 		cfg.AuthorAffinityWeight, cfg.AuthorAffinitySaturationScale, cfg.FollowingBonus,
-		cfg.OutOfNetworkMinRatio, cfg.NovelAuthorMinRatio, cfg.ServedHardExclusionMinutes,
+		cfg.OutOfNetworkMinRatio, cfg.ServedHardExclusionMinutes,
 		cfg.ServedSoftLookbackDays, cfg.ServedHistoryLimit, cfg.Diversity.Enabled,
 		cfg.Diversity.AuthorWindowSize, cfg.Diversity.MaxSameAuthorInWindow,
 		cfg.Diversity.SemanticDuplicateThreshold, cfg.Diversity.SemanticDuplicatePenalty,
+		cfg.Exploration.Ratio, cfg.Exploration.MaxSlots, cfg.Exploration.RecentWindowDays, cfg.Exploration.NovelArticleMaxAgeDays,
 		p.Semantic, p.Following, p.Recent, p.Trending, p.Merged,
 		c.Following, c.Recent, c.Trending, c.Merged, recommendationCandidateRetrievalVersion,
 		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion()),
@@ -195,6 +211,9 @@ func verifyRecommendationTrackingToken(token string, key []byte) (recommendation
 	}
 	if _, err := uuid.Parse(claims.RequestID); err != nil {
 		return recommendationTrackingClaims{}, errors.New("invalid tracking request id")
+	}
+	if err := eventing.ValidateRecommendationProvenance(claims.ExplorationOpportunity, claims.SelectionMode, claims.ExplorationReason); err != nil {
+		return recommendationTrackingClaims{}, err
 	}
 	return claims, nil
 }

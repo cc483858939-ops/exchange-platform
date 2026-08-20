@@ -23,7 +23,7 @@ func TestAggregateRecommendationMetricsPreservesFullMetricDimensions(t *testing.
 		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(),
 		Scene: "recommendation_page", Position: 1,
 		RankerVersion: "embedding_v1", RankerConfigHash: "config-a",
-		StrategyID: "strategy-a", ReceivedAt: now,
+		StrategyID: "strategy-a", ReceivedAt: now, SelectionMode: eventing.RecommendationSelectionModeRanked,
 	}
 	records := make([]recommendationMetricEvent, 0, 4)
 	for _, variant := range []struct {
@@ -55,5 +55,30 @@ func TestAggregateRecommendationMetricsPreservesFullMetricDimensions(t *testing.
 	aggregates := aggregateRecommendationMetrics(records, firstDelivery)
 	if len(aggregates) != 4 {
 		t.Fatalf("aggregates=%#v want=4", aggregates)
+	}
+}
+
+func TestAggregateRecommendationMetricsSeparatesExplorationProvenanceDimensions(t *testing.T) {
+	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	base := eventing.RecommendationBehaviorPayload{
+		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
+		SelectionMode: eventing.RecommendationSelectionModeRanked,
+	}
+	variants := []eventing.RecommendationBehaviorPayload{base, {
+		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
+		ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: eventing.RecommendationExplorationReasonRecent,
+	}}
+	records := make([]recommendationMetricEvent, 0, len(variants))
+	firstDelivery := make(map[string]struct{}, len(variants))
+	for _, payload := range variants {
+		record := recommendationMetricEvent{Envelope: eventing.Envelope{ID: uuid.NewString(), Type: eventing.EventTypeRecommendationImpression, OccurredAt: now}, Payload: payload}
+		records = append(records, record)
+		firstDelivery[record.Envelope.ID] = struct{}{}
+	}
+	aggregates := aggregateRecommendationMetrics(records, firstDelivery)
+	if len(aggregates) != 2 || aggregates[0].Key.SelectionMode == aggregates[1].Key.SelectionMode {
+		t.Fatalf("aggregates=%#v, exploration provenance must be a metric dimension", aggregates)
 	}
 }

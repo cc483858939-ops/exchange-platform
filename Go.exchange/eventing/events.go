@@ -25,6 +25,13 @@ const (
 	EventTypeRecommendationReadEnd       = "recommendation.read_end"
 	EventTypeRecommendationFeedDwell     = "recommendation.feed_dwell"
 	EventTypeRecommendationNotInterested = "recommendation.not_interested"
+
+	RecommendationBehaviorSchemaVersion              = 2
+	RecommendationSelectionModeRanked                = "ranked"
+	RecommendationSelectionModeExploration           = "exploration"
+	RecommendationExplorationReasonRecent            = "recent"
+	RecommendationExplorationReasonNovelAuthor       = "novel_author"
+	RecommendationExplorationReasonRecentNovelAuthor = "recent_novel_author"
 )
 
 type Envelope struct {
@@ -61,6 +68,10 @@ type RecommendationBehaviorPayload struct {
 	RankerConfigHash string `json:"ranker_config_hash"`
 	StrategyID       string `json:"strategy_id"`
 
+	ExplorationOpportunity bool   `json:"exploration_opportunity"`
+	SelectionMode          string `json:"selection_mode"`
+	ExplorationReason      string `json:"exploration_reason"`
+
 	ReceivedAt time.Time `json:"received_at"`
 
 	ForegroundTimeMS      *int64  `json:"foreground_time_ms,omitempty"`
@@ -81,6 +92,20 @@ const (
 	RecommendationBehaviorActionReadNeutral     = "recommendation_read_neutral"
 	RecommendationBehaviorActionNotInterested   = "recommendation_not_interested"
 )
+
+func ValidateRecommendationProvenance(opportunity bool, selectionMode, explorationReason string) error {
+	switch {
+	case selectionMode == RecommendationSelectionModeRanked && explorationReason == "":
+		return nil
+	case opportunity && selectionMode == RecommendationSelectionModeExploration &&
+		(explorationReason == RecommendationExplorationReasonRecent ||
+			explorationReason == RecommendationExplorationReasonNovelAuthor ||
+			explorationReason == RecommendationExplorationReasonRecentNovelAuthor):
+		return nil
+	default:
+		return errors.New("invalid recommendation provenance")
+	}
+}
 
 func RecommendationEventTypeForAction(action string) (string, bool) {
 	switch strings.TrimSpace(action) {
@@ -130,6 +155,9 @@ func NewRecommendationBehaviorEnvelope(eventID, eventType string, occurredAt tim
 		strings.TrimSpace(payload.StrategyID) == "" || payload.ReceivedAt.IsZero() {
 		return Envelope{}, errors.New("recommendation payload is missing required fields")
 	}
+	if err := ValidateRecommendationProvenance(payload.ExplorationOpportunity, payload.SelectionMode, payload.ExplorationReason); err != nil {
+		return Envelope{}, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("marshal recommendation behavior payload: %w", err)
@@ -137,7 +165,7 @@ func NewRecommendationBehaviorEnvelope(eventID, eventType string, occurredAt tim
 	return Envelope{
 		ID:            eventID,
 		Type:          eventType,
-		SchemaVersion: 1,
+		SchemaVersion: RecommendationBehaviorSchemaVersion,
 		AggregateType: "user",
 		AggregateID:   strconv.FormatUint(uint64(payload.UserID), 10),
 		OccurredAt:    occurredAt.UTC(),

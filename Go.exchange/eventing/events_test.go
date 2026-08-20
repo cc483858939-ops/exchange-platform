@@ -15,6 +15,7 @@ func testRecommendationPayload() RecommendationBehaviorPayload {
 	return RecommendationBehaviorPayload{
 		UserID: 7, ArticleID: 11, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
 		RankerVersion: "embedding_v1", RankerConfigHash: "0123456789ab", StrategyID: "embedding_feed_v1", ReceivedAt: now,
+		SelectionMode: RecommendationSelectionModeRanked,
 	}
 }
 
@@ -29,10 +30,26 @@ func TestRecommendationBehaviorEnvelopeRoutesByUserAndPreservesClientID(t *testi
 		if event.ID != id || event.Type != eventType || KeyForEvent(event) != "7" {
 			t.Fatalf("event=%#v key=%q", event, KeyForEvent(event))
 		}
+		if event.SchemaVersion != RecommendationBehaviorSchemaVersion {
+			t.Fatalf("schema=%d want=%d", event.SchemaVersion, RecommendationBehaviorSchemaVersion)
+		}
 		topic, err := TopicForEvent(configValue, event.Type)
 		if err != nil || topic != "recommendation-events" {
 			t.Fatalf("type=%q topic=%q err=%v", eventType, topic, err)
 		}
+	}
+}
+
+func TestRecommendationBehaviorEnvelopeRejectsInvalidProvenance(t *testing.T) {
+	payload := testRecommendationPayload()
+	payload.SelectionMode = RecommendationSelectionModeExploration
+	payload.ExplorationReason = RecommendationExplorationReasonRecent
+	if _, err := NewRecommendationBehaviorEnvelope(uuid.NewString(), EventTypeRecommendationImpression, time.Now(), payload); err == nil {
+		t.Fatal("exploration without opportunity must be rejected")
+	}
+	payload.ExplorationOpportunity = true
+	if _, err := NewRecommendationBehaviorEnvelope(uuid.NewString(), EventTypeRecommendationImpression, time.Now(), payload); err != nil {
+		t.Fatal(err)
 	}
 }
 

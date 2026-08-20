@@ -38,6 +38,7 @@ func signTestRecommendationToken(t *testing.T, userID, articleID uint, now time.
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
 		EstimatedReadTimeMS: estimated, ReadPolicyVersion: policy,
+		SelectionMode: string(recommendationResultSelectionRanked),
 	}, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
@@ -169,6 +170,32 @@ func TestValidateRecommendationTelemetryEventRejectsUserMismatch(t *testing.T) {
 	}, now, key)
 	if reason != "user_mismatch" {
 		t.Fatalf("reason=%q", reason)
+	}
+}
+
+func TestValidateRecommendationTelemetryEventCopiesSignedExplorationProvenance(t *testing.T) {
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	key := []byte("0123456789abcdef0123456789abcdef")
+	claims := recommendationTrackingClaims{
+		UserID: 7, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
+		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
+		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
+		ExplorationOpportunity: true, SelectionMode: string(recommendationResultSelectionExploration), ExplorationReason: recommendationExplorationReasonRecent,
+	}
+	token, err := signRecommendationTrackingClaims(claims, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, reason := validateRecommendationTelemetryEvent(7, recommendationEventInput{
+		EventID: uuid.NewString(), EventType: "impression", TrackingToken: token, OccurredAt: now.Format(time.RFC3339Nano),
+	}, now, key)
+	if reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+	if !event.Payload.ExplorationOpportunity || event.Payload.SelectionMode != string(recommendationResultSelectionExploration) || event.Payload.ExplorationReason != recommendationExplorationReasonRecent {
+		t.Fatalf("payload provenance=%#v", event.Payload)
 	}
 }
 

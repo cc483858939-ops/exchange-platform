@@ -51,12 +51,15 @@ recommendation:
     max_age_days: 7
     half_life_hours: 24
     comment_factor: 0.5
+  exploration:
+    ratio: 0.10
+    max_slots: 3
+    recent_window_days: 7
+    novel_article_max_age_days: 30
   signal_half_life_days: 14
   feedback_lookback_days: 90
   semantic_weight: 4
-  freshness_weight: 2
   trending_weight: 0.5
-  freshness_half_life_days: 2
   positive_signal_coexist_bonus: 1
   positive_article_weight_cap: 7
   negative_semantic_weight: 1.5
@@ -65,7 +68,6 @@ recommendation:
   author_affinity_saturation_scale: 6
   following_bonus: 0.5
   out_of_network_min_ratio: 0.30
-  novel_author_min_ratio: 0.10
   served_hard_exclusion_minutes: 30
   served_soft_lookback_days: 7
   served_history_limit: 1000

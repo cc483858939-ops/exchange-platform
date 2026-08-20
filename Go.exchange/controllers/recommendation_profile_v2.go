@@ -18,12 +18,13 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 		},
 		SemanticRecall:     config.RecommendationSemanticRecallConfig{RecentWindowDays: 30, RecentRatio: 0.80},
 		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 7, HalfLifeHours: 24, CommentFactor: 0.5},
+		Exploration:        config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelArticleMaxAgeDays: 30},
 		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90,
 		PositiveSignalCoexistBonus: 1, PositiveArticleWeightCap: 7,
 		SemanticWeight: 4, NegativeSemanticWeight: 1.5, NegativeConfidenceSaturationScale: 12,
-		FreshnessWeight: 2, FreshnessHalfLifeDays: 2, TrendingWeight: 0.5,
+		TrendingWeight:       0.5,
 		AuthorAffinityWeight: 1, AuthorAffinitySaturationScale: 6, FollowingBonus: 0.5,
-		OutOfNetworkMinRatio: 0.30, NovelAuthorMinRatio: 0.10,
+		OutOfNetworkMinRatio:       0.30,
 		ServedHardExclusionMinutes: 30, ServedSoftLookbackDays: 7, ServedHistoryLimit: 1000,
 		Diversity: config.RecommendationDiversityConfig{
 			Enabled: true, AuthorWindowSize: 8, MaxSameAuthorInWindow: 2,
@@ -93,12 +94,6 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.NegativeConfidenceSaturationScale > 0 {
 		cfg.NegativeConfidenceSaturationScale = set.NegativeConfidenceSaturationScale
 	}
-	if set.FreshnessWeight >= 0 && recommendationSettingProvided("freshness_weight", set.FreshnessWeight != 0) {
-		cfg.FreshnessWeight = set.FreshnessWeight
-	}
-	if set.FreshnessHalfLifeDays > 0 {
-		cfg.FreshnessHalfLifeDays = set.FreshnessHalfLifeDays
-	}
 	if recommendationSettingProvided("trending_weight", set.TrendingWeight != 0) {
 		cfg.TrendingWeight = set.TrendingWeight
 	}
@@ -117,6 +112,18 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Trending.HalfLifeHours > 0 {
 		cfg.Trending.HalfLifeHours = set.Trending.HalfLifeHours
 	}
+	if recommendationSettingProvided("exploration.ratio", set.Exploration.Ratio != 0) {
+		cfg.Exploration.Ratio = set.Exploration.Ratio
+	}
+	if set.Exploration.MaxSlots > 0 {
+		cfg.Exploration.MaxSlots = set.Exploration.MaxSlots
+	}
+	if set.Exploration.RecentWindowDays > 0 {
+		cfg.Exploration.RecentWindowDays = set.Exploration.RecentWindowDays
+	}
+	if set.Exploration.NovelArticleMaxAgeDays > 0 {
+		cfg.Exploration.NovelArticleMaxAgeDays = set.Exploration.NovelArticleMaxAgeDays
+	}
 	if set.AuthorAffinityWeight >= 0 && recommendationSettingProvided("author_affinity_weight", set.AuthorAffinityWeight != 0) {
 		cfg.AuthorAffinityWeight = set.AuthorAffinityWeight
 	}
@@ -128,9 +135,6 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	}
 	if set.OutOfNetworkMinRatio >= 0 && set.OutOfNetworkMinRatio <= 1 && recommendationSettingProvided("out_of_network_min_ratio", set.OutOfNetworkMinRatio != 0) {
 		cfg.OutOfNetworkMinRatio = set.OutOfNetworkMinRatio
-	}
-	if set.NovelAuthorMinRatio >= 0 && set.NovelAuthorMinRatio <= 1 && recommendationSettingProvided("novel_author_min_ratio", set.NovelAuthorMinRatio != 0) {
-		cfg.NovelAuthorMinRatio = set.NovelAuthorMinRatio
 	}
 	if set.ServedHardExclusionMinutes > 0 {
 		cfg.ServedHardExclusionMinutes = set.ServedHardExclusionMinutes
@@ -199,11 +203,17 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if cfg.OutOfNetworkMinRatio < 0 || cfg.OutOfNetworkMinRatio > 1 {
 		cfg.OutOfNetworkMinRatio = 0.30
 	}
-	if cfg.NovelAuthorMinRatio < 0 || cfg.NovelAuthorMinRatio > 1 {
-		cfg.NovelAuthorMinRatio = 0.10
+	if cfg.Exploration.Ratio < 0 || cfg.Exploration.Ratio > 0.25 {
+		cfg.Exploration.Ratio = 0.10
 	}
-	if cfg.NovelAuthorMinRatio > cfg.OutOfNetworkMinRatio {
-		cfg.NovelAuthorMinRatio = math.Min(0.10, cfg.OutOfNetworkMinRatio)
+	if cfg.Exploration.MaxSlots <= 0 {
+		cfg.Exploration.MaxSlots = 3
+	}
+	if cfg.Exploration.RecentWindowDays <= 0 {
+		cfg.Exploration.RecentWindowDays = 7
+	}
+	if cfg.Exploration.NovelArticleMaxAgeDays <= 0 {
+		cfg.Exploration.NovelArticleMaxAgeDays = 30
 	}
 	if cfg.ServedHardExclusionMinutes <= 0 {
 		cfg.ServedHardExclusionMinutes = 30

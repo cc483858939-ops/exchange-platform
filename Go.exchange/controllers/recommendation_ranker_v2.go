@@ -16,7 +16,6 @@ type recommendationScoreBreakdown struct {
 	InteractionAffinity     float64
 	FollowingBonusApplied   float64
 	SemanticComponent       float64
-	FreshnessComponent      float64
 	TrendingComponent       float64
 	AuthorAffinityComponent float64
 	DiversityPenalty        float64
@@ -37,15 +36,6 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 		}
 		negativeConfidence := profile.NegativeConfidence
 		semanticRaw := positiveSemantic - cfg.NegativeSemanticWeight*negativeConfidence*negativeSemantic
-		articleTime := candidate.Article.CreatedAt
-		if candidate.Article.PublishedAt != nil && !candidate.Article.PublishedAt.IsZero() {
-			articleTime = candidate.Article.PublishedAt.UTC()
-		}
-		ageDays := now.Sub(articleTime).Hours() / 24
-		if ageDays < 0 {
-			ageDays = 0
-		}
-		freshness := math.Exp(-math.Ln2 * ageDays / cfg.FreshnessHalfLifeDays)
 		trendingRaw := recommendationTrendingRaw(candidate.Article, now, cfg)
 		interactionAffinity := clampUnit(profile.AuthorAffinity[candidate.Article.AuthorID])
 		followingBonus := 0.0
@@ -60,19 +50,37 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 			PositiveSemantic: positiveSemantic, NegativeSemantic: negativeSemantic, NegativeConfidence: negativeConfidence,
 			InteractionAffinity: interactionAffinity, FollowingBonusApplied: followingBonus,
 			SemanticComponent:       cfg.SemanticWeight * semanticRaw,
-			FreshnessComponent:      cfg.FreshnessWeight * freshness,
 			TrendingComponent:       cfg.TrendingWeight * trendingRaw,
 			AuthorAffinityComponent: cfg.AuthorAffinityWeight * authorScore,
 		}
 		candidate.Breakdown.BaseScore = candidate.Breakdown.SemanticComponent +
-			candidate.Breakdown.FreshnessComponent + candidate.Breakdown.TrendingComponent +
+			candidate.Breakdown.TrendingComponent +
 			candidate.Breakdown.AuthorAffinityComponent
 		candidate.Breakdown.FinalScore = candidate.Breakdown.BaseScore
+		candidate.ExplorationSemantic = recommendationExplorationSemantic(*candidate, profile, cfg)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return recommendationCandidateBaseBefore(candidates[i], candidates[j])
 	})
 	return candidates
+}
+
+func recommendationExplorationSemantic(candidate hydratedRecommendationCandidate, profile userInterestProfile, cfg config.RecommendationConfig) float64 {
+	positive := 0.0
+	if validComparableRecommendationEmbedding(candidate.Embedding, profile.PositiveVector) {
+		positive = clampUnit(cosineSimilarity(candidate.Embedding, profile.PositiveVector))
+	}
+	negative := 0.0
+	if validComparableRecommendationEmbedding(candidate.Embedding, profile.NegativeVector) {
+		negative = clampUnit(cosineSimilarity(candidate.Embedding, profile.NegativeVector))
+	}
+	confidence := clampUnit(profile.NegativeConfidence)
+	raw := positive - cfg.NegativeSemanticWeight*confidence*negative
+	return clampUnit(raw)
+}
+
+func validComparableRecommendationEmbedding(left, right []float32) bool {
+	return validEmbeddingVector(left) && validEmbeddingVector(right) && len(left) == len(right)
 }
 
 func recommendationTrendingRaw(article models.Article, now time.Time, cfg config.RecommendationConfig) float64 {

@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestRecommendationRankerUsesSemanticFreshnessAndTrendingBreakdown(t *testing.T) {
+func TestRecommendationRankerUsesSemanticAndTrendingBreakdown(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	cfg := defaultRecommendationConfig()
 	article := models.Article{
@@ -29,18 +29,40 @@ func TestRecommendationRankerUsesSemanticFreshnessAndTrendingBreakdown(t *testin
 		t.Fatalf("ranked=%#v", ranked)
 	}
 	got := ranked[0].Breakdown
-	wantFreshness := cfg.FreshnessWeight * 0.5
 	wantTrending := cfg.TrendingWeight * recommendationTrendingRaw(article, now, cfg)
 	if math.Abs(got.PositiveSemantic-.75) > 1e-9 ||
 		math.Abs(got.SemanticComponent-cfg.SemanticWeight*.75) > 1e-9 ||
-		math.Abs(got.FreshnessComponent-wantFreshness) > 1e-9 ||
 		math.Abs(got.TrendingComponent-wantTrending) > 1e-9 ||
 		got.AuthorAffinityComponent != 0 {
 		t.Fatalf("breakdown=%#v", got)
 	}
-	wantBase := got.SemanticComponent + got.FreshnessComponent + got.TrendingComponent
+	wantBase := got.SemanticComponent + got.TrendingComponent
 	if math.Abs(got.BaseScore-wantBase) > 1e-9 {
 		t.Fatalf("base score=%v want=%v", got.BaseScore, wantBase)
+	}
+}
+
+func TestRecommendationRankerPublicationAgeDoesNotChangeBaseScore(t *testing.T) {
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	ranked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{
+		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-time.Hour)}, AuthorID: 10}},
+		{Candidate: embeddingCandidate{ArticleID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 2, CreatedAt: now.Add(-365 * 24 * time.Hour)}, AuthorID: 11}},
+	}, now, cfg)
+	if len(ranked) != 2 || math.Abs(ranked[0].Breakdown.BaseScore-ranked[1].Breakdown.BaseScore) > 1e-9 {
+		t.Fatalf("ranked=%#v, publication age must not affect base score", ranked)
+	}
+}
+
+func TestRecommendationRankerOldRelevantArticleBeatsWeakNewArticle(t *testing.T) {
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	ranked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{
+		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: .9}, Article: models.Article{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-365 * 24 * time.Hour)}, AuthorID: 10}},
+		{Candidate: embeddingCandidate{ArticleID: 2, FromSemantic: true, PositiveSemanticSimilarity: .1}, Article: models.Article{Model: gorm.Model{ID: 2, CreatedAt: now.Add(-time.Hour)}, AuthorID: 11}},
+	}, now, cfg)
+	if len(ranked) != 2 || ranked[0].Article.ID != 1 {
+		t.Fatalf("ranked=%#v, old relevant article should beat weak new article", ranked)
 	}
 }
 

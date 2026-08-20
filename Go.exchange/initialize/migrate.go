@@ -75,6 +75,9 @@ func RunMigrations() error {
 		if err := applyRecommendationTraceConstraints(tx); err != nil {
 			return err
 		}
+		if err := applyRecommendationExplorationSchema(tx); err != nil {
+			return err
+		}
 		if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
 			return err
 		}
@@ -340,6 +343,75 @@ func applyRecommendationTraceConstraints(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply recommendation trace constraint: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyRecommendationExplorationSchema(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE recommendation_requests ADD COLUMN IF NOT EXISTS exploration_target_count INTEGER",
+		"ALTER TABLE recommendation_requests ADD COLUMN IF NOT EXISTS exploration_opportunity_count INTEGER",
+		"ALTER TABLE recommendation_requests ADD COLUMN IF NOT EXISTS exploration_result_count INTEGER",
+		"UPDATE recommendation_requests SET exploration_target_count = COALESCE(exploration_target_count, 0), exploration_opportunity_count = COALESCE(exploration_opportunity_count, 0), exploration_result_count = COALESCE(exploration_result_count, 0)",
+		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_target_count SET DEFAULT 0",
+		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_opportunity_count SET DEFAULT 0",
+		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_result_count SET DEFAULT 0",
+		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_target_count SET NOT NULL",
+		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_opportunity_count SET NOT NULL",
+		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_result_count SET NOT NULL",
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_exploration_target",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_exploration_target CHECK (exploration_target_count >= 0 AND exploration_target_count <= requested_limit)",
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_exploration_opportunity",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_exploration_opportunity CHECK (exploration_opportunity_count >= 0 AND exploration_opportunity_count <= exploration_target_count)",
+		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_exploration_result",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_exploration_result CHECK (exploration_result_count >= 0 AND exploration_result_count <= exploration_opportunity_count AND exploration_result_count <= result_count)",
+
+		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS exploration_opportunity BOOLEAN",
+		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS selection_mode VARCHAR(16)",
+		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS exploration_reason VARCHAR(32)",
+		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS exploration_semantic DOUBLE PRECISION",
+		"UPDATE recommendation_result_traces SET exploration_opportunity = COALESCE(exploration_opportunity, FALSE), selection_mode = COALESCE(NULLIF(selection_mode, ''), 'ranked'), exploration_reason = COALESCE(exploration_reason, ''), exploration_semantic = COALESCE(exploration_semantic, 0)",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_opportunity SET DEFAULT FALSE",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN selection_mode SET DEFAULT 'ranked'",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_reason SET DEFAULT ''",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_semantic SET DEFAULT 0",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_opportunity SET NOT NULL",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN selection_mode SET NOT NULL",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_reason SET NOT NULL",
+		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_semantic SET NOT NULL",
+		"ALTER TABLE recommendation_result_traces DROP COLUMN IF EXISTS freshness_component",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_selection_mode",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_selection_mode CHECK (selection_mode IN ('ranked', 'exploration'))",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_exploration_reason",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_exploration_reason CHECK (exploration_reason IN ('', 'recent', 'novel_author', 'recent_novel_author'))",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_exploration_semantic",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_exploration_semantic CHECK (exploration_semantic >= 0 AND exploration_semantic <= 1)",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_provenance",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_provenance CHECK ((selection_mode = 'ranked' AND exploration_reason = '' AND exploration_semantic = 0) OR (exploration_opportunity AND selection_mode = 'exploration' AND exploration_reason IN ('recent', 'novel_author', 'recent_novel_author')))",
+
+		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS exploration_opportunity BOOLEAN",
+		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS selection_mode VARCHAR(16)",
+		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS exploration_reason VARCHAR(32)",
+		"UPDATE recommendation_daily_metrics SET exploration_opportunity = COALESCE(exploration_opportunity, FALSE), selection_mode = COALESCE(NULLIF(selection_mode, ''), 'ranked'), exploration_reason = COALESCE(exploration_reason, '')",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_opportunity SET DEFAULT FALSE",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN selection_mode SET DEFAULT 'ranked'",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_reason SET DEFAULT ''",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_opportunity SET NOT NULL",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN selection_mode SET NOT NULL",
+		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_reason SET NOT NULL",
+		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_selection_mode",
+		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_selection_mode CHECK (selection_mode IN ('ranked', 'exploration'))",
+		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_exploration_reason",
+		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_exploration_reason CHECK (exploration_reason IN ('', 'recent', 'novel_author', 'recent_novel_author'))",
+		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_provenance",
+		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_provenance CHECK ((selection_mode = 'ranked' AND exploration_reason = '') OR (exploration_opportunity AND selection_mode = 'exploration' AND exploration_reason IN ('recent', 'novel_author', 'recent_novel_author')))",
+		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS recommendation_daily_metrics_pkey",
+		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT recommendation_daily_metrics_pkey PRIMARY KEY (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, article_id)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply recommendation exploration schema: %w", err)
 		}
 	}
 	return nil

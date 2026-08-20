@@ -95,7 +95,7 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		return
 	}
 	rankedFresh := rankRecommendationCandidates(profile, freshHydrated, now, cfg)
-	selected := selectRecommendationCandidates(rankedFresh, nil, limit, cfg, now, recommendationSelectionFresh)
+	selected := selectRecommendationCandidates(rankedFresh, nil, limit, cfg, now, recommendationSelectionFresh, requestID)
 
 	if len(selected) < limit {
 		softSet, softErr := loadRecommendationCandidateSet(userID, profile, served, now, cfg, true)
@@ -114,12 +114,12 @@ func GetArticleRecommendations(ctx *gin.Context) {
 			return
 		}
 		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg)
-		selected = selectRecommendationCandidates(rankedSoft, selected, limit, cfg, now, recommendationSelectionSoft)
+		selected = selectRecommendationCandidates(rankedSoft, selected, limit, cfg, now, recommendationSelectionSoft, requestID)
 		freshSet = mergeCandidateSets(freshSet, softSet, recommendationCandidateCaps(profile, cfg).Merged)
 	}
 
 	recommendations := selectedRecommendationResponses(selected)
-	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, recommendations, now)
+	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, selected, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
 	}
@@ -149,8 +149,13 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		RecentCandidateCount: freshSet.RecentCount, TrendingCandidateCount: freshSet.TrendingCount,
 		MergedCandidateCount: len(freshSet.Candidates), PositiveSignalCount: profile.PositiveSignalCount,
 		NegativeSignalCount: profile.NegativeSignalCount, InNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsInNetwork }),
-		OutOfNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return !item.IsInNetwork }),
-		NovelAuthorResultCount:  countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsNovelAuthor }),
+		OutOfNetworkResultCount:     countSelectedClass(selected, func(item selectedRecommendation) bool { return !item.IsInNetwork }),
+		NovelAuthorResultCount:      countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsNovelAuthor }),
+		ExplorationTargetCount:      recommendationExplorationTarget(limit, cfg),
+		ExplorationOpportunityCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.ExplorationOpportunity }),
+		ExplorationResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool {
+			return item.SelectionMode == recommendationResultSelectionExploration
+		}),
 		SoftServedFallbackCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.Candidate.WasSoftServed }),
 		PersonalizationMode:     recommendationPersonalizationMode(profile, freshSet.FollowingCount),
 		FallbackReason:          recommendationFallbackReason(profile.PositiveSignalCount, len(recommendations), limit),
@@ -214,6 +219,11 @@ func recordResultMetrics(selected []selectedRecommendation) {
 		}
 		if item.Candidate.WasSoftServed {
 			metrics.AddRecommendationResultsByClass("soft_served_fallback", 1)
+		}
+		if item.SelectionMode == recommendationResultSelectionExploration {
+			metrics.AddRecommendationResultsBySelection("exploration", item.ExplorationReason, 1)
+		} else {
+			metrics.AddRecommendationResultsBySelection("ranked", "none", 1)
 		}
 	}
 }

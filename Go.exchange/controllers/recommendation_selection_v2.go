@@ -1,8 +1,11 @@
 package controllers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"Go.exchange/config"
@@ -16,13 +19,27 @@ const (
 	recommendationSelectionSoft
 )
 
+type recommendationResultSelectionMode string
+
+const (
+	recommendationResultSelectionRanked              recommendationResultSelectionMode = "ranked"
+	recommendationResultSelectionExploration         recommendationResultSelectionMode = "exploration"
+	recommendationExplorationReasonRecent                                              = "recent"
+	recommendationExplorationReasonNovelAuthor                                         = "novel_author"
+	recommendationExplorationReasonRecentNovelAuthor                                   = "recent_novel_author"
+)
+
 type selectedRecommendation struct {
-	Candidate     embeddingCandidate
-	Article       models.Article
-	Embedding     []float32
-	Breakdown     recommendationScoreBreakdown
-	IsInNetwork   bool
-	IsNovelAuthor bool
+	Candidate              embeddingCandidate
+	Article                models.Article
+	Embedding              []float32
+	Breakdown              recommendationScoreBreakdown
+	IsInNetwork            bool
+	IsNovelAuthor          bool
+	ExplorationOpportunity bool
+	SelectionMode          recommendationResultSelectionMode
+	ExplorationReason      string
+	ExplorationSemantic    float64
 }
 
 func balancedPositions(limit, target int) []int {
@@ -70,9 +87,76 @@ func balancedPositions(limit, target int) []int {
 	return result
 }
 
-func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate, initial []selectedRecommendation, limit int, cfg config.RecommendationConfig, now time.Time, mode recommendationSelectionMode) []selectedRecommendation {
+func recommendationExplorationTarget(limit int, cfg config.RecommendationConfig) int {
+	if limit <= 0 || cfg.Exploration.Ratio <= 0 {
+		return 0
+	}
+	target := int(math.Round(float64(limit) * cfg.Exploration.Ratio))
+	if target > cfg.Exploration.MaxSlots {
+		target = cfg.Exploration.MaxSlots
+	}
+	if target > limit {
+		target = limit
+	}
+	if target < 0 {
+		return 0
+	}
+	return target
+}
+
+func explorationPositions(requestID string, limit, target int) []int {
+	if limit <= 0 || target <= 0 {
+		return nil
+	}
+	if target > limit {
+		target = limit
+	}
+	type scoredPosition struct {
+		position int
+		score    string
+	}
+	positions := make([]scoredPosition, 0, limit)
+	for position := 1; position <= limit; position++ {
+		if limit > 2 && (position == 1 || position == limit) {
+			continue
+		}
+		sum := sha256.Sum256([]byte(requestID + "|recommendation_exploration_positions_v1|" + strconv.Itoa(position)))
+		positions = append(positions, scoredPosition{position: position, score: hex.EncodeToString(sum[:])})
+	}
+	sort.Slice(positions, func(i, j int) bool {
+		if positions[i].score != positions[j].score {
+			return positions[i].score < positions[j].score
+		}
+		return positions[i].position < positions[j].position
+	})
+	if target > len(positions) {
+		remaining := make(map[int]struct{}, len(positions))
+		for _, item := range positions {
+			remaining[item.position] = struct{}{}
+		}
+		for position := 1; position <= limit && len(positions) < target; position++ {
+			if _, exists := remaining[position]; exists {
+				continue
+			}
+			positions = append(positions, scoredPosition{position: position})
+		}
+	}
+	positions = positions[:target]
+	result := make([]int, 0, len(positions))
+	for _, item := range positions {
+		result = append(result, item.position)
+	}
+	sort.Ints(result)
+	return result
+}
+
+func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate, initial []selectedRecommendation, limit int, cfg config.RecommendationConfig, now time.Time, mode recommendationSelectionMode, requestIDs ...string) []selectedRecommendation {
 	if limit <= 0 {
 		return nil
+	}
+	requestID := ""
+	if len(requestIDs) > 0 {
+		requestID = requestIDs[0]
 	}
 	result := append([]selectedRecommendation(nil), initial...)
 	selectedIDs := make(map[uint]struct{}, len(result))
@@ -83,9 +167,11 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 	for _, position := range balancedPositions(limit, int(math.Round(float64(limit)*cfg.OutOfNetworkMinRatio))) {
 		outPositions[position] = struct{}{}
 	}
-	novelPositions := make(map[int]struct{})
-	for _, position := range balancedPositions(limit, int(math.Round(float64(limit)*cfg.NovelAuthorMinRatio))) {
-		novelPositions[position] = struct{}{}
+	explorationPositionsByPage := make(map[int]struct{})
+	if mode == recommendationSelectionFresh {
+		for _, position := range explorationPositions(requestID, limit, recommendationExplorationTarget(limit, cfg)) {
+			explorationPositionsByPage[position] = struct{}{}
+		}
 	}
 
 	for len(result) < limit {
@@ -104,36 +190,30 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 			}
 			return true
 		}
-		preferNovel := func(item hydratedRecommendationCandidate) bool {
-			if _, ok := novelPositions[position]; ok {
-				return item.IsNovelAuthor
+		_, normal, normalOK := chooseNormalRecommendationCandidate(candidates, result, available, outPositions, position, cfg, mode)
+		chosen := normal
+		ok := normalOK
+		selectionOpportunity := false
+		selectionMode := recommendationResultSelectionRanked
+		selectionReason := ""
+		selectionSemantic := 0.0
+		opportunity := mode == recommendationSelectionFresh
+		if opportunity {
+			_, opportunityPosition := explorationPositionsByPage[position]
+			opportunity = opportunityPosition
+		}
+		if opportunity {
+			_, strict, strictOK := chooseStrictExplorationCandidate(candidates, result, available, outPositions, position, cfg, now)
+			if strictOK && (!normalOK || strict.Article.ID != normal.Article.ID) {
+				chosen = strict
+				ok = true
+				selectionOpportunity = true
+				selectionMode = recommendationResultSelectionExploration
+				selectionReason = recommendationExplorationReason(strict, now, cfg)
+				selectionSemantic = clampUnit(strict.ExplorationSemantic)
+			} else if normalOK {
+				selectionOpportunity = true
 			}
-			if _, ok := outPositions[position]; ok {
-				return !item.IsInNetwork
-			}
-			return true
-		}
-		secondary := func(item hydratedRecommendationCandidate) bool {
-			if _, ok := novelPositions[position]; ok {
-				return !item.IsInNetwork
-			}
-			return true
-		}
-		_, chosen, ok := chooseRecommendationCandidate(candidates, result, available, preferNovel, cfg, mode, true)
-		if !ok {
-			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, secondary, cfg, mode, true)
-		}
-		if !ok {
-			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, mode, true)
-		}
-		if !ok {
-			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, preferNovel, cfg, mode, false)
-		}
-		if !ok {
-			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, secondary, cfg, mode, false)
-		}
-		if !ok {
-			_, chosen, ok = chooseRecommendationCandidate(candidates, result, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, mode, false)
 		}
 		if !ok {
 			break
@@ -143,9 +223,67 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 		result = append(result, selectedRecommendation{
 			Candidate: chosen.Candidate, Article: chosen.Article, Embedding: chosen.Embedding,
 			Breakdown: chosen.Breakdown, IsInNetwork: chosen.IsInNetwork, IsNovelAuthor: chosen.IsNovelAuthor,
+			ExplorationOpportunity: selectionOpportunity, SelectionMode: selectionMode,
+			ExplorationReason: selectionReason, ExplorationSemantic: selectionSemantic,
 		})
 	}
 	return result
+}
+
+func chooseNormalRecommendationCandidate(candidates []hydratedRecommendationCandidate, selected []selectedRecommendation, available func(hydratedRecommendationCandidate) bool, outPositions map[int]struct{}, position int, cfg config.RecommendationConfig, mode recommendationSelectionMode) (int, hydratedRecommendationCandidate, bool) {
+	preferOutOfNetwork := func(item hydratedRecommendationCandidate) bool {
+		if _, ok := outPositions[position]; ok {
+			return !item.IsInNetwork
+		}
+		return true
+	}
+	_, chosen, ok := chooseRecommendationCandidate(candidates, selected, available, preferOutOfNetwork, cfg, mode, true)
+	if ok {
+		return 0, chosen, true
+	}
+	_, chosen, ok = chooseRecommendationCandidate(candidates, selected, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, mode, true)
+	if ok {
+		return 0, chosen, true
+	}
+	_, chosen, ok = chooseRecommendationCandidate(candidates, selected, available, preferOutOfNetwork, cfg, mode, false)
+	if ok {
+		return 0, chosen, true
+	}
+	_, chosen, ok = chooseRecommendationCandidate(candidates, selected, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, mode, false)
+	return 0, chosen, ok
+}
+
+func chooseStrictExplorationCandidate(candidates []hydratedRecommendationCandidate, selected []selectedRecommendation, available func(hydratedRecommendationCandidate) bool, outPositions map[int]struct{}, position int, cfg config.RecommendationConfig, now time.Time) (int, hydratedRecommendationCandidate, bool) {
+	preferOutOfNetwork := func(item hydratedRecommendationCandidate) bool {
+		if _, ok := outPositions[position]; ok {
+			return !item.IsInNetwork
+		}
+		return true
+	}
+	if _, chosen, ok := chooseStrictExplorationCandidateFrom(candidates, selected, available, preferOutOfNetwork, cfg, now); ok {
+		return 0, chosen, true
+	}
+	return chooseStrictExplorationCandidateFrom(candidates, selected, available, func(hydratedRecommendationCandidate) bool { return true }, cfg, now)
+}
+
+func chooseStrictExplorationCandidateFrom(candidates []hydratedRecommendationCandidate, selected []selectedRecommendation, available func(hydratedRecommendationCandidate) bool, preferred func(hydratedRecommendationCandidate) bool, cfg config.RecommendationConfig, now time.Time) (int, hydratedRecommendationCandidate, bool) {
+	bestIndex := -1
+	var best hydratedRecommendationCandidate
+	found := false
+	for index, candidate := range candidates {
+		if !available(candidate) || !preferred(candidate) || recommendationExplorationReason(candidate, now, cfg) == "" {
+			continue
+		}
+		if recommendationIsSemanticDuplicate(candidate, selected, cfg) || !recommendationAuthorWindowAllows(candidate, selected, cfg) {
+			continue
+		}
+		evaluated := candidate
+		evaluated.Breakdown.DiversityPenalty = recommendationDiversityPenalty(evaluated, selected, cfg)
+		if !found || recommendationStrictExplorationBefore(evaluated, best, now, cfg) {
+			found, bestIndex, best = true, index, evaluated
+		}
+	}
+	return bestIndex, best, found
 }
 
 func chooseRecommendationCandidate(candidates []hydratedRecommendationCandidate, selected []selectedRecommendation, available func(hydratedRecommendationCandidate) bool, preferred func(hydratedRecommendationCandidate) bool, cfg config.RecommendationConfig, mode recommendationSelectionMode, enforceAuthorWindow bool) (int, hydratedRecommendationCandidate, bool) {
@@ -189,20 +327,84 @@ func recommendationAuthorWindowAllows(candidate hydratedRecommendationCandidate,
 }
 
 func recommendationDiversityPenalty(candidate hydratedRecommendationCandidate, selected []selectedRecommendation, cfg config.RecommendationConfig) float64 {
-	if !cfg.Diversity.Enabled || !validEmbeddingVector(candidate.Embedding) || len(selected) == 0 {
-		return 0
-	}
-	maxSimilarity := -1.0
-	for _, item := range selected {
-		if !validEmbeddingVector(item.Embedding) || len(item.Embedding) != len(candidate.Embedding) {
-			continue
-		}
-		maxSimilarity = math.Max(maxSimilarity, cosineSimilarity(candidate.Embedding, item.Embedding))
-	}
-	if maxSimilarity >= cfg.Diversity.SemanticDuplicateThreshold {
+	if recommendationIsSemanticDuplicate(candidate, selected, cfg) {
 		return cfg.Diversity.SemanticDuplicatePenalty
 	}
 	return 0
+}
+
+func recommendationIsSemanticDuplicate(candidate hydratedRecommendationCandidate, selected []selectedRecommendation, cfg config.RecommendationConfig) bool {
+	if !cfg.Diversity.Enabled || cfg.Diversity.SemanticDuplicateThreshold < -1 || cfg.Diversity.SemanticDuplicateThreshold > 1 || !validEmbeddingVector(candidate.Embedding) || len(selected) == 0 {
+		return false
+	}
+	maxSimilarity := -1.0
+	comparable := false
+	for _, item := range selected {
+		if !validComparableRecommendationEmbedding(item.Embedding, candidate.Embedding) {
+			continue
+		}
+		comparable = true
+		maxSimilarity = math.Max(maxSimilarity, cosineSimilarity(candidate.Embedding, item.Embedding))
+	}
+	return comparable && maxSimilarity >= cfg.Diversity.SemanticDuplicateThreshold
+}
+
+func recommendationArticleAgeDays(article models.Article, now time.Time) float64 {
+	ageDays := now.Sub(recommendationArticleTime(article)).Hours() / 24
+	if ageDays < 0 {
+		return 0
+	}
+	return ageDays
+}
+
+func recommendationExplorationReason(candidate hydratedRecommendationCandidate, now time.Time, cfg config.RecommendationConfig) string {
+	recent := candidate.Candidate.FromRecent && recommendationArticleAgeDays(candidate.Article, now) <= float64(cfg.Exploration.RecentWindowDays)
+	novel := candidate.IsNovelAuthor && recommendationArticleAgeDays(candidate.Article, now) <= float64(cfg.Exploration.NovelArticleMaxAgeDays)
+	if recent && novel {
+		return recommendationExplorationReasonRecentNovelAuthor
+	}
+	if novel {
+		return recommendationExplorationReasonNovelAuthor
+	}
+	if recent {
+		return recommendationExplorationReasonRecent
+	}
+	return ""
+}
+
+func recommendationExplorationReasonPriority(reason string) int {
+	switch reason {
+	case recommendationExplorationReasonRecentNovelAuthor:
+		return 3
+	case recommendationExplorationReasonNovelAuthor:
+		return 2
+	case recommendationExplorationReasonRecent:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func recommendationStrictExplorationBefore(left, right hydratedRecommendationCandidate, now time.Time, cfg config.RecommendationConfig) bool {
+	if left.ExplorationSemantic != right.ExplorationSemantic {
+		return left.ExplorationSemantic > right.ExplorationSemantic
+	}
+	leftReason := recommendationExplorationReasonPriority(recommendationExplorationReason(left, now, cfg))
+	rightReason := recommendationExplorationReasonPriority(recommendationExplorationReason(right, now, cfg))
+	if leftReason != rightReason {
+		return leftReason > rightReason
+	}
+	leftScore := left.Breakdown.BaseScore - left.Breakdown.DiversityPenalty
+	rightScore := right.Breakdown.BaseScore - right.Breakdown.DiversityPenalty
+	if leftScore != rightScore {
+		return leftScore > rightScore
+	}
+	leftTime := recommendationArticleTime(left.Article)
+	rightTime := recommendationArticleTime(right.Article)
+	if !leftTime.Equal(rightTime) {
+		return leftTime.After(rightTime)
+	}
+	return left.Article.ID > right.Article.ID
 }
 
 func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, mode recommendationSelectionMode) bool {

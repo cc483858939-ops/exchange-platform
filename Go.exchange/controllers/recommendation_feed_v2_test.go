@@ -126,7 +126,6 @@ func TestRecommendationSelectionUsesFreshThenSoftWithoutDuplicate(t *testing.T) 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	cfg := normalizedRecommendationConfig()
 	cfg.OutOfNetworkMinRatio = 0
-	cfg.NovelAuthorMinRatio = 0
 	cfg.Diversity.Enabled = false
 	fresh := []hydratedRecommendationCandidate{{
 		Candidate: embeddingCandidate{ArticleID: 1, FromRecent: true},

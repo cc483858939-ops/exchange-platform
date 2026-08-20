@@ -33,6 +33,7 @@ var (
 	recommendationRecallCandidates               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_recall_candidates_total", Help: "Distinct recommendation candidates by source."}, []string{"source"})
 	recommendationResultsBySource                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_source_total", Help: "Returned recommendation results by source."}, []string{"source"})
 	recommendationResultsByClass                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_class_total", Help: "Returned recommendation results by class."}, []string{"class"})
+	recommendationResultsBySelection             = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_selection_total", Help: "Returned recommendation results by selection mode and exploration reason."}, []string{"mode", "reason"})
 	recommendationServedHistoryFailures          = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_served_history_load_failures_total", Help: "Recommendation served-history load failures."})
 	recommendationTracePersistFailures           = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_persist_failures_total", Help: "Recommendation serving trace persistence failures."})
 	recommendationTraceCleanupFailures           = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_failures_total", Help: "Recommendation serving trace cleanup failures."})
@@ -50,7 +51,7 @@ func init() {
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
-		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
+		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
 	)
 	for _, result := range []string{"generated", "up_to_date", "article_missing", "article_unavailable", "invalid_event", "provider_non_retryable"} {
@@ -147,6 +148,11 @@ func AddRecommendationResultsBySource(source string, count int) {
 func AddRecommendationResultsByClass(class string, count int) {
 	if count > 0 {
 		recommendationResultsByClass.WithLabelValues(class).Add(float64(count))
+	}
+}
+func AddRecommendationResultsBySelection(mode, reason string, count int) {
+	if count > 0 {
+		recommendationResultsBySelection.WithLabelValues(mode, reason).Add(float64(count))
 	}
 }
 func RecordRecommendationServedHistoryLoadFailure() { recommendationServedHistoryFailures.Inc() }

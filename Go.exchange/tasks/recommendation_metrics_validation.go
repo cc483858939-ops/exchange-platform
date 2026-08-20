@@ -7,6 +7,9 @@ import (
 )
 
 func validRecommendationMetricsPayload(eventType string, payload eventing.RecommendationBehaviorPayload) bool {
+	if eventing.ValidateRecommendationProvenance(payload.ExplorationOpportunity, payload.SelectionMode, payload.ExplorationReason) != nil {
+		return false
+	}
 	switch eventType {
 	case eventing.EventTypeRecommendationImpression, eventing.EventTypeRecommendationClick, eventing.EventTypeRecommendationNotInterested:
 		return payload.ForegroundTimeMS == nil &&

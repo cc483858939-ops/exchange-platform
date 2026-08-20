@@ -22,12 +22,15 @@ type RecommendationResultTrace struct {
 	InteractionAffinity     float64   `json:"interaction_affinity" gorm:"not null;default:0"`
 	FollowingBonusApplied   float64   `json:"following_bonus_applied" gorm:"not null;default:0"`
 	SemanticComponent       float64   `json:"semantic_component" gorm:"not null;default:0"`
-	FreshnessComponent      float64   `json:"freshness_component" gorm:"not null;default:0"`
 	TrendingComponent       float64   `json:"trending_component" gorm:"not null;default:0"`
 	AuthorAffinityComponent float64   `json:"author_affinity_component" gorm:"not null;default:0"`
 	DiversityPenalty        float64   `json:"diversity_penalty" gorm:"not null;default:0"`
 	BaseScore               float64   `json:"base_score" gorm:"not null;default:0"`
 	FinalScore              float64   `json:"final_score" gorm:"not null;default:0"`
+	ExplorationOpportunity  bool      `json:"exploration_opportunity" gorm:"not null;default:false"`
+	SelectionMode           string    `json:"selection_mode" gorm:"size:16;not null;default:'ranked'"`
+	ExplorationReason       string    `json:"exploration_reason" gorm:"size:32;not null;default:''"`
+	ExplorationSemantic     float64   `json:"exploration_semantic" gorm:"not null;default:0"`
 	CreatedAt               time.Time `json:"created_at" gorm:"not null;index:idx_recommendation_result_trace_created"`
 	ExpiresAt               time.Time `json:"expires_at" gorm:"not null;index:idx_recommendation_result_trace_expires"`
 }

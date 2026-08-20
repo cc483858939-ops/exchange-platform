@@ -16,7 +16,6 @@ func TestRecommendationSelectionUsesStrictFallbackBeforeAuthorRelaxation(t *test
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
 	cfg.OutOfNetworkMinRatio = 0.5
-	cfg.NovelAuthorMinRatio = 0.5
 	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}, Embedding: []float32{0, 1}}}
 	candidates := []hydratedRecommendationCandidate{
 		{Candidate: embeddingCandidate{ArticleID: 1}, Article: models.Article{Model: gorm.Model{ID: 1}, AuthorID: 10}, Embedding: []float32{1, 0}, Breakdown: recommendationScoreBreakdown{BaseScore: 100}, IsNovelAuthor: true},
@@ -35,7 +34,6 @@ func TestRecommendationSelectionUsesStrictOutOfNetworkFallbackBeforeAuthorRelaxa
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
 	cfg.OutOfNetworkMinRatio = 0.5
-	cfg.NovelAuthorMinRatio = 0.5
 	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}}}
 	candidates := []hydratedRecommendationCandidate{
 		{Candidate: embeddingCandidate{ArticleID: 1}, Article: models.Article{Model: gorm.Model{ID: 1}, AuthorID: 10}, Breakdown: recommendationScoreBreakdown{BaseScore: 100}, IsNovelAuthor: true},
@@ -55,7 +53,6 @@ func TestRecommendationSelectionRelaxesAuthorAfterStrictPoolsExhausted(t *testin
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
 	cfg.OutOfNetworkMinRatio = 0.5
-	cfg.NovelAuthorMinRatio = 0.5
 	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}, Embedding: []float32{1, 0}}}
 	candidates := []hydratedRecommendationCandidate{{
 		Candidate:     embeddingCandidate{ArticleID: 1},

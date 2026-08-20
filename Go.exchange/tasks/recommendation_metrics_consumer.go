@@ -38,13 +38,16 @@ type recommendationMetricEvent struct {
 }
 
 type recommendationMetricKey struct {
-	MetricDate       time.Time
-	Scene            string
-	RankerVersion    string
-	RankerConfigHash string
-	StrategyID       string
-	Position         int
-	ArticleID        uint
+	MetricDate             time.Time
+	Scene                  string
+	RankerVersion          string
+	RankerConfigHash       string
+	StrategyID             string
+	ExplorationOpportunity bool
+	SelectionMode          string
+	ExplorationReason      string
+	Position               int
+	ArticleID              uint
 }
 
 type recommendationMetricDelta struct {
@@ -174,7 +177,7 @@ func decodeRecommendationMetricEvent(raw []byte) (recommendationMetricEvent, err
 	if _, err := uuid.Parse(event.ID); err != nil {
 		return recommendationMetricEvent{}, fmt.Errorf("%w: event id must be UUID", errInvalidRecommendationMetricsEvent)
 	}
-	if event.SchemaVersion != 1 {
+	if event.SchemaVersion != eventing.RecommendationBehaviorSchemaVersion {
 		return recommendationMetricEvent{}, fmt.Errorf("%w: unsupported schema version %d", errInvalidRecommendationMetricsEvent, event.SchemaVersion)
 	}
 	if !eventing.IsRecommendationEventType(event.Type) {
@@ -273,7 +276,9 @@ func aggregateRecommendationMetrics(records []recommendationMetricEvent, firstDe
 			MetricDate: time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC),
 			Scene:      record.Payload.Scene, RankerVersion: record.Payload.RankerVersion,
 			RankerConfigHash: record.Payload.RankerConfigHash, StrategyID: record.Payload.StrategyID,
-			Position: record.Payload.Position, ArticleID: record.Payload.ArticleID,
+			ExplorationOpportunity: record.Payload.ExplorationOpportunity, SelectionMode: record.Payload.SelectionMode,
+			ExplorationReason: record.Payload.ExplorationReason,
+			Position:          record.Payload.Position, ArticleID: record.Payload.ArticleID,
 		}
 		delta := metricDeltaFor(record.Envelope.Type, record.Payload)
 		current := byKey[key]
@@ -307,6 +312,15 @@ func aggregateRecommendationMetrics(records []recommendationMetricEvent, firstDe
 		}
 		if left.StrategyID != right.StrategyID {
 			return left.StrategyID < right.StrategyID
+		}
+		if left.ExplorationOpportunity != right.ExplorationOpportunity {
+			return !left.ExplorationOpportunity
+		}
+		if left.SelectionMode != right.SelectionMode {
+			return left.SelectionMode < right.SelectionMode
+		}
+		if left.ExplorationReason != right.ExplorationReason {
+			return left.ExplorationReason < right.ExplorationReason
 		}
 		if left.Position != right.Position {
 			return left.Position < right.Position
@@ -455,7 +469,9 @@ func bulkUpsertRecommendationDailyMetrics(tx *gorm.DB, aggregates []recommendati
 		metricsRows = append(metricsRows, models.RecommendationDailyMetric{
 			MetricDate: aggregate.Key.MetricDate, Scene: aggregate.Key.Scene,
 			RankerVersion: aggregate.Key.RankerVersion, RankerConfigHash: aggregate.Key.RankerConfigHash,
-			StrategyID: aggregate.Key.StrategyID, Position: aggregate.Key.Position, ArticleID: aggregate.Key.ArticleID,
+			StrategyID: aggregate.Key.StrategyID, ExplorationOpportunity: aggregate.Key.ExplorationOpportunity,
+			SelectionMode: aggregate.Key.SelectionMode, ExplorationReason: aggregate.Key.ExplorationReason,
+			Position: aggregate.Key.Position, ArticleID: aggregate.Key.ArticleID,
 			ImpressionCount: aggregate.Delta.ImpressionCount, ClickCount: aggregate.Delta.ClickCount,
 			QualifiedReadCount: aggregate.Delta.QualifiedReadCount, QuickBounceCount: aggregate.Delta.QuickBounceCount,
 			NotInterestedCount: aggregate.Delta.NotInterestedCount, FeedDwellCount: aggregate.Delta.FeedDwellCount,
@@ -466,7 +482,8 @@ func bulkUpsertRecommendationDailyMetrics(tx *gorm.DB, aggregates []recommendati
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "metric_date"}, {Name: "scene"}, {Name: "ranker_version"},
-			{Name: "ranker_config_hash"}, {Name: "strategy_id"}, {Name: "position"}, {Name: "article_id"},
+			{Name: "ranker_config_hash"}, {Name: "strategy_id"}, {Name: "exploration_opportunity"},
+			{Name: "selection_mode"}, {Name: "exploration_reason"}, {Name: "position"}, {Name: "article_id"},
 		},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"impression_count":     gorm.Expr("recommendation_daily_metrics.impression_count + EXCLUDED.impression_count"),

@@ -30,12 +30,13 @@ type recommendationCandidateSet struct {
 }
 
 type hydratedRecommendationCandidate struct {
-	Candidate     embeddingCandidate
-	Article       models.Article
-	Embedding     []float32
-	Breakdown     recommendationScoreBreakdown
-	IsInNetwork   bool
-	IsNovelAuthor bool
+	Candidate           embeddingCandidate
+	Article             models.Article
+	Embedding           []float32
+	Breakdown           recommendationScoreBreakdown
+	ExplorationSemantic float64
+	IsInNetwork         bool
+	IsNovelAuthor       bool
 }
 
 func loadRecommendationServedHistory(userID uint, now time.Time, cfg config.RecommendationConfig) (map[uint]servedArticle, error) {

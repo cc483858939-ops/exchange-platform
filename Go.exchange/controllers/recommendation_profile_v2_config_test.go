@@ -13,7 +13,8 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 
 	cfg := normalizedRecommendationConfig()
 	if cfg.BehaviorWeights.Reply != 5 || cfg.FollowingBonus != 0.5 ||
-		cfg.OutOfNetworkMinRatio != 0.30 || cfg.NovelAuthorMinRatio != 0.10 ||
+		cfg.OutOfNetworkMinRatio != 0.30 || cfg.Exploration.Ratio != 0.10 || cfg.Exploration.MaxSlots != 3 ||
+		cfg.Exploration.RecentWindowDays != 7 || cfg.Exploration.NovelArticleMaxAgeDays != 30 ||
 		!cfg.Diversity.Enabled || cfg.Diversity.SemanticDuplicatePenalty != 1 {
 		t.Fatalf("normalized config=%#v", cfg)
 	}
@@ -24,11 +25,12 @@ func TestNormalizedRecommendationConfigProgrammaticOverridesRemainSupported(t *t
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
 		FollowingBonus:       0.25,
 		OutOfNetworkMinRatio: 0.40,
+		Exploration:          config.RecommendationExplorationConfig{Ratio: 0.20, MaxSlots: 5, RecentWindowDays: 4, NovelArticleMaxAgeDays: 12},
 	}}
 	t.Cleanup(func() { config.AppConfig = original })
 
 	cfg := normalizedRecommendationConfig()
-	if cfg.FollowingBonus != 0.25 || cfg.OutOfNetworkMinRatio != 0.40 {
+	if cfg.FollowingBonus != 0.25 || cfg.OutOfNetworkMinRatio != 0.40 || cfg.Exploration.Ratio != 0.20 || cfg.Exploration.MaxSlots != 5 || cfg.Exploration.RecentWindowDays != 4 || cfg.Exploration.NovelArticleMaxAgeDays != 12 {
 		t.Fatalf("normalized config=%#v", cfg)
 	}
 }
@@ -50,7 +52,6 @@ func TestNormalizedRecommendationConfigExplicitZeroOverrides(t *testing.T) {
 		{name: "positive_signal_coexist_bonus", path: "positive_signal_coexist_bonus", set: func(cfg *config.RecommendationConfig) { cfg.PositiveSignalCoexistBonus = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.PositiveSignalCoexistBonus }},
 		{name: "semantic_weight", path: "semantic_weight", set: func(cfg *config.RecommendationConfig) { cfg.SemanticWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticWeight }},
 		{name: "negative_semantic_weight", path: "negative_semantic_weight", set: func(cfg *config.RecommendationConfig) { cfg.NegativeSemanticWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.NegativeSemanticWeight }},
-		{name: "freshness_weight", path: "freshness_weight", set: func(cfg *config.RecommendationConfig) { cfg.FreshnessWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.FreshnessWeight }},
 		{name: "trending_weight", path: "trending_weight", set: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.TrendingWeight }},
 		{name: "trending.comment_factor", path: "trending.comment_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.CommentFactor = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.CommentFactor }},
 		{name: "author_affinity_weight", path: "author_affinity_weight", set: func(cfg *config.RecommendationConfig) { cfg.AuthorAffinityWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.AuthorAffinityWeight }},
@@ -114,12 +115,12 @@ func TestNormalizedRecommendationConfigExplicitZeroRatios(t *testing.T) {
 	original := config.AppConfig
 	config.AppConfig = &config.Config{RecommendationPresence: map[string]bool{
 		"out_of_network_min_ratio": true,
-		"novel_author_min_ratio":   true,
+		"exploration.ratio":        true,
 	}}
 	t.Cleanup(func() { config.AppConfig = original })
 
 	cfg := normalizedRecommendationConfig()
-	if cfg.OutOfNetworkMinRatio != 0 || cfg.NovelAuthorMinRatio != 0 {
+	if cfg.OutOfNetworkMinRatio != 0 || cfg.Exploration.Ratio != 0 {
 		t.Fatalf("normalized ratios=%#v, want both zero", cfg)
 	}
 }
@@ -148,7 +149,11 @@ func TestNormalizedRecommendationConfigInvalidValuesRemainInvalid(t *testing.T) 
 		{name: "reply negative", path: "behavior_weights.reply", set: func(cfg *config.RecommendationConfig) { cfg.BehaviorWeights.Reply = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.BehaviorWeights.Reply }, want: 5},
 		{name: "out ratio negative", path: "out_of_network_min_ratio", set: func(cfg *config.RecommendationConfig) { cfg.OutOfNetworkMinRatio = -0.1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.OutOfNetworkMinRatio }, want: 0.30},
 		{name: "out ratio above one", path: "out_of_network_min_ratio", set: func(cfg *config.RecommendationConfig) { cfg.OutOfNetworkMinRatio = 1.1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.OutOfNetworkMinRatio }, want: 0.30},
-		{name: "novel ratio above one", path: "novel_author_min_ratio", set: func(cfg *config.RecommendationConfig) { cfg.NovelAuthorMinRatio = 2 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.NovelAuthorMinRatio }, want: 0.10},
+		{name: "exploration ratio negative", path: "exploration.ratio", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.Ratio = -0.1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Exploration.Ratio }, want: 0.10},
+		{name: "exploration ratio above cap", path: "exploration.ratio", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.Ratio = 0.3 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Exploration.Ratio }, want: 0.10},
+		{name: "exploration max slots nonpositive", path: "", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.MaxSlots = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Exploration.MaxSlots) }, want: 3},
+		{name: "exploration recent window nonpositive", path: "", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.RecentWindowDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Exploration.RecentWindowDays) }, want: 7},
+		{name: "exploration novel age nonpositive", path: "", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.NovelArticleMaxAgeDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Exploration.NovelArticleMaxAgeDays) }, want: 30},
 		{name: "semantic threshold above one", path: "diversity.semantic_duplicate_threshold", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicateThreshold = 2 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicateThreshold }, want: 0.92},
 		{name: "semantic penalty negative", path: "diversity.semantic_duplicate_penalty", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicatePenalty = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicatePenalty }, want: 1},
 	}

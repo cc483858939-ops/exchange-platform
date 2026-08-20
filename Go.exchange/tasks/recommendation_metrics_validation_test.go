@@ -9,7 +9,7 @@ import (
 
 func TestValidRecommendationMetricsPayloadFeedDwell(t *testing.T) {
 	duration := int64(8234)
-	base := eventing.RecommendationBehaviorPayload{FeedVisibleTimeMS: &duration}
+	base := eventing.RecommendationBehaviorPayload{FeedVisibleTimeMS: &duration, SelectionMode: eventing.RecommendationSelectionModeRanked}
 	if !validRecommendationMetricsPayload(eventing.EventTypeRecommendationFeedDwell, base) {
 		t.Fatal("valid feed dwell payload rejected")
 	}
@@ -53,6 +53,7 @@ func TestValidRecommendationMetricsPayloadReadEnd(t *testing.T) {
 	payload := eventing.RecommendationBehaviorPayload{
 		ForegroundTimeMS: &foreground, ScrollProgressPercent: &progress, ExitType: &exitType,
 		EstimatedReadTimeMS: &estimated, ReadPolicyVersion: &policy, ReadOutcome: &outcome,
+		SelectionMode: eventing.RecommendationSelectionModeRanked,
 	}
 	if !validRecommendationMetricsPayload(eventing.EventTypeRecommendationReadEnd, payload) {
 		t.Fatal("valid read_end payload rejected")
