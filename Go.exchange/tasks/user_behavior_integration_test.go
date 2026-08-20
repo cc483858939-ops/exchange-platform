@@ -27,7 +27,13 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.ConsumerInbox{}, &models.ArticleBehavior{}, &models.ArticleReaction{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.ConsumerInbox{},
+		&models.ArticleBehavior{},
+		&models.ArticleReaction{},
+		&models.UserRecoProfileDirty{},
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -37,14 +43,33 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
 	global.Db = db
 
-	userOneID := uint(time.Now().UnixNano() & 0x3fffffff)
-	userTwoID := userOneID + 1
+	var userOneID, userTwoID uint
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
+		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.ArticleBehavior{})
 		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.ArticleReaction{})
+		db.Unscoped().Where("id IN ?", []uint{userOneID, userTwoID}).Delete(&models.User{})
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
+
+	userOne := models.User{
+		Username: "test-user-behavior-one-" + uuid.NewString(),
+		Password: "test",
+	}
+	if err := db.Create(&userOne).Error; err != nil {
+		t.Fatal(err)
+	}
+	userOneID = userOne.ID
+
+	userTwo := models.User{
+		Username: "test-user-behavior-two-" + uuid.NewString(),
+		Password: "test",
+	}
+	if err := db.Create(&userTwo).Error; err != nil {
+		t.Fatal(err)
+	}
+	userTwoID = userTwo.ID
 
 	base := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	viewMessages := make([]kafka.Message, 0, 8)
@@ -63,6 +88,13 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 
 	if err := applyUserBehaviorBatch(viewMessages); err != nil {
 		t.Fatal(err)
+	}
+	var dirty models.UserRecoProfileDirty
+	if err := db.Where("user_id = ?", userOneID).First(&dirty).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dirty.DirtyVersion < 1 || dirty.Reason != "user_behavior_projection" {
+		t.Fatalf("dirty profile=%#v want version>=1 reason=%q", dirty, "user_behavior_projection")
 	}
 	if err := applyUserBehaviorBatch(viewMessages); err != nil {
 		t.Fatal(err)
@@ -153,7 +185,7 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}, &models.ArticleReaction{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}, &models.ArticleReaction{}, &models.UserRecoProfileDirty{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,7 +217,9 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
+		db.Unscoped().Where("user_id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("article_id IN ?", []uint{articleOne.ID, articleTwo.ID, articleThree.ID}).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("user_id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.ArticleReaction{})
 		db.Unscoped().Where("id IN ?", []uint{articleOne.ID, articleTwo.ID, articleThree.ID}).Delete(&models.Article{})
 		db.Unscoped().Where("id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.User{})
 		global.Db, config.AppConfig = originalDB, originalConfig
@@ -229,7 +263,7 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}, &models.UserRecoProfileDirty{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,6 +290,7 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 	}
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
+		db.Unscoped().Where("user_id = ?", author.ID).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleBehavior{})
 		db.Unscoped().Delete(&article)
 		db.Unscoped().Delete(&author)

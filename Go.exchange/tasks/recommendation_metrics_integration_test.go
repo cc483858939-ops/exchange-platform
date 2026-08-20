@@ -26,21 +26,36 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.ConsumerInbox{}, &models.RecommendationDailyMetric{}, &models.ArticleBehavior{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.ConsumerInbox{},
+		&models.RecommendationDailyMetric{},
+		&models.ArticleBehavior{},
+		&models.UserRecoProfileDirty{},
+	); err != nil {
 		t.Fatal(err)
 	}
 
 	originalDB, originalConfig := global.Db, config.AppConfig
 	groupID := "test-rec-metrics-" + uuid.NewString()
+	user := models.User{
+		Username: "test-rec-metrics-" + uuid.NewString(),
+		Password: "test",
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	userID := user.ID
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.RecommendationMetricsGroupID = groupID
 	global.Db = db
 
-	userID := uint(time.Now().UnixNano() & 0x3fffffff)
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Where("strategy_id LIKE ?", groupID+"%").Delete(&models.RecommendationDailyMetric{})
+		db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("user_id = ?", userID).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("id = ?", userID).Delete(&models.User{})
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
@@ -97,8 +112,23 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := applyRecommendationMetricsBatch(messages); err != nil {
 		t.Fatal(err)
 	}
+
+	var dirty models.UserRecoProfileDirty
+	if err := db.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dirty.DirtyVersion != 1 || dirty.Reason != "recommendation_feedback_projection" {
+		t.Fatalf("dirty profile=%#v want version=1 reason=%q", dirty, "recommendation_feedback_projection")
+	}
+
 	if err := applyRecommendationMetricsBatch([]kafka.Message{messages[0]}); err != nil {
 		t.Fatal(err)
+	}
+	if err := db.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dirty.DirtyVersion != 1 {
+		t.Fatalf("replayed impression advanced dirty version to %d", dirty.DirtyVersion)
 	}
 
 	var metric models.RecommendationDailyMetric
