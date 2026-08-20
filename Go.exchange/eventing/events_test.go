@@ -53,6 +53,59 @@ func TestRecommendationBehaviorEnvelopeRejectsInvalidProvenance(t *testing.T) {
 	}
 }
 
+func TestValidateRecommendationProvenanceCoversAllThreeValidStates(t *testing.T) {
+	valid := []struct {
+		opportunity bool
+		mode        string
+		reason      string
+	}{
+		{false, RecommendationSelectionModeRanked, ""},
+		{true, RecommendationSelectionModeRanked, ""},
+		{true, RecommendationSelectionModeExploration, RecommendationExplorationReasonRecent},
+		{true, RecommendationSelectionModeExploration, RecommendationExplorationReasonNovelAuthor},
+		{true, RecommendationSelectionModeExploration, RecommendationExplorationReasonRecentNovelAuthor},
+	}
+	for _, tc := range valid {
+		if err := ValidateRecommendationProvenance(tc.opportunity, tc.mode, tc.reason); err != nil {
+			t.Fatalf("valid provenance rejected: %#v err=%v", tc, err)
+		}
+	}
+	invalid := []struct {
+		opportunity bool
+		mode        string
+		reason      string
+	}{
+		{false, RecommendationSelectionModeExploration, RecommendationExplorationReasonRecent},
+		{false, RecommendationSelectionModeRanked, RecommendationExplorationReasonRecent},
+		{true, RecommendationSelectionModeRanked, RecommendationExplorationReasonRecent},
+		{true, RecommendationSelectionModeExploration, ""},
+		{true, RecommendationSelectionModeExploration, "unknown"},
+	}
+	for _, tc := range invalid {
+		if err := ValidateRecommendationProvenance(tc.opportunity, tc.mode, tc.reason); err == nil {
+			t.Fatalf("invalid provenance accepted: %#v", tc)
+		}
+	}
+}
+
+func TestRecommendationBehaviorEnvelopePreservesRankedExplorationOpportunity(t *testing.T) {
+	payload := testRecommendationPayload()
+	payload.ExplorationOpportunity = true
+	payload.SelectionMode = RecommendationSelectionModeRanked
+	payload.ExplorationReason = ""
+	event, err := NewRecommendationBehaviorEnvelope(uuid.NewString(), EventTypeRecommendationImpression, time.Now(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded RecommendationBehaviorPayload
+	if err := json.Unmarshal(event.Payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.ExplorationOpportunity || decoded.SelectionMode != RecommendationSelectionModeRanked || decoded.ExplorationReason != "" {
+		t.Fatalf("decoded provenance=%#v", decoded)
+	}
+}
+
 func TestArticleViewedEnvelopeUsesUserPartitionKey(t *testing.T) {
 	id := uuid.NewString()
 	event, err := NewArticleViewedEnvelope(id, 7, 42, time.Unix(10, 0), "article_detail")

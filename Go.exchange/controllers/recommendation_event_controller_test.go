@@ -199,6 +199,87 @@ func TestValidateRecommendationTelemetryEventCopiesSignedExplorationProvenance(t
 	}
 }
 
+func TestValidateRecommendationTelemetryEventCopiesSignedRankedOpportunity(t *testing.T) {
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	key := []byte("0123456789abcdef0123456789abcdef")
+	claims := recommendationTrackingClaims{
+		UserID: 7, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
+		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
+		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
+		ExplorationOpportunity: true, SelectionMode: string(recommendationResultSelectionRanked), ExplorationReason: "",
+	}
+	token, err := signRecommendationTrackingClaims(claims, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, reason := validateRecommendationTelemetryEvent(7, recommendationEventInput{
+		EventID: uuid.NewString(), EventType: models.RecommendationEventTypeImpression,
+		TrackingToken: token, OccurredAt: now.Format(time.RFC3339Nano),
+	}, now, key)
+	if reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+	if !event.Payload.ExplorationOpportunity || event.Payload.SelectionMode != string(recommendationResultSelectionRanked) || event.Payload.ExplorationReason != "" {
+		t.Fatalf("ranked opportunity payload=%#v", event.Payload)
+	}
+}
+
+func TestRecommendationEventsHandlerUsesSignedProvenanceAgainstClientFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	key := "0123456789abcdef0123456789abcdef"
+	t.Setenv("RECOMMENDATION_TELEMETRY_ENABLED", "true")
+	t.Setenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY", key)
+	originalAllow, originalNow, originalDB := allowRecommendationTelemetryEvents, recommendationTelemetryNow, global.Db
+	t.Cleanup(func() {
+		allowRecommendationTelemetryEvents = originalAllow
+		recommendationTelemetryNow = originalNow
+		global.Db = originalDB
+	})
+	allowRecommendationTelemetryEvents = func(uint, int) (bool, error) { return true, nil }
+	recommendationTelemetryNow = func() time.Time { return now }
+	global.Db = nil
+	claims := recommendationTrackingClaims{
+		UserID: 7, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
+		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
+		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
+		ExplorationOpportunity: true, SelectionMode: string(recommendationResultSelectionExploration), ExplorationReason: recommendationExplorationReasonRecent,
+	}
+	token, err := signRecommendationTrackingClaims(claims, []byte(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]interface{}{"events": []map[string]interface{}{{
+		"event_id": uuid.NewString(), "event_type": models.RecommendationEventTypeImpression,
+		"tracking_token": token, "occurred_at": now.Format(time.RFC3339Nano),
+		"exploration_opportunity": false, "selection_mode": string(recommendationResultSelectionRanked), "exploration_reason": "",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(7))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/recommendation-events", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	publisher := &recommendationTestPublisher{}
+	NewRecommendationEventsHandler(publisher)(ctx)
+	if recorder.Code != http.StatusAccepted || len(publisher.events) != 1 {
+		t.Fatalf("status=%d events=%d body=%s", recorder.Code, len(publisher.events), recorder.Body.String())
+	}
+	var payload eventing.RecommendationBehaviorPayload
+	if err := json.Unmarshal(publisher.events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.ExplorationOpportunity || payload.SelectionMode != string(recommendationResultSelectionExploration) || payload.ExplorationReason != recommendationExplorationReasonRecent {
+		t.Fatalf("publisher payload used client provenance instead of signed claims: %#v", payload)
+	}
+}
+
 func TestValidateRecommendationTelemetryEventFeedDwellPayload(t *testing.T) {
 	now := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	key := []byte("0123456789abcdef0123456789abcdef")

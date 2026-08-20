@@ -67,17 +67,25 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 		t.Fatalf("daily metric primary key=%q want=%q", primaryKeyColumns, wantPrimaryKey)
 	}
 
+	strategyID := "exploration-migration-" + uuid.NewString()
 	user := models.User{Username: "recommendation-exploration-migration-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	article := models.Article{AuthorID: user.ID, Title: "exploration migration", Content: "body", Preview: "body", PublicationState: "published"}
-	if err := db.Create(&article).Error; err != nil {
-		t.Fatal(err)
+	articles := []models.Article{
+		{AuthorID: user.ID, Title: "exploration migration one", Content: "body", Preview: "body", PublicationState: "published"},
+		{AuthorID: user.ID, Title: "exploration migration two", Content: "body", Preview: "body", PublicationState: "published"},
+		{AuthorID: user.ID, Title: "exploration migration three", Content: "body", Preview: "body", PublicationState: "published"},
+	}
+	for index := range articles {
+		if err := db.Create(&articles[index]).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	request := models.RecommendationRequest{
-		RequestID: uuid.NewString(), UserID: user.ID, Scene: "recommendation_page", StrategyID: "exploration-migration",
-		RankerVersion: "rules_v4", RankerConfigHash: "hash", RequestedLimit: 2, CreatedAt: time.Now().UTC(),
+		RequestID: uuid.NewString(), UserID: user.ID, Scene: "recommendation_page", StrategyID: strategyID,
+		RankerVersion: "rules_v4", RankerConfigHash: "hash", RequestedLimit: 20, ResultCount: 3,
+		ExplorationTargetCount: 2, ExplorationOpportunityCount: 2, ExplorationResultCount: 1, CreatedAt: time.Now().UTC(),
 	}
 	if err := db.Create(&request).Error; err != nil {
 		t.Fatal(err)
@@ -85,28 +93,130 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 	t.Cleanup(func() {
 		db.Unscoped().Where("request_id = ?", request.RequestID).Delete(&models.RecommendationResultTrace{})
 		db.Unscoped().Where("request_id = ?", request.RequestID).Delete(&models.RecommendationRequest{})
-		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Article{})
+		db.Unscoped().Where("strategy_id = ?", strategyID).Delete(&models.RecommendationDailyMetric{})
+		db.Unscoped().Where("author_id = ?", user.ID).Delete(&models.Article{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 
-	invalidTrace := db.Exec(`
-INSERT INTO recommendation_result_traces (request_id, position, article_id, author_id, selection_mode, exploration_reason, exploration_semantic, created_at, expires_at)
-VALUES (?, 1, ?, ?, 'exploration', 'recent', 0, ?, ?)
-`, request.RequestID, article.ID, user.ID, time.Now().UTC(), time.Now().UTC().Add(time.Hour))
-	if invalidTrace.Error == nil {
-		t.Fatal("invalid trace provenance write was accepted")
+	traceStates := []struct {
+		position    int
+		articleID   uint
+		opportunity bool
+		mode        string
+		reason      string
+		semantic    float64
+	}{
+		{1, articles[0].ID, false, "ranked", "", 0},
+		{2, articles[1].ID, true, "ranked", "", 0},
+		{3, articles[2].ID, true, "exploration", "recent", .5},
 	}
-	invalidRequest := request
-	invalidRequest.RequestID = uuid.NewString()
-	invalidRequest.ExplorationTargetCount = 3
-	if err := db.Create(&invalidRequest).Error; err == nil {
-		t.Fatal("invalid request exploration count write was accepted")
+	for _, state := range traceStates {
+		trace := models.RecommendationResultTrace{
+			RequestID: request.RequestID, Position: state.position, ArticleID: state.articleID, AuthorID: user.ID,
+			ExplorationOpportunity: state.opportunity, SelectionMode: state.mode, ExplorationReason: state.reason,
+			ExplorationSemantic: state.semantic, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}
+		if err := db.Create(&trace).Error; err != nil {
+			t.Fatalf("valid trace state %#v rejected: %v", state, err)
+		}
 	}
-	invalidMetric := db.Exec(`
+
+	invalidTraceStates := []struct {
+		name        string
+		opportunity bool
+		mode        string
+		reason      string
+		semantic    float64
+	}{
+		{"false exploration reason", false, "exploration", "recent", 0},
+		{"ranked reason", true, "ranked", "recent", 0},
+		{"exploration empty reason", true, "exploration", "", .5},
+		{"unsupported reason", true, "exploration", "unsupported", .5},
+		{"ranked semantic", true, "ranked", "", .5},
+		{"negative semantic", true, "exploration", "recent", -.1},
+		{"over one semantic", true, "exploration", "recent", 1.1},
+	}
+	for index, state := range invalidTraceStates {
+		result := db.Exec(`
+INSERT INTO recommendation_result_traces (request_id, position, article_id, author_id, exploration_opportunity, selection_mode, exploration_reason, exploration_semantic, created_at, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, request.RequestID, 10+index, articles[0].ID, user.ID, state.opportunity, state.mode, state.reason, state.semantic, time.Now().UTC(), time.Now().UTC().Add(time.Hour))
+		if result.Error == nil {
+			t.Fatalf("invalid trace state %q was accepted", state.name)
+		}
+	}
+
+	invalidRequests := []struct {
+		name   string
+		mutate func(*models.RecommendationRequest)
+	}{
+		{"target negative", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = -1 }},
+		{"target exceeds limit", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = value.RequestedLimit + 1 }},
+		{"opportunity negative", func(value *models.RecommendationRequest) { value.ExplorationOpportunityCount = -1 }},
+		{"opportunity exceeds target", func(value *models.RecommendationRequest) {
+			value.ExplorationOpportunityCount = value.ExplorationTargetCount + 1
+		}},
+		{"result negative", func(value *models.RecommendationRequest) { value.ExplorationResultCount = -1 }},
+		{"result exceeds opportunity", func(value *models.RecommendationRequest) {
+			value.ExplorationResultCount = value.ExplorationOpportunityCount + 1
+		}},
+		{"result exceeds result count", func(value *models.RecommendationRequest) { value.ResultCount = 0 }},
+	}
+	for _, invalid := range invalidRequests {
+		value := request
+		value.RequestID = uuid.NewString()
+		invalid.mutate(&value)
+		if err := db.Create(&value).Error; err == nil {
+			t.Fatalf("invalid request state %q was accepted", invalid.name)
+		}
+	}
+
+	metricDate := time.Now().UTC()
+	metricStates := []struct {
+		opportunity bool
+		mode        string
+		reason      string
+	}{
+		{false, "ranked", ""},
+		{true, "ranked", ""},
+		{true, "exploration", "recent"},
+	}
+	for _, state := range metricStates {
+		metric := models.RecommendationDailyMetric{
+			MetricDate: metricDate, Scene: request.Scene, RankerVersion: request.RankerVersion,
+			RankerConfigHash: request.RankerConfigHash, StrategyID: strategyID,
+			ExplorationOpportunity: state.opportunity, SelectionMode: state.mode, ExplorationReason: state.reason,
+			Position: 1, ArticleID: articles[0].ID, UpdatedAt: metricDate,
+		}
+		if err := db.Create(&metric).Error; err != nil {
+			t.Fatalf("valid metric state %#v rejected: %v", state, err)
+		}
+	}
+	var metricRows int64
+	if err := db.Model(&models.RecommendationDailyMetric{}).Where("strategy_id = ?", strategyID).Count(&metricRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if metricRows != 3 {
+		t.Fatalf("metric rows=%d want=3 distinct provenance rows", metricRows)
+	}
+	invalidMetricStates := []struct {
+		name        string
+		opportunity bool
+		mode        string
+		reason      string
+	}{
+		{"false exploration reason", false, "exploration", "recent"},
+		{"ranked reason", true, "ranked", "recent"},
+		{"exploration empty reason", true, "exploration", ""},
+		{"unsupported reason", true, "exploration", "unsupported"},
+	}
+	for index, state := range invalidMetricStates {
+		result := db.Exec(`
 INSERT INTO recommendation_daily_metrics (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, article_id, updated_at)
-VALUES (CURRENT_DATE, 'recommendation_page', 'rules_v4', 'hash-invalid', 'exploration-migration', FALSE, 'invalid', '', 1, ?, ?)
-`, article.ID, time.Now().UTC())
-	if invalidMetric.Error == nil {
-		t.Fatal("invalid metric selection mode write was accepted")
+VALUES (CURRENT_DATE, ?, 'rules_v4', ?, ?, ?, ?, ?, ?, ?, ?)
+`, request.Scene, "hash-invalid-"+uuid.NewString(), strategyID, state.opportunity, state.mode, state.reason, 10+index, articles[0].ID, metricDate)
+		if result.Error == nil {
+			t.Fatalf("invalid metric state %q was accepted", state.name)
+		}
 	}
 }

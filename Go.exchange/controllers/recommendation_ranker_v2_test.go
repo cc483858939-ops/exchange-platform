@@ -118,3 +118,47 @@ func TestRecommendationRankerUsesDeterministicTieBreak(t *testing.T) {
 		t.Fatalf("ranked=%#v, want IDs [3 1]", ranked)
 	}
 }
+
+func TestRecommendationExplorationSemanticHonorsNegativePreference(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.NegativeSemanticWeight = 2
+	profile := userInterestProfile{
+		PositiveVector:     []float32{1, 0, 0},
+		NegativeVector:     []float32{0, 1, 0},
+		NegativeConfidence: 1,
+	}
+	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
+		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: .8}, Article: models.Article{Model: gorm.Model{ID: 1}, PublishedAt: ptrTime(now)}, Embedding: []float32{.8, .6, 0}},
+		{Candidate: embeddingCandidate{ArticleID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 2}, PublishedAt: ptrTime(now)}, Embedding: []float32{.5, 0, .8660254}},
+	}, now, cfg)
+	if len(ranked) != 2 {
+		t.Fatalf("ranked=%#v, want two candidates", ranked)
+	}
+	semanticByID := map[uint]float64{ranked[0].Article.ID: ranked[0].ExplorationSemantic, ranked[1].Article.ID: ranked[1].ExplorationSemantic}
+	if semanticByID[1] != 0 || semanticByID[2] < .49 {
+		t.Fatalf("ranked=%#v, want high-negative semantic=0 and neutral semantic near .5", ranked)
+	}
+}
+
+func TestRecommendationExplorationSemanticInvalidEmbeddingsRemainFiniteAndBounded(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	profile := userInterestProfile{PositiveVector: []float32{1, 0}, NegativeVector: []float32{0, 1}, NegativeConfidence: 1}
+	for index, embedding := range [][]float32{
+		nil,
+		{},
+		{1},
+		{float32(math.NaN()), 1},
+		{float32(math.Inf(1)), 0},
+	} {
+		ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{{
+			Candidate: embeddingCandidate{ArticleID: uint(index + 1), FromSemantic: true, PositiveSemanticSimilarity: .9},
+			Article:   models.Article{Model: gorm.Model{ID: uint(index + 1)}, PublishedAt: ptrTime(now)},
+			Embedding: embedding,
+		}}, now, cfg)
+		if len(ranked) != 1 || math.IsNaN(ranked[0].ExplorationSemantic) || math.IsInf(ranked[0].ExplorationSemantic, 0) || ranked[0].ExplorationSemantic < 0 || ranked[0].ExplorationSemantic > 1 {
+			t.Fatalf("embedding %v produced unsafe exploration semantic=%v", embedding, ranked[0].ExplorationSemantic)
+		}
+	}
+}

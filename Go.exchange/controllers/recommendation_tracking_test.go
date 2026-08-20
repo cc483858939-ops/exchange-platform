@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/eventing"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
@@ -147,6 +148,88 @@ func TestRecommendationTrackingTokenV3RejectsInvalidProvenanceStates(t *testing.
 		if _, err := verifyRecommendationTrackingToken(token, key); err == nil {
 			t.Fatalf("invalid provenance state accepted: %#v", claims)
 		}
+	}
+}
+
+func TestRecommendationTrackingAcceptsRankedExplorationOpportunity(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	want := testRecommendationTrackingClaims(now)
+	want.ExplorationOpportunity = true
+	want.SelectionMode = string(recommendationResultSelectionRanked)
+	want.ExplorationReason = ""
+	token, err := signRecommendationTrackingClaims(want, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := verifyRecommendationTrackingToken(token, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("decoded ranked opportunity claims=%#v want=%#v", got, want)
+	}
+}
+
+func TestRecommendationTrackingTokenV3RejectsCompleteInvalidProvenanceMatrix(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	invalid := []struct {
+		name   string
+		mutate func(*recommendationTrackingClaims)
+	}{
+		{name: "false exploration recent", mutate: func(claims *recommendationTrackingClaims) {
+			claims.SelectionMode = string(recommendationResultSelectionExploration)
+			claims.ExplorationReason = recommendationExplorationReasonRecent
+		}},
+		{name: "ranked recent", mutate: func(claims *recommendationTrackingClaims) {
+			claims.ExplorationOpportunity = true
+			claims.SelectionMode = string(recommendationResultSelectionRanked)
+			claims.ExplorationReason = recommendationExplorationReasonRecent
+		}},
+		{name: "exploration empty reason", mutate: func(claims *recommendationTrackingClaims) {
+			claims.ExplorationOpportunity = true
+			claims.SelectionMode = string(recommendationResultSelectionExploration)
+		}},
+		{name: "exploration unsupported reason", mutate: func(claims *recommendationTrackingClaims) {
+			claims.ExplorationOpportunity = true
+			claims.SelectionMode = string(recommendationResultSelectionExploration)
+			claims.ExplorationReason = "unsupported"
+		}},
+		{name: "unknown mode", mutate: func(claims *recommendationTrackingClaims) {
+			claims.SelectionMode = "unknown"
+		}},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := testRecommendationTrackingClaims(now)
+			tc.mutate(&claims)
+			token, err := signRecommendationTrackingClaims(claims, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := verifyRecommendationTrackingToken(token, key); err == nil {
+				t.Fatalf("invalid provenance accepted: %#v", claims)
+			}
+		})
+	}
+}
+
+func TestRecommendationServingVersionsRemainRev3Contract(t *testing.T) {
+	if recommendationRankerVersion != "rules_v4" {
+		t.Fatalf("ranker version=%q", recommendationRankerVersion)
+	}
+	if recommendationPersonalizedStrategyID != "for_you_materialized_profile_v5" || recommendationColdStartStrategyID != recommendationPersonalizedStrategyID {
+		t.Fatalf("strategy versions personalized=%q cold-start=%q", recommendationPersonalizedStrategyID, recommendationColdStartStrategyID)
+	}
+	if recommendationSelectionPolicyVersion != "network_balance_exploration_v2" {
+		t.Fatalf("selection policy=%q", recommendationSelectionPolicyVersion)
+	}
+	if recommendationTrackingTokenVersion != "v3" || eventing.RecommendationBehaviorSchemaVersion != 2 {
+		t.Fatalf("tracking=%q behavior schema=%d", recommendationTrackingTokenVersion, eventing.RecommendationBehaviorSchemaVersion)
+	}
+	if recommendationCandidateRetrievalVersion != "social_semantic_materialized_profile_v4" || recommendation.MaterializedProfileVersion != "materialized_profile_v1" {
+		t.Fatalf("retrieval=%q materialized profile=%q", recommendationCandidateRetrievalVersion, recommendation.MaterializedProfileVersion)
 	}
 }
 

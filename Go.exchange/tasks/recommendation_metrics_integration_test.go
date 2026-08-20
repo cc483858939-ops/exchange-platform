@@ -85,6 +85,17 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 	messages = append(messages, recommendationMessage(t, click))
 
+	explorationPayload := base
+	explorationPayload.ExplorationOpportunity = true
+	explorationPayload.SelectionMode = eventing.RecommendationSelectionModeExploration
+	explorationPayload.ExplorationReason = eventing.RecommendationExplorationReasonRecent
+	explorationEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt, explorationPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explorationMessage := recommendationMessage(t, explorationEvent)
+	messages = append(messages, explorationMessage)
+
 	variantPosition := base
 	variantPosition.Position = 2
 	positionEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt, variantPosition)
@@ -124,6 +135,9 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := applyRecommendationMetricsBatch([]kafka.Message{messages[0]}); err != nil {
 		t.Fatal(err)
 	}
+	if err := applyRecommendationMetricsBatch([]kafka.Message{explorationMessage}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +152,20 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if metric.ImpressionCount != 100 || metric.ClickCount != 1 {
 		t.Fatalf("base metric=%#v want impressions=100 clicks=1", metric)
 	}
+	var explorationMetric models.RecommendationDailyMetric
+	if err := db.Where("strategy_id = ? AND exploration_opportunity = ? AND selection_mode = ? AND exploration_reason = ?", groupID, true, eventing.RecommendationSelectionModeExploration, eventing.RecommendationExplorationReasonRecent).First(&explorationMetric).Error; err != nil {
+		t.Fatal(err)
+	}
+	if explorationMetric.ImpressionCount != 1 {
+		t.Fatalf("exploration metric=%#v want one idempotent impression", explorationMetric)
+	}
 
 	var metricRows int64
 	if err := db.Model(&models.RecommendationDailyMetric{}).Where("strategy_id LIKE ?", groupID+"%").Count(&metricRows).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metricRows != 4 {
-		t.Fatalf("metric rows=%d want=4 for position/strategy/date dimensions", metricRows)
+	if metricRows != 5 {
+		t.Fatalf("metric rows=%d want=5 including ranked/exploration provenance dimensions", metricRows)
 	}
 
 	var clickBehavior models.ArticleBehavior

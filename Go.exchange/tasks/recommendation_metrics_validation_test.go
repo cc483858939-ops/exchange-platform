@@ -60,3 +60,28 @@ func TestValidRecommendationMetricsPayloadReadEnd(t *testing.T) {
 	}
 	_ = time.Now()
 }
+
+func TestValidRecommendationMetricsPayloadUsesRecommendationProvenanceContract(t *testing.T) {
+	duration := int64(1000)
+	valid := []eventing.RecommendationBehaviorPayload{
+		{FeedVisibleTimeMS: &duration, SelectionMode: eventing.RecommendationSelectionModeRanked},
+		{FeedVisibleTimeMS: &duration, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeRanked},
+		{FeedVisibleTimeMS: &duration, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: eventing.RecommendationExplorationReasonRecent},
+	}
+	for _, payload := range valid {
+		if !validRecommendationMetricsPayload(eventing.EventTypeRecommendationFeedDwell, payload) {
+			t.Fatalf("valid provenance rejected: %#v", payload)
+		}
+	}
+	invalid := []eventing.RecommendationBehaviorPayload{
+		{FeedVisibleTimeMS: &duration, ExplorationOpportunity: false, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: eventing.RecommendationExplorationReasonRecent},
+		{FeedVisibleTimeMS: &duration, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeRanked, ExplorationReason: eventing.RecommendationExplorationReasonRecent},
+		{FeedVisibleTimeMS: &duration, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration},
+		{FeedVisibleTimeMS: &duration, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: "unknown"},
+	}
+	for _, payload := range invalid {
+		if validRecommendationMetricsPayload(eventing.EventTypeRecommendationFeedDwell, payload) {
+			t.Fatalf("invalid provenance accepted: %#v", payload)
+		}
+	}
+}

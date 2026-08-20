@@ -176,14 +176,314 @@ func TestRecommendationSelectionRecordsNaturalAndDisplacedExploration(t *testing
 		t.Fatalf("natural provenance=%#v", natural)
 	}
 
-	soft := selectRecommendationCandidates(candidates, nil, 3, cfg, now, recommendationSelectionSoft, "natural-and-displaced")
+	softCandidates := append([]hydratedRecommendationCandidate(nil), candidates...)
+	for index := range softCandidates {
+		softCandidates[index].Candidate.WasSoftServed = true
+		softCandidates[index].Candidate.LastServedAt = now.Add(-time.Duration(index+1) * time.Hour)
+	}
+	soft := selectRecommendationCandidates(softCandidates, nil, 3, cfg, now, recommendationSelectionSoft, "natural-and-displaced")
+	if len(soft) == 0 {
+		t.Fatal("soft selection must use real soft-served candidates")
+	}
 	for _, item := range soft {
 		if item.ExplorationOpportunity || item.SelectionMode != recommendationResultSelectionRanked {
 			t.Fatalf("soft selection must disable exploration: %#v", soft)
+		}
+		if item.ExplorationReason != "" || item.ExplorationSemantic != 0 {
+			t.Fatalf("soft selection provenance=%#v", item)
 		}
 	}
 }
 
 func explorationTimePtr(value time.Time) *time.Time {
 	return &value
+}
+
+func makeExplorationTestCandidate(now time.Time, id uint, baseScore, explorationSemantic float64, recent, novel bool) hydratedRecommendationCandidate {
+	at := now.Add(-time.Hour)
+	return hydratedRecommendationCandidate{
+		Candidate: embeddingCandidate{ArticleID: id, FromRecent: recent},
+		Article: models.Article{
+			Model:       gorm.Model{ID: id, CreatedAt: at},
+			AuthorID:    id,
+			PublishedAt: explorationTimePtr(at),
+		},
+		IsNovelAuthor:       novel,
+		ExplorationSemantic: explorationSemantic,
+		Breakdown:           recommendationScoreBreakdown{BaseScore: baseScore},
+	}
+}
+
+func TestRecommendationSoftSelectionAppendsRealCandidatesWithoutExploration(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Diversity.Enabled = false
+	initial := []selectedRecommendation{
+		{Article: models.Article{Model: gorm.Model{ID: 100}}, SelectionMode: recommendationResultSelectionRanked},
+		{Article: models.Article{Model: gorm.Model{ID: 101}}, SelectionMode: recommendationResultSelectionRanked},
+	}
+	softCandidates := []hydratedRecommendationCandidate{
+		makeExplorationTestCandidate(now, 1, 5, .9, true, false),
+		makeExplorationTestCandidate(now, 2, 10, .8, true, false),
+	}
+	softCandidates[0].Candidate.WasSoftServed = true
+	softCandidates[0].Candidate.LastServedAt = now.Add(-2 * time.Hour)
+	softCandidates[1].Candidate.WasSoftServed = true
+	softCandidates[1].Candidate.LastServedAt = now.Add(-time.Hour)
+
+	selected := selectRecommendationCandidates(softCandidates, initial, 4, cfg, now, recommendationSelectionSoft, "soft-extension")
+	if len(selected) != 4 {
+		t.Fatalf("selected length=%d want=4", len(selected))
+	}
+	if selected[0].Article.ID != 100 || selected[1].Article.ID != 101 {
+		t.Fatalf("initial fresh results changed: %#v", selected)
+	}
+	if selected[2].Article.ID != 1 || selected[3].Article.ID != 2 {
+		t.Fatalf("soft LastServedAt ordering selected=%#v", selected)
+	}
+	for index, item := range selected[2:] {
+		if item.ExplorationOpportunity || item.SelectionMode != recommendationResultSelectionRanked || item.ExplorationReason != "" || item.ExplorationSemantic != 0 {
+			t.Fatalf("soft result %d has exploration provenance: %#v", index+2, item)
+		}
+	}
+}
+
+func TestRecommendationExplorationRecentRequiresRecentRecallProvenance(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	candidate := makeExplorationTestCandidate(now, 1, 1, .5, false, false)
+	candidate.Candidate.FromSemantic = true
+	candidate.Candidate.FromFollowing = true
+	candidate.Candidate.FromTrending = true
+	if got := recommendationExplorationReason(candidate, now, cfg); got != "" {
+		t.Fatalf("young candidate without recent recall reason=%q want empty", got)
+	}
+}
+
+func TestRecommendationExplorationYoungNonRecentSourcesAreNotEligible(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	for _, source := range []struct {
+		name string
+		set  func(*embeddingCandidate)
+	}{
+		{name: "semantic", set: func(candidate *embeddingCandidate) { candidate.FromSemantic = true }},
+		{name: "following", set: func(candidate *embeddingCandidate) { candidate.FromFollowing = true }},
+		{name: "trending", set: func(candidate *embeddingCandidate) { candidate.FromTrending = true }},
+	} {
+		t.Run(source.name, func(t *testing.T) {
+			candidate := makeExplorationTestCandidate(now, 1, 1, .5, false, false)
+			source.set(&candidate.Candidate)
+			if got := recommendationExplorationReason(candidate, now, cfg); got != "" {
+				t.Fatalf("source=%s reason=%q want empty", source.name, got)
+			}
+		})
+	}
+}
+
+func TestRecommendationExplorationNovelAuthorIsIndependentFromRecentRecall(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	candidate := makeExplorationTestCandidate(now, 1, 1, .5, false, true)
+	if got := recommendationExplorationReason(candidate, now, cfg); got != recommendationExplorationReasonNovelAuthor {
+		t.Fatalf("novel-author reason=%q want=%q", got, recommendationExplorationReasonNovelAuthor)
+	}
+	candidate.Article.PublishedAt = explorationTimePtr(now.Add(-30 * 24 * time.Hour))
+	if got := recommendationExplorationReason(candidate, now, cfg); got != recommendationExplorationReasonNovelAuthor {
+		t.Fatalf("boundary novel-author reason=%q want=%q", got, recommendationExplorationReasonNovelAuthor)
+	}
+	candidate.Article.PublishedAt = explorationTimePtr(now.Add(-30*24*time.Hour - time.Nanosecond))
+	if got := recommendationExplorationReason(candidate, now, cfg); got != "" {
+		t.Fatalf("over-age novel-author reason=%q want empty", got)
+	}
+}
+
+func TestRecommendationStrictExplorationRejectsSemanticDuplicatesWhenPenaltyIsZero(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.Diversity.Enabled = true
+	cfg.Diversity.SemanticDuplicateThreshold = .8
+	cfg.Diversity.SemanticDuplicatePenalty = 0
+	selected := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}}, Embedding: []float32{1, 0}}}
+	duplicate := makeExplorationTestCandidate(now, 1, 100, 1, true, false)
+	duplicate.Embedding = []float32{1, 0}
+	nonDuplicate := makeExplorationTestCandidate(now, 2, 1, .5, true, false)
+	nonDuplicate.Embedding = []float32{0, 1}
+	available := func(hydratedRecommendationCandidate) bool { return true }
+	_, chosen, ok := chooseStrictExplorationCandidate([]hydratedRecommendationCandidate{duplicate, nonDuplicate}, selected, available, nil, 1, cfg, now)
+	if !ok || chosen.Article.ID != 2 {
+		t.Fatalf("strict selection=%#v ok=%v want non-duplicate article 2", chosen, ok)
+	}
+	if !recommendationIsSemanticDuplicate(duplicate, selected, cfg) || recommendationDiversityPenalty(duplicate, selected, cfg) != 0 {
+		t.Fatal("duplicate gate and penalty must remain independent")
+	}
+}
+
+func TestRecommendationDuplicateOnlyExplorationFallsBackToRankedWithoutUnderfill(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.Exploration.Ratio = .5
+	cfg.Exploration.MaxSlots = 1
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Diversity.Enabled = true
+	cfg.Diversity.SemanticDuplicateThreshold = .8
+	cfg.Diversity.SemanticDuplicatePenalty = 0
+	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}}, Embedding: []float32{1, 0}, SelectionMode: recommendationResultSelectionRanked}}
+	duplicate := makeExplorationTestCandidate(now, 1, 10, 1, true, false)
+	duplicate.Embedding = []float32{1, 0}
+	normal := makeExplorationTestCandidate(now, 2, 9, 0, false, false)
+	selected := selectRecommendationCandidates([]hydratedRecommendationCandidate{duplicate, normal}, initial, 3, cfg, now, recommendationSelectionFresh, "duplicate-only")
+	if len(selected) != 3 {
+		t.Fatalf("selected length=%d want=3: %#v", len(selected), selected)
+	}
+	if !selected[1].ExplorationOpportunity || selected[1].SelectionMode != recommendationResultSelectionRanked || selected[1].ExplorationReason != "" || selected[1].ExplorationSemantic != 0 {
+		t.Fatalf("duplicate-only fallback provenance=%#v", selected[1])
+	}
+	for _, item := range selected {
+		if item.SelectionMode == recommendationResultSelectionExploration {
+			t.Fatalf("duplicate-only fixture unexpectedly explored: %#v", selected)
+		}
+	}
+}
+
+func TestRecommendationExplorationShortageDoesNotUnderfill(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.Exploration.Ratio = .2
+	cfg.Exploration.MaxSlots = 2
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Diversity.Enabled = false
+	const limit = 10
+	candidates := make([]hydratedRecommendationCandidate, 0, limit)
+	for id := uint(1); id <= limit; id++ {
+		candidates = append(candidates, makeExplorationTestCandidate(now, id, float64(limit-id+1), 0, false, false))
+	}
+	selected := selectRecommendationCandidates(candidates, nil, limit, cfg, now, recommendationSelectionFresh, "shortage")
+	if len(selected) != limit {
+		t.Fatalf("selected length=%d want=%d", len(selected), limit)
+	}
+	wantOpportunities := recommendationExplorationTarget(limit, cfg)
+	actualOpportunities, actualResults := 0, 0
+	for _, item := range selected {
+		if item.SelectionMode != recommendationResultSelectionRanked {
+			t.Fatalf("shortage result explored unexpectedly: %#v", item)
+		}
+		if item.ExplorationOpportunity {
+			actualOpportunities++
+		}
+		if item.SelectionMode == recommendationResultSelectionExploration {
+			actualResults++
+		}
+	}
+	if actualOpportunities != wantOpportunities || actualResults != 0 {
+		t.Fatalf("opportunities=%d results=%d want opportunities=%d results=0", actualOpportunities, actualResults, wantOpportunities)
+	}
+}
+
+func TestRecommendationExplorationDoesNotCarryForwardNaturalOpportunity(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.Exploration.Ratio = .5
+	cfg.Exploration.MaxSlots = 2
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Diversity.Enabled = false
+	const limit = 6
+	requestID := "no-carry-forward"
+	positions := explorationPositions(requestID, limit, recommendationExplorationTarget(limit, cfg))
+	if len(positions) != 2 {
+		t.Fatalf("positions=%v want two exploration positions", positions)
+	}
+	firstPosition, secondPosition := positions[0], positions[1]
+	candidates := make([]hydratedRecommendationCandidate, 0, limit)
+	for position := 1; position < firstPosition; position++ {
+		candidates = append(candidates, makeExplorationTestCandidate(now, uint(100+position), float64(100-position), 0, false, false))
+	}
+	natural := makeExplorationTestCandidate(now, 1, 50, 1, true, false)
+	candidates = append(candidates, natural)
+	for position := firstPosition + 1; position < secondPosition; position++ {
+		candidates = append(candidates, makeExplorationTestCandidate(now, uint(200+position), float64(40-position), 0, false, false))
+	}
+	exploration := makeExplorationTestCandidate(now, 2, 1, .8, true, false)
+	candidates = append(candidates, exploration)
+	for position := secondPosition + 1; position <= limit; position++ {
+		candidates = append(candidates, makeExplorationTestCandidate(now, uint(300+position), float64(40-position), 0, false, false))
+	}
+	selected := selectRecommendationCandidates(candidates, nil, limit, cfg, now, recommendationSelectionFresh, requestID)
+	if len(selected) != limit {
+		t.Fatalf("selected length=%d want=%d: %#v", len(selected), limit, selected)
+	}
+	if selected[firstPosition-1].Article.ID != natural.Article.ID || selected[firstPosition-1].SelectionMode != recommendationResultSelectionRanked || !selected[firstPosition-1].ExplorationOpportunity {
+		t.Fatalf("natural opportunity=%#v want ranked natural candidate", selected[firstPosition-1])
+	}
+	if selected[secondPosition-1].Article.ID != exploration.Article.ID || selected[secondPosition-1].SelectionMode != recommendationResultSelectionExploration || !selected[secondPosition-1].ExplorationOpportunity {
+		t.Fatalf("displaced opportunity=%#v want exploration candidate", selected[secondPosition-1])
+	}
+	opportunities, results := 0, 0
+	for _, item := range selected {
+		if item.ExplorationOpportunity {
+			opportunities++
+		}
+		if item.SelectionMode == recommendationResultSelectionExploration {
+			results++
+		}
+	}
+	if opportunities != 2 || results != 1 {
+		t.Fatalf("opportunities=%d results=%d want 2 and 1", opportunities, results)
+	}
+}
+
+func TestRecommendationExplorationCountsOpportunitySeparatelyFromDisplacement(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.Exploration.Ratio = .1
+	cfg.Exploration.MaxSlots = 2
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Diversity.Enabled = false
+	const limit = 20
+	candidates := make([]hydratedRecommendationCandidate, 0, limit)
+	for id := uint(1); id <= limit; id++ {
+		candidates = append(candidates, makeExplorationTestCandidate(now, id, float64(limit-id+1), 0, false, false))
+	}
+	selected := selectRecommendationCandidates(candidates, nil, limit, cfg, now, recommendationSelectionFresh, "count-separation")
+	if len(selected) != limit {
+		t.Fatalf("selected length=%d want=%d", len(selected), limit)
+	}
+	if got := countSelectedClass(selected, func(item selectedRecommendation) bool { return item.ExplorationOpportunity }); got != 2 {
+		t.Fatalf("opportunity count=%d want=2", got)
+	}
+	if got := countSelectedClass(selected, func(item selectedRecommendation) bool {
+		return item.SelectionMode == recommendationResultSelectionExploration
+	}); got != 0 {
+		t.Fatalf("result count=%d want=0", got)
+	}
+}
+
+func TestRecommendationExplorationCountsSeparateTargetOpportunityAndResult(t *testing.T) {
+	selected := []selectedRecommendation{
+		{SelectionMode: recommendationResultSelectionRanked},
+		{ExplorationOpportunity: true, SelectionMode: recommendationResultSelectionRanked},
+		{ExplorationOpportunity: true, SelectionMode: recommendationResultSelectionExploration, ExplorationReason: recommendationExplorationReasonRecent},
+		{SelectionMode: recommendationResultSelectionRanked},
+	}
+	counts := recommendationExplorationCountsForSelection(selected, 2)
+	if counts.Target != 2 || counts.Opportunities != 2 || counts.Results != 1 {
+		t.Fatalf("counts=%#v want target=2 opportunities=2 results=1", counts)
+	}
+}
+
+func TestRecommendationNovelAuthorCountIsIndependentFromExplorationResultCount(t *testing.T) {
+	selected := []selectedRecommendation{
+		{IsNovelAuthor: true, SelectionMode: recommendationResultSelectionRanked},
+		{IsNovelAuthor: true, SelectionMode: recommendationResultSelectionRanked},
+		{ExplorationOpportunity: true, SelectionMode: recommendationResultSelectionExploration, ExplorationReason: recommendationExplorationReasonNovelAuthor},
+	}
+	if got := countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsNovelAuthor }); got != 2 {
+		t.Fatalf("novel-author count=%d want=2", got)
+	}
+	if got := countSelectedClass(selected, func(item selectedRecommendation) bool {
+		return item.SelectionMode == recommendationResultSelectionExploration
+	}); got != 1 {
+		t.Fatalf("exploration result count=%d want=1", got)
+	}
 }

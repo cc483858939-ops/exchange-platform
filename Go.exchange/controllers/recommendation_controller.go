@@ -137,6 +137,7 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	metrics.ObserveRecommendationCandidateCount(len(freshSet.Candidates))
 	metrics.ObserveRecommendationResultCount(len(recommendations))
 	metrics.ObserveRecommendationGenerationDuration(strategyID, duration)
+	explorationCounts := recommendationExplorationCountsForSelection(selected, recommendationExplorationTarget(limit, cfg))
 
 	requestRecord := models.RecommendationRequest{
 		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
@@ -149,13 +150,10 @@ func GetArticleRecommendations(ctx *gin.Context) {
 		RecentCandidateCount: freshSet.RecentCount, TrendingCandidateCount: freshSet.TrendingCount,
 		MergedCandidateCount: len(freshSet.Candidates), PositiveSignalCount: profile.PositiveSignalCount,
 		NegativeSignalCount: profile.NegativeSignalCount, InNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsInNetwork }),
-		OutOfNetworkResultCount:     countSelectedClass(selected, func(item selectedRecommendation) bool { return !item.IsInNetwork }),
-		NovelAuthorResultCount:      countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsNovelAuthor }),
-		ExplorationTargetCount:      recommendationExplorationTarget(limit, cfg),
-		ExplorationOpportunityCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.ExplorationOpportunity }),
-		ExplorationResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool {
-			return item.SelectionMode == recommendationResultSelectionExploration
-		}),
+		OutOfNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return !item.IsInNetwork }),
+		NovelAuthorResultCount:  countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsNovelAuthor }),
+		ExplorationTargetCount:  explorationCounts.Target, ExplorationOpportunityCount: explorationCounts.Opportunities,
+		ExplorationResultCount:  explorationCounts.Results,
 		SoftServedFallbackCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.Candidate.WasSoftServed }),
 		PersonalizationMode:     recommendationPersonalizationMode(profile, freshSet.FollowingCount),
 		FallbackReason:          recommendationFallbackReason(profile.PositiveSignalCount, len(recommendations), limit),
@@ -236,6 +234,22 @@ func countSelectedClass(items []selectedRecommendation, predicate func(selectedR
 		}
 	}
 	return count
+}
+
+type recommendationExplorationCounts struct {
+	Target        int
+	Opportunities int
+	Results       int
+}
+
+func recommendationExplorationCountsForSelection(selected []selectedRecommendation, target int) recommendationExplorationCounts {
+	return recommendationExplorationCounts{
+		Target:        target,
+		Opportunities: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.ExplorationOpportunity }),
+		Results: countSelectedClass(selected, func(item selectedRecommendation) bool {
+			return item.SelectionMode == recommendationResultSelectionExploration
+		}),
+	}
 }
 
 func parseRecommendationLimit(raw string) int {

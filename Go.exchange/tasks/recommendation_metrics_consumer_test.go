@@ -82,3 +82,98 @@ func TestAggregateRecommendationMetricsSeparatesExplorationProvenanceDimensions(
 		t.Fatalf("aggregates=%#v, exploration provenance must be a metric dimension", aggregates)
 	}
 }
+
+func TestAggregateRecommendationMetricsSeparatesAllThreeProvenanceStates(t *testing.T) {
+	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	base := eventing.RecommendationBehaviorPayload{
+		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
+	}
+	variants := []eventing.RecommendationBehaviorPayload{
+		{UserID: base.UserID, ArticleID: base.ArticleID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, SelectionMode: eventing.RecommendationSelectionModeRanked},
+		{UserID: base.UserID, ArticleID: base.ArticleID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeRanked},
+		{UserID: base.UserID, ArticleID: base.ArticleID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: eventing.RecommendationExplorationReasonRecent},
+	}
+	records := make([]recommendationMetricEvent, 0, len(variants))
+	firstDelivery := make(map[string]struct{}, len(variants))
+	for _, payload := range variants {
+		record := recommendationMetricEvent{Envelope: eventing.Envelope{ID: uuid.NewString(), Type: eventing.EventTypeRecommendationImpression, OccurredAt: now}, Payload: payload}
+		records = append(records, record)
+		firstDelivery[record.Envelope.ID] = struct{}{}
+	}
+	aggregates := aggregateRecommendationMetrics(records, firstDelivery)
+	if len(aggregates) != 3 {
+		t.Fatalf("aggregates=%#v want three provenance dimensions", aggregates)
+	}
+	seen := make(map[recommendationMetricKey]struct{}, len(aggregates))
+	for _, aggregate := range aggregates {
+		seen[aggregate.Key] = struct{}{}
+	}
+	if len(seen) != 3 {
+		t.Fatalf("metric keys=%v want three distinct keys", seen)
+	}
+}
+
+func TestAggregateRecommendationMetricsSeparatesExplorationReasons(t *testing.T) {
+	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	reasons := []string{
+		eventing.RecommendationExplorationReasonRecent,
+		eventing.RecommendationExplorationReasonNovelAuthor,
+		eventing.RecommendationExplorationReasonRecentNovelAuthor,
+	}
+	records := make([]recommendationMetricEvent, 0, len(reasons))
+	firstDelivery := make(map[string]struct{}, len(reasons))
+	for _, reason := range reasons {
+		record := recommendationMetricEvent{
+			Envelope: eventing.Envelope{ID: uuid.NewString(), Type: eventing.EventTypeRecommendationImpression, OccurredAt: now},
+			Payload: eventing.RecommendationBehaviorPayload{
+				UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+				RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
+				ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: reason,
+			},
+		}
+		records = append(records, record)
+		firstDelivery[record.Envelope.ID] = struct{}{}
+	}
+	aggregates := aggregateRecommendationMetrics(records, firstDelivery)
+	if len(aggregates) != len(reasons) {
+		t.Fatalf("aggregates=%#v want one row per reason", aggregates)
+	}
+	seen := make(map[string]struct{}, len(aggregates))
+	for _, aggregate := range aggregates {
+		seen[aggregate.Key.ExplorationReason] = struct{}{}
+	}
+	if len(seen) != len(reasons) {
+		t.Fatalf("reason dimensions=%v want=%v", seen, reasons)
+	}
+}
+
+func TestAggregateRecommendationBehaviorIgnoresSelectionProvenance(t *testing.T) {
+	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	base := eventing.RecommendationBehaviorPayload{
+		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
+	}
+	records := []recommendationMetricEvent{}
+	firstDelivery := make(map[string]struct{})
+	for _, provenance := range []struct {
+		opportunity bool
+		mode        string
+		reason      string
+	}{
+		{false, eventing.RecommendationSelectionModeRanked, ""},
+		{true, eventing.RecommendationSelectionModeExploration, eventing.RecommendationExplorationReasonRecent},
+	} {
+		payload := base
+		payload.ExplorationOpportunity = provenance.opportunity
+		payload.SelectionMode = provenance.mode
+		payload.ExplorationReason = provenance.reason
+		record := recommendationMetricEvent{Envelope: eventing.Envelope{ID: uuid.NewString(), Type: eventing.EventTypeRecommendationClick, OccurredAt: now}, Payload: payload}
+		records = append(records, record)
+		firstDelivery[record.Envelope.ID] = struct{}{}
+	}
+	aggregates := aggregateRecommendationBehavior(records, firstDelivery)
+	if len(aggregates) != 1 || aggregates[0].Key.Action != eventing.RecommendationBehaviorActionClick || aggregates[0].Count != 2 {
+		t.Fatalf("behavior aggregates=%#v want one provenance-independent click row count=2", aggregates)
+	}
+}
