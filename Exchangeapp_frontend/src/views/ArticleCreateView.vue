@@ -38,105 +38,117 @@
       novalidate
       @submit.prevent="submitArticle"
     >
-      <section class="composer-section composer-section--identity" aria-labelledby="author-heading">
+      <section
+        class="composer-section composer-section--main"
+        aria-labelledby="post-fields-heading"
+      >
         <h1 id="author-heading" class="sr-only">Current author</h1>
-        <div class="composer-author">
-          <span class="composer-author__avatar" aria-hidden="true">{{ identityInitial }}</span>
-          <span class="composer-author__copy">
-            <strong>{{ identityUsername }}</strong>
-            <small>{{ identityHandle }}</small>
-          </span>
-        </div>
-      </section>
-
-      <section class="composer-section composer-section--fields" aria-labelledby="post-fields-heading">
         <h2 id="post-fields-heading" class="sr-only">Post content</h2>
 
-        <div class="composer-field composer-field--primary">
-          <label for="article-content">Post</label>
-          <textarea
-            id="article-content"
-            ref="contentInput"
-            v-model="form.content"
-            class="composer-input composer-input--content"
-            rows="5"
-            placeholder="What's happening?"
-            :disabled="isSubmitting"
-            aria-describedby="article-content-help article-content-error"
-          ></textarea>
-          <div id="article-content-help" class="composer-field__meta">
-            <span
-              v-if="contentError"
-              id="article-content-error"
-              class="field-error"
-              role="alert"
-            >
-              {{ contentError }}
-            </span>
-            <span :class="{ 'field-count--over': contentLength > maxContentLength }">
-              {{ contentLength }}/{{ maxContentLength }}
-            </span>
+        <div class="composer-main">
+          <span class="composer-author__avatar" aria-hidden="true">
+            <img
+              v-if="authorAvatarURL && !avatarLoadFailed"
+              :src="authorAvatarURL"
+              alt=""
+              @error="avatarLoadFailed = true"
+            />
+            <span v-else>{{ authorInitial }}</span>
+          </span>
+
+          <div class="composer-main__content">
+            <div class="composer-author__copy">
+              <strong>{{ authorDisplayName }}</strong>
+              <small>{{ authorHandle }}</small>
+            </div>
+
+            <div class="composer-field composer-field--primary">
+              <label class="sr-only" for="article-content">Post</label>
+              <textarea
+                id="article-content"
+                ref="contentInput"
+                v-model="form.content"
+                class="composer-input composer-input--content"
+                rows="5"
+                placeholder="What's happening?"
+                :disabled="isSubmitting"
+                aria-describedby="article-content-help article-content-error"
+              ></textarea>
+              <div id="article-content-help" class="composer-field__meta">
+                <span
+                  v-if="contentError"
+                  id="article-content-error"
+                  class="field-error"
+                  role="alert"
+                >
+                  {{ contentError }}
+                </span>
+                <span :class="{ 'field-count--over': contentLength > maxContentLength }">
+                  {{ contentLength }}/{{ maxContentLength }}
+                </span>
+              </div>
+            </div>
+
+            <details class="composer-details">
+              <summary>Additional details</summary>
+              <div class="composer-details__fields">
+                <div class="composer-field">
+                  <label for="article-title">Headline (optional)</label>
+                  <input
+                    id="article-title"
+                    v-model="form.title"
+                    class="composer-input composer-input--title"
+                    type="text"
+                    autocomplete="off"
+                    placeholder="Headline"
+                    :disabled="isSubmitting"
+                    aria-describedby="article-title-help article-title-error"
+                  />
+                  <div id="article-title-help" class="composer-field__meta">
+                    <span
+                      v-if="titleError"
+                      id="article-title-error"
+                      class="field-error"
+                      role="alert"
+                    >
+                      {{ titleError }}
+                    </span>
+                    <span :class="{ 'field-count--over': titleLength > maxTitleLength }">
+                      {{ titleLength }}/{{ maxTitleLength }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="composer-field">
+                  <label for="article-preview">Summary (optional)</label>
+                  <textarea
+                    id="article-preview"
+                    v-model="form.preview"
+                    class="composer-input composer-input--preview"
+                    rows="2"
+                    autocomplete="off"
+                    placeholder="Add a short summary..."
+                    :disabled="isSubmitting"
+                    aria-describedby="article-preview-help article-preview-error"
+                  ></textarea>
+                  <div id="article-preview-help" class="composer-field__meta">
+                    <span
+                      v-if="previewError"
+                      id="article-preview-error"
+                      class="field-error"
+                      role="alert"
+                    >
+                      {{ previewError }}
+                    </span>
+                    <span :class="{ 'field-count--over': previewLength > maxPreviewLength }">
+                      {{ previewLength }}/{{ maxPreviewLength }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
-
-        <details class="composer-details">
-          <summary>Additional details</summary>
-          <div class="composer-details__fields">
-            <div class="composer-field">
-              <label for="article-title">Headline (optional)</label>
-              <input
-                id="article-title"
-                v-model="form.title"
-                class="composer-input composer-input--title"
-                type="text"
-                autocomplete="off"
-                placeholder="Headline"
-                :disabled="isSubmitting"
-                aria-describedby="article-title-help article-title-error"
-              />
-              <div id="article-title-help" class="composer-field__meta">
-                <span
-                  v-if="titleError"
-                  id="article-title-error"
-                  class="field-error"
-                  role="alert"
-                >
-                  {{ titleError }}
-                </span>
-                <span :class="{ 'field-count--over': titleLength > maxTitleLength }">
-                  {{ titleLength }}/{{ maxTitleLength }}
-                </span>
-              </div>
-            </div>
-
-            <div class="composer-field">
-              <label for="article-preview">Summary (optional)</label>
-              <textarea
-                id="article-preview"
-                v-model="form.preview"
-                class="composer-input composer-input--preview"
-                rows="2"
-                autocomplete="off"
-                placeholder="Add a short summary..."
-                :disabled="isSubmitting"
-                aria-describedby="article-preview-help article-preview-error"
-              ></textarea>
-              <div id="article-preview-help" class="composer-field__meta">
-                <span
-                  v-if="previewError"
-                  id="article-preview-error"
-                  class="field-error"
-                  role="alert"
-                >
-                  {{ previewError }}
-                </span>
-                <span :class="{ 'field-count--over': previewLength > maxPreviewLength }">
-                  {{ previewLength }}/{{ maxPreviewLength }}
-                </span>
-              </div>
-            </div>
-          </div>
-        </details>
       </section>
 
       <section class="composer-section composer-section--cover" aria-labelledby="cover-heading">
@@ -214,9 +226,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { createArticle, uploadArticleCover } from '../services/articleService';
+import { getUser } from '../services/userService';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import AppIcon from '../components/icons/AppIcon.vue';
+import type { PublicUser } from '../types/User';
 
 type PublishPhase = 'idle' | 'uploading' | 'publishing';
 
@@ -245,14 +259,40 @@ const coverError = ref('');
 const uploadError = ref('');
 const publishError = ref('');
 const contentInput = ref<HTMLTextAreaElement | null>(null);
+const authorProfile = ref<PublicUser | null>(null);
+const avatarLoadFailed = ref(false);
+let authorProfileRequestVersion = 0;
 
 const currentIdentity = computed(() => authStore.currentIdentity);
-const identityUsername = computed(() => currentIdentity.value?.username || 'Current user');
-const identityHandle = computed(() => (
-  currentIdentity.value ? '@' + currentIdentity.value.username : 'Signed-in account'
+const currentUserID = computed(() => currentIdentity.value?.id ?? null);
+const currentAuthorProfile = computed(() => {
+  const identity = currentIdentity.value;
+  const profile = authorProfile.value;
+
+  if (!identity || !profile || profile.id !== identity.id) {
+    return null;
+  }
+
+  return profile;
+});
+const authorUsername = computed(() => {
+  const profileUsername = currentAuthorProfile.value?.username.trim() ?? '';
+
+  return profileUsername || currentIdentity.value?.username.trim() || '';
+});
+const authorDisplayName = computed(() => {
+  const displayName = currentAuthorProfile.value?.display_name.trim() ?? '';
+
+  return displayName || authorUsername.value || 'Current user';
+});
+const authorHandle = computed(() => (
+  authorUsername.value ? '@' + authorUsername.value : 'Signed-in account'
 ));
-const identityInitial = computed(
-  () => Array.from(currentIdentity.value?.username.trim() ?? '')[0]?.toUpperCase() || '?',
+const authorInitial = computed(
+  () => Array.from(authorDisplayName.value.trim() || authorUsername.value)[0]?.toUpperCase() || '?',
+);
+const authorAvatarURL = computed(
+  () => currentAuthorProfile.value?.avatar_url.trim() ?? '',
 );
 
 const isSubmitting = computed(() => phase.value !== 'idle');
@@ -302,6 +342,48 @@ const canPublish = computed(() => (
   && Boolean(form.content.trim())
   && contentLength.value <= maxContentLength
 ));
+
+const refreshAuthorProfile = async (userID: number | null) => {
+  const requestVersion = ++authorProfileRequestVersion;
+
+  authorProfile.value = null;
+  avatarLoadFailed.value = false;
+
+  if (typeof userID !== 'number' || !Number.isSafeInteger(userID) || userID <= 0) {
+    return;
+  }
+
+  try {
+    const profile = await getUser(userID);
+
+    if (
+      requestVersion !== authorProfileRequestVersion
+      || currentUserID.value !== userID
+      || profile.id !== userID
+    ) {
+      return;
+    }
+
+    authorProfile.value = profile;
+  } catch {
+    // Profile data enriches the composer but never blocks authoring or publishing.
+  }
+};
+
+watch(
+  currentUserID,
+  userID => {
+    void refreshAuthorProfile(userID);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [currentAuthorProfile.value?.id, authorAvatarURL.value],
+  () => {
+    avatarLoadFailed.value = false;
+  },
+);
 
 const revokeCoverPreview = () => {
   if (coverPreviewURL.value) {
@@ -489,7 +571,10 @@ onMounted(() => {
   void nextTick(resizeContent);
 });
 
-onBeforeUnmount(revokeCoverPreview);
+onBeforeUnmount(() => {
+  ++authorProfileRequestVersion;
+  revokeCoverPreview();
+});
 </script>
 
 <style scoped>
@@ -569,23 +654,31 @@ onBeforeUnmount(revokeCoverPreview);
   border-bottom: 1px solid var(--color-border);
 }
 
-.composer-section--identity {
+.composer-section--main {
   padding-top: var(--space-5);
   padding-bottom: var(--space-5);
 }
 
-.composer-author {
-  display: inline-flex;
-  align-items: center;
+.composer-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
   gap: var(--space-3);
+}
+
+.composer-main__content {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-6);
 }
 
 .composer-author__avatar {
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
   flex: 0 0 auto;
   place-items: center;
+  overflow: hidden;
   border: 1px solid var(--color-border-strong);
   border-radius: 50%;
   background: var(--color-surface-subtle);
@@ -594,10 +687,25 @@ onBeforeUnmount(revokeCoverPreview);
   font-weight: 800;
 }
 
+.composer-author__avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .composer-author__copy {
   display: grid;
+  min-width: 0;
   gap: 2px;
   line-height: 1.15;
+}
+
+.composer-author__copy strong,
+.composer-author__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-author__copy strong {
@@ -608,11 +716,6 @@ onBeforeUnmount(revokeCoverPreview);
 .composer-author__copy small {
   color: var(--color-text-tertiary);
   font-size: 12px;
-}
-
-.composer-section--fields {
-  display: grid;
-  gap: var(--space-6);
 }
 
 .composer-details {
@@ -882,6 +985,11 @@ onBeforeUnmount(revokeCoverPreview);
 
   .composer-input--title {
     font-size: 20px;
+  }
+
+  .composer-author__avatar {
+    width: 38px;
+    height: 38px;
   }
 
   .cover-preview-frame {
