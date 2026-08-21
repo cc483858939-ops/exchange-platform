@@ -194,27 +194,33 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	}
 
 	invalidRequests := []struct {
-		name       string
-		constraint string
-		mutate     func(*models.RecommendationRequest)
+		name        string
+		constraints []string
+		mutate      func(*models.RecommendationRequest)
 	}{
-		{"target negative", "chk_recommendation_request_exploration_target", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = -1 }},
-		{"target exceeds limit", "chk_recommendation_request_exploration_target", func(value *models.RecommendationRequest) { value.ExplorationTargetCount = value.RequestedLimit + 1 }},
-		{"opportunity negative", "chk_recommendation_request_exploration_opportunity", func(value *models.RecommendationRequest) { value.ExplorationOpportunityCount = -1 }},
-		{"opportunity exceeds target", "chk_recommendation_request_exploration_opportunity", func(value *models.RecommendationRequest) {
+		{"target negative", []string{
+			"chk_recommendation_request_exploration_target",
+			"chk_recommendation_request_exploration_opportunity",
+		}, func(value *models.RecommendationRequest) { value.ExplorationTargetCount = -1 }},
+		{"target exceeds limit", []string{"chk_recommendation_request_exploration_target"}, func(value *models.RecommendationRequest) { value.ExplorationTargetCount = value.RequestedLimit + 1 }},
+		{"opportunity negative", []string{
+			"chk_recommendation_request_exploration_opportunity",
+			"chk_recommendation_request_exploration_result",
+		}, func(value *models.RecommendationRequest) { value.ExplorationOpportunityCount = -1 }},
+		{"opportunity exceeds target", []string{"chk_recommendation_request_exploration_opportunity"}, func(value *models.RecommendationRequest) {
 			value.ExplorationOpportunityCount = value.ExplorationTargetCount + 1
 		}},
-		{"result negative", "chk_recommendation_request_exploration_result", func(value *models.RecommendationRequest) { value.ExplorationResultCount = -1 }},
-		{"result exceeds opportunity", "chk_recommendation_request_exploration_result", func(value *models.RecommendationRequest) {
+		{"result negative", []string{"chk_recommendation_request_exploration_result"}, func(value *models.RecommendationRequest) { value.ExplorationResultCount = -1 }},
+		{"result exceeds opportunity", []string{"chk_recommendation_request_exploration_result"}, func(value *models.RecommendationRequest) {
 			value.ExplorationResultCount = value.ExplorationOpportunityCount + 1
 		}},
-		{"result exceeds result count", "chk_recommendation_request_exploration_result", func(value *models.RecommendationRequest) { value.ResultCount = 0 }},
+		{"result exceeds result count", []string{"chk_recommendation_request_exploration_result"}, func(value *models.RecommendationRequest) { value.ResultCount = 0 }},
 	}
 	for _, invalid := range invalidRequests {
 		value := request
 		value.RequestID = uuid.NewString()
 		invalid.mutate(&value)
-		requirePostgresCheckViolation(t, invalid.name, db.Create(&value).Error, invalid.constraint)
+		requirePostgresCheckViolation(t, invalid.name, db.Create(&value).Error, invalid.constraints...)
 	}
 
 	metricDate := time.Now().UTC()
@@ -260,10 +266,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		}},
 	}
 	for index, state := range invalidMetricStates {
+		invalidRankerConfigHash := "invalid-" + uuid.NewString()[:24]
 		result := db.Exec(`
 INSERT INTO recommendation_daily_metrics (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, article_id, updated_at)
 VALUES (CURRENT_DATE, ?, 'rules_v4', ?, ?, ?, ?, ?, ?, ?, ?)
-`, request.Scene, "hash-invalid-"+uuid.NewString(), strategyID, state.opportunity, state.mode, state.reason, 10+index, articles[0].ID, metricDate)
+`, request.Scene, invalidRankerConfigHash, strategyID, state.opportunity, state.mode, state.reason, 10+index, articles[0].ID, metricDate)
 		requirePostgresCheckViolation(t, state.name, result.Error, state.constraints...)
 	}
 }
