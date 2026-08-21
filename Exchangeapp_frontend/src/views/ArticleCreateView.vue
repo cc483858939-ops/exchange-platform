@@ -675,7 +675,7 @@ onBeforeUnmount(() => {
 .composer-main__content {
   display: grid;
   min-width: 0;
-  gap: var(--space-6);
+  gap: var(--space-3);
 }
 
 .composer-author__avatar {
@@ -798,8 +798,10 @@ onBeforeUnmount(() => {
 }
 
 .composer-input--content {
-  min-height: 120px;
+  min-height: 140px;
   max-height: 360px;
+  border-color: var(--color-border);
+  font-size: 17px;
   overflow-y: hidden;
 }
 
@@ -854,6 +856,11 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.cover-preview-frame--empty {
+  aspect-ratio: auto;
+  min-height: 180px;
 }
 
 .cover-empty {
@@ -1000,6 +1007,10 @@ onBeforeUnmount(() => {
 
   .cover-preview-frame {
     width: 100%;
+  }
+
+  .cover-preview-frame--empty {
+    min-height: 150px;
   }
 }
 </style>
