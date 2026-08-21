@@ -215,6 +215,59 @@ describe('ArticleCreateView author identity', () => {
     expect(mocks.getUser).not.toHaveBeenCalled();
   });
 
+  it('does not request a profile when authentication is false and identity is retained', () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = { id: 7, username: 'alice' };
+
+    wrapper = mountPage();
+
+    expect(wrapper.find('form').exists()).toBe(false);
+    expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
+    expect(mocks.getUser).not.toHaveBeenCalled();
+  });
+
+  it('ignores an in-flight profile response after authentication is lost', async () => {
+    const request = deferred<PublicUser>();
+    mocks.getUser.mockReturnValue(request.promise);
+
+    wrapper = mountPage();
+    expect(mocks.getUser).toHaveBeenCalledOnce();
+    expect(mocks.getUser).toHaveBeenCalledWith(7);
+
+    mocks.authStore!.isAuthenticated = false;
+    await nextTick();
+
+    expect(wrapper.find('form').exists()).toBe(false);
+    expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
+    expect(mocks.getUser).toHaveBeenCalledOnce();
+
+    request.resolve(profile({
+      displayName: 'Alice After Logout',
+      avatarURL: 'https://example.test/alice-after-logout.jpg',
+    }));
+    await flushPromises();
+
+    expect(wrapper.find('form').exists()).toBe(false);
+    expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
+    expect(wrapper.html()).not.toContain('alice-after-logout.jpg');
+  });
+
+  it('fetches the profile once when authentication becomes true', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = { id: 7, username: 'alice' };
+
+    wrapper = mountPage();
+    expect(mocks.getUser).not.toHaveBeenCalled();
+
+    mocks.authStore!.isAuthenticated = true;
+    await nextTick();
+    await flushPromises();
+
+    expect(mocks.getUser).toHaveBeenCalledOnce();
+    expect(mocks.getUser).toHaveBeenCalledWith(7);
+    expect(wrapper.get('.composer-author__copy strong').text()).toBe('Alice Smith');
+  });
+
   it('ignores a profile response for another user', async () => {
     mocks.getUser.mockResolvedValue(profile({
       id: 99,

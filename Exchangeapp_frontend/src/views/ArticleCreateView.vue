@@ -264,7 +264,13 @@ const avatarLoadFailed = ref(false);
 let authorProfileRequestVersion = 0;
 
 const currentIdentity = computed(() => authStore.currentIdentity);
-const currentUserID = computed(() => currentIdentity.value?.id ?? null);
+const currentUserID = computed(() => {
+  if (!authStore.isAuthenticated) {
+    return null;
+  }
+
+  return currentIdentity.value?.id ?? null;
+});
 const currentAuthorProfile = computed(() => {
   const identity = currentIdentity.value;
   const profile = authorProfile.value;
