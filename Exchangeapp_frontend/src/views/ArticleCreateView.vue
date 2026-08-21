@@ -159,16 +159,24 @@
           </div>
         </div>
 
-        <figure class="cover-preview-frame" :class="{ 'cover-preview-frame--empty': !coverPreviewURL }">
+        <button
+          v-if="!coverPreviewURL"
+          class="cover-preview-frame cover-preview-frame--empty cover-preview-trigger"
+          type="button"
+          :disabled="isSubmitting"
+          aria-label="Add cover image"
+          @click="openCoverPicker"
+        >
+          <span class="cover-empty" aria-hidden="true">
+            <AppIcon name="image" :size="28" />
+            <span>No cover selected</span>
+          </span>
+        </button>
+        <figure v-else class="cover-preview-frame">
           <img
-            v-if="coverPreviewURL"
             :src="coverPreviewURL"
             alt="Selected cover preview"
           />
-          <div v-else class="cover-empty" aria-hidden="true">
-            <AppIcon name="image" :size="28" />
-            <span>No cover selected</span>
-          </div>
         </figure>
 
         <div class="cover-actions">
@@ -181,6 +189,7 @@
             <AppIcon name="image" :size="16" />
             {{ coverFile ? 'Replace cover' : 'Add cover' }}
             <input
+              ref="coverInput"
               id="article-cover-input"
               class="cover-input"
               type="file"
@@ -258,6 +267,7 @@ const uploadedCoverURL = ref('');
 const coverError = ref('');
 const uploadError = ref('');
 const publishError = ref('');
+const coverInput = ref<HTMLInputElement | null>(null);
 const contentInput = ref<HTMLTextAreaElement | null>(null);
 const authorProfile = ref<PublicUser | null>(null);
 const avatarLoadFailed = ref(false);
@@ -414,6 +424,14 @@ const removeCover = () => {
   if (input) {
     input.value = '';
   }
+};
+
+const openCoverPicker = () => {
+  if (isSubmitting.value) {
+    return;
+  }
+
+  coverInput.value?.click();
 };
 
 const handleCoverChange = (event: Event) => {
@@ -861,6 +879,30 @@ onBeforeUnmount(() => {
 .cover-preview-frame--empty {
   aspect-ratio: auto;
   min-height: 180px;
+}
+
+.cover-preview-trigger {
+  appearance: none;
+  padding: 0;
+  text-align: inherit;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cover-preview-trigger:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.cover-preview-trigger:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
+  outline-offset: 2px;
+}
+
+.cover-preview-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .cover-empty {
