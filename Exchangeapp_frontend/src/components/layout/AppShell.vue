@@ -35,6 +35,10 @@
           <AppIcon name="search" :size="20" />
           <span>Search</span>
         </router-link>
+        <router-link v-if="authStore.isAuthenticated" :to="{ name: 'History' }" aria-label="History" title="History">
+          <AppIcon name="history" :size="20" />
+          <span>History</span>
+        </router-link>
         <router-link :to="{ name: 'CurrencyExchange' }" aria-label="Exchange" title="Exchange">
           <AppIcon name="exchange" :size="20" />
           <span>Exchange</span>
@@ -230,7 +234,7 @@ const { authStore, handleLogout } = useLogout();
   }
 
   .app-layout__mobile-links--authenticated {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .app-layout__mobile-links a {

@@ -153,12 +153,14 @@ import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '.
 
 const props = withDefaults(defineProps<{
   post: FeedPost;
+  trackView?: boolean;
   likePending?: boolean;
   showNotInterested?: boolean;
   showDelete?: boolean;
   deletePending?: boolean;
   deleteError?: string;
 }>(), {
+  trackView: true,
   likePending: false,
   showNotInterested: false,
   showDelete: false,
@@ -219,8 +221,14 @@ const viewLabel = computed(() => formatAccessibleEngagementCount(props.post.view
 const viewActionLabel = computed(() => 'Open post, ' + viewLabel.value);
 
 const observeCurrentPost = () => {
-  if (postCardRef.value) {
+  if (props.trackView && postCardRef.value) {
     articleViewTelemetry.observeFeedCard(postCardRef.value, props.post.id);
+  }
+};
+
+const unobserveCurrentPost = () => {
+  if (postCardRef.value) {
+    articleViewTelemetry.unobserveFeedCard(postCardRef.value);
   }
 };
 
@@ -390,16 +398,18 @@ watch(
 );
 
 watch(
-  () => props.post.id,
-  (articleID, previousArticleID) => {
-    if (articleID === previousArticleID) {
+  [() => props.post.id, () => props.trackView],
+  ([articleID, trackView], [previousArticleID, previousTrackView]) => {
+    if (articleID === previousArticleID && trackView === previousTrackView) {
       return;
     }
-    if (postCardRef.value) {
-      articleViewTelemetry.unobserveFeedCard(postCardRef.value);
+    unobserveCurrentPost();
+    if (trackView) {
+      observeCurrentPost();
     }
-    observeCurrentPost();
-    closeMore();
+    if (articleID !== previousArticleID) {
+      closeMore();
+    }
   },
 );
 
@@ -410,9 +420,7 @@ const hideCover = () => {
 };
 
 onBeforeUnmount(() => {
-  if (postCardRef.value) {
-    articleViewTelemetry.unobserveFeedCard(postCardRef.value);
-  }
+  unobserveCurrentPost();
   closeMore();
 });
 </script>

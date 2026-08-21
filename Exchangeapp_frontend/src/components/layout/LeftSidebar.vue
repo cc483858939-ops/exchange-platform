@@ -85,6 +85,7 @@ const currentProfileID = computed(() => {
 const navigation = [
   { name: 'Home', label: 'Home', icon: 'home' as const, compactOnly: false, authOnly: false },
   { name: 'UserSearch', label: 'Search', icon: 'search' as const, compactOnly: false, authOnly: true },
+  { name: 'History', label: 'History', icon: 'history' as const, compactOnly: false, authOnly: true },
   { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, compactOnly: true, authOnly: false },
 ];
 

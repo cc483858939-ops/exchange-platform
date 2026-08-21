@@ -49,8 +49,8 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     vi.restoreAllMocks();
   });
 
-  const mountPostCard = (post = basePost()) => mount(PostCard, {
-    props: { post },
+  const mountPostCard = (post = basePost(), extraProps: Record<string, unknown> = {}) => mount(PostCard, {
+    props: { post, ...extraProps },
     global: {
       stubs: {
         AuthorIdentity: { template: '<span class="author-identity" />' },
@@ -102,6 +102,19 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(mocks.observeFeedCard).toHaveBeenCalledWith(root, 43);
 
     wrapper.unmount();
+    expect(mocks.unobserveFeedCard).toHaveBeenCalledWith(root);
+  });
+
+  it('does not observe feed view telemetry when trackView is false and syncs later changes', async () => {
+    const wrapper = mountPostCard(basePost(), { trackView: false });
+    const root = wrapper.element;
+
+    expect(mocks.observeFeedCard).not.toHaveBeenCalled();
+
+    await wrapper.setProps({ trackView: true });
+    expect(mocks.observeFeedCard).toHaveBeenCalledWith(root, 42);
+
+    await wrapper.setProps({ trackView: false });
     expect(mocks.unobserveFeedCard).toHaveBeenCalledWith(root);
   });
 
