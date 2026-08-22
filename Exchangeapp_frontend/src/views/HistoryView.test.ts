@@ -142,6 +142,31 @@ describe('HistoryView', () => {
     expect(mocks.getArticleLikeStates).toHaveBeenCalledWith([42]);
   });
 
+  it('preserves a pending history request when the same viewer refreshes their access token', async () => {
+    setAuth(7);
+    const pendingPage = deferred<{ items: Article[]; next_cursor: string | null }>();
+    mocks.getLikedHistory.mockImplementationOnce(() => pendingPage.promise);
+    mocks.getArticleLikeStates.mockResolvedValue({
+      items: [{ article_id: 1, likes: 4, liked: true }],
+      unavailable_article_ids: [],
+    });
+    const wrapper = mountHistory();
+
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(1);
+    const authStore = mocks.authStore;
+    authStore.token = 'Bearer token-7-b';
+    await flushPromises();
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(1);
+
+    pendingPage.resolve({ items: [article(1)], next_cursor: 'cursor-1' });
+    await flushPromises();
+
+    expect(wrapper.find('[data-id="1"]').attributes('data-status')).toBe('ready');
+    expect(wrapper.find('[data-id="1"]').attributes('data-liked')).toBe('true');
+    expect(wrapper.text()).toContain('Load more posts');
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(1);
+  });
+
   it('hydrates one page in a batch and keeps unavailable cards visible', async () => {
     setAuth(7);
     mocks.getLikedHistory.mockResolvedValue({ items: [article(1), article(2)], next_cursor: null });
@@ -291,17 +316,53 @@ describe('HistoryView', () => {
     expect(wrapper.find('[data-id="1"]').attributes('data-liked')).toBe('true');
   });
 
-  it('ignores stale page and hydration responses after a viewer switch', async () => {
+  it('ignores a pending page response after a viewer switch and starts the new request first', async () => {
     setAuth(1);
     const firstPage = deferred<{ items: Article[]; next_cursor: string | null }>();
-    const firstHydration = deferred<{ items: Array<{ article_id: number; likes: number; liked: boolean }>; unavailable_article_ids: number[] }>();
-    mocks.getLikedHistory.mockImplementationOnce(() => firstPage.promise).mockResolvedValue({ items: [], next_cursor: null });
-    mocks.getArticleLikeStates.mockImplementationOnce(() => firstHydration.promise);
+    const secondPage = deferred<{ items: Article[]; next_cursor: string | null }>();
+    mocks.getLikedHistory
+      .mockImplementationOnce(() => firstPage.promise)
+      .mockImplementationOnce(() => secondPage.promise);
     const wrapper = mountHistory();
+
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(1);
+    const authStore = mocks.authStore;
+    Object.assign(authStore, {
+      currentIdentity: { id: 2, username: 'viewer-2' },
+      token: 'Bearer token-2',
+    });
+    await flushPromises();
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(2);
+
+    secondPage.resolve({ items: [article(2)], next_cursor: null });
+    await flushPromises();
+
+    expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
 
     firstPage.resolve({ items: [article(1)], next_cursor: null });
     await flushPromises();
-    expect(wrapper.find('[data-id="1"]').exists()).toBe(true);
+
+    expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
+  });
+
+  it('ignores a pending hydration response after a viewer switch', async () => {
+    setAuth(1);
+    const firstHydration = deferred<{
+      items: Array<{ article_id: number; likes: number; liked: boolean }>;
+      unavailable_article_ids: number[];
+    }>();
+    const secondPage = deferred<{ items: Article[]; next_cursor: string | null }>();
+    mocks.getLikedHistory
+      .mockResolvedValueOnce({ items: [article(1)], next_cursor: null })
+      .mockImplementationOnce(() => secondPage.promise);
+    mocks.getArticleLikeStates.mockImplementationOnce(() => firstHydration.promise);
+    const wrapper = mountHistory();
+
+    await flushPromises();
+    expect(mocks.getArticleLikeStates).toHaveBeenCalledTimes(1);
+    expect(mocks.getArticleLikeStates).toHaveBeenCalledWith([1]);
 
     const authStore = mocks.authStore;
     Object.assign(authStore, {
@@ -309,18 +370,26 @@ describe('HistoryView', () => {
       token: 'Bearer token-2',
     });
     await flushPromises();
-    firstHydration.resolve({ items: [{ article_id: 1, likes: 99, liked: true }], unavailable_article_ids: [] });
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(2);
+
+    secondPage.resolve({ items: [article(2)], next_cursor: null });
+    await flushPromises();
+    expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
+
+    firstHydration.resolve({
+      items: [{ article_id: 1, likes: 99, liked: true }],
+      unavailable_article_ids: [],
+    });
     await flushPromises();
 
-    expect(wrapper.find('.history-post').exists()).toBe(false);
-    expect(mocks.getLikedHistory).toHaveBeenCalledWith({ limit: 20 });
+    expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
   });
 
-  it('ignores stale page and unlike responses after logout', async () => {
+  it('ignores a pending unlike response after logout', async () => {
     setAuth(1);
-    const page = deferred<{ items: Article[]; next_cursor: string | null }>();
     const unlike = deferred<{ likes: number; liked: boolean }>();
-    mocks.getLikedHistory.mockImplementationOnce(() => page.promise).mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getLikedHistory.mockResolvedValue({ items: [article(1)], next_cursor: null });
     mocks.getArticleLikeStates.mockResolvedValue({
       items: [{ article_id: 1, likes: 4, liked: true }],
       unavailable_article_ids: [],
@@ -328,20 +397,61 @@ describe('HistoryView', () => {
     mocks.unlikeArticle.mockImplementationOnce(() => unlike.promise);
     const wrapper = mountHistory();
 
-    page.resolve({ items: [article(1)], next_cursor: null });
     await flushPromises();
     expect(wrapper.find('[data-id="1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-id="1"]').attributes('data-status')).toBe('ready');
+    expect(wrapper.find('[data-id="1"]').attributes('data-liked')).toBe('true');
+
+    await wrapper.get('[data-id="1"] .history-post__like').trigger('click');
+    expect(mocks.unlikeArticle).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('.history-post').exists()).toBe(false);
 
     const authStore = mocks.authStore;
     authStore.isAuthenticated = false;
     authStore.currentIdentity = null;
     authStore.token = null;
     await flushPromises();
+
+    expect(wrapper.text()).toContain('Log in to view your history.');
+    expect(wrapper.find('.history-post').exists()).toBe(false);
+
     unlike.resolve({ likes: 4, liked: true });
-    page.resolve({ items: [article(1)], next_cursor: null });
     await flushPromises();
 
     expect(wrapper.find('.history-post').exists()).toBe(false);
-    expect(mocks.getArticleLikeStates).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).not.toContain('Could not remove this like.');
+  });
+
+  it('loads a fresh page after logout and logging back in as the same viewer', async () => {
+    setAuth(7);
+    mocks.getLikedHistory
+      .mockResolvedValueOnce({ items: [article(1)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [article(2)], next_cursor: null });
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(true);
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(1);
+
+    const authStore = mocks.authStore;
+    Object.assign(authStore, {
+      isAuthenticated: false,
+      currentIdentity: null,
+      token: null,
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain('Log in to view your history.');
+    expect(wrapper.find('.history-post').exists()).toBe(false);
+
+    Object.assign(authStore, {
+      isAuthenticated: true,
+      currentIdentity: { id: 7, username: 'viewer-7' },
+      token: 'Bearer token-7-b',
+    });
+    await flushPromises();
+
+    expect(mocks.getLikedHistory).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
   });
 });

@@ -109,11 +109,11 @@ const currentViewerID = computed(() => {
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
 });
 
-const viewerIdentityKey = computed(() =>
-  authStore.isAuthenticated
-    ? `${authStore.token ?? ''}:${currentViewerID.value ?? ''}`
-    : 'anonymous',
-);
+const viewerIdentityKey = computed(() => (
+  currentViewerID.value === null
+    ? 'anonymous'
+    : `user:${currentViewerID.value}`
+));
 
 const historyPosts = ref<FeedPost[]>([]);
 const initialLoading = ref(false);
