@@ -28,5 +28,17 @@ func main() {
 		log.Printf("Kafka topic provisioning failed: %v", err)
 		os.Exit(1)
 	}
-	log.Printf("Kafka topic provisioning completed: %d topics ready", len(specs))
+	internalSpecs, err := eventing.KafkaConnectInternalTopicSpecs(config.AppConfig.Kafka)
+	if err != nil {
+		log.Printf("Kafka Connect topic configuration is invalid: %v", err)
+		os.Exit(1)
+	}
+	for _, spec := range internalSpecs {
+		log.Printf("Kafka Connect topic required: name=%s partitions=%d replication_factor=%d", spec.Name, spec.Partitions, spec.ReplicationFactor)
+	}
+	if err := eventing.EnsureKafkaConnectInternalTopics(ctx, config.AppConfig.Kafka); err != nil {
+		log.Printf("Kafka Connect topic provisioning failed: %v", err)
+		os.Exit(1)
+	}
+	log.Printf("Kafka topic provisioning completed: %d application topics and %d Kafka Connect topics ready", len(specs), len(internalSpecs))
 }

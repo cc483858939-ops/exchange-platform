@@ -73,6 +73,28 @@ func (p *KafkaPublisher) PublishBatch(ctx context.Context, events []Envelope) er
 	return nil
 }
 
+// PublishRawMessages is used only for infrastructure side channels such as a
+// projection DLQ. Domain activity publication continues to use canonical
+// Envelope values and TopicForEvent.
+func PublishRawMessages(ctx context.Context, kafkaConfig config.KafkaConfig, topic string, messages ...kafka.Message) error {
+	if strings.TrimSpace(topic) == "" {
+		return errors.New("Kafka topic is required")
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	brokers := normalizedBrokers(kafkaConfig.Brokers)
+	if len(brokers) == 0 {
+		return errors.New("kafka brokers are required")
+	}
+	writer := &kafka.Writer{
+		Addr: kafka.TCP(brokers...), Topic: topic, Balancer: &kafka.Hash{},
+		RequiredAcks: kafka.RequireAll, Async: false, BatchTimeout: 50 * time.Millisecond,
+	}
+	defer writer.Close()
+	return writer.WriteMessages(ctx, messages...)
+}
+
 func (p *KafkaPublisher) writer(topic string) *kafka.Writer {
 	p.mu.Lock()
 	defer p.mu.Unlock()

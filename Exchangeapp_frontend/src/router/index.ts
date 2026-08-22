@@ -9,6 +9,7 @@ import UserProfileView from '../views/UserProfileView.vue';
 import UserConnectionsView from '../views/UserConnectionsView.vue';
 import UserSearchView from '../views/UserSearchView.vue';
 import HistoryView from '../views/HistoryView.vue';
+import NotificationsView from '../views/NotificationsView.vue';
 import Login from '../components/Login.vue';
 import Register from '../components/Register.vue';
 
@@ -24,6 +25,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/users/:id/followers', name: 'UserFollowers', component: UserConnectionsView, meta: { layout: 'app' } },
   { path: '/search', name: 'UserSearch', component: UserSearchView, meta: { layout: 'app' } },
   { path: '/history', name: 'History', component: HistoryView, meta: { layout: 'app' } },
+  { path: '/notifications', name: 'Notifications', component: NotificationsView, meta: { layout: 'app' } },
   { path: '/login', name: 'Login', component: Login, meta: { layout: 'auth' } },
   { path: '/register', name: 'Register', component: Register, meta: { layout: 'auth' } },
 ];

@@ -6,10 +6,12 @@ import (
 	"strconv"
 	"time"
 
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -156,14 +158,28 @@ func followAndLoadStateFromDB(viewerID, targetID uint) (userFollowState, error) 
 
 	var state userFollowState
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{
+		follow := models.UserFollow{FollowerID: viewerID, FollowingID: targetID}
+		result := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "follower_id"}, {Name: "following_id"}},
 			DoNothing: true,
-		}).Create(&models.UserFollow{
-			FollowerID:  viewerID,
-			FollowingID: targetID,
-		}).Error; err != nil {
-			return err
+		}).Create(&follow)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			createdAt := follow.CreatedAt.UTC()
+			if createdAt.IsZero() {
+				createdAt = time.Now().UTC()
+			}
+			activity, err := eventing.NewUserFollowCreatedEnvelope(uuid.NewString(), eventing.UserFollowCreatedPayload{
+				FollowID: follow.ID, FollowerID: viewerID, FollowingID: targetID, CreatedAt: createdAt,
+			})
+			if err != nil {
+				return err
+			}
+			if err := addConfiguredActivityOutboxEvent(tx, activity); err != nil {
+				return err
+			}
 		}
 		nextState, err := readFollowState(tx, viewerID, targetID)
 		if err != nil {

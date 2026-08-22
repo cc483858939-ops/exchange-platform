@@ -136,7 +136,7 @@ func TestRecommendationBehaviorEnvelopeRejectsMissingStructuralFields(t *testing
 }
 
 func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
-	cfg := config.KafkaConfig{Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", ArticleEmbeddingTopic: "embedding", TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, ArticleEmbeddingPartitions: 6}
+	cfg := config.KafkaConfig{Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", ArticleEmbeddingTopic: "embedding", ActivityEventsTopic: "activity", NotificationDLQTopic: "notification-dlq", TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, ArticleEmbeddingPartitions: 6, ActivityEventsPartitions: 12, NotificationDLQPartitions: 3}
 	specs, err := RequiredKafkaTopics(cfg)
 	if err != nil {
 		t.Fatal(err)

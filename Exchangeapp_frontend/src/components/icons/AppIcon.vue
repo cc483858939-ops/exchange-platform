@@ -55,6 +55,18 @@
       <path d="M12 7.5v4.75l3.25 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
     </template>
 
+    <template v-else-if="props.name === 'notifications'">
+      <path
+        d="M6.25 10.5a5.75 5.75 0 0 1 11.5 0v3.25l1.75 2.25H4.5l1.75-2.25V10.5Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+      <path d="M9.75 19h4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    </template>
+
     <template v-else-if="props.name === 'profile'">
       <path
         v-if="props.filled"
@@ -294,6 +306,7 @@ type AppIconName =
   | 'exchange'
   | 'search'
   | 'history'
+  | 'notifications'
   | 'profile'
   | 'compose'
   | 'logout'

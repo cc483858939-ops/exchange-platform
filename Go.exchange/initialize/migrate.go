@@ -25,6 +25,9 @@ func RunMigrations() error {
 		if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 			return fmt.Errorf("enable pgvector extension: %w", err)
 		}
+		if err := prepareLegacyOutboxSchema(tx); err != nil {
+			return err
+		}
 
 		if err := tx.AutoMigrate(
 			&models.User{},
@@ -33,6 +36,7 @@ func RunMigrations() error {
 			&models.Comment{},
 			&models.ArticleEmbedding{},
 			&models.OutboxEvent{},
+			&models.Notification{},
 			&models.ConsumerInbox{},
 			&models.ArticleBehavior{},
 			&models.ArticleReaction{},
@@ -88,6 +92,12 @@ func RunMigrations() error {
 			return err
 		}
 		if err := applyCommentConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyOutboxSchema(tx); err != nil {
+			return err
+		}
+		if err := applyNotificationSchema(tx); err != nil {
 			return err
 		}
 		if err := tx.Exec(`

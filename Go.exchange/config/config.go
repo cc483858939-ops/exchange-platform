@@ -25,15 +25,20 @@ type KafkaConfig struct {
 	LikeSnapshotTopic              string   `mapstructure:"like_snapshot_topic"`
 	RecommendationEventsTopic      string   `mapstructure:"recommendation_events_topic"`
 	ArticleEmbeddingTopic          string   `mapstructure:"article_embedding_topic"`
+	ActivityEventsTopic            string   `mapstructure:"activity_events_topic"`
+	NotificationDLQTopic           string   `mapstructure:"notification_dlq_topic"`
 	TopicReplicationFactor         int      `mapstructure:"topic_replication_factor"`
 	UserBehaviorPartitions         int      `mapstructure:"user_behavior_partitions"`
 	LikeSnapshotPartitions         int      `mapstructure:"like_snapshot_partitions"`
 	RecommendationEventsPartitions int      `mapstructure:"recommendation_events_partitions"`
 	ArticleEmbeddingPartitions     int      `mapstructure:"article_embedding_partitions"`
+	ActivityEventsPartitions       int      `mapstructure:"activity_events_partitions"`
+	NotificationDLQPartitions      int      `mapstructure:"notification_dlq_partitions"`
 	UserBehaviorGroupID            string   `mapstructure:"user_behavior_group_id"`
 	LikeSnapshotGroupID            string   `mapstructure:"like_snapshot_group_id"`
 	RecommendationMetricsGroupID   string   `mapstructure:"recommendation_metrics_group_id"`
 	ArticleEmbeddingGroupID        string   `mapstructure:"article_embedding_group_id"`
+	NotificationGroupID            string   `mapstructure:"notification_group_id"`
 }
 
 type RecommendationBehaviorWeights struct {
@@ -162,7 +167,9 @@ type RecommendationConfig struct {
 }
 
 type OutboxConfig struct {
-	PollIntervalSeconds int `mapstructure:"poll_interval_seconds"`
+	RetentionHours         int `mapstructure:"retention_hours"`
+	CleanupIntervalSeconds int `mapstructure:"cleanup_interval_seconds"`
+	CleanupBatchSize       int `mapstructure:"cleanup_batch_size"`
 }
 
 type StorageConfig struct {

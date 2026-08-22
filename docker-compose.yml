@@ -26,6 +26,9 @@ x-go-environment: &go-environment
   EMBEDDING_MODEL: "${EMBEDDING_MODEL:-}"
   EMBEDDING_VERSION: "${EMBEDDING_VERSION:-post_embedding_v1}"
   EMBEDDING_TIMEOUT_SECONDS: "${EMBEDDING_TIMEOUT_SECONDS:-10}"
+  CDC_DATABASE_USER: "${CDC_DATABASE_USER:-postgres}"
+  CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-1234}"
+  CDC_CONNECT_URL: "${CDC_CONNECT_URL:-http://kafka-connect:8083}"
 
 services:
   embedding:
@@ -76,6 +79,57 @@ services:
     environment:
       KAFKA_BROKERS: "${KAFKA_BROKERS:-}"
     restart: "no"
+
+  kafka-connect:
+    image: debezium/connect:3.6.1.Final
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: "1"
+      CONFIG_STORAGE_TOPIC: goexchange.connect.configs
+      OFFSET_STORAGE_TOPIC: goexchange.connect.offsets
+      STATUS_STORAGE_TOPIC: goexchange.connect.status
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_PLUGIN_PATH: /kafka/connect,/usr/share/java
+      CDC_DATABASE_USER: "${CDC_DATABASE_USER:-postgres}"
+      CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-1234}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+  cdc-init:
+    <<: *go-service
+    command: ["go", "run", "./cmd/cdc-init"]
+    environment:
+      <<: *go-environment
+      CDC_DATABASE_USER: "${CDC_DATABASE_USER:-postgres}"
+      CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-1234}"
+      CDC_CONNECT_URL: "${CDC_CONNECT_URL:-http://kafka-connect:8083}"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-connect:
+        condition: service_healthy
+    restart: "no"
   api:
     <<: *go-service
     command: ["go", "run", "main.go"]
@@ -85,6 +139,8 @@ services:
       redis:
         condition: service_started
       kafka-init:
+        condition: service_completed_successfully
+      cdc-init:
         condition: service_completed_successfully
       minio:
         condition: service_started
@@ -110,6 +166,8 @@ services:
         condition: service_started
       kafka-init:
         condition: service_completed_successfully
+      cdc-init:
+        condition: service_completed_successfully
       minio:
         condition: service_started
     environment:
@@ -132,6 +190,7 @@ services:
 
   db:
     image: pgvector/pgvector:pg16
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4", "-c", "max_wal_senders=4"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: "1234"

@@ -40,6 +40,8 @@ func RequiredKafkaTopics(cfg config.KafkaConfig) ([]TopicSpec, error) {
 		{Name: cfg.LikeSnapshotTopic, Partitions: cfg.LikeSnapshotPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.RecommendationEventsTopic, Partitions: cfg.RecommendationEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.ArticleEmbeddingTopic, Partitions: cfg.ArticleEmbeddingPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: cfg.ActivityEventsTopic, Partitions: cfg.ActivityEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: cfg.NotificationDLQTopic, Partitions: cfg.NotificationDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 	}
 	seen := make(map[string]struct{}, len(specs))
 	for index := range specs {
@@ -118,6 +120,35 @@ func EnsureKafkaTopics(ctx context.Context, cfg config.KafkaConfig) error {
 	if err != nil {
 		return err
 	}
+	return ensureConfiguredKafkaTopics(ctx, cfg, specs)
+}
+
+// KafkaConnectInternalTopicSpecs describes the durable Kafka Connect worker
+// topics. They are infrastructure topics, not application event topics, so
+// they are provisioned separately from RequiredKafkaTopics.
+func KafkaConnectInternalTopicSpecs(cfg config.KafkaConfig) ([]TopicSpec, error) {
+	if len(normalizedBrokers(cfg.Brokers)) == 0 {
+		return nil, errors.New("kafka brokers are required")
+	}
+	if cfg.TopicReplicationFactor < 1 {
+		return nil, errors.New("kafka topic replication factor must be at least 1")
+	}
+	return []TopicSpec{
+		{Name: "goexchange.connect.configs", Partitions: 1, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: "goexchange.connect.offsets", Partitions: 25, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: "goexchange.connect.status", Partitions: 5, ReplicationFactor: cfg.TopicReplicationFactor},
+	}, nil
+}
+
+func EnsureKafkaConnectInternalTopics(ctx context.Context, cfg config.KafkaConfig) error {
+	specs, err := KafkaConnectInternalTopicSpecs(cfg)
+	if err != nil {
+		return err
+	}
+	return ensureConfiguredKafkaTopics(ctx, cfg, specs)
+}
+
+func ensureConfiguredKafkaTopics(ctx context.Context, cfg config.KafkaConfig, specs []TopicSpec) error {
 	brokers := normalizedBrokers(cfg.Brokers)
 	factory := func(dialCtx context.Context) (kafkaTopicAdmin, error) {
 		errs := make([]error, 0, len(brokers))
@@ -203,6 +234,7 @@ func provisionKafkaTopics(ctx context.Context, admin kafkaTopicAdmin, specs []To
 			Topic:             spec.Name,
 			NumPartitions:     spec.Partitions,
 			ReplicationFactor: spec.ReplicationFactor,
+			ConfigEntries:     kafkaTopicConfigEntries(spec.Name),
 		})
 	}
 	if len(missing) > 0 {
@@ -211,6 +243,15 @@ func provisionKafkaTopics(ctx context.Context, admin kafkaTopicAdmin, specs []To
 		}
 	}
 	return verifyKafkaTopicMetadata(ctx, admin, specs, options)
+}
+
+func kafkaTopicConfigEntries(topic string) []kafka.ConfigEntry {
+	switch topic {
+	case "goexchange.connect.configs", "goexchange.connect.offsets", "goexchange.connect.status":
+		return []kafka.ConfigEntry{{ConfigName: "cleanup.policy", ConfigValue: "compact"}}
+	default:
+		return nil
+	}
 }
 
 func verifyKafkaTopicMetadata(ctx context.Context, admin kafkaTopicAdmin, specs []TopicSpec, options kafkaProvisioningOptions) error {

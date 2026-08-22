@@ -1,7 +1,7 @@
 <template>
   <div class="app-layout">
     <aside class="app-layout__left">
-      <LeftSidebar />
+      <LeftSidebar :notification-badge="notificationStore.unreadBadge" />
     </aside>
 
     <header class="app-layout__mobile-nav">
@@ -35,6 +35,11 @@
           <AppIcon name="search" :size="20" />
           <span>Search</span>
         </router-link>
+        <router-link v-if="authStore.isAuthenticated" class="app-layout__notification-link" :to="{ name: 'Notifications' }" aria-label="Notifications" title="Notifications">
+          <AppIcon name="notifications" :size="20" />
+          <span>Notifications</span>
+          <span v-if="notificationStore.unreadBadge" class="app-layout__notification-badge">{{ notificationStore.unreadBadge }}</span>
+        </router-link>
         <router-link v-if="authStore.isAuthenticated" :to="{ name: 'History' }" aria-label="History" title="History">
           <AppIcon name="history" :size="20" />
           <span>History</span>
@@ -57,12 +62,38 @@
 </template>
 
 <script setup lang="ts">
+import { watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useLogout } from '../../composables/useLogout';
+import { useNotificationStore } from '../../store/notification';
 import AppIcon from '../icons/AppIcon.vue';
 import LeftSidebar from './LeftSidebar.vue';
 import RightRail from './RightRail.vue';
 
 const { authStore, handleLogout } = useLogout();
+const route = useRoute();
+const notificationStore = useNotificationStore();
+
+const syncNotificationViewer = () => {
+  const nextViewerID = authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null;
+  notificationStore.setViewer(nextViewerID);
+  const capture = notificationStore.captureViewer();
+  if (capture) {
+    void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
+  }
+};
+
+// AppShell is the sole unread coordinator. Identity changes invalidate old
+// requests; access-token rotation for the same identity does not refetch.
+watch(() => authStore.currentIdentity?.id, syncNotificationViewer, { immediate: true });
+watch(() => route.name, (name) => {
+  if (name === 'Notifications' && authStore.isAuthenticated) {
+    const capture = notificationStore.captureViewer();
+    if (capture) {
+      void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
+    }
+  }
+});
 </script>
 
 <style scoped>
@@ -234,7 +265,7 @@ const { authStore, handleLogout } = useLogout();
   }
 
   .app-layout__mobile-links--authenticated {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .app-layout__mobile-links a {
@@ -253,6 +284,39 @@ const { authStore, handleLogout } = useLogout();
     text-decoration: none;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .app-layout__mobile-links--authenticated a {
+    flex-direction: column;
+    gap: 1px;
+    min-height: 44px;
+    padding-inline: 0;
+    font-size: 10px;
+    line-height: 1.1;
+  }
+
+  .app-layout__mobile-links--authenticated a .app-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .app-layout__notification-link {
+    position: relative;
+  }
+
+  .app-layout__notification-badge {
+    position: absolute;
+    top: 0;
+    right: 2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    border-radius: var(--radius-pill);
+    background: var(--color-accent);
+    color: var(--color-surface);
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 16px;
   }
 
   .app-layout__mobile-links a.router-link-active {
@@ -278,9 +342,14 @@ const { authStore, handleLogout } = useLogout();
     font-size: 12px;
   }
 
-  .app-layout__mobile-links a {
+  .app-layout__mobile-links:not(.app-layout__mobile-links--authenticated) a {
     gap: 4px;
     font-size: 11px;
+  }
+
+  .app-layout__mobile-links--authenticated a {
+    font-size: 9px;
+    letter-spacing: -0.02em;
   }
 }
 </style>

@@ -5,10 +5,12 @@ import (
 	"log"
 	"time"
 
+	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -66,13 +68,17 @@ func createCommentWithCount(articleID, userID uint, content string) (models.Comm
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
 		var article models.Article
 		if err := tx.
-			Select("id").
+			Select("id, author_id").
 			Scopes(func(query *gorm.DB) *gorm.DB { return publicArticleScope(query, occurredAt) }).
 			First(&article, articleID).Error; err != nil {
 			return err
 		}
 		if err := tx.Create(&comment).Error; err != nil {
 			return err
+		}
+		commentCreatedAt := comment.CreatedAt.UTC()
+		if commentCreatedAt.IsZero() {
+			commentCreatedAt = occurredAt
 		}
 		rowsAffected, err := incrementArticleCommentCount(tx, articleID)
 		if err != nil {
@@ -81,10 +87,20 @@ func createCommentWithCount(articleID, userID uint, content string) (models.Comm
 		if rowsAffected != 1 {
 			return errCommentCountConsistency
 		}
-		if err := upsertReplyArticleBehavior(tx, userID, articleID, occurredAt); err != nil {
+		if err := upsertReplyArticleBehavior(tx, userID, articleID, commentCreatedAt); err != nil {
 			return err
 		}
-		if err := recommendation.InvalidateProfiles(tx, []uint{userID}, "reply_created", occurredAt); err != nil {
+		if err := recommendation.InvalidateProfiles(tx, []uint{userID}, "reply_created", commentCreatedAt); err != nil {
+			return err
+		}
+		activity, err := eventing.NewCommentCreatedEnvelope(uuid.NewString(), eventing.CommentCreatedPayload{
+			CommentID: comment.ID, ArticleID: article.ID, ActorID: userID,
+			ArticleAuthorID: article.AuthorID, CreatedAt: commentCreatedAt,
+		})
+		if err != nil {
+			return err
+		}
+		if err := addConfiguredActivityOutboxEvent(tx, activity); err != nil {
 			return err
 		}
 		return nil

@@ -118,6 +118,14 @@ func LikeBehaviorProjectionConsumers() int {
 	return consumers
 }
 
+func NotificationProjectionConsumers() int {
+	consumers := envInt("NOTIFICATION_PROJECTION_CONSUMERS", 1)
+	if consumers < 1 {
+		return 1
+	}
+	return consumers
+}
+
 func RecommendationTelemetryEnabled() bool {
 	return envBool("RECOMMENDATION_TELEMETRY_ENABLED", false)
 }

@@ -17,6 +17,7 @@ import (
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -243,7 +244,11 @@ func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
 		}
 
 		reactions := collapseUserBehaviorReactions(records, firstDelivery)
-		if err := bulkUpsertArticleReactions(tx, reactions); err != nil {
+		applied, err := bulkUpsertArticleReactionsReturningApplied(tx, reactions)
+		if err != nil {
+			return err
+		}
+		if err := appendAppliedReactionActivities(tx, applied); err != nil {
 			return err
 		}
 		return recommendation.InvalidateProfiles(tx, userBehaviorProfileInvalidationUsers(records, firstDelivery), "user_behavior_projection", time.Now().UTC())
@@ -456,6 +461,100 @@ func applyArticleReactionProjection(tx *gorm.DB, eventType string, payload event
 	}
 	return bulkUpsertArticleReactions(tx, []userBehaviorReactionCandidate{candidate})
 }
+
+type appliedArticleReaction struct {
+	UserID         uint      `gorm:"column:user_id"`
+	ArticleID      uint      `gorm:"column:article_id"`
+	Version        int64     `gorm:"column:reaction_version"`
+	Liked          bool      `gorm:"column:liked"`
+	StateChangedAt time.Time `gorm:"column:state_changed_at"`
+}
+
+// bulkUpsertArticleReactionsReturningApplied is the authoritative version
+// gate. PostgreSQL returns only inserts and updates whose incoming version was
+// newer than the stored version, which prevents stale deliveries from
+// generating activity or notifications.
+func bulkUpsertArticleReactionsReturningApplied(tx *gorm.DB, candidates []userBehaviorReactionCandidate) ([]appliedArticleReaction, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	values := make([]string, 0, len(candidates))
+	args := make([]interface{}, 0, len(candidates)*7)
+	updatedAt := time.Now().UTC()
+	for index, candidate := range candidates {
+		base := index*7 + 1
+		values = append(values, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d)", base, base+1, base+2, base+3, base+4, base+5, base+6))
+		args = append(args,
+			candidate.Key.UserID, candidate.Key.ArticleID, models.ArticleReactionLike,
+			candidate.Liked, candidate.Payload.LikeVersion, updatedAt, userBehaviorOccurredAt(candidate.Envelope),
+		)
+	}
+	query := `
+INSERT INTO article_reaction
+  (user_id, article_id, reaction, liked, reaction_version, updated_at, state_changed_at)
+VALUES ` + strings.Join(values, ",") + `
+ON CONFLICT (user_id, article_id) DO UPDATE SET
+  reaction = EXCLUDED.reaction,
+  liked = EXCLUDED.liked,
+  reaction_version = EXCLUDED.reaction_version,
+  state_changed_at = EXCLUDED.state_changed_at,
+  updated_at = EXCLUDED.updated_at
+WHERE article_reaction.reaction_version < EXCLUDED.reaction_version
+RETURNING user_id, article_id, reaction_version, liked, state_changed_at`
+	var applied []appliedArticleReaction
+	if err := tx.Raw(query, args...).Scan(&applied).Error; err != nil {
+		return nil, err
+	}
+	return applied, nil
+}
+
+func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedArticleReaction) error {
+	if len(applied) == 0 || config.AppConfig == nil || config.AppConfig.Kafka.ActivityEventsTopic == "" {
+		return nil
+	}
+	articleIDs := make([]uint, 0, len(applied))
+	seen := make(map[uint]struct{}, len(applied))
+	for _, reaction := range applied {
+		if _, exists := seen[reaction.ArticleID]; !exists {
+			seen[reaction.ArticleID] = struct{}{}
+			articleIDs = append(articleIDs, reaction.ArticleID)
+		}
+	}
+	type articleAuthorRow struct {
+		ID       uint `gorm:"column:id"`
+		AuthorID uint `gorm:"column:author_id"`
+	}
+	var rows []articleAuthorRow
+	if err := tx.Table("articles").Select("id, author_id").Where("id IN ?", articleIDs).Find(&rows).Error; err != nil {
+		return err
+	}
+	authors := make(map[uint]uint, len(rows))
+	for _, row := range rows {
+		authors[row.ID] = row.AuthorID
+	}
+	for _, reaction := range applied {
+		authorID := authors[reaction.ArticleID]
+		if authorID == 0 {
+			return fmt.Errorf("article %d author is missing for reaction activity", reaction.ArticleID)
+		}
+		envelope, err := eventing.NewArticleReactionAppliedEnvelope(uuid.NewString(), eventing.ArticleReactionAppliedPayload{
+			ActorID: reaction.UserID, ArticleID: reaction.ArticleID, ArticleAuthorID: authorID,
+			Liked: reaction.Liked, ReactionVersion: reaction.Version, StateChangedAt: reaction.StateChangedAt,
+		})
+		if err != nil {
+			return err
+		}
+		outboxEvent, err := eventing.NewOutboxEvent(config.AppConfig.Kafka, envelope)
+		if err != nil {
+			return err
+		}
+		if err := eventing.AddOutboxEvent(tx, outboxEvent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func bulkUpsertArticleReactions(tx *gorm.DB, candidates []userBehaviorReactionCandidate) error {
 	if len(candidates) == 0 {
 		return nil

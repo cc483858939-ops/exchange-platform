@@ -19,6 +19,9 @@ const (
 	EventTypeArticleLiked              = "article.liked"
 	EventTypeArticleUnliked            = "article.unliked"
 	EventTypeArticleEmbeddingRequested = "article.embedding.requested"
+	EventTypeArticleReactionApplied    = "article.reaction.applied"
+	EventTypeCommentCreated            = "comment.created"
+	EventTypeUserFollowCreated         = "user_follow.created"
 
 	EventTypeRecommendationImpression    = "recommendation.impression"
 	EventTypeRecommendationClick         = "recommendation.click"
@@ -54,6 +57,30 @@ type UserBehaviorPayload struct {
 
 type ArticleEmbeddingRequestedPayload struct {
 	ArticleID uint `json:"article_id"`
+}
+
+type ArticleReactionAppliedPayload struct {
+	ActorID         uint      `json:"actor_id"`
+	ArticleID       uint      `json:"article_id"`
+	ArticleAuthorID uint      `json:"article_author_id"`
+	Liked           bool      `json:"liked"`
+	ReactionVersion int64     `json:"reaction_version"`
+	StateChangedAt  time.Time `json:"state_changed_at"`
+}
+
+type CommentCreatedPayload struct {
+	CommentID       uint      `json:"comment_id"`
+	ArticleID       uint      `json:"article_id"`
+	ActorID         uint      `json:"actor_id"`
+	ArticleAuthorID uint      `json:"article_author_id"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type UserFollowCreatedPayload struct {
+	FollowID    uint      `json:"follow_id"`
+	FollowerID  uint      `json:"follower_id"`
+	FollowingID uint      `json:"following_id"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type RecommendationBehaviorPayload struct {
@@ -227,28 +254,102 @@ func NewArticleEmbeddingRequestedEnvelope(eventID string, articleID uint, occurr
 	}, nil
 }
 
-func NewOutboxEvent(eventType, aggregateType, aggregateID string, payload interface{}) (models.OutboxEvent, error) {
-	eventType = strings.TrimSpace(eventType)
-	aggregateType = strings.TrimSpace(aggregateType)
-	aggregateID = strings.TrimSpace(aggregateID)
-	if eventType == "" || aggregateType == "" || aggregateID == "" {
-		return models.OutboxEvent{}, errors.New("event type, aggregate type, and aggregate id are required")
+// NewOutboxEvent materializes one immutable row from the complete canonical
+// envelope. It intentionally does not publish or mutate delivery metadata.
+func NewOutboxEvent(kafkaConfig config.KafkaConfig, envelope Envelope) (models.OutboxEvent, error) {
+	if err := validateOutboxEnvelope(envelope); err != nil {
+		return models.OutboxEvent{}, err
 	}
+	topic, err := TopicForEvent(kafkaConfig, envelope.Type)
+	if err != nil {
+		return models.OutboxEvent{}, err
+	}
+	if topic == "" {
+		return models.OutboxEvent{}, fmt.Errorf("Kafka topic is empty for event type %q", envelope.Type)
+	}
+	key := strings.TrimSpace(KeyForEvent(envelope))
+	if key == "" {
+		return models.OutboxEvent{}, errors.New("outbox partition key is required")
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return models.OutboxEvent{}, fmt.Errorf("marshal canonical outbox envelope: %w", err)
+	}
+	return models.OutboxEvent{
+		ID:            envelope.ID,
+		Topic:         topic,
+		PartitionKey:  key,
+		EventType:     envelope.Type,
+		SchemaVersion: envelope.SchemaVersion,
+		AggregateType: envelope.AggregateType,
+		AggregateID:   envelope.AggregateID,
+		Message:       string(body),
+		OccurredAt:    envelope.OccurredAt.UTC(),
+		CreatedAt:     time.Now().UTC(),
+	}, nil
+}
 
+func validateOutboxEnvelope(event Envelope) error {
+	if _, err := uuid.Parse(strings.TrimSpace(event.ID)); err != nil {
+		return errors.New("outbox event id must be a UUID")
+	}
+	if strings.TrimSpace(event.Type) == "" || event.SchemaVersion < 1 ||
+		strings.TrimSpace(event.AggregateType) == "" || strings.TrimSpace(event.AggregateID) == "" ||
+		event.OccurredAt.IsZero() {
+		return errors.New("outbox envelope has missing required fields")
+	}
+	if len(event.Payload) == 0 || string(event.Payload) == "null" {
+		return errors.New("outbox envelope payload is required")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &object); err != nil || object == nil {
+		return errors.New("outbox envelope payload must be a JSON object")
+	}
+	return nil
+}
+
+func NewArticleReactionAppliedEnvelope(eventID string, payload ArticleReactionAppliedPayload) (Envelope, error) {
+	if payload.ActorID == 0 || payload.ArticleID == 0 || payload.ArticleAuthorID == 0 || payload.ReactionVersion <= 0 || payload.StateChangedAt.IsZero() {
+		return Envelope{}, errors.New("article reaction activity payload is missing required fields")
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return models.OutboxEvent{}, fmt.Errorf("marshal outbox payload: %w", err)
+		return Envelope{}, fmt.Errorf("marshal article reaction activity payload: %w", err)
 	}
+	return newActivityEnvelope(eventID, EventTypeArticleReactionApplied, "article_reaction",
+		fmt.Sprintf("%d:%d", payload.ActorID, payload.ArticleID), payload.StateChangedAt, body)
+}
 
-	return models.OutboxEvent{
-		ID:            uuid.NewString(),
-		AggregateType: aggregateType,
-		AggregateID:   aggregateID,
-		EventType:     eventType,
-		SchemaVersion: 1,
-		Payload:       string(body),
-		OccurredAt:    time.Now().UTC(),
-	}, nil
+func NewCommentCreatedEnvelope(eventID string, payload CommentCreatedPayload) (Envelope, error) {
+	if payload.CommentID == 0 || payload.ArticleID == 0 || payload.ActorID == 0 || payload.ArticleAuthorID == 0 || payload.CreatedAt.IsZero() {
+		return Envelope{}, errors.New("comment activity payload is missing required fields")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal comment activity payload: %w", err)
+	}
+	return newActivityEnvelope(eventID, EventTypeCommentCreated, "comment", strconv.FormatUint(uint64(payload.CommentID), 10), payload.CreatedAt, body)
+}
+
+func NewUserFollowCreatedEnvelope(eventID string, payload UserFollowCreatedPayload) (Envelope, error) {
+	if payload.FollowID == 0 || payload.FollowerID == 0 || payload.FollowingID == 0 || payload.FollowerID == payload.FollowingID || payload.CreatedAt.IsZero() {
+		return Envelope{}, errors.New("follow activity payload is missing required fields")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal follow activity payload: %w", err)
+	}
+	return newActivityEnvelope(eventID, EventTypeUserFollowCreated, "user_follow", strconv.FormatUint(uint64(payload.FollowID), 10), payload.CreatedAt, body)
+}
+
+func newActivityEnvelope(eventID, eventType, aggregateType, aggregateID string, occurredAt time.Time, payload []byte) (Envelope, error) {
+	if _, err := uuid.Parse(strings.TrimSpace(eventID)); err != nil {
+		return Envelope{}, errors.New("activity event id must be a UUID")
+	}
+	if occurredAt.IsZero() {
+		return Envelope{}, errors.New("activity occurred_at is required")
+	}
+	return Envelope{ID: strings.TrimSpace(eventID), Type: eventType, SchemaVersion: 1, AggregateType: aggregateType, AggregateID: aggregateID, OccurredAt: occurredAt.UTC(), Payload: payload}, nil
 }
 
 func EventTypeForBehaviorAction(action string) string {
@@ -259,18 +360,6 @@ func EventTypeForBehaviorAction(action string) string {
 		return EventTypeArticleUnliked
 	default:
 		return EventTypeArticleViewed
-	}
-}
-
-func EnvelopeFromOutbox(event models.OutboxEvent) Envelope {
-	return Envelope{
-		ID:            event.ID,
-		Type:          event.EventType,
-		SchemaVersion: event.SchemaVersion,
-		AggregateType: event.AggregateType,
-		AggregateID:   event.AggregateID,
-		OccurredAt:    event.OccurredAt,
-		Payload:       json.RawMessage(event.Payload),
 	}
 }
 
@@ -299,6 +388,8 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 		return strings.TrimSpace(kafkaConfig.RecommendationEventsTopic), nil
 	case EventTypeArticleEmbeddingRequested:
 		return strings.TrimSpace(kafkaConfig.ArticleEmbeddingTopic), nil
+	case EventTypeArticleReactionApplied, EventTypeCommentCreated, EventTypeUserFollowCreated:
+		return strings.TrimSpace(kafkaConfig.ActivityEventsTopic), nil
 	default:
 		return "", fmt.Errorf("unsupported event type %q", eventType)
 	}
@@ -329,6 +420,21 @@ func KeyForEvent(event Envelope) string {
 		var payload ArticleEmbeddingRequestedPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ArticleID > 0 {
 			return strconv.FormatUint(uint64(payload.ArticleID), 10)
+		}
+	case EventTypeArticleReactionApplied:
+		var payload ArticleReactionAppliedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ActorID > 0 && payload.ArticleID > 0 {
+			return fmt.Sprintf("%d:%d", payload.ActorID, payload.ArticleID)
+		}
+	case EventTypeCommentCreated:
+		var payload CommentCreatedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ArticleID > 0 {
+			return strconv.FormatUint(uint64(payload.ArticleID), 10)
+		}
+	case EventTypeUserFollowCreated:
+		var payload UserFollowCreatedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.FollowerID > 0 && payload.FollowingID > 0 {
+			return fmt.Sprintf("%d:%d", payload.FollowerID, payload.FollowingID)
 		}
 	}
 	return event.AggregateID

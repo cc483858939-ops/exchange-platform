@@ -18,7 +18,16 @@ var (
 	articleEmbeddingFailures                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_failures_total", Help: "Article embedding processing failures by stage."}, []string{"stage"})
 	articleEmbeddingPublishFailures              = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_publish_failures_total", Help: "Article embedding publish failures by source."}, []string{"source"})
 	articleEmbeddingProcessingDuration           = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_article_embedding_processing_duration_seconds", Help: "Article embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
-	outboxPending                                = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_pending_events", Help: "Current unpublished outbox event count."})
+	outboxCDCSlotActive                          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_active", Help: "Whether the configured PostgreSQL CDC slot is active."})
+	outboxCDCWALLagBytes                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_wal_lag_bytes", Help: "WAL lag behind the outbox CDC slot in bytes."})
+	outboxCDCSlotConfirmedLSN                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_confirmed_lsn", Help: "Confirmed flush LSN reported by the outbox CDC slot."})
+	outboxRowsTotal                              = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_rows_total", Help: "Current retained outbox row count."})
+	outboxOldestRowAgeSeconds                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_oldest_row_age_seconds", Help: "Age of the oldest retained outbox row in seconds."})
+	notificationConsumerLag                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_notification_consumer_lag", Help: "Notification projection consumer lag."})
+	consumerInboxRows                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_consumer_inbox_rows_total", Help: "ConsumerInbox rows retained for a consumer."}, []string{"consumer"})
+	notificationProjectionFailures               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_notification_projection_failures_total", Help: "Notification projection failures by stage."}, []string{"stage"})
+	notificationProjectionDLQ                    = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_notification_projection_dlq_total", Help: "Malformed notification activity messages sent to the DLQ."})
+	notificationProjectionLatency                = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_notification_projection_latency_seconds", Help: "Notification projection batch latency in seconds.", Buckets: prometheus.DefBuckets})
 	likePipelineDepth                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
 	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
 	recommendationTelemetryBatchSize             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
@@ -47,7 +56,8 @@ var (
 
 func init() {
 	registry.MustRegister(
-		httpRequestsTotal, httpRequestDuration, articleEmbeddingEvents, articleEmbeddingFailures, articleEmbeddingPublishFailures, articleEmbeddingProcessingDuration, outboxPending, likePipelineDepth,
+		httpRequestsTotal, httpRequestDuration, articleEmbeddingEvents, articleEmbeddingFailures, articleEmbeddingPublishFailures, articleEmbeddingProcessingDuration,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, notificationProjectionFailures, notificationProjectionDLQ, notificationProjectionLatency, likePipelineDepth,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -102,7 +112,24 @@ func RecordArticleEmbeddingPublishFailure(source string) {
 func ObserveArticleEmbeddingProcessingDuration(duration time.Duration) {
 	articleEmbeddingProcessingDuration.Observe(duration.Seconds())
 }
-func SetOutboxPending(value float64) { outboxPending.Set(value) }
+func SetOutboxCDCSlotActive(value float64)       { outboxCDCSlotActive.Set(value) }
+func SetOutboxCDCWALLagBytes(value float64)      { outboxCDCWALLagBytes.Set(value) }
+func SetOutboxCDCSlotConfirmedLSN(value float64) { outboxCDCSlotConfirmedLSN.Set(value) }
+func SetOutboxRowsTotal(value float64)           { outboxRowsTotal.Set(value) }
+func SetOutboxOldestRowAgeSeconds(value float64) { outboxOldestRowAgeSeconds.Set(value) }
+func SetNotificationConsumerLag(value float64)   { notificationConsumerLag.Set(value) }
+func SetConsumerInboxRows(consumer string, value float64) {
+	if consumer != "" {
+		consumerInboxRows.WithLabelValues(consumer).Set(value)
+	}
+}
+func RecordNotificationProjectionFailure(stage string) {
+	notificationProjectionFailures.WithLabelValues(stage).Inc()
+}
+func RecordNotificationProjectionDLQ() { notificationProjectionDLQ.Inc() }
+func ObserveNotificationProjectionLatency(duration time.Duration) {
+	notificationProjectionLatency.Observe(duration.Seconds())
+}
 func SetLikePipelineDepth(stage string, value float64) {
 	likePipelineDepth.WithLabelValues(stage).Set(value)
 }

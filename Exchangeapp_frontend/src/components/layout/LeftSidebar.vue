@@ -19,6 +19,11 @@
       >
         <AppIcon :name="item.icon" :size="24" />
         <span class="left-sidebar__label">{{ item.label }}</span>
+        <span
+          v-if="item.name === 'Notifications' && notificationBadge"
+          class="left-sidebar__badge"
+          aria-label="Unread notifications"
+        >{{ notificationBadge }}</span>
       </router-link>
       <router-link
         v-if="authStore.isAuthenticated && currentProfileID !== null"
@@ -75,6 +80,10 @@ import { computed } from 'vue';
 import { useLogout } from '../../composables/useLogout';
 import AppIcon from '../icons/AppIcon.vue';
 
+withDefaults(defineProps<{ notificationBadge?: string | null }>(), {
+  notificationBadge: null,
+});
+
 const { authStore, handleLogout } = useLogout();
 const currentProfileID = computed(() => {
   const id = authStore.currentIdentity?.id;
@@ -85,6 +94,7 @@ const currentProfileID = computed(() => {
 const navigation = [
   { name: 'Home', label: 'Home', icon: 'home' as const, compactOnly: false, authOnly: false },
   { name: 'UserSearch', label: 'Search', icon: 'search' as const, compactOnly: false, authOnly: true },
+  { name: 'Notifications', label: 'Notifications', icon: 'notifications' as const, compactOnly: false, authOnly: true },
   { name: 'History', label: 'History', icon: 'history' as const, compactOnly: false, authOnly: true },
   { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, compactOnly: true, authOnly: false },
 ];
@@ -168,6 +178,22 @@ const visibleNavigation = computed(() => navigation.filter((item) => !item.authO
 
 .left-sidebar__link.router-link-active .app-icon {
   color: var(--color-accent);
+}
+
+.left-sidebar__badge {
+  display: inline-flex;
+  min-width: 22px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-surface);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .left-sidebar__link--primary {
