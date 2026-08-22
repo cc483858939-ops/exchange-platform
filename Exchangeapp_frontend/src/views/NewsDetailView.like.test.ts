@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
   getArticleComments: vi.fn(),
+  getUser: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
     recordReadEnd: vi.fn(),
@@ -31,8 +32,6 @@ const mocks = vi.hoisted(() => ({
     currentIdentity: {
       id: 7,
       username: 'reader',
-      display_name: 'Reader',
-      avatar_url: '',
     },
   },
   feedStore: {
@@ -64,6 +63,10 @@ vi.mock('../store/feed', () => ({
 vi.mock('../services/articleService', () => ({
   deleteArticle: vi.fn(),
   getArticleById: mocks.getArticleById,
+}));
+
+vi.mock('../services/userService', () => ({
+  getUser: mocks.getUser,
 }));
 
 vi.mock('../services/likeService', () => ({
@@ -135,6 +138,14 @@ describe('NewsDetailView LikeAction wiring', () => {
     mocks.getArticleById.mockResolvedValue(article);
     mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
     mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUser.mockResolvedValue({
+      id: 7,
+      username: 'reader',
+      display_name: 'Reader',
+      avatar_url: '',
+      bio: '',
+      created_at: '2026-08-15T00:00:00.000Z',
+    });
     mocks.consumeAttribution.mockReturnValue(null);
   });
 

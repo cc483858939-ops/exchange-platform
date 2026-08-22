@@ -2,7 +2,13 @@
   <form class="comment-composer" @submit.prevent="submitReply">
     <div class="comment-composer__body">
       <span v-if="author" class="comment-composer__avatar" aria-hidden="true">
-        {{ initial }}
+        <img
+          v-if="avatarURL && !avatarLoadFailed"
+          :src="avatarURL"
+          alt=""
+          @error="avatarLoadFailed = true"
+        />
+        <span v-else>{{ initial }}</span>
       </span>
       <textarea
         ref="textareaRef"
@@ -35,11 +41,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue';
-import type { AuthIdentity } from '../../utils/authIdentity';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import type { PublicAuthor } from '../../types/User';
 
 const props = withDefaults(defineProps<{
-  author?: AuthIdentity | null;
+  author?: PublicAuthor | null;
   disabled?: boolean;
   submitting?: boolean;
 }>(), {
@@ -58,7 +64,20 @@ const maxContentLength = 1000;
 const trimmedContent = computed(() => content.value.trim());
 const contentLength = computed(() => Array.from(trimmedContent.value).length);
 const exceedsMaxLength = computed(() => contentLength.value > maxContentLength);
-const initial = computed(() => Array.from(props.author?.username.trim() ?? '')[0]?.toUpperCase() || '?');
+const avatarLoadFailed = ref(false);
+const username = computed(() => props.author?.username.trim() || '');
+const displayName = computed(() => props.author?.display_name.trim() || username.value);
+const avatarURL = computed(() => props.author?.avatar_url.trim() || '');
+const initial = computed(
+  () => Array.from(displayName.value || username.value)[0]?.toUpperCase() || '?',
+);
+
+watch(
+  [() => props.author?.id, () => props.author?.avatar_url],
+  () => {
+    avatarLoadFailed.value = false;
+  },
+);
 
 const resizeTextarea = () => {
   const textarea = textareaRef.value;
@@ -122,12 +141,19 @@ onMounted(resizeTextarea);
   height: 30px;
   flex: 0 0 auto;
   place-items: center;
+  overflow: hidden;
   border: 1px solid var(--color-border-strong);
   border-radius: 50%;
   background: var(--color-surface-subtle);
   color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 800;
+}
+
+.comment-composer__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .comment-composer__textarea {
