@@ -509,8 +509,14 @@ RETURNING user_id, article_id, reaction_version, liked, state_changed_at`
 }
 
 func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedArticleReaction) error {
-	if len(applied) == 0 || config.AppConfig == nil || config.AppConfig.Kafka.ActivityEventsTopic == "" {
+	if len(applied) == 0 {
 		return nil
+	}
+	if config.AppConfig == nil {
+		return errors.New("application config is not initialized")
+	}
+	if strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) == "" {
+		return errors.New("Kafka activity events topic is not configured")
 	}
 	articleIDs := make([]uint, 0, len(applied))
 	seen := make(map[uint]struct{}, len(applied))

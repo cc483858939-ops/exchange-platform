@@ -28,6 +28,7 @@ x-go-environment: &go-environment
   EMBEDDING_TIMEOUT_SECONDS: "${EMBEDDING_TIMEOUT_SECONDS:-10}"
   CDC_DATABASE_USER: "${CDC_DATABASE_USER:-postgres}"
   CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-1234}"
+  CDC_DATABASE_SSLMODE: "${CDC_DATABASE_SSLMODE:-disable}"
   CDC_CONNECT_URL: "${CDC_CONNECT_URL:-http://kafka-connect:8083}"
 
 services:
@@ -69,6 +70,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      outbox-cutover:
+        condition: service_completed_successfully
+
+  outbox-cutover:
+    <<: *go-service
+    command: ["go", "run", "./cmd/outbox-cutover"]
+    environment:
+      <<: *go-environment
+      OUTBOX_CUTOVER_CONFIRM_PRELAUNCH: "${OUTBOX_CUTOVER_CONFIRM_PRELAUNCH:-false}"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
 
   kafka-init:
     <<: *go-service
@@ -81,7 +95,7 @@ services:
     restart: "no"
 
   kafka-connect:
-    image: debezium/connect:3.6.1.Final
+    image: quay.io/debezium/connect:3.6.1.Final
     depends_on:
       kafka:
         condition: service_healthy
@@ -104,8 +118,6 @@ services:
       INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
       CONNECT_PLUGIN_PATH: /kafka/connect,/usr/share/java
-      CDC_DATABASE_USER: "${CDC_DATABASE_USER:-postgres}"
-      CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-1234}"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8083/ >/dev/null"]
       interval: 5s
@@ -273,6 +285,7 @@ services:
       - api
     volumes:
       - ./Go.exchange/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./Go.exchange/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     restart: unless-stopped
 
   grafana:

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -25,6 +26,33 @@ func RuntimeRole() string {
 	default:
 		return RuntimeRoleAll
 	}
+}
+
+// ValidateRuntimeEventingConfig fails before a process can accept authoritative
+// mutations while its required durable activity path is unavailable.
+func ValidateRuntimeEventingConfig(role string) error {
+	if AppConfig == nil {
+		return errors.New("application configuration is not initialized")
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" {
+		role = RuntimeRoleAll
+	}
+	if role != RuntimeRoleAPI && role != RuntimeRoleWorker && role != RuntimeRoleAll {
+		role = RuntimeRoleAll
+	}
+	if strings.TrimSpace(AppConfig.Kafka.ActivityEventsTopic) == "" {
+		return errors.New("Kafka activity events topic is not configured")
+	}
+	if role == RuntimeRoleWorker || role == RuntimeRoleAll {
+		if strings.TrimSpace(AppConfig.Kafka.NotificationGroupID) == "" {
+			return errors.New("Kafka notification consumer group is not configured")
+		}
+		if strings.TrimSpace(AppConfig.Kafka.NotificationDLQTopic) == "" {
+			return errors.New("Kafka notification DLQ topic is not configured")
+		}
+	}
+	return nil
 }
 
 func AppPort() string {

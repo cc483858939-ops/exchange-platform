@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"errors"
+	"strings"
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
@@ -10,14 +11,14 @@ import (
 )
 
 func addConfiguredActivityOutboxEvent(tx *gorm.DB, envelope eventing.Envelope) error {
-	if config.AppConfig == nil || config.AppConfig.Kafka.ActivityEventsTopic == "" {
-		// Unit and legacy integration fixtures can exercise the existing domain
-		// transaction without loading runtime Kafka configuration. Production
-		// config always supplies the activity topic.
-		return nil
-	}
 	if tx == nil {
 		return errors.New("database transaction is nil")
+	}
+	if config.AppConfig == nil {
+		return errors.New("application config is not initialized")
+	}
+	if strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) == "" {
+		return errors.New("Kafka activity events topic is not configured")
 	}
 	event, err := eventing.NewOutboxEvent(config.AppConfig.Kafka, envelope)
 	if err != nil {

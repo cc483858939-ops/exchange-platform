@@ -3,6 +3,8 @@ package core
 import (
 	"log"
 	"net/http"
+
+	"Go.exchange/metrics"
 )
 
 func StartWorkerHealthServer(addr string, ready func() bool) *http.Server {
@@ -17,6 +19,7 @@ func StartWorkerHealthServer(addr string, ready func() bool) *http.Server {
 		}
 		writer.WriteHeader(http.StatusServiceUnavailable)
 	})
+	mux.Handle("/metrics", metrics.Handler())
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	go func() {

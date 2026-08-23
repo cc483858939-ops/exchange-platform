@@ -92,6 +92,37 @@ func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeEventingConfigByRole(t *testing.T) {
+	original := AppConfig
+	t.Cleanup(func() { AppConfig = original })
+
+	AppConfig = &Config{Kafka: KafkaConfig{
+		ActivityEventsTopic:  "activity",
+		NotificationGroupID:  "notifications",
+		NotificationDLQTopic: "notification-dlq",
+	}}
+	for _, role := range []string{RuntimeRoleAPI, RuntimeRoleWorker, RuntimeRoleAll} {
+		if err := ValidateRuntimeEventingConfig(role); err != nil {
+			t.Fatalf("role=%s error=%v", role, err)
+		}
+	}
+
+	AppConfig.Kafka.ActivityEventsTopic = ""
+	if err := ValidateRuntimeEventingConfig(RuntimeRoleAPI); err == nil {
+		t.Fatal("API without activity topic must fail")
+	}
+	AppConfig.Kafka.ActivityEventsTopic = "activity"
+	AppConfig.Kafka.NotificationGroupID = ""
+	if err := ValidateRuntimeEventingConfig(RuntimeRoleWorker); err == nil {
+		t.Fatal("worker without notification group must fail")
+	}
+	AppConfig.Kafka.NotificationGroupID = "notifications"
+	AppConfig.Kafka.NotificationDLQTopic = ""
+	if err := ValidateRuntimeEventingConfig(RuntimeRoleAll); err == nil {
+		t.Fatal("all role without notification DLQ must fail")
+	}
+}
+
 func TestActiveEmbeddingVersionUsesConfiguredValueAndDefault(t *testing.T) {
 	original := AppConfig
 	t.Cleanup(func() { AppConfig = original })

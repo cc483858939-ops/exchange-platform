@@ -1,0 +1,45 @@
+groups:
+  - name: go-exchange-cdc-notifications
+    rules:
+      - alert: GoExchangeCDCSlotInactive
+        expr: go_exchange_outbox_cdc_slot_active{job="go-exchange-worker"} < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Go.exchange CDC replication slot is inactive
+          description: The outbox CDC replication slot has been inactive for more than one minute.
+
+      - alert: GoExchangeCDCWALLagHigh
+        expr: go_exchange_outbox_cdc_wal_lag_bytes{job="go-exchange-worker"} > 67108864
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Go.exchange CDC WAL lag is high
+          description: CDC WAL lag has exceeded 64 MiB for more than five minutes.
+
+      - alert: GoExchangeNotificationConsumerLagHigh
+        expr: go_exchange_notification_consumer_lag{job="go-exchange-worker"} > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Go.exchange notification consumer lag is high
+          description: Notification projection consumer lag has exceeded 1000 messages for five minutes.
+
+      - alert: GoExchangeNotificationProjectionFailure
+        expr: increase(go_exchange_notification_projection_failures_total{job="go-exchange-worker"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Go.exchange notification projection failed
+          description: Notification projection failures occurred during the last five minutes.
+
+      - alert: GoExchangeNotificationDLQEvent
+        expr: increase(go_exchange_notification_projection_dlq_total{job="go-exchange-worker"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Go.exchange notification activity reached the DLQ
+          description: At least one malformed notification activity event was sent to the DLQ during the last fifteen minutes.

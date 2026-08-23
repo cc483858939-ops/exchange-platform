@@ -55,7 +55,10 @@ type notificationActivityRecord struct {
 }
 
 func notificationConsumerConfigured() bool {
-	return config.AppConfig != nil && strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) != "" && strings.TrimSpace(config.AppConfig.Kafka.NotificationGroupID) != ""
+	return config.AppConfig != nil &&
+		strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) != "" &&
+		strings.TrimSpace(config.AppConfig.Kafka.NotificationGroupID) != "" &&
+		strings.TrimSpace(config.AppConfig.Kafka.NotificationDLQTopic) != ""
 }
 
 func startNotificationProjectionConsumer(ctx context.Context, wg *sync.WaitGroup) {
@@ -328,13 +331,29 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 			commentIDs = append(commentIDs, *candidate.CommentID)
 		}
 	}
-	activeUsers := make(map[uint]struct{})
-	var users []models.User
-	if err := tx.Select("id").Where("id IN ? AND deleted_at IS NULL", uniqueUintIDs(append(recipientIDs, actorIDs...))).Find(&users).Error; err != nil {
+	activeRecipients := make(map[uint]struct{})
+	var recipients []struct {
+		ID uint `gorm:"column:id"`
+	}
+	if err := tx.Model(&models.User{}).Select("id").Where("id IN ? AND deleted_at IS NULL", uniqueUintIDs(recipientIDs)).Find(&recipients).Error; err != nil {
 		return nil, err
 	}
-	for _, user := range users {
-		activeUsers[user.ID] = struct{}{}
+	for _, user := range recipients {
+		activeRecipients[user.ID] = struct{}{}
+	}
+
+	// Actor existence is a historical integrity check, not a current
+	// visibility check. A soft-deleted actor is still a valid source reference;
+	// the API applies the current-state actor visibility filter later.
+	physicalActors := make(map[uint]struct{})
+	var actors []struct {
+		ID uint `gorm:"column:id"`
+	}
+	if err := tx.Unscoped().Model(&models.User{}).Select("id").Where("id IN ?", uniqueUintIDs(actorIDs)).Find(&actors).Error; err != nil {
+		return nil, err
+	}
+	for _, actor := range actors {
+		physicalActors[actor.ID] = struct{}{}
 	}
 	articles := make(map[uint]struct{})
 	var articleRows []struct {
@@ -348,24 +367,25 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 			articles[row.ID] = struct{}{}
 		}
 	}
-	comments := make(map[uint]struct{})
+	commentArticles := make(map[uint]uint)
 	var commentRows []struct {
-		ID uint `gorm:"column:id"`
+		ID        uint `gorm:"column:id"`
+		ArticleID uint `gorm:"column:article_id"`
 	}
 	if len(commentIDs) > 0 {
-		if err := tx.Table("comments").Select("id").Where("id IN ?", uniqueUintIDs(commentIDs)).Find(&commentRows).Error; err != nil {
+		if err := tx.Table("comments").Select("id, article_id").Where("id IN ?", uniqueUintIDs(commentIDs)).Find(&commentRows).Error; err != nil {
 			return nil, err
 		}
 		for _, row := range commentRows {
-			comments[row.ID] = struct{}{}
+			commentArticles[row.ID] = row.ArticleID
 		}
 	}
 	filtered := make([]models.Notification, 0, len(candidates))
 	for _, candidate := range candidates {
-		if _, ok := activeUsers[candidate.RecipientID]; !ok {
+		if _, ok := activeRecipients[candidate.RecipientID]; !ok {
 			continue
 		}
-		if _, ok := activeUsers[candidate.ActorID]; !ok {
+		if _, ok := physicalActors[candidate.ActorID]; !ok {
 			continue
 		}
 		if candidate.ArticleID != nil {
@@ -374,7 +394,8 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 			}
 		}
 		if candidate.CommentID != nil {
-			if _, ok := comments[*candidate.CommentID]; !ok {
+			articleID, ok := commentArticles[*candidate.CommentID]
+			if !ok || candidate.ArticleID == nil || articleID != *candidate.ArticleID {
 				continue
 			}
 		}

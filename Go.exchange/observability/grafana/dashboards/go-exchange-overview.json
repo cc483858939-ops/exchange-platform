@@ -185,7 +185,7 @@
       },
       "targets": [
         {
-          "expr": "go_exchange_tasks_dynamic_workers",
+        "expr": "go_exchange_tasks_dynamic_workers{job=\"go-exchange-worker\"}",
           "refId": "A"
         }
       ],
@@ -242,12 +242,68 @@
       },
       "targets": [
         {
-          "expr": "go_exchange_tasks_dirty_backlog",
+        "expr": "go_exchange_tasks_dirty_backlog{job=\"go-exchange-worker\"}",
           "refId": "A"
         }
       ],
       "title": "Dirty Backlog",
       "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 16},
+      "id": 6,
+      "targets": [{"expr": "go_exchange_outbox_cdc_slot_active{job=\"go-exchange-worker\"}", "refId": "A"}],
+      "title": "CDC Slot Active",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 16},
+      "id": 7,
+      "targets": [{"expr": "go_exchange_outbox_cdc_wal_lag_bytes{job=\"go-exchange-worker\"}", "refId": "A"}],
+      "title": "CDC WAL Lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 16},
+      "id": 8,
+      "targets": [{"expr": "go_exchange_outbox_rows_total{job=\"go-exchange-worker\"}", "refId": "A"}],
+      "title": "Retained Outbox Rows",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 22},
+      "id": 9,
+      "targets": [{"expr": "go_exchange_outbox_oldest_row_age_seconds{job=\"go-exchange-worker\"}", "refId": "A"}],
+      "title": "Oldest Outbox Row Age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 22},
+      "id": 10,
+      "targets": [{"expr": "go_exchange_notification_consumer_lag{job=\"go-exchange-worker\"}", "refId": "A"}],
+      "title": "Notification Consumer Lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 22},
+      "id": 11,
+      "targets": [{"expr": "rate(go_exchange_notification_projection_failures_total{job=\"go-exchange-worker\"}[5m])", "refId": "A"}],
+      "title": "Notification Projection Failure Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 28},
+      "id": 12,
+      "targets": [{"expr": "increase(go_exchange_notification_projection_dlq_total{job=\"go-exchange-worker\"}[15m])", "refId": "A"}],
+      "title": "Notification DLQ",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",

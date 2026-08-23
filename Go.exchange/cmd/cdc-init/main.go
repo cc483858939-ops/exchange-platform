@@ -20,8 +20,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("open CDC database connection: %v", err)
 	}
-	connectURL, databaseUser, databasePassword := cdc.Environment()
-	status, err := cdc.Run(ctx, db, config.AppConfig.Kafka, connectURL, databaseUser, databasePassword)
+	environment := cdc.Environment()
+	source, err := cdc.ParseSourceDatabaseConfig(config.DatabaseDSN(), environment)
+	if err != nil {
+		log.Fatalf("CDC source database configuration failed: %v", err)
+	}
+	status, err := cdc.Run(ctx, db, config.AppConfig.Kafka, environment.ConnectURL, source)
 	if err != nil {
 		log.Fatalf("CDC initialization failed: %v", err)
 	}

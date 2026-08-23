@@ -27,6 +27,9 @@ func main() {
 	initialize.InitAll()
 
 	role := config.RuntimeRole()
+	if err := config.ValidateRuntimeEventingConfig(role); err != nil {
+		log.Fatalf("invalid runtime eventing configuration: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var waitGroup sync.WaitGroup
 	log.Printf("starting go.exchange in %s mode", role)

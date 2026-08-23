@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -36,9 +35,15 @@ type ConnectorStatus struct {
 	} `json:"tasks"`
 }
 
-func Run(ctx context.Context, db *sql.DB, kafkaConfig config.KafkaConfig, connectURL, databaseUser, databasePassword string) (ConnectorStatus, error) {
+func Run(ctx context.Context, db *sql.DB, kafkaConfig config.KafkaConfig, connectURL string, source SourceDatabaseConfig) (ConnectorStatus, error) {
 	if db == nil {
 		return ConnectorStatus{}, errors.New("database connection is nil")
+	}
+	if err := ValidateSourceDatabaseConfig(source); err != nil {
+		return ConnectorStatus{}, err
+	}
+	if err := ValidateCurrentDatabase(ctx, db, source); err != nil {
+		return ConnectorStatus{}, err
 	}
 	if err := verifyPostgresCDCSettings(ctx, db); err != nil {
 		return ConnectorStatus{}, err
@@ -49,7 +54,7 @@ func Run(ctx context.Context, db *sql.DB, kafkaConfig config.KafkaConfig, connec
 	if err := ensureReplicationSlot(ctx, db); err != nil {
 		return ConnectorStatus{}, err
 	}
-	status, err := RegisterConnector(ctx, connectURL, BuildConnectorConfig(kafkaConfig, databaseUser, databasePassword))
+	status, err := RegisterConnector(ctx, connectURL, BuildConnectorConfig(kafkaConfig, source))
 	if err != nil {
 		return ConnectorStatus{}, err
 	}
@@ -64,18 +69,16 @@ func Run(ctx context.Context, db *sql.DB, kafkaConfig config.KafkaConfig, connec
 	return status, nil
 }
 
-func BuildConnectorConfig(_ config.KafkaConfig, databaseUser, databasePassword string) map[string]string {
-	if strings.TrimSpace(databaseUser) == "" {
-		databaseUser = "postgres"
-	}
-	return map[string]string{
+func BuildConnectorConfig(_ config.KafkaConfig, source SourceDatabaseConfig) map[string]string {
+	result := map[string]string{
 		"connector.class":                               "io.debezium.connector.postgresql.PostgresConnector",
 		"plugin.name":                                   "pgoutput",
-		"database.hostname":                             "db",
-		"database.port":                                 "5432",
-		"database.dbname":                               "test",
-		"database.user":                                 databaseUser,
-		"database.password":                             databasePassword,
+		"database.hostname":                             source.Host,
+		"database.port":                                 strconv.FormatUint(uint64(source.Port), 10),
+		"database.dbname":                               source.Database,
+		"database.user":                                 source.User,
+		"database.password":                             source.Password,
+		"database.sslmode":                              source.SSLMode,
 		"topic.prefix":                                  "goexchange.cdc",
 		"slot.name":                                     SlotName,
 		"publication.name":                              PublicationName,
@@ -87,6 +90,10 @@ func BuildConnectorConfig(_ config.KafkaConfig, databaseUser, databasePassword s
 		"tombstones.on.delete":                          "false",
 		"transforms":                                    "outbox",
 		"transforms.outbox.type":                        "io.debezium.transforms.outbox.EventRouter",
+		"predicates":                                    "IsOutboxTable",
+		"predicates.IsOutboxTable.type":                 "org.apache.kafka.connect.transforms.predicates.TopicNameMatches",
+		"predicates.IsOutboxTable.pattern":              `^goexchange\.cdc\.public\.outbox_events$`,
+		"transforms.outbox.predicate":                   "IsOutboxTable",
 		"transforms.outbox.table.field.event.id":        "id",
 		"transforms.outbox.table.field.event.key":       "partition_key",
 		"transforms.outbox.table.field.event.payload":   "message",
@@ -101,6 +108,16 @@ func BuildConnectorConfig(_ config.KafkaConfig, databaseUser, databasePassword s
 		"value.converter":                               "org.apache.kafka.connect.json.JsonConverter",
 		"value.converter.schemas.enable":                "false",
 	}
+	if source.SSLCert != "" {
+		result["database.sslcert"] = source.SSLCert
+	}
+	if source.SSLKey != "" {
+		result["database.sslkey"] = source.SSLKey
+	}
+	if source.SSLRootCert != "" {
+		result["database.sslrootcert"] = source.SSLRootCert
+	}
+	return result
 }
 
 func verifyPostgresCDCSettings(ctx context.Context, db *sql.DB) error {
@@ -214,14 +231,4 @@ func connectorStatus(ctx context.Context, connectURL string) (ConnectorStatus, e
 		return ConnectorStatus{}, fmt.Errorf("decode CDC connector status: %w", err)
 	}
 	return status, nil
-}
-
-func Environment() (connectURL, databaseUser, databasePassword string) {
-	connectURL = strings.TrimSpace(os.Getenv("CDC_CONNECT_URL"))
-	if connectURL == "" {
-		connectURL = ConnectURL
-	}
-	databaseUser = strings.TrimSpace(os.Getenv("CDC_DATABASE_USER"))
-	databasePassword = os.Getenv("CDC_DATABASE_PASSWORD")
-	return
 }

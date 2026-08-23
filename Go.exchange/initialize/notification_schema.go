@@ -9,31 +9,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// prepareLegacyOutboxSchema is deliberately non-destructive. A legacy table
-// must be explicitly confirmed by the deployment operator before a separate
-// one-time cleanup is run; startup must never guess that old rows are safe to
-// erase.
-func prepareLegacyOutboxSchema(tx *gorm.DB) error {
-	if tx == nil || !tx.Migrator().HasTable(&models.OutboxEvent{}) {
-		return nil
-	}
-	var legacy bool
-	if err := tx.Raw(`
-SELECT EXISTS (
-  SELECT 1 FROM information_schema.columns
-  WHERE table_schema = current_schema() AND table_name = 'outbox_events' AND column_name = 'published_at'
-) AND NOT EXISTS (
-  SELECT 1 FROM information_schema.columns
-  WHERE table_schema = current_schema() AND table_name = 'outbox_events' AND column_name = 'message'
-)`).Scan(&legacy).Error; err != nil {
-		return fmt.Errorf("detect legacy outbox schema: %w", err)
-	}
-	if legacy {
-		return errors.New("legacy outbox_events schema detected; confirm the pre-launch no-history assumption and run the one-time cleanup before migration")
-	}
-	return nil
-}
-
 func applyOutboxSchema(tx *gorm.DB) error {
 	if tx == nil || !tx.Migrator().HasTable(&models.OutboxEvent{}) {
 		return errors.New("outbox_events table is missing")

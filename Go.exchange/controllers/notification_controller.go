@@ -209,15 +209,27 @@ func MarkMyNotificationRead(ctx *gin.Context) {
 	}
 	readAt := time.Now().UTC()
 	result := global.Db.Model(&models.Notification{}).
-		Where("id = ? AND recipient_id = ?", id, viewerID).
+		Where("id = ? AND recipient_id = ? AND read_at IS NULL", id, viewerID).
 		Updates(map[string]interface{}{"read_at": readAt, "updated_at": readAt})
 	if result.Error != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 	if result.RowsAffected == 0 {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
-		return
+		var exists bool
+		if err := global.Db.Raw(`
+SELECT EXISTS (
+    SELECT 1
+    FROM notifications
+    WHERE id = ? AND recipient_id = ?
+)`, id, viewerID).Scan(&exists).Error; err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+			return
+		}
+		if !exists {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
+			return
+		}
 	}
 	ctx.Status(http.StatusNoContent)
 }
