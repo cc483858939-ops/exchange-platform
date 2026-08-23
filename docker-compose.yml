@@ -26,8 +26,8 @@ x-go-environment: &go-environment
   EMBEDDING_MODEL: "${EMBEDDING_MODEL:-}"
   EMBEDDING_VERSION: "${EMBEDDING_VERSION:-post_embedding_v1}"
   EMBEDDING_TIMEOUT_SECONDS: "${EMBEDDING_TIMEOUT_SECONDS:-10}"
-  CDC_DATABASE_USER: "${CDC_DATABASE_USER:-postgres}"
-  CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-1234}"
+  CDC_DATABASE_USER: "${CDC_DATABASE_USER:-}"
+  CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-}"
   CDC_DATABASE_SSLMODE: "${CDC_DATABASE_SSLMODE:-disable}"
   CDC_CONNECT_URL: "${CDC_CONNECT_URL:-http://kafka-connect:8083}"
 
@@ -131,8 +131,6 @@ services:
     command: ["go", "run", "./cmd/cdc-init"]
     environment:
       <<: *go-environment
-      CDC_DATABASE_USER: "${CDC_DATABASE_USER:-postgres}"
-      CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-1234}"
       CDC_CONNECT_URL: "${CDC_CONNECT_URL:-http://kafka-connect:8083}"
     depends_on:
       db:

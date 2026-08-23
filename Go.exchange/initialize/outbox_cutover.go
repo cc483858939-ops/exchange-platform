@@ -31,7 +31,17 @@ var finalOutboxColumns = []string{
 	"aggregate_type", "aggregate_id", "message", "occurred_at", "created_at",
 }
 
-var legacyOutboxColumns = []string{
+var legacyOutboxRequiredColumns = []string{
+	"id", "aggregate_type", "aggregate_id", "event_type", "schema_version",
+	"payload", "occurred_at", "published_at", "publish_attempts", "last_error",
+	"created_at", "updated_at",
+}
+
+var finalOnlyOutboxColumns = []string{
+	"topic", "partition_key", "message",
+}
+
+var legacyDeliveryColumns = []string{
 	"payload", "published_at", "publish_attempts", "last_error", "updated_at",
 }
 
@@ -83,22 +93,34 @@ WHERE table_schema = current_schema() AND table_name = 'outbox_events'
 			break
 		}
 	}
-	legacyEvidence := has("payload") && has("published_at") && has("publish_attempts") &&
-		!has("message") && !has("topic") && !has("partition_key")
-	hasLegacyColumn := false
-	for _, name := range legacyOutboxColumns {
-		if has(name) {
-			hasLegacyColumn = true
-			break
-		}
-	}
-	if legacyEvidence && !final {
-		return OutboxSchemaLegacy, nil
-	}
-	if final && !hasLegacyColumn {
+	if final && !containsAny(columns, legacyDeliveryColumns) {
 		return OutboxSchemaFinal, nil
 	}
+	if exactColumnSet(columns, legacyOutboxRequiredColumns) && !containsAny(columns, finalOnlyOutboxColumns) {
+		return OutboxSchemaLegacy, nil
+	}
 	return OutboxSchemaMixed, nil
+}
+
+func containsAny(columns map[string]struct{}, names []string) bool {
+	for _, name := range names {
+		if _, ok := columns[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func exactColumnSet(columns map[string]struct{}, expected []string) bool {
+	if len(columns) != len(expected) {
+		return false
+	}
+	for _, name := range expected {
+		if _, ok := columns[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // prepareLegacyOutboxSchema is intentionally defensive. The regular migrate

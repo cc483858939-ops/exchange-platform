@@ -2,6 +2,7 @@ package cdc
 
 import (
 	"encoding/json"
+	"regexp"
 	"testing"
 
 	"Go.exchange/config"
@@ -59,6 +60,53 @@ func TestBuildConnectorConfigPinsOutboxRoutingContract(t *testing.T) {
 	}
 }
 
+func TestOutboxPredicateMatchesOnlyRawDebeziumTopic(t *testing.T) {
+	cfg := BuildConnectorConfig(config.KafkaConfig{}, SourceDatabaseConfig{
+		Host: "db", Port: 5432, Database: "exchange", User: "cdc", SSLMode: "disable",
+	})
+	pattern := cfg["predicates.IsOutboxTable.pattern"]
+	if pattern != `^goexchange\.cdc\.public\.outbox_events$` {
+		t.Fatalf("predicate=%q", pattern)
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.MatchString("goexchange.cdc.public.outbox_events") {
+		t.Fatalf("predicate %q does not match raw Debezium topic", pattern)
+	}
+	for _, topic := range []string{
+		"goexchangeXcdcXpublicXoutbox_events",
+		"goexchange.cdc.public.articles",
+		"goexchange.cdc.public.comments",
+		"goexchange.activity.events.v1",
+		"__debezium-heartbeat.goexchange.cdc",
+	} {
+		if compiled.MatchString(topic) {
+			t.Fatalf("predicate %q unexpectedly matched %q", pattern, topic)
+		}
+	}
+}
+
+func TestSourceTopicPatternEscapesEachTopicComponent(t *testing.T) {
+	pattern := sourceTopicPattern("goexchange.cdc.acceptance.abc123", "public", "outbox_events_cdc_a_abc123")
+	want := `^goexchange\.cdc\.acceptance\.abc123\.public\.outbox_events_cdc_a_abc123$`
+	if pattern != want {
+		t.Fatalf("pattern=%q want=%q", pattern, want)
+	}
+}
+
+func TestConnectorIdentityValidation(t *testing.T) {
+	identity := ProductionConnectorIdentity()
+	if err := identity.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	identity.TableName = "outbox-events"
+	if err := identity.Validate(); err == nil {
+		t.Fatal("invalid PostgreSQL table identifier unexpectedly accepted")
+	}
+}
+
 func TestParseSourceDatabaseConfigUsesDSNIdentityAndCDCCredentials(t *testing.T) {
 	source, err := ParseSourceDatabaseConfig("postgres://app-user:app-password@source-db:6543/exchange?sslmode=disable", EnvironmentConfig{
 		User: "cdc-user", Password: "cdc-password", SSLMode: "require",
@@ -75,6 +123,19 @@ func TestParseSourceDatabaseConfigUsesDSNIdentityAndCDCCredentials(t *testing.T)
 	}
 	if source.SSLCert == "" || source.SSLKey == "" || source.SSLRootCert == "" {
 		t.Fatalf("source certificate paths=%+v", source)
+	}
+}
+
+func TestParseSourceDatabaseConfigFallsBackToDSNCredentials(t *testing.T) {
+	source, err := ParseSourceDatabaseConfig("postgres://app-user:app-password@source-db:6543/exchange?sslmode=disable", EnvironmentConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Host != "source-db" || source.Port != 6543 || source.Database != "exchange" {
+		t.Fatalf("source identity=%+v", source)
+	}
+	if source.User != "app-user" || source.Password != "app-password" {
+		t.Fatalf("source credentials=%+v", source)
 	}
 }
 

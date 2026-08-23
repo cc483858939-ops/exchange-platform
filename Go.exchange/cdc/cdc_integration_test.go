@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -31,6 +32,7 @@ type cdcAcceptanceFixture struct {
 	brokers    []string
 	connectURL string
 	topic      string
+	identity   ConnectorIdentity
 }
 
 func newCDCAcceptanceFixture(t *testing.T) *cdcAcceptanceFixture {
@@ -57,12 +59,13 @@ func newCDCAcceptanceFixture(t *testing.T) *cdcAcceptanceFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identity := ProductionConnectorIdentity()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := Run(ctx, sqlDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source); err != nil {
+	if _, err := runWithIdentity(ctx, sqlDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source, identity); err != nil {
 		t.Fatal(err)
 	}
-	return &cdcAcceptanceFixture{db: sqlDB, brokers: brokers, connectURL: connectURL, topic: cdcAcceptanceActivityTopic}
+	return &cdcAcceptanceFixture{db: sqlDB, brokers: brokers, connectURL: connectURL, topic: cdcAcceptanceActivityTopic, identity: identity}
 }
 
 func splitNonEmpty(raw string) []string {
@@ -75,6 +78,13 @@ func splitNonEmpty(raw string) []string {
 	return values
 }
 
+func acceptanceTableReference(identity ConnectorIdentity) (string, error) {
+	if err := identity.Validate(); err != nil {
+		return "", err
+	}
+	return quotedIdentifier(identity.SchemaName) + "." + quotedIdentifier(identity.TableName), nil
+}
+
 type cdcAcceptanceEvent struct {
 	RowID        string
 	PartitionKey string
@@ -83,6 +93,14 @@ type cdcAcceptanceEvent struct {
 }
 
 func insertCDCAcceptanceEvent(ctx context.Context, db *sql.DB) (cdcAcceptanceEvent, error) {
+	return insertAcceptanceEventInto(ctx, db, ProductionConnectorIdentity(), cdcAcceptanceActivityTopic, `{"source":"rev4.2-acceptance"}`)
+}
+
+func insertAcceptanceEventInto(ctx context.Context, db *sql.DB, identity ConnectorIdentity, topic, payload string) (cdcAcceptanceEvent, error) {
+	table, err := acceptanceTableReference(identity)
+	if err != nil {
+		return cdcAcceptanceEvent{}, err
+	}
 	now := time.Now().UTC()
 	id := uuid.NewString()
 	aggregateID := uuid.NewString()
@@ -90,17 +108,17 @@ func insertCDCAcceptanceEvent(ctx context.Context, db *sql.DB) (cdcAcceptanceEve
 	envelope := eventing.Envelope{
 		ID: id, Type: "cdc.acceptance.v1", SchemaVersion: 1,
 		AggregateType: "cdc_acceptance", AggregateID: aggregateID,
-		OccurredAt: now, Payload: json.RawMessage(`{"source":"rev4.2-acceptance"}`),
+		OccurredAt: now, Payload: json.RawMessage(payload),
 	}
 	message, err := json.Marshal(envelope)
 	if err != nil {
 		return cdcAcceptanceEvent{}, err
 	}
-	_, err = db.ExecContext(ctx, `
-INSERT INTO outbox_events
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+INSERT INTO %s
   (id, topic, partition_key, event_type, schema_version, aggregate_type, aggregate_id, message, occurred_at, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-`, id, cdcAcceptanceActivityTopic, partitionKey, envelope.Type, envelope.SchemaVersion, envelope.AggregateType, envelope.AggregateID, message, now, now)
+	`, table), id, topic, partitionKey, envelope.Type, envelope.SchemaVersion, envelope.AggregateType, envelope.AggregateID, message, now, now)
 	if err != nil {
 		return cdcAcceptanceEvent{}, err
 	}
@@ -169,6 +187,7 @@ func findActivityEventAfterBoundary(ctx context.Context, fixture *cdcAcceptanceF
 				var envelope eventing.Envelope
 				if json.Unmarshal(message.Value, &envelope) == nil && envelope.ID == eventID {
 					results <- cdcKafkaSearchResult{message: message, found: true}
+					cancel()
 					return
 				}
 			}
@@ -218,7 +237,11 @@ func TestRealCDCCommitRollbackUpdateAndDeleteAcceptance(t *testing.T) {
 		t.Fatalf("Kafka envelope=%+v want=%+v", observed, committed.Envelope)
 	}
 
-	if _, err := fixture.db.ExecContext(ctx, "UPDATE outbox_events SET event_type = event_type WHERE id = $1", committed.RowID); err == nil {
+	table, err := acceptanceTableReference(fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET event_type = event_type WHERE id = $1", table), committed.RowID); err == nil {
 		t.Fatal("append-only Outbox UPDATE unexpectedly succeeded")
 	}
 
@@ -230,7 +253,7 @@ func TestRealCDCCommitRollbackUpdateAndDeleteAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rolledBack, err := insertAcceptanceEventTx(ctx, tx)
+	rolledBack, err := insertAcceptanceEventTx(ctx, tx, fixture.identity, fixture.topic)
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -248,7 +271,7 @@ func TestRealCDCCommitRollbackUpdateAndDeleteAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.db.ExecContext(ctx, "DELETE FROM outbox_events WHERE id = $1", committed.RowID); err != nil {
+	if _, err := fixture.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = $1", table), committed.RowID); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, err := findActivityEventAfterBoundary(ctx, fixture, deleteBoundary, committed.Envelope.ID, 5*time.Second); err != nil {
@@ -258,7 +281,11 @@ func TestRealCDCCommitRollbackUpdateAndDeleteAcceptance(t *testing.T) {
 	}
 }
 
-func insertAcceptanceEventTx(ctx context.Context, tx *sql.Tx) (cdcAcceptanceEvent, error) {
+func insertAcceptanceEventTx(ctx context.Context, tx *sql.Tx, identity ConnectorIdentity, topic string) (cdcAcceptanceEvent, error) {
+	table, err := acceptanceTableReference(identity)
+	if err != nil {
+		return cdcAcceptanceEvent{}, err
+	}
 	now := time.Now().UTC()
 	id := uuid.NewString()
 	aggregateID := uuid.NewString()
@@ -272,21 +299,31 @@ func insertAcceptanceEventTx(ctx context.Context, tx *sql.Tx) (cdcAcceptanceEven
 	if err != nil {
 		return cdcAcceptanceEvent{}, err
 	}
-	_, err = tx.ExecContext(ctx, `
-INSERT INTO outbox_events
+	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
+INSERT INTO %s
   (id, topic, partition_key, event_type, schema_version, aggregate_type, aggregate_id, message, occurred_at, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-`, id, cdcAcceptanceActivityTopic, partitionKey, envelope.Type, envelope.SchemaVersion, envelope.AggregateType, envelope.AggregateID, message, now, now)
+	`, table), id, topic, partitionKey, envelope.Type, envelope.SchemaVersion, envelope.AggregateType, envelope.AggregateID, message, now, now)
 	return cdcAcceptanceEvent{RowID: id, PartitionKey: partitionKey, Envelope: envelope, Message: message}, err
 }
 
 func TestRealCDCConnectorPauseRecoveryAcceptance(t *testing.T) {
 	fixture := newCDCAcceptanceFixture(t)
 	ctx := context.Background()
-	if err := connectorAction(ctx, fixture.connectURL, "pause"); err != nil {
+	if err := waitForConnectorState(ctx, fixture.connectURL, fixture.identity.ConnectorName, "RUNNING"); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitForConnectorState(ctx, fixture.connectURL, "PAUSED", "STOPPED"); err != nil {
+	if err := connectorAction(ctx, fixture.connectURL, fixture.identity.ConnectorName, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := connectorAction(cleanupCtx, fixture.connectURL, fixture.identity.ConnectorName, "resume"); err != nil {
+			t.Logf("resume production connector during pause-test cleanup: %v", err)
+		}
+	})
+	if err := waitForConnectorState(ctx, fixture.connectURL, fixture.identity.ConnectorName, "PAUSED", "STOPPED"); err != nil {
 		t.Fatal(err)
 	}
 	boundary, err := captureActivityTopicBoundary(ctx, fixture)
@@ -297,10 +334,10 @@ func TestRealCDCConnectorPauseRecoveryAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := connectorAction(ctx, fixture.connectURL, "resume"); err != nil {
+	if err := connectorAction(ctx, fixture.connectURL, fixture.identity.ConnectorName, "resume"); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitForConnectorState(ctx, fixture.connectURL, "RUNNING"); err != nil {
+	if err := waitForConnectorState(ctx, fixture.connectURL, fixture.identity.ConnectorName, "RUNNING"); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, err := findActivityEventAfterBoundary(ctx, fixture, boundary, event.Envelope.ID, 45*time.Second); err != nil {
@@ -310,8 +347,8 @@ func TestRealCDCConnectorPauseRecoveryAcceptance(t *testing.T) {
 	}
 }
 
-func connectorAction(ctx context.Context, connectURL, action string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, strings.TrimRight(connectURL, "/")+"/connectors/"+ConnectorName+"/"+action, nil)
+func connectorAction(ctx context.Context, connectURL, connectorName, action string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, strings.TrimRight(connectURL, "/")+"/connectors/"+url.PathEscape(connectorName)+"/"+url.PathEscape(action), nil)
 	if err != nil {
 		return err
 	}
@@ -326,11 +363,11 @@ func connectorAction(ctx context.Context, connectURL, action string) error {
 	return nil
 }
 
-func waitForConnectorState(ctx context.Context, connectURL string, wanted ...string) error {
+func waitForConnectorState(ctx context.Context, connectURL, connectorName string, wanted ...string) error {
 	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	for {
-		status, err := connectorStatus(deadline, strings.TrimRight(connectURL, "/"))
+		status, err := connectorStatusForName(deadline, strings.TrimRight(connectURL, "/"), connectorName)
 		if err == nil {
 			state := strings.ToUpper(status.Connector.State)
 			for _, candidate := range wanted {
@@ -361,7 +398,7 @@ func TestRealCDCContainerRestartResumeAcceptance(t *testing.T) {
 		t.Skipf("BLOCKED: docker compose restart kafka-connect failed: %v (%s)", err, strings.TrimSpace(string(output)))
 	}
 	ctx := context.Background()
-	if err := waitForConnectorState(ctx, fixture.connectURL, "RUNNING"); err != nil {
+	if err := waitForConnectorState(ctx, fixture.connectURL, fixture.identity.ConnectorName, "RUNNING"); err != nil {
 		t.Fatal(err)
 	}
 	boundary, err := captureActivityTopicBoundary(ctx, fixture)
@@ -386,108 +423,178 @@ func TestRealCDCIsolatedInitialSnapshotAcceptance(t *testing.T) {
 	if os.Getenv("RUN_CDC_SNAPSHOT_INTEGRATION") != "1" {
 		t.Skip("set RUN_CDC_SNAPSHOT_INTEGRATION=1 to run isolated initial-snapshot acceptance")
 	}
-	dsn := strings.TrimSpace(os.Getenv("CDC_SNAPSHOT_DATABASE_DSN"))
-	connectURL := strings.TrimSpace(os.Getenv("CDC_SNAPSHOT_CONNECT_URL"))
-	brokers := splitNonEmpty(os.Getenv("CDC_SNAPSHOT_KAFKA_BROKERS"))
-	if len(brokers) == 0 {
-		brokers = splitNonEmpty(os.Getenv("KAFKA_BROKERS"))
+	identity := isolatedSnapshotIdentity()
+	if err := validateIsolatedSnapshotIdentity(identity); err != nil {
+		t.Fatal(err)
 	}
+	var snapshotDB *sql.DB
+	var connectURL string
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if err := cleanupIsolatedSnapshot(cleanupCtx, snapshotDB, connectURL, identity); err != nil {
+			t.Logf("isolated snapshot cleanup: %v", err)
+		}
+	})
+
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	connectURL = strings.TrimSpace(os.Getenv("CDC_CONNECT_URL"))
+	brokers := splitNonEmpty(os.Getenv("KAFKA_BROKERS"))
 	if dsn == "" || connectURL == "" || len(brokers) == 0 {
-		t.Skip("RUN_CDC_SNAPSHOT_INTEGRATION requires CDC_SNAPSHOT_DATABASE_DSN, CDC_SNAPSHOT_CONNECT_URL, and Kafka brokers")
+		t.Skip("RUN_CDC_SNAPSHOT_INTEGRATION requires POSTGRES_TEST_DSN, KAFKA_BROKERS, and CDC_CONNECT_URL")
 	}
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sqlDB, err := db.DB()
+	snapshotDB, err = db.DB()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &cdcAcceptanceFixture{db: sqlDB, brokers: brokers, connectURL: connectURL, topic: cdcAcceptanceActivityTopic}
+	fixture := &cdcAcceptanceFixture{db: snapshotDB, brokers: brokers, connectURL: connectURL, topic: cdcAcceptanceActivityTopic, identity: identity}
 	ctx := context.Background()
-	if err := prepareIsolatedSnapshotOutbox(ctx, sqlDB); err != nil {
+	if err := prepareIsolatedSnapshotOutbox(ctx, snapshotDB, identity); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := deleteConnector(cleanupCtx, connectURL); err != nil {
-			t.Logf("snapshot connector cleanup: %v", err)
-		}
-		if _, err := sqlDB.ExecContext(cleanupCtx, "SELECT pg_drop_replication_slot($1) WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", SlotName); err != nil {
-			t.Logf("snapshot slot cleanup: %v", err)
-		}
-		if _, err := sqlDB.ExecContext(cleanupCtx, "DROP PUBLICATION IF EXISTS "+PublicationName); err != nil {
-			t.Logf("snapshot publication cleanup: %v", err)
-		}
-		if _, err := sqlDB.ExecContext(cleanupCtx, "DROP TABLE IF EXISTS outbox_events"); err != nil {
-			t.Logf("snapshot table cleanup: %v", err)
-		}
-	})
 
+	seeded, err := insertAcceptanceEventInto(ctx, snapshotDB, identity, cdcAcceptanceActivityTopic, `{"source":"rev4.2.1-isolated-snapshot"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	boundary, err := captureActivityTopicBoundary(ctx, fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seeded, err := insertCDCAcceptanceEvent(ctx, sqlDB)
+	source, err := ParseSourceDatabaseConfig(dsn, Environment())
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment := Environment()
-	if value := strings.TrimSpace(os.Getenv("CDC_SNAPSHOT_DATABASE_USER")); value != "" {
-		environment.User = value
+	if _, err := runWithIdentity(ctx, snapshotDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source, identity); err != nil {
+		t.Fatal(err)
 	}
-	if value, ok := os.LookupEnv("CDC_SNAPSHOT_DATABASE_PASSWORD"); ok {
-		environment.Password = value
+	if err := waitForConnectorState(ctx, connectURL, identity.ConnectorName, "RUNNING"); err != nil {
+		t.Fatal(err)
 	}
-	if value := strings.TrimSpace(os.Getenv("CDC_SNAPSHOT_DATABASE_SSLMODE")); value != "" {
-		environment.SSLMode = value
-	}
-	source, err := ParseSourceDatabaseConfig(dsn, environment)
+	message, found, err := findActivityEventAfterBoundary(ctx, fixture, boundary, seeded.Envelope.ID, 60*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Run(ctx, sqlDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source); err != nil {
-		t.Fatal(err)
-	}
-	if err := waitForConnectorState(ctx, connectURL, "RUNNING"); err != nil {
-		t.Fatal(err)
-	}
-	if _, found, err := findActivityEventAfterBoundary(ctx, fixture, boundary, seeded.Envelope.ID, 60*time.Second); err != nil {
-		t.Fatal(err)
-	} else if !found {
+	if !found {
 		t.Fatalf("pre-existing snapshot event %s did not reach Kafka", seeded.Envelope.ID)
+	}
+	if message.Topic != fixture.topic || string(message.Key) != seeded.PartitionKey {
+		t.Fatalf("snapshot Kafka routing topic=%q key=%q", message.Topic, string(message.Key))
+	}
+	var observed eventing.Envelope
+	if err := json.Unmarshal(message.Value, &observed); err != nil {
+		t.Fatal(err)
+	}
+	if observed.ID != seeded.Envelope.ID || observed.Type != seeded.Envelope.Type || observed.SchemaVersion != seeded.Envelope.SchemaVersion || observed.AggregateType != seeded.Envelope.AggregateType || observed.AggregateID != seeded.Envelope.AggregateID || !bytes.Equal(observed.Payload, seeded.Envelope.Payload) {
+		t.Fatalf("snapshot Kafka envelope=%+v want=%+v", observed, seeded.Envelope)
 	}
 }
 
-func prepareIsolatedSnapshotOutbox(ctx context.Context, db *sql.DB) error {
-	if db == nil {
-		return errors.New("snapshot database connection is nil")
+func isolatedSnapshotIdentity() ConnectorIdentity {
+	suffix := cdcAcceptanceSuffix()
+	return ConnectorIdentity{
+		ConnectorName:   "goexchange-outbox-acceptance-" + suffix,
+		TopicPrefix:     "goexchange.cdc.acceptance." + suffix,
+		SlotName:        "goexchange_outbox_slot_a_" + suffix,
+		PublicationName: "goexchange_outbox_pub_a_" + suffix,
+		SchemaName:      ProductionSchemaName,
+		TableName:       "outbox_events_cdc_a_" + suffix,
 	}
-	statements := []string{
-		"DROP PUBLICATION IF EXISTS " + PublicationName,
-		"CREATE TABLE IF NOT EXISTS outbox_events (id UUID PRIMARY KEY, topic VARCHAR(255) NOT NULL, partition_key VARCHAR(255) NOT NULL, event_type VARCHAR(128) NOT NULL, schema_version INTEGER NOT NULL, aggregate_type VARCHAR(64) NOT NULL, aggregate_id VARCHAR(128) NOT NULL, message JSONB NOT NULL, occurred_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
-		"TRUNCATE TABLE outbox_events",
-		"SELECT pg_drop_replication_slot($1) WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)",
-		"CREATE PUBLICATION " + PublicationName + " FOR TABLE public.outbox_events",
+}
+
+func cdcAcceptanceSuffix() string {
+	return strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+}
+
+func validateIsolatedSnapshotIdentity(identity ConnectorIdentity) error {
+	if err := identity.Validate(); err != nil {
+		return err
 	}
-	for index, statement := range statements {
-		var err error
-		if index == 3 {
-			_, err = db.ExecContext(ctx, statement, SlotName)
-		} else {
-			_, err = db.ExecContext(ctx, statement)
-		}
-		if err != nil {
-			return fmt.Errorf("prepare isolated snapshot statement %d: %w", index+1, err)
-		}
+	production := ProductionConnectorIdentity()
+	// The acceptance table intentionally remains in public. Every resource
+	// name and the topic namespace, which can cause destructive cross-talk,
+	// must still be different from production.
+	if identity.ConnectorName == production.ConnectorName ||
+		identity.TopicPrefix == production.TopicPrefix ||
+		identity.SlotName == production.SlotName ||
+		identity.PublicationName == production.PublicationName ||
+		identity.TableName == production.TableName {
+		return errors.New("isolated snapshot identity overlaps a production CDC resource")
 	}
 	return nil
 }
 
-func deleteConnector(ctx context.Context, connectURL string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, strings.TrimRight(connectURL, "/")+"/connectors/"+ConnectorName, nil)
+func prepareIsolatedSnapshotOutbox(ctx context.Context, db *sql.DB, identity ConnectorIdentity) error {
+	if db == nil {
+		return errors.New("snapshot database connection is nil")
+	}
+	if err := validateIsolatedSnapshotIdentity(identity); err != nil {
+		return err
+	}
+	table, err := acceptanceTableReference(identity)
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`
+CREATE TABLE %s (
+  id UUID PRIMARY KEY,
+  topic VARCHAR(255) NOT NULL,
+  partition_key VARCHAR(255) NOT NULL,
+  event_type VARCHAR(128) NOT NULL,
+  schema_version INTEGER NOT NULL,
+  aggregate_type VARCHAR(64) NOT NULL,
+  aggregate_id VARCHAR(128) NOT NULL,
+  message JSONB NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+)`, table)); err != nil {
+		return fmt.Errorf("create isolated snapshot outbox: %w", err)
+	}
+	if err := ensurePublicationForIdentity(ctx, db, identity); err != nil {
+		return fmt.Errorf("create isolated snapshot publication: %w", err)
+	}
+	return nil
+}
+
+func cleanupIsolatedSnapshot(ctx context.Context, db *sql.DB, connectURL string, identity ConnectorIdentity) error {
+	if err := validateIsolatedSnapshotIdentity(identity); err != nil {
+		return err
+	}
+	var cleanupErrors []string
+	if strings.TrimSpace(connectURL) != "" {
+		if err := deleteConnectorForName(ctx, connectURL, identity.ConnectorName); err != nil {
+			cleanupErrors = append(cleanupErrors, "delete connector: "+err.Error())
+		}
+		if err := waitForConnectorDeleted(ctx, connectURL, identity.ConnectorName); err != nil {
+			cleanupErrors = append(cleanupErrors, "wait connector deletion: "+err.Error())
+		}
+	}
+	if db != nil {
+		if err := waitForSlotInactive(ctx, db, identity.SlotName); err != nil {
+			cleanupErrors = append(cleanupErrors, "wait slot inactive: "+err.Error())
+		} else if err := dropReplicationSlot(ctx, db, identity.SlotName); err != nil {
+			cleanupErrors = append(cleanupErrors, "drop slot: "+err.Error())
+		}
+		if err := dropPublication(ctx, db, identity.PublicationName); err != nil {
+			cleanupErrors = append(cleanupErrors, "drop publication: "+err.Error())
+		}
+		if err := dropSnapshotTable(ctx, db, identity); err != nil {
+			cleanupErrors = append(cleanupErrors, "drop table: "+err.Error())
+		}
+	}
+	if len(cleanupErrors) > 0 {
+		return errors.New(strings.Join(cleanupErrors, "; "))
+	}
+	return nil
+}
+
+func deleteConnectorForName(ctx context.Context, connectURL, connectorName string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, strings.TrimRight(connectURL, "/")+"/connectors/"+url.PathEscape(connectorName), nil)
 	if err != nil {
 		return err
 	}
@@ -497,7 +604,100 @@ func deleteConnector(ctx context.Context, connectURL string) error {
 	}
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 && response.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("delete CDC connector returned %s", response.Status)
+		return fmt.Errorf("delete CDC connector %s returned %s", connectorName, response.Status)
 	}
 	return nil
+}
+
+func waitForConnectorDeleted(ctx context.Context, connectURL, connectorName string) error {
+	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var lastErr error
+	for {
+		request, err := http.NewRequestWithContext(deadline, http.MethodGet, strings.TrimRight(connectURL, "/")+"/connectors/"+url.PathEscape(connectorName)+"/status", nil)
+		if err != nil {
+			return err
+		}
+		response, err := (&http.Client{Timeout: 15 * time.Second}).Do(request)
+		if err == nil {
+			if response.StatusCode == http.StatusNotFound {
+				_ = response.Body.Close()
+				return nil
+			}
+			_ = response.Body.Close()
+			if response.StatusCode/100 == 2 {
+				lastErr = fmt.Errorf("connector %s still exists", connectorName)
+			} else {
+				lastErr = fmt.Errorf("connector status returned %s", response.Status)
+			}
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-deadline.Done():
+			if lastErr != nil {
+				return fmt.Errorf("connector %s was not deleted: %w", connectorName, lastErr)
+			}
+			return fmt.Errorf("connector %s was not deleted: %w", connectorName, deadline.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func waitForSlotInactive(ctx context.Context, db *sql.DB, slotName string) error {
+	if db == nil {
+		return errors.New("database connection is nil")
+	}
+	if len(slotName) == 0 || !postgresIdentifierPattern.MatchString(slotName) || len(slotName) > 63 {
+		return fmt.Errorf("invalid replication slot name %q", slotName)
+	}
+	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var lastErr error
+	for {
+		var active bool
+		err := db.QueryRowContext(deadline, "SELECT active FROM pg_replication_slots WHERE slot_name = $1", slotName).Scan(&active)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			lastErr = err
+		case !active:
+			return nil
+		default:
+			lastErr = fmt.Errorf("replication slot %s is still active", slotName)
+		}
+		select {
+		case <-deadline.Done():
+			if lastErr != nil {
+				return fmt.Errorf("replication slot %s did not become inactive: %w", slotName, lastErr)
+			}
+			return fmt.Errorf("replication slot %s did not become inactive: %w", slotName, deadline.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func dropReplicationSlot(ctx context.Context, db *sql.DB, slotName string) error {
+	if _, err := db.ExecContext(ctx, "SELECT pg_drop_replication_slot($1) WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", slotName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func dropPublication(ctx context.Context, db *sql.DB, publicationName string) error {
+	if len(publicationName) == 0 || !postgresIdentifierPattern.MatchString(publicationName) || len(publicationName) > 63 {
+		return fmt.Errorf("invalid publication name %q", publicationName)
+	}
+	_, err := db.ExecContext(ctx, "DROP PUBLICATION IF EXISTS "+quotedIdentifier(publicationName))
+	return err
+}
+
+func dropSnapshotTable(ctx context.Context, db *sql.DB, identity ConnectorIdentity) error {
+	table, err := acceptanceTableReference(identity)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table)
+	return err
 }
