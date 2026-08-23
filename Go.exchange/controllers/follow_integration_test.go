@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -51,9 +52,17 @@ func TestFollowGraphIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
+	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	config.AppConfig = &config.Config{
+		Kafka: config.KafkaConfig{
+			ActivityEventsTopic: "goexchange.activity.events.v1",
+		},
+	}
+	t.Cleanup(func() {
+		global.Db = originalDB
+		config.AppConfig = originalConfig
+	})
 
 	users := []models.User{
 		{Username: "follow-alice-" + uuid.NewString(), Password: "test"},

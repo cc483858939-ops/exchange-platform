@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -42,9 +43,17 @@ func openCommentIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.Comment{}, &models.ArticleBehavior{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
+	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	config.AppConfig = &config.Config{
+		Kafka: config.KafkaConfig{
+			ActivityEventsTopic: "goexchange.activity.events.v1",
+		},
+	}
+	t.Cleanup(func() {
+		global.Db = originalDB
+		config.AppConfig = originalConfig
+	})
 	return db
 }
 

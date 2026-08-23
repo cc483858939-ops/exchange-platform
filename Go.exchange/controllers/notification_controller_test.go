@@ -63,8 +63,8 @@ func TestNotificationReadIdempotencyAndIsolationIntegration(t *testing.T) {
 	ctx, recorder := notificationIntegrationContext(http.MethodPut, "/api/me/notifications/"+strconvUint(notifications[0].ID)+"/read", recipient.ID)
 	ctx.Params = gin.Params{{Key: "id", Value: strconvUint(notifications[0].ID)}}
 	MarkMyNotificationRead(ctx)
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("first read status=%d body=%s", recorder.Code, recorder.Body.String())
+	if ctx.Writer.Status() != http.StatusNoContent {
+		t.Fatalf("first read status=%d body=%s", ctx.Writer.Status(), recorder.Body.String())
 	}
 	var first models.Notification
 	if err := db.First(&first, notifications[0].ID).Error; err != nil {
@@ -78,8 +78,8 @@ func TestNotificationReadIdempotencyAndIsolationIntegration(t *testing.T) {
 	ctx, recorder = notificationIntegrationContext(http.MethodPut, "/api/me/notifications/"+strconvUint(notifications[0].ID)+"/read", recipient.ID)
 	ctx.Params = gin.Params{{Key: "id", Value: strconvUint(notifications[0].ID)}}
 	MarkMyNotificationRead(ctx)
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("second read status=%d body=%s", recorder.Code, recorder.Body.String())
+	if ctx.Writer.Status() != http.StatusNoContent {
+		t.Fatalf("second read status=%d body=%s", ctx.Writer.Status(), recorder.Body.String())
 	}
 	var second models.Notification
 	if err := db.First(&second, notifications[0].ID).Error; err != nil {
