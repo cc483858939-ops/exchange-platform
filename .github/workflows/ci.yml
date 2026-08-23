@@ -206,12 +206,22 @@ jobs:
               --list
           )"
 
-          for topic in \
-            "goexchange.user.behavior.v1" \
-            "goexchange.article.like.snapshot.v1" \
-            "goexchange.recommendation.events.v1" \
+          # Keep this list aligned with:
+          # eventing.RequiredKafkaTopics
+          # eventing.KafkaConnectInternalTopicSpecs
+          expected_topics=(
+            "goexchange.user.behavior.v1"
+            "goexchange.article.like.snapshot.v1"
+            "goexchange.recommendation.events.v1"
             "goexchange.article.embedding.v1"
-          do
+            "goexchange.activity.events.v1"
+            "goexchange.notification.projection.dlq.v1"
+            "goexchange.connect.configs"
+            "goexchange.connect.offsets"
+            "goexchange.connect.status"
+          )
+
+          for topic in "${expected_topics[@]}"; do
             if ! printf '%s\n' "$topics" | grep -Fxq "$topic"; then
               echo "Missing required Kafka topic: $topic"
               echo "Broker topics:"
@@ -220,19 +230,29 @@ jobs:
             fi
           done
 
-          topic_count="$(
-            printf '%s\n' "$topics" |
-              sed '/^[[:space:]]*$/d' |
-              wc -l |
-              tr -d '[:space:]'
-          )"
+          assert_partition_count() {
+            local topic="$1"
+            local expected="$2"
+            local actual
 
-          if [ "$topic_count" -ne 4 ]; then
-            echo "Unexpected Kafka topic count: $topic_count, want 4"
-            echo "Broker topics:"
-            printf '%s\n' "$topics"
-            exit 1
-          fi
+            actual="$(
+              docker exec "$kafka_container" \
+                kafka-topics.sh \
+                --bootstrap-server localhost:9092 \
+                --describe \
+                --topic "$topic" |
+              awk -F'PartitionCount: ' 'NR==1 {print $2}' |
+              awk '{print $1}'
+            )"
+
+            if [ "$actual" != "$expected" ]; then
+              echo "Unexpected partition count for $topic: got=$actual want=$expected"
+              exit 1
+            fi
+          }
+
+          assert_partition_count "goexchange.activity.events.v1" "12"
+          assert_partition_count "goexchange.notification.projection.dlq.v1" "3"
   frontend:
     name: Frontend / Test and Build
     runs-on: ubuntu-latest
