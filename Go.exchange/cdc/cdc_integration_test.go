@@ -164,7 +164,40 @@ type cdcKafkaSearchResult struct {
 	err     error
 }
 
-func findActivityEventAfterBoundary(ctx context.Context, fixture *cdcAcceptanceFixture, boundary map[int]int64, eventID string, timeout time.Duration) (kafka.Message, bool, error) {
+func newAcceptancePartitionReader(fixture *cdcAcceptanceFixture, partition int, startOffset int64) (*kafka.Reader, error) {
+	if fixture == nil {
+		return nil, errors.New("CDC acceptance fixture is nil")
+	}
+	if startOffset < 0 {
+		return nil, fmt.Errorf("invalid partition %d start offset %d", partition, startOffset)
+	}
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:   fixture.brokers,
+		Topic:     fixture.topic,
+		Partition: partition,
+		MinBytes:  1,
+		MaxBytes:  4 * 1024 * 1024,
+		MaxWait:   500 * time.Millisecond,
+	})
+	if err := reader.SetOffset(startOffset); err != nil {
+		_ = reader.Close()
+		return nil, fmt.Errorf("set partition %d offset %d: %w", partition, startOffset, err)
+	}
+	return reader, nil
+}
+
+func TestNewAcceptancePartitionReaderRejectsInvalidBoundary(t *testing.T) {
+	fixture := &cdcAcceptanceFixture{brokers: []string{"127.0.0.1:9092"}, topic: cdcAcceptanceActivityTopic}
+	if _, err := newAcceptancePartitionReader(fixture, 0, -1); err == nil {
+		t.Fatal("negative Kafka boundary unexpectedly accepted")
+	}
+	if _, err := newAcceptancePartitionReader(nil, 0, 0); err == nil {
+		t.Fatal("nil CDC acceptance fixture unexpectedly accepted")
+	}
+}
+
+func findActivityEventAfterBoundary(t *testing.T, ctx context.Context, fixture *cdcAcceptanceFixture, boundary map[int]int64, eventID string, timeout time.Duration) (kafka.Message, bool, error) {
+	t.Helper()
 	searchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	results := make(chan cdcKafkaSearchResult, len(boundary))
@@ -173,10 +206,14 @@ func findActivityEventAfterBoundary(ctx context.Context, fixture *cdcAcceptanceF
 		waitGroup.Add(1)
 		go func(partition int, start int64) {
 			defer waitGroup.Done()
-			reader := kafka.NewReader(kafka.ReaderConfig{
-				Brokers: fixture.brokers, Topic: fixture.topic, Partition: partition,
-				StartOffset: start, MinBytes: 1, MaxBytes: 4 * 1024 * 1024, MaxWait: 500 * time.Millisecond,
-			})
+			if t != nil {
+				t.Logf("partition=%d boundary=%d SetOffset=%d", partition, start, start)
+			}
+			reader, err := newAcceptancePartitionReader(fixture, partition, start)
+			if err != nil {
+				results <- cdcKafkaSearchResult{err: err}
+				return
+			}
 			defer reader.Close()
 			for {
 				message, err := reader.ReadMessage(searchCtx)
@@ -186,6 +223,20 @@ func findActivityEventAfterBoundary(ctx context.Context, fixture *cdcAcceptanceF
 				}
 				var envelope eventing.Envelope
 				if json.Unmarshal(message.Value, &envelope) == nil && envelope.ID == eventID {
+					boundaryOffset, ok := boundary[message.Partition]
+					if !ok {
+						cancel()
+						results <- cdcKafkaSearchResult{err: fmt.Errorf("matching message partition %d is absent from captured boundary", message.Partition)}
+						return
+					}
+					if message.Offset < boundaryOffset {
+						cancel()
+						results <- cdcKafkaSearchResult{err: fmt.Errorf("matched message offset=%d before boundary=%d on partition=%d", message.Offset, boundaryOffset, message.Partition)}
+						return
+					}
+					if t != nil {
+						t.Logf("partition=%d boundary=%d matching offset=%d", message.Partition, boundaryOffset, message.Offset)
+					}
 					results <- cdcKafkaSearchResult{message: message, found: true}
 					cancel()
 					return
@@ -219,7 +270,7 @@ func TestRealCDCCommitRollbackUpdateAndDeleteAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, found, err := findActivityEventAfterBoundary(ctx, fixture, boundary, committed.Envelope.ID, 45*time.Second)
+	message, found, err := findActivityEventAfterBoundary(t, ctx, fixture, boundary, committed.Envelope.ID, 45*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +312,7 @@ func TestRealCDCCommitRollbackUpdateAndDeleteAcceptance(t *testing.T) {
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := findActivityEventAfterBoundary(ctx, fixture, rollbackBoundary, rolledBack.Envelope.ID, 5*time.Second); err != nil {
+	if _, found, err := findActivityEventAfterBoundary(t, ctx, fixture, rollbackBoundary, rolledBack.Envelope.ID, 5*time.Second); err != nil {
 		t.Fatal(err)
 	} else if found {
 		t.Fatalf("rolled-back event %s reached Kafka", rolledBack.Envelope.ID)
@@ -274,7 +325,7 @@ func TestRealCDCCommitRollbackUpdateAndDeleteAcceptance(t *testing.T) {
 	if _, err := fixture.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = $1", table), committed.RowID); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := findActivityEventAfterBoundary(ctx, fixture, deleteBoundary, committed.Envelope.ID, 5*time.Second); err != nil {
+	if _, found, err := findActivityEventAfterBoundary(t, ctx, fixture, deleteBoundary, committed.Envelope.ID, 5*time.Second); err != nil {
 		t.Fatal(err)
 	} else if found {
 		t.Fatal("Outbox DELETE produced a duplicate Activity event")
@@ -340,7 +391,7 @@ func TestRealCDCConnectorPauseRecoveryAcceptance(t *testing.T) {
 	if err := waitForConnectorState(ctx, fixture.connectURL, fixture.identity.ConnectorName, "RUNNING"); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := findActivityEventAfterBoundary(ctx, fixture, boundary, event.Envelope.ID, 45*time.Second); err != nil {
+	if _, found, err := findActivityEventAfterBoundary(t, ctx, fixture, boundary, event.Envelope.ID, 45*time.Second); err != nil {
 		t.Fatal(err)
 	} else if !found {
 		t.Fatalf("paused-then-resumed event %s did not reach Kafka", event.Envelope.ID)
@@ -409,7 +460,7 @@ func TestRealCDCContainerRestartResumeAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := findActivityEventAfterBoundary(ctx, fixture, boundary, event.Envelope.ID, 45*time.Second); err != nil {
+	if _, found, err := findActivityEventAfterBoundary(t, ctx, fixture, boundary, event.Envelope.ID, 45*time.Second); err != nil {
 		t.Fatal(err)
 	} else if !found {
 		t.Fatalf("post-restart event %s did not reach Kafka", event.Envelope.ID)
@@ -476,7 +527,7 @@ func TestRealCDCIsolatedInitialSnapshotAcceptance(t *testing.T) {
 	if err := waitForConnectorState(ctx, connectURL, identity.ConnectorName, "RUNNING"); err != nil {
 		t.Fatal(err)
 	}
-	message, found, err := findActivityEventAfterBoundary(ctx, fixture, boundary, seeded.Envelope.ID, 60*time.Second)
+	message, found, err := findActivityEventAfterBoundary(t, ctx, fixture, boundary, seeded.Envelope.ID, 60*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
