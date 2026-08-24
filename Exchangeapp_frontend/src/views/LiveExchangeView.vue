@@ -368,7 +368,7 @@ dd {
 
 @media (max-width: 799px) {
   .exchange-header {
-    top: var(--app-mobile-nav-offset, 0px);
+    top: var(--mobile-safe-top);
   }
 
   .exchange-content {

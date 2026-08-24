@@ -1,8 +1,11 @@
 <template>
   <main class="home-view">
     <header class="home-feed-header">
-      <h1>Home</h1>
-      <FeedTabs :active-tab="activeTab" @select="selectTab" />
+      <MobileHomeHeader />
+      <div class="home-feed-header__content">
+        <h1>Home</h1>
+        <FeedTabs :active-tab="activeTab" @select="selectTab" />
+      </div>
     </header>
 
     <div
@@ -149,6 +152,16 @@
     </section>
 
     </div>
+
+    <RouterLink
+      v-if="authStore.isAuthenticated"
+      class="home-compose-fab"
+      :to="{ name: 'ArticleCreate' }"
+      aria-label="Post"
+      title="Post"
+    >
+      <AppIcon name="plus" :size="24" />
+    </RouterLink>
   </main>
 </template>
 
@@ -158,6 +171,8 @@ import type { ComponentPublicInstance } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
+import AppIcon from '../components/icons/AppIcon.vue';
+import MobileHomeHeader from '../components/layout/MobileHomeHeader.vue';
 import { deleteArticle, getFollowingTimeline } from '../services/articleService';
 import { getArticleRecommendations } from '../services/recommendationService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
@@ -1009,6 +1024,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .home-view {
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--color-surface);
   color: var(--color-text);
 }
@@ -1016,27 +1032,28 @@ onBeforeUnmount(() => {
 .home-feed-header {
   position: sticky;
   top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
+  z-index: 20;
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   backdrop-filter: blur(10px);
 }
 
-@media (max-width: 799px) {
-  .home-feed-header {
-    top: var(--app-mobile-nav-offset, 0px);
-  }
+.home-feed-header__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
 }
 
 .home-feed-header h1 {
   margin: 0;
   font-size: 22px;
   letter-spacing: -0.02em;
+}
+
+.home-compose-fab {
+  display: none;
 }
 
 .home-feed-body {
@@ -1175,18 +1192,54 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 620px) {
+  .home-state {
+    padding-inline: var(--space-4);
+  }
+}
+
+@media (max-width: 799px) {
   .home-feed-header {
-    align-items: stretch;
-    flex-direction: column;
-    padding: var(--space-3) var(--space-4);
+    top: var(--mobile-safe-top);
+    padding: 0;
+  }
+
+  .home-feed-header__content {
+    display: block;
+    padding: 0;
   }
 
   .home-feed-header h1 {
-    font-size: 20px;
+    display: none;
   }
 
-  .home-state {
-    padding-inline: var(--space-4);
+  .home-compose-fab {
+    position: fixed;
+    right: 16px;
+    bottom: calc(
+      var(--mobile-bottom-nav-height)
+      + var(--mobile-safe-bottom)
+      + 16px
+    );
+    z-index: 30;
+    display: grid;
+    width: var(--mobile-fab-size);
+    height: var(--mobile-fab-size);
+    place-items: center;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: var(--color-surface);
+    text-decoration: none;
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--color-text) 18%, transparent);
+    transition: background-color var(--transition-fast), transform var(--transition-fast);
+  }
+
+  .home-compose-fab:hover,
+  .home-compose-fab:focus-visible {
+    background: var(--color-accent-hover);
+  }
+
+  .home-compose-fab:active {
+    transform: scale(0.96);
   }
 }
 

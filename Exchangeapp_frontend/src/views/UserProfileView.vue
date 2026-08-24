@@ -13,6 +13,7 @@
           <small>Profile</small>
         </span>
       </button>
+      <MobileAccountMenu v-if="isOwnProfile" />
     </header>
 
     <section
@@ -331,6 +332,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
+import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import { followUser, getUser, getUserArticles, getUserFollowState, unfollowUser, updateUserProfile, uploadProfileAvatar } from '../services/userService';
@@ -1388,6 +1390,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .profile-view {
   min-height: 100vh;
+  min-height: 100dvh;
   color: var(--color-text);
   background: var(--color-surface);
 }
@@ -1398,6 +1401,8 @@ onBeforeUnmount(() => {
   z-index: 12;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
   min-height: 56px;
   padding: var(--space-2) var(--space-5);
   border-bottom: 1px solid var(--color-border);
@@ -1408,6 +1413,7 @@ onBeforeUnmount(() => {
 .profile-header__back {
   display: inline-flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: var(--space-3);
   min-width: 0;
   border: 0;
@@ -1786,7 +1792,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 799px) {
   .profile-header {
-    top: var(--app-mobile-nav-offset, 0px);
+    top: var(--mobile-safe-top);
   }
 }
 

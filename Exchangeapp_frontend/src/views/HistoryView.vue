@@ -691,7 +691,7 @@ onBeforeUnmount(resetHistoryState);
 
 @media (max-width: 799px) {
   .history-view__header {
-    top: var(--app-mobile-nav-offset, 0px);
+    top: var(--mobile-safe-top);
   }
 }
 

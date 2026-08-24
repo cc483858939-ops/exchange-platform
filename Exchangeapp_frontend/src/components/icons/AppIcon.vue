@@ -239,6 +239,16 @@
       />
     </template>
 
+    <template v-else-if="props.name === 'plus'">
+      <path
+        d="M12 5v14M5 12h14"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+    </template>
+
     <template v-else-if="props.name === 'camera'">
       <path
         d="M5.25 7.5h3l1.25-2h5l1.25 2h3A1.75 1.75 0 0 1 20.5 9.25v8.5a1.75 1.75 0 0 1-1.75 1.75h-14A1.75 1.75 0 0 1 3 17.75v-8.5A1.75 1.75 0 0 1 4.75 7.5Z"
@@ -319,6 +329,7 @@ type AppIconName =
   | 'trash'
   | 'arrow-left'
   | 'close'
+  | 'plus'
   | 'camera'
   | 'image'
   | 'image-off';

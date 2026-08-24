@@ -555,6 +555,13 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+@media (max-width: 799px) {
+  .post-card__engagement {
+    justify-content: space-between;
+    gap: 0;
+  }
+}
+
 .post-card__metric {
   display: inline-flex;
   align-items: center;

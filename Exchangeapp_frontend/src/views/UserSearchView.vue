@@ -201,6 +201,6 @@ onBeforeUnmount(invalidate);
 .search-view__button { padding: 0 var(--space-4); text-decoration: none; }.search-view__clear { display: grid; width: 42px; place-items: center; border-color: var(--color-border-strong); background: var(--color-surface); color: var(--color-text-secondary); }
 .search-view__state, .search-view__more { display: grid; justify-items: center; gap: var(--space-3); padding: 56px var(--space-5); color: var(--color-text-secondary); text-align: center; }.search-view__state p { margin: 0; }.search-view__state--error, .search-view__more--error { color: var(--color-danger); }
 .search-view__results-heading { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--color-border); }.search-view__results-heading h2 { margin: 0; font-size: 16px; }.search-view__sentinel { min-height: 1px; }.search-view__more { min-height: 64px; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--color-border); }
-@media (max-width: 799px) { .search-view__header { top: var(--app-mobile-nav-offset, 0px); } }
+@media (max-width: 799px) { .search-view__header { top: var(--mobile-safe-top); } }
 @media (max-width: 420px) { .search-view__header, .search-view__form, .search-view__results-heading { padding-inline: var(--space-4); } .search-view__form { grid-template-columns: minmax(0, 1fr) auto; } .search-view__clear { grid-column: 1 / -1; justify-self: end; width: auto; padding-inline: var(--space-3); } .search-view__button { padding-inline: var(--space-3); } }
 </style>

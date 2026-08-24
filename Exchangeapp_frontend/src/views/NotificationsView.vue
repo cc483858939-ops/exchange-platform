@@ -28,6 +28,9 @@
       <button class="notifications-page__action" type="button" @click="loadInitial">Try again</button>
     </div>
     <div v-else-if="items.length === 0" class="notifications-page__state">
+      <span class="notifications-page__empty-icon" aria-hidden="true">
+        <AppIcon name="notifications" :size="28" />
+      </span>
       <h2>You’re all caught up.</h2>
       <p>New likes, replies, and follows will appear here.</p>
     </div>
@@ -82,6 +85,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from '../services/notificationService';
+import AppIcon from '../components/icons/AppIcon.vue';
 import type { Notification } from '../types/Notification';
 
 const authStore = useAuthStore();
@@ -302,6 +306,7 @@ onBeforeUnmount(disconnectObserver);
 <style scoped>
 .notifications-page {
   min-height: 100vh;
+  min-height: 100dvh;
   padding: clamp(24px, 4vw, 48px) clamp(16px, 4vw, 32px) 72px;
 }
 
@@ -369,6 +374,16 @@ onBeforeUnmount(disconnectObserver);
 .notifications-page__state h2,
 .notifications-page__state p {
   margin: 0;
+}
+
+.notifications-page__empty-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
 }
 
 .notifications-page__state h2 {
@@ -502,6 +517,80 @@ onBeforeUnmount(disconnectObserver);
 
   .notification-card__title {
     font-size: 14px;
+  }
+}
+
+@media (max-width: 799px) {
+  .notifications-page {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 0 0 24px;
+  }
+
+  .notifications-page__header {
+    position: sticky;
+    top: var(--mobile-safe-top);
+    z-index: 20;
+    min-height: var(--mobile-topbar-height);
+    align-items: center;
+    flex-direction: row;
+    padding: 0 var(--space-4);
+    background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+    backdrop-filter: blur(10px);
+  }
+
+  .notifications-page__eyebrow {
+    display: none;
+  }
+
+  .notifications-page h1 {
+    font-size: 20px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+
+  .notifications-page__mark-all {
+    border: 0;
+    border-radius: 0;
+    padding: var(--space-2);
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 13px;
+  }
+
+  .notifications-page__mark-all:hover,
+  .notifications-page__mark-all:focus-visible {
+    border-color: transparent;
+    color: var(--color-accent-hover);
+  }
+
+  .notifications-page__pending-label {
+    padding: var(--space-2) 0;
+    font-size: 13px;
+  }
+
+  .notifications-page__state {
+    min-height: clamp(240px, 45dvh, 380px);
+    padding-inline: var(--space-4);
+  }
+
+  .notification-card__open {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .notification-card__avatar {
+    width: 40px;
+    height: 40px;
+  }
+
+  .notification-card__title {
+    overflow: visible;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
   }
 }
 </style>

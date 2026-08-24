@@ -119,4 +119,25 @@ const handleKeydown = (event: KeyboardEvent, index: number) => {
     left: var(--space-2);
   }
 }
+
+@media (max-width: 799px) {
+  .feed-tabs {
+    width: 100%;
+    min-width: 0;
+    height: var(--mobile-feed-tabs-height);
+  }
+
+  .feed-tab {
+    min-height: var(--mobile-feed-tabs-height);
+    padding-inline: var(--space-2);
+  }
+
+  .feed-tab::after {
+    right: 50%;
+    left: 50%;
+    width: 52px;
+    height: 3px;
+    transform: translateX(-50%);
+  }
+}
 </style>

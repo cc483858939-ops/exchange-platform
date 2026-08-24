@@ -1259,7 +1259,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 799px) {
   .detail-header {
-    top: var(--app-mobile-nav-offset, 0px);
+    top: var(--mobile-safe-top);
   }
 }
 

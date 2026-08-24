@@ -27,4 +27,10 @@
   --space-6: 24px;
   --space-8: 32px;
   --transition-fast: 140ms ease;
+  --mobile-topbar-height: 56px;
+  --mobile-feed-tabs-height: 48px;
+  --mobile-bottom-nav-height: 64px;
+  --mobile-fab-size: 56px;
+  --mobile-safe-top: env(safe-area-inset-top, 0px);
+  --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
 }
