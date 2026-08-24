@@ -2,7 +2,10 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -82,6 +85,67 @@ func WorkerHealthAddr() string {
 	}
 	return port
 }
+
+// TrustedProxyCIDRs returns the explicitly configured network origins that may
+// supply an alternative client IP through the supported forwarding headers.
+// An empty configuration deliberately means that no proxy is trusted.
+func TrustedProxyCIDRs() ([]string, error) {
+	raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if raw == "" {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+
+		canonical, err := canonicalTrustedProxyCIDR(value)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+	}
+
+	if len(seen) == 0 {
+		return nil, nil
+	}
+	result := make([]string, 0, len(seen))
+	for value := range seen {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func canonicalTrustedProxyCIDR(value string) (string, error) {
+	if strings.Contains(value, "/") {
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return "", fmt.Errorf("invalid TRUSTED_PROXY_CIDRS entry")
+		}
+		ones, _ := network.Mask.Size()
+		if ones == 0 {
+			return "", fmt.Errorf("TRUSTED_PROXY_CIDRS must not contain a trust-all network")
+		}
+		return network.String(), nil
+	}
+
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return "", fmt.Errorf("invalid TRUSTED_PROXY_CIDRS entry")
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return ipv4.String() + "/32", nil
+	}
+	return ip.String() + "/128", nil
+}
+
 func DatabaseDSN() string {
 	if dsn := strings.TrimSpace(os.Getenv("DATABASE_DSN")); dsn != "" {
 		return dsn

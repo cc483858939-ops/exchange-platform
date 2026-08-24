@@ -17,8 +17,14 @@ func startLikeStateRelay(ctx context.Context, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		PipelineStarted(PipelineLikeStateRelay)
+		defer PipelineStopped(PipelineLikeStateRelay)
+		PipelineStarted(PipelineLikeBehaviorRelay)
+		defer PipelineStopped(PipelineLikeBehaviorRelay)
 		publisher, err := eventing.NewKafkaPublisher(config.AppConfig.Kafka)
 		if err != nil {
+			PipelineFailure(PipelineLikeStateRelay, "kafka_publisher_unavailable", 0)
+			PipelineFailure(PipelineLikeBehaviorRelay, "kafka_publisher_unavailable", 0)
 			log.Printf("[LikeBehaviorRelay] create publisher: %v", err)
 			return
 		}
@@ -35,7 +41,12 @@ func startLikeStateRelay(ctx context.Context, wg *sync.WaitGroup) {
 		defer ticker.Stop()
 		for {
 			if err := runLikeBehaviorRelayBatch(ctx, store, publisher); err != nil && ctx.Err() == nil {
+				PipelineFailure(PipelineLikeStateRelay, "relay_failed", 0)
+				PipelineFailure(PipelineLikeBehaviorRelay, "relay_failed", 0)
 				log.Printf("[LikeBehaviorRelay] batch: %v", err)
+			} else if ctx.Err() == nil {
+				PipelineIdle(PipelineLikeStateRelay, 0)
+				PipelineIdle(PipelineLikeBehaviorRelay, 0)
 			}
 			select {
 			case <-ctx.Done():

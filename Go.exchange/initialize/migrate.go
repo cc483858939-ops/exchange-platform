@@ -48,6 +48,7 @@ func RunMigrations() error {
 			&models.UserAuthorAffinity{},
 			&models.UserRecoProfileDirty{},
 			&models.ExchangeRate{},
+			&models.RuntimeSchemaState{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
@@ -106,6 +107,9 @@ SET liked = (reaction = 1)
 WHERE reaction_version = 0
 `).Error; err != nil {
 			return fmt.Errorf("backfill article reaction tombstones: %w", err)
+		}
+		if err := validateMigratedSchema(tx); err != nil {
+			return err
 		}
 		return nil
 	})

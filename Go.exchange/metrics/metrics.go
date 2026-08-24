@@ -52,6 +52,15 @@ var (
 	recommendationProfileMaterialization         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_profile_materialization_total", Help: "Recommendation profile materialization outcomes."}, []string{"result"})
 	recommendationProfileMaterializationDuration = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_profile_materialization_duration_seconds", Help: "Recommendation profile materialization duration in seconds.", Buckets: prometheus.DefBuckets})
 	recommendationProfileDirtyQueueDepth         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_recommendation_profile_dirty_queue_depth", Help: "Current recommendation profile dirty queue depth."})
+	runtimeReadiness                             = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "runtime_readiness", Help: "Runtime readiness by role and check."}, []string{"role", "check"})
+	runtimeReadinessTransitions                  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "runtime_readiness_transitions_total", Help: "Runtime readiness state transitions."}, []string{"role", "from", "to", "reason"})
+	runtimeReadinessLastSuccess                  = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "runtime_readiness_last_success_timestamp", Help: "Unix timestamp of the last successful readiness evaluation."}, []string{"role"})
+	runtimeReadinessLastEvaluation               = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "runtime_readiness_last_evaluation_timestamp", Help: "Unix timestamp of the most recent readiness evaluation."}, []string{"role"})
+	workerPipelineHealthy                        = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "worker_pipeline_healthy", Help: "Whether a worker pipeline is healthy."}, []string{"pipeline"})
+	workerPipelineConsecutiveFailures            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "worker_pipeline_consecutive_failures", Help: "Consecutive failures for a worker pipeline."}, []string{"pipeline"})
+	workerPipelineLastSuccess                    = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "worker_pipeline_last_success_timestamp", Help: "Unix timestamp of the last successful worker pipeline operation."}, []string{"pipeline"})
+	workerPipelineBacklog                        = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "worker_pipeline_backlog", Help: "Current backlog for a worker pipeline."}, []string{"pipeline"})
+	workerPipelineBacklogStalled                 = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "worker_pipeline_backlog_stalled", Help: "Whether a worker pipeline backlog has exceeded its grace period."}, []string{"pipeline"})
 )
 
 func init() {
@@ -63,6 +72,8 @@ func init() {
 		recommendationRequestLogFailures, recommendationTrackingResults,
 		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
+		runtimeReadiness, runtimeReadinessTransitions, runtimeReadinessLastSuccess, runtimeReadinessLastEvaluation,
+		workerPipelineHealthy, workerPipelineConsecutiveFailures, workerPipelineLastSuccess, workerPipelineBacklog, workerPipelineBacklogStalled,
 	)
 	for _, result := range []string{"generated", "up_to_date", "article_missing", "article_unavailable", "invalid_event", "provider_non_retryable"} {
 		articleEmbeddingEvents.WithLabelValues(result)
@@ -211,4 +222,61 @@ func ObserveRecommendationProfileMaterializationDuration(duration time.Duration)
 
 func SetRecommendationProfileDirtyQueueDepth(value float64) {
 	recommendationProfileDirtyQueueDepth.Set(value)
+}
+
+func SetRuntimeReadiness(role, check string, healthy bool) {
+	value := 0.0
+	if healthy {
+		value = 1
+	}
+	runtimeReadiness.WithLabelValues(role, check).Set(value)
+}
+
+func RecordRuntimeReadinessTransition(role, from, to, reason string) {
+	runtimeReadinessTransitions.WithLabelValues(role, from, to, reason).Inc()
+}
+
+func SetRuntimeReadinessLastSuccess(role string, timestamp time.Time) {
+	if !timestamp.IsZero() {
+		runtimeReadinessLastSuccess.WithLabelValues(role).Set(float64(timestamp.Unix()))
+	}
+}
+
+func SetRuntimeReadinessLastEvaluation(role string, timestamp time.Time) {
+	if !timestamp.IsZero() {
+		runtimeReadinessLastEvaluation.WithLabelValues(role).Set(float64(timestamp.Unix()))
+	}
+}
+
+func SetWorkerPipelineHealthy(pipeline string, healthy bool) {
+	value := 0.0
+	if healthy {
+		value = 1
+	}
+	workerPipelineHealthy.WithLabelValues(pipeline).Set(value)
+}
+
+func SetWorkerPipelineConsecutiveFailures(pipeline string, failures int) {
+	workerPipelineConsecutiveFailures.WithLabelValues(pipeline).Set(float64(failures))
+}
+
+func SetWorkerPipelineLastSuccess(pipeline string, timestamp time.Time) {
+	if !timestamp.IsZero() {
+		workerPipelineLastSuccess.WithLabelValues(pipeline).Set(float64(timestamp.Unix()))
+	}
+}
+
+func SetWorkerPipelineBacklog(pipeline string, backlog int64) {
+	if backlog < 0 {
+		backlog = 0
+	}
+	workerPipelineBacklog.WithLabelValues(pipeline).Set(float64(backlog))
+}
+
+func SetWorkerPipelineBacklogStalled(pipeline string, stalled bool) {
+	value := 0.0
+	if stalled {
+		value = 1
+	}
+	workerPipelineBacklogStalled.WithLabelValues(pipeline).Set(value)
 }

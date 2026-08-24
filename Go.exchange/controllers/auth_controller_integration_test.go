@@ -21,6 +21,12 @@ import (
 
 type stubTokenService struct{}
 
+type allowAllAttemptLimiter struct{}
+
+func (allowAllAttemptLimiter) Allow(context.Context, auth.AttemptInput) (auth.AttemptDecision, error) {
+	return auth.AttemptDecision{Allowed: true}, nil
+}
+
 func (stubTokenService) IssuePair(_ context.Context, userID uint) (auth.TokenPair, error) {
 	return auth.TokenPair{
 		UserID:           userID,
@@ -53,7 +59,7 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}); err != nil {
 		t.Fatal(err)
 	}
-	controller, err := NewAuthController(db, stubTokenService{})
+	controller, err := NewAuthController(db, stubTokenService{}, allowAllAttemptLimiter{})
 	if err != nil {
 		t.Fatal(err)
 	}

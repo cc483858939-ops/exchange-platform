@@ -5,9 +5,14 @@ import (
 	"Go.exchange/models"
 	"Go.exchange/utils"
 	"errors"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
+	ginjson "github.com/gin-gonic/gin/codec/json"
 	"gorm.io/gorm"
 )
 
@@ -40,24 +45,37 @@ type authResponse struct {
 }
 
 type AuthController struct {
-	db     *gorm.DB
-	tokens auth.TokenService
+	db      *gorm.DB
+	tokens  auth.TokenService
+	limiter auth.AttemptLimiter
 }
 
-func NewAuthController(db *gorm.DB, tokens auth.TokenService) (*AuthController, error) {
+const authRequestMaxBodyBytes int64 = 16 << 10
+
+func NewAuthController(db *gorm.DB, tokens auth.TokenService, limiter auth.AttemptLimiter) (*AuthController, error) {
 	if db == nil {
 		return nil, errors.New("auth database is required")
 	}
 	if tokens == nil {
 		return nil, errors.New("auth token service is required")
 	}
-	return &AuthController{db: db, tokens: tokens}, nil
+	if limiter == nil {
+		return nil, errors.New("auth attempt limiter is required")
+	}
+	return &AuthController{db: db, tokens: tokens, limiter: limiter}, nil
 }
 
 func (c *AuthController) Register(ctx *gin.Context) {
 	var request registerRequest
-	if err := ctx.ShouldBindJSON(&request); err != nil {
+	if err := bindAuthJSON(ctx, &request); err != nil {
+		if isAuthRequestTooLarge(err) {
+			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
+			return
+		}
 		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		return
+	}
+	if !c.allowAttempt(ctx, auth.AttemptRegister, strings.ToLower(strings.TrimSpace(request.Username))) {
 		return
 	}
 
@@ -82,8 +100,15 @@ func (c *AuthController) Register(ctx *gin.Context) {
 
 func (c *AuthController) Login(ctx *gin.Context) {
 	var request loginRequest
-	if err := ctx.ShouldBindJSON(&request); err != nil {
+	if err := bindAuthJSON(ctx, &request); err != nil {
+		if isAuthRequestTooLarge(err) {
+			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
+			return
+		}
 		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		return
+	}
+	if !c.allowAttempt(ctx, auth.AttemptLogin, strings.ToLower(strings.TrimSpace(request.Username))) {
 		return
 	}
 
@@ -111,8 +136,15 @@ func (c *AuthController) Login(ctx *gin.Context) {
 
 func (c *AuthController) Refresh(ctx *gin.Context) {
 	var request refreshRequest
-	if err := ctx.ShouldBindJSON(&request); err != nil {
+	if err := bindAuthJSON(ctx, &request); err != nil {
+		if isAuthRequestTooLarge(err) {
+			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
+			return
+		}
 		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		return
+	}
+	if !c.allowAttempt(ctx, auth.AttemptRefresh, strings.TrimSpace(request.RefreshToken)) {
 		return
 	}
 
@@ -137,6 +169,64 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 		return
 	}
 	writeAuthResponse(ctx, pair, user)
+}
+
+func bindAuthJSON(ctx *gin.Context, destination any) error {
+	if ctx == nil || ctx.Request == nil || ctx.Request.Body == nil {
+		return errors.New("authentication request body is unavailable")
+	}
+	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, authRequestMaxBodyBytes)
+	decoder := ginjson.API.NewDecoder(ctx.Request.Body)
+	if binding.EnableDecoderUseNumber {
+		decoder.UseNumber()
+	}
+	if binding.EnableDecoderDisallowUnknownFields {
+		decoder.DisallowUnknownFields()
+	}
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if binding.Validator != nil {
+		if err := binding.Validator.ValidateStruct(destination); err != nil {
+			return err
+		}
+	}
+
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values in authentication request")
+		}
+		return err
+	}
+	return nil
+}
+
+func isAuthRequestTooLarge(err error) bool {
+	var maxBytesError *http.MaxBytesError
+	return errors.As(err, &maxBytesError)
+}
+
+func (c *AuthController) allowAttempt(ctx *gin.Context, action auth.AttemptAction, subject string) bool {
+	if c == nil || c.limiter == nil {
+		writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_RATE_LIMIT_UNAVAILABLE", "Authentication temporarily unavailable")
+		return false
+	}
+	decision, err := c.limiter.Allow(ctx.Request.Context(), auth.AttemptInput{
+		Action:   action,
+		ClientIP: ctx.ClientIP(),
+		Subject:  subject,
+	})
+	if err != nil {
+		writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_RATE_LIMIT_UNAVAILABLE", "Authentication temporarily unavailable")
+		return false
+	}
+	if decision.Allowed {
+		return true
+	}
+	ctx.Header("Retry-After", strconv.Itoa(auth.RetryAfterSeconds(action, decision.RetryAfter)))
+	writeAuthError(ctx, http.StatusTooManyRequests, "AUTH_RATE_LIMITED", "Too many authentication attempts")
+	return false
 }
 
 func writeAuthResponse(ctx *gin.Context, pair auth.TokenPair, user models.User) {

@@ -69,6 +69,8 @@ func startNotificationProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
+			PipelineStarted(PipelineNotificationProjection)
+			defer PipelineStopped(PipelineNotificationProjection)
 			for {
 				runNotificationProjectionConsumer(ctx)
 				if ctx.Err() != nil {
@@ -88,6 +90,7 @@ func startNotificationProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 func runNotificationProjectionConsumer(ctx context.Context) {
 	reader, err := eventing.NewKafkaReader(config.AppConfig.Kafka, config.AppConfig.Kafka.ActivityEventsTopic, config.AppConfig.Kafka.NotificationGroupID)
 	if err != nil {
+		PipelineFailure(PipelineNotificationProjection, "kafka_reader_unavailable", 0)
 		log.Printf("[NotificationProjection] create Kafka reader: %v", err)
 		return
 	}
@@ -96,6 +99,7 @@ func runNotificationProjectionConsumer(ctx context.Context) {
 	defer notificationConsumers.Add(-1)
 	defer reader.Close()
 	if err := consumeNotificationMessages(ctx, reader, publisher); err != nil && ctx.Err() == nil {
+		PipelineFailure(PipelineNotificationProjection, "projection_failed", 0)
 		log.Printf("[NotificationProjection] consumer stopped: %v", err)
 	}
 }
@@ -121,6 +125,9 @@ func consumeNotificationMessages(ctx context.Context, reader notificationMessage
 				lag = 0
 			}
 			metrics.SetNotificationConsumerLag(float64(lag))
+			PipelineCommit(PipelineNotificationProjection, time.Now().UTC(), int64(lag))
+		} else {
+			PipelineCommit(PipelineNotificationProjection, time.Now().UTC(), 0)
 		}
 	}
 }

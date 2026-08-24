@@ -1,7 +1,13 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: go-exchange-migrate
+  generateName: go-exchange-migrate-
+  labels:
+    app: go-exchange
+    component: migrate
+  annotations:
+    go.exchange/readiness-gate: "migration-complete-before-api-worker"
+    go.exchange/release-revision: "injected-by-deploy-script"
 spec:
   backoffLimit: 3
   template:
@@ -13,7 +19,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: your-registry/go-exchange:latest
+          image: your-registry/go-exchange:replace-me
           imagePullPolicy: IfNotPresent
           command: ["/app/go-exchange-migrate"]
           envFrom:

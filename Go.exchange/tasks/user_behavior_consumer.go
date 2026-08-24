@@ -68,6 +68,8 @@ func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
+			PipelineStarted(PipelineUserBehaviorProjection)
+			defer PipelineStopped(PipelineUserBehaviorProjection)
 			for {
 				runUserBehaviorProjectionConsumer(ctx)
 				if ctx.Err() != nil {
@@ -91,6 +93,7 @@ func runUserBehaviorProjectionConsumer(ctx context.Context) {
 		config.AppConfig.Kafka.UserBehaviorGroupID,
 	)
 	if err != nil {
+		PipelineFailure(PipelineUserBehaviorProjection, "kafka_reader_unavailable", 0)
 		log.Printf("[BehaviorProjection] create Kafka reader: %v", err)
 		return
 	}
@@ -98,6 +101,7 @@ func runUserBehaviorProjectionConsumer(ctx context.Context) {
 	defer userBehaviorConsumers.Add(-1)
 	defer reader.Close()
 	if err := consumeUserBehaviorMessages(ctx, reader, applyUserBehaviorBatch); err != nil && ctx.Err() == nil {
+		PipelineFailure(PipelineUserBehaviorProjection, "projection_failed", 0)
 		log.Printf("[BehaviorProjection] consumer stopped: %v", err)
 	}
 }
@@ -125,6 +129,11 @@ func consumeUserBehaviorMessages(
 			}
 			return err
 		}
+		backlog := int64(0)
+		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
+			backlog = kafkaBacklog(statsReader)
+		}
+		PipelineCommit(PipelineUserBehaviorProjection, time.Now().UTC(), backlog)
 	}
 }
 

@@ -74,6 +74,8 @@ func startRecommendationMetricsConsumer(ctx context.Context, wg *sync.WaitGroup)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		PipelineStarted(PipelineRecommendationMetrics)
+		defer PipelineStopped(PipelineRecommendationMetrics)
 		for {
 			runRecommendationMetricsConsumer(ctx)
 			if ctx.Err() != nil {
@@ -96,6 +98,7 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 		config.AppConfig.Kafka.RecommendationMetricsGroupID,
 	)
 	if err != nil {
+		PipelineFailure(PipelineRecommendationMetrics, "kafka_reader_unavailable", 0)
 		log.Printf("[RecommendationMetrics] create Kafka reader: %v", err)
 		return
 	}
@@ -106,6 +109,7 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 		first, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
+				PipelineFailure(PipelineRecommendationMetrics, "kafka_fetch_failed", 0)
 				log.Printf("[RecommendationMetrics] fetch Kafka message: %v", err)
 			}
 			return
@@ -113,15 +117,18 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 		batch := collectRecommendationMetricsBatch(ctx, reader, first)
 		if err := applyRecommendationMetricsBatch(batch); err != nil {
 			metrics.RecordRecommendationTelemetryProjection("retryable_error")
+			PipelineFailure(PipelineRecommendationMetrics, "projection_failed", 0)
 			log.Printf("[RecommendationMetrics] apply batch of %d messages: %v", len(batch), err)
 			return
 		}
 		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() == nil {
+				PipelineFailure(PipelineRecommendationMetrics, "kafka_commit_failed", 0)
 				log.Printf("[RecommendationMetrics] commit Kafka batch: %v", err)
 			}
 			return
 		}
+		PipelineCommit(PipelineRecommendationMetrics, time.Now().UTC(), kafkaBacklog(reader))
 	}
 }
 

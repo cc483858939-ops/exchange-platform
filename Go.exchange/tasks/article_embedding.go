@@ -127,6 +127,8 @@ func startArticleEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		PipelineStarted(PipelineArticleEmbedding)
+		defer PipelineStopped(PipelineArticleEmbedding)
 		for {
 			runArticleEmbeddingConsumer(ctx)
 			select {
@@ -143,16 +145,19 @@ func runArticleEmbeddingConsumer(ctx context.Context) {
 		return
 	}
 	if global.Db == nil {
+		PipelineFailure(PipelineArticleEmbedding, "database_unavailable", 0)
 		log.Printf("[ArticleEmbedding] consumer disabled: database is not initialized")
 		return
 	}
 	activeVersion := strings.TrimSpace(config.ActiveEmbeddingVersion())
 	if activeVersion == "" {
+		PipelineFailure(PipelineArticleEmbedding, "embedding_config_invalid", 0)
 		log.Printf("[ArticleEmbedding] consumer disabled: active embedding version is empty")
 		return
 	}
 	embedder, err := newArticleEmbedder(config.AppConfig.Embedding)
 	if err != nil {
+		PipelineFailure(PipelineArticleEmbedding, "embedding_provider_unavailable", 0)
 		log.Printf("[ArticleEmbedding] create embedder: %v", err)
 		return
 	}
@@ -160,6 +165,7 @@ func runArticleEmbeddingConsumer(ctx context.Context) {
 	groupID := strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingGroupID)
 	reader, err := newArticleEmbeddingReader(config.AppConfig.Kafka, topic, groupID)
 	if err != nil {
+		PipelineFailure(PipelineArticleEmbedding, "kafka_reader_unavailable", 0)
 		log.Printf("[ArticleEmbedding] create Kafka reader: %v", err)
 		return
 	}
@@ -170,6 +176,7 @@ func runArticleEmbeddingConsumer(ctx context.Context) {
 	}()
 	store := gormArticleEmbeddingStore{db: global.Db}
 	if err := consumeArticleEmbeddingMessages(ctx, reader, embedder, store, activeVersion); err != nil && ctx.Err() == nil {
+		PipelineFailure(PipelineArticleEmbedding, "projection_failed", 0)
 		log.Printf("[ArticleEmbedding] consume: %v", err)
 	}
 }
@@ -199,6 +206,11 @@ func consumeArticleEmbeddingMessages(ctx context.Context, reader articleEmbeddin
 			metrics.RecordArticleEmbeddingFailure("kafka_commit")
 			return err
 		}
+		backlog := int64(0)
+		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
+			backlog = kafkaBacklog(statsReader)
+		}
+		PipelineCommit(PipelineArticleEmbedding, time.Now().UTC(), backlog)
 	}
 }
 

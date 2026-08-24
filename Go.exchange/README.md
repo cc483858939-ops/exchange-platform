@@ -42,6 +42,31 @@ cd D:\code\mf
 docker compose run --rm migrate
 ```
 
+Runtime readiness is evaluated from an immutable two-second snapshot. `/healthz`
+is liveness-only; `/readyz` gates API startup on PostgreSQL, the published
+`runtime_schema_state` compatibility interval and the Redis ping. Kafka is
+reported as degraded for API readiness and does not make the API endpoint
+return 503. Worker readiness additionally reports each required pipeline's
+active workers, last commit, failures and backlog. Readiness snapshots are
+fail-closed when their provider is unavailable or stale; the evaluator's
+timestamp and pipeline backlog-stall gauges are exported for alerting.
+
+For Kubernetes, run `k8s/deploy.ps1` from any directory with a lowercase
+release revision and an immutable image digest:
+
+```powershell
+.\k8s\deploy.ps1 `
+  -Namespace default `
+  -ReleaseRevision 09eecd4b7f86 `
+  -Image registry.example.com/go-exchange@sha256:<64-hex-digest>
+```
+
+The script renders the manifests with the supplied image and revision, creates
+a new generated-name migration Job, verifies that exact Job name and UID, and
+only then applies and rolls out the API and Worker. It never applies the
+migration manifest and it does not build or push images. Kubernetes acceptance
+is not claimed unless this script has been run against a real cluster.
+
 ## Recommendation profile materialization
 
 The For You endpoint reads `user_reco_profiles` by user primary key. View,

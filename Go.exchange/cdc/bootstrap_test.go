@@ -1,9 +1,15 @@
 package cdc
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"Go.exchange/config"
 )
@@ -147,4 +153,206 @@ func TestConnectorStatusDecodesNestedConnectorState(t *testing.T) {
 	if status.Name != ConnectorName || status.Connector.State != "RUNNING" || len(status.Tasks) != 1 || status.Tasks[0].State != "RUNNING" {
 		t.Fatalf("status=%+v", status)
 	}
+}
+
+func TestAssessConnectorReadiness(t *testing.T) {
+	const expectedName = "test-connector"
+	tests := []struct {
+		name   string
+		status ConnectorStatus
+		want   connectorReadinessDecision
+	}{
+		{name: "running with one running task", status: testConnectorStatus(expectedName, "RUNNING", "RUNNING"), want: connectorReadinessReady},
+		{name: "running with all tasks running", status: testConnectorStatus(expectedName, "RUNNING", "RUNNING", " running "), want: connectorReadinessReady},
+		{name: "running with no tasks", status: testConnectorStatus(expectedName, "RUNNING"), want: connectorReadinessRetry},
+		{name: "paused connector", status: testConnectorStatus(expectedName, "PAUSED", "RUNNING"), want: connectorReadinessTerminalFailure},
+		{name: "stopped connector", status: testConnectorStatus(expectedName, "STOPPED"), want: connectorReadinessTerminalFailure},
+		{name: "failed connector", status: testConnectorStatus(expectedName, "FAILED"), want: connectorReadinessTerminalFailure},
+		{name: "unassigned connector", status: testConnectorStatus(expectedName, "UNASSIGNED"), want: connectorReadinessRetry},
+		{name: "empty connector state", status: testConnectorStatus(expectedName, ""), want: connectorReadinessRetry},
+		{name: "unknown connector state", status: testConnectorStatus(expectedName, "BROKEN"), want: connectorReadinessRetry},
+		{name: "failed task", status: testConnectorStatus(expectedName, "RUNNING", "FAILED"), want: connectorReadinessTerminalFailure},
+		{name: "paused task", status: testConnectorStatus(expectedName, "RUNNING", "PAUSED"), want: connectorReadinessTerminalFailure},
+		{name: "stopped task", status: testConnectorStatus(expectedName, "RUNNING", "STOPPED"), want: connectorReadinessTerminalFailure},
+		{name: "unassigned task", status: testConnectorStatus(expectedName, "RUNNING", "UNASSIGNED"), want: connectorReadinessRetry},
+		{name: "empty task state", status: testConnectorStatus(expectedName, "RUNNING", ""), want: connectorReadinessRetry},
+		{name: "unknown task state", status: testConnectorStatus(expectedName, "RUNNING", "BROKEN"), want: connectorReadinessRetry},
+		{name: "empty connector name", status: testConnectorStatus("", "RUNNING", "RUNNING"), want: connectorReadinessTerminalFailure},
+		{name: "unexpected connector name", status: testConnectorStatus("other-connector", "RUNNING", "RUNNING"), want: connectorReadinessTerminalFailure},
+		{name: "mixed case and whitespace", status: testConnectorStatus(expectedName, " rUnNiNg ", " rUnNiNg "), want: connectorReadinessReady},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := assessConnectorReadiness(expectedName, test.status); got != test.want {
+				t.Fatalf("readiness=%v want=%v status=%s", got, test.want, connectorStatusSummary(test.status))
+			}
+		})
+	}
+}
+
+func TestWaitForConnectorReadyRetriesUntilAllTasksRunning(t *testing.T) {
+	statuses := []ConnectorStatus{
+		testConnectorStatus(ConnectorName, "UNASSIGNED"),
+		testConnectorStatus(ConnectorName, "RUNNING"),
+		testConnectorStatus(ConnectorName, "RUNNING", "UNASSIGNED"),
+		testConnectorStatus(ConnectorName, "RUNNING", "RUNNING"),
+	}
+	reads := 0
+	waits := 0
+	status, err := waitForConnectorReadyWith(context.Background(), ConnectorName, func(context.Context) (ConnectorStatus, error) {
+		current := statuses[reads]
+		reads++
+		return current, nil
+	}, func(context.Context, time.Duration) error {
+		waits++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("wait returned error: %v", err)
+	}
+	if assessConnectorReadiness(ConnectorName, status) != connectorReadinessReady || reads != len(statuses) || waits != len(statuses)-1 {
+		t.Fatalf("status=%s reads=%d waits=%d", connectorStatusSummary(status), reads, waits)
+	}
+}
+
+func TestWaitForConnectorReadyNeverAcceptsEmptyTasks(t *testing.T) {
+	statuses := []ConnectorStatus{
+		testConnectorStatus(ConnectorName, "RUNNING"),
+		testConnectorStatus(ConnectorName, "RUNNING"),
+		testConnectorStatus(ConnectorName, "RUNNING", "RUNNING"),
+	}
+	reads := 0
+	status, err := waitForConnectorReadyWith(context.Background(), ConnectorName, func(context.Context) (ConnectorStatus, error) {
+		current := statuses[reads]
+		reads++
+		return current, nil
+	}, func(context.Context, time.Duration) error { return nil })
+	if err != nil {
+		t.Fatalf("wait returned error: %v", err)
+	}
+	if reads != 3 || assessConnectorReadiness(ConnectorName, status) != connectorReadinessReady {
+		t.Fatalf("empty task state was accepted early: reads=%d status=%s", reads, connectorStatusSummary(status))
+	}
+}
+
+func TestWaitForConnectorReadyStopsOnTerminalState(t *testing.T) {
+	reads := 0
+	status, err := waitForConnectorReadyWith(context.Background(), ConnectorName, func(context.Context) (ConnectorStatus, error) {
+		reads++
+		if reads == 1 {
+			return testConnectorStatus(ConnectorName, "RUNNING"), nil
+		}
+		return testConnectorStatus(ConnectorName, "FAILED"), nil
+	}, func(context.Context, time.Duration) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "terminal failure") {
+		t.Fatalf("terminal state did not fail immediately: status=%s err=%v", connectorStatusSummary(status), err)
+	}
+	if reads != 2 {
+		t.Fatalf("terminal state was polled after failure: reads=%d", reads)
+	}
+}
+
+func TestWaitForConnectorReadyHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reads := 0
+	_, err := waitForConnectorReadyWith(ctx, ConnectorName, func(context.Context) (ConnectorStatus, error) {
+		reads++
+		return testConnectorStatus(ConnectorName, "RUNNING"), nil
+	}, func(context.Context, time.Duration) error {
+		cancel()
+		return context.Canceled
+	})
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("context cancellation was not preserved: %v", err)
+	}
+	if reads != 1 {
+		t.Fatalf("polling continued after cancellation: reads=%d", reads)
+	}
+}
+
+func TestConnectorHTTPStatusHandling(t *testing.T) {
+	t.Run("GET 200 exists and decodes", func(t *testing.T) {
+		server := newConnectorHTTPTestServer(http.StatusOK, `{"name":"test-connector","connector":{"state":"RUNNING"},"tasks":[{"id":0,"state":"RUNNING"}]}`)
+		defer server.Close()
+		status, err := connectorStatusForName(context.Background(), server.URL, "test-connector")
+		if err != nil || assessConnectorReadiness("test-connector", status) != connectorReadinessReady {
+			t.Fatalf("status=%s err=%v", connectorStatusSummary(status), err)
+		}
+	})
+
+	t.Run("GET 404 means absent", func(t *testing.T) {
+		server := newConnectorHTTPTestServer(http.StatusNotFound, "not found")
+		defer server.Close()
+		exists, err := connectorPresenceForName(context.Background(), server.URL, "test-connector")
+		if err != nil || exists {
+			t.Fatalf("exists=%v err=%v", exists, err)
+		}
+	})
+
+	t.Run("GET 500 is an error", func(t *testing.T) {
+		server := newConnectorHTTPTestServer(http.StatusInternalServerError, "server error")
+		defer server.Close()
+		exists, err := connectorPresenceForName(context.Background(), server.URL, "test-connector")
+		if err == nil || exists || isConnectorNotFound(err) {
+			t.Fatalf("500 was treated as absence: exists=%v err=%v", exists, err)
+		}
+	})
+
+	t.Run("invalid JSON is an error", func(t *testing.T) {
+		server := newConnectorHTTPTestServer(http.StatusOK, "{")
+		defer server.Close()
+		if _, err := connectorStatusForName(context.Background(), server.URL, "test-connector"); err == nil {
+			t.Fatal("invalid JSON unexpectedly decoded")
+		}
+	})
+
+	t.Run("PUT non-2xx is an error without config body", func(t *testing.T) {
+		server := newConnectorHTTPTestServer(http.StatusBadRequest, `{"error":"password=secret"}`)
+		defer server.Close()
+		sent, err := putConnectorConfig(context.Background(), server.URL, "test-connector", map[string]string{"database.password": "secret"})
+		if !sent || err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("sent=%v err=%v", sent, err)
+		}
+	})
+
+	t.Run("DELETE 404 is already deleted", func(t *testing.T) {
+		server := newConnectorHTTPTestServer(http.StatusNotFound, "not found")
+		defer server.Close()
+		if err := deleteConnectorForNameOwned(context.Background(), server.URL, "test-connector"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("response body is bounded", func(t *testing.T) {
+		server := newConnectorHTTPTestServer(http.StatusOK, strings.Repeat("x", maxConnectorResponseBodyLength+1))
+		defer server.Close()
+		if _, err := connectorStatusForName(context.Background(), server.URL, "test-connector"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("oversized response was not rejected: %v", err)
+		}
+	})
+}
+
+func testConnectorStatus(name, connectorState string, taskStates ...string) ConnectorStatus {
+	payload := map[string]interface{}{
+		"name":      name,
+		"connector": map[string]string{"state": connectorState},
+		"tasks":     make([]map[string]interface{}, 0, len(taskStates)),
+	}
+	tasks := payload["tasks"].([]map[string]interface{})
+	for id, state := range taskStates {
+		tasks = append(tasks, map[string]interface{}{"id": id, "state": state})
+	}
+	payload["tasks"] = tasks
+	encoded, _ := json.Marshal(payload)
+	var status ConnectorStatus
+	_ = json.Unmarshal(encoded, &status)
+	return status
+}
+
+func newConnectorHTTPTestServer(statusCode int, body string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(statusCode)
+		_, _ = writer.Write([]byte(body))
+	}))
 }

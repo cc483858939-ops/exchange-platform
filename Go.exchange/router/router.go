@@ -4,17 +4,30 @@ import (
 	"time"
 
 	"Go.exchange/auth"
+	"Go.exchange/config"
 	"Go.exchange/controllers"
 	"Go.exchange/eventing"
 	"Go.exchange/metrics"
 	"Go.exchange/middlewares"
+	"Go.exchange/runtimehealth"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher) *gin.Engine {
+func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider) (*gin.Engine, error) {
+	trustedProxies, err := config.TrustedProxyCIDRs()
+	if err != nil {
+		return nil, err
+	}
+
 	router := gin.Default()
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		return nil, err
+	}
+	router.ForwardedByClientIP = true
+	router.RemoteIPHeaders = []string{"X-Forwarded-For", "X-Real-IP"}
+	router.TrustedPlatform = ""
 
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
@@ -27,7 +40,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	router.Use(metrics.Middleware())
 
 	router.GET("/healthz", controllers.Healthz)
-	router.GET("/readyz", controllers.Readyz)
+	router.GET("/readyz", controllers.ReadyzWithProvider(readiness))
 	router.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	authRoutes := router.Group("/api/auth")
@@ -77,5 +90,5 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.DELETE("/articles/:id/like", controllers.UnlikeArticle)
 	}
 
-	return router
+	return router, nil
 }

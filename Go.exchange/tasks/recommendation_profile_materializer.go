@@ -37,16 +37,22 @@ func startRecommendationProfileMaterializer(ctx context.Context, wg *sync.WaitGr
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		PipelineStarted(PipelineRecommendationProfile)
+		defer PipelineStopped(PipelineRecommendationProfile)
 		lastRebase := time.Time{}
 		for {
 			settings := recommendationProfileMaterializerSettings()
 			now := time.Now().UTC()
 			if global.Db != nil {
 				if err := materializeDueRecommendationProfiles(now, settings); err != nil {
+					PipelineFailure(PipelineRecommendationProfile, "materialization_failed", 0)
 					log.Printf("[RecommendationProfile] materialize due profiles: %v", err)
+				} else {
+					PipelineSuccess(PipelineRecommendationProfile, 0)
 				}
 				if lastRebase.IsZero() || now.Sub(lastRebase) >= time.Duration(settings.StaleScanIntervalSeconds)*time.Second {
 					if err := enqueuePeriodicRecommendationProfileRebuilds(now, settings); err != nil {
+						PipelineFailure(PipelineRecommendationProfile, "rebuild_enqueue_failed", 0)
 						log.Printf("[RecommendationProfile] enqueue periodic rebase: %v", err)
 					}
 					lastRebase = now

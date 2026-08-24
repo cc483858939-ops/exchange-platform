@@ -35,6 +35,9 @@ JWT_ACCESS_TTL=15m
 JWT_REFRESH_IDLE_TTL=168h
 JWT_REFRESH_ABSOLUTE_TTL=720h
 JWT_CLOCK_SKEW=30s
+
+# Optional: comma-separated direct proxy IPs/CIDRs for client-IP headers.
+# TRUSTED_PROXY_CIDRS=<confirmed-direct-proxy-cidr>
 ```
 
 Generate the key pair outside Railway and never commit it:
@@ -47,6 +50,15 @@ go run ./cmd/gen-jwt-keys --kid jwt-2026-01 --out .secrets/jwt
 Store the Base64 result as a Railway secret. Do not give the JWT private key
 to Worker or migration services. `JWT_VERIFY_KEYS_B64` is optional and is only
 needed while old public keys remain valid during a future rotation window.
+
+`TRUSTED_PROXY_CIDRS` defines the IPs or CIDRs of proxies that connect directly
+to the API and are therefore allowed to provide `X-Forwarded-For` or
+`X-Real-IP`. When it is empty, all forwarding headers are ignored. Production
+must use the directly connecting Railway or Kubernetes proxy ranges confirmed
+from the deployed network topology; this document does not assume a fixed
+Railway CIDR. Do not configure `0.0.0.0/0` or `::/0`. Invalid proxy
+configuration causes the API to reject startup. Without a trusted CIDR, rate
+limiting still works, but requests sharing one proxy can share the IP bucket.
 
 Use the actual Railway service names in reference variables. Do not set `PORT`:
 the application reads the port that Railway supplies.

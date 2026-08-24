@@ -43,3 +43,74 @@ groups:
         annotations:
           summary: Go.exchange notification activity reached the DLQ
           description: At least one malformed notification activity event was sent to the DLQ during the last fifteen minutes.
+
+  - name: go-exchange-runtime-readiness
+    rules:
+      - alert: GoExchangeRuntimeDependencyNotReady
+        expr: (runtime_readiness{role="api",check=~"database|schema|redis"} == 0) or (runtime_readiness{role="worker",check=~"database|schema|redis|kafka"} == 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Go.exchange runtime dependency is not ready
+          description: A hard runtime dependency has been unavailable for more than two minutes.
+
+      - alert: GoExchangeAPIKafkaDegraded
+        expr: runtime_readiness{role="api",check="kafka"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Go.exchange API Kafka dependency is degraded
+          description: API Kafka reachability has been degraded for more than five minutes.
+
+      - alert: GoExchangeReadinessEvaluatorStale
+        expr: >-
+          (
+            time() - runtime_readiness_last_evaluation_timestamp > 10
+          )
+          or
+          (
+            (up{job="go-exchange-api"} == 1)
+            unless on(job, instance)
+            runtime_readiness_last_evaluation_timestamp{role="api"}
+          )
+          or
+          (
+            (up{job="go-exchange-worker"} == 1)
+            unless on(job, instance)
+            runtime_readiness_last_evaluation_timestamp{role="worker"}
+          )
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Go.exchange readiness evaluator is stale
+          description: A runtime readiness evaluator has not published a snapshot within ten seconds.
+
+      - alert: GoExchangeWorkerPipelineUnhealthy
+        expr: worker_pipeline_healthy == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Go.exchange worker pipeline is unhealthy
+          description: A required worker pipeline has been unhealthy for more than two minutes.
+
+      - alert: GoExchangeWorkerPipelineFailureThreshold
+        expr: worker_pipeline_consecutive_failures >= 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Go.exchange worker pipeline reached its failure threshold
+          description: A worker pipeline has recorded at least three consecutive failures.
+
+      - alert: GoExchangeWorkerPipelineBacklogStalled
+        expr: worker_pipeline_backlog_stalled == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Go.exchange worker pipeline backlog is stalled
+          description: A worker pipeline backlog has exceeded its progress grace period.

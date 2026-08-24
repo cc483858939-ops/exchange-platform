@@ -6,6 +6,7 @@ import (
 )
 
 func StartAll(ctx context.Context, wg *sync.WaitGroup) {
+	RegisterWorkerPipelines()
 	startExchangeRateRefresh(ctx, wg)
 	startArticleEmbeddingConsumer(ctx, wg)
 	startUserBehaviorProjectionConsumer(ctx, wg)

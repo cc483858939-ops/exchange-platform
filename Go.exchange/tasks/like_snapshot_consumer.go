@@ -20,6 +20,8 @@ func startLikeSnapshotProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		PipelineStarted(PipelineLikeSnapshotProjection)
+		defer PipelineStopped(PipelineLikeSnapshotProjection)
 		for {
 			runLikeSnapshotProjectionConsumer(ctx)
 			if ctx.Err() != nil {
@@ -37,6 +39,7 @@ func startLikeSnapshotProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 func runLikeSnapshotProjectionConsumer(ctx context.Context) {
 	reader, err := eventing.NewKafkaReader(config.AppConfig.Kafka, config.AppConfig.Kafka.LikeSnapshotTopic, config.AppConfig.Kafka.LikeSnapshotGroupID)
 	if err != nil {
+		PipelineFailure(PipelineLikeSnapshotProjection, "kafka_reader_unavailable", 0)
 		log.Printf("[LikeSnapshotProjection] create reader: %v", err)
 		return
 	}
@@ -47,6 +50,7 @@ func runLikeSnapshotProjectionConsumer(ctx context.Context) {
 		message, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
+				PipelineFailure(PipelineLikeSnapshotProjection, "kafka_fetch_failed", 0)
 				log.Printf("[LikeSnapshotProjection] fetch: %v", err)
 			}
 			return
@@ -56,15 +60,18 @@ func runLikeSnapshotProjectionConsumer(ctx context.Context) {
 			err = applyLikeSnapshotEvent(event)
 		}
 		if err != nil {
+			PipelineFailure(PipelineLikeSnapshotProjection, "projection_failed", 0)
 			log.Printf("[LikeSnapshotProjection] apply: %v", err)
 			return
 		}
 		if err := reader.CommitMessages(ctx, message); err != nil {
 			if ctx.Err() == nil {
+				PipelineFailure(PipelineLikeSnapshotProjection, "kafka_commit_failed", 0)
 				log.Printf("[LikeSnapshotProjection] commit: %v", err)
 			}
 			return
 		}
+		PipelineCommit(PipelineLikeSnapshotProjection, time.Now().UTC(), kafkaBacklog(reader))
 	}
 }
 

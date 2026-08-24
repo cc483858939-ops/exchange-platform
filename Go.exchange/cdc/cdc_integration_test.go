@@ -62,8 +62,12 @@ func newCDCAcceptanceFixture(t *testing.T) *cdcAcceptanceFixture {
 	identity := ProductionConnectorIdentity()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := runWithIdentity(ctx, sqlDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source, identity); err != nil {
+	status, err := runWithIdentity(ctx, sqlDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source, identity)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if assessConnectorReadiness(identity.ConnectorName, status) != connectorReadinessReady {
+		t.Fatalf("CDC bootstrap returned non-ready status: %s", connectorStatusSummary(status))
 	}
 	return &cdcAcceptanceFixture{db: sqlDB, brokers: brokers, connectURL: connectURL, topic: cdcAcceptanceActivityTopic, identity: identity}
 }
@@ -521,8 +525,12 @@ func TestRealCDCIsolatedInitialSnapshotAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runWithIdentity(ctx, snapshotDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source, identity); err != nil {
+	status, err := runWithIdentity(ctx, snapshotDB, config.KafkaConfig{ActivityEventsTopic: cdcAcceptanceActivityTopic}, connectURL, source, identity)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if assessConnectorReadiness(identity.ConnectorName, status) != connectorReadinessReady {
+		t.Fatalf("CDC snapshot bootstrap returned non-ready status: %s", connectorStatusSummary(status))
 	}
 	if err := waitForConnectorState(ctx, connectURL, identity.ConnectorName, "RUNNING"); err != nil {
 		t.Fatal(err)

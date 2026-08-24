@@ -17,7 +17,7 @@ spec:
       terminationGracePeriodSeconds: 15
       containers:
         - name: app
-          image: your-registry/go-exchange:latest
+          image: your-registry/go-exchange:replace-me
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -30,15 +30,24 @@ spec:
           ports:
             - name: worker-health
               containerPort: 8081
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: worker-health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
           readinessProbe:
             httpGet:
               path: /readyz
               port: worker-health
-            initialDelaySeconds: 3
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
           livenessProbe:
             httpGet:
               path: /healthz
               port: worker-health
-            initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
