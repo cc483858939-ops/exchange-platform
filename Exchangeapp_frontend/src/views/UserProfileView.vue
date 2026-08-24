@@ -829,6 +829,7 @@ const saveProfile = async () => {
       return;
     }
     user.value = updatedUser;
+    authStore.syncCurrentIdentityProfile(updatedUser);
     const updatedAuthor: PublicAuthor = {
       id: updatedUser.id,
       username: updatedUser.username,

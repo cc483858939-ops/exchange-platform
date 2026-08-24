@@ -31,8 +31,10 @@ type refreshRequest struct {
 }
 
 type authUserResponse struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
+	ID          uint   `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	AvatarURL   string `json:"avatar_url"`
 }
 
 type authResponse struct {
@@ -164,7 +166,7 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 	}
 
 	var user models.User
-	if err := c.db.WithContext(ctx.Request.Context()).Select("id", "username").First(&user, pair.UserID).Error; err != nil {
+	if err := c.db.WithContext(ctx.Request.Context()).Select("id", "username", "display_name", "avatar_url").First(&user, pair.UserID).Error; err != nil {
 		writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
 		return
 	}
@@ -236,7 +238,12 @@ func writeAuthResponse(ctx *gin.Context, pair auth.TokenPair, user models.User) 
 		TokenType:        pair.TokenType,
 		ExpiresIn:        int64(pair.AccessExpiresIn.Seconds()),
 		RefreshExpiresIn: int64(pair.RefreshExpiresIn.Seconds()),
-		User:             authUserResponse{ID: user.ID, Username: user.Username},
+		User: authUserResponse{
+			ID:          user.ID,
+			Username:    user.Username,
+			DisplayName: user.DisplayName,
+			AvatarURL:   user.AvatarURL,
+		},
 	})
 }
 

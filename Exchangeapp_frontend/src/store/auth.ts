@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import axios from 'axios';
 import { apiBaseUrl } from '../api';
-import { decodeAuthIdentity } from '../utils/authIdentity';
+import { decodeAuthIdentity, normalizeAuthIdentity } from '../utils/authIdentity';
 import type { AuthIdentity } from '../utils/authIdentity';
 
 const authClient = axios.create({
@@ -19,7 +19,7 @@ type AuthResponse = {
   token_type: 'Bearer';
   expires_in: number;
   refresh_expires_in: number;
-  user: AuthIdentity;
+  user: unknown;
 };
 
 type AuthErrorResponse = {
@@ -41,11 +41,7 @@ const loadStoredIdentity = (): AuthIdentity | null => {
   try {
     const raw = localStorage.getItem(authUserKey);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<AuthIdentity>;
-    if (!Number.isSafeInteger(parsed.id) || Number(parsed.id) <= 0 || typeof parsed.username !== 'string') {
-      return null;
-    }
-    return { id: Number(parsed.id), username: parsed.username };
+    return normalizeAuthIdentity(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -60,26 +56,45 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => Boolean(token.value && refreshToken.value && identity.value));
   const currentIdentity = computed<AuthIdentity | null>(() => identity.value);
 
+  const persistIdentity = (next: AuthIdentity | null) => {
+    identity.value = next;
+    if (next) {
+      localStorage.setItem(authUserKey, JSON.stringify(next));
+    } else {
+      localStorage.removeItem(authUserKey);
+    }
+  };
+
   const setTokens = (response: AuthResponse) => {
-    const rawAccessToken = response.access_token.trim().replace(/^Bearer\s+/i, '');
-    if (!rawAccessToken || !response.refresh_token || response.token_type !== 'Bearer' || !response.user?.id) {
+    const rawAccessToken = typeof response.access_token === 'string'
+      ? response.access_token.trim().replace(/^Bearer\s+/i, '')
+      : '';
+    const normalizedIdentity = normalizeAuthIdentity(response.user);
+    if (!rawAccessToken || typeof response.refresh_token !== 'string' || !response.refresh_token || response.token_type !== 'Bearer' || !normalizedIdentity) {
       throw new Error('Invalid authentication response');
     }
     token.value = asAuthorizationHeader(rawAccessToken);
     refreshToken.value = response.refresh_token;
-    identity.value = response.user;
     localStorage.setItem(accessTokenKey, rawAccessToken);
     localStorage.setItem(refreshTokenKey, response.refresh_token);
-    localStorage.setItem(authUserKey, JSON.stringify(response.user));
+    persistIdentity(normalizedIdentity);
   };
 
   const clearAuth = () => {
     token.value = null;
     refreshToken.value = null;
-    identity.value = null;
     localStorage.removeItem(accessTokenKey);
     localStorage.removeItem(refreshTokenKey);
-    localStorage.removeItem(authUserKey);
+    persistIdentity(null);
+  };
+
+  const syncCurrentIdentityProfile = (candidate: AuthIdentity): boolean => {
+    const normalized = normalizeAuthIdentity(candidate);
+    if (!normalized || !identity.value || normalized.id !== identity.value.id) {
+      return false;
+    }
+    persistIdentity(normalized);
+    return true;
   };
 
   const login = async (username: string, password: string) => {
@@ -132,6 +147,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     refreshAccessToken,
+    syncCurrentIdentityProfile,
     clearAuth,
     logout,
   };

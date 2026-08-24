@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"Go.exchange/auth"
+	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/postgres"
@@ -81,6 +82,60 @@ func TestNewAuthControllerRequiresAllDependencies(t *testing.T) {
 				t.Fatal("NewAuthController unexpectedly succeeded")
 			}
 		})
+	}
+}
+
+func TestWriteAuthResponseIncludesProfileIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	pair := auth.TokenPair{
+		AccessToken:      "access-token",
+		RefreshToken:     "refresh-token",
+		TokenType:        "Bearer",
+		AccessExpiresIn:  15 * time.Minute,
+		RefreshExpiresIn: 7 * 24 * time.Hour,
+	}
+	user := models.User{
+		Model:       gorm.Model{ID: 7},
+		Username:    "alice",
+		DisplayName: "Alice",
+		AvatarURL:   "/api/files/profile-avatars/7/test.webp",
+	}
+
+	writeAuthResponse(ctx, pair, user)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode auth response: %v", err)
+	}
+	for _, key := range []string{"access_token", "refresh_token", "token_type", "user"} {
+		if _, ok := body[key]; !ok {
+			t.Fatalf("response missing %q: %s", key, response.Body.String())
+		}
+	}
+	var responseUser map[string]json.RawMessage
+	if err := json.Unmarshal(body["user"], &responseUser); err != nil {
+		t.Fatalf("decode auth user: %v", err)
+	}
+	for _, key := range []string{"id", "username", "display_name", "avatar_url"} {
+		if _, ok := responseUser[key]; !ok {
+			t.Fatalf("response user missing %q: %s", key, response.Body.String())
+		}
+	}
+
+	var decoded authResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode typed auth response: %v", err)
+	}
+	if decoded.AccessToken != pair.AccessToken || decoded.RefreshToken != pair.RefreshToken || decoded.TokenType != pair.TokenType {
+		t.Fatalf("unexpected token response: %+v", decoded)
+	}
+	if decoded.User.ID != user.ID || decoded.User.Username != user.Username || decoded.User.DisplayName != user.DisplayName || decoded.User.AvatarURL != user.AvatarURL {
+		t.Fatalf("unexpected response user: %+v", decoded.User)
 	}
 }
 

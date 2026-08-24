@@ -1,6 +1,8 @@
 export type AuthIdentity = {
   id: number;
   username: string;
+  display_name: string;
+  avatar_url: string;
 };
 
 type TokenClaims = {
@@ -26,6 +28,22 @@ const readUserID = (value: unknown): number | null => {
   return null;
 };
 
+export const normalizeAuthIdentity = (value: unknown): AuthIdentity | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.id !== 'number' || !Number.isSafeInteger(candidate.id) || candidate.id <= 0 || typeof candidate.username !== 'string') {
+    return null;
+  }
+  return {
+    id: candidate.id,
+    username: candidate.username,
+    display_name: typeof candidate.display_name === 'string' ? candidate.display_name : '',
+    avatar_url: typeof candidate.avatar_url === 'string' ? candidate.avatar_url : '',
+  };
+};
+
 export const decodeAuthIdentity = (token: string | null | undefined): AuthIdentity | null => {
   try {
     const rawToken = token?.trim().replace(/^Bearer\s+/i, '');
@@ -38,7 +56,7 @@ export const decodeAuthIdentity = (token: string | null | undefined): AuthIdenti
     }
     const claims = JSON.parse(decodeBase64Url(segments[1])) as TokenClaims;
     const id = readUserID(claims.sub);
-    return id ? { id, username: '' } : null;
+    return id ? { id, username: '', display_name: '', avatar_url: '' } : null;
   } catch {
     return null;
   }
