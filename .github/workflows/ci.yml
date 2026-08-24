@@ -101,6 +101,90 @@ jobs:
       - name: Download Go dependencies
         run: go mod download
 
+      - name: Configure PostgreSQL logical replication
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          postgres_container="$(
+            docker ps \
+              --filter ancestor=pgvector/pgvector:pg16 \
+              --format '{{.ID}}' |
+            head -n 1
+          )"
+          if [ -z "$postgres_container" ]; then
+            echo "PostgreSQL service container was not found"
+            exit 1
+          fi
+
+          docker exec "$postgres_container" \
+            psql \
+            -U postgres \
+            -d goexchange_test \
+            -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET wal_level = 'logical';"
+          docker exec "$postgres_container" \
+            psql \
+            -U postgres \
+            -d goexchange_test \
+            -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET max_replication_slots = '4';"
+          docker exec "$postgres_container" \
+            psql \
+            -U postgres \
+            -d goexchange_test \
+            -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET max_wal_senders = '4';"
+
+          docker restart "$postgres_container"
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if docker exec "$postgres_container" \
+                pg_isready \
+                -U postgres \
+                -d goexchange_test >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "PostgreSQL did not become ready after logical replication configuration"
+            exit 1
+          fi
+
+          wal_level="$(
+            docker exec "$postgres_container" \
+              psql -U postgres -d goexchange_test -Atqc "SHOW wal_level"
+          )"
+          max_replication_slots="$(
+            docker exec "$postgres_container" \
+              psql -U postgres -d goexchange_test -Atqc "SHOW max_replication_slots"
+          )"
+          max_wal_senders="$(
+            docker exec "$postgres_container" \
+              psql -U postgres -d goexchange_test -Atqc "SHOW max_wal_senders"
+          )"
+
+          if [ "$wal_level" != "logical" ]; then
+            echo "wal_level=$wal_level; want logical"
+            exit 1
+          fi
+          if ! [[ "$max_replication_slots" =~ ^[0-9]+$ ]] || (( max_replication_slots < 2 )); then
+            echo "max_replication_slots=$max_replication_slots; want >= 2"
+            exit 1
+          fi
+          if ! [[ "$max_wal_senders" =~ ^[0-9]+$ ]] || (( max_wal_senders < 2 )); then
+            echo "max_wal_senders=$max_wal_senders; want >= 2"
+            exit 1
+          fi
+
+          echo "PostgreSQL replication settings:"
+          echo "wal_level=$wal_level"
+          echo "max_replication_slots=$max_replication_slots"
+          echo "max_wal_senders=$max_wal_senders"
+
       - name: Run first migration
         run: go run ./cmd/migrate
 

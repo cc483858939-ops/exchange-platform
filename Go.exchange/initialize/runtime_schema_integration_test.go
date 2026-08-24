@@ -66,7 +66,7 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.AutoMigrate(&models.ExchangeRate{}); err != nil {
 		t.Fatalf("migrate fallback exchange rate table: %v", err)
 	}
-	if err := setIntegrationSearchPath(tx, primarySchema, fallbackSchema); err != nil {
+	if err := setIntegrationValidationSearchPath(tx, primarySchema, fallbackSchema); err != nil {
 		t.Fatalf("restore isolated schema search path: %v", err)
 	}
 	if err := insertIntegrationState(tx, PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor); err != nil {
@@ -223,6 +223,14 @@ func setIntegrationSearchPath(tx *gorm.DB, schemas ...string) error {
 		parts = append(parts, quoteIntegrationIdentifier(schema))
 	}
 	parts = append(parts, "public")
+	return tx.Exec("SET LOCAL search_path TO " + strings.Join(parts, ", ")).Error
+}
+
+func setIntegrationValidationSearchPath(tx *gorm.DB, schemas ...string) error {
+	parts := make([]string, 0, len(schemas))
+	for _, schema := range schemas {
+		parts = append(parts, quoteIntegrationIdentifier(schema))
+	}
 	return tx.Exec("SET LOCAL search_path TO " + strings.Join(parts, ", ")).Error
 }
 
