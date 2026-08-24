@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootRef" class="mobile-account-menu">
+  <div ref="rootRef" class="mobile-account-menu" @focusout="handleFocusOut">
     <button
       ref="triggerRef"
       class="mobile-account-menu__trigger"
@@ -68,12 +68,21 @@ const handleDocumentPointerDown = (event: PointerEvent) => {
   closeMenu();
 };
 
+const handleFocusOut = (event: FocusEvent) => {
+  if (!isOpen.value) {
+    return;
+  }
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && rootRef.value?.contains(nextTarget)) {
+    return;
+  }
+  closeMenu();
+};
+
 const handleDocumentKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Escape') {
     event.preventDefault();
     closeMenu(true);
-  } else if (event.key === 'Tab') {
-    closeMenu();
   }
 };
 
