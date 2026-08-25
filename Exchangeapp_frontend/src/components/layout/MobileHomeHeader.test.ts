@@ -71,7 +71,7 @@ describe('MobileHomeHeader', () => {
     setAuthenticated(identity({ avatar_url: '/avatar.webp' }));
     const wrapper = mountHeader();
     const profile = wrapper.find('.mobile-home-header__profile');
-    const image = wrapper.find('img');
+    const image = wrapper.find('.user-avatar__image');
 
     expect(image.attributes('src')).toBe('/avatar.webp');
     expect(profile.attributes('data-route-name')).toBe('UserProfile');
@@ -81,22 +81,22 @@ describe('MobileHomeHeader', () => {
   it('keeps the initial visible until the avatar image has loaded', async () => {
     setAuthenticated(identity({ avatar_url: '/avatar.webp' }));
     const wrapper = mountHeader();
-    const image = wrapper.find('img');
+    const image = wrapper.find('.user-avatar__image');
 
-    expect(wrapper.find('.mobile-home-header__avatar-fallback').text()).toBe('A');
-    expect((image.element as HTMLElement).style.display).toBe('none');
+    expect(wrapper.find('.user-avatar__fallback').text()).toBe('A');
+    expect(image.classes()).not.toContain('user-avatar__image--loaded');
 
     await image.trigger('load');
     await nextTick();
-    expect((image.element as HTMLElement).style.display).not.toBe('none');
+    expect(image.classes()).toContain('user-avatar__image--loaded');
   });
 
   it('falls back to the display name initial when the avatar fails', async () => {
     setAuthenticated(identity({ avatar_url: '/avatar.webp' }));
     const wrapper = mountHeader();
-    await wrapper.find('img').trigger('error');
+    await wrapper.find('.user-avatar__image').trigger('error');
 
-    expect(wrapper.find('img').exists()).toBe(false);
+    expect(wrapper.find('.user-avatar__image').exists()).toBe(false);
     expect(wrapper.find('.mobile-home-header__avatar').text()).toBe('A');
   });
 
@@ -109,7 +109,7 @@ describe('MobileHomeHeader', () => {
 
     mocks.authStore!.currentIdentity = identity({ display_name: '', username: '' });
     await nextTick();
-    expect(wrapper.find('[data-icon="profile"]').exists()).toBe(true);
+    expect(wrapper.find('.user-avatar__fallback').text()).toBe('?');
   });
 
   it('renders the anonymous login affordance without fake actions', () => {

@@ -149,7 +149,6 @@ import CommentList from '../components/comments/CommentList.vue';
 import { createArticleComment, deleteComment, getArticleComments } from '../services/commentService';
 import { deleteArticle, getArticleById } from '../services/articleService';
 import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
-import { getUser } from '../services/userService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { createArticleViewEventID, getArticleViewTelemetry } from '../services/articleViewTelemetry';
@@ -164,7 +163,7 @@ import {
 import type { Article } from '../types/Article';
 import type { ArticleComment } from '../types/Comment';
 import type { RecommendationTracking } from '../types/Recommendation';
-import type { PublicAuthor, PublicUser } from '../types/User';
+import type { PublicAuthor } from '../types/User';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
 
 const route = useRoute();
@@ -172,7 +171,6 @@ const router = useRouter();
 const authStore = useAuthStore();
 const feedStore = useFeedStore();
 const currentIdentity = computed(() => authStore.currentIdentity);
-const replyAuthorProfile = ref<PublicUser | null>(null);
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
 const articleId = computed(() => String(route.params.id ?? '').trim());
@@ -208,7 +206,6 @@ let deleteRequestVersion = 0;
 let likeRequestVersion = 0;
 let likeMutationVersion = 0;
 let commentsRequestVersion = 0;
-let replyAuthorProfileRequestVersion = 0;
 let replyIntentTask: Promise<void> | null = null;
 let replyIntentRetryRequested = false;
 
@@ -265,42 +262,19 @@ const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : null;
 });
-const currentReplyAuthorID = computed(() => {
-  if (!authStore.isAuthenticated) {
-    return null;
-  }
-
-  const id = authStore.currentIdentity?.id;
-
-  return typeof id === 'number'
-    && Number.isSafeInteger(id)
-    && id > 0
-    ? id
-    : null;
-});
-const currentReplyAuthorProfile = computed(() => {
-  const viewerID = currentReplyAuthorID.value;
-  const profile = replyAuthorProfile.value;
-
-  if (viewerID === null || !profile || profile.id !== viewerID) {
-    return null;
-  }
-
-  return profile;
-});
 const replyComposerAuthor = computed<PublicAuthor | null>(() => {
   const identity = currentIdentity.value;
-  const viewerID = currentReplyAuthorID.value;
+  const viewerID = currentViewerID.value;
 
   if (!identity || viewerID === null) {
     return null;
   }
 
-  return currentReplyAuthorProfile.value ?? {
+  return {
     id: viewerID,
     username: identity.username,
-    display_name: '',
-    avatar_url: '',
+    display_name: identity.display_name,
+    avatar_url: identity.avatar_url,
   };
 });
 const articleViewTelemetry = getArticleViewTelemetry();
@@ -914,44 +888,6 @@ const hideCover = () => {
   showCover.value = false;
 };
 
-const refreshReplyAuthorProfile = async (userID: number | null) => {
-  const requestVersion = ++replyAuthorProfileRequestVersion;
-
-  replyAuthorProfile.value = null;
-
-  if (
-    typeof userID !== 'number'
-    || !Number.isSafeInteger(userID)
-    || userID <= 0
-  ) {
-    return;
-  }
-
-  try {
-    const profile = await getUser(userID);
-
-    if (
-      requestVersion !== replyAuthorProfileRequestVersion
-      || currentReplyAuthorID.value !== userID
-      || profile.id !== userID
-    ) {
-      return;
-    }
-
-    replyAuthorProfile.value = profile;
-  } catch {
-    // Profile data enriches the reply identity but never blocks replying.
-  }
-};
-
-watch(
-  currentReplyAuthorID,
-  userID => {
-    void refreshReplyAuthorProfile(userID);
-  },
-  { immediate: true },
-);
-
 watch(
   [articleId, () => authStore.isAuthenticated],
   ([id, isAuthenticated]) => {
@@ -992,7 +928,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  ++replyAuthorProfileRequestVersion;
   finishRead('route_leave');
   void recommendationTelemetry.flush(false);
   disconnectReadGeometryObserver();

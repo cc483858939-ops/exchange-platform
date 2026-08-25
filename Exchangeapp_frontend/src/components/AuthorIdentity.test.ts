@@ -59,12 +59,12 @@ describe('AuthorIdentity time display', () => {
       },
     });
 
-    const image = wrapper.find('img');
-    expect(wrapper.find('.author-avatar__fallback').text()).toBe('R');
-    expect((image.element as HTMLElement).style.display).toBe('none');
+    const image = wrapper.get('.user-avatar__image');
+    expect(wrapper.find('.user-avatar__fallback').text()).toBe('R');
+    expect(image.classes()).not.toContain('user-avatar__image--loaded');
 
     await image.trigger('load');
     await nextTick();
-    expect((image.element as HTMLElement).style.display).not.toBe('none');
+    expect(image.classes()).toContain('user-avatar__image--loaded');
   });
 });

@@ -5,17 +5,14 @@
     :aria-label="`View ${displayName}'s profile`"
     @click.stop
   >
-    <span class="author-avatar" aria-hidden="true">
-      <span class="author-avatar__fallback">{{ initial }}</span>
-      <img
-        v-if="avatarURL && !avatarLoadFailed"
-        :src="avatarURL"
-        alt=""
-        v-show="avatarLoaded"
-        @load="avatarLoaded = true"
-        @error="avatarLoadFailed = true; avatarLoaded = false"
-      />
-    </span>
+    <UserAvatar
+      class="author-avatar"
+      :avatar-url="author.avatar_url"
+      :display-name="author.display_name"
+      :username="author.username"
+      :size="30"
+      decorative
+    />
     <span class="author-copy">
       <span class="author-name">{{ displayName }}</span>
       <span class="author-meta">@{{ username }}<span v-if="postDate"> · {{ postDate }}</span></span>
@@ -24,10 +21,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
 import type { PublicAuthor } from '../types/User';
 import { useNow } from '../composables/useNow';
 import { formatPostDate } from '../utils/time';
+import UserAvatar from './users/UserAvatar.vue';
 
 const props = defineProps<{
   author: PublicAuthor;
@@ -36,17 +34,8 @@ const props = defineProps<{
 
 const username = computed(() => props.author.username.trim() || '?');
 const displayName = computed(() => props.author.display_name.trim() || username.value);
-const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperCase() || '?');
-const avatarURL = computed(() => props.author.avatar_url.trim());
-const avatarLoadFailed = ref(false);
-const avatarLoaded = ref(false);
 const now = useNow();
 const postDate = computed(() => formatPostDate(props.createdAt, now.value));
-
-watch(() => [props.author.id, props.author.avatar_url], () => {
-  avatarLoadFailed.value = false;
-  avatarLoaded.value = false;
-});
 </script>
 
 <style scoped>
@@ -66,34 +55,10 @@ watch(() => [props.author.id, props.author.avatar_url], () => {
 }
 
 .author-avatar {
-  position: relative;
   display: grid;
   width: 30px;
   height: 30px;
   flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 50%;
-  overflow: hidden;
-  background: var(--color-surface-subtle);
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.author-avatar img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.author-avatar__fallback {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-items: center;
 }
 
 .author-copy {

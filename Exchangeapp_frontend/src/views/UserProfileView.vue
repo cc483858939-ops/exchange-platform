@@ -34,20 +34,14 @@
       class="profile-identity"
       aria-labelledby="profile-name"
     >
-      <div
+      <UserAvatar
         class="profile-avatar"
-        :class="{ 'profile-avatar--image': user.avatar_url && avatarLoaded && !avatarLoadFailed }"
-      >
-        <span class="profile-avatar__fallback" aria-hidden="true">{{ profileInitial }}</span>
-        <img
-          v-if="user.avatar_url && !avatarLoadFailed"
-          :src="user.avatar_url"
-          :alt="profileDisplayName + ' avatar'"
-          v-show="avatarLoaded"
-          @load="avatarLoaded = true"
-          @error="avatarLoadFailed = true; avatarLoaded = false"
-        />
-      </div>
+        :avatar-url="user.avatar_url"
+        :display-name="user.display_name"
+        :username="user.username"
+        :size="76"
+        decorative
+      />
       <div class="profile-identity__copy">
         <h1 id="profile-name">{{ profileDisplayName }}</h1>
         <p class="profile-identity__handle">@{{ user.username }}</p>
@@ -338,6 +332,7 @@ import { useRoute, useRouter } from 'vue-router';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
+import UserAvatar from '../components/users/UserAvatar.vue';
 import { updateUserProfile, uploadProfileAvatar } from '../services/userService';
 import type { UpdateUserProfilePayload, UserFollowState } from '../services/userService';
 import { useAuthStore } from '../store/auth';
@@ -397,9 +392,6 @@ const profileDisplayName = computed(() => {
   return displayName || user.value?.username || 'Profile';
 });
 const headerUsername = computed(() => profileDisplayName.value);
-const profileInitial = computed(
-  () => Array.from(profileDisplayName.value.trim())[0]?.toUpperCase() || '?',
-);
 const joinedLabel = computed(() => {
   const value = user.value?.created_at;
   if (!value) return '';
@@ -500,8 +492,6 @@ const editAvatarLoadFailed = ref(false);
 const editAvatarError = ref('');
 const editError = ref('');
 const editSaving = ref(false);
-const avatarLoadFailed = ref(false);
-const avatarLoaded = ref(false);
 
 const editDisplayNameLength = computed(() => Array.from(editDraft.display_name.trim()).length);
 const editBioLength = computed(() => Array.from(editDraft.bio.trim()).length);
@@ -695,7 +685,6 @@ const saveProfile = async () => {
     if (!isCurrentEditSession(capture, profile.id, viewerID)) return;
     profileStore.updateUser(updatedUser);
     authStore.syncCurrentIdentityProfile(updatedUser);
-    avatarLoadFailed.value = false;
     editSaving.value = false;
     clearEditDraft();
     editDialogRef.value?.close();
@@ -843,14 +832,6 @@ watch(
 onMounted(() => {
   void nextTick(updateObserver);
 });
-
-watch(
-  () => [user.value?.id, user.value?.avatar_url],
-  () => {
-    avatarLoadFailed.value = false;
-    avatarLoaded.value = false;
-  },
-);
 
 onBeforeUnmount(() => {
   if (numericUserID.value !== null) saveCurrentScroll(numericUserID.value);
@@ -1312,10 +1293,6 @@ onBeforeUnmount(() => {
     margin-inline: var(--space-4);
   }
 }
-.profile-avatar--image {
-  overflow: hidden;
-}
-
 .profile-avatar img {
   position: absolute;
   inset: 0;
@@ -1323,13 +1300,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.profile-avatar__fallback {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-items: center;
 }
 
 .profile-identity__bio {

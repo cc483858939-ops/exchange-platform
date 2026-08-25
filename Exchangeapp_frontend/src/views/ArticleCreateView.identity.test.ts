@@ -1,19 +1,36 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import { nextTick } from 'vue';
+import { nextTick, reactive } from 'vue';
+import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ArticleCreateView from './ArticleCreateView.vue';
-import type { PublicUser } from '../types/User';
+import { useArticleDraftStore } from '../store/articleDraft';
 
 const mocks = vi.hoisted(() => ({
   authState: {
     isAuthenticated: true,
-    currentIdentity: { id: 7, username: 'alice' } as { id: number; username: string } | null,
+    currentIdentity: {
+      id: 7,
+      username: 'alice',
+      display_name: 'Alice Smith',
+      avatar_url: 'https://example.test/alice.jpg',
+    } as {
+      id: number;
+      username: string;
+      display_name: string;
+      avatar_url: string;
+    } | null,
   },
   authStore: null as {
     isAuthenticated: boolean;
-    currentIdentity: { id: number; username: string } | null;
+    currentIdentity: {
+      id: number;
+      username: string;
+      display_name: string;
+      avatar_url: string;
+    } | null;
+    syncCurrentIdentityProfile: ReturnType<typeof vi.fn>;
   } | null,
   router: {
     back: vi.fn(),
@@ -37,7 +54,10 @@ vi.mock('vue-router', () => ({
 
 vi.mock('../store/auth', async () => {
   const { reactive } = await import('vue');
-  mocks.authStore = reactive(mocks.authState);
+  mocks.authStore = reactive({
+    ...mocks.authState,
+    syncCurrentIdentityProfile: vi.fn(),
+  });
   return {
     useAuthStore: () => mocks.authStore,
   };
@@ -60,36 +80,23 @@ vi.mock('../services/articleService', () => ({
   uploadArticleCover: mocks.uploadArticleCover,
 }));
 
-const profile = ({
-  id = 7,
-  username = 'alice',
-  displayName = 'Alice Smith',
-  avatarURL = 'https://example.test/avatar.jpg',
-}: {
-  id?: number;
-  username?: string;
-  displayName?: string;
-  avatarURL?: string;
-} = {}): PublicUser => ({
-  id,
-  username,
-  display_name: displayName,
-  avatar_url: avatarURL,
-  bio: '',
-  created_at: '2026-08-21T00:00:00.000Z',
+const identity = (overrides: Partial<NonNullable<typeof mocks.authState.currentIdentity>> = {}) => ({
+  id: 7,
+  username: 'alice',
+  display_name: 'Alice Smith',
+  avatar_url: 'https://example.test/alice.jpg',
+  ...overrides,
 });
 
-const deferred = <T>() => {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-
-  return { promise, resolve, reject };
-};
+const publishedArticle = (authorID = 7) => ({
+  id: 101,
+  author: {
+    id: authorID,
+    username: authorID === 7 ? 'alice' : 'bob',
+    display_name: authorID === 7 ? 'Alice Smith' : 'Bob Jones',
+    avatar_url: authorID === 7 ? 'https://example.test/alice.jpg' : '',
+  },
+});
 
 const mountPage = () => mount(ArticleCreateView, {
   global: {
@@ -100,19 +107,22 @@ const mountPage = () => mount(ArticleCreateView, {
   },
 });
 
-describe('ArticleCreateView author identity', () => {
+describe('ArticleCreateView current identity fast path', () => {
   let wrapper: VueWrapper | null = null;
 
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.authStore!.isAuthenticated = true;
-    mocks.authStore!.currentIdentity = { id: 7, username: 'alice' };
-    mocks.getUser.mockResolvedValue(profile());
-    mocks.createArticle.mockResolvedValue({ id: 101, author: { id: 7 } });
+    mocks.authStore!.currentIdentity = identity();
+    mocks.createArticle.mockResolvedValue(publishedArticle());
     mocks.uploadArticleCover.mockResolvedValue('https://example.test/cover.jpg');
     mocks.feedStore.registerPublishedArticle.mockReturnValue(true);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
+    const draft = useArticleDraftStore();
+    draft.clear();
+    draft.setViewer(7);
   });
 
   afterEach(() => {
@@ -120,98 +130,60 @@ describe('ArticleCreateView author identity', () => {
     wrapper = null;
   });
 
-  it('renders auth fallback immediately while the profile is pending', () => {
-    const request = deferred<PublicUser>();
-    mocks.getUser.mockReturnValue(request.promise);
-
+  it('renders the canonical identity and avatar without waiting for a profile request', () => {
     wrapper = mountPage();
 
-    expect(mocks.getUser).toHaveBeenCalledOnce();
-    expect(mocks.getUser).toHaveBeenCalledWith(7);
-    expect(wrapper.get('.composer-author__avatar').text()).toBe('A');
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('alice');
-    expect(wrapper.get('.composer-author__copy small').text()).toBe('@alice');
-    expect(wrapper.find('#article-content').exists()).toBe(true);
-    expect(wrapper.get('label[for="article-content"]').classes()).toContain('sr-only');
-
-    request.reject(new Error('cleanup'));
-  });
-
-  it('enriches the composer with the current profile identity and avatar', async () => {
-    mocks.getUser.mockResolvedValue(profile({ avatarURL: 'https://example.test/alice.jpg' }));
-
-    wrapper = mountPage();
-    await flushPromises();
-
+    expect(mocks.getUser).not.toHaveBeenCalled();
     expect(wrapper.get('.composer-author__copy strong').text()).toBe('Alice Smith');
     expect(wrapper.get('.composer-author__copy small').text()).toBe('@alice');
-    expect(wrapper.get('.composer-author__avatar img').attributes('src')).toBe('https://example.test/alice.jpg');
+    expect(wrapper.get('.composer-author__avatar .user-avatar__image').attributes('src'))
+      .toBe('https://example.test/alice.jpg');
+    expect(wrapper.get('.composer-author__avatar').attributes('aria-hidden')).toBe('true');
   });
 
-  it('falls back to username when the profile display name is empty', async () => {
-    mocks.getUser.mockResolvedValue(profile({ displayName: '', avatarURL: '' }));
-
+  it('reacts to a current identity change and isolates the draft viewer', async () => {
     wrapper = mountPage();
-    await flushPromises();
+    await wrapper.get('#article-content').setValue('Alice draft');
 
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('alice');
-    expect(wrapper.get('.composer-author__copy small').text()).toBe('@alice');
-    expect(wrapper.get('.composer-author__avatar').text()).toBe('A');
-    expect(wrapper.find('.composer-author__avatar img').exists()).toBe(false);
+    mocks.authStore!.currentIdentity = identity({
+      id: 8,
+      username: 'bob',
+      display_name: 'Bob Jones',
+      avatar_url: 'https://example.test/bob.jpg',
+    });
+    await nextTick();
+
+    expect(wrapper.get('.composer-author__copy strong').text()).toBe('Bob Jones');
+    expect(wrapper.get('.composer-author__copy small').text()).toBe('@bob');
+    expect(wrapper.get('.composer-author__avatar .user-avatar__image').attributes('src'))
+      .toBe('https://example.test/bob.jpg');
+    expect(useArticleDraftStore().viewerID).toBe(8);
+    expect(useArticleDraftStore().content).toBe('');
   });
 
-  it('uses the initial when the profile has no avatar', async () => {
-    mocks.getUser.mockResolvedValue(profile({ avatarURL: '' }));
-
+  it('publishes from the fast-path identity without profile enrichment', async () => {
     wrapper = mountPage();
-    await flushPromises();
-
-    expect(wrapper.find('.composer-author__avatar img').exists()).toBe(false);
-    expect(wrapper.get('.composer-author__avatar').text()).toBe('A');
-  });
-
-  it('replaces a broken avatar image with the initial', async () => {
-    wrapper = mountPage();
-    await flushPromises();
-
-    const image = wrapper.get('.composer-author__avatar img');
-    await image.trigger('error');
-
-    expect(wrapper.find('.composer-author__avatar img').exists()).toBe(false);
-    expect(wrapper.get('.composer-author__avatar').text()).toBe('A');
-  });
-
-  it('keeps the fallback identity and publish available when profile loading fails', async () => {
-    mocks.getUser.mockRejectedValue(new Error('profile unavailable'));
-
-    wrapper = mountPage();
-    await flushPromises();
-    await wrapper.get('#article-content').setValue('A post without profile enrichment');
-
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('alice');
-    expect(wrapper.get('.publish-button').attributes('disabled')).toBeUndefined();
-
+    await wrapper.get('#article-content').setValue('A post from the current identity');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
-    expect(mocks.createArticle).toHaveBeenCalledOnce();
+    expect(mocks.getUser).not.toHaveBeenCalled();
+    expect(mocks.createArticle).toHaveBeenCalledWith({
+      title: '',
+      preview: '',
+      content: 'A post from the current identity',
+    });
+    expect(mocks.feedStore.registerPublishedArticle).toHaveBeenCalledWith(
+      publishedArticle(),
+      7,
+    );
+    expect(mocks.authStore!.syncCurrentIdentityProfile).toHaveBeenCalledWith(
+      publishedArticle().author,
+    );
+    expect(useArticleDraftStore().dirty).toBe(false);
   });
 
-  it('does not wait for profile loading before publishing', async () => {
-    const request = deferred<PublicUser>();
-    mocks.getUser.mockReturnValue(request.promise);
-
-    wrapper = mountPage();
-    await wrapper.get('#article-content').setValue('A post while profile is pending');
-    await wrapper.get('form').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createArticle).toHaveBeenCalledOnce();
-
-    request.reject(new Error('cleanup'));
-  });
-
-  it('does not request a profile for an unauthenticated composer', () => {
+  it('does not render the composer or request a profile while logged out', () => {
     mocks.authStore!.isAuthenticated = false;
     mocks.authStore!.currentIdentity = null;
 
@@ -220,133 +192,5 @@ describe('ArticleCreateView author identity', () => {
     expect(wrapper.find('form').exists()).toBe(false);
     expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
     expect(mocks.getUser).not.toHaveBeenCalled();
-  });
-
-  it('does not request a profile when authentication is false and identity is retained', () => {
-    mocks.authStore!.isAuthenticated = false;
-    mocks.authStore!.currentIdentity = { id: 7, username: 'alice' };
-
-    wrapper = mountPage();
-
-    expect(wrapper.find('form').exists()).toBe(false);
-    expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
-    expect(mocks.getUser).not.toHaveBeenCalled();
-  });
-
-  it('ignores an in-flight profile response after authentication is lost', async () => {
-    const request = deferred<PublicUser>();
-    mocks.getUser.mockReturnValue(request.promise);
-
-    wrapper = mountPage();
-    expect(mocks.getUser).toHaveBeenCalledOnce();
-    expect(mocks.getUser).toHaveBeenCalledWith(7);
-
-    mocks.authStore!.isAuthenticated = false;
-    await nextTick();
-
-    expect(wrapper.find('form').exists()).toBe(false);
-    expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
-    expect(mocks.getUser).toHaveBeenCalledOnce();
-
-    request.resolve(profile({
-      displayName: 'Alice After Logout',
-      avatarURL: 'https://example.test/alice-after-logout.jpg',
-    }));
-    await flushPromises();
-
-    expect(wrapper.find('form').exists()).toBe(false);
-    expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
-    expect(wrapper.html()).not.toContain('alice-after-logout.jpg');
-  });
-
-  it('fetches the profile once when authentication becomes true', async () => {
-    mocks.authStore!.isAuthenticated = false;
-    mocks.authStore!.currentIdentity = { id: 7, username: 'alice' };
-
-    wrapper = mountPage();
-    expect(mocks.getUser).not.toHaveBeenCalled();
-
-    mocks.authStore!.isAuthenticated = true;
-    await nextTick();
-    await flushPromises();
-
-    expect(mocks.getUser).toHaveBeenCalledOnce();
-    expect(mocks.getUser).toHaveBeenCalledWith(7);
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('Alice Smith');
-  });
-
-  it('ignores a profile response for another user', async () => {
-    mocks.getUser.mockResolvedValue(profile({
-      id: 99,
-      username: 'wrong-user',
-      displayName: 'Wrong User',
-      avatarURL: '/wrong.jpg',
-    }));
-
-    wrapper = mountPage();
-    await flushPromises();
-
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('alice');
-    expect(wrapper.get('.composer-author__copy small').text()).toBe('@alice');
-    expect(wrapper.find('.composer-author__avatar img').exists()).toBe(false);
-    expect(wrapper.text()).not.toContain('Wrong User');
-    expect(wrapper.html()).not.toContain('/wrong.jpg');
-  });
-
-  it('keeps the newest account after an out-of-order profile response', async () => {
-    const accountA = deferred<PublicUser>();
-    const accountB = deferred<PublicUser>();
-    mocks.getUser.mockImplementation((userID: number) => (
-      userID === 7 ? accountA.promise : accountB.promise
-    ));
-
-    wrapper = mountPage();
-    expect(mocks.getUser).toHaveBeenCalledWith(7);
-
-    mocks.authStore!.currentIdentity = { id: 8, username: 'bob' };
-    await nextTick();
-
-    expect(mocks.getUser).toHaveBeenCalledWith(8);
-    expect(mocks.getUser).toHaveBeenCalledTimes(2);
-
-    accountB.resolve(profile({
-      id: 8,
-      username: 'bob',
-      displayName: 'Bob Jones',
-      avatarURL: 'https://example.test/bob.jpg',
-    }));
-    await flushPromises();
-
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('Bob Jones');
-    expect(wrapper.get('.composer-author__copy small').text()).toBe('@bob');
-    expect(wrapper.get('.composer-author__avatar img').attributes('src')).toBe('https://example.test/bob.jpg');
-
-    accountA.resolve(profile({ avatarURL: 'https://example.test/alice.jpg' }));
-    await flushPromises();
-
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('Bob Jones');
-    expect(wrapper.get('.composer-author__copy small').text()).toBe('@bob');
-    expect(wrapper.html()).not.toContain('alice.jpg');
-  });
-
-  it('resets avatar failure when the account changes', async () => {
-    mocks.getUser.mockImplementation((userID: number) => Promise.resolve(profile({
-      id: userID,
-      username: userID === 7 ? 'alice' : 'bob',
-      displayName: userID === 7 ? 'Alice Smith' : 'Bob Jones',
-      avatarURL: userID === 7 ? 'https://example.test/alice.jpg' : 'https://example.test/bob.jpg',
-    })));
-
-    wrapper = mountPage();
-    await flushPromises();
-    await wrapper.get('.composer-author__avatar img').trigger('error');
-    expect(wrapper.find('.composer-author__avatar img').exists()).toBe(false);
-
-    mocks.authStore!.currentIdentity = { id: 8, username: 'bob' };
-    await nextTick();
-    await flushPromises();
-
-    expect(mocks.getUser).toHaveBeenNthCalledWith(2, 8);
-    expect(wrapper.get('.composer-author__avatar img').attributes('src')).toBe('https://example.test/bob.jpg');
   });
 });

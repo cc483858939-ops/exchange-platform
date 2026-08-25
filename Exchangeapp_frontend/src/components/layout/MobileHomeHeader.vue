@@ -6,20 +6,14 @@
       :to="{ name: 'UserProfile', params: { id: String(identity.id) } }"
       aria-label="Profile"
     >
-      <span class="mobile-home-header__avatar">
-        <span v-if="avatarInitial" class="mobile-home-header__avatar-fallback" aria-hidden="true">
-          {{ avatarInitial }}
-        </span>
-        <AppIcon v-else name="profile" :size="22" />
-        <img
-          v-if="avatarSource"
-          :src="avatarSource"
-          alt=""
-          v-show="avatarLoaded"
-          @load="avatarLoaded = true"
-          @error="avatarLoadFailed = true; avatarLoaded = false"
-        />
-      </span>
+      <UserAvatar
+        class="mobile-home-header__avatar"
+        :avatar-url="identity.avatar_url"
+        :display-name="identity.display_name"
+        :username="identity.username"
+        :size="36"
+        decorative
+      />
     </RouterLink>
     <RouterLink
       v-else
@@ -41,34 +35,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
 import { useAuthStore } from '../../store/auth';
 import AppIcon from '../icons/AppIcon.vue';
+import UserAvatar from '../users/UserAvatar.vue';
 
 const authStore = useAuthStore();
-const avatarLoadFailed = ref(false);
-const avatarLoaded = ref(false);
 const identity = computed(() => authStore.currentIdentity);
-
-const avatarSource = computed(() => {
-  const value = identity.value?.avatar_url?.trim() || '';
-  return value && !avatarLoadFailed.value ? value : '';
-});
-
-const avatarInitial = computed(() => {
-  const value = identity.value?.display_name?.trim()
-    || identity.value?.username?.trim()
-    || '';
-  return Array.from(value)[0]?.toUpperCase() || '';
-});
-
-watch(
-  [() => identity.value?.id, () => identity.value?.avatar_url],
-  () => {
-    avatarLoadFailed.value = false;
-    avatarLoaded.value = false;
-  },
-);
 </script>
 
 <style scoped>
@@ -133,13 +106,6 @@ watch(
     width: 100%;
     height: 100%;
     object-fit: cover;
-  }
-
-  .mobile-home-header__avatar-fallback {
-    display: grid;
-    width: 100%;
-    height: 100%;
-    place-items: center;
   }
 
   .mobile-home-header__brand {

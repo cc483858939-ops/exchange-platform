@@ -24,7 +24,7 @@ describe('CommentComposer avatar and reply behavior', () => {
   it('renders the real avatar when the profile provides an avatar URL', () => {
     wrapper = mount(CommentComposer, { props: { author: author() } });
 
-    expect(wrapper.get('.comment-composer__avatar img').attributes('src'))
+    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice.jpg');
   });
 
@@ -33,8 +33,8 @@ describe('CommentComposer avatar and reply behavior', () => {
       props: { author: author({ avatar_url: '', display_name: 'Universal' }) },
     });
 
-    expect(wrapper.find('.comment-composer__avatar img').exists()).toBe(false);
-    expect(wrapper.get('.comment-composer__avatar').text()).toBe('U');
+    expect(wrapper.find('.comment-composer__avatar .user-avatar__image').exists()).toBe(false);
+    expect(wrapper.get('.comment-composer__avatar .user-avatar__fallback').text()).toBe('U');
   });
 
   it('uses the username initial when the display name is empty', () => {
@@ -42,28 +42,28 @@ describe('CommentComposer avatar and reply behavior', () => {
       props: { author: author({ avatar_url: '', display_name: '', username: '12345678' }) },
     });
 
-    expect(wrapper.find('.comment-composer__avatar img').exists()).toBe(false);
-    expect(wrapper.get('.comment-composer__avatar').text()).toBe('1');
+    expect(wrapper.find('.comment-composer__avatar .user-avatar__image').exists()).toBe(false);
+    expect(wrapper.get('.comment-composer__avatar .user-avatar__fallback').text()).toBe('1');
   });
 
   it('replaces a broken avatar image with the initial fallback', async () => {
     wrapper = mount(CommentComposer, { props: { author: author() } });
 
-    await wrapper.get('.comment-composer__avatar img').trigger('error');
+    await wrapper.get('.comment-composer__avatar .user-avatar__image').trigger('error');
 
-    expect(wrapper.find('.comment-composer__avatar img').exists()).toBe(false);
-    expect(wrapper.get('.comment-composer__avatar').text()).toBe('A');
+    expect(wrapper.find('.comment-composer__avatar .user-avatar__image').exists()).toBe(false);
+    expect(wrapper.get('.comment-composer__avatar .user-avatar__fallback').text()).toBe('A');
   });
 
   it('resets the avatar failure when the avatar URL changes', async () => {
     wrapper = mount(CommentComposer, { props: { author: author() } });
-    await wrapper.get('.comment-composer__avatar img').trigger('error');
+    await wrapper.get('.comment-composer__avatar .user-avatar__image').trigger('error');
 
     await wrapper.setProps({
       author: author({ avatar_url: 'https://example.test/alice-new.jpg' }),
     });
 
-    expect(wrapper.get('.comment-composer__avatar img').attributes('src'))
+    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice-new.jpg');
   });
 

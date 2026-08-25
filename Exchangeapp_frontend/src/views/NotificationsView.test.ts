@@ -32,10 +32,10 @@ vi.mock('vue-router', () => ({
   useRouter: () => mocks.router,
 }));
 
-const notification = (id: number, read = false): Notification => ({
+const notification = (id: number, read = false, avatarURL = ''): Notification => ({
   id,
   type: 'post_liked',
-  actor: { id: 9, username: 'alice', display_name: 'Alice', avatar_url: '' },
+  actor: { id: 9, username: 'alice', display_name: 'Alice', avatar_url: avatarURL },
   article_id: 42,
   comment_id: null,
   activity_at: '2026-08-22T12:00:00.000Z',
@@ -134,6 +134,22 @@ describe('NotificationsView', () => {
     await flushPromises();
     expect(wrapper.find('.notification-card--unread').exists()).toBe(true);
     expect(mocks.getUnreadNotificationCount).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('renders notification actors through the shared avatar component', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({
+      items: [notification(1, false, '/actor.webp')],
+      next_cursor: null,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.get('.notification-card__avatar .user-avatar__image').attributes('src'))
+      .toBe('/actor.webp');
+    expect(wrapper.get('.notification-card__avatar').attributes('aria-hidden')).toBe('true');
     wrapper.unmount();
   });
 

@@ -1,21 +1,36 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { nextTick } from 'vue';
+import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import NewsDetailView from './NewsDetailView.vue';
-import type { PublicUser } from '../types/User';
+import CommentComposer from '../components/comments/CommentComposer.vue';
 
 const mocks = vi.hoisted(() => ({
   authState: {
     isAuthenticated: true,
     token: 'Bearer test-token',
-    currentIdentity: { id: 7, username: 'alice' } as { id: number; username: string } | null,
+    currentIdentity: {
+      id: 7,
+      username: 'alice',
+      display_name: 'Alice Smith',
+      avatar_url: 'https://example.test/alice.jpg',
+    } as {
+      id: number;
+      username: string;
+      display_name: string;
+      avatar_url: string;
+    } | null,
   },
   authStore: null as {
     isAuthenticated: boolean;
     token: string;
-    currentIdentity: { id: number; username: string } | null;
+    currentIdentity: {
+      id: number;
+      username: string;
+      display_name: string;
+      avatar_url: string;
+    } | null;
   } | null,
   getArticleById: vi.fn(),
   getArticleLikeState: vi.fn(),
@@ -126,34 +141,13 @@ const article = {
   },
 };
 
-const profile = ({
-  id = 7,
-  username = 'alice',
-  displayName = 'Alice Smith',
-  avatarURL = 'https://example.test/alice.jpg',
-}: {
-  id?: number;
-  username?: string;
-  displayName?: string;
-  avatarURL?: string;
-} = {}): PublicUser => ({
-  id,
-  username,
-  display_name: displayName,
-  avatar_url: avatarURL,
-  bio: '',
-  created_at: '2026-08-21T00:00:00.000Z',
+const identity = (overrides: Partial<NonNullable<typeof mocks.authState.currentIdentity>> = {}) => ({
+  id: 7,
+  username: 'alice',
+  display_name: 'Alice Smith',
+  avatar_url: 'https://example.test/alice.jpg',
+  ...overrides,
 });
-
-const deferred = <T>() => {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-};
 
 const mountDetail = () => mount(NewsDetailView, {
   attachTo: document.body,
@@ -176,12 +170,11 @@ describe('NewsDetailView reply composer identity', () => {
     mocks.routeLeave.mockReset();
     mocks.authStore!.isAuthenticated = true;
     mocks.authStore!.token = 'Bearer test-token';
-    mocks.authStore!.currentIdentity = { id: 7, username: 'alice' };
+    mocks.authStore!.currentIdentity = identity();
     mocks.getArticleById.mockResolvedValue(article);
     mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
     mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
     mocks.createArticleComment.mockResolvedValue({ id: 101 });
-    mocks.getUser.mockResolvedValue(profile({ avatarURL: '' }));
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
@@ -192,144 +185,66 @@ describe('NewsDetailView reply composer identity', () => {
     wrapper = null;
   });
 
-  it('renders the composer with an immediate initial while the profile is pending', async () => {
-    const request = deferred<PublicUser>();
-    mocks.getUser.mockReturnValue(request.promise);
-
+  it('passes the canonical current identity immediately without a profile request', async () => {
     wrapper = mountDetail();
     await flushPromises();
 
-    expect(mocks.getUser).toHaveBeenCalledOnce();
-    expect(mocks.getUser).toHaveBeenCalledWith(7);
-    expect(wrapper.get('.comment-composer__avatar').text()).toBe('A');
-    const textarea = wrapper.get('.comment-composer__textarea');
-    await textarea.setValue('reply while profile is pending');
-    expect(textarea.element).not.toHaveProperty('disabled', true);
-
-    request.resolve(profile({ avatarURL: '' }));
-    await flushPromises();
-  });
-
-  it('replaces the fallback with the current profile avatar', async () => {
-    mocks.getUser.mockResolvedValue(profile({ avatarURL: 'https://example.test/alice.jpg' }));
-
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(wrapper.get('.comment-composer__avatar img').attributes('src'))
+    const composer = wrapper.findComponent(CommentComposer);
+    expect(mocks.getUser).not.toHaveBeenCalled();
+    expect(composer.props('author')).toEqual({
+      id: 7,
+      username: 'alice',
+      display_name: 'Alice Smith',
+      avatar_url: 'https://example.test/alice.jpg',
+    });
+    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice.jpg');
   });
 
-  it('keeps the fallback and reply usable when profile loading fails', async () => {
-    mocks.getUser.mockRejectedValue(new Error('profile unavailable'));
-
+  it('updates the reply identity when the authenticated viewer changes', async () => {
     wrapper = mountDetail();
     await flushPromises();
 
-    expect(wrapper.get('.comment-composer__avatar').text()).toBe('A');
-    expect(wrapper.find('.comment-composer__avatar img').exists()).toBe(false);
+    mocks.authStore!.currentIdentity = identity({
+      id: 8,
+      username: 'bob',
+      display_name: 'Bob Jones',
+      avatar_url: 'https://example.test/bob.jpg',
+    });
+    await nextTick();
+
+    expect(wrapper.findComponent(CommentComposer).props('author')).toEqual({
+      id: 8,
+      username: 'bob',
+      display_name: 'Bob Jones',
+      avatar_url: 'https://example.test/bob.jpg',
+    });
+    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
+      .toBe('https://example.test/bob.jpg');
+    expect(mocks.getUser).not.toHaveBeenCalled();
+  });
+
+  it('keeps replying usable from the canonical identity without enrichment', async () => {
+    wrapper = mountDetail();
+    await flushPromises();
 
     await wrapper.get('.comment-composer__textarea').setValue('reply without enrichment');
     await wrapper.get('.comment-composer').trigger('submit');
     await flushPromises();
 
     expect(mocks.createArticleComment).toHaveBeenCalledWith('42', 'reply without enrichment');
-    expect(wrapper.find('.comment-error').exists()).toBe(false);
+    expect(mocks.getUser).not.toHaveBeenCalled();
   });
 
-  it('does not request a profile when authentication is false', async () => {
+  it('does not render a composer or request a profile while logged out', async () => {
     mocks.authStore!.isAuthenticated = false;
     mocks.authStore!.currentIdentity = null;
 
     wrapper = mountDetail();
     await flushPromises();
 
-    expect(mocks.getUser).not.toHaveBeenCalled();
     expect(wrapper.find('.comment-composer').exists()).toBe(false);
+    expect(mocks.getUser).not.toHaveBeenCalled();
     expect(wrapper.get('.detail-state__link').text()).toContain('Log in');
-  });
-
-  it('does not request a profile when authentication is false and identity is retained', async () => {
-    mocks.authStore!.isAuthenticated = false;
-    mocks.authStore!.currentIdentity = { id: 7, username: 'alice' };
-
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(mocks.getUser).not.toHaveBeenCalled();
-    expect(wrapper.find('.comment-composer').exists()).toBe(false);
-    expect(wrapper.find('.detail-state__link').exists()).toBe(true);
-  });
-
-  it('ignores a profile whose returned ID does not match the viewer', async () => {
-    mocks.getUser.mockResolvedValue(profile({
-      id: 99,
-      username: 'wrong-user',
-      displayName: 'Wrong User',
-      avatarURL: 'https://example.test/wrong.jpg',
-    }));
-
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(wrapper.get('.comment-composer__avatar').text()).toBe('A');
-    expect(wrapper.find('.comment-composer__avatar img').exists()).toBe(false);
-    expect(wrapper.html()).not.toContain('wrong.jpg');
-  });
-
-  it('keeps the newest account after an out-of-order profile response', async () => {
-    const accountA = deferred<PublicUser>();
-    const accountB = deferred<PublicUser>();
-    mocks.getUser.mockImplementation((userID: number) => (
-      userID === 7 ? accountA.promise : accountB.promise
-    ));
-
-    wrapper = mountDetail();
-    expect(mocks.getUser).toHaveBeenCalledWith(7);
-
-    mocks.authStore!.currentIdentity = { id: 8, username: 'bob' };
-    await nextTick();
-
-    expect(mocks.getUser).toHaveBeenCalledTimes(2);
-    expect(mocks.getUser).toHaveBeenLastCalledWith(8);
-
-    accountB.resolve(profile({
-      id: 8,
-      username: 'bob',
-      displayName: 'Bob Jones',
-      avatarURL: 'https://example.test/bob.jpg',
-    }));
-    await flushPromises();
-
-    expect(wrapper.get('.comment-composer__avatar img').attributes('src'))
-      .toBe('https://example.test/bob.jpg');
-
-    accountA.resolve(profile({ avatarURL: 'https://example.test/alice.jpg' }));
-    await flushPromises();
-
-    expect(wrapper.get('.comment-composer__avatar img').attributes('src'))
-      .toBe('https://example.test/bob.jpg');
-    expect(wrapper.html()).not.toContain('alice.jpg');
-  });
-
-  it('ignores a profile response that arrives after logout', async () => {
-    const request = deferred<PublicUser>();
-    mocks.getUser.mockReturnValue(request.promise);
-
-    wrapper = mountDetail();
-    await flushPromises();
-    expect(mocks.getUser).toHaveBeenCalledWith(7);
-
-    mocks.authStore!.isAuthenticated = false;
-    await nextTick();
-
-    expect(mocks.getUser).toHaveBeenCalledOnce();
-    expect(wrapper.find('.comment-composer').exists()).toBe(false);
-
-    request.resolve(profile({ avatarURL: 'https://example.test/alice-after-logout.jpg' }));
-    await flushPromises();
-
-    expect(wrapper.find('.comment-composer').exists()).toBe(false);
-    expect(wrapper.html()).not.toContain('alice-after-logout.jpg');
   });
 });

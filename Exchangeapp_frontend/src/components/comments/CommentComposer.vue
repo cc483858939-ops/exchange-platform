@@ -1,15 +1,15 @@
 <template>
   <form class="comment-composer" @submit.prevent="submitReply">
     <div class="comment-composer__body">
-      <span v-if="author" class="comment-composer__avatar" aria-hidden="true">
-        <img
-          v-if="avatarURL && !avatarLoadFailed"
-          :src="avatarURL"
-          alt=""
-          @error="avatarLoadFailed = true"
-        />
-        <span v-else>{{ initial }}</span>
-      </span>
+      <UserAvatar
+        v-if="author"
+        class="comment-composer__avatar"
+        :avatar-url="author.avatar_url"
+        :display-name="author.display_name"
+        :username="author.username"
+        :size="30"
+        decorative
+      />
       <textarea
         ref="textareaRef"
         v-model="content"
@@ -41,8 +41,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import type { PublicAuthor } from '../../types/User';
+import UserAvatar from '../users/UserAvatar.vue';
 
 const props = withDefaults(defineProps<{
   author?: PublicAuthor | null;
@@ -64,20 +65,6 @@ const maxContentLength = 1000;
 const trimmedContent = computed(() => content.value.trim());
 const contentLength = computed(() => Array.from(trimmedContent.value).length);
 const exceedsMaxLength = computed(() => contentLength.value > maxContentLength);
-const avatarLoadFailed = ref(false);
-const username = computed(() => props.author?.username.trim() || '');
-const displayName = computed(() => props.author?.display_name.trim() || username.value);
-const avatarURL = computed(() => props.author?.avatar_url.trim() || '');
-const initial = computed(
-  () => Array.from(displayName.value || username.value)[0]?.toUpperCase() || '?',
-);
-
-watch(
-  [() => props.author?.id, () => props.author?.avatar_url],
-  () => {
-    avatarLoadFailed.value = false;
-  },
-);
 
 const resizeTextarea = () => {
   const textarea = textareaRef.value;

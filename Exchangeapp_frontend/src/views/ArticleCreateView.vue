@@ -46,15 +46,14 @@
         <h2 id="post-fields-heading" class="sr-only">Post content</h2>
 
         <div class="composer-main">
-          <span class="composer-author__avatar" aria-hidden="true">
-            <img
-              v-if="authorAvatarURL && !avatarLoadFailed"
-              :src="authorAvatarURL"
-              alt=""
-              @error="avatarLoadFailed = true"
-            />
-            <span v-else>{{ authorInitial }}</span>
-          </span>
+          <UserAvatar
+            class="composer-author__avatar"
+            :avatar-url="currentIdentity?.avatar_url"
+            :display-name="currentIdentity?.display_name"
+            :username="currentIdentity?.username"
+            :size="42"
+            decorative
+          />
 
           <div class="composer-main__content">
             <div class="composer-author__copy">
@@ -67,7 +66,7 @@
               <textarea
                 id="article-content"
                 ref="contentInput"
-                v-model="form.content"
+                v-model="content"
                 class="composer-input composer-input--content"
                 rows="5"
                 placeholder="What's happening?"
@@ -96,7 +95,7 @@
                   <label for="article-title">Headline (optional)</label>
                   <input
                     id="article-title"
-                    v-model="form.title"
+                    v-model="title"
                     class="composer-input composer-input--title"
                     type="text"
                     autocomplete="off"
@@ -123,7 +122,7 @@
                   <label for="article-preview">Summary (optional)</label>
                   <textarea
                     id="article-preview"
-                    v-model="form.preview"
+                    v-model="preview"
                     class="composer-input composer-input--preview"
                     rows="2"
                     autocomplete="off"
@@ -232,15 +231,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { createArticle, uploadArticleCover } from '../services/articleService';
-import { getUser } from '../services/userService';
 import { useAuthStore } from '../store/auth';
+import { useArticleDraftStore } from '../store/articleDraft';
 import { useFeedStore } from '../store/feed';
 import { useProfileSessionStore } from '../store/profileSession';
 import AppIcon from '../components/icons/AppIcon.vue';
-import type { PublicUser } from '../types/User';
+import UserAvatar from '../components/users/UserAvatar.vue';
 
 type PublishPhase = 'idle' | 'uploading' | 'publishing';
 
@@ -253,27 +252,19 @@ const allowedCoverTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const router = useRouter();
 const authStore = useAuthStore();
+const articleDraft = useArticleDraftStore();
 const feedStore = useFeedStore();
 const profileSessionStore = useProfileSessionStore();
-const form = reactive({
-  title: '',
-  preview: '',
-  content: '',
-});
 
 const phase = ref<PublishPhase>('idle');
 const validationAttempted = ref(false);
-const coverFile = ref<File | null>(null);
 const coverPreviewURL = ref('');
-const uploadedCoverURL = ref('');
 const coverError = ref('');
 const uploadError = ref('');
 const publishError = ref('');
 const coverInput = ref<HTMLInputElement | null>(null);
 const contentInput = ref<HTMLTextAreaElement | null>(null);
-const authorProfile = ref<PublicUser | null>(null);
-const avatarLoadFailed = ref(false);
-let authorProfileRequestVersion = 0;
+let publishAttemptVersion = 0;
 
 const currentIdentity = computed(() => authStore.currentIdentity);
 const currentUserID = computed(() => {
@@ -283,35 +274,27 @@ const currentUserID = computed(() => {
 
   return currentIdentity.value?.id ?? null;
 });
-const currentAuthorProfile = computed(() => {
-  const identity = currentIdentity.value;
-  const profile = authorProfile.value;
-
-  if (!identity || !profile || profile.id !== identity.id) {
-    return null;
-  }
-
-  return profile;
+const title = computed({
+  get: () => articleDraft.title,
+  set: (value: string) => articleDraft.setTitle(value),
 });
-const authorUsername = computed(() => {
-  const profileUsername = currentAuthorProfile.value?.username.trim() ?? '';
-
-  return profileUsername || currentIdentity.value?.username.trim() || '';
+const preview = computed({
+  get: () => articleDraft.preview,
+  set: (value: string) => articleDraft.setPreview(value),
 });
+const content = computed({
+  get: () => articleDraft.content,
+  set: (value: string) => articleDraft.setContent(value),
+});
+const coverFile = computed(() => articleDraft.coverFile);
+const uploadedCoverURL = computed(() => articleDraft.uploadedCoverURL);
+const authorUsername = computed(() => currentIdentity.value?.username.trim() || '');
 const authorDisplayName = computed(() => {
-  const displayName = currentAuthorProfile.value?.display_name.trim() ?? '';
-
-  return displayName || authorUsername.value || 'Current user';
+  return currentIdentity.value?.display_name.trim() || authorUsername.value || 'Current user';
 });
 const authorHandle = computed(() => (
   authorUsername.value ? '@' + authorUsername.value : 'Signed-in account'
 ));
-const authorInitial = computed(
-  () => Array.from(authorDisplayName.value.trim() || authorUsername.value)[0]?.toUpperCase() || '?',
-);
-const authorAvatarURL = computed(
-  () => currentAuthorProfile.value?.avatar_url.trim() ?? '',
-);
 
 const isSubmitting = computed(() => phase.value !== 'idle');
 const publishLabel = computed(() => {
@@ -325,9 +308,9 @@ const publishLabel = computed(() => {
 });
 
 const codePointLength = (value: string) => Array.from(value.trim()).length;
-const titleLength = computed(() => codePointLength(form.title));
-const previewLength = computed(() => codePointLength(form.preview));
-const contentLength = computed(() => codePointLength(form.content));
+const titleLength = computed(() => codePointLength(title.value));
+const previewLength = computed(() => codePointLength(preview.value));
+const contentLength = computed(() => codePointLength(content.value));
 
 const titleError = computed(() => {
   if (titleLength.value > maxTitleLength) {
@@ -347,7 +330,7 @@ const contentError = computed(() => {
   if (contentLength.value > maxContentLength) {
     return 'Post must be ' + maxContentLength + ' characters or fewer.';
   }
-  if (validationAttempted.value && !form.content.trim()) {
+  if (validationAttempted.value && !content.value.trim()) {
     return 'Post is required.';
   }
   return '';
@@ -357,51 +340,9 @@ const canPublish = computed(() => (
   authStore.isAuthenticated
   && titleLength.value <= maxTitleLength
   && previewLength.value <= maxPreviewLength
-  && Boolean(form.content.trim())
+  && Boolean(content.value.trim())
   && contentLength.value <= maxContentLength
 ));
-
-const refreshAuthorProfile = async (userID: number | null) => {
-  const requestVersion = ++authorProfileRequestVersion;
-
-  authorProfile.value = null;
-  avatarLoadFailed.value = false;
-
-  if (typeof userID !== 'number' || !Number.isSafeInteger(userID) || userID <= 0) {
-    return;
-  }
-
-  try {
-    const profile = await getUser(userID);
-
-    if (
-      requestVersion !== authorProfileRequestVersion
-      || currentUserID.value !== userID
-      || profile.id !== userID
-    ) {
-      return;
-    }
-
-    authorProfile.value = profile;
-  } catch {
-    // Profile data enriches the composer but never blocks authoring or publishing.
-  }
-};
-
-watch(
-  currentUserID,
-  userID => {
-    void refreshAuthorProfile(userID);
-  },
-  { immediate: true },
-);
-
-watch(
-  () => [currentAuthorProfile.value?.id, authorAvatarURL.value],
-  () => {
-    avatarLoadFailed.value = false;
-  },
-);
 
 const revokeCoverPreview = () => {
   if (coverPreviewURL.value) {
@@ -410,14 +351,24 @@ const revokeCoverPreview = () => {
   }
 };
 
+const isCurrentPublishAttempt = (
+  attemptVersion: number,
+  publisherUserID: number,
+  selectedCover: File | null,
+) => (
+  publishAttemptVersion === attemptVersion
+  && authStore.isAuthenticated
+  && authStore.currentIdentity?.id === publisherUserID
+  && articleDraft.viewerID === publisherUserID
+  && articleDraft.coverFile === selectedCover
+);
+
 const removeCover = () => {
   if (isSubmitting.value) {
     return;
   }
 
-  revokeCoverPreview();
-  coverFile.value = null;
-  uploadedCoverURL.value = '';
+  articleDraft.removeCover();
   coverError.value = '';
   uploadError.value = '';
   publishError.value = '';
@@ -465,10 +416,7 @@ const handleCoverChange = (event: Event) => {
     return;
   }
 
-  revokeCoverPreview();
-  coverFile.value = file;
-  coverPreviewURL.value = URL.createObjectURL(file);
-  uploadedCoverURL.value = '';
+  articleDraft.setCoverFile(file);
   coverError.value = '';
   uploadError.value = '';
   publishError.value = '';
@@ -521,11 +469,12 @@ const submitArticle = async () => {
     return;
   }
 
+  const publishAttempt = ++publishAttemptVersion;
   const selectedCover = coverFile.value;
   const draft = {
-    title: form.title.trim(),
-    preview: form.preview.trim(),
-    content: form.content.trim(),
+    title: title.value.trim(),
+    preview: preview.value.trim(),
+    content: content.value.trim(),
   };
 
   uploadError.value = '';
@@ -541,15 +490,20 @@ const submitArticle = async () => {
         if (!uploadedURL) {
           throw new Error('The cover upload returned no URL.');
         }
-        uploadedCoverURL.value = uploadedURL;
+        if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, selectedCover)) {
+          return;
+        }
+        articleDraft.setUploadedCoverURL(uploadedURL);
         coverImageURL = uploadedURL;
       } catch {
-        uploadError.value = 'Cover upload failed. Your draft was preserved.';
+        if (publishAttemptVersion === publishAttempt) {
+          uploadError.value = 'Cover upload failed. Your draft was preserved.';
+        }
         return;
       }
     }
 
-    if (authStore.currentIdentity?.id !== publisherUserID) {
+    if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, selectedCover)) {
       publishError.value = 'Your account changed while publishing. No post was created, and your draft was preserved.';
       return;
     }
@@ -562,9 +516,11 @@ const submitArticle = async () => {
           : draft,
       );
       if (
-        authStore.currentIdentity?.id !== publisherUserID
-        || article.author?.id !== publisherUserID
+        !isCurrentPublishAttempt(publishAttempt, publisherUserID, selectedCover)
       ) {
+        return;
+      }
+      if (article.author?.id !== publisherUserID) {
         publishError.value = 'The post was saved, but your account changed during publishing. It was not added to this Home feed.';
         return;
       }
@@ -574,6 +530,8 @@ const submitArticle = async () => {
         return;
       }
       profileSessionStore.registerPublishedArticle(article, publisherUserID);
+      authStore.syncCurrentIdentityProfile(article.author);
+      articleDraft.clear();
 
       await router.replace({
         name: 'Home',
@@ -583,15 +541,40 @@ const submitArticle = async () => {
       publishError.value = 'Post could not be published. Try again.';
     }
   } finally {
-    phase.value = 'idle';
+    if (publishAttemptVersion === publishAttempt) {
+      phase.value = 'idle';
+    }
   }
 };
 
 watch(
-  () => form.content,
+  content,
   () => {
     void nextTick(resizeContent);
   },
+);
+
+watch(
+  currentUserID,
+  viewerID => {
+    publishAttemptVersion += 1;
+    articleDraft.setViewer(viewerID);
+    if (phase.value !== 'idle') {
+      phase.value = 'idle';
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  coverFile,
+  file => {
+    revokeCoverPreview();
+    if (file) {
+      coverPreviewURL.value = URL.createObjectURL(file);
+    }
+  },
+  { immediate: true },
 );
 
 onMounted(() => {
@@ -599,7 +582,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  ++authorProfileRequestVersion;
+  publishAttemptVersion += 1;
   revokeCoverPreview();
 });
 </script>

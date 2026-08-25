@@ -215,12 +215,12 @@ describe('UserProfileView current identity synchronization', () => {
     wrapper = mountProfile();
     await settle();
 
-    const image = wrapper.get('.profile-avatar img');
-    expect(wrapper.get('.profile-avatar__fallback').text()).toBe('V');
-    expect((image.element as HTMLElement).style.display).toBe('none');
+    const image = wrapper.get('.profile-avatar .user-avatar__image');
+    expect(wrapper.get('.profile-avatar .user-avatar__fallback').text()).toBe('V');
+    expect(image.classes()).not.toContain('user-avatar__image--loaded');
 
     await image.trigger('load');
     await nextTick();
-    expect((image.element as HTMLElement).style.display).not.toBe('none');
+    expect(image.classes()).toContain('user-avatar__image--loaded');
   });
 });

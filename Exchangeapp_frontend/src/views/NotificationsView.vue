@@ -42,10 +42,14 @@
         :class="{ 'notification-card--unread': !item.read }"
       >
         <button class="notification-card__open" type="button" @click="openNotification(item)">
-          <span class="notification-card__avatar" aria-hidden="true">
-            <img v-if="item.actor.avatar_url" :src="item.actor.avatar_url" alt="" />
-            <span v-else>{{ actorInitial(item) }}</span>
-          </span>
+          <UserAvatar
+            class="notification-card__avatar"
+            :avatar-url="item.actor.avatar_url"
+            :display-name="item.actor.display_name"
+            :username="item.actor.username"
+            :size="44"
+            decorative
+          />
           <span class="notification-card__body">
             <span class="notification-card__title">
               <strong>{{ item.actor.display_name || item.actor.username }}</strong>
@@ -82,6 +86,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { useNotificationStore } from '../store/notification';
 import AppIcon from '../components/icons/AppIcon.vue';
+import UserAvatar from '../components/users/UserAvatar.vue';
 import type { Notification } from '../types/Notification';
 
 const authStore = useAuthStore();
@@ -169,8 +174,6 @@ const notificationCopy = (item: Notification) => {
     case 'user_followed': return 'followed you.';
   }
 };
-
-const actorInitial = (item: Notification) => (item.actor.display_name || item.actor.username || '?').slice(0, 1).toUpperCase();
 
 const formatActivityAt = (value: string) => {
   const date = new Date(value);
