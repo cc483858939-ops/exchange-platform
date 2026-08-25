@@ -33,6 +33,7 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '../../store/auth';
 import { useHomeTimelineStore } from '../../store/homeTimeline';
+import { useSearchSessionStore } from '../../store/searchSession';
 import AppIcon from '../icons/AppIcon.vue';
 
 type RouteParam = string | string[] | undefined;
@@ -40,7 +41,7 @@ type NavigationItem = {
   label: string;
   routeName: string;
   icon: 'home' | 'search' | 'exchange' | 'notifications' | 'profile';
-  to: { name: string; params?: { id: string }; query?: { tab: 'following' } };
+  to: { name: string; params?: { id: string }; query?: { tab?: 'following'; q?: string } };
 };
 
 const props = withDefaults(defineProps<{
@@ -51,6 +52,7 @@ const props = withDefaults(defineProps<{
 
 const authStore = useAuthStore();
 const homeTimeline = useHomeTimelineStore();
+const searchSession = useSearchSessionStore();
 const route = useRoute();
 
 const currentProfileID = computed(() => {
@@ -64,6 +66,12 @@ const homeDestination = computed<NavigationItem['to']>(() =>
     : { name: 'Home' },
 );
 
+const searchDestination = computed<NavigationItem['to']>(() => (
+  searchSession.query
+    ? { name: 'UserSearch', query: { q: searchSession.query } }
+    : { name: 'UserSearch' }
+));
+
 const navigationItems = computed<NavigationItem[]>(() => {
   if (!authStore.isAuthenticated) {
     return [
@@ -75,7 +83,7 @@ const navigationItems = computed<NavigationItem[]>(() => {
 
   return [
     { label: 'Home', routeName: 'Home', icon: 'home', to: homeDestination.value },
-    { label: 'Search', routeName: 'UserSearch', icon: 'search', to: { name: 'UserSearch' } },
+    { label: 'Search', routeName: 'UserSearch', icon: 'search', to: searchDestination.value },
     { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', to: { name: 'CurrencyExchange' } },
     { label: 'Notifications', routeName: 'Notifications', icon: 'notifications', to: { name: 'Notifications' } },
     {

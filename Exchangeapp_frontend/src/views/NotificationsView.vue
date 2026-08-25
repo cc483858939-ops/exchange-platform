@@ -76,53 +76,40 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { useNotificationStore } from '../store/notification';
-import {
-  getNotifications,
-  markAllNotificationsRead,
-  markNotificationRead,
-} from '../services/notificationService';
 import AppIcon from '../components/icons/AppIcon.vue';
 import type { Notification } from '../types/Notification';
 
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
 const router = useRouter();
-
-const items = ref<Notification[]>([]);
-const nextCursor = ref<string | null>(null);
-const loading = ref(false);
-const error = ref<unknown>(null);
-const loadingMore = ref(false);
-const loadMoreError = ref<unknown>(null);
-const pendingReadIDs = ref<Set<number>>(new Set());
-const markAllPending = ref(false);
+const {
+  items,
+  nextCursor,
+  loaded,
+  loading,
+  error,
+  loadingMore,
+  loadMoreError,
+  pendingReadIDs,
+  markAllPending,
+} = storeToRefs(notificationStore);
 const sentinel = ref<HTMLElement | null>(null);
 const observerAvailable = ref(typeof IntersectionObserver !== 'undefined');
 let observer: IntersectionObserver | null = null;
-let pageGeneration = 0;
+let mounted = false;
+let notificationEntryVersion = 0;
+let restoredEntryVersion = -1;
 
 const hasUnread = computed(() => items.value.some((item) => !item.read));
 
 const currentViewerID = computed(() => (
   authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null
 ));
-
-const mergeUniqueNotifications = (existing: Notification[], incoming: Notification[]) => {
-  const seen = new Set<number>();
-  const merged: Notification[] = [];
-  for (const item of [...existing, ...incoming]) {
-    if (seen.has(item.id)) {
-      continue;
-    }
-    seen.add(item.id);
-    merged.push(item);
-  }
-  return merged;
-};
 
 const disconnectObserver = () => {
   observer?.disconnect();
@@ -131,7 +118,7 @@ const disconnectObserver = () => {
 
 const setupObserver = async () => {
   disconnectObserver();
-  if (!observerAvailable.value || !nextCursor.value || !sentinel.value) {
+  if (!observerAvailable.value || !nextCursor.value || !sentinel.value || notificationStore.listStale || notificationStore.revalidating) {
     return;
   }
   await nextTick();
@@ -140,102 +127,32 @@ const setupObserver = async () => {
   }
   observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
-      void loadMore();
+      void notificationStore.loadMore();
     }
   }, { rootMargin: '240px 0px' });
   observer.observe(sentinel.value);
 };
 
-const loadInitial = async () => {
-  const capture = notificationStore.captureViewer();
-  const generation = ++pageGeneration;
-  disconnectObserver();
-  items.value = [];
-  nextCursor.value = null;
-  error.value = null;
-  loadMoreError.value = null;
-  pendingReadIDs.value = new Set();
-  markAllPending.value = false;
-  if (!capture || currentViewerID.value === null) {
-    loading.value = false;
-    return;
-  }
-  loading.value = true;
-  try {
-    const response = await getNotifications({ limit: 20 });
-    if (generation !== pageGeneration || !notificationStore.isCurrentViewer(capture)) {
-      return;
-    }
-    items.value = mergeUniqueNotifications([], response.items);
-    nextCursor.value = response.next_cursor;
-    await setupObserver();
-  } catch (loadError) {
-    if (generation === pageGeneration && notificationStore.isCurrentViewer(capture)) {
-      error.value = loadError;
-    }
-  } finally {
-    if (generation === pageGeneration) {
-      loading.value = false;
-    }
-  }
-};
+const loadInitial = () => { void notificationStore.loadInitial(true); };
+const loadMore = () => { void notificationStore.loadMore(); };
 
-const loadMore = async () => {
-  if (!nextCursor.value || loadingMore.value || !notificationStore.captureViewer()) {
+const restoreScrollOnce = async () => {
+  const entryVersion = notificationEntryVersion;
+  if (!mounted || restoredEntryVersion === entryVersion || !loaded.value || loading.value) {
     return;
   }
-  const capture = notificationStore.captureViewer();
-  if (!capture) {
+  await nextTick();
+  if (!mounted || entryVersion !== notificationEntryVersion || restoredEntryVersion === entryVersion) {
     return;
   }
-  const generation = pageGeneration;
-  const cursor = nextCursor.value;
-  loadingMore.value = true;
-  loadMoreError.value = null;
-  try {
-    const response = await getNotifications({ limit: 20, cursor });
-    if (generation !== pageGeneration || !notificationStore.isCurrentViewer(capture)) {
-      return;
-    }
-    items.value = mergeUniqueNotifications(items.value, response.items);
-    nextCursor.value = response.next_cursor;
-    await setupObserver();
-  } catch (loadError) {
-    if (generation === pageGeneration && notificationStore.isCurrentViewer(capture)) {
-      loadMoreError.value = loadError;
-    }
-  } finally {
-    if (generation === pageGeneration) {
-      loadingMore.value = false;
-    }
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+    window.scrollTo({ top: notificationStore.scrollY, behavior: 'auto' });
   }
+  restoredEntryVersion = entryVersion;
 };
 
 const openNotification = (item: Notification) => {
-  const capture = notificationStore.captureViewer();
-  const index = items.value.findIndex((candidate) => candidate.id === item.id);
-  const wasUnread = index >= 0 && !items.value[index].read;
-  if (wasUnread && capture) {
-    items.value[index].read = true;
-    notificationStore.decrementUnread();
-    pendingReadIDs.value = new Set(pendingReadIDs.value).add(item.id);
-    void markNotificationRead(item.id).then(() => {
-      if (notificationStore.isCurrentViewer(capture)) {
-        void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
-      }
-    }).catch(() => {
-      if (!notificationStore.isCurrentViewer(capture) || index < 0) {
-        return;
-      }
-      items.value[index].read = false;
-      notificationStore.incrementUnread();
-      void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
-    }).finally(() => {
-      const next = new Set(pendingReadIDs.value);
-      next.delete(item.id);
-      pendingReadIDs.value = next;
-    });
-  }
+  void notificationStore.markNotificationRead(item.id).catch(() => undefined);
   if (item.type === 'user_followed') {
     void router.push({ name: 'UserProfile', params: { id: String(item.actor.id) } });
   } else if (item.article_id !== null) {
@@ -243,37 +160,7 @@ const openNotification = (item: Notification) => {
   }
 };
 
-const markAll = () => {
-  if (markAllPending.value || !hasUnread.value) {
-    return;
-  }
-  const capture = notificationStore.captureViewer();
-  if (!capture) {
-    return;
-  }
-  const previousReadState = items.value.map((item) => ({ id: item.id, read: item.read }));
-  const previousCount = notificationStore.unreadCount;
-  items.value.forEach((item) => { item.read = true; });
-  notificationStore.setUnreadCount(0);
-  markAllPending.value = true;
-  void markAllNotificationsRead().then(() => {
-    if (notificationStore.isCurrentViewer(capture)) {
-      void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
-    }
-  }).catch(() => {
-    if (!notificationStore.isCurrentViewer(capture)) {
-      return;
-    }
-    const stateByID = new Map(previousReadState.map((state) => [state.id, state.read]));
-    items.value.forEach((item) => { item.read = stateByID.get(item.id) ?? item.read; });
-    notificationStore.setUnreadCount(previousCount);
-    void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
-  }).finally(() => {
-    if (notificationStore.isCurrentViewer(capture)) {
-      markAllPending.value = false;
-    }
-  });
-};
+const markAll = () => { void notificationStore.markAllRead().catch(() => undefined); };
 
 const notificationCopy = (item: Notification) => {
   switch (item.type) {
@@ -293,14 +180,30 @@ const formatActivityAt = (value: string) => {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 };
 
-watch(currentViewerID, (nextID, previousID) => {
-  if (nextID !== previousID) {
-    notificationStore.setViewer(nextID);
-    void loadInitial();
-  }
+watch(currentViewerID, () => {
+  notificationEntryVersion += 1;
+  void notificationStore.loadInitial();
 }, { immediate: true });
+watch([loaded, loading, error], () => { void restoreScrollOnce(); }, { flush: 'post' });
+watch([
+  nextCursor,
+  loadingMore,
+  loadMoreError,
+  () => items.value.length,
+  () => notificationStore.listStale,
+  () => notificationStore.revalidating,
+], () => { void setupObserver(); }, { flush: 'post' });
 
-onBeforeUnmount(disconnectObserver);
+onMounted(() => {
+  mounted = true;
+  void restoreScrollOnce();
+});
+
+onBeforeUnmount(() => {
+  mounted = false;
+  if (typeof window !== 'undefined') notificationStore.saveScroll(window.scrollY);
+  disconnectObserver();
+});
 </script>
 
 <style scoped>

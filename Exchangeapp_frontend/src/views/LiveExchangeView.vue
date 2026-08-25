@@ -19,7 +19,8 @@
       </div>
 
       <el-alert v-if="market?.freshness === 'stale'" class="page-alert" title="上游行情暂时不可用，当前报价使用最近缓存。" type="warning" :closable="false" show-icon />
-      <div v-if="loading" class="skeleton"><el-skeleton animated :rows="5" /></div>
+      <el-alert v-if="refreshError" class="page-alert" :title="refreshError" type="warning" :closable="false" show-icon />
+      <div v-if="!loaded && !loadError" class="skeleton"><el-skeleton animated :rows="5" /></div>
       <el-alert v-else-if="loadError" class="page-alert" :title="loadError" type="error" :closable="false" show-icon>
         <template #default><el-button type="primary" plain @click="loadCurrencies">重新加载</el-button></template>
       </el-alert>
@@ -42,7 +43,7 @@
           <el-form-item label="金额"><el-input v-model="form.amount" inputmode="decimal" placeholder="例如 100" @keyup.enter="requestQuote" /></el-form-item>
           <div class="form-actions">
             <el-button type="primary" :loading="quoting" @click="requestQuote">获取报价</el-button>
-            <el-button :loading="loading" @click="loadCurrencies">刷新行情</el-button>
+            <el-button :loading="refreshing" @click="loadCurrencies">刷新行情</el-button>
           </div>
         </el-form>
 
@@ -65,7 +66,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import {
   ElAlert,
   ElButton,
@@ -78,69 +80,64 @@ import {
   ElSkeleton,
 } from 'element-plus';
 import 'element-plus/dist/index.css';
-import { isAxiosError } from 'axios';
-import axios from '../axios';
+import { useExchangeSessionStore } from '../store/exchangeSession';
 
-interface MarketMeta { asOf: string; source: string; freshness: 'fresh' | 'stale'; }
-interface CurrencyResponse extends MarketMeta { currencies: string[]; }
-interface QuoteResponse extends MarketMeta { from: string; to: string; amount: string; rate: string; convertedAmount: string; }
+const exchangeSession = useExchangeSessionStore();
+const {
+  currencies,
+  market,
+  quote,
+  form,
+  loaded,
+  loadError,
+  refreshing,
+  refreshError,
+  quoting,
+  quoteError,
+} = storeToRefs(exchangeSession);
+let mounted = false;
+let exchangeEntryVersion = 0;
+let restoredEntryVersion = -1;
 
-const form = reactive({ fromCurrency: 'CNY', toCurrency: 'USD', amount: '100' });
-const currencies = ref<string[]>([]);
-const market = ref<MarketMeta | null>(null);
-const quote = ref<QuoteResponse | null>(null);
-const loading = ref(false);
-const quoting = ref(false);
-const loadError = ref('');
-
-const readError = (error: unknown, fallback: string) => {
-  if (isAxiosError(error)) {
-    const message = error.response?.data?.error;
-    if (typeof message === 'string' && message.trim()) return message;
+const restoreScrollOnce = async () => {
+  const entryVersion = exchangeEntryVersion;
+  if (!mounted || restoredEntryVersion === entryVersion || !loaded.value) return;
+  await Promise.resolve();
+  if (!mounted || entryVersion !== exchangeEntryVersion || restoredEntryVersion === entryVersion) return;
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+    window.scrollTo({ top: exchangeSession.scrollY, behavior: 'auto' });
   }
-  return error instanceof Error && error.message ? error.message : fallback;
+  restoredEntryVersion = entryVersion;
 };
 
-const loadCurrencies = async () => {
-  loading.value = true;
-  loadError.value = '';
-  try {
-    const { data } = await axios.get<CurrencyResponse>('/exchange/currencies');
-    if (!data.currencies?.length) throw new Error('当前行情没有可用货币');
-    currencies.value = data.currencies;
-    market.value = { asOf: data.asOf, source: data.source, freshness: data.freshness };
-    if (!currencies.value.includes(form.fromCurrency)) form.fromCurrency = currencies.value[0];
-    if (!currencies.value.includes(form.toCurrency)) form.toCurrency = currencies.value.find(code => code !== form.fromCurrency) ?? currencies.value[0];
-  } catch (error) {
-    currencies.value = [];
-    market.value = null;
-    quote.value = null;
-    loadError.value = readError(error, '汇率数据加载失败，请稍后重试。');
-  } finally {
-    loading.value = false;
-  }
-};
+const loadCurrencies = () => { void exchangeSession.loadCurrencies({ force: true }); };
 
 const requestQuote = async () => {
-  if (!form.fromCurrency || !form.toCurrency) return ElMessage.error('请选择要兑换的两种货币');
-  if (!/^\d+(\.\d+)?$/.test(form.amount) || Number(form.amount) <= 0) return ElMessage.error('请输入大于零的金额');
-  quoting.value = true;
-  try {
-    const { data } = await axios.get<QuoteResponse>('/exchange/quote', { params: { from: form.fromCurrency, to: form.toCurrency, amount: form.amount } });
-    quote.value = data;
-    market.value = { asOf: data.asOf, source: data.source, freshness: data.freshness };
-    if (data.freshness === 'stale') ElMessage.warning('当前结果使用最近缓存行情');
-  } catch (error) {
-    quote.value = null;
-    ElMessage.error(readError(error, '暂时无法获取报价，请稍后重试。'));
-  } finally {
-    quoting.value = false;
+  if (!form.value.fromCurrency || !form.value.toCurrency) {
+    ElMessage.error('请选择要兑换的两种货币');
+    return;
+  }
+  if (!/^\d+(\.\d+)?$/.test(form.value.amount) || Number(form.value.amount) <= 0) {
+    ElMessage.error('请输入大于零的金额');
+    return;
+  }
+  const result = await exchangeSession.requestQuote();
+  if (!mounted || !result.applied) return;
+  if (!result.success) {
+    ElMessage.error(quoteError.value || '暂时无法获取报价，请稍后重试。');
+  } else if (result.data?.freshness === 'stale') {
+    ElMessage.warning('当前结果使用最近缓存行情');
   }
 };
 
-const swapCurrencies = () => {
-  [form.fromCurrency, form.toCurrency] = [form.toCurrency, form.fromCurrency];
-  if (quote.value) void requestQuote();
+const swapCurrencies = async () => {
+  const result = await exchangeSession.swapCurrencies();
+  if (!mounted || !result.applied) return;
+  if (!result.success) {
+    ElMessage.error(quoteError.value || '暂时无法获取报价，请稍后重试。');
+  } else if (result.data?.freshness === 'stale') {
+    ElMessage.warning('当前结果使用最近缓存行情');
+  }
 };
 
 const displayNumber = (value: string) => {
@@ -149,7 +146,19 @@ const displayNumber = (value: string) => {
   return fraction ? `${grouped}.${fraction}` : grouped;
 };
 
-onMounted(loadCurrencies);
+watch(loaded, () => { void restoreScrollOnce(); }, { flush: 'post' });
+
+onMounted(() => {
+  mounted = true;
+  void exchangeSession.loadCurrencies();
+  void restoreScrollOnce();
+});
+
+onBeforeUnmount(() => {
+  mounted = false;
+  exchangeEntryVersion += 1;
+  if (typeof window !== 'undefined') exchangeSession.saveScroll(window.scrollY);
+});
 </script>
 
 <style scoped>

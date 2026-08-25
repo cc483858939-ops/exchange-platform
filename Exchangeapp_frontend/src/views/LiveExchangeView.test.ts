@@ -2,6 +2,7 @@
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
 import LiveExchangeView from './LiveExchangeView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -62,7 +63,9 @@ describe('LiveExchangeView', () => {
   let wrapper: VueWrapper | null = null;
 
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
     mocks.get
       .mockResolvedValueOnce({ data: currencies })
       .mockResolvedValueOnce({ data: quote });
@@ -71,6 +74,7 @@ describe('LiveExchangeView', () => {
   afterEach(() => {
     wrapper?.unmount();
     wrapper = null;
+    vi.restoreAllMocks();
   });
 
   it('loads currencies and requests a quote through the existing exchange flow', async () => {
@@ -90,5 +94,22 @@ describe('LiveExchangeView', () => {
     });
     expect(mocks.get).toHaveBeenCalledTimes(2);
     expect(wrapper.text()).toContain('14.00 USD');
+  });
+
+  it('reuses the cached currencies and quote when the route is re-entered', async () => {
+    wrapper = mountExchange();
+    await flushPromises();
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    const firstWrapper = wrapper;
+    firstWrapper.unmount();
+    vi.mocked(window.scrollTo).mockClear();
+
+    wrapper = mountExchange();
+    await flushPromises();
+
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain('14.00 USD');
+    expect(window.scrollTo).toHaveBeenCalledTimes(1);
   });
 });

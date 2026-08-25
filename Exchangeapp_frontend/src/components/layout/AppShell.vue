@@ -17,10 +17,11 @@
 </template>
 
 <script setup lang="ts">
-import { watch } from 'vue';
+import { onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '../../store/auth';
 import { useNotificationStore } from '../../store/notification';
+import { useSearchSessionStore } from '../../store/searchSession';
 import LeftSidebar from './LeftSidebar.vue';
 import MobileBottomNav from './MobileBottomNav.vue';
 import RightRail from './RightRail.vue';
@@ -28,26 +29,54 @@ import RightRail from './RightRail.vue';
 const authStore = useAuthStore();
 const route = useRoute();
 const notificationStore = useNotificationStore();
+const searchSession = useSearchSessionStore();
 
-const syncNotificationViewer = () => {
-  const nextViewerID = authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null;
-  notificationStore.setViewer(nextViewerID);
+const currentViewerID = () => (
+  authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null
+);
+
+const refreshUnreadAndMaybeRevalidate = () => {
   const capture = notificationStore.captureViewer();
-  if (capture) {
-    void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
+  if (!capture) {
+    return;
   }
+  void notificationStore.refreshUnreadCount(capture)
+    .then(() => {
+      if (route.name === 'Notifications' && notificationStore.listStale) {
+        void notificationStore.revalidateNotifications();
+      }
+    })
+    .catch(() => undefined);
+};
+
+const syncSessionViewers = () => {
+  const nextViewerID = currentViewerID();
+  notificationStore.setViewer(nextViewerID);
+  searchSession.setViewer(nextViewerID);
+  refreshUnreadAndMaybeRevalidate();
 };
 
 // AppShell is the sole unread coordinator. Identity changes invalidate old
 // requests; access-token rotation for the same identity does not refetch.
-watch(() => authStore.currentIdentity?.id, syncNotificationViewer, { immediate: true });
+watch(() => currentViewerID(), syncSessionViewers, { immediate: true });
 watch(() => route.name, (name) => {
   if (name === 'Notifications' && authStore.isAuthenticated) {
-    const capture = notificationStore.captureViewer();
-    if (capture) {
-      void notificationStore.refreshUnreadCount(capture).catch(() => undefined);
-    }
+    refreshUnreadAndMaybeRevalidate();
   }
+});
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible' && authStore.isAuthenticated) {
+    refreshUnreadAndMaybeRevalidate();
+  }
+};
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
 });
 </script>
 

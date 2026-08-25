@@ -28,125 +28,64 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
-import { followUser, searchUsers, unfollowUser, type UserConnectionItem, type UserConnectionPage } from '../services/userService';
 import { useAuthStore } from '../store/auth';
-import { syncExternalFollowState } from '../store/sessionSync';
+import { normalizeSearchQuery, useSearchSessionStore } from '../store/searchSession';
 
-const pageSize = 20;
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const inputValue = ref('');
-const items = ref<UserConnectionItem[]>([]);
-const initialLoading = ref(false);
-const initialError = ref('');
-const loadingMore = ref(false);
-const loadMoreError = ref('');
-const hasMore = ref(false);
-const nextOffset = ref(0);
+const searchSession = useSearchSessionStore();
+const {
+  viewerID,
+  query,
+  inputValue,
+  items,
+  loaded,
+  initialLoading,
+  initialError,
+  nextOffset,
+  hasMore,
+  loadingMore,
+  loadMoreError,
+  pendingMutationIDs,
+  mutationErrors,
+} = storeToRefs(searchSession);
 const sentinelRef = ref<HTMLElement | null>(null);
-const pendingMutationIDs = ref(new Set<number>());
-const mutationErrors = ref(new Map<number, string>());
-const loadedUserIDs = new Set<number>();
-let pageGeneration = 0;
-let paginationRequestVersion = 0;
-let mutationSequence = 0;
-const mutationVersions = new Map<number, number>();
 let observer: IntersectionObserver | null = null;
+let mounted = false;
+let searchEntryVersion = 0;
+let restoredEntryVersion = -1;
 
-const normalize = (value: string) => {
-  let normalized = value.trim();
-  if (normalized.startsWith('@')) normalized = normalized.slice(1).trim();
-  return normalized;
-};
-const query = computed(() => normalize(typeof route.query.q === 'string' ? route.query.q : ''));
-const viewerID = computed(() => {
+const routeQuery = computed(() => normalizeSearchQuery(typeof route.query.q === 'string' ? route.query.q : ''));
+const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
 });
-const viewerKey = computed(() => (
-  viewerID.value === null ? 'anonymous' : `user:${viewerID.value}`
-));
 const disconnectObserver = () => { observer?.disconnect(); observer = null; };
-const invalidate = () => {
-  pageGeneration += 1;
-  paginationRequestVersion += 1;
-  mutationSequence += 1;
-  disconnectObserver();
-  items.value = [];
-  initialLoading.value = false;
-  initialError.value = '';
-  loadingMore.value = false;
-  loadMoreError.value = '';
-  hasMore.value = false;
-  nextOffset.value = 0;
-  loadedUserIDs.clear();
-  pendingMutationIDs.value = new Set();
-  mutationErrors.value = new Map();
-  mutationVersions.clear();
-};
-const appendPage = (page: UserConnectionPage) => {
-  nextOffset.value += page.items.length;
-  const additions = page.items.filter((item) => {
-    if (loadedUserIDs.has(item.user.id)) return false;
-    loadedUserIDs.add(item.user.id);
-    return true;
-  });
-  items.value = [...items.value, ...additions];
-  hasMore.value = page.has_more;
-};
-const current = (generation: number, version: number, capturedQuery: string, capturedViewer: string) => generation === pageGeneration && version === paginationRequestVersion && query.value === capturedQuery && viewerKey.value === capturedViewer && authStore.isAuthenticated;
 const updateObserver = async () => {
   await nextTick();
   disconnectObserver();
   if (!query.value || !hasMore.value || loadingMore.value || loadMoreError.value || !sentinelRef.value || !('IntersectionObserver' in window)) return;
-  observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) void loadMore(); }, { rootMargin: '240px 0px' });
+  observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) void searchSession.loadMore(); }, { rootMargin: '240px 0px' });
   observer.observe(sentinelRef.value);
 };
-const loadInitial = async () => {
-  if (!authStore.isAuthenticated || viewerID.value === null || !query.value) return;
-  const generation = pageGeneration;
-  const version = ++paginationRequestVersion;
-  const capturedQuery = query.value;
-  const capturedViewer = viewerKey.value;
-  initialLoading.value = true;
-  initialError.value = '';
-  try {
-    const page = await searchUsers({ q: capturedQuery, limit: pageSize, offset: 0 });
-    if (!current(generation, version, capturedQuery, capturedViewer)) return;
-    appendPage(page);
-  } catch {
-    if (current(generation, version, capturedQuery, capturedViewer)) initialError.value = 'Could not search people.';
-  } finally {
-    if (current(generation, version, capturedQuery, capturedViewer)) { initialLoading.value = false; void updateObserver(); }
+const restoreScrollOnce = async () => {
+  const entryVersion = searchEntryVersion;
+  if (!mounted || restoredEntryVersion === entryVersion || !query.value || !loaded.value || initialLoading.value) return;
+  await nextTick();
+  if (!mounted || entryVersion !== searchEntryVersion || restoredEntryVersion === entryVersion) return;
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+    window.scrollTo({ top: searchSession.scrollY, behavior: 'auto' });
   }
-};
-const reload = () => { invalidate(); void loadInitial(); };
-const loadMore = async () => {
-  if (!authStore.isAuthenticated || viewerID.value === null || !query.value || !hasMore.value || loadingMore.value || initialLoading.value) return;
-  const generation = pageGeneration;
-  const version = ++paginationRequestVersion;
-  const offset = nextOffset.value;
-  const capturedQuery = query.value;
-  const capturedViewer = viewerKey.value;
-  loadingMore.value = true;
-  loadMoreError.value = '';
-  try {
-    const page = await searchUsers({ q: capturedQuery, limit: pageSize, offset });
-    if (!current(generation, version, capturedQuery, capturedViewer) || nextOffset.value !== offset) return;
-    appendPage(page);
-  } catch {
-    if (current(generation, version, capturedQuery, capturedViewer)) loadMoreError.value = 'Could not load more users.';
-  } finally {
-    if (current(generation, version, capturedQuery, capturedViewer)) { loadingMore.value = false; void updateObserver(); }
-  }
+  restoredEntryVersion = entryVersion;
 };
 const submit = async () => {
-  const submitted = normalize(inputValue.value);
+  const submitted = normalizeSearchQuery(inputValue.value);
   if (!submitted) { await clearSearch(); return; }
   inputValue.value = submitted;
   if (submitted === query.value) { reload(); return; }
@@ -158,39 +97,30 @@ const clearSearch = async () => {
   delete nextQuery.q;
   await router.push({ name: 'UserSearch', query: nextQuery });
 };
-const toggleFollow = async (userID: number) => {
-  const index = items.value.findIndex((item) => item.user.id === userID);
-  const capturedViewerID = viewerID.value;
-  if (index < 0 || capturedViewerID === null || userID === capturedViewerID || pendingMutationIDs.value.has(userID)) return;
-  const previous = items.value[index].following;
-  const generation = pageGeneration;
-  const capturedQuery = query.value;
-  const capturedViewer = viewerKey.value;
-  const version = ++mutationSequence;
-  mutationVersions.set(userID, version);
-  pendingMutationIDs.value = new Set(pendingMutationIDs.value).add(userID);
-  mutationErrors.value = new Map(mutationErrors.value);
-  mutationErrors.value.delete(userID);
-  items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: !previous } : item);
-  const mutationCurrent = () => generation === pageGeneration && query.value === capturedQuery && viewerKey.value === capturedViewer && mutationVersions.get(userID) === version && pendingMutationIDs.value.has(userID);
-  try {
-    const response = previous ? await unfollowUser(userID) : await followUser(userID);
-    if (!mutationCurrent()) return;
-    if (response.user_id !== userID) throw new Error('invalid follow response');
-    items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: response.following } : item);
-    const nextPending = new Set(pendingMutationIDs.value); nextPending.delete(userID); pendingMutationIDs.value = nextPending;
-    const nextErrors = new Map(mutationErrors.value); nextErrors.delete(userID); mutationErrors.value = nextErrors;
-    syncExternalFollowState(response);
-  } catch {
-    if (!mutationCurrent()) return;
-    items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: previous } : item);
-    const nextPending = new Set(pendingMutationIDs.value); nextPending.delete(userID); pendingMutationIDs.value = nextPending;
-    mutationErrors.value = new Map(mutationErrors.value).set(userID, 'Could not update follow status.');
-  }
-};
-watch([query, viewerKey], () => { inputValue.value = query.value; invalidate(); void loadInitial(); }, { immediate: true });
+const reload = () => { searchSession.reload(); };
+const loadMore = () => { void searchSession.loadMore(); };
+const toggleFollow = (userID: number) => { void searchSession.toggleFollow(userID); };
+
+watch(currentViewerID, (nextID) => {
+  searchEntryVersion += 1;
+  searchSession.setViewer(nextID);
+}, { immediate: true });
+watch(routeQuery, (nextQuery) => {
+  searchEntryVersion += 1;
+  searchSession.activateQuery(nextQuery);
+  void restoreScrollOnce();
+}, { immediate: true });
+watch([loaded, initialLoading, initialError], () => { void restoreScrollOnce(); }, { flush: 'post' });
 watch([hasMore, loadingMore, loadMoreError, () => items.value.length], () => { void updateObserver(); }, { flush: 'post' });
-onBeforeUnmount(invalidate);
+onMounted(() => {
+  mounted = true;
+  void restoreScrollOnce();
+});
+onBeforeUnmount(() => {
+  mounted = false;
+  if (typeof window !== 'undefined') searchSession.saveScroll(window.scrollY);
+  disconnectObserver();
+});
 </script>
 
 <style scoped>

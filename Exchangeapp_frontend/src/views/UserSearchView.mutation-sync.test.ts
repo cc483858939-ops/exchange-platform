@@ -3,6 +3,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
 import UserSearchView from './UserSearchView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -51,7 +52,7 @@ const mountSearch = () => mount(UserSearchView, {
       AppIcon: { template: '<span />' },
       RouterLink: { template: '<a><slot /></a>' },
       UserRow: {
-        props: ['item', 'pending', 'error'],
+        props: ['item', 'pending', 'error', 'isSelf'],
         emits: ['toggle-follow'],
         template: '<button class="test-follow" :data-following="item.following" @click="$emit(\'toggle-follow\', item.user.id)">{{ item.user.username }}</button>',
       },
@@ -61,7 +62,9 @@ const mountSearch = () => mount(UserSearchView, {
 
 describe('UserSearchView mutation synchronization', () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
     mocks.route = reactive({ query: { q: 'alice' } });
     mocks.authStore = reactive({
       isAuthenticated: true,
@@ -88,6 +91,7 @@ describe('UserSearchView mutation synchronization', () => {
     await wrapper.find('.test-follow').trigger('click');
     await flushPromises();
     expect(mocks.externalFollow).toHaveBeenCalledWith(followResponse(8, false));
+    wrapper.unmount();
   });
 
   it('rolls back a failed follow without external synchronization', async () => {
@@ -100,6 +104,7 @@ describe('UserSearchView mutation synchronization', () => {
 
     expect(wrapper.find('.test-follow').attributes('data-following')).toBe('false');
     expect(mocks.externalFollow).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 
   it('keeps the same viewer request valid across an access-token refresh', async () => {
@@ -118,5 +123,6 @@ describe('UserSearchView mutation synchronization', () => {
     resolvePage({ items: [{ user: user(8), following: false }], has_more: false });
     await flushPromises();
     expect(wrapper.find('.test-follow').exists()).toBe(true);
+    wrapper.unmount();
   });
 });

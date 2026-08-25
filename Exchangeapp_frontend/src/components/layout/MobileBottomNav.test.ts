@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   authStore: null as AuthState | null,
   route: null as RouteState | null,
   homeTimeline: { activeTab: 'for-you' as 'for-you' | 'following' },
+  searchSession: { query: '' },
 }));
 
 vi.mock('../../store/auth', () => ({
@@ -29,13 +30,17 @@ vi.mock('../../store/homeTimeline', () => ({
   useHomeTimelineStore: () => mocks.homeTimeline,
 }));
 
+vi.mock('../../store/searchSession', () => ({
+  useSearchSessionStore: () => mocks.searchSession,
+}));
+
 vi.mock('vue-router', () => ({
   useRoute: () => mocks.route,
 }));
 
 const routerLinkStub = {
   props: { to: { type: [String, Object], required: true } },
-  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" v-bind="$attrs"><slot /></a>',
+  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" :data-route-query-q="to && to.query && to.query.q" v-bind="$attrs"><slot /></a>',
 };
 
 const mountNav = (notificationBadge: string | null = null) => mount(MobileBottomNav, {
@@ -99,6 +104,15 @@ describe('MobileBottomNav', () => {
 
     expect(home.attributes('data-route-name')).toBe('Home');
     expect(home.attributes('data-route-query-tab')).toBe('following');
+  });
+
+  it('preserves the active search query in the Search destination', () => {
+    mocks.searchSession.query = 'alice';
+    const wrapper = mountNav();
+    const search = wrapper.findAll('.mobile-bottom-nav__item')[1];
+
+    expect(search.attributes('data-route-name')).toBe('UserSearch');
+    expect(search.attributes('data-route-query-q')).toBe('alice');
   });
 
   it('renders a store-provided badge once and omits it when null', async () => {
