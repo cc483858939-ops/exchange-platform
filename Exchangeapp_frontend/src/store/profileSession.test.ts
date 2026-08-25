@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedPost } from '../types/Feed';
+import { registerHomeTimelineSync } from './sessionSync';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as {
@@ -67,6 +68,13 @@ const profile = (id: number) => ({
   ...author(id),
   bio: '',
   created_at: '2026-08-24T00:00:00.000Z',
+});
+
+const followState = (id: number, following: boolean) => ({
+  user_id: id,
+  following,
+  follower_count: following ? 1 : 0,
+  following_count: 0,
 });
 
 const article = (id: number, authorID = 7) => ({
@@ -247,6 +255,114 @@ describe('profile session store', () => {
     expect(session.articles.map((post) => post.id)).toEqual([43]);
     expect(session.hasMore).toBe(false);
     expect(session.nextCursor).toBeNull();
+  });
+
+  it('external like state invalidates an older local Profile like mutation', async () => {
+    let resolveLike!: (value: { likes: number; liked: boolean }) => void;
+    const pendingLike = new Promise<{ likes: number; liked: boolean }>((resolve) => {
+      resolveLike = resolve;
+    });
+    mocks.likeArticle.mockReturnValue(pendingLike);
+    const store = useProfileSessionStore();
+    const session = store.ensureSession(7)!;
+    session.articles = [{
+      id: 4,
+      author: author(7),
+      title: 'Post 4',
+      excerpt: 'Post 4',
+      coverImageUrl: '',
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 2,
+      commentCount: 0,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready',
+    }];
+
+    const localMutation = store.toggleLike(4, 7);
+    expect(store.likePendingArticleIds.has(4)).toBe(true);
+
+    store.applyExternalLikeStateLocal({
+      articleId: 4,
+      likes: 8,
+      liked: true,
+      status: 'ready',
+    });
+    expect(store.likePendingArticleIds.has(4)).toBe(false);
+    expect(session.articles[0].likeCount).toBe(8);
+    expect(session.articles[0].liked).toBe(true);
+
+    resolveLike({ likes: 3, liked: true });
+    await localMutation;
+    expect(session.articles[0].likeCount).toBe(8);
+  });
+
+  it('external follow state invalidates an older Profile follow request', async () => {
+    let resolveFollow!: (value: ReturnType<typeof followState>) => void;
+    const pendingFollow = new Promise<ReturnType<typeof followState>>((resolve) => {
+      resolveFollow = resolve;
+    });
+    mocks.followUser.mockReturnValue(pendingFollow);
+    const store = useProfileSessionStore();
+    const session = store.ensureSession(8)!;
+    session.followState = followState(8, false);
+    session.followLoaded = true;
+
+    const localMutation = store.toggleFollow(8);
+    expect(session.followPending).toBe(true);
+    store.applyExternalFollowStateLocal(followState(8, true));
+    expect(session.followPending).toBe(false);
+    expect(session.followLoading).toBe(false);
+    expect(session.followState?.following).toBe(true);
+
+    resolveFollow(followState(8, true));
+    await localMutation;
+    expect(session.followState?.following).toBe(true);
+  });
+
+  it('sends a successful own Profile follow to Home reconciliation', async () => {
+    const reconcileFollowStateLocal = vi.fn();
+    registerHomeTimelineSync({
+      applyLikeStateUpdateLocal: vi.fn().mockReturnValue(false),
+      applyExternalLikeStateLocal: vi.fn().mockReturnValue(false),
+      applyCommentCountUpdateLocal: vi.fn().mockReturnValue(false),
+      reconcileFollowStateLocal,
+      removeArticleLocal: vi.fn(),
+      replaceAuthorIdentityLocal: vi.fn(),
+    });
+    mocks.followUser.mockResolvedValue(followState(8, true));
+    const store = useProfileSessionStore();
+    const session = store.ensureSession(8)!;
+    session.followState = followState(8, false);
+    session.followLoaded = true;
+
+    expect(await store.toggleFollow(8)).toBe(true);
+    expect(reconcileFollowStateLocal).toHaveBeenCalledWith(followState(8, true));
+  });
+
+  it('updates comment counts in every cached matching Profile article', () => {
+    const store = useProfileSessionStore();
+    const first = store.ensureSession(7)!;
+    const second = store.ensureSession(8)!;
+    const post = {
+      id: 4,
+      author: author(7),
+      title: 'Post 4',
+      excerpt: 'Post 4',
+      coverImageUrl: '',
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 0,
+      commentCount: 1,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready' as const,
+    };
+    first.articles = [{ ...post }];
+    second.articles = [{ ...post }];
+
+    expect(store.applyCommentCountUpdateEverywhereLocal({ articleId: 4, commentCount: 6 })).toBe(true);
+    expect(first.articles[0].commentCount).toBe(6);
+    expect(second.articles[0].commentCount).toBe(6);
   });
 
   it('synchronizes likes, deletes, identity edits, and newly published own posts across profile sessions', () => {

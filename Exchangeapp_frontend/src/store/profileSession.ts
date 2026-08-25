@@ -28,6 +28,8 @@ import {
   syncProfileAuthorIdentity,
   syncProfileLikeState,
 } from './sessionSync';
+import type { ArticleCommentCountUpdate } from './sessionSync';
+import { syncProfileFollowState } from './sessionSync';
 
 export type ProfileSessionEntry = {
   user: PublicUser | null;
@@ -77,6 +79,11 @@ const normalizeID = (value: unknown): number | null => {
 
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
+
+const normalizeCommentCount = (value: unknown) => {
+  const count = Number(value);
+  return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : null;
+};
 
 export const useProfileSessionStore = defineStore('profileSession', () => {
   const authStore = useAuthStore();
@@ -236,6 +243,43 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       applied = applyFeedLikeStateUpdate(post, update) || applied;
     });
     return applied;
+  };
+
+  const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
+    likeMutationVersions.set(
+      update.articleId,
+      (likeMutationVersions.get(update.articleId) ?? 0) + 1,
+    );
+    likePendingArticleIds.delete(update.articleId);
+    return applyLikeStateUpdateLocal(update);
+  };
+
+  const applyCommentCountUpdateEverywhereLocal = (update: ArticleCommentCountUpdate) => {
+    const commentCount = normalizeCommentCount(update.commentCount);
+    if (commentCount === null) return false;
+    let applied = false;
+    sessions.forEach((session) => {
+      session.articles.forEach((post) => {
+        if (post.id !== update.articleId) return;
+        post.commentCount = commentCount;
+        applied = true;
+      });
+    });
+    return applied;
+  };
+
+  const applyExternalFollowStateLocal = (state: UserFollowState) => {
+    const session = sessions.get(state.user_id);
+    if (!session) return false;
+    session.followRequestVersion += 1;
+    session.followMutationVersion += 1;
+    session.followPending = false;
+    session.followLoading = false;
+    session.followActionError = '';
+    session.followError = '';
+    session.followState = state;
+    session.followLoaded = true;
+    return true;
   };
 
   const applyLikeStateUpdateEverywhere = (update: FeedLikeStateUpdate) => {
@@ -531,6 +575,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       session.followState = response;
       session.followLoaded = true;
       session.followPending = false;
+      syncProfileFollowState(response);
       return true;
     } catch {
       if (!isCurrent()) return false;
@@ -812,6 +857,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
   registerProfileSessionSync({
     applyLikeStateUpdateLocal,
+    applyExternalLikeStateLocal,
+    applyCommentCountUpdateEverywhereLocal,
+    applyExternalFollowStateLocal,
     removeArticleEverywhereLocal,
     replaceAuthorIdentityEverywhereLocal,
   });
@@ -847,6 +895,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     deletePost,
     applyLikeStateUpdateEverywhere,
     applyLikeStateUpdateLocal,
+    applyExternalLikeStateLocal,
+    applyCommentCountUpdateEverywhereLocal,
+    applyExternalFollowStateLocal,
     removeArticleEverywhere,
     removeArticleEverywhereLocal,
     replaceAuthorIdentityEverywhere,

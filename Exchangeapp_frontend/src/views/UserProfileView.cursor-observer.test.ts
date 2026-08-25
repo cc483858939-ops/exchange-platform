@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { useProfileSessionStore } from '../store/profileSession';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -332,5 +333,82 @@ describe('UserProfileView observer and cursor concurrency', () => {
     expect(mounted.findAll('.post-card__id')).toHaveLength(1);
     expect(mounted.find('.profile-feed-sentinel').exists()).toBe(false);
     expect(mounted.text()).not.toContain('Loading more posts...');
+  });
+
+  it('restores cached scroll once and never rewinds it during pagination changes', async () => {
+    const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0',
+    });
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const profileStore = useProfileSessionStore();
+    const session = profileStore.ensureSession(7)!;
+    session.user = profile(7);
+    session.profileLoaded = true;
+    session.articlesLoaded = true;
+    session.articles = [article(1, 7) as any];
+    session.loadedArticleIds.add(1);
+    session.hasMore = true;
+    session.nextCursor = 'cursor-1';
+    session.scrollY = 500;
+
+    const mounted = mountProfile();
+    mountedViews.push(mounted);
+    await settle();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'auto' });
+
+    session.articlesLoadingMore = true;
+    session.articles = [...session.articles, article(2, 7) as any];
+    session.articlesLoadingMore = false;
+    await settle();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    if (userAgentDescriptor) {
+      Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
+    }
+    scrollTo.mockRestore();
+  });
+
+  it('saves the previous profile and restores the next profile once on route switch', async () => {
+    const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0',
+    });
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      writable: true,
+      value: 400,
+    });
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const profileStore = useProfileSessionStore();
+    const first = profileStore.ensureSession(7)!;
+    first.user = profile(7);
+    first.profileLoaded = true;
+    first.articlesLoaded = true;
+    first.scrollY = 400;
+    const second = profileStore.ensureSession(8)!;
+    second.user = profile(8);
+    second.profileLoaded = true;
+    second.articlesLoaded = true;
+    second.scrollY = 900;
+
+    const mounted = mountProfile();
+    mountedViews.push(mounted);
+    await settle();
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 400, behavior: 'auto' });
+
+    mocks.setRouteID('8');
+    await settle();
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 900, behavior: 'auto' });
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(first.scrollY).toBe(400);
+
+    if (userAgentDescriptor) {
+      Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
+    }
+    scrollTo.mockRestore();
   });
 });

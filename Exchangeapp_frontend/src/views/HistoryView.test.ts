@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   getLikedHistory: vi.fn(),
   getArticleLikeStates: vi.fn(),
   unlikeArticle: vi.fn(),
+  externalLike: vi.fn(),
 }));
 
 vi.mock('../store/auth', () => ({
@@ -28,6 +29,10 @@ vi.mock('../services/historyService', () => ({
 vi.mock('../services/likeService', () => ({
   getArticleLikeStates: mocks.getArticleLikeStates,
   unlikeArticle: mocks.unlikeArticle,
+}));
+
+vi.mock('../store/sessionSync', () => ({
+  syncExternalArticleLikeState: mocks.externalLike,
 }));
 
 vi.mock('vue-router', () => ({
@@ -258,6 +263,12 @@ describe('HistoryView', () => {
     expect(wrapper.find('.history-post').exists()).toBe(false);
     await flushPromises();
     expect(wrapper.find('.history-post').exists()).toBe(false);
+    expect(mocks.externalLike).toHaveBeenCalledWith({
+      articleId: 1,
+      likes: 3,
+      liked: false,
+      status: 'ready',
+    });
   });
 
   it('rolls an unlike failure back near its original index', async () => {
@@ -277,6 +288,7 @@ describe('HistoryView', () => {
     await wrapper.get('[data-id="1"] .history-post__like').trigger('click');
     await flushPromises();
     expect(wrapper.findAll('.history-post').map(card => card.attributes('data-id'))).toEqual(['1', '2']);
+    expect(mocks.externalLike).not.toHaveBeenCalled();
     expect(wrapper.find('[data-id="1"]').attributes('data-status')).toBe('ready');
     expect(wrapper.find('[data-id="1"]').attributes('data-liked')).toBe('true');
     expect(wrapper.text()).toContain('Could not remove this like.');
@@ -314,6 +326,12 @@ describe('HistoryView', () => {
     await flushPromises();
     expect(wrapper.find('[data-id="1"]').attributes('data-status')).toBe('ready');
     expect(wrapper.find('[data-id="1"]').attributes('data-liked')).toBe('true');
+    expect(mocks.externalLike).toHaveBeenCalledWith({
+      articleId: 1,
+      likes: 8,
+      liked: true,
+      status: 'ready',
+    });
   });
 
   it('ignores a pending page response after a viewer switch and starts the new request first', async () => {

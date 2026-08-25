@@ -156,6 +156,11 @@ import { createArticleViewEventID, getArticleViewTelemetry } from '../services/a
 import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
+import {
+  syncExternalArticleLikeState,
+  syncExternalArticleRemoval,
+  syncExternalCommentCount,
+} from '../store/sessionSync';
 import type { Article } from '../types/Article';
 import type { ArticleComment } from '../types/Comment';
 import type { RecommendationTracking } from '../types/Recommendation';
@@ -497,6 +502,7 @@ const handleDeleteArticle = async () => {
     if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleID, viewerID)) {
       return false;
     }
+    syncExternalArticleRemoval(articleID);
     finishRead('route_leave');
     void recommendationTelemetry.flush(false);
     deletePending.value = false;
@@ -596,6 +602,12 @@ const toggleLike = async () => {
 
     liked.value = response.liked;
     likeCount.value = clampCount(response.likes);
+    syncExternalArticleLikeState({
+      articleId: Number(id),
+      likes: likeCount.value,
+      liked: response.liked,
+      status: 'ready',
+    });
   } catch {
     if (detailVersion === detailRequestVersion && mutationVersion === likeMutationVersion) {
       liked.value = previousLiked;
@@ -702,6 +714,10 @@ const handleCreateComment = async (content: string) => {
     comments.value = mergeComments([created].concat(comments.value));
     commentsError.value = '';
     commentCount.value = clampCount(commentCount.value + 1);
+    syncExternalCommentCount({
+      articleId: Number(id),
+      commentCount: commentCount.value,
+    });
     composerRef.value?.clear();
   } catch {
     if (detailVersion === detailRequestVersion) {
@@ -735,6 +751,10 @@ const deleteOwnComment = async (commentID: number) => {
 
     comments.value = comments.value.filter(comment => comment.id !== commentID);
     commentCount.value = Math.max(0, commentCount.value - 1);
+    syncExternalCommentCount({
+      articleId: Number(articleId.value),
+      commentCount: commentCount.value,
+    });
   } catch {
     if (detailVersion === detailRequestVersion) {
       commentError.value = 'Reply could not be deleted. Please try again.';

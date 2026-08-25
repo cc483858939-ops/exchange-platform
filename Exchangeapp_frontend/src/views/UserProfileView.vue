@@ -389,6 +389,8 @@ const deleteErrors = profileStore.deleteErrors;
 const sentinelRef = ref<HTMLElement | null>(null);
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let observer: IntersectionObserver | null = null;
+let profileEntryVersion = 0;
+let restoredEntryVersion = -1;
 
 const profileDisplayName = computed(() => {
   const displayName = user.value?.display_name?.trim() ?? '';
@@ -443,17 +445,34 @@ const saveCurrentScroll = (targetUserID: number) => {
   }
 };
 
-const restoreScroll = () => {
-  void nextTick(() => {
-    const session = activeSession.value;
-    if (!session?.profileLoaded || typeof window === 'undefined') return;
-    if (
-      typeof window.scrollTo === 'function'
-      && !window.navigator.userAgent.toLowerCase().includes('jsdom')
-    ) {
-      window.scrollTo({ top: session.scrollY, behavior: 'auto' });
-    }
-  });
+const restoreScrollOnce = async () => {
+  const entryVersion = profileEntryVersion;
+  if (restoredEntryVersion === entryVersion) return;
+
+  const session = activeSession.value;
+  const targetUserID = numericUserID.value;
+  if (
+    !session
+    || targetUserID === null
+    || !session.profileLoaded
+    || (!session.articlesLoaded && session.articlesInitialLoading)
+    || typeof window === 'undefined'
+  ) return;
+
+  await nextTick();
+  if (
+    entryVersion !== profileEntryVersion
+    || targetUserID !== numericUserID.value
+    || restoredEntryVersion === entryVersion
+  ) return;
+
+  if (
+    typeof window.scrollTo === 'function'
+    && !window.navigator.userAgent.toLowerCase().includes('jsdom')
+  ) {
+    window.scrollTo({ top: session.scrollY, behavior: 'auto' });
+  }
+  restoredEntryVersion = entryVersion;
 };
 
 const retryFollowState = () => {
@@ -778,6 +797,7 @@ const updateObserver = () => {
 };
 
 watch(userId, (nextID, previousID) => {
+  profileEntryVersion += 1;
   const previousNumericID = Number(previousID);
   if (Number.isSafeInteger(previousNumericID) && previousNumericID > 0) {
     saveCurrentScroll(previousNumericID);
@@ -789,6 +809,7 @@ watch(userId, (nextID, previousID) => {
 
 watch(currentViewerID, (nextViewerID, previousViewerID) => {
   if (nextViewerID === previousViewerID) return;
+  profileEntryVersion += 1;
   forceCloseEditProfile();
   loadProfile();
 });
@@ -798,17 +819,24 @@ watch(
     userId,
     () => activeSession.value?.profileLoaded,
     () => activeSession.value?.articlesLoaded,
+    () => activeSession.value?.articlesInitialLoading,
+    () => activeSession.value?.articlesInitialError,
+  ],
+  () => { void restoreScrollOnce(); },
+  { flush: 'post', immediate: true },
+);
+
+watch(
+  [
+    userId,
+    () => activeSession.value?.profileLoaded,
+    () => activeSession.value?.articlesLoaded,
     () => activeSession.value?.hasMore,
     () => activeSession.value?.articlesLoadingMore,
     () => activeSession.value?.articlesLoadMoreError,
-    () => activeSession.value?.articlesInitialLoading,
+    () => activeSession.value?.articles.length,
   ],
-  () => {
-    void nextTick(() => {
-      restoreScroll();
-      void nextTick(updateObserver);
-    });
-  },
+  () => { void nextTick(updateObserver); },
   { flush: 'post' },
 );
 

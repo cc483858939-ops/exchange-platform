@@ -8,6 +8,7 @@ import {
 } from '../services/articleService';
 import { getArticleRecommendations } from '../services/recommendationService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
+import type { UserFollowState } from '../services/userService';
 import type { Article } from '../types/Article';
 import type { RecommendedArticle } from '../types/Recommendation';
 import type { FeedLikeStateUpdate, FeedPost, FeedTab } from '../types/Feed';
@@ -24,6 +25,7 @@ import {
   syncHomeAuthorIdentity,
   syncHomeLikeState,
 } from './sessionSync';
+import type { ArticleCommentCountUpdate } from './sessionSync';
 
 export type HomeRecommendationItem = {
   article: RecommendedArticle;
@@ -41,6 +43,9 @@ export type HomeFollowingState = HomeFeedState<FeedPost> & {
   nextCursor: string | null;
   loadingMore: boolean;
   loadMoreError: boolean;
+  stale: boolean;
+  revalidating: boolean;
+  revalidateError: boolean;
 };
 
 const normalizeID = (value: unknown): number | null => {
@@ -52,6 +57,11 @@ const normalizeID = (value: unknown): number | null => {
 
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
+
+const normalizeCommentCount = (value: unknown) => {
+  const count = Number(value);
+  return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : null;
+};
 
 export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const authStore = useAuthStore();
@@ -73,6 +83,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     nextCursor: null,
     loadingMore: false,
     loadMoreError: false,
+    stale: false,
+    revalidating: false,
+    revalidateError: false,
   });
   const scrollY = reactive<Record<FeedTab, number>>({
     'for-you': 0,
@@ -114,6 +127,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     following.nextCursor = null;
     following.loadingMore = false;
     following.loadMoreError = false;
+    following.stale = false;
+    following.revalidating = false;
+    following.revalidateError = false;
     followingLoadedArticleIds.clear();
   };
 
@@ -197,6 +213,42 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       applied = applyFeedLikeStateUpdate(post, update) || applied;
     });
     return applied;
+  };
+
+  const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
+    bumpLikeMutationVersion(update.articleId);
+    likePendingArticleIds.delete(update.articleId);
+    return applyLikeStateUpdateLocal(update);
+  };
+
+  const applyCommentCountUpdateLocal = (update: ArticleCommentCountUpdate) => {
+    const commentCount = normalizeCommentCount(update.commentCount);
+    if (commentCount === null) return false;
+    let applied = false;
+    forEachHomePost(update.articleId, (post) => {
+      post.commentCount = commentCount;
+      applied = true;
+    });
+    return applied;
+  };
+
+  const reconcileFollowStateLocal = (state: UserFollowState) => {
+    if (!Number.isSafeInteger(state.user_id) || state.user_id <= 0) return false;
+
+    followingRequestVersion += 1;
+    followingPagingVersion += 1;
+    following.loading = false;
+    following.loadingMore = false;
+    following.revalidating = false;
+    following.error = false;
+    following.loadMoreError = false;
+    following.revalidateError = false;
+    following.stale = true;
+
+    if (!state.following) {
+      following.items = following.items.filter(post => post.author.id !== state.user_id);
+    }
+    return true;
   };
 
   const applyLikeStateUpdate = (
@@ -314,6 +366,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   ) => currentFollowingRequest(requestVersion, generation, capturedViewerID)
     && pagingVersion === followingPagingVersion;
 
+  const currentFollowingRefresh = (
+    requestVersion: number,
+    generation: number,
+    pagingVersion: number,
+    capturedViewerID: number,
+  ) => currentFollowingRequest(requestVersion, generation, capturedViewerID)
+    && pagingVersion === followingPagingVersion;
+
   const loadForYou = async (force = false) => {
     const capturedViewerID = viewerID.value;
     if (
@@ -389,6 +449,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       const newPosts = appendFollowingArticles(response.items);
       following.nextCursor = response.next_cursor;
       following.loaded = true;
+      following.stale = false;
+      following.revalidateError = false;
       const capturedLikeGeneration = likeGeneration;
       void hydrateLikeStates(
         newPosts.map((post) => post.id),
@@ -419,6 +481,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       || !following.nextCursor
       || following.loading
       || following.loadingMore
+      || following.stale
+      || following.revalidating
       || following.loadMoreError
     ) {
       return;
@@ -452,6 +516,70 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     } finally {
       if (currentFollowingPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
         following.loadingMore = false;
+      }
+    }
+  };
+
+  const revalidateFollowing = async () => {
+    const capturedViewerID = viewerID.value;
+    if (
+      capturedViewerID === null
+      || !isAuthenticatedForViewer(capturedViewerID)
+    ) {
+      return;
+    }
+    if (!following.loaded) {
+      await loadFollowing();
+      return;
+    }
+    if (!following.stale || following.revalidating) return;
+
+    const version = ++followingRequestVersion;
+    const generation = authGeneration;
+    const pagingVersion = ++followingPagingVersion;
+    following.revalidating = true;
+    following.revalidateError = false;
+    following.loadingMore = false;
+    following.loadMoreError = false;
+
+    try {
+      const response = await getFollowingTimeline({ limit: 20 });
+      if (!currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)) return;
+
+      const freshIDs = new Set<number>();
+      const freshPosts: FeedPost[] = [];
+      response.items.forEach((article) => {
+        if (
+          freshIDs.has(article.ID)
+          || feedStore.isArticleDeleted(article.ID)
+        ) return;
+        freshIDs.add(article.ID);
+        freshPosts.push(articleToFeedPost(article));
+      });
+
+      following.items = freshPosts;
+      followingLoadedArticleIds.clear();
+      freshPosts.forEach(post => followingLoadedArticleIds.add(post.id));
+      following.nextCursor = response.next_cursor;
+      following.loaded = true;
+      following.stale = false;
+      following.revalidating = false;
+      following.revalidateError = false;
+      const capturedLikeGeneration = likeGeneration;
+      void hydrateLikeStates(
+        freshPosts.map(post => post.id),
+        () => currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)
+          && likeGeneration === capturedLikeGeneration,
+      );
+    } catch {
+      if (currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)) {
+        following.revalidating = false;
+        following.revalidateError = true;
+        following.stale = true;
+      }
+    } finally {
+      if (currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)) {
+        following.revalidating = false;
       }
     }
   };
@@ -611,6 +739,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   registerHomeTimelineSync({
     applyLikeStateUpdateLocal,
+    applyExternalLikeStateLocal,
+    applyCommentCountUpdateLocal,
+    reconcileFollowStateLocal,
     removeArticleLocal,
     replaceAuthorIdentityLocal,
   });
@@ -659,11 +790,15 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     loadForYou,
     loadFollowing,
     loadMoreFollowing,
+    revalidateFollowing,
     retryFollowingLoadMore,
     toggleLike,
     findPost,
     applyLikeStateUpdate,
     applyLikeStateUpdateLocal,
+    applyExternalLikeStateLocal,
+    applyCommentCountUpdateLocal,
+    reconcileFollowStateLocal,
     dismissRecommendation,
     removeArticle,
     removeArticleLocal,

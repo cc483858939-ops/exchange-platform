@@ -289,6 +289,8 @@ const updateFollowingObserver = () => {
     || !followingSentinelRef.value
     || !followingFeed.nextCursor
     || followingFeed.loadingMore
+    || followingFeed.stale
+    || followingFeed.revalidating
     || followingFeed.loadMoreError
     || !authStore.isAuthenticated
   ) {
@@ -328,7 +330,11 @@ const loadForYou = async (force = false) => {
 };
 
 const loadFollowing = async (force = false) => {
-  await homeTimeline.loadFollowing(force);
+  if (!force && followingFeed.loaded && followingFeed.stale) {
+    await homeTimeline.revalidateFollowing();
+  } else {
+    await homeTimeline.loadFollowing(force);
+  }
   await nextTick(updateFollowingObserver);
 };
 
@@ -435,6 +441,8 @@ watch(
     () => followingFeed.loadingMore,
     () => followingFeed.loadMoreError,
     () => followingFeed.loading,
+    () => followingFeed.stale,
+    () => followingFeed.revalidating,
   ],
   () => {
     void nextTick(updateFollowingObserver);

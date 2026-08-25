@@ -72,7 +72,7 @@ const recommendation = (id: number) => ({
   score: 1,
 });
 
-const article = (id: number) => ({
+const article = (id: number, authorID = 7) => ({
   ID: id,
   CreatedAt: '2026-08-24T00:00:00.000Z',
   UpdatedAt: '2026-08-24T00:00:00.000Z',
@@ -87,7 +87,7 @@ const article = (id: number) => ({
   comment_count: 0,
   view_count: 0,
   like_sync_version: 0,
-  author: author(),
+  author: author(authorID),
 });
 
 const settle = async () => {
@@ -235,4 +235,181 @@ describe('home timeline session store', () => {
     expect(store.forYou.items).toHaveLength(0);
     expect(mocks.feedStore!.markArticleDeleted).toHaveBeenCalledWith(4, 7);
   });
+
+  it('external like state invalidates an older local like mutation', async () => {
+    let resolveLike!: (value: { likes: number; liked: boolean }) => void;
+    const pendingLike = new Promise<{ likes: number; liked: boolean }>((resolve) => {
+      resolveLike = resolve;
+    });
+    mocks.likeArticle.mockReturnValue(pendingLike);
+    const store = useHomeTimelineStore();
+    store.following.items = [{
+      id: 4,
+      author: author(),
+      title: 'Following',
+      excerpt: 'Following',
+      coverImageUrl: '',
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 2,
+      commentCount: 0,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready',
+    }];
+
+    const localMutation = store.toggleLike(4);
+    expect(store.likePendingArticleIds.has(4)).toBe(true);
+
+    store.applyExternalLikeStateLocal({
+      articleId: 4,
+      likes: 8,
+      liked: true,
+      status: 'ready',
+    });
+    expect(store.likePendingArticleIds.has(4)).toBe(false);
+    expect(store.following.items[0].likeCount).toBe(8);
+    expect(store.following.items[0].liked).toBe(true);
+
+    resolveLike({ likes: 3, liked: true });
+    await localMutation;
+    expect(store.following.items[0].likeCount).toBe(8);
+  });
+
+  it('updates comment counts across recently published, Following, and For You copies', () => {
+    const store = useHomeTimelineStore();
+    const post: FeedPost = {
+      id: 4,
+      author: author(),
+      title: 'Post',
+      excerpt: 'Post',
+      coverImageUrl: '',
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 0,
+      commentCount: 1,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready',
+    };
+    mocks.feedStore!.recentlyPublishedPosts = [{ ...post }];
+    store.following.items = [{ ...post }];
+    store.forYou.items = [{ article: recommendation(4), post: { ...post } }];
+
+    expect(store.applyCommentCountUpdateLocal({ articleId: 4, commentCount: 7 })).toBe(true);
+    expect(mocks.feedStore!.recentlyPublishedPosts[0].commentCount).toBe(7);
+    expect(store.following.items[0].commentCount).toBe(7);
+    expect(store.forYou.items[0].post.commentCount).toBe(7);
+  });
+
+  it('reconciles an unfollow by removing only Following posts and marking it stale', () => {
+    const store = useHomeTimelineStore();
+    store.following.items = [
+      { ...articleToPost(4, 8) },
+      { ...articleToPost(5, 7) },
+    ];
+    store.forYou.items = [{ article: recommendation(4), post: articleToPost(4, 8) }];
+
+    store.reconcileFollowStateLocal({
+      user_id: 8,
+      following: false,
+      follower_count: 0,
+      following_count: 0,
+    });
+
+    expect(store.following.items.map(post => post.id)).toEqual([5]);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([4]);
+    expect(store.following.stale).toBe(true);
+  });
+
+  it('marks Follow stale without synthesizing posts', () => {
+    const store = useHomeTimelineStore();
+
+    store.reconcileFollowStateLocal({
+      user_id: 8,
+      following: true,
+      follower_count: 1,
+      following_count: 2,
+    });
+
+    expect(store.following.items).toHaveLength(0);
+    expect(store.following.stale).toBe(true);
+  });
+
+  it('replaces cached Following atomically on successful background revalidation', async () => {
+    const store = useHomeTimelineStore();
+    store.following.items = [articleToPost(1, 7)];
+    store.following.loaded = true;
+    store.following.nextCursor = 'old-cursor';
+    store.following.stale = true;
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [article(2), article(2), article(3)],
+      next_cursor: 'fresh-cursor',
+    });
+
+    const refresh = store.revalidateFollowing();
+    expect(store.following.items.map(post => post.id)).toEqual([1]);
+    expect(store.following.loading).toBe(false);
+    expect(store.following.revalidating).toBe(true);
+    await refresh;
+
+    expect(store.following.items.map(post => post.id)).toEqual([2, 3]);
+    expect(store.following.nextCursor).toBe('fresh-cursor');
+    expect(store.following.stale).toBe(false);
+    expect(store.following.revalidating).toBe(false);
+  });
+
+  it('preserves cached Following when background revalidation fails', async () => {
+    const store = useHomeTimelineStore();
+    store.following.items = [articleToPost(1, 7)];
+    store.following.loaded = true;
+    store.following.stale = true;
+    mocks.getFollowingTimeline.mockRejectedValue(new Error('offline'));
+
+    await store.revalidateFollowing();
+
+    expect(store.following.items.map(post => post.id)).toEqual([1]);
+    expect(store.following.stale).toBe(true);
+    expect(store.following.revalidating).toBe(false);
+    expect(store.following.revalidateError).toBe(true);
+  });
+
+  it('invalidates an old Following page when an unfollow changes the relationship', async () => {
+    const store = useHomeTimelineStore();
+    store.following.items = [articleToPost(1, 8)];
+    store.following.loaded = true;
+    store.following.nextCursor = 'cursor-1';
+    let resolvePage!: (value: { items: ReturnType<typeof article>[]; next_cursor: string | null }) => void;
+    const pendingPage = new Promise<{ items: ReturnType<typeof article>[]; next_cursor: string | null }>((resolve) => {
+      resolvePage = resolve;
+    });
+    mocks.getFollowingTimeline.mockReturnValue(pendingPage);
+
+    const request = store.loadMoreFollowing();
+    expect(store.following.loadingMore).toBe(true);
+    store.reconcileFollowStateLocal({
+      user_id: 8,
+      following: false,
+      follower_count: 0,
+      following_count: 0,
+    });
+    resolvePage({ items: [article(9, 8)], next_cursor: null });
+    await request;
+
+    expect(store.following.loadingMore).toBe(false);
+    expect(store.following.items).toHaveLength(0);
+    expect(store.following.stale).toBe(true);
+  });
+});
+
+const articleToPost = (id: number, authorID: number): FeedPost => ({
+  id,
+  author: author(authorID),
+  title: `Post ${id}`,
+  excerpt: `Post ${id}`,
+  coverImageUrl: '',
+  createdAt: '2026-08-24T00:00:00.000Z',
+  likeCount: 0,
+  commentCount: 0,
+  viewCount: 0,
+  liked: false,
+  likeStatus: 'ready',
 });

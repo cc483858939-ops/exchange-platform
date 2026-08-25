@@ -34,6 +34,7 @@ import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
 import { followUser, searchUsers, unfollowUser, type UserConnectionItem, type UserConnectionPage } from '../services/userService';
 import { useAuthStore } from '../store/auth';
+import { syncExternalFollowState } from '../store/sessionSync';
 
 const pageSize = 20;
 const route = useRoute();
@@ -67,7 +68,9 @@ const viewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
 });
-const viewerKey = computed(() => `${authStore.token ?? ''}:${viewerID.value ?? ''}`);
+const viewerKey = computed(() => (
+  viewerID.value === null ? 'anonymous' : `user:${viewerID.value}`
+));
 const disconnectObserver = () => { observer?.disconnect(); observer = null; };
 const invalidate = () => {
   pageGeneration += 1;
@@ -177,6 +180,7 @@ const toggleFollow = async (userID: number) => {
     items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: response.following } : item);
     const nextPending = new Set(pendingMutationIDs.value); nextPending.delete(userID); pendingMutationIDs.value = nextPending;
     const nextErrors = new Map(mutationErrors.value); nextErrors.delete(userID); mutationErrors.value = nextErrors;
+    syncExternalFollowState(response);
   } catch {
     if (!mutationCurrent()) return;
     items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: previous } : item);

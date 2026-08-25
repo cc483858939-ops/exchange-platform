@@ -58,6 +58,7 @@ import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
 import { followUser, getUser, getUserFollowers, getUserFollowing, unfollowUser, type UserConnectionItem, type UserConnectionPage } from '../services/userService';
 import { useAuthStore } from '../store/auth';
+import { syncExternalFollowState } from '../store/sessionSync';
 import type { PublicUser } from '../types/User';
 
 const pageSize = 20;
@@ -213,6 +214,7 @@ const toggleFollow = async (userID: number) => {
     }
     const nextPending = new Set(pendingMutationIDs.value); nextPending.delete(userID); pendingMutationIDs.value = nextPending;
     mutationErrors.value.delete(userID);
+    syncExternalFollowState(response);
     void updateObserver();
   } catch {
     if (!mutationCurrent()) return;

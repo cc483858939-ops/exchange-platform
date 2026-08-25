@@ -88,6 +88,7 @@ import PostCard from '../components/feed/PostCard.vue';
 import { getLikedHistory } from '../services/historyService';
 import { getArticleLikeStates, unlikeArticle } from '../services/likeService';
 import { useAuthStore } from '../store/auth';
+import { syncExternalArticleLikeState } from '../store/sessionSync';
 import type { Article } from '../types/Article';
 import type { FeedPost } from '../types/Feed';
 import {
@@ -457,13 +458,22 @@ const handleLikeToggle = async (articleID: number) => {
       return;
     }
 
+    const normalizedLikes = Number.isFinite(result.likes)
+      ? Math.max(0, Math.floor(result.likes))
+      : previousPost.likeCount;
+    syncExternalArticleLikeState({
+      articleId: articleID,
+      likes: normalizedLikes,
+      liked: result.liked,
+      status: 'ready',
+    });
     if (result.liked === false) {
       suppressedArticleIDs.add(articleID);
     } else {
       suppressedArticleIDs.delete(articleID);
       restoreHistoryPost({
         ...previousPost,
-        likeCount: Number.isFinite(result.likes) ? Math.max(0, result.likes) : previousPost.likeCount,
+        likeCount: normalizedLikes,
         liked: result.liked,
         likeStatus: 'ready',
       }, index);
