@@ -527,6 +527,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     deleteErrors.delete(articleId);
   };
 
+  const dismissRecommendation = (articleId: number) => {
+    const before = forYou.items.length;
+    forYou.items = forYou.items.filter((item) => item.article.id !== articleId);
+    return forYou.items.length !== before;
+  };
+
   const removeArticle = (articleId: number, ownerUserID?: number) => {
     if (ownerUserID !== undefined) {
       if (!feedStore.markArticleDeleted(articleId, ownerUserID)) return false;
@@ -658,6 +664,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     findPost,
     applyLikeStateUpdate,
     applyLikeStateUpdateLocal,
+    dismissRecommendation,
     removeArticle,
     removeArticleLocal,
     deletePost,

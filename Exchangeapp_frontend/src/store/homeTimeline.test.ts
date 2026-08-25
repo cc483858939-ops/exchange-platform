@@ -168,6 +168,31 @@ describe('home timeline session store', () => {
     expect(store.scrollY.following).toBe(0);
   });
 
+  it('dismisses a recommendation without removing the same article from Following', () => {
+    const store = useHomeTimelineStore();
+    const followingPost: FeedPost = {
+      id: 4,
+      author: author(),
+      title: 'Following',
+      excerpt: 'Following',
+      coverImageUrl: '',
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 0,
+      commentCount: 0,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready',
+    };
+    store.forYou.items = [{ article: recommendation(4), post: { ...followingPost } }];
+    store.following.items = [followingPost];
+
+    expect(store.dismissRecommendation(4)).toBe(true);
+    expect(store.forYou.items).toHaveLength(0);
+    expect(store.following.items).toHaveLength(1);
+    expect(store.following.items[0].id).toBe(4);
+    expect(mocks.feedStore!.markArticleDeleted).not.toHaveBeenCalled();
+  });
+
   it('applies a like update to every Home surface and removes deleted articles', () => {
     const store = useHomeTimelineStore();
     mocks.feedStore!.recentlyPublishedPosts = [{

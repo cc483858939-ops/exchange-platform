@@ -184,6 +184,71 @@ describe('profile session store', () => {
     expect(session.hasMore).toBe(false);
   });
 
+  it('keeps an unrelated pending initial article request valid when another article is removed', async () => {
+    let resolveArticles!: (value: {
+      items: ReturnType<typeof article>[];
+      next_cursor: string | null;
+    }) => void;
+    const pending = new Promise<{
+      items: ReturnType<typeof article>[];
+      next_cursor: string | null;
+    }>((resolve) => {
+      resolveArticles = resolve;
+    });
+    mocks.getUserArticles.mockReturnValue(pending);
+    mocks.feedStore!.isArticleDeleted.mockImplementation((articleID: number) => articleID === 42);
+    const store = useProfileSessionStore();
+
+    const request = store.loadArticles(8);
+    const session = store.getSession(8)!;
+    const requestVersion = session.articleRequestVersion;
+    expect(session.articlesInitialLoading).toBe(true);
+
+    expect(store.removeArticleEverywhere(42, 7)).toBe(true);
+    expect(session.articleRequestVersion).toBe(requestVersion);
+
+    resolveArticles({ items: [article(42, 8), article(43, 8)], next_cursor: null });
+    await request;
+
+    expect(session.articlesInitialLoading).toBe(false);
+    expect(session.articles.map((post) => post.id)).toEqual([43]);
+  });
+
+  it('does not strand an unrelated pending load-more request after article removal', async () => {
+    let resolveArticles!: (value: {
+      items: ReturnType<typeof article>[];
+      next_cursor: string | null;
+    }) => void;
+    const pending = new Promise<{
+      items: ReturnType<typeof article>[];
+      next_cursor: string | null;
+    }>((resolve) => {
+      resolveArticles = resolve;
+    });
+    mocks.getUserArticles.mockReturnValue(pending);
+    mocks.feedStore!.isArticleDeleted.mockImplementation((articleID: number) => articleID === 42);
+    const store = useProfileSessionStore();
+    const session = store.ensureSession(8)!;
+    session.articlesLoaded = true;
+    session.hasMore = true;
+    session.nextCursor = 'cursor-1';
+
+    const request = store.loadMoreArticles(8);
+    const requestVersion = session.articleRequestVersion;
+    expect(session.articlesLoadingMore).toBe(true);
+
+    expect(store.removeArticleEverywhere(42, 7)).toBe(true);
+    expect(session.articleRequestVersion).toBe(requestVersion);
+
+    resolveArticles({ items: [article(42, 8), article(43, 8)], next_cursor: null });
+    await request;
+
+    expect(session.articlesLoadingMore).toBe(false);
+    expect(session.articles.map((post) => post.id)).toEqual([43]);
+    expect(session.hasMore).toBe(false);
+    expect(session.nextCursor).toBeNull();
+  });
+
   it('synchronizes likes, deletes, identity edits, and newly published own posts across profile sessions', () => {
     const store = useProfileSessionStore();
     const first = store.ensureSession(7)!;

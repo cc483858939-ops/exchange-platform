@@ -605,11 +605,14 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
   const removeArticleEverywhereLocal = (articleId: number) => {
     sessions.forEach((session) => {
+      const removedFromSession = session.articles.some((post) => post.id === articleId);
       session.articles = session.articles.filter((post) => post.id !== articleId);
       session.loadedArticleIds.add(articleId);
-      session.articleRequestVersion += 1;
-      session.articlesLoadingMore = false;
-      session.articlesLoadMoreError = '';
+      if (removedFromSession && session.articlesLoadingMore) {
+        session.articleRequestVersion += 1;
+        session.articlesLoadingMore = false;
+        session.articlesLoadMoreError = '';
+      }
     });
     likePendingArticleIds.delete(articleId);
     likeMutationVersions.delete(articleId);

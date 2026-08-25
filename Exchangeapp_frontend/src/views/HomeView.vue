@@ -405,7 +405,7 @@ const handleNotInterested = (articleId: number) => {
   }
   recommendationTelemetry.recordNotInterested(item.article.id, item.article.tracking);
   recommendationTelemetry.unobserveFeedCard(item.article.id, item.article.tracking);
-  homeTimeline.removeArticle(articleId);
+  homeTimeline.dismissRecommendation(articleId);
   recommendationCardElements.delete(articleId);
 };
 
