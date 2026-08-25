@@ -1,17 +1,16 @@
-import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
-import HomeView from '../views/HomeView.vue';
-import LiveExchangeView from '../views/LiveExchangeView.vue';
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 
-import NewsDetailView from '../views/NewsDetailView.vue';
-import ArticleCreateView from '../views/ArticleCreateView.vue';
-
-import UserProfileView from '../views/UserProfileView.vue';
-import UserConnectionsView from '../views/UserConnectionsView.vue';
-import UserSearchView from '../views/UserSearchView.vue';
-import HistoryView from '../views/HistoryView.vue';
-import NotificationsView from '../views/NotificationsView.vue';
-import Login from '../components/Login.vue';
-import Register from '../components/Register.vue';
+const HomeView = () => import('../views/HomeView.vue');
+const LiveExchangeView = () => import('../views/LiveExchangeView.vue');
+const NewsDetailView = () => import('../views/NewsDetailView.vue');
+const ArticleCreateView = () => import('../views/ArticleCreateView.vue');
+const UserProfileView = () => import('../views/UserProfileView.vue');
+const UserConnectionsView = () => import('../views/UserConnectionsView.vue');
+const UserSearchView = () => import('../views/UserSearchView.vue');
+const HistoryView = () => import('../views/HistoryView.vue');
+const NotificationsView = () => import('../views/NotificationsView.vue');
+const Login = () => import('../components/Login.vue');
+const Register = () => import('../components/Register.vue');
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'Home', component: HomeView, meta: { layout: 'app' } },

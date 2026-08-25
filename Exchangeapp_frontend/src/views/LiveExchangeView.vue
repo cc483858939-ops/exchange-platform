@@ -66,7 +66,18 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
-import { ElMessage } from 'element-plus';
+import {
+  ElAlert,
+  ElButton,
+  ElForm,
+  ElFormItem,
+  ElInput,
+  ElMessage,
+  ElOption,
+  ElSelect,
+  ElSkeleton,
+} from 'element-plus';
+import 'element-plus/dist/index.css';
 import { isAxiosError } from 'axios';
 import axios from '../axios';
 
