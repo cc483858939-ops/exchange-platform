@@ -2,9 +2,9 @@ import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import type { Article } from '../types/Article';
-import type { FeedPost } from '../types/Feed';
+import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
-import { articleToFeedPost } from '../utils/feedPost';
+import { applyFeedLikeStateUpdate, articleToFeedPost } from '../utils/feedPost';
 
 const maxRecentlyPublishedPosts = 5;
 
@@ -98,6 +98,14 @@ export const useFeedStore = defineStore('feed', () => {
     ));
   };
 
+  const applyLikeStateUpdate = (update: FeedLikeStateUpdate) => {
+    let applied = false;
+    recentlyPublishedPosts.value.forEach((post) => {
+      applied = applyFeedLikeStateUpdate(post, update) || applied;
+    });
+    return applied;
+  };
+
   watch(
     () => authStore.currentIdentity?.id,
     (nextViewerID) => {
@@ -116,6 +124,7 @@ export const useFeedStore = defineStore('feed', () => {
     markArticleDeleted,
     isArticleDeleted,
     replaceAuthorIdentity,
+    applyLikeStateUpdate,
     clearRecentlyPublishedPosts,
   };
 });

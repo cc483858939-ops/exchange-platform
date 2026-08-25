@@ -7,14 +7,18 @@
       aria-label="Profile"
     >
       <span class="mobile-home-header__avatar">
+        <span v-if="avatarInitial" class="mobile-home-header__avatar-fallback" aria-hidden="true">
+          {{ avatarInitial }}
+        </span>
+        <AppIcon v-else name="profile" :size="22" />
         <img
           v-if="avatarSource"
           :src="avatarSource"
           alt=""
-          @error="avatarLoadFailed = true"
+          v-show="avatarLoaded"
+          @load="avatarLoaded = true"
+          @error="avatarLoadFailed = true; avatarLoaded = false"
         />
-        <span v-else-if="avatarInitial" aria-hidden="true">{{ avatarInitial }}</span>
-        <AppIcon v-else name="profile" :size="22" />
       </span>
     </RouterLink>
     <RouterLink
@@ -43,6 +47,7 @@ import AppIcon from '../icons/AppIcon.vue';
 
 const authStore = useAuthStore();
 const avatarLoadFailed = ref(false);
+const avatarLoaded = ref(false);
 const identity = computed(() => authStore.currentIdentity);
 
 const avatarSource = computed(() => {
@@ -61,6 +66,7 @@ watch(
   [() => identity.value?.id, () => identity.value?.avatar_url],
   () => {
     avatarLoadFailed.value = false;
+    avatarLoaded.value = false;
   },
 );
 </script>
@@ -103,6 +109,7 @@ watch(
   }
 
   .mobile-home-header__avatar {
+    position: relative;
     display: grid;
     width: 36px;
     height: 36px;
@@ -121,9 +128,18 @@ watch(
   }
 
   .mobile-home-header__avatar img {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+
+  .mobile-home-header__avatar-fallback {
+    display: grid;
+    width: 100%;
+    height: 100%;
+    place-items: center;
   }
 
   .mobile-home-header__brand {

@@ -46,4 +46,25 @@ describe('AuthorIdentity time display', () => {
 
     expect(wrapper.find('.author-meta').text()).toBe('@reader · 1h');
   });
+
+  it('keeps the fallback under an avatar until the image has loaded', async () => {
+    wrapper = mount(AuthorIdentity, {
+      props: {
+        author: { ...author, avatar_url: '/avatar.webp' },
+      },
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>' },
+        },
+      },
+    });
+
+    const image = wrapper.find('img');
+    expect(wrapper.find('.author-avatar__fallback').text()).toBe('R');
+    expect((image.element as HTMLElement).style.display).toBe('none');
+
+    await image.trigger('load');
+    await nextTick();
+    expect((image.element as HTMLElement).style.display).not.toBe('none');
+  });
 });

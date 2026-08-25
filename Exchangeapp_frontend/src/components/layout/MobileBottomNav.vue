@@ -32,6 +32,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '../../store/auth';
+import { useHomeTimelineStore } from '../../store/homeTimeline';
 import AppIcon from '../icons/AppIcon.vue';
 
 type RouteParam = string | string[] | undefined;
@@ -39,7 +40,7 @@ type NavigationItem = {
   label: string;
   routeName: string;
   icon: 'home' | 'search' | 'exchange' | 'notifications' | 'profile';
-  to: { name: string; params?: { id: string } };
+  to: { name: string; params?: { id: string }; query?: { tab: 'following' } };
 };
 
 const props = withDefaults(defineProps<{
@@ -49,6 +50,7 @@ const props = withDefaults(defineProps<{
 });
 
 const authStore = useAuthStore();
+const homeTimeline = useHomeTimelineStore();
 const route = useRoute();
 
 const currentProfileID = computed(() => {
@@ -56,17 +58,23 @@ const currentProfileID = computed(() => {
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? String(id) : null;
 });
 
+const homeDestination = computed<NavigationItem['to']>(() =>
+  homeTimeline.activeTab === 'following'
+    ? { name: 'Home', query: { tab: 'following' } }
+    : { name: 'Home' },
+);
+
 const navigationItems = computed<NavigationItem[]>(() => {
   if (!authStore.isAuthenticated) {
     return [
-      { label: 'Home', routeName: 'Home', icon: 'home', to: { name: 'Home' } },
+      { label: 'Home', routeName: 'Home', icon: 'home', to: homeDestination.value },
       { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', to: { name: 'CurrencyExchange' } },
       { label: 'Log in', routeName: 'Login', icon: 'profile', to: { name: 'Login' } },
     ];
   }
 
   return [
-    { label: 'Home', routeName: 'Home', icon: 'home', to: { name: 'Home' } },
+    { label: 'Home', routeName: 'Home', icon: 'home', to: homeDestination.value },
     { label: 'Search', routeName: 'UserSearch', icon: 'search', to: { name: 'UserSearch' } },
     { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', to: { name: 'CurrencyExchange' } },
     { label: 'Notifications', routeName: 'Notifications', icon: 'notifications', to: { name: 'Notifications' } },

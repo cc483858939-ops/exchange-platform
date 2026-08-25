@@ -238,6 +238,7 @@ import { createArticle, uploadArticleCover } from '../services/articleService';
 import { getUser } from '../services/userService';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
+import { useProfileSessionStore } from '../store/profileSession';
 import AppIcon from '../components/icons/AppIcon.vue';
 import type { PublicUser } from '../types/User';
 
@@ -253,6 +254,7 @@ const allowedCoverTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const router = useRouter();
 const authStore = useAuthStore();
 const feedStore = useFeedStore();
+const profileSessionStore = useProfileSessionStore();
 const form = reactive({
   title: '',
   preview: '',
@@ -571,6 +573,7 @@ const submitArticle = async () => {
         publishError.value = 'The post was published, but Home could not update for this account. Your draft was preserved.';
         return;
       }
+      profileSessionStore.registerPublishedArticle(article, publisherUserID);
 
       await router.replace({
         name: 'Home',

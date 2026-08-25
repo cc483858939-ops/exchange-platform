@@ -18,10 +18,15 @@ type RouteState = {
 const mocks = vi.hoisted(() => ({
   authStore: null as AuthState | null,
   route: null as RouteState | null,
+  homeTimeline: { activeTab: 'for-you' as 'for-you' | 'following' },
 }));
 
 vi.mock('../../store/auth', () => ({
   useAuthStore: () => mocks.authStore,
+}));
+
+vi.mock('../../store/homeTimeline', () => ({
+  useHomeTimelineStore: () => mocks.homeTimeline,
 }));
 
 vi.mock('vue-router', () => ({
@@ -30,7 +35,7 @@ vi.mock('vue-router', () => ({
 
 const routerLinkStub = {
   props: { to: { type: [String, Object], required: true } },
-  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" v-bind="$attrs"><slot /></a>',
+  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" v-bind="$attrs"><slot /></a>',
 };
 
 const mountNav = (notificationBadge: string | null = null) => mount(MobileBottomNav, {
@@ -58,6 +63,7 @@ const setState = (
 describe('MobileBottomNav', () => {
   beforeEach(() => {
     setState(true);
+    mocks.homeTimeline.activeTab = 'for-you';
   });
 
   it('renders the authenticated navigation in the frozen order', () => {
@@ -84,6 +90,15 @@ describe('MobileBottomNav', () => {
 
     expect(profile.attributes('data-route-name')).toBe('UserProfile');
     expect(profile.attributes('data-route-id')).toBe('123');
+  });
+
+  it('preserves the following tab in the Home destination', () => {
+    mocks.homeTimeline.activeTab = 'following';
+    const wrapper = mountNav();
+    const home = wrapper.find('.mobile-bottom-nav__item');
+
+    expect(home.attributes('data-route-name')).toBe('Home');
+    expect(home.attributes('data-route-query-tab')).toBe('following');
   });
 
   it('renders a store-provided badge once and omits it when null', async () => {

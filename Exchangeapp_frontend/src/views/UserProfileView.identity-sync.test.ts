@@ -3,6 +3,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -36,6 +37,7 @@ const mocks = vi.hoisted(() => ({
     isArticleDeleted: vi.fn(),
     markArticleDeleted: vi.fn(),
     replaceAuthorIdentity: vi.fn(),
+    applyLikeStateUpdate: vi.fn(),
   },
 }));
 
@@ -156,6 +158,7 @@ describe('UserProfileView current identity synchronization', () => {
   let wrapper: VueWrapper | null = null;
 
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity.id = 7;
@@ -202,5 +205,22 @@ describe('UserProfileView current identity synchronization', () => {
 
     expect(mocks.authStore.syncCurrentIdentityProfile).not.toHaveBeenCalled();
     expect(mocks.feedStore.replaceAuthorIdentity).not.toHaveBeenCalled();
+  });
+
+  it('keeps the profile fallback visible until the main avatar has loaded', async () => {
+    mocks.getUser.mockResolvedValue({
+      ...originalUser,
+      avatar_url: '/avatar.webp',
+    });
+    wrapper = mountProfile();
+    await settle();
+
+    const image = wrapper.get('.profile-avatar img');
+    expect(wrapper.get('.profile-avatar__fallback').text()).toBe('V');
+    expect((image.element as HTMLElement).style.display).toBe('none');
+
+    await image.trigger('load');
+    await nextTick();
+    expect((image.element as HTMLElement).style.display).not.toBe('none');
   });
 });

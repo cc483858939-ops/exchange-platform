@@ -34,14 +34,19 @@
       class="profile-identity"
       aria-labelledby="profile-name"
     >
-      <div class="profile-avatar" :class="{ 'profile-avatar--image': user.avatar_url && !avatarLoadFailed }">
+      <div
+        class="profile-avatar"
+        :class="{ 'profile-avatar--image': user.avatar_url && avatarLoaded && !avatarLoadFailed }"
+      >
+        <span class="profile-avatar__fallback" aria-hidden="true">{{ profileInitial }}</span>
         <img
           v-if="user.avatar_url && !avatarLoadFailed"
           :src="user.avatar_url"
           :alt="profileDisplayName + ' avatar'"
-          @error="avatarLoadFailed = true"
+          v-show="avatarLoaded"
+          @load="avatarLoaded = true"
+          @error="avatarLoadFailed = true; avatarLoaded = false"
         />
-        <span v-else aria-hidden="true">{{ profileInitial }}</span>
       </div>
       <div class="profile-identity__copy">
         <h1 id="profile-name">{{ profileDisplayName }}</h1>
@@ -333,65 +338,135 @@ import { useRoute, useRouter } from 'vue-router';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
-import { useAuthStore } from '../store/auth';
-import { useFeedStore } from '../store/feed';
-import { followUser, getUser, getUserArticles, getUserFollowState, unfollowUser, updateUserProfile, uploadProfileAvatar } from '../services/userService';
-import { deleteArticle } from '../services/articleService';
-import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
-import type { Article } from '../types/Article';
-import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
-import type { PublicAuthor, PublicUser } from '../types/User';
+import { updateUserProfile, uploadProfileAvatar } from '../services/userService';
 import type { UpdateUserProfilePayload, UserFollowState } from '../services/userService';
-import {
-  applyFeedLikeStateUpdate,
-  articleToFeedPost,
-  setFeedPostLikeUnavailable,
-} from '../utils/feedPost';
+import { useAuthStore } from '../store/auth';
+import { useProfileSessionStore, type ProfileSessionCapture } from '../store/profileSession';
+import type { PublicUser } from '../types/User';
 
-const pageSize = 20;
 const profileDisplayNameLimit = 50;
 const profileBioLimit = 160;
 const profileAvatarMaxBytes = 2 * 1024 * 1024;
 const profileAvatarTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const skeletonCount = 3;
+
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const feedStore = useFeedStore();
+const profileStore = useProfileSessionStore();
 
 const userId = computed(() => String(route.params.id ?? '').trim());
-const user = ref<PublicUser | null>(null);
-const profileLoading = ref(false);
-const profileError = ref('');
-const profileNotFound = ref(false);
+const numericUserID = computed(() => {
+  const value = Number(userId.value);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+});
+const activeSession = computed(() => (
+  numericUserID.value === null ? null : profileStore.ensureSession(numericUserID.value)
+));
+const invalidProfileError = ref('');
 
-const articles = ref<FeedPost[]>([]);
-const articlesInitialLoading = ref(false);
-const articlesLoadingMore = ref(false);
-const articlesInitialError = ref('');
-const articlesLoadMoreError = ref('');
-const nextCursor = ref<string | null>(null);
-const hasMore = ref(false);
+const user = computed(() => activeSession.value?.user ?? null);
+const profileLoading = computed(() => activeSession.value?.profileLoading ?? false);
+const profileError = computed(() => invalidProfileError.value || activeSession.value?.profileError || '');
+const profileNotFound = computed(() => activeSession.value?.profileNotFound ?? false);
+const articles = computed(() => activeSession.value?.articles ?? []);
+const articlesInitialLoading = computed(() => activeSession.value?.articlesInitialLoading ?? false);
+const articlesLoadingMore = computed(() => activeSession.value?.articlesLoadingMore ?? false);
+const articlesInitialError = computed(() => activeSession.value?.articlesInitialError ?? '');
+const articlesLoadMoreError = computed(() => activeSession.value?.articlesLoadMoreError ?? '');
+const nextCursor = computed(() => activeSession.value?.nextCursor ?? null);
+const hasMore = computed(() => activeSession.value?.hasMore ?? false);
+const followState = computed<UserFollowState | null>(() => activeSession.value?.followState ?? null);
+const followLoading = computed(() => activeSession.value?.followLoading ?? false);
+const followError = computed(() => activeSession.value?.followError ?? '');
+const followActionError = computed(() => activeSession.value?.followActionError ?? '');
+const followPending = computed(() => activeSession.value?.followPending ?? false);
+
+const likePendingArticleIds = profileStore.likePendingArticleIds;
+const pendingDeleteArticleIds = profileStore.pendingDeleteArticleIds;
+const deleteErrors = profileStore.deleteErrors;
 
 const sentinelRef = ref<HTMLElement | null>(null);
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
-const loadedArticleIds = new Set<number>();
-let profileRequestVersion = 0;
-let feedRequestVersion = 0;
-const likePendingArticleIds = reactive(new Set<number>());
-const likeMutationVersions = new Map<number, number>();
-const pendingDeleteArticleIds = reactive(new Set<number>());
-const deleteErrors = reactive(new Map<number, string>());
-let profileLikeHydrationGeneration = 0;
 let observer: IntersectionObserver | null = null;
-const followState = ref<UserFollowState | null>(null);
-const followLoading = ref(false);
-const followError = ref('');
-const followActionError = ref('');
-const followPending = ref(false);
-let followRequestVersion = 0;
-let followMutationVersion = 0;
-let viewerGeneration = 0;
+
+const profileDisplayName = computed(() => {
+  const displayName = user.value?.display_name?.trim() ?? '';
+  return displayName || user.value?.username || 'Profile';
+});
+const headerUsername = computed(() => profileDisplayName.value);
+const profileInitial = computed(
+  () => Array.from(profileDisplayName.value.trim())[0]?.toUpperCase() || '?',
+);
+const joinedLabel = computed(() => {
+  const value = user.value?.created_at;
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+});
+
+const getErrorStatus = (error: unknown) =>
+  (error as { response?: { status?: number } }).response?.status;
+
+const currentViewerID = computed(() => {
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
+});
+const isOwnProfile = computed(() => Boolean(
+  user.value
+  && currentViewerID.value !== null
+  && user.value.id === currentViewerID.value,
+));
+const socialReady = computed(() => Boolean(
+  authStore.isAuthenticated
+  && currentViewerID.value !== null
+  && followState.value
+  && !followLoading.value
+  && activeSession.value?.followLoaded,
+));
+const showFollowControl = computed(() => Boolean(
+  authStore.isAuthenticated
+  && user.value
+  && currentViewerID.value !== null
+  && user.value.id !== currentViewerID.value
+  && socialReady.value,
+));
+const canDeletePost = (post: { author: { id: number } }) =>
+  authStore.isAuthenticated
+  && currentViewerID.value !== null
+  && post.author.id === currentViewerID.value;
+
+const saveCurrentScroll = (targetUserID: number) => {
+  if (typeof window !== 'undefined') {
+    profileStore.setScrollY(targetUserID, window.scrollY);
+  }
+};
+
+const restoreScroll = () => {
+  void nextTick(() => {
+    const session = activeSession.value;
+    if (!session?.profileLoaded || typeof window === 'undefined') return;
+    if (
+      typeof window.scrollTo === 'function'
+      && !window.navigator.userAgent.toLowerCase().includes('jsdom')
+    ) {
+      window.scrollTo({ top: session.scrollY, behavior: 'auto' });
+    }
+  });
+};
+
+const retryFollowState = () => {
+  if (numericUserID.value !== null && currentViewerID.value !== null) {
+    void profileStore.loadFollowState(numericUserID.value, true);
+  }
+};
+
+const handleFollowToggle = () => {
+  if (numericUserID.value !== null) {
+    void profileStore.toggleFollow(numericUserID.value);
+  }
+};
 
 type ProfileEditSnapshot = Pick<PublicUser, 'display_name' | 'bio' | 'avatar_url'>;
 
@@ -407,220 +482,20 @@ const editAvatarError = ref('');
 const editError = ref('');
 const editSaving = ref(false);
 const avatarLoadFailed = ref(false);
-
-const profileDisplayName = computed(() => {
-  const displayName = user.value?.display_name?.trim() ?? '';
-  return displayName || user.value?.username || 'Profile';
-});
-const headerUsername = computed(() => profileDisplayName.value);
-const profileInitial = computed(
-  () => Array.from(profileDisplayName.value.trim())[0]?.toUpperCase() || '?',
-);
-const joinedLabel = computed(() => {
-  const value = user.value?.created_at;
-  if (!value) {
-    return '';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-
-  return date.toLocaleDateString(undefined, {
-    month: 'long',
-    year: 'numeric',
-  });
-});
-
-const getErrorStatus = (error: unknown) =>
-  (error as { response?: { status?: number } }).response?.status;
-
-const editProfileDisplayName = computed(() => {
-  const displayName = editDraft.display_name.trim();
-  return displayName || user.value?.username || 'Profile';
-});
-const editProfileInitial = computed(
-  () => Array.from(editProfileDisplayName.value.trim())[0]?.toUpperCase() || '?',
-);
-const currentViewerID = computed(() => {
-  const id = authStore.currentIdentity?.id;
-  return typeof id === 'number' && id > 0 ? id : null;
-});
-
-const isOwnProfile = computed(() => Boolean(
-  user.value
-  && currentViewerID.value !== null
-  && user.value.id === currentViewerID.value,
-));
-
-const socialReady = computed(() => Boolean(
-  user.value
-  && followState.value
-  && !followLoading.value
-  && !followError.value,
-));
-
-const showFollowControl = computed(() => Boolean(
-  socialReady.value
-  && currentViewerID.value !== null
-  && user.value
-  && user.value.id !== currentViewerID.value,
-));
-
-const canDeletePost = (post: FeedPost) =>
-  authStore.isAuthenticated
-  && currentViewerID.value !== null
-  && post.author.id === currentViewerID.value;
-
-const invalidateSocialState = () => {
-  followRequestVersion += 1;
-  followMutationVersion += 1;
-  followState.value = null;
-  followLoading.value = false;
-  followError.value = '';
-  followActionError.value = '';
-  followPending.value = false;
-};
-
-const isCurrentSocialRequest = (
-  profileVersion: number,
-  targetID: number,
-  viewerID: number,
-  capturedViewerGeneration: number,
-  requestVersion: number,
-  mutationVersion: number,
-) =>
-  profileVersion === profileRequestVersion
-  && user.value?.id === targetID
-  && currentViewerID.value === viewerID
-  && viewerGeneration === capturedViewerGeneration
-  && followRequestVersion === requestVersion
-  && followMutationVersion === mutationVersion
-  && authStore.isAuthenticated;
-
-const loadFollowStateForProfile = async (targetID: number, profileVersion: number) => {
-  const viewerID = currentViewerID.value;
-  if (viewerID === null || !authStore.isAuthenticated) {
-    followState.value = null;
-    followLoading.value = false;
-    return;
-  }
-
-  const requestVersion = ++followRequestVersion;
-  const mutationVersion = followMutationVersion;
-  const capturedViewerGeneration = viewerGeneration;
-  followLoading.value = true;
-  followError.value = '';
-  followActionError.value = '';
-
-  const isCurrent = () => isCurrentSocialRequest(
-    profileVersion,
-    targetID,
-    viewerID,
-    capturedViewerGeneration,
-    requestVersion,
-    mutationVersion,
-  );
-
-  try {
-    const response = await getUserFollowState(targetID);
-    if (!isCurrent()) {
-      return;
-    }
-    if (response.user_id !== targetID) {
-      throw new Error('invalid follow response');
-    }
-    followState.value = response;
-  } catch {
-    if (isCurrent()) {
-      followState.value = null;
-      followError.value = 'Social stats unavailable.';
-    }
-  } finally {
-    if (isCurrent()) {
-      followLoading.value = false;
-    }
-  }
-};
-
-const retryFollowState = () => {
-  if (user.value && currentViewerID.value !== null) {
-    void loadFollowStateForProfile(user.value.id, profileRequestVersion);
-  }
-};
-
-const handleFollowToggle = async () => {
-  const targetID = user.value?.id;
-  const viewerID = currentViewerID.value;
-  const previous = followState.value;
-  if (
-    targetID === undefined
-    || viewerID === null
-    || targetID === viewerID
-    || !previous
-    || !socialReady.value
-    || followPending.value
-  ) {
-    return;
-  }
-
-  const profileVersion = profileRequestVersion;
-  const requestVersion = followRequestVersion;
-  const capturedViewerGeneration = viewerGeneration;
-  const mutationVersion = ++followMutationVersion;
-  const previousState: UserFollowState = { ...previous };
-  followPending.value = true;
-  followActionError.value = '';
-  followState.value = {
-    ...previousState,
-    following: !previousState.following,
-    follower_count: previousState.following
-      ? Math.max(0, previousState.follower_count - 1)
-      : previousState.follower_count + 1,
-  };
-
-  const isCurrent = () =>
-    profileVersion === profileRequestVersion
-    && user.value?.id === targetID
-    && currentViewerID.value === viewerID
-    && viewerGeneration === capturedViewerGeneration
-    && followRequestVersion === requestVersion
-    && followMutationVersion === mutationVersion
-    && followPending.value
-    && authStore.isAuthenticated;
-
-  try {
-    const response = previousState.following
-      ? await unfollowUser(targetID)
-      : await followUser(targetID);
-    if (!isCurrent()) {
-      return;
-    }
-    if (response.user_id !== targetID) {
-      throw new Error('invalid follow response');
-    }
-    followState.value = response;
-    followPending.value = false;
-    followActionError.value = '';
-  } catch {
-    if (!isCurrent()) {
-      return;
-    }
-    followState.value = previousState;
-    followPending.value = false;
-    followActionError.value = 'Could not update follow status.';
-  }
-};
+const avatarLoaded = ref(false);
 
 const editDisplayNameLength = computed(() => Array.from(editDraft.display_name.trim()).length);
 const editBioLength = computed(() => Array.from(editDraft.bio.trim()).length);
 const editDisplayNameOverLimit = computed(() => editDisplayNameLength.value > profileDisplayNameLimit);
 const editBioOverLimit = computed(() => editBioLength.value > profileBioLimit);
+const editProfileDisplayName = computed(() =>
+  editDraft.display_name.trim() || user.value?.username || 'Profile',
+);
+const editProfileInitial = computed(
+  () => Array.from(editProfileDisplayName.value.trim())[0]?.toUpperCase() || '?',
+);
 const editAvatarPreview = computed(() => {
-  if (editAvatarLoadFailed.value) {
-    return '';
-  }
+  if (editAvatarLoadFailed.value) return '';
   return pendingAvatarPreviewURL.value || editDraft.avatar_url;
 });
 const editAvatarHasValue = computed(() => Boolean(pendingAvatarFile.value || editDraft.avatar_url));
@@ -668,9 +543,7 @@ const forceCloseEditProfile = () => {
 };
 
 const openEditProfile = () => {
-  if (!user.value || !isOwnProfile.value || editSaving.value) {
-    return;
-  }
+  if (!user.value || !isOwnProfile.value || editSaving.value) return;
   clearEditDraft();
   editOriginal.value = {
     display_name: user.value.display_name,
@@ -685,13 +558,9 @@ const openEditProfile = () => {
 };
 
 const closeEditProfile = () => {
-  if (editSaving.value) {
-    return;
-  }
+  if (editSaving.value) return;
   clearEditDraft();
-  if (editDialogRef.value?.open) {
-    editDialogRef.value.close();
-  }
+  if (editDialogRef.value?.open) editDialogRef.value.close();
 };
 
 const handleDialogCancel = (event: Event) => {
@@ -703,18 +572,14 @@ const handleDialogCancel = (event: Event) => {
 };
 
 const handleDialogClose = () => {
-  if (!editSaving.value) {
-    clearEditDraft();
-  }
+  if (!editSaving.value) clearEditDraft();
 };
 
 const handleAvatarSelection = (event: Event) => {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = '';
-  if (!file) {
-    return;
-  }
+  if (!file) return;
   if (file.size <= 0 || file.size > profileAvatarMaxBytes) {
     editAvatarError.value = 'Photo must be between 1 byte and 2 MiB.';
     return;
@@ -733,9 +598,7 @@ const handleAvatarSelection = (event: Event) => {
 };
 
 const removeProfileAvatar = () => {
-  if (editSaving.value) {
-    return;
-  }
+  if (editSaving.value) return;
   revokePendingAvatarPreview();
   pendingAvatarFile.value = null;
   editDraft.avatar_url = '';
@@ -745,44 +608,32 @@ const removeProfileAvatar = () => {
 };
 
 const isCurrentEditSession = (
+  capture: ProfileSessionCapture,
   profileID: number,
   viewerID: number,
-  capturedProfileVersion: number,
-  capturedViewerGeneration: number,
 ) =>
   editDialogRef.value?.open === true
   && user.value?.id === profileID
   && userId.value === String(profileID)
   && currentViewerID.value === viewerID
-  && profileRequestVersion === capturedProfileVersion
-  && viewerGeneration === capturedViewerGeneration
-  && authStore.isAuthenticated;
+  && authStore.isAuthenticated
+  && profileStore.isCurrentSessionCapture(capture);
 
 const buildProfilePatch = (): UpdateUserProfilePayload => {
   const original = editOriginal.value;
-  if (!original) {
-    return {};
-  }
+  if (!original) return {};
   const payload: UpdateUserProfilePayload = {};
   const displayName = editDraft.display_name.trim();
   const bio = editDraft.bio.trim();
-  if (displayName !== original.display_name) {
-    payload.display_name = displayName;
-  }
-  if (bio !== original.bio) {
-    payload.bio = bio;
-  }
-  if (editDraft.avatar_url !== original.avatar_url) {
-    payload.avatar_url = editDraft.avatar_url;
-  }
+  if (displayName !== original.display_name) payload.display_name = displayName;
+  if (bio !== original.bio) payload.bio = bio;
+  if (editDraft.avatar_url !== original.avatar_url) payload.avatar_url = editDraft.avatar_url;
   return payload;
 };
 
 const profileEditErrorMessage = (error: unknown, action: 'upload' | 'save') => {
   const status = getErrorStatus(error);
-  if (status === 401) {
-    return 'Please log in again and retry.';
-  }
+  if (status === 401) return 'Please log in again and retry.';
   if (status === 400) {
     return action === 'upload'
       ? 'That photo could not be uploaded.'
@@ -796,13 +647,10 @@ const profileEditErrorMessage = (error: unknown, action: 'upload' | 'save') => {
 const saveProfile = async () => {
   const profile = user.value;
   const viewerID = currentViewerID.value;
-  if (!profile || viewerID === null || !editCanSave.value) {
-    return;
-  }
+  if (!profile || viewerID === null || !editCanSave.value) return;
 
-  const capturedProfileID = profile.id;
-  const capturedProfileVersion = profileRequestVersion;
-  const capturedViewerGeneration = viewerGeneration;
+  const capture = profileStore.captureSession(profile.id);
+  if (!capture) return;
   const selectedFile = pendingAvatarFile.value;
   editSaving.value = true;
   editError.value = '';
@@ -810,9 +658,7 @@ const saveProfile = async () => {
   try {
     if (selectedFile) {
       const uploadedAvatarURL = await uploadProfileAvatar(selectedFile);
-      if (!isCurrentEditSession(capturedProfileID, viewerID, capturedProfileVersion, capturedViewerGeneration)) {
-        return;
-      }
+      if (!isCurrentEditSession(capture, profile.id, viewerID)) return;
       editDraft.avatar_url = uploadedAvatarURL;
       pendingAvatarFile.value = null;
       revokePendingAvatarPreview();
@@ -826,476 +672,70 @@ const saveProfile = async () => {
       return;
     }
 
-    const updatedUser = await updateUserProfile(capturedProfileID, payload);
-    if (!isCurrentEditSession(capturedProfileID, viewerID, capturedProfileVersion, capturedViewerGeneration)) {
-      return;
-    }
-    user.value = updatedUser;
+    const updatedUser = await updateUserProfile(profile.id, payload);
+    if (!isCurrentEditSession(capture, profile.id, viewerID)) return;
+    profileStore.updateUser(updatedUser);
     authStore.syncCurrentIdentityProfile(updatedUser);
-    const updatedAuthor: PublicAuthor = {
-      id: updatedUser.id,
-      username: updatedUser.username,
-      display_name: updatedUser.display_name,
-      avatar_url: updatedUser.avatar_url,
-    };
-    articles.value = articles.value.map((post) => (
-      post.author.id === updatedAuthor.id ? { ...post, author: updatedAuthor } : post
-    ));
-    feedStore.replaceAuthorIdentity(updatedAuthor);
-
     avatarLoadFailed.value = false;
     editSaving.value = false;
     clearEditDraft();
     editDialogRef.value?.close();
   } catch (error) {
-    if (isCurrentEditSession(capturedProfileID, viewerID, capturedProfileVersion, capturedViewerGeneration)) {
-      editError.value = profileEditErrorMessage(error, selectedFile && pendingAvatarFile.value ? 'upload' : 'save');
+    if (isCurrentEditSession(capture, profile.id, viewerID)) {
+      editError.value = profileEditErrorMessage(
+        error,
+        selectedFile && pendingAvatarFile.value ? 'upload' : 'save',
+      );
     }
   } finally {
-    if (isCurrentEditSession(capturedProfileID, viewerID, capturedProfileVersion, capturedViewerGeneration)) {
+    if (isCurrentEditSession(capture, profile.id, viewerID)) {
       editSaving.value = false;
     }
   }
 };
 
-watch(() => user.value?.avatar_url, () => {
-  avatarLoadFailed.value = false;
-});
-const getLikeMutationVersion = (articleId: number) =>
-  likeMutationVersions.get(articleId) ?? 0;
-
-const bumpLikeMutationVersion = (articleId: number) => {
-  const nextVersion = getLikeMutationVersion(articleId) + 1;
-  likeMutationVersions.set(articleId, nextVersion);
-  return nextVersion;
-};
-
-
-const findProfilePost = (articleId: number) =>
-  articles.value.find((post) => post.id === articleId);
-
-const applyProfileLikeUpdate = (update: FeedLikeStateUpdate, expectedVersion?: number) => {
-  if (
-    expectedVersion !== undefined
-    && getLikeMutationVersion(update.articleId) !== expectedVersion
-  ) {
-    return false;
-  }
-
-  const post = findProfilePost(update.articleId);
-  return post ? applyFeedLikeStateUpdate(post, update) : false;
-};
-
-const markProfileHydrationUnavailable = (articleIds: number[], versions: Map<number, number>) => {
-  articleIds.forEach((articleId) => {
-    const capturedVersion = versions.get(articleId);
-    const post = findProfilePost(articleId);
-    if (
-      capturedVersion === undefined
-      || getLikeMutationVersion(articleId) !== capturedVersion
-      || !post
-      || post.likeStatus !== 'unknown'
-    ) {
-      return;
-    }
-    setFeedPostLikeUnavailable(post);
-  });
-};
-
-const hydrateProfileLikeStates = async (newPosts: FeedPost[], profileVersion: number) => {
-  const articleIds = Array.from(new Set(newPosts.map((post) => post.id)));
-  if (articleIds.length === 0) {
+const loadProfile = (force = false) => {
+  invalidProfileError.value = '';
+  if (numericUserID.value === null) {
+    invalidProfileError.value = 'This profile URL is not valid.';
     return;
   }
-
-  const likeGeneration = profileLikeHydrationGeneration;
-  const versions = new Map(
-    articleIds.map((articleId) => [articleId, getLikeMutationVersion(articleId)]),
-  );
-
-  try {
-    const response = await getArticleLikeStates(articleIds);
-    if (
-      profileVersion !== profileRequestVersion
-      || likeGeneration !== profileLikeHydrationGeneration
-      || userId.value !== String(route.params.id ?? '').trim()
-    ) {
-      return;
-    }
-
-    const readyIds = new Set<number>();
-    response.items.forEach((item) => {
-      const capturedVersion = versions.get(item.article_id);
-      if (
-        capturedVersion === undefined
-        || getLikeMutationVersion(item.article_id) !== capturedVersion
-        || !findProfilePost(item.article_id)
-      ) {
-        return;
-      }
-
-      readyIds.add(item.article_id);
-      applyProfileLikeUpdate({
-        articleId: item.article_id,
-        likes: item.likes,
-        liked: item.liked,
-        status: 'ready',
-      }, capturedVersion);
-    });
-
-    response.unavailable_article_ids.forEach((articleId) => {
-      if (readyIds.has(articleId)) {
-        return;
-      }
-      const capturedVersion = versions.get(articleId);
-      if (
-        capturedVersion !== undefined
-        && getLikeMutationVersion(articleId) === capturedVersion
-        && findProfilePost(articleId)
-      ) {
-        applyProfileLikeUpdate({
-          articleId,
-          likes: 0,
-          liked: false,
-          status: 'unavailable',
-        }, capturedVersion);
-      }
-    });
-  } catch {
-    if (
-      profileVersion === profileRequestVersion
-      && likeGeneration === profileLikeHydrationGeneration
-      && userId.value === String(route.params.id ?? '').trim()
-    ) {
-      markProfileHydrationUnavailable(articleIds, versions);
-    }
-  }
-};
-const disconnectObserver = () => {
-  observer?.disconnect();
-  observer = null;
+  forceCloseEditProfile();
+  void profileStore.loadProfile(numericUserID.value, force);
 };
 
-const resetFeedState = () => {
-  feedRequestVersion += 1;
-  profileLikeHydrationGeneration += 1;
-  likePendingArticleIds.clear();
-  likeMutationVersions.clear();
-  pendingDeleteArticleIds.clear();
-  deleteErrors.clear();
-  articles.value = [];
-  articlesInitialLoading.value = false;
-  articlesLoadingMore.value = false;
-  articlesInitialError.value = '';
-  articlesLoadMoreError.value = '';
-  nextCursor.value = null;
-  hasMore.value = false;
-  loadedArticleIds.clear();
-  disconnectObserver();
-};
-
-const appendArticles = (rawArticles: Article[]): FeedPost[] => {
-  const newPosts = rawArticles
-    .filter((article) => {
-      if (loadedArticleIds.has(article.ID)) {
-        return false;
-      }
-
-      loadedArticleIds.add(article.ID);
-      return !feedStore.isArticleDeleted(article.ID);
-    })
-    .map(articleToFeedPost);
-
-  if (newPosts.length > 0) {
-    articles.value = [...articles.value, ...newPosts];
-  }
-  return newPosts;
-};
-
-const loadInitialPosts = async (id: string, profileVersion: number) => {
-  const feedVersion = ++feedRequestVersion;
-  articlesInitialLoading.value = true;
-  articlesInitialError.value = '';
-  articlesLoadMoreError.value = '';
-  articles.value = [];
-  nextCursor.value = null;
-  hasMore.value = false;
-  loadedArticleIds.clear();
-  disconnectObserver();
-
-  try {
-    const rawPage = await getUserArticles(id, { limit: pageSize });
-    if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
-      return;
-    }
-
-    const newPosts = appendArticles(rawPage.items);
-    nextCursor.value = rawPage.next_cursor;
-    hasMore.value = rawPage.next_cursor !== null;
-    void hydrateProfileLikeStates(newPosts, profileVersion);
-  } catch (error) {
-    if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
-      return;
-    }
-
-    articlesInitialError.value = getErrorStatus(error) === 404
-      ? 'The user posts could not be found.'
-      : "Try again to load this user's posts.";
-  } finally {
-    if (profileVersion === profileRequestVersion && feedVersion === feedRequestVersion) {
-      articlesInitialLoading.value = false;
-    }
-  }
-};
-
-const loadMorePosts = async () => {
-  const id = userId.value;
-  const profileVersion = profileRequestVersion;
-
-  if (
-    !id
-    || !user.value
-    || !hasMore.value
-    || articlesInitialLoading.value
-    || articlesLoadingMore.value
-    || articlesLoadMoreError.value
-  ) {
-    return;
-  }
-
-  const cursor = nextCursor.value;
-  if (cursor === null) {
-    return;
-  }
-  const feedVersion = ++feedRequestVersion;
-  articlesLoadingMore.value = true;
-  articlesLoadMoreError.value = '';
-
-  try {
-    const rawPage = await getUserArticles(id, { limit: pageSize, cursor });
-    if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
-      return;
-    }
-
-    const newPosts = appendArticles(rawPage.items);
-    nextCursor.value = rawPage.next_cursor;
-    hasMore.value = rawPage.next_cursor !== null;
-    void hydrateProfileLikeStates(newPosts, profileVersion);
-  } catch (error) {
-    if (profileVersion !== profileRequestVersion || feedVersion !== feedRequestVersion) {
-      return;
-    }
-
-    articlesLoadMoreError.value = getErrorStatus(error) === 404
-      ? 'The user posts could not be found.'
-      : 'Try again to load more posts.';
-  } finally {
-    if (profileVersion === profileRequestVersion && feedVersion === feedRequestVersion) {
-      articlesLoadingMore.value = false;
-    }
-  }
+const retryProfile = () => {
+  loadProfile(true);
 };
 
 const retryInitialPosts = () => {
-  if (user.value && userId.value) {
-    resetFeedState();
-    void loadInitialPosts(userId.value, profileRequestVersion);
+  if (numericUserID.value !== null) {
+    void profileStore.loadArticles(numericUserID.value, true);
+  }
+};
+
+const loadMorePosts = () => {
+  if (numericUserID.value !== null) {
+    void profileStore.loadMoreArticles(numericUserID.value);
   }
 };
 
 const retryLoadMore = () => {
-  articlesLoadMoreError.value = '';
-  void loadMorePosts();
-};
-
-const retryProfile = () => {
-  void loadProfile();
+  if (numericUserID.value !== null) {
+    profileStore.retryLoadMoreArticles(numericUserID.value);
+  }
 };
 
 const handleDeletePost = async (articleId: number) => {
-  if (pendingDeleteArticleIds.has(articleId)) {
-    return;
-  }
-
-  const ownerUserID = currentViewerID.value;
-  const post = findProfilePost(articleId);
-  if (
-    ownerUserID === null
-    || !authStore.isAuthenticated
-    || !post
-    || !canDeletePost(post)
-  ) {
-    return;
-  }
-
-  const capturedViewerGeneration = viewerGeneration;
-  const capturedProfileID = userId.value;
-  pendingDeleteArticleIds.add(articleId);
-  deleteErrors.delete(articleId);
-
-  const isCurrentDelete = () =>
-    authStore.isAuthenticated
-    && currentViewerID.value === ownerUserID
-    && viewerGeneration === capturedViewerGeneration
-    && userId.value === capturedProfileID
-    && pendingDeleteArticleIds.has(articleId);
-
-  const finishTerminalDelete = () => {
-    if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleId, ownerUserID)) {
-      return false;
-    }
-    articles.value = articles.value.filter((item) => item.id !== articleId);
-    loadedArticleIds.delete(articleId);
-    pendingDeleteArticleIds.delete(articleId);
-    deleteErrors.delete(articleId);
-    likePendingArticleIds.delete(articleId);
-    likeMutationVersions.delete(articleId);
-    feedRequestVersion += 1;
-    articlesLoadingMore.value = false;
-    articlesLoadMoreError.value = '';
+  const removed = await profileStore.deletePost(articleId, numericUserID.value ?? undefined);
+  if (removed) {
     disconnectObserver();
-    void nextTick(updateObserver);
-    return true;
-  };
-
-  try {
-    await deleteArticle(articleId);
-    finishTerminalDelete();
-  } catch (error) {
-    if (!isCurrentDelete()) {
-      return;
-    }
-
-    const status = getErrorStatus(error);
-    if (status === 404) {
-      finishTerminalDelete();
-      return;
-    }
-    deleteErrors.set(
-      articleId,
-      status === 403
-        ? 'You can only delete your own posts.'
-        : status === 401
-          ? 'Please log in again to delete this post.'
-          : 'Could not delete post. Please try again.',
-    );
-    pendingDeleteArticleIds.delete(articleId);
+    await nextTick(updateObserver);
   }
 };
 
-const handleLikeToggle = async (articleId: number) => {
-  const post = findProfilePost(articleId);
-  if (
-    !post
-    || post.likeStatus !== 'ready'
-    || likePendingArticleIds.has(articleId)
-  ) {
-    return;
-  }
-
-  const previousLiked = post.liked;
-  const previousLikes = post.likeCount;
-  const mutationVersion = bumpLikeMutationVersion(articleId);
-  const likeGeneration = profileLikeHydrationGeneration;
-  const profileVersion = profileRequestVersion;
-  const profileID = userId.value;
-  likePendingArticleIds.add(articleId);
-
-  applyProfileLikeUpdate({
-    articleId,
-    likes: previousLiked ? Math.max(0, previousLikes - 1) : previousLikes + 1,
-    liked: !previousLiked,
-    status: 'ready',
-  }, mutationVersion);
-
-  const isCurrentMutation = () =>
-    profileRequestVersion === profileVersion
-    && profileLikeHydrationGeneration === likeGeneration
-    && userId.value === profileID
-    && getLikeMutationVersion(articleId) === mutationVersion
-    && likePendingArticleIds.has(articleId);
-
-  try {
-    const result = previousLiked
-      ? await unlikeArticle(articleId)
-      : await likeArticle(articleId);
-
-    if (isCurrentMutation()) {
-      applyProfileLikeUpdate({
-        articleId,
-        likes: result.likes,
-        liked: result.liked,
-        status: 'ready',
-      }, mutationVersion);
-      likePendingArticleIds.delete(articleId);
-    }
-  } catch (error) {
-    if (!isCurrentMutation()) {
-      return;
-    }
-
-    applyProfileLikeUpdate({
-      articleId,
-      likes: previousLikes,
-      liked: previousLiked,
-      status: 'ready',
-    }, mutationVersion);
-
-    if (getErrorStatus(error) === 503) {
-      applyProfileLikeUpdate({
-        articleId,
-        likes: previousLikes,
-        liked: previousLiked,
-        status: 'unavailable',
-      }, mutationVersion);
-    }
-    likePendingArticleIds.delete(articleId);
-  }
-};
-
-const loadProfile = async () => {
-  const id = userId.value;
-  const profileVersion = ++profileRequestVersion;
-  forceCloseEditProfile();
-  invalidateSocialState();
-
-  user.value = null;
-  profileLoading.value = false;
-  profileError.value = '';
-  profileNotFound.value = false;
-  resetFeedState();
-
-  if (!id) {
-    profileError.value = 'This profile URL is not valid.';
-    return;
-  }
-
-  profileLoading.value = true;
-
-  try {
-    const loadedUser = await getUser(id);
-    if (profileVersion !== profileRequestVersion) {
-      return;
-    }
-
-    user.value = loadedUser;
-    profileLoading.value = false;
-    void loadInitialPosts(id, profileVersion);
-    void loadFollowStateForProfile(loadedUser.id, profileVersion);
-  } catch (error) {
-    if (profileVersion !== profileRequestVersion) {
-      return;
-    }
-
-    profileNotFound.value = getErrorStatus(error) === 404;
-    profileError.value = profileNotFound.value
-      ? ''
-      : 'The profile could not be loaded. Try again.';
-  } finally {
-    if (profileVersion === profileRequestVersion) {
-      profileLoading.value = false;
-    }
-  }
+const handleLikeToggle = (articleId: number) => {
+  void profileStore.toggleLike(articleId, numericUserID.value ?? undefined);
 };
 
 const goHome = () => {
@@ -1308,13 +748,16 @@ const goBack = () => {
     router.back();
     return;
   }
-
   goHome();
+};
+
+const disconnectObserver = () => {
+  observer?.disconnect();
+  observer = null;
 };
 
 const updateObserver = () => {
   disconnectObserver();
-
   if (
     !intersectionObserverAvailable
     || !sentinelRef.value
@@ -1328,61 +771,62 @@ const updateObserver = () => {
 
   observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
-      void loadMorePosts();
+      loadMorePosts();
     }
   }, { rootMargin: '240px 0px' });
-
   observer.observe(sentinelRef.value);
 };
+
+watch(userId, (nextID, previousID) => {
+  const previousNumericID = Number(previousID);
+  if (Number.isSafeInteger(previousNumericID) && previousNumericID > 0) {
+    saveCurrentScroll(previousNumericID);
+    profileStore.cancelPendingDeletesForProfile(previousNumericID);
+  }
+  invalidProfileError.value = '';
+  loadProfile();
+}, { immediate: true });
+
+watch(currentViewerID, (nextViewerID, previousViewerID) => {
+  if (nextViewerID === previousViewerID) return;
+  forceCloseEditProfile();
+  loadProfile();
+});
 
 watch(
   [
     userId,
-    () => user.value,
-    () => hasMore.value,
-    () => articlesLoadingMore.value,
-    () => articlesLoadMoreError.value,
-    () => articlesInitialLoading.value,
+    () => activeSession.value?.profileLoaded,
+    () => activeSession.value?.articlesLoaded,
+    () => activeSession.value?.hasMore,
+    () => activeSession.value?.articlesLoadingMore,
+    () => activeSession.value?.articlesLoadMoreError,
+    () => activeSession.value?.articlesInitialLoading,
   ],
   () => {
-    void nextTick(updateObserver);
+    void nextTick(() => {
+      restoreScroll();
+      void nextTick(updateObserver);
+    });
   },
   { flush: 'post' },
 );
-
-watch(userId, () => {
-  void loadProfile();
-}, { immediate: true });
-
-watch(currentViewerID, (viewerID, previousViewerID) => {
-  if (viewerID === previousViewerID) {
-    return;
-  }
-  viewerGeneration += 1;
-  forceCloseEditProfile();
-  pendingDeleteArticleIds.clear();
-  deleteErrors.clear();
-  invalidateSocialState();
-  if (viewerID !== null && user.value) {
-    void loadFollowStateForProfile(user.value.id, profileRequestVersion);
-  }
-});
 
 onMounted(() => {
   void nextTick(updateObserver);
 });
 
+watch(
+  () => [user.value?.id, user.value?.avatar_url],
+  () => {
+    avatarLoadFailed.value = false;
+    avatarLoaded.value = false;
+  },
+);
+
 onBeforeUnmount(() => {
+  if (numericUserID.value !== null) saveCurrentScroll(numericUserID.value);
   forceCloseEditProfile();
-  profileRequestVersion += 1;
-  feedRequestVersion += 1;
-  profileLikeHydrationGeneration += 1;
-  viewerGeneration += 1;
-  invalidateSocialState();
-  likePendingArticleIds.clear();
-  likeMutationVersions.clear();
-  pendingDeleteArticleIds.clear();
-  deleteErrors.clear();
   disconnectObserver();
 });
 </script>
@@ -1469,6 +913,7 @@ onBeforeUnmount(() => {
 }
 
 .profile-avatar {
+  position: relative;
   display: grid;
   width: 76px;
   height: 76px;
@@ -1844,10 +1289,19 @@ onBeforeUnmount(() => {
 }
 
 .profile-avatar img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.profile-avatar__fallback {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
 }
 
 .profile-identity__bio {

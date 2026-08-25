@@ -6,13 +6,15 @@
     @click.stop
   >
     <span class="author-avatar" aria-hidden="true">
+      <span class="author-avatar__fallback">{{ initial }}</span>
       <img
         v-if="avatarURL && !avatarLoadFailed"
         :src="avatarURL"
         alt=""
-        @error="avatarLoadFailed = true"
+        v-show="avatarLoaded"
+        @load="avatarLoaded = true"
+        @error="avatarLoadFailed = true; avatarLoaded = false"
       />
-      <span v-else>{{ initial }}</span>
     </span>
     <span class="author-copy">
       <span class="author-name">{{ displayName }}</span>
@@ -37,11 +39,13 @@ const displayName = computed(() => props.author.display_name.trim() || username.
 const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperCase() || '?');
 const avatarURL = computed(() => props.author.avatar_url.trim());
 const avatarLoadFailed = ref(false);
+const avatarLoaded = ref(false);
 const now = useNow();
 const postDate = computed(() => formatPostDate(props.createdAt, now.value));
 
 watch(() => [props.author.id, props.author.avatar_url], () => {
   avatarLoadFailed.value = false;
+  avatarLoaded.value = false;
 });
 </script>
 
@@ -62,6 +66,7 @@ watch(() => [props.author.id, props.author.avatar_url], () => {
 }
 
 .author-avatar {
+  position: relative;
   display: grid;
   width: 30px;
   height: 30px;
@@ -77,9 +82,18 @@ watch(() => [props.author.id, props.author.avatar_url], () => {
 }
 
 .author-avatar img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.author-avatar__fallback {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
 }
 
 .author-copy {

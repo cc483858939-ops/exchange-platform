@@ -3,6 +3,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -36,6 +37,7 @@ const mocks = vi.hoisted(() => ({
     isArticleDeleted: vi.fn(),
     markArticleDeleted: vi.fn(),
     replaceAuthorIdentity: vi.fn(),
+    applyLikeStateUpdate: vi.fn(),
   },
 }));
 
@@ -138,6 +140,7 @@ const mountProfile = () => mount(UserProfileView, {
 
 describe('UserProfileView cursor pagination', () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.setRouteID('7');
     mocks.authStore.currentIdentity.id = 7;

@@ -3,6 +3,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -40,6 +41,7 @@ const mocks = vi.hoisted(() => ({
     isArticleDeleted: vi.fn(),
     markArticleDeleted: vi.fn(),
     replaceAuthorIdentity: vi.fn(),
+    applyLikeStateUpdate: vi.fn(),
   },
 }));
 
@@ -230,6 +232,7 @@ afterAll(() => {
 
 describe('UserProfileView observer and cursor concurrency', () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     installFakeIntersectionObserver();
     vi.resetAllMocks();
     FakeIntersectionObserver.instances.length = 0;

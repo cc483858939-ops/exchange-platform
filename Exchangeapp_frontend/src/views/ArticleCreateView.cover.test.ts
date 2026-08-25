@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   feedStore: {
     registerPublishedArticle: vi.fn(),
   },
+  profileSessionStore: {
+    registerPublishedArticle: vi.fn(),
+  },
   getUser: vi.fn(),
   createArticle: vi.fn(),
   uploadArticleCover: vi.fn(),
@@ -41,6 +44,10 @@ vi.mock('../store/auth', async () => {
 
 vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
+}));
+
+vi.mock('../store/profileSession', () => ({
+  useProfileSessionStore: () => mocks.profileSessionStore,
 }));
 
 vi.mock('../services/userService', () => ({

@@ -78,6 +78,19 @@ describe('MobileHomeHeader', () => {
     expect(profile.attributes('data-route-id')).toBe('123');
   });
 
+  it('keeps the initial visible until the avatar image has loaded', async () => {
+    setAuthenticated(identity({ avatar_url: '/avatar.webp' }));
+    const wrapper = mountHeader();
+    const image = wrapper.find('img');
+
+    expect(wrapper.find('.mobile-home-header__avatar-fallback').text()).toBe('A');
+    expect((image.element as HTMLElement).style.display).toBe('none');
+
+    await image.trigger('load');
+    await nextTick();
+    expect((image.element as HTMLElement).style.display).not.toBe('none');
+  });
+
   it('falls back to the display name initial when the avatar fails', async () => {
     setAuthenticated(identity({ avatar_url: '/avatar.webp' }));
     const wrapper = mountHeader();
