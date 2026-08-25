@@ -3,6 +3,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { ElMessage } from 'element-plus';
 import LiveExchangeView from './LiveExchangeView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -33,11 +34,22 @@ const quote = {
   freshness: 'fresh' as const,
 };
 
+const swappedQuote = {
+  ...quote,
+  from: 'USD',
+  to: 'CNY',
+  rate: '7.12',
+  convertedAmount: '712.00',
+};
+
 const mountExchange = () => mount(LiveExchangeView, {
   global: {
     stubs: {
       ElAlert: { template: '<div class="el-alert"><slot /></div>' },
-      ElButton: { template: '<button type="button"><slot /></button>' },
+      ElButton: {
+        emits: ['click'],
+        template: '<button type="button" @click="$emit(\'click\', $event)"><slot /></button>',
+      },
       ElForm: {
         inheritAttrs: false,
         template: '<form @submit="$emit(\'submit\', $event)"><slot /></form>',
@@ -66,6 +78,8 @@ describe('LiveExchangeView', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: vi.fn() }));
+    vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: vi.fn() }));
     mocks.get
       .mockResolvedValueOnce({ data: currencies })
       .mockResolvedValueOnce({ data: quote });
@@ -111,5 +125,37 @@ describe('LiveExchangeView', () => {
     expect(mocks.get).toHaveBeenCalledTimes(2);
     expect(wrapper.text()).toContain('14.00 USD');
     expect(window.scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates a swap in the View before requesting the swapped quote', async () => {
+    mocks.get.mockResolvedValueOnce({ data: swappedQuote });
+    wrapper = mountExchange();
+    await flushPromises();
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    await wrapper.find('.swap-button').trigger('click');
+    await flushPromises();
+
+    expect(mocks.get).toHaveBeenNthCalledWith(3, '/exchange/quote', {
+      params: { from: 'USD', to: 'CNY', amount: '100' },
+    });
+    expect(wrapper.text()).toContain('712.00 CNY');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+  });
+
+  it.each(['abc', '0'])('does not request a quote when swapping with invalid amount %s', async (amount) => {
+    wrapper = mountExchange();
+    await flushPromises();
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    await wrapper.get('input').setValue(amount);
+    mocks.get.mockClear();
+
+    await wrapper.find('.swap-button').trigger('click');
+    await flushPromises();
+
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(ElMessage.error).toHaveBeenCalledWith('请输入大于零的金额');
   });
 });

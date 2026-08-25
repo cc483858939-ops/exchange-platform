@@ -27,6 +27,7 @@ vi.mock('../services/userService', () => ({
   unfollowUser: mocks.unfollowUser,
 }));
 vi.mock('../store/sessionSync', () => ({
+  registerSearchSessionSync: vi.fn(),
   syncExternalFollowState: mocks.externalFollow,
 }));
 

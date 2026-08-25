@@ -123,18 +123,25 @@ describe('exchange session store', () => {
     expect(store.quoteError).toContain('quote offline');
   });
 
-  it('swaps currencies and requests a version-safe quote', async () => {
+  it('swaps currencies in the store without issuing a quote request', () => {
     const store = useExchangeSessionStore();
     store.quote = quote('100');
-    mocks.get.mockResolvedValueOnce({ data: quote('100', 'USD', 'CNY') });
-    const result = await store.swapCurrencies();
+    const shouldRefresh = store.swapCurrencies();
 
     expect(store.form.fromCurrency).toBe('USD');
     expect(store.form.toCurrency).toBe('CNY');
-    expect(mocks.get).toHaveBeenCalledWith('/exchange/quote', {
-      params: { from: 'USD', to: 'CNY', amount: '100' },
-    });
-    expect(result.applied).toBe(true);
-    expect(store.quote?.from).toBe('USD');
+    expect(shouldRefresh).toBe(true);
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(store.quote?.from).toBe('CNY');
+  });
+
+  it('only swaps currencies when no quote exists', () => {
+    const store = useExchangeSessionStore();
+    const shouldRefresh = store.swapCurrencies();
+
+    expect(store.form.fromCurrency).toBe('USD');
+    expect(store.form.toCurrency).toBe('CNY');
+    expect(shouldRefresh).toBe(false);
+    expect(mocks.get).not.toHaveBeenCalled();
   });
 });

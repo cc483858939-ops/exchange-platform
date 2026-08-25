@@ -177,11 +177,9 @@ export const useExchangeSessionStore = defineStore('exchangeSession', () => {
   };
 
   const swapCurrencies = () => {
+    const shouldRefreshQuote = quote.value !== null;
     [form.fromCurrency, form.toCurrency] = [form.toCurrency, form.fromCurrency];
-    if (quote.value) {
-      return requestQuote();
-    }
-    return Promise.resolve<QuoteRequestResult>({ applied: false, success: true });
+    return shouldRefreshQuote;
   };
 
   const saveScroll = (value: number) => {

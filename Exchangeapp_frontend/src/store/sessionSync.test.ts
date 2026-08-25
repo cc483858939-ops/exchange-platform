@@ -4,6 +4,7 @@ import type { UserFollowState } from '../services/userService';
 import {
   registerHomeTimelineSync,
   registerProfileSessionSync,
+  registerSearchSessionSync,
   syncExternalArticleLikeState,
   syncExternalArticleRemoval,
   syncExternalCommentCount,
@@ -42,9 +43,13 @@ const registerSinks = () => {
     removeArticleEverywhereLocal: vi.fn(),
     replaceAuthorIdentityEverywhereLocal: vi.fn(),
   };
+  const search = {
+    applyExternalFollowStateLocal: vi.fn().mockReturnValue(true),
+  };
   registerHomeTimelineSync(home);
   registerProfileSessionSync(profile);
-  return { home, profile };
+  registerSearchSessionSync(search);
+  return { home, profile, search };
 };
 
 describe('sessionSync external mutation sinks', () => {
@@ -80,21 +85,25 @@ describe('sessionSync external mutation sinks', () => {
     expect(profile.applyCommentCountUpdateEverywhereLocal).toHaveBeenCalledWith(update);
   });
 
-  it('routes Profile follow success only to Home reconciliation', () => {
-    const { home, profile } = registerSinks();
+  it('routes Profile follow success to Home and Search only', () => {
+    const { home, profile, search } = registerSinks();
 
     syncProfileFollowState(followState);
 
     expect(home.reconcileFollowStateLocal).toHaveBeenCalledWith(followState);
     expect(profile.applyExternalFollowStateLocal).not.toHaveBeenCalled();
+    expect(search.applyExternalFollowStateLocal).toHaveBeenCalledOnce();
+    expect(search.applyExternalFollowStateLocal).toHaveBeenCalledWith(followState);
   });
 
-  it('routes external follow success to Home and Profile', () => {
-    const { home, profile } = registerSinks();
+  it('routes external follow success to Home, Profile, and Search', () => {
+    const { home, profile, search } = registerSinks();
 
     syncExternalFollowState(followState);
 
     expect(home.reconcileFollowStateLocal).toHaveBeenCalledOnce();
     expect(profile.applyExternalFollowStateLocal).toHaveBeenCalledOnce();
+    expect(search.applyExternalFollowStateLocal).toHaveBeenCalledOnce();
+    expect(search.applyExternalFollowStateLocal).toHaveBeenCalledWith(followState);
   });
 });

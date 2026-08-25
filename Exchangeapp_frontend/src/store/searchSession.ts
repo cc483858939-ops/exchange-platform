@@ -6,8 +6,9 @@ import {
   unfollowUser,
   type UserConnectionItem,
   type UserConnectionPage,
+  type UserFollowState,
 } from '../services/userService';
-import { syncExternalFollowState } from './sessionSync';
+import { registerSearchSessionSync, syncExternalFollowState } from './sessionSync';
 
 const pageSize = 20;
 
@@ -302,11 +303,22 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     }
   };
 
+  const applyExternalFollowStateLocal = (state: UserFollowState) => {
+    const item = items.value.find(candidate => candidate.user.id === state.user_id);
+    if (!item) {
+      return false;
+    }
+    item.following = state.following;
+    return true;
+  };
+
   const saveScroll = (value: number) => {
     if (Number.isFinite(value) && value >= 0) {
       scrollY.value = value;
     }
   };
+
+  registerSearchSessionSync({ applyExternalFollowStateLocal });
 
   return {
     viewerID,
@@ -333,6 +345,7 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     reload,
     loadMore,
     toggleFollow,
+    applyExternalFollowStateLocal,
     saveScroll,
   };
 });

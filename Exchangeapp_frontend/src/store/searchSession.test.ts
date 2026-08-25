@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   syncExternalFollowState: vi.fn(),
+  registerSearchSessionSync: vi.fn(),
 }));
 
 vi.mock('../services/userService', () => ({
@@ -15,6 +16,7 @@ vi.mock('../services/userService', () => ({
 }));
 
 vi.mock('./sessionSync', () => ({
+  registerSearchSessionSync: mocks.registerSearchSessionSync,
   syncExternalFollowState: mocks.syncExternalFollowState,
 }));
 
@@ -59,6 +61,88 @@ describe('search session store', () => {
     store.activateQuery('alice');
     await store.loadInitial();
     expect(mocks.searchUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers a local sink that updates a cached row without refetching', async () => {
+    mocks.searchUsers.mockResolvedValueOnce({ items: [item(8, false)], has_more: false });
+    const store = useSearchSessionStore();
+    store.setViewer(7);
+    store.activateQuery('alice');
+    await vi.waitFor(() => expect(store.loaded).toBe(true));
+    const sink = mocks.registerSearchSessionSync.mock.calls.at(-1)?.[0];
+    const requestCount = mocks.searchUsers.mock.calls.length;
+
+    expect(sink.applyExternalFollowStateLocal({
+      user_id: 8,
+      following: true,
+      follower_count: 1,
+      following_count: 0,
+    })).toBe(true);
+    expect(store.items[0].following).toBe(true);
+    expect(mocks.searchUsers).toHaveBeenCalledTimes(requestCount);
+  });
+
+  it('does not synthesize a missing external follow target', async () => {
+    mocks.searchUsers.mockResolvedValueOnce({ items: [item(8, false)], has_more: false });
+    const store = useSearchSessionStore();
+    store.setViewer(7);
+    store.activateQuery('alice');
+    await vi.waitFor(() => expect(store.loaded).toBe(true));
+    const sink = mocks.registerSearchSessionSync.mock.calls.at(-1)?.[0];
+    const before = [...store.items];
+
+    expect(sink.applyExternalFollowStateLocal({
+      user_id: 9,
+      following: true,
+      follower_count: 1,
+      following_count: 0,
+    })).toBe(false);
+    expect(store.items).toEqual(before);
+    expect(mocks.searchUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps search lineage and pending mutation state untouched by an external update', async () => {
+    const followPending = deferred<{ user_id: number; following: boolean; follower_count: number; following_count: number }>();
+    mocks.searchUsers.mockResolvedValueOnce({ items: [item(8, false)], has_more: true });
+    mocks.followUser.mockReturnValueOnce(followPending.promise);
+    const store = useSearchSessionStore();
+    store.setViewer(7);
+    store.activateQuery('alice');
+    await vi.waitFor(() => expect(store.loaded).toBe(true));
+    store.saveScroll(360);
+    const mutation = store.toggleFollow(8);
+    const before = {
+      query: store.query,
+      nextOffset: store.nextOffset,
+      hasMore: store.hasMore,
+      scrollY: store.scrollY,
+      pageGeneration: store.pageGeneration,
+      paginationRequestVersion: store.paginationRequestVersion,
+      pending: store.pendingMutationIDs.has(8),
+      mutationSequence: store.mutationSequence,
+    };
+    const sink = mocks.registerSearchSessionSync.mock.calls.at(-1)?.[0];
+
+    expect(sink.applyExternalFollowStateLocal({
+      user_id: 8,
+      following: false,
+      follower_count: 0,
+      following_count: 0,
+    })).toBe(true);
+    expect(store.items[0].following).toBe(false);
+    expect({
+      query: store.query,
+      nextOffset: store.nextOffset,
+      hasMore: store.hasMore,
+      scrollY: store.scrollY,
+      pageGeneration: store.pageGeneration,
+      paginationRequestVersion: store.paginationRequestVersion,
+      pending: store.pendingMutationIDs.has(8),
+      mutationSequence: store.mutationSequence,
+    }).toEqual(before);
+
+    followPending.resolve({ user_id: 8, following: true, follower_count: 1, following_count: 0 });
+    await mutation;
   });
 
   it('ignores an old query response after a query change', async () => {

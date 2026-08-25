@@ -131,12 +131,9 @@ const requestQuote = async () => {
 };
 
 const swapCurrencies = async () => {
-  const result = await exchangeSession.swapCurrencies();
-  if (!mounted || !result.applied) return;
-  if (!result.success) {
-    ElMessage.error(quoteError.value || '暂时无法获取报价，请稍后重试。');
-  } else if (result.data?.freshness === 'stale') {
-    ElMessage.warning('当前结果使用最近缓存行情');
+  const shouldRefreshQuote = exchangeSession.swapCurrencies();
+  if (shouldRefreshQuote) {
+    await requestQuote();
   }
 };
 

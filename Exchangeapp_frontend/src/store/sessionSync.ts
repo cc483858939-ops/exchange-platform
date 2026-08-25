@@ -25,8 +25,13 @@ export type ProfileSessionSync = {
   replaceAuthorIdentityEverywhereLocal: (author: PublicAuthor) => void;
 };
 
+export type SearchSessionSync = {
+  applyExternalFollowStateLocal: (state: UserFollowState) => boolean;
+};
+
 let homeTimelineSync: HomeTimelineSync | null = null;
 let profileSessionSync: ProfileSessionSync | null = null;
+let searchSessionSync: SearchSessionSync | null = null;
 
 export const registerHomeTimelineSync = (sync: HomeTimelineSync) => {
   homeTimelineSync = sync;
@@ -34,6 +39,10 @@ export const registerHomeTimelineSync = (sync: HomeTimelineSync) => {
 
 export const registerProfileSessionSync = (sync: ProfileSessionSync) => {
   profileSessionSync = sync;
+};
+
+export const registerSearchSessionSync = (sync: SearchSessionSync) => {
+  searchSessionSync = sync;
 };
 
 export const syncHomeLikeState = (update: FeedLikeStateUpdate) =>
@@ -75,9 +84,11 @@ export const syncExternalCommentCount = (update: ArticleCommentCountUpdate) => {
 
 export const syncProfileFollowState = (state: UserFollowState) => {
   homeTimelineSync?.reconcileFollowStateLocal(state);
+  searchSessionSync?.applyExternalFollowStateLocal(state);
 };
 
 export const syncExternalFollowState = (state: UserFollowState) => {
   homeTimelineSync?.reconcileFollowStateLocal(state);
   profileSessionSync?.applyExternalFollowStateLocal(state);
+  searchSessionSync?.applyExternalFollowStateLocal(state);
 };
