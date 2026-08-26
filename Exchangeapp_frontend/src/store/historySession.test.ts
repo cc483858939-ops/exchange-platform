@@ -140,6 +140,130 @@ describe('historySession store', () => {
     expect(store.loaded).toBe(false);
   });
 
+  it('keeps unrelated pending hydration alive when an uncached article is deleted', async () => {
+    const store = createStore();
+    const hydration = deferred<{
+      items: Array<{ article_id: number; likes: number; liked: boolean }>;
+      unavailable_article_ids: number[];
+    }>();
+    mocks.getLikedHistory.mockResolvedValueOnce({
+      items: [article(1), article(2)],
+      next_cursor: null,
+    });
+    mocks.getArticleLikeStates.mockImplementationOnce(() => hydration.promise);
+
+    await store.loadInitial();
+    await vi.waitFor(() => expect(mocks.getArticleLikeStates).toHaveBeenCalledWith([1, 2]));
+    const requestVersion = store.requestVersion;
+    const pagingVersion = store.pagingVersion;
+    const hydrationGeneration = store.likeHydrationGeneration;
+
+    expect(store.removeArticleLocal(99)).toBe(false);
+    expect(store.requestVersion).toBe(requestVersion);
+    expect(store.pagingVersion).toBe(pagingVersion);
+    expect(store.likeHydrationGeneration).toBe(hydrationGeneration);
+
+    hydration.resolve({
+      items: [
+        { article_id: 1, likes: 11, liked: true },
+        { article_id: 2, likes: 12, liked: true },
+      ],
+      unavailable_article_ids: [],
+    });
+    await vi.waitFor(() => expect(store.items.every(item => item.likeStatus === 'ready')).toBe(true));
+
+    expect(store.items.map(item => [item.id, item.likeCount])).toEqual([[1, 11], [2, 12]]);
+  });
+
+  it('tombstones a deleted article while hydrating the other IDs in the batch', async () => {
+    const store = createStore();
+    const hydration = deferred<{
+      items: Array<{ article_id: number; likes: number; liked: boolean }>;
+      unavailable_article_ids: number[];
+    }>();
+    mocks.getLikedHistory.mockResolvedValueOnce({
+      items: [article(1), article(2)],
+      next_cursor: null,
+    });
+    mocks.getArticleLikeStates.mockImplementationOnce(() => hydration.promise);
+
+    await store.loadInitial();
+    await vi.waitFor(() => expect(mocks.getArticleLikeStates).toHaveBeenCalledWith([1, 2]));
+    expect(store.removeArticleLocal(1)).toBe(true);
+
+    hydration.resolve({
+      items: [
+        { article_id: 1, likes: 11, liked: true },
+        { article_id: 2, likes: 12, liked: true },
+      ],
+      unavailable_article_ids: [],
+    });
+    await vi.waitFor(() => expect(store.items[0]?.likeStatus).toBe('ready'));
+
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    expect(store.items[0].likeCount).toBe(12);
+  });
+
+  it('does not invalidate an initial page when its response contains a deleted article', async () => {
+    const store = createStore();
+    const page = deferred<{ items: Article[]; next_cursor: string | null }>();
+    mocks.getLikedHistory.mockImplementationOnce(() => page.promise);
+    const request = store.loadInitial();
+
+    expect(store.initialLoading).toBe(true);
+    expect(store.removeArticleLocal(1)).toBe(false);
+    page.resolve({ items: [article(1), article(2)], next_cursor: null });
+    await request;
+
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    expect(store.loaded).toBe(true);
+    expect(store.initialLoading).toBe(false);
+  });
+
+  it('does not invalidate a pending page when its response contains a deleted article', async () => {
+    const store = createStore();
+    mocks.getLikedHistory.mockResolvedValueOnce({ items: [article(1)], next_cursor: 'cursor-1' });
+    await store.loadInitial();
+
+    const page = deferred<{ items: Article[]; next_cursor: string | null }>();
+    mocks.getLikedHistory.mockImplementationOnce(() => page.promise);
+    const request = store.loadMore();
+
+    expect(store.loadingMore).toBe(true);
+    expect(store.removeArticleLocal(3)).toBe(false);
+    page.resolve({ items: [article(3), article(4)], next_cursor: null });
+    await request;
+
+    expect(store.items.map(item => item.id)).toEqual([1, 4]);
+    expect(store.loadingMore).toBe(false);
+    expect(store.nextCursor).toBe(null);
+  });
+
+  it('does not restore a deleted unlike snapshot from a later liked state', async () => {
+    const store = createStore();
+    await loadReady(store, [1]);
+    const unlike = deferred<{ likes: number; liked: boolean }>();
+    mocks.unlikeArticle.mockImplementationOnce(() => unlike.promise);
+
+    const request = store.toggleUnlike(1);
+    expect(store.items).toEqual([]);
+    expect(store.removeArticleLocal(1)).toBe(true);
+    const pagingVersion = store.pagingVersion;
+    expect(store.applyExternalLikeStateLocal({
+      articleId: 1,
+      likes: 99,
+      liked: true,
+      status: 'ready',
+    })).toBe(false);
+    expect(store.items).toEqual([]);
+    expect(store.stale).toBe(false);
+    expect(store.pagingVersion).toBe(pagingVersion);
+
+    unlike.resolve({ likes: 99, liked: true });
+    await request;
+    expect(store.items).toEqual([]);
+  });
+
   it('preserves unlike success, unexpected like success, and failure rollback semantics', async () => {
     const store = createStore();
     await loadReady(store, [1, 2, 3]);

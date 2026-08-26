@@ -166,7 +166,6 @@ const restoreScrollOnce = async () => {
   if (
     typeof window !== 'undefined'
     && typeof window.scrollTo === 'function'
-    && !window.navigator.userAgent.toLowerCase().includes('jsdom')
   ) {
     window.scrollTo({ top: scrollY.value, behavior: 'auto' });
   }

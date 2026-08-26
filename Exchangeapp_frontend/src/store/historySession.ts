@@ -60,6 +60,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
 
   const loadedArticleIDs = new Set<number>();
   const removedSnapshots = new Map<number, RemovedSnapshot>();
+  const deletedArticleIDs = new Set<number>();
   const likeMutationVersions = reactive(new Map<number, number>());
   let freshnessVersion = 0;
 
@@ -95,6 +96,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     scrollY.value = 0;
     loadedArticleIDs.clear();
     removedSnapshots.clear();
+    deletedArticleIDs.clear();
     freshnessVersion += 1;
     clearMutationState();
   };
@@ -150,6 +152,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   };
 
   const restoreSnapshot = (articleID: number, update?: FeedLikeStateUpdate) => {
+    if (deletedArticleIDs.has(articleID)) {
+      removedSnapshots.delete(articleID);
+      return false;
+    }
     const snapshot = removedSnapshots.get(articleID);
     if (!snapshot || findPost(articleID)) {
       return false;
@@ -171,7 +177,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     const additions: FeedPost[] = [];
     articles.forEach((article) => {
       if (
-        loadedArticleIDs.has(article.ID)
+        deletedArticleIDs.has(article.ID)
+        || loadedArticleIDs.has(article.ID)
         || removedSnapshots.has(article.ID)
       ) {
         return;
@@ -213,6 +220,9 @@ export const useHistorySessionStore = defineStore('historySession', () => {
 
       const readyArticleIDs = new Set<number>();
       (response.items ?? []).forEach((item) => {
+        if (deletedArticleIDs.has(item.article_id)) {
+          return;
+        }
         const capturedVersion = capturedMutationVersions.get(item.article_id);
         if (
           capturedVersion === undefined
@@ -240,7 +250,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       });
 
       (response.unavailable_article_ids ?? []).forEach((articleID) => {
-        if (readyArticleIDs.has(articleID)) {
+        if (deletedArticleIDs.has(articleID) || readyArticleIDs.has(articleID)) {
           return;
         }
         const capturedVersion = capturedMutationVersions.get(articleID);
@@ -258,6 +268,9 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         return;
       }
       articleIDs.forEach((articleID) => {
+        if (deletedArticleIDs.has(articleID)) {
+          return;
+        }
         const capturedVersion = capturedMutationVersions.get(articleID);
         const post = findPost(articleID);
         if (
@@ -413,7 +426,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
           return;
         }
         freshIDs.add(article.ID);
-        if (removedSnapshots.has(article.ID)) {
+        if (deletedArticleIDs.has(article.ID) || removedSnapshots.has(article.ID)) {
           return;
         }
         const freshPost = articleToFeedPost(article);
@@ -423,7 +436,9 @@ export const useHistorySessionStore = defineStore('historySession', () => {
           : freshPost);
       });
 
-      const cachedTail = oldItems.filter(post => !freshIDs.has(post.id));
+      const cachedTail = oldItems.filter(post => (
+        !deletedArticleIDs.has(post.id) && !freshIDs.has(post.id)
+      ));
       items.value = [...freshPosts, ...cachedTail];
       loadedArticleIDs.clear();
       items.value.forEach(post => loadedArticleIDs.add(post.id));
@@ -530,6 +545,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   };
 
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
+    if (deletedArticleIDs.has(update.articleId)) {
+      removedSnapshots.delete(update.articleId);
+      return false;
+    }
     bumpLikeMutationVersion(update.articleId);
     pendingUnlikeArticleIDs.value.delete(update.articleId);
     mutationErrors.value.delete(update.articleId);
@@ -587,12 +606,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
 
   const removeArticleLocal = (articleID: number) => {
     const hadItem = Boolean(findPost(articleID) || removedSnapshots.has(articleID));
-    requestVersion.value += 1;
-    pagingVersion.value += 1;
-    likeHydrationGeneration.value += 1;
-    initialLoading.value = false;
-    loadingMore.value = false;
-    revalidating.value = false;
+    deletedArticleIDs.add(articleID);
     items.value = items.value.filter(post => post.id !== articleID);
     loadedArticleIDs.delete(articleID);
     removedSnapshots.delete(articleID);

@@ -5,7 +5,9 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import HistoryView from './HistoryView.vue';
+import { useHistorySessionStore } from '../store/historySession';
 import type { Article } from '../types/Article';
+import { articleToFeedPost } from '../utils/feedPost';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
@@ -104,6 +106,10 @@ const mountHistory = () => mount(HistoryView, {
   },
 });
 
+const setWindowScrollY = (value: number) => {
+  Object.defineProperty(window, 'scrollY', { configurable: true, value });
+};
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -123,9 +129,12 @@ describe('HistoryView', () => {
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getArticleLikeStates.mockResolvedValue({ items: [], unavailable_article_ids: [] });
     mocks.unlikeArticle.mockResolvedValue({ likes: 0, liked: false });
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    setWindowScrollY(0);
   });
 
   afterEach(() => {
+    setWindowScrollY(0);
     vi.restoreAllMocks();
   });
 
@@ -479,5 +488,65 @@ describe('HistoryView', () => {
     expect(mocks.getLikedHistory).toHaveBeenCalledTimes(2);
     expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
     expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
+  });
+
+  it('restores cached History scroll once and ignores later session mutations', async () => {
+    setAuth(7);
+    const historySession = useHistorySessionStore();
+    historySession.items = [articleToFeedPost(article(1))];
+    historySession.loaded = true;
+    historySession.initialLoading = false;
+    historySession.scrollY = 640;
+
+    const scrollTo = window.scrollTo as ReturnType<typeof vi.fn>;
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 640, behavior: 'auto' });
+
+    historySession.items = [...historySession.items, articleToFeedPost(article(2))];
+    historySession.nextCursor = 'cursor-2';
+    historySession.loadingMore = true;
+    historySession.loadingMore = false;
+    historySession.revalidating = true;
+    historySession.revalidating = false;
+    historySession.applyCommentCountUpdateLocal({ articleId: 1, commentCount: 12 });
+    historySession.applyExternalLikeStateLocal({
+      articleId: 1,
+      likes: 8,
+      liked: true,
+      status: 'ready',
+    });
+    historySession.stale = true;
+    await flushPromises();
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('saves History scroll on unmount and restores it once on the next mount', async () => {
+    setAuth(7);
+    const historySession = useHistorySessionStore();
+    historySession.items = [articleToFeedPost(article(1))];
+    historySession.loaded = true;
+    historySession.initialLoading = false;
+    historySession.scrollY = 640;
+
+    const scrollTo = window.scrollTo as ReturnType<typeof vi.fn>;
+    const firstWrapper = mountHistory();
+    await flushPromises();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    setWindowScrollY(880);
+    firstWrapper.unmount();
+    scrollTo.mockClear();
+
+    const secondWrapper = mountHistory();
+    await flushPromises();
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 880, behavior: 'auto' });
+    secondWrapper.unmount();
   });
 });

@@ -3,8 +3,9 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import UserConnectionsView from './UserConnectionsView.vue';
+import { useConnectionsSessionStore } from '../store/connectionsSession';
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
@@ -69,6 +70,10 @@ const mountConnections = () => mount(UserConnectionsView, {
   },
 });
 
+const setWindowScrollY = (value: number) => {
+  Object.defineProperty(window, 'scrollY', { configurable: true, value });
+};
+
 describe('UserConnectionsView mutation synchronization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -92,6 +97,13 @@ describe('UserConnectionsView mutation synchronization', () => {
     });
     mocks.followUser.mockResolvedValue(followResponse(8, true));
     mocks.unfollowUser.mockResolvedValue(followResponse(8, false));
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    setWindowScrollY(0);
+  });
+
+  afterEach(() => {
+    setWindowScrollY(0);
+    vi.restoreAllMocks();
   });
 
   it('syncs successful unfollow and preserves own Following removal', async () => {
@@ -134,5 +146,68 @@ describe('UserConnectionsView mutation synchronization', () => {
 
     expect(wrapper.find('.test-follow').attributes('data-following')).toBe('false');
     expect(mocks.externalFollow).not.toHaveBeenCalled();
+  });
+
+  it('restores scroll independently per connection mode and target, once per route entry', async () => {
+    mocks.route.name = 'UserFollowing';
+    mocks.route.params.id = '42';
+    mocks.getUser.mockResolvedValue(user(42));
+    const connectionsSession = useConnectionsSessionStore();
+    const target42 = connectionsSession.activate(42, 'following')!;
+    await flushPromises();
+    connectionsSession.activate(42, 'followers');
+    await flushPromises();
+    const target99 = connectionsSession.activate(99, 'following')!;
+    await flushPromises();
+
+    target42.following.scrollY = 400;
+    target42.followers.scrollY = 900;
+    target99.following.scrollY = 1100;
+
+    const scrollTo = window.scrollTo as ReturnType<typeof vi.fn>;
+    const wrapper = mountConnections();
+    await flushPromises();
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 400, behavior: 'auto' });
+
+    setWindowScrollY(500);
+    mocks.route.name = 'UserFollowers';
+    await flushPromises();
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 900, behavior: 'auto' });
+
+    setWindowScrollY(700);
+    mocks.route.name = 'UserFollowing';
+    await flushPromises();
+    expect(scrollTo).toHaveBeenCalledTimes(3);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 500, behavior: 'auto' });
+
+    setWindowScrollY(750);
+    mocks.route.params.id = '99';
+    await flushPromises();
+    expect(scrollTo).toHaveBeenCalledTimes(4);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1100, behavior: 'auto' });
+
+    setWindowScrollY(1200);
+    mocks.route.params.id = '42';
+    await flushPromises();
+    expect(scrollTo).toHaveBeenCalledTimes(5);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 750, behavior: 'auto' });
+
+    scrollTo.mockClear();
+    const activeFollowing = target42.following;
+    activeFollowing.items = [...activeFollowing.items, { user: user(123), following: false }];
+    activeFollowing.hasMore = true;
+    activeFollowing.loadingMore = true;
+    activeFollowing.loadingMore = false;
+    activeFollowing.loadMoreError = 'temporary';
+    activeFollowing.stale = true;
+    activeFollowing.revalidating = true;
+    connectionsSession.pendingMutationIDs.add(123);
+    await flushPromises();
+
+    expect(scrollTo).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 });
