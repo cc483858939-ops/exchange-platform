@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import UserConnectionsView from './UserConnectionsView.vue';
@@ -14,10 +15,15 @@ const mocks = vi.hoisted(() => ({
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   externalFollow: vi.fn(),
+  connectionsSync: null as any,
+  getProfileSession: vi.fn(),
 }));
 
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route }));
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
+vi.mock('../store/profileSession', () => ({
+  useProfileSessionStore: () => ({ getSession: mocks.getProfileSession }),
+}));
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
   getUserFollowers: mocks.getUserFollowers,
@@ -26,7 +32,11 @@ vi.mock('../services/userService', () => ({
   unfollowUser: mocks.unfollowUser,
 }));
 vi.mock('../store/sessionSync', () => ({
-  syncExternalFollowState: mocks.externalFollow,
+  registerConnectionsSessionSync: vi.fn((sync: any) => { mocks.connectionsSync = sync; }),
+  syncExternalFollowState: vi.fn((state: any) => {
+    mocks.externalFollow(state);
+    mocks.connectionsSync?.applyExternalFollowStateLocal(state);
+  }),
 }));
 
 const user = (id: number) => ({
@@ -62,6 +72,8 @@ const mountConnections = () => mount(UserConnectionsView, {
 describe('UserConnectionsView mutation synchronization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setActivePinia(createPinia());
+    mocks.connectionsSync = null;
     mocks.route = reactive({
       name: 'UserFollowing',
       params: { id: '7' },
@@ -71,6 +83,7 @@ describe('UserConnectionsView mutation synchronization', () => {
       token: 'Bearer token',
       currentIdentity: { id: 7, username: 'viewer' },
     });
+    mocks.getProfileSession.mockReturnValue(undefined);
     mocks.getUser.mockResolvedValue(user(7));
     mocks.getUserFollowers.mockResolvedValue({ items: [], has_more: false });
     mocks.getUserFollowing.mockResolvedValue({

@@ -52,180 +52,183 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useRoute } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
-import { followUser, getUser, getUserFollowers, getUserFollowing, unfollowUser, type UserConnectionItem, type UserConnectionPage } from '../services/userService';
-import { useAuthStore } from '../store/auth';
-import { syncExternalFollowState } from '../store/sessionSync';
-import type { PublicUser } from '../types/User';
+import {
+  useConnectionsSessionStore,
+  type ConnectionsMode,
+} from '../store/connectionsSession';
 
-const pageSize = 20;
 const route = useRoute();
-const authStore = useAuthStore();
-const profile = ref<PublicUser | null>(null);
-const profileLoading = ref(false);
-const profileError = ref('');
-const items = ref<UserConnectionItem[]>([]);
-const initialLoading = ref(false);
-const initialError = ref('');
-const loadingMore = ref(false);
-const loadMoreError = ref('');
-const hasMore = ref(false);
-const nextOffset = ref(0);
-const loadedUserIDs = new Set<number>();
-const pendingMutationIDs = ref(new Set<number>());
-const mutationErrors = ref(new Map<number, string>());
-const sentinelRef = ref<HTMLElement | null>(null);
-let pageGeneration = 0;
-let paginationRequestVersion = 0;
-let mutationSequence = 0;
-const mutationVersions = new Map<number, number>();
-let observer: IntersectionObserver | null = null;
+const connectionsSession = useConnectionsSessionStore();
+const {
+  viewerID,
+  pendingMutationIDs,
+  mutationErrors,
+} = storeToRefs(connectionsSession);
 
 const targetID = computed(() => String(route.params.id ?? '').trim());
-const mode = computed<'followers' | 'following' | null>(() => route.name === 'UserFollowers' ? 'followers' : route.name === 'UserFollowing' ? 'following' : null);
-const viewerID = computed(() => {
-  const id = authStore.currentIdentity?.id;
-  return typeof id === 'number' && id > 0 ? id : null;
+const numericTargetID = computed(() => {
+  const value = Number(targetID.value);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
 });
+const mode = computed<ConnectionsMode | null>(() => (
+  route.name === 'UserFollowers'
+    ? 'followers'
+    : route.name === 'UserFollowing'
+      ? 'following'
+      : null
+));
+const activeTargetSession = computed(() => (
+  numericTargetID.value === null
+    ? undefined
+    : connectionsSession.getTargetSession(numericTargetID.value)
+));
+const activeModeSession = computed(() => {
+  const target = activeTargetSession.value;
+  return target && mode.value ? target[mode.value] : undefined;
+});
+const profile = computed(() => activeTargetSession.value?.profile ?? null);
+const profileLoading = computed(() => activeTargetSession.value?.profileLoading ?? false);
+const profileError = computed(() => activeTargetSession.value?.profileError ?? '');
+const items = computed(() => activeModeSession.value?.items ?? []);
+const initialLoading = computed(() => activeModeSession.value?.initialLoading ?? false);
+const initialError = computed(() => activeModeSession.value?.initialError ?? '');
+const loadingMore = computed(() => activeModeSession.value?.loadingMore ?? false);
+const loadMoreError = computed(() => activeModeSession.value?.loadMoreError ?? '');
+const hasMore = computed(() => activeModeSession.value?.hasMore ?? false);
+const loaded = computed(() => activeModeSession.value?.loaded ?? false);
+const stale = computed(() => activeModeSession.value?.stale ?? false);
+const revalidating = computed(() => activeModeSession.value?.revalidating ?? false);
 const displayName = computed(() => profile.value?.display_name.trim() || profile.value?.username || 'Profile');
 const modeLabel = computed(() => mode.value === 'followers' ? 'Followers' : 'Following');
 const emptyCopy = computed(() => mode.value === 'followers' ? 'No followers yet.' : 'Not following anyone yet.');
-const routeIsCurrent = () => mode.value !== null;
+const sentinelRef = ref<HTMLElement | null>(null);
+let observer: IntersectionObserver | null = null;
+let mounted = false;
+let entryVersion = 0;
+let restoredEntryVersion = -1;
 
-const disconnectObserver = () => { observer?.disconnect(); observer = null; };
-const invalidatePage = () => {
-  pageGeneration += 1;
-  paginationRequestVersion += 1;
-  mutationSequence += 1;
-  disconnectObserver();
-  profile.value = null;
-  profileLoading.value = false;
-  profileError.value = '';
-  items.value = [];
-  initialLoading.value = false;
-  initialError.value = '';
-  loadingMore.value = false;
-  loadMoreError.value = '';
-  hasMore.value = false;
-  nextOffset.value = 0;
-  loadedUserIDs.clear();
-  pendingMutationIDs.value = new Set();
-  mutationErrors.value = new Map();
-  mutationVersions.clear();
+const disconnectObserver = () => {
+  observer?.disconnect();
+  observer = null;
 };
-const requestPage = (offset: number) => mode.value === 'followers'
-  ? getUserFollowers(targetID.value, { limit: pageSize, offset })
-  : getUserFollowing(targetID.value, { limit: pageSize, offset });
-const appendPage = (page: UserConnectionPage) => {
-  nextOffset.value += page.items.length;
-  const additions = page.items.filter((item) => {
-    if (loadedUserIDs.has(item.user.id)) return false;
-    loadedUserIDs.add(item.user.id);
-    return true;
-  });
-  items.value = [...items.value, ...additions];
-  hasMore.value = page.has_more;
-};
-const current = (generation: number, requestVersion: number, capturedMode: typeof mode.value, capturedViewer: number) =>
-  pageGeneration === generation && paginationRequestVersion === requestVersion && mode.value === capturedMode && viewerID.value === capturedViewer && routeIsCurrent();
 
 const updateObserver = async () => {
   await nextTick();
   disconnectObserver();
-  if (!routeIsCurrent() || !('IntersectionObserver' in window) || !sentinelRef.value || !hasMore.value || loadingMore.value || loadMoreError.value) return;
-  observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) void loadMore(); }, { rootMargin: '240px 0px' });
+  if (
+    !mounted
+    || numericTargetID.value === null
+    || mode.value === null
+    || !('IntersectionObserver' in window)
+    || !sentinelRef.value
+    || !hasMore.value
+    || loadingMore.value
+    || loadMoreError.value
+    || stale.value
+    || revalidating.value
+  ) return;
+  observer = new IntersectionObserver((entries) => {
+    if (entries.some(entry => entry.isIntersecting)) {
+      void connectionsSession.loadMore(numericTargetID.value!, mode.value!);
+    }
+  }, { rootMargin: '240px 0px' });
   observer.observe(sentinelRef.value);
 };
 
-const loadInitial = async () => {
-  if (!routeIsCurrent() || viewerID.value === null || !targetID.value) return;
-  const generation = pageGeneration;
-  const requestVersion = ++paginationRequestVersion;
-  const capturedMode = mode.value;
-  const capturedViewer = viewerID.value;
-  profileLoading.value = true;
-  initialLoading.value = true;
-  profileError.value = '';
-  initialError.value = '';
-  const profileRequest = getUser(targetID.value)
-    .then((result) => { if (current(generation, requestVersion, capturedMode, capturedViewer)) profile.value = result; })
-    .catch(() => { if (current(generation, requestVersion, capturedMode, capturedViewer)) profileError.value = 'Profile could not be loaded.'; });
-  const listRequest = requestPage(0)
-    .then((page) => { if (current(generation, requestVersion, capturedMode, capturedViewer)) appendPage(page); })
-    .catch(() => { if (current(generation, requestVersion, capturedMode, capturedViewer)) initialError.value = 'Connections could not be loaded.'; });
-  await Promise.all([profileRequest, listRequest]);
-  if (current(generation, requestVersion, capturedMode, capturedViewer)) {
-    profileLoading.value = false;
-    initialLoading.value = false;
-    void updateObserver();
+const restoreScrollOnce = async () => {
+  const capturedEntryVersion = entryVersion;
+  const activeSession = activeModeSession.value;
+  if (
+    !mounted
+    || restoredEntryVersion === capturedEntryVersion
+    || !activeSession
+    || !activeSession.loaded
+    || activeSession.initialLoading
+  ) return;
+  await nextTick();
+  if (
+    !mounted
+    || capturedEntryVersion !== entryVersion
+    || restoredEntryVersion === capturedEntryVersion
+  ) return;
+  if (
+    typeof window !== 'undefined'
+    && typeof window.scrollTo === 'function'
+    && !window.navigator.userAgent.toLowerCase().includes('jsdom')
+  ) {
+    window.scrollTo({ top: activeSession.scrollY, behavior: 'auto' });
+  }
+  restoredEntryVersion = capturedEntryVersion;
+};
+
+const reload = () => {
+  if (numericTargetID.value !== null && mode.value !== null) {
+    connectionsSession.reload(numericTargetID.value, mode.value);
   }
 };
-const reload = () => { invalidatePage(); void loadInitial(); };
-const loadMore = async () => {
-  if (!routeIsCurrent() || viewerID.value === null || !hasMore.value || loadingMore.value || initialLoading.value) return;
-  const generation = pageGeneration;
-  const requestVersion = ++paginationRequestVersion;
-  const offset = nextOffset.value;
-  const capturedMode = mode.value;
-  const capturedViewer = viewerID.value;
-  loadingMore.value = true;
-  loadMoreError.value = '';
-  try {
-    const page = await requestPage(offset);
-    if (!current(generation, requestVersion, capturedMode, capturedViewer) || nextOffset.value !== offset) return;
-    appendPage(page);
-  } catch {
-    if (current(generation, requestVersion, capturedMode, capturedViewer)) loadMoreError.value = 'Could not load more users.';
-  } finally {
-    if (current(generation, requestVersion, capturedMode, capturedViewer)) { loadingMore.value = false; void updateObserver(); }
+
+const loadMore = () => {
+  if (numericTargetID.value !== null && mode.value !== null) {
+    void connectionsSession.loadMore(numericTargetID.value, mode.value);
   }
 };
-const toggleFollow = async (userID: number) => {
-  const index = items.value.findIndex((item) => item.user.id === userID);
-  const capturedViewer = viewerID.value;
-  if (index < 0 || capturedViewer === null || userID === capturedViewer || pendingMutationIDs.value.has(userID) || mode.value === null) return;
-  const previous = items.value[index].following;
-  const generation = pageGeneration;
-  const capturedTarget = targetID.value;
-  const capturedMode = mode.value;
-  const version = ++mutationSequence;
-  mutationVersions.set(userID, version);
-  pendingMutationIDs.value = new Set(pendingMutationIDs.value).add(userID);
-  mutationErrors.value = new Map(mutationErrors.value);
-  mutationErrors.value.delete(userID);
-  items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: !previous } : item);
-  const mutationCurrent = () => pageGeneration === generation && targetID.value === capturedTarget && mode.value === capturedMode && viewerID.value === capturedViewer && mutationVersions.get(userID) === version && pendingMutationIDs.value.has(userID) && routeIsCurrent();
-  try {
-    const response = previous ? await unfollowUser(userID) : await followUser(userID);
-    if (!mutationCurrent()) return;
-    if (response.user_id !== userID) throw new Error('invalid follow response');
-    const ownFollowingRemoval = previous && capturedViewer === Number(capturedTarget) && capturedMode === 'following';
-    if (ownFollowingRemoval) {
-      items.value = items.value.filter((item) => item.user.id !== userID);
-      loadedUserIDs.delete(userID);
-      nextOffset.value = Math.max(0, nextOffset.value - 1);
-      paginationRequestVersion += 1;
-      loadingMore.value = false;
-    } else {
-      items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: response.following } : item);
+
+const toggleFollow = (userID: number) => {
+  void connectionsSession.toggleFollow(userID);
+};
+
+watch(
+  [targetID, mode, viewerID],
+  ([nextTargetID, nextMode, nextViewerID], previousValues) => {
+    const [previousTargetID, previousMode, previousViewerID] = previousValues ?? [];
+    if (
+      previousViewerID === nextViewerID
+      && previousTargetID
+      && previousMode
+      && typeof window !== 'undefined'
+    ) {
+      connectionsSession.saveScroll(previousTargetID, previousMode, window.scrollY);
     }
-    const nextPending = new Set(pendingMutationIDs.value); nextPending.delete(userID); pendingMutationIDs.value = nextPending;
-    mutationErrors.value.delete(userID);
-    syncExternalFollowState(response);
-    void updateObserver();
-  } catch {
-    if (!mutationCurrent()) return;
-    items.value = items.value.map((item) => item.user.id === userID ? { ...item, following: previous } : item);
-    const nextPending = new Set(pendingMutationIDs.value); nextPending.delete(userID); pendingMutationIDs.value = nextPending;
-    mutationErrors.value = new Map(mutationErrors.value).set(userID, 'Could not update follow status.');
+    entryVersion += 1;
+    restoredEntryVersion = -1;
+    if (nextViewerID !== null && nextTargetID && nextMode) {
+      connectionsSession.activate(Number(nextTargetID), nextMode);
+    }
+  },
+  { immediate: true },
+);
+
+watch([targetID, mode, loaded, initialLoading], () => {
+  void restoreScrollOnce();
+}, { flush: 'post' });
+
+watch([targetID, mode, hasMore, loadingMore, loadMoreError, () => items.value.length, stale, revalidating], () => {
+  void updateObserver();
+}, { flush: 'post' });
+
+watch([targetID, mode, loaded, stale], ([nextTargetID, nextMode, isLoaded, isStale]) => {
+  if (nextTargetID && nextMode && isLoaded && isStale) {
+    void connectionsSession.revalidateMode(Number(nextTargetID), nextMode);
   }
-};
-watch([targetID, mode, viewerID], () => { invalidatePage(); void loadInitial(); }, { immediate: true });
-watch([hasMore, loadingMore, loadMoreError, () => items.value.length], () => { void updateObserver(); }, { flush: 'post' });
-onBeforeUnmount(() => { invalidatePage(); });
+}, { flush: 'post' });
+
+onMounted(() => {
+  mounted = true;
+  void restoreScrollOnce();
+});
+
+onBeforeUnmount(() => {
+  mounted = false;
+  if (numericTargetID.value !== null && mode.value !== null && typeof window !== 'undefined') {
+    connectionsSession.saveScroll(numericTargetID.value, mode.value, window.scrollY);
+  }
+  disconnectObserver();
+});
 </script>
 
 <style scoped>

@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import HistoryView from './HistoryView.vue';
 import type { Article } from '../types/Article';
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   getArticleLikeStates: vi.fn(),
   unlikeArticle: vi.fn(),
   externalLike: vi.fn(),
+  historySync: null as any,
 }));
 
 vi.mock('../store/auth', () => ({
@@ -32,7 +34,11 @@ vi.mock('../services/likeService', () => ({
 }));
 
 vi.mock('../store/sessionSync', () => ({
-  syncExternalArticleLikeState: mocks.externalLike,
+  registerHistorySessionSync: vi.fn((sync: any) => { mocks.historySync = sync; }),
+  syncExternalArticleLikeState: vi.fn((update: any) => {
+    mocks.externalLike(update);
+    mocks.historySync?.applyExternalLikeStateLocal(update);
+  }),
 }));
 
 vi.mock('vue-router', () => ({
@@ -111,6 +117,8 @@ const deferred = <T>() => {
 describe('HistoryView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setActivePinia(createPinia());
+    mocks.historySync = null;
     setAuth(null);
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getArticleLikeStates.mockResolvedValue({ items: [], unavailable_article_ids: [] });
