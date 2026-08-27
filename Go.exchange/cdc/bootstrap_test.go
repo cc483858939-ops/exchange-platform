@@ -43,6 +43,7 @@ func TestBuildConnectorConfigPinsOutboxRoutingContract(t *testing.T) {
 		"transforms.outbox.table.field.event.id":        "id",
 		"transforms.outbox.table.field.event.key":       "partition_key",
 		"transforms.outbox.table.field.event.payload":   "message",
+		"transforms.outbox.table.field.event.timestamp": "occurred_at",
 		"transforms.outbox.table.expand.json.payload":   "true",
 		"transforms.outbox.table.op.invalid.behavior":   "fatal",
 		"transforms.outbox.route.by.field":              "topic",
@@ -62,9 +63,6 @@ func TestBuildConnectorConfigPinsOutboxRoutingContract(t *testing.T) {
 	}
 	if _, exists := cfg["name"]; exists {
 		t.Fatal("PUT connector config must not duplicate the connector name field")
-	}
-	if _, exists := cfg["transforms.outbox.table.field.event.timestamp"]; exists {
-		t.Fatal("TIMESTAMPTZ occurred_at must not override the Debezium event timestamp")
 	}
 }
 
