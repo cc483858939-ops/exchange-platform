@@ -180,7 +180,16 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("unfollow status=%d body=%s", status, body)
 	}
-	if findFollowingTimelineItem(page.Items, bobArticle.ID) != nil || findFollowingTimelineItem(page.Items, tieArticle.ID) != nil {
-		t.Fatalf("Alice activities remained after unfollow: %v", followingTimelineArticleIDs(page.Items))
+	if findFollowingTimelineItem(page.Items, bobArticle.ID) != nil {
+		t.Fatalf("bobArticle remained after Alice unfollow: %v", followingTimelineArticleIDs(page.Items))
+	}
+	tieItem = findFollowingTimelineItem(page.Items, tieArticle.ID)
+	if tieItem == nil || tieItem.ActivityType != followingActivityPost || tieItem.Actor.ID != directAuthor.ID || tieItem.SourceID != tieArticle.ID || tieItem.Article.ID != tieArticle.ID || tieItem.Article.Author.ID != directAuthor.ID {
+		t.Fatalf("tieArticle did not fall back to direct post after Alice unfollow: %#v", tieItem)
+	}
+	for _, item := range page.Items {
+		if item.Actor.ID == alice.ID {
+			t.Fatalf("Alice remained as selected activity actor after unfollow: %#v", item)
+		}
 	}
 }
