@@ -57,6 +57,10 @@ vi.mock('../store/auth', () => ({
   useAuthStore: () => mocks.authStore,
 }));
 
+vi.mock('../store/articleDetailHandoff', () => ({
+  useArticleDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
+}));
+
 vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));

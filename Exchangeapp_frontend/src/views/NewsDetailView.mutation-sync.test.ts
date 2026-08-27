@@ -46,6 +46,9 @@ vi.mock('vue-router', () => ({
 
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../store/feed', () => ({ useFeedStore: () => mocks.feedStore }));
+vi.mock('../store/articleDetailHandoff', () => ({
+  useArticleDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
+}));
 vi.mock('../store/sessionSync', () => ({
   syncExternalArticleLikeState: mocks.externalLike,
   syncExternalArticleRemoval: mocks.externalRemoval,

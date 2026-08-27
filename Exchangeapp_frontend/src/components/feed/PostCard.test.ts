@@ -11,10 +11,15 @@ const mocks = vi.hoisted(() => ({
   observeFeedCard: vi.fn(),
   unobserveFeedCard: vi.fn(),
   enqueue: vi.fn(),
+  remember: vi.fn(),
 }));
 
 vi.mock('../../services/articleViewTelemetry', () => ({
   getArticleViewTelemetry: () => mocks,
+}));
+
+vi.mock('../../store/articleDetailHandoff', () => ({
+  useArticleDetailHandoffStore: () => ({ remember: mocks.remember }),
 }));
 
 vi.mock('vue-router', () => ({
@@ -84,11 +89,57 @@ describe('PostCard View metric and telemetry lifecycle', () => {
 
     await views?.trigger('click');
 
+    expect(mocks.remember).toHaveBeenCalledTimes(1);
+    expect(mocks.remember).toHaveBeenCalledWith(post);
     expect(wrapper.emitted('articleClick')).toEqual([[post]]);
     expect(wrapper.emitted('toggleLike') ?? []).toHaveLength(0);
     expect(wrapper.emitted('notInterested') ?? []).toHaveLength(0);
     expect(wrapper.emitted('deletePost') ?? []).toHaveLength(0);
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('captures content, reply, and view navigation with one handoff and one articleClick each', async () => {
+    const post = basePost();
+    const wrapper = mountPostCard(post);
+    const links = wrapper.findAllComponents(RouterLinkStub);
+    const content = links.find(link => link.classes().includes('post-card__content'))!;
+    const reply = links.find(link => link.classes().includes('post-card__reply'))!;
+    const views = links.find(link => link.classes().includes('post-card__views'))!;
+
+    expect(reply.props('to')).toEqual({
+      name: 'NewsDetail',
+      params: { id: '42' },
+      query: { reply: '1' },
+    });
+    await content.trigger('click');
+    await reply.trigger('click');
+    await views.trigger('click');
+
+    expect(mocks.remember).toHaveBeenCalledTimes(3);
+    expect(mocks.remember).toHaveBeenNthCalledWith(1, post);
+    expect(mocks.remember).toHaveBeenNthCalledWith(2, post);
+    expect(mocks.remember).toHaveBeenNthCalledWith(3, post);
+    expect(wrapper.emitted('articleClick')).toEqual([[post], [post], [post]]);
+  });
+
+  it('does not remember a modified-click navigation', async () => {
+    const post = basePost();
+    const wrapper = mountPostCard(post);
+    const content = wrapper.findComponent(RouterLinkStub);
+
+    await content.trigger('click', { ctrlKey: true });
+
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(wrapper.emitted('articleClick')).toEqual([[post]]);
+  });
+
+  it('does not remember non-navigation like activation', async () => {
+    const wrapper = mountPostCard();
+
+    await wrapper.find('.stub-like-action').trigger('click');
+
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(wrapper.emitted('toggleLike')).toEqual([[42]]);
   });
 
   it('observes on mount, replaces stale observation on id change, and unobserves on unmount', async () => {

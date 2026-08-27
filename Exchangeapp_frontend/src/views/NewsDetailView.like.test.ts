@@ -60,6 +60,10 @@ vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
 
+vi.mock('../store/articleDetailHandoff', () => ({
+  useArticleDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
+}));
+
 vi.mock('../services/articleService', () => ({
   deleteArticle: vi.fn(),
   getArticleById: mocks.getArticleById,

@@ -263,7 +263,6 @@ func buildConnectorConfig(_ config.KafkaConfig, source SourceDatabaseConfig, ide
 		"transforms.outbox.table.field.event.id":        "id",
 		"transforms.outbox.table.field.event.key":       "partition_key",
 		"transforms.outbox.table.field.event.payload":   "message",
-		"transforms.outbox.table.field.event.timestamp": "occurred_at",
 		"transforms.outbox.table.expand.json.payload":   "true",
 		"transforms.outbox.table.op.invalid.behavior":   "fatal",
 		"transforms.outbox.route.by.field":              "topic",

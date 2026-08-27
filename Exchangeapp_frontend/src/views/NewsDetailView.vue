@@ -7,36 +7,51 @@
       </button>
     </header>
 
-    <section v-if="articleLoading" class="detail-state" aria-live="polite">
-      <p>Loading article...</p>
-    </section>
-
-    <template v-else-if="article">
+    <template v-if="detailPresentation">
       <article class="article-detail">
-        <AuthorIdentity :author="article.author" :created-at="article.CreatedAt" />
+        <AuthorIdentity
+          :author="detailPresentation.author"
+          :created-at="detailPresentation.createdAt"
+        />
 
-        <h1 v-if="article.title.trim()" class="article-detail__title">{{ article.title }}</h1>
+        <h1 v-if="detailPresentation.title.trim()" class="article-detail__title">
+          {{ detailPresentation.title }}
+        </h1>
 
-        <p v-if="article.expired_at" class="article-detail__expiry">
+        <p v-if="article && article.expired_at" class="article-detail__expiry">
           {{ articleExpiredLabel }}
         </p>
 
-        <div ref="articleBodyRef" class="article-detail__body">{{ article.content }}</div>
+        <div
+          ref="articleBodyRef"
+          class="article-detail__body"
+          :class="{ 'article-detail__body--loading': detailPresentation.kind === 'warm' }"
+          :aria-busy="detailPresentation.kind === 'warm' ? 'true' : undefined"
+        >{{ detailPresentation.body }}</div>
 
-        <figure v-if="showCover" class="article-detail__cover">
+        <figure v-if="detailPresentation.coverUrl" class="article-detail__cover">
           <img
-            :src="article.cover_image_url"
-            :alt="article.title.trim() || 'Post image'"
+            v-if="failedCoverUrl !== detailPresentation.coverUrl"
+            :src="detailPresentation.coverUrl"
+            :alt="detailPresentation.title.trim() || 'Post image'"
             loading="lazy"
-            @error="hideCover"
+            @error="handleCoverError"
           />
+          <div
+            v-else
+            class="article-detail__cover-placeholder"
+            role="img"
+            aria-label="Post image unavailable"
+          ></div>
         </figure>
 
         <div class="article-detail__meta">
           <span>Article</span>
-          <span v-if="article.CreatedAt">{{ formatArticleDate(article.CreatedAt) }}</span>
+          <span v-if="detailPresentation.createdAt">
+            {{ formatArticleDate(detailPresentation.createdAt) }}
+          </span>
           <button
-            v-if="canDeleteArticle"
+            v-if="detailPresentation.kind === 'article' && canDeleteArticle"
             class="detail-delete-action"
             type="button"
             :disabled="deletePending"
@@ -49,40 +64,92 @@
         </div>
 
         <div class="article-detail__engagement" aria-label="Article engagement">
-          <LikeAction
-            :key="article.ID"
-            :liked="liked"
-            :count="likeCount"
-            :disabled="!authStore.isAuthenticated"
-            :loading="likeStateLoading"
-            :pending="likeSubmitting"
-            :ariaLabel="detailLikeLabel"
-            variant="detail"
-            @toggle="toggleLike"
-          />
+          <template v-if="detailPresentation.kind === 'article'">
+            <LikeAction
+              :key="articleId"
+              :liked="liked"
+              :count="likeCount"
+              :disabled="!authStore.isAuthenticated"
+              :loading="likeStateLoading"
+              :pending="likeSubmitting"
+              :ariaLabel="detailLikeLabel"
+              variant="detail"
+              @toggle="toggleLike"
+            />
 
-          <span class="engagement-metric">
-            <AppIcon name="reply" :size="18" />
-            <span>{{ commentCount }}</span>
-            <span class="sr-only">Replies</span>
-          </span>
+            <span class="engagement-metric">
+              <AppIcon name="reply" :size="18" />
+              <span>{{ commentCount }}</span>
+              <span class="sr-only">Replies</span>
+            </span>
 
-          <span
-            class="engagement-metric"
-            :aria-label="detailViewLabel"
-            :title="detailViewLabel"
-          >
-            <AppIcon name="analytics" :size="18" />
-            <span>{{ compactViewCount }}</span>
-            <span class="sr-only">{{ detailViewLabel }}</span>
-          </span>
+            <span
+              class="engagement-metric"
+              :aria-label="detailViewLabel"
+              :title="detailViewLabel"
+            >
+              <AppIcon name="analytics" :size="18" />
+              <span>{{ compactViewCount }}</span>
+              <span class="sr-only">{{ detailViewLabel }}</span>
+            </span>
+          </template>
+          <template v-else>
+            <span
+              class="engagement-metric"
+              :aria-label="presentationLikeLabel"
+              :title="presentationLikeLabel"
+            >
+              <span>{{ detailPresentation.likeCount }}</span>
+              <span class="sr-only">Likes</span>
+            </span>
+            <span
+              class="engagement-metric"
+              :aria-label="presentationCommentLabel"
+              :title="presentationCommentLabel"
+            >
+              <AppIcon name="reply" :size="18" />
+              <span>{{ detailPresentation.commentCount }}</span>
+              <span class="sr-only">Replies</span>
+            </span>
+            <span
+              class="engagement-metric"
+              :aria-label="presentationViewLabel"
+              :title="presentationViewLabel"
+            >
+              <AppIcon name="analytics" :size="18" />
+              <span>{{ formatCompactEngagementCount(detailPresentation.viewCount) }}</span>
+              <span class="sr-only">{{ presentationViewLabel }}</span>
+            </span>
+          </template>
         </div>
 
-        <p v-if="likeError" class="detail-inline-error" role="status">{{ likeError }}</p>
-        <p v-if="deleteError" class="detail-inline-error" role="alert">{{ deleteError }}</p>
+        <p
+          v-if="detailPresentation.kind === 'article' && likeError"
+          class="detail-inline-error"
+          role="status"
+        >{{ likeError }}</p>
+        <p
+          v-if="detailPresentation.kind === 'article' && deleteError"
+          class="detail-inline-error"
+          role="alert"
+        >{{ deleteError }}</p>
+
+        <div
+          v-if="detailPresentation.kind === 'warm'"
+          class="detail-warm-loading"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="detail-loading__spinner" aria-hidden="true"></span>
+          <span class="sr-only">Loading full article</span>
+        </div>
       </article>
 
-      <section class="replies-section" aria-labelledby="replies-heading">
+      <section
+        v-if="detailPresentation.kind === 'article'"
+        class="replies-section"
+        aria-labelledby="replies-heading"
+      >
         <div class="replies-section__heading">
           <h2 id="replies-heading">Replies</h2>
           <span>{{ commentCount }}</span>
@@ -127,6 +194,11 @@
       </section>
     </template>
 
+    <section v-else-if="articleLoading" class="detail-loading" role="status" aria-live="polite">
+      <span class="detail-loading__spinner" aria-hidden="true"></span>
+      <span class="sr-only">Loading post</span>
+    </section>
+
     <section v-else class="detail-state detail-state--error">
       <h1>{{ articleFailureTitle }}</h1>
       <p>{{ articleFailureMessage }}</p>
@@ -154,6 +226,7 @@ import { getRecommendationTelemetry } from '../services/recommendationTelemetry'
 import { createArticleViewEventID, getArticleViewTelemetry } from '../services/articleViewTelemetry';
 import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
 import { useAuthStore } from '../store/auth';
+import { useArticleDetailHandoffStore } from '../store/articleDetailHandoff';
 import { useFeedStore } from '../store/feed';
 import {
   syncExternalArticleLikeState,
@@ -162,6 +235,7 @@ import {
 } from '../store/sessionSync';
 import type { Article } from '../types/Article';
 import type { ArticleComment } from '../types/Comment';
+import type { FeedPost } from '../types/Feed';
 import type { RecommendationTracking } from '../types/Recommendation';
 import type { PublicAuthor } from '../types/User';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
@@ -169,6 +243,7 @@ import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '.
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const articleDetailHandoff = useArticleDetailHandoffStore();
 const feedStore = useFeedStore();
 const currentIdentity = computed(() => authStore.currentIdentity);
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
@@ -177,7 +252,8 @@ const articleId = computed(() => String(route.params.id ?? '').trim());
 const article = ref<Article | null>(null);
 const articleLoading = ref(false);
 const articleError = ref('');
-const showCover = ref(false);
+const handoffPost = ref<FeedPost | null>(null);
+const failedCoverUrl = ref('');
 const deletePending = ref(false);
 const deleteError = ref('');
 const articleBodyRef = ref<HTMLElement | null>(null);
@@ -223,6 +299,64 @@ const isValidArticleID = (value: string) => {
   const parsed = Number(value);
   return /^\d+$/.test(value) && Number.isSafeInteger(parsed) && parsed > 0;
 };
+
+type DetailPresentation = {
+  kind: 'warm' | 'article';
+  author: PublicAuthor;
+  title: string;
+  body: string;
+  createdAt: string;
+  coverUrl: string;
+  likeCount: number;
+  commentCount: number;
+  viewCount: number;
+};
+
+const detailPresentation = computed<DetailPresentation | null>(() => {
+  if (article.value) {
+    return {
+      kind: 'article',
+      author: article.value.author,
+      title: article.value.title,
+      body: article.value.content,
+      createdAt: article.value.CreatedAt,
+      coverUrl: article.value.cover_image_url || '',
+      likeCount: likeCount.value,
+      commentCount: commentCount.value,
+      viewCount: viewCount.value,
+    };
+  }
+
+  if (articleLoading.value && handoffPost.value) {
+    return {
+      kind: 'warm',
+      author: handoffPost.value.author,
+      title: handoffPost.value.title,
+      body: handoffPost.value.excerpt,
+      createdAt: handoffPost.value.createdAt,
+      coverUrl: handoffPost.value.coverImageUrl,
+      likeCount: handoffPost.value.likeCount,
+      commentCount: handoffPost.value.commentCount,
+      viewCount: handoffPost.value.viewCount,
+    };
+  }
+
+  return null;
+});
+
+const presentationLikeLabel = computed(() => {
+  const count = detailPresentation.value?.likeCount ?? 0;
+  return String(count) + (count === 1 ? ' like' : ' likes');
+});
+
+const presentationCommentLabel = computed(() => {
+  const count = detailPresentation.value?.commentCount ?? 0;
+  return String(count) + (count === 1 ? ' reply' : ' replies');
+});
+
+const presentationViewLabel = computed(() => (
+  formatAccessibleEngagementCount(detailPresentation.value?.viewCount ?? 0, 'views')
+));
 
 const formatArticleDate = (value: string) => {
   const date = new Date(value);
@@ -434,7 +568,7 @@ const resetArticleState = () => {
   article.value = null;
   articleLoading.value = false;
   articleError.value = '';
-  showCover.value = false;
+  failedCoverUrl.value = '';
   viewCount.value = 0;
   deletePending.value = false;
   deleteError.value = '';
@@ -814,6 +948,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
   resetArticleState();
   resetLikeState();
   resetCommentsState();
+  handoffPost.value = null;
 
   if (!isAuthenticated) {
     return;
@@ -824,6 +959,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     return;
   }
 
+  handoffPost.value = articleDetailHandoff.consume(Number(id));
   articleLoading.value = true;
 
   try {
@@ -835,8 +971,8 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       throw new Error('article response id mismatch');
     }
 
+    handoffPost.value = null;
     article.value = loadedArticle;
-    showCover.value = Boolean(loadedArticle.cover_image_url);
     likeCount.value = clampCount(loadedArticle.like_count);
     commentCount.value = clampCount(loadedArticle.comment_count);
     viewCount.value = clampCount(loadedArticle.view_count);
@@ -858,6 +994,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     void loadInitialComments(id, detailVersion);
   } catch (error) {
     if (detailVersion === detailRequestVersion) {
+      handoffPost.value = null;
       const status = (error as { response?: { status?: number } }).response?.status;
       articleError.value = status === 404
         ? 'This article does not exist.'
@@ -884,8 +1021,11 @@ const goBack = () => {
   void router.push({ name: 'Home' });
 };
 
-const hideCover = () => {
-  showCover.value = false;
+const handleCoverError = () => {
+  const coverUrl = detailPresentation.value?.coverUrl ?? '';
+  if (coverUrl) {
+    failedCoverUrl.value = coverUrl;
+  }
 };
 
 watch(
@@ -1018,7 +1158,12 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
+.article-detail__body--loading {
+  color: var(--color-text-secondary);
+}
+
 .article-detail__cover {
+  aspect-ratio: 16 / 9;
   margin: var(--space-5) 0 0;
   overflow: hidden;
   border-radius: var(--radius-sm);
@@ -1028,8 +1173,14 @@ onBeforeUnmount(() => {
 .article-detail__cover img {
   display: block;
   width: 100%;
-  max-height: 620px;
+  height: 100%;
   object-fit: cover;
+}
+
+.article-detail__cover-placeholder {
+  width: 100%;
+  height: 100%;
+  background: var(--color-surface-subtle);
 }
 
 .article-detail__meta {
@@ -1187,6 +1338,41 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
+.detail-loading {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  padding: var(--space-8) var(--space-5);
+}
+
+.detail-warm-loading {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  margin-top: var(--space-4);
+}
+
+.detail-loading__spinner {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: detail-spin 700ms linear infinite;
+}
+
+.detail-warm-loading .detail-loading__spinner {
+  width: 18px;
+  height: 18px;
+}
+
+@keyframes detail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .detail-state p,
 .detail-state h1 {
   margin: 0;
@@ -1241,6 +1427,10 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .detail-header {
     backdrop-filter: none;
+  }
+
+  .detail-loading__spinner {
+    animation-duration: 1.4s;
   }
 }
 

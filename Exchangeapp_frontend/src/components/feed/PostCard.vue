@@ -78,7 +78,7 @@
     <RouterLink
       class="post-card__content"
       :to="{ name: 'NewsDetail', params: { id: String(post.id) } }"
-      @click="emit('articleClick', post)"
+      @click.capture="prepareDetailNavigation"
     >
       <h2 v-if="post.title.trim()" class="post-card__title">{{ post.title }}</h2>
       <p
@@ -107,7 +107,7 @@
           query: { reply: '1' },
         }"
         :aria-label="replyLabel"
-        @click="emit('articleClick', post)"
+        @click.capture="prepareDetailNavigation"
       >
         <AppIcon name="reply" :size="18" />
         <span>{{ post.commentCount }}</span>
@@ -132,7 +132,7 @@
         }"
         :aria-label="viewActionLabel"
         :title="viewActionLabel"
-        @click="emit('articleClick', post)"
+        @click.capture="prepareDetailNavigation"
       >
         <AppIcon name="analytics" :size="18" />
         <span>{{ compactViewCount }}</span>
@@ -149,6 +149,7 @@ import AuthorIdentity from '../AuthorIdentity.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
 import { getArticleViewTelemetry } from '../../services/articleViewTelemetry';
+import { useArticleDetailHandoffStore } from '../../store/articleDetailHandoff';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../../utils/engagementCount';
 
 const props = withDefaults(defineProps<{
@@ -177,6 +178,7 @@ const emit = defineEmits<{
 
 const router = useRouter();
 const articleViewTelemetry = getArticleViewTelemetry();
+const articleDetailHandoff = useArticleDetailHandoffStore();
 const postCardRef = ref<HTMLElement | null>(null);
 const showCover = ref(Boolean(props.post.coverImageUrl));
 const moreButtonRef = ref<HTMLButtonElement | null>(null);
@@ -196,6 +198,22 @@ const handleLikeActivation = () => {
   }
 
   emit('toggleLike', props.post.id);
+};
+
+const isNormalSameTabNavigation = (event: MouseEvent) => (
+  event.button === 0
+  && !event.ctrlKey
+  && !event.metaKey
+  && !event.shiftKey
+  && !event.altKey
+  && !event.defaultPrevented
+);
+
+const prepareDetailNavigation = (event: MouseEvent) => {
+  if (isNormalSameTabNavigation(event)) {
+    articleDetailHandoff.remember(props.post);
+  }
+  emit('articleClick', props.post);
 };
 
 const likeLabel = computed(() => {
