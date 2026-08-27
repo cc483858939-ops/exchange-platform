@@ -68,6 +68,7 @@ var apiSchemaModels = []interface{}{
 	&models.User{},
 	&models.UserFollow{},
 	&models.Article{},
+	&models.ArticleRepost{},
 	&models.Comment{},
 	&models.ArticleReaction{},
 	&models.Notification{},

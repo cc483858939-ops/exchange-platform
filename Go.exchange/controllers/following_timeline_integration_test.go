@@ -31,7 +31,7 @@ func openFollowingTimelineIntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (articlePageResponse, int, string) {
+func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (followingTimelinePageResponse, int, string) {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -42,7 +42,7 @@ func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (articl
 	ctx.Request = httptest.NewRequest(http.MethodGet, path, nil)
 	ctx.Set("user_id", viewerID)
 	GetFollowingTimeline(ctx)
-	var response articlePageResponse
+	var response followingTimelinePageResponse
 	if recorder.Code == http.StatusOK {
 		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
@@ -51,26 +51,38 @@ func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (articl
 	return response, recorder.Code, recorder.Body.String()
 }
 
-func followingTimelineArticleIDs(items []articleResponse) []uint {
+func followingTimelineArticleIDs(items []followingTimelineItem) []uint {
 	ids := make([]uint, 0, len(items))
 	for _, item := range items {
-		ids = append(ids, item.ID)
+		ids = append(ids, item.Article.ID)
 	}
 	return ids
 }
 
-func containsArticleID(items []articleResponse, want uint) bool {
+func containsFollowingArticleID(items []followingTimelineItem, want uint) bool {
 	for _, item := range items {
-		if item.ID == want {
+		if item.Article.ID == want {
 			return true
 		}
 	}
 	return false
 }
 
+func findFollowingTimelineItem(items []followingTimelineItem, articleID uint) *followingTimelineItem {
+	for index := range items {
+		if items[index].Article.ID == articleID {
+			return &items[index]
+		}
+	}
+	return nil
+}
+
 func TestFollowingTimelineIntegration(t *testing.T) {
 	db := openFollowingTimelineIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}, &models.ArticleRepost{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_article_reposts_user_article ON article_reposts (user_id, article_id)").Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,10 +183,10 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	if status != http.StatusOK || len(page1.Items) != 2 || page1.NextCursor == nil {
 		t.Fatalf("page1 status=%d body=%s response=%#v", status, body, page1)
 	}
-	if page1.Items[0].ID != newerContentOnly.ID || page1.Items[1].ID != aTie.ID {
+	if page1.Items[0].Article.ID != newerContentOnly.ID || page1.Items[1].Article.ID != aTie.ID {
 		t.Fatalf("page1 order=%v", followingTimelineArticleIDs(page1.Items))
 	}
-	first := page1.Items[0]
+	first := page1.Items[0].Article
 	if first.Title != "" || first.Content != "Canonical following body" || first.LikeCount != 0 || first.CommentCount != 0 || first.Author.ID != followedA.ID || first.Author.Username != followedA.Username || first.Author.DisplayName != "Followed A" || first.Author.AvatarURL != "a.jpg" {
 		t.Fatalf("content-only response=%#v", first)
 	}
@@ -183,12 +195,12 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	if status != http.StatusOK || len(page2.Items) != 2 || page2.NextCursor == nil {
 		t.Fatalf("page2 status=%d body=%s response=%#v", status, body, page2)
 	}
-	if page2.Items[0].ID != bTie.ID || page2.Items[1].ID != bOlder.ID {
+	if page2.Items[0].Article.ID != bTie.ID || page2.Items[1].Article.ID != bOlder.ID {
 		t.Fatalf("page2 order=%v", followingTimelineArticleIDs(page2.Items))
 	}
 
 	page3, status, body := requestFollowingTimeline(t, viewer.ID, "limit=2&cursor="+*page2.NextCursor)
-	if status != http.StatusOK || len(page3.Items) != 1 || page3.NextCursor != nil || page3.Items[0].ID != aOlder.ID {
+	if status != http.StatusOK || len(page3.Items) != 1 || page3.NextCursor != nil || page3.Items[0].Article.ID != aOlder.ID {
 		t.Fatalf("page3 status=%d body=%s response=%#v", status, body, page3)
 	}
 	allIDs := append(followingTimelineArticleIDs(page1.Items), followingTimelineArticleIDs(page2.Items)...)
@@ -203,32 +215,32 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		}
 	}
 	for _, excluded := range []uint{expired.ID, future.ID, nilPublished.ID, draft.ID, deleted.ID, softFollowedPost.ID, unfollowedPost.ID, viewerPost.ID} {
-		if containsArticleID(page1.Items, excluded) || containsArticleID(page2.Items, excluded) || containsArticleID(page3.Items, excluded) {
+		if containsFollowingArticleID(page1.Items, excluded) || containsFollowingArticleID(page2.Items, excluded) || containsFollowingArticleID(page3.Items, excluded) {
 			t.Fatalf("excluded article %d appeared", excluded)
 		}
 	}
 
 	noFollows, status, body := requestFollowingTimeline(t, noFollowsViewer.ID, "")
-	if status != http.StatusOK || noFollows.Items == nil || len(noFollows.Items) != 0 || noFollows.NextCursor != nil || containsArticleID(noFollows.Items, noFollowsPost.ID) {
+	if status != http.StatusOK || noFollows.Items == nil || len(noFollows.Items) != 0 || noFollows.NextCursor != nil || containsFollowingArticleID(noFollows.Items, noFollowsPost.ID) {
 		t.Fatalf("no follows status=%d body=%s response=%#v", status, body, noFollows)
 	}
 
 	activeBeforeFollow, status, body := requestFollowingTimeline(t, viewer.ID, "limit=50")
-	if status != http.StatusOK || containsArticleID(activeBeforeFollow.Items, unfollowedPost.ID) {
+	if status != http.StatusOK || containsFollowingArticleID(activeBeforeFollow.Items, unfollowedPost.ID) {
 		t.Fatalf("unfollowed post before follow status=%d body=%s response=%#v", status, body, activeBeforeFollow)
 	}
 	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: unfollowed.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
 	activeAfterFollow, status, body := requestFollowingTimeline(t, viewer.ID, "limit=50")
-	if status != http.StatusOK || !containsArticleID(activeAfterFollow.Items, unfollowedPost.ID) {
+	if status != http.StatusOK || !containsFollowingArticleID(activeAfterFollow.Items, unfollowedPost.ID) {
 		t.Fatalf("unfollowed post after follow status=%d body=%s response=%#v", status, body, activeAfterFollow)
 	}
 	if err := db.Where("follower_id = ? AND following_id = ?", viewer.ID, unfollowed.ID).Delete(&models.UserFollow{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	activeAfterUnfollow, status, body := requestFollowingTimeline(t, viewer.ID, "limit=50")
-	if status != http.StatusOK || containsArticleID(activeAfterUnfollow.Items, unfollowedPost.ID) {
+	if status != http.StatusOK || containsFollowingArticleID(activeAfterUnfollow.Items, unfollowedPost.ID) {
 		t.Fatalf("unfollowed post after unfollow status=%d body=%s response=%#v", status, body, activeAfterUnfollow)
 	}
 

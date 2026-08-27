@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   getArticleLikeStates: vi.fn(),
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
+  getArticleRepostStates: vi.fn(),
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
   deleteArticle: vi.fn(),
 }));
 
@@ -47,6 +50,12 @@ vi.mock('../services/likeService', () => ({
   getArticleLikeStates: mocks.getArticleLikeStates,
   likeArticle: mocks.likeArticle,
   unlikeArticle: mocks.unlikeArticle,
+}));
+
+vi.mock('../services/repostService', () => ({
+  getArticleRepostStates: mocks.getArticleRepostStates,
+  repostArticle: mocks.repostArticle,
+  undoRepostArticle: mocks.undoRepostArticle,
 }));
 
 import { useHomeTimelineStore } from './homeTimeline';
@@ -90,9 +99,30 @@ const article = (id: number, authorID = 7) => ({
   author: author(authorID),
 });
 
+const followingActivity = (
+  id: number,
+  articleAuthorID = 7,
+  actorID = articleAuthorID,
+  activityType: 'post' | 'repost' = 'post',
+) => ({
+  activity_type: activityType,
+  activity_at: '2026-08-24T00:00:00.000Z',
+  source_id: id,
+  actor: author(actorID),
+  article: article(id, articleAuthorID),
+});
+
 const settle = async () => {
   await flushPromises();
   await flushPromises();
+};
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 };
 
 describe('home timeline session store', () => {
@@ -116,12 +146,18 @@ describe('home timeline session store', () => {
     mocks.getArticleLikeStates.mockReset().mockResolvedValue({ items: [], unavailable_article_ids: [] });
     mocks.likeArticle.mockReset();
     mocks.unlikeArticle.mockReset();
+    mocks.getArticleRepostStates.mockReset().mockResolvedValue({ items: [], unavailable_article_ids: [] });
+    mocks.repostArticle.mockReset();
+    mocks.undoRepostArticle.mockReset();
     mocks.deleteArticle.mockReset().mockResolvedValue(undefined);
   });
 
   it('does not refetch a loaded tab after clean Home re-entry', async () => {
     mocks.getArticleRecommendations.mockResolvedValue([recommendation(1)]);
-    mocks.getFollowingTimeline.mockResolvedValue({ items: [article(2)], next_cursor: null });
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(2)],
+      next_cursor: null,
+    });
     const store = useHomeTimelineStore();
 
     await store.loadForYou();
@@ -182,6 +218,9 @@ describe('home timeline session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
     };
     store.forYou.items = [{ article: recommendation(4), post: { ...followingPost } }];
     store.following.items = [followingPost];
@@ -207,6 +246,9 @@ describe('home timeline session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
     }];
     store.following.items = [{
       id: 4,
@@ -220,6 +262,9 @@ describe('home timeline session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
     }];
     store.forYou.items = [
       { article: recommendation(4), post: { ...store.following.items[0] } },
@@ -234,6 +279,88 @@ describe('home timeline session store', () => {
     expect(store.following.items).toHaveLength(0);
     expect(store.forYou.items).toHaveLength(0);
     expect(mocks.feedStore!.markArticleDeleted).toHaveBeenCalledWith(4, 7);
+  });
+
+  it('batch-hydrates Repost state without changing For You membership', async () => {
+    mocks.getArticleRecommendations.mockResolvedValue([recommendation(1), recommendation(2)]);
+    mocks.getArticleRepostStates.mockResolvedValue({
+      items: [{ article_id: 1, reposts: 5, reposted: true }],
+      unavailable_article_ids: [2],
+    });
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await settle();
+
+    expect(mocks.getArticleRepostStates).toHaveBeenCalledWith([1, 2]);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.items[0].post).toMatchObject({
+      repostCount: 5,
+      reposted: true,
+      repostStatus: 'ready',
+    });
+    expect(store.forYou.items[1].post.repostStatus).toBe('unavailable');
+  });
+
+  it('optimistically toggles Repost and settles from server authority', async () => {
+    const store = useHomeTimelineStore();
+    const post = articleToPost(4, 7);
+    post.repostCount = 8;
+    post.repostStatus = 'ready';
+    store.following.items = [post];
+    mocks.repostArticle.mockResolvedValue({ reposts: 9, reposted: true });
+
+    const request = store.toggleRepost(4);
+    expect(post.repostCount).toBe(9);
+    expect(post.reposted).toBe(true);
+    expect(store.repostPendingArticleIds.has(4)).toBe(true);
+    expect(await request).toBe(true);
+    expect(post.repostCount).toBe(9);
+    expect(post.reposted).toBe(true);
+    expect(store.repostPendingArticleIds.has(4)).toBe(false);
+  });
+
+  it('rolls back a failed Repost mutation and ignores a stale response', async () => {
+    const store = useHomeTimelineStore();
+    const post = articleToPost(4, 7);
+    post.repostCount = 8;
+    post.repostStatus = 'ready';
+    store.following.items = [post];
+    const pending = deferred<{ reposts: number; reposted: boolean }>();
+    mocks.repostArticle.mockReturnValue(pending.promise);
+
+    const request = store.toggleRepost(4);
+    expect(post.reposted).toBe(true);
+    store.applyExternalRepostStateLocal({
+      articleId: 4,
+      reposts: 12,
+      reposted: true,
+      status: 'ready',
+    });
+    pending.resolve({ reposts: 9, reposted: true });
+    expect(await request).toBe(false);
+    expect(post.repostCount).toBe(12);
+    expect(post.reposted).toBe(true);
+    expect(store.repostPendingArticleIds.has(4)).toBe(false);
+  });
+
+  it('filters Following by activity actor while preserving a followed reposter card', () => {
+    const store = useHomeTimelineStore();
+    const repostedPost = articleToPost(4, 9);
+    repostedPost.repostContext = { actor: author(8) };
+    const directPost = articleToPost(5, 9);
+    store.following.items = [repostedPost, directPost];
+
+    store.reconcileFollowStateLocal({
+      user_id: 8,
+      following: false,
+      follower_count: 0,
+      following_count: 0,
+    });
+
+    expect(store.following.items.map(post => post.id)).toEqual([5]);
+    expect(store.following.items[0].author.id).toBe(9);
+    expect(store.following.stale).toBe(true);
   });
 
   it('external like state invalidates an older local like mutation', async () => {
@@ -255,6 +382,9 @@ describe('home timeline session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
     }];
 
     const localMutation = store.toggleLike(4);
@@ -289,6 +419,9 @@ describe('home timeline session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
     };
     mocks.feedStore!.recentlyPublishedPosts = [{ ...post }];
     store.following.items = [{ ...post }];
@@ -341,7 +474,7 @@ describe('home timeline session store', () => {
     store.following.nextCursor = 'old-cursor';
     store.following.stale = true;
     mocks.getFollowingTimeline.mockResolvedValue({
-      items: [article(2), article(2), article(3)],
+      items: [followingActivity(2), followingActivity(2), followingActivity(3)],
       next_cursor: 'fresh-cursor',
     });
 
@@ -377,8 +510,8 @@ describe('home timeline session store', () => {
     store.following.items = [articleToPost(1, 8)];
     store.following.loaded = true;
     store.following.nextCursor = 'cursor-1';
-    let resolvePage!: (value: { items: ReturnType<typeof article>[]; next_cursor: string | null }) => void;
-    const pendingPage = new Promise<{ items: ReturnType<typeof article>[]; next_cursor: string | null }>((resolve) => {
+    let resolvePage!: (value: { items: ReturnType<typeof followingActivity>[]; next_cursor: string | null }) => void;
+    const pendingPage = new Promise<{ items: ReturnType<typeof followingActivity>[]; next_cursor: string | null }>((resolve) => {
       resolvePage = resolve;
     });
     mocks.getFollowingTimeline.mockReturnValue(pendingPage);
@@ -391,7 +524,7 @@ describe('home timeline session store', () => {
       follower_count: 0,
       following_count: 0,
     });
-    resolvePage({ items: [article(9, 8)], next_cursor: null });
+    resolvePage({ items: [followingActivity(9, 8, 8)], next_cursor: null });
     await request;
 
     expect(store.following.loadingMore).toBe(false);
@@ -412,4 +545,7 @@ const articleToPost = (id: number, authorID: number): FeedPost => ({
   viewCount: 0,
   liked: false,
   likeStatus: 'ready',
+  repostCount: 0,
+  reposted: false,
+  repostStatus: 'ready',
 });

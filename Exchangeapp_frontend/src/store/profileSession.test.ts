@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   getArticleLikeStates: vi.fn(),
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
+  getArticleRepostStates: vi.fn(),
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
   deleteArticle: vi.fn(),
 }));
 
@@ -53,6 +56,12 @@ vi.mock('../services/likeService', () => ({
   getArticleLikeStates: mocks.getArticleLikeStates,
   likeArticle: mocks.likeArticle,
   unlikeArticle: mocks.unlikeArticle,
+}));
+
+vi.mock('../services/repostService', () => ({
+  getArticleRepostStates: mocks.getArticleRepostStates,
+  repostArticle: mocks.repostArticle,
+  undoRepostArticle: mocks.undoRepostArticle,
 }));
 
 import { useProfileSessionStore } from './profileSession';
@@ -111,6 +120,7 @@ describe('profile session store', () => {
       markArticleDeleted: vi.fn().mockReturnValue(true),
       replaceAuthorIdentity: vi.fn(),
       applyLikeStateUpdate: vi.fn(),
+      applyRepostStateUpdate: vi.fn(),
     });
     mocks.getUser.mockReset().mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
     mocks.getUserArticles.mockReset().mockResolvedValue({ items: [], next_cursor: null });
@@ -121,10 +131,13 @@ describe('profile session store', () => {
       following_count: 0,
     });
     mocks.getArticleLikeStates.mockReset().mockResolvedValue({ items: [], unavailable_article_ids: [] });
+    mocks.getArticleRepostStates.mockReset().mockResolvedValue({ items: [], unavailable_article_ids: [] });
     mocks.followUser.mockReset();
     mocks.unfollowUser.mockReset();
     mocks.likeArticle.mockReset();
     mocks.unlikeArticle.mockReset();
+    mocks.repostArticle.mockReset();
+    mocks.undoRepostArticle.mockReset();
     mocks.deleteArticle.mockReset().mockResolvedValue(undefined);
   });
 
@@ -277,6 +290,9 @@ describe('profile session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
     }];
 
     const localMutation = store.toggleLike(4, 7);
@@ -295,6 +311,90 @@ describe('profile session store', () => {
     resolveLike({ likes: 3, liked: true });
     await localMutation;
     expect(session.articles[0].likeCount).toBe(8);
+  });
+
+  it('batch-hydrates Profile Repost state without changing authored membership', async () => {
+    mocks.getUserArticles.mockResolvedValue({ items: [article(4)], next_cursor: null });
+    mocks.getArticleRepostStates.mockResolvedValue({
+      items: [{ article_id: 4, reposts: 6, reposted: true }],
+      unavailable_article_ids: [],
+    });
+    const store = useProfileSessionStore();
+
+    await store.loadProfile(7);
+    await settle();
+
+    const session = store.getSession(7)!;
+    expect(mocks.getArticleRepostStates).toHaveBeenCalledWith([4]);
+    expect(session.articles).toHaveLength(1);
+    expect(session.articles[0]).toMatchObject({
+      id: 4,
+      repostCount: 6,
+      reposted: true,
+      repostStatus: 'ready',
+    });
+  });
+
+  it('optimistically toggles Profile Repost and rolls back on failure', async () => {
+    const store = useProfileSessionStore();
+    const session = store.ensureSession(7)!;
+    const post: FeedPost = {
+      id: 4,
+      author: author(7),
+      title: 'Post 4',
+      excerpt: 'Post 4',
+      coverImageUrl: '',
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 0,
+      commentCount: 0,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready',
+      repostCount: 8,
+      reposted: false,
+      repostStatus: 'ready',
+    };
+    session.articles = [post];
+    mocks.repostArticle.mockRejectedValue(new Error('offline'));
+
+    const request = store.toggleRepost(4, 7);
+    expect(post.reposted).toBe(true);
+    expect(post.repostCount).toBe(9);
+    expect(await request).toBe(false);
+    expect(post.reposted).toBe(false);
+    expect(post.repostCount).toBe(8);
+    expect(store.repostPendingArticleIds.has(4)).toBe(false);
+  });
+
+  it('applies an external Detail Repost update without changing Profile membership', () => {
+    const store = useProfileSessionStore();
+    const session = store.ensureSession(7)!;
+    session.articles = [{
+      id: 4,
+      author: author(7),
+      title: 'Post 4',
+      excerpt: 'Post 4',
+      coverImageUrl: '',
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 0,
+      commentCount: 0,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready',
+      repostCount: 8,
+      reposted: false,
+      repostStatus: 'ready',
+    }];
+
+    expect(store.applyExternalRepostStateLocal({
+      articleId: 4,
+      reposts: 9,
+      reposted: true,
+      status: 'ready',
+    })).toBe(true);
+    expect(session.articles).toHaveLength(1);
+    expect(session.articles[0].repostCount).toBe(9);
+    expect(session.articles[0].reposted).toBe(true);
   });
 
   it('external follow state invalidates an older Profile follow request', async () => {
@@ -325,6 +425,8 @@ describe('profile session store', () => {
     registerHomeTimelineSync({
       applyLikeStateUpdateLocal: vi.fn().mockReturnValue(false),
       applyExternalLikeStateLocal: vi.fn().mockReturnValue(false),
+      applyRepostStateUpdateLocal: vi.fn().mockReturnValue(false),
+      applyExternalRepostStateLocal: vi.fn().mockReturnValue(false),
       applyCommentCountUpdateLocal: vi.fn().mockReturnValue(false),
       reconcileFollowStateLocal,
       removeArticleLocal: vi.fn(),
@@ -356,6 +458,9 @@ describe('profile session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready' as const,
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready' as const,
     };
     first.articles = [{ ...post }];
     second.articles = [{ ...post }];
@@ -381,6 +486,9 @@ describe('profile session store', () => {
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
     }];
     second.articles = [{ ...first.articles[0] }];
     store.applyLikeStateUpdateEverywhere({ articleId: 4, likes: 2, liked: true, status: 'ready' });

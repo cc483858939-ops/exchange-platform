@@ -1,4 +1,4 @@
-import type { FeedLikeStateUpdate } from '../types/Feed';
+import type { FeedLikeStateUpdate, FeedRepostStateUpdate } from '../types/Feed';
 import type { UserFollowState } from '../services/userService';
 import type { PublicAuthor } from '../types/User';
 
@@ -10,6 +10,8 @@ export type ArticleCommentCountUpdate = {
 export type HomeTimelineSync = {
   applyLikeStateUpdateLocal: (update: FeedLikeStateUpdate, expectedVersion?: number) => boolean;
   applyExternalLikeStateLocal: (update: FeedLikeStateUpdate) => boolean;
+  applyRepostStateUpdateLocal: (update: FeedRepostStateUpdate, expectedVersion?: number) => boolean;
+  applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyCommentCountUpdateLocal: (update: ArticleCommentCountUpdate) => boolean;
   reconcileFollowStateLocal: (state: UserFollowState) => boolean;
   removeArticleLocal: (articleId: number) => void;
@@ -19,6 +21,8 @@ export type HomeTimelineSync = {
 export type ProfileSessionSync = {
   applyLikeStateUpdateLocal: (update: FeedLikeStateUpdate) => boolean;
   applyExternalLikeStateLocal: (update: FeedLikeStateUpdate) => boolean;
+  applyRepostStateUpdateLocal: (update: FeedRepostStateUpdate) => boolean;
+  applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyCommentCountUpdateEverywhereLocal: (update: ArticleCommentCountUpdate) => boolean;
   applyExternalFollowStateLocal: (state: UserFollowState) => boolean;
   removeArticleEverywhereLocal: (articleId: number) => void;
@@ -31,6 +35,7 @@ export type SearchSessionSync = {
 
 export type HistorySessionSync = {
   applyExternalLikeStateLocal: (update: FeedLikeStateUpdate) => boolean;
+  applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyCommentCountUpdateLocal: (update: ArticleCommentCountUpdate) => boolean;
   removeArticleLocal: (articleId: number) => void;
   replaceAuthorIdentityLocal: (author: PublicAuthor) => void;
@@ -73,6 +78,12 @@ export const syncHomeLikeState = (update: FeedLikeStateUpdate) => {
   return profileApplied || historyApplied;
 };
 
+export const syncHomeRepostState = (update: FeedRepostStateUpdate) => {
+  const profileApplied = profileSessionSync?.applyRepostStateUpdateLocal(update) ?? false;
+  const historyApplied = historySessionSync?.applyExternalRepostStateLocal(update) ?? false;
+  return profileApplied || historyApplied;
+};
+
 export const syncHomeArticleRemoval = (articleId: number) => {
   profileSessionSync?.removeArticleEverywhereLocal(articleId);
   historySessionSync?.removeArticleLocal(articleId);
@@ -87,6 +98,12 @@ export const syncHomeAuthorIdentity = (author: PublicAuthor) => {
 export const syncProfileLikeState = (update: FeedLikeStateUpdate) => {
   const homeApplied = homeTimelineSync?.applyLikeStateUpdateLocal(update) ?? false;
   const historyApplied = historySessionSync?.applyExternalLikeStateLocal(update) ?? false;
+  return homeApplied || historyApplied;
+};
+
+export const syncProfileRepostState = (update: FeedRepostStateUpdate) => {
+  const homeApplied = homeTimelineSync?.applyRepostStateUpdateLocal(update) ?? false;
+  const historyApplied = historySessionSync?.applyExternalRepostStateLocal(update) ?? false;
   return homeApplied || historyApplied;
 };
 
@@ -105,6 +122,12 @@ export const syncExternalArticleLikeState = (update: FeedLikeStateUpdate) => {
   homeTimelineSync?.applyExternalLikeStateLocal(update);
   profileSessionSync?.applyExternalLikeStateLocal(update);
   historySessionSync?.applyExternalLikeStateLocal(update);
+};
+
+export const syncExternalArticleRepostState = (update: FeedRepostStateUpdate) => {
+  homeTimelineSync?.applyExternalRepostStateLocal(update);
+  profileSessionSync?.applyExternalRepostStateLocal(update);
+  historySessionSync?.applyExternalRepostStateLocal(update);
 };
 
 export const syncExternalArticleRemoval = (articleId: number) => {

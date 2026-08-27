@@ -5,25 +5,39 @@ import { useFeedStore } from './feed';
 import {
   deleteArticle,
   getFollowingTimeline,
+  type FollowingTimelineItem,
 } from '../services/articleService';
 import { getArticleRecommendations } from '../services/recommendationService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
+import {
+  getArticleRepostStates,
+  repostArticle,
+  undoRepostArticle,
+} from '../services/repostService';
 import type { UserFollowState } from '../services/userService';
 import type { Article } from '../types/Article';
 import type { RecommendedArticle } from '../types/Recommendation';
-import type { FeedLikeStateUpdate, FeedPost, FeedTab } from '../types/Feed';
+import type {
+  FeedLikeStateUpdate,
+  FeedPost,
+  FeedRepostStateUpdate,
+  FeedTab,
+} from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
-  articleToFeedPost,
+  applyFeedRepostStateUpdate,
+  followingTimelineItemToFeedPost,
   recommendationToFeedPost,
   setFeedPostLikeUnavailable,
+  setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import {
   registerHomeTimelineSync,
   syncHomeArticleRemoval,
   syncHomeAuthorIdentity,
   syncHomeLikeState,
+  syncHomeRepostState,
 } from './sessionSync';
 import type { ArticleCommentCountUpdate } from './sessionSync';
 
@@ -92,21 +106,30 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     following: 0,
   });
   const likePendingArticleIds = reactive(new Set<number>());
+  const repostPendingArticleIds = reactive(new Set<number>());
   const pendingDeleteArticleIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
 
   const followingLoadedArticleIds = new Set<number>();
   const likeMutationVersions = new Map<number, number>();
+  const repostMutationVersions = new Map<number, number>();
   let authGeneration = 0;
   let forYouRequestVersion = 0;
   let followingRequestVersion = 0;
   let followingPagingVersion = 0;
   let likeGeneration = 0;
+  let repostGeneration = 0;
 
   const clearLikeWork = () => {
     likeGeneration += 1;
     likePendingArticleIds.clear();
     likeMutationVersions.clear();
+  };
+
+  const clearRepostWork = () => {
+    repostGeneration += 1;
+    repostPendingArticleIds.clear();
+    repostMutationVersions.clear();
   };
 
   const resetForYou = () => {
@@ -136,6 +159,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const clearForViewer = () => {
     authGeneration += 1;
     clearLikeWork();
+    clearRepostWork();
     pendingDeleteArticleIds.clear();
     deleteErrors.clear();
     activeTab.value = 'for-you';
@@ -172,6 +196,15 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const bumpLikeMutationVersion = (articleId: number) => {
     const next = getLikeMutationVersion(articleId) + 1;
     likeMutationVersions.set(articleId, next);
+    return next;
+  };
+
+  const getRepostMutationVersion = (articleId: number) =>
+    repostMutationVersions.get(articleId) ?? 0;
+
+  const bumpRepostMutationVersion = (articleId: number) => {
+    const next = getRepostMutationVersion(articleId) + 1;
+    repostMutationVersions.set(articleId, next);
     return next;
   };
 
@@ -221,6 +254,29 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     return applyLikeStateUpdateLocal(update);
   };
 
+  const applyRepostStateUpdateLocal = (
+    update: FeedRepostStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    if (
+      expectedVersion !== undefined
+      && getRepostMutationVersion(update.articleId) !== expectedVersion
+    ) {
+      return false;
+    }
+    let applied = false;
+    forEachHomePost(update.articleId, (post) => {
+      applied = applyFeedRepostStateUpdate(post, update) || applied;
+    });
+    return applied;
+  };
+
+  const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
+    bumpRepostMutationVersion(update.articleId);
+    repostPendingArticleIds.delete(update.articleId);
+    return applyRepostStateUpdateLocal(update);
+  };
+
   const applyCommentCountUpdateLocal = (update: ArticleCommentCountUpdate) => {
     const commentCount = normalizeCommentCount(update.commentCount);
     if (commentCount === null) return false;
@@ -246,7 +302,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     following.stale = true;
 
     if (!state.following) {
-      following.items = following.items.filter(post => post.author.id !== state.user_id);
+      following.items = following.items.filter((post) => (
+        (post.repostContext?.actor.id ?? post.author.id) !== state.user_id
+      ));
     }
     return true;
   };
@@ -260,6 +318,18 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       return false;
     }
     syncHomeLikeState(update);
+    return applied;
+  };
+
+  const applyRepostStateUpdate = (
+    update: FeedRepostStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    const applied = applyRepostStateUpdateLocal(update, expectedVersion);
+    if (expectedVersion !== undefined && !applied) {
+      return false;
+    }
+    syncHomeRepostState(update);
     return applied;
   };
 
@@ -334,14 +404,86 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
-  const appendFollowingArticles = (articles: Article[]) => {
-    const newPosts = articles
+  const markRepostUnavailableLocal = (articleIds: number[], versions: Map<number, number>) => {
+    articleIds.forEach((articleId) => {
+      const capturedVersion = versions.get(articleId);
+      if (
+        capturedVersion === undefined
+        || getRepostMutationVersion(articleId) !== capturedVersion
+      ) {
+        return;
+      }
+      forEachHomePost(articleId, (post) => {
+        if (post.repostStatus === 'unknown') {
+          setFeedPostRepostUnavailable(post);
+        }
+      });
+    });
+  };
+
+  const hydrateRepostStates = async (
+    articleIds: number[],
+    isCurrent: () => boolean,
+  ) => {
+    const uniqueIDs = Array.from(new Set(articleIds));
+    if (uniqueIDs.length === 0) return;
+
+    const versions = new Map(uniqueIDs.map((id) => [id, getRepostMutationVersion(id)]));
+    try {
+      const response = await getArticleRepostStates(uniqueIDs);
+      if (!isCurrent()) return;
+
+      const readyIDs = new Set<number>();
+      response.items.forEach((item) => {
+        const capturedVersion = versions.get(item.article_id);
+        if (
+          capturedVersion === undefined
+          || getRepostMutationVersion(item.article_id) !== capturedVersion
+          || !findPost(item.article_id)
+        ) {
+          return;
+        }
+        readyIDs.add(item.article_id);
+        applyRepostStateUpdate({
+          articleId: item.article_id,
+          reposts: item.reposts,
+          reposted: item.reposted,
+          status: 'ready',
+        }, capturedVersion);
+      });
+      response.unavailable_article_ids.forEach((articleId) => {
+        const capturedVersion = versions.get(articleId);
+        if (
+          readyIDs.has(articleId)
+          || capturedVersion === undefined
+          || getRepostMutationVersion(articleId) !== capturedVersion
+          || !findPost(articleId)
+        ) {
+          return;
+        }
+        applyRepostStateUpdate({
+          articleId,
+          reposts: 0,
+          reposted: false,
+          status: 'unavailable',
+        }, capturedVersion);
+      });
+    } catch {
+      if (isCurrent()) {
+        markRepostUnavailableLocal(uniqueIDs, versions);
+      }
+    }
+  };
+
+  const appendFollowingArticles = (activities: FollowingTimelineItem[]) => {
+    const newPosts = activities
       .filter((article) => {
-        if (followingLoadedArticleIds.has(article.ID)) return false;
-        followingLoadedArticleIds.add(article.ID);
-        return !feedStore.isArticleDeleted(article.ID);
+        const articleID = article.article.ID;
+        if (followingLoadedArticleIds.has(articleID)) return false;
+        followingLoadedArticleIds.add(articleID);
+        return !feedStore.isArticleDeleted(articleID);
       })
-      .map(articleToFeedPost);
+      .map(followingTimelineItemToFeedPost);
     if (newPosts.length > 0) {
       following.items = [...following.items, ...newPosts];
     }
@@ -411,6 +553,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         () => currentForYouRequest(version, generation, capturedViewerID)
           && likeGeneration === capturedLikeGeneration,
       );
+      const capturedRepostGeneration = repostGeneration;
+      void hydrateRepostStates(
+        forYou.items.map(({ post }) => post.id),
+        () => currentForYouRequest(version, generation, capturedViewerID)
+          && repostGeneration === capturedRepostGeneration,
+      );
     } catch {
       if (currentForYouRequest(version, generation, capturedViewerID)) {
         forYou.error = true;
@@ -456,6 +604,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         newPosts.map((post) => post.id),
         () => currentFollowingRequest(version, generation, capturedViewerID)
           && likeGeneration === capturedLikeGeneration,
+      );
+      const capturedRepostGeneration = repostGeneration;
+      void hydrateRepostStates(
+        newPosts.map((post) => post.id),
+        () => currentFollowingRequest(version, generation, capturedViewerID)
+          && repostGeneration === capturedRepostGeneration,
       );
     } catch {
       if (currentFollowingRequest(version, generation, capturedViewerID)) {
@@ -509,6 +663,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         () => currentFollowingRequest(requestVersion, generation, capturedViewerID)
           && likeGeneration === capturedLikeGeneration,
       );
+      const capturedRepostGeneration = repostGeneration;
+      void hydrateRepostStates(
+        newPosts.map((post) => post.id),
+        () => currentFollowingRequest(requestVersion, generation, capturedViewerID)
+          && repostGeneration === capturedRepostGeneration,
+      );
     } catch {
       if (currentFollowingPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
         following.loadMoreError = true;
@@ -547,14 +707,25 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       if (!currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)) return;
 
       const freshIDs = new Set<number>();
+      const previousPostsByID = new Map(following.items.map(post => [post.id, post]));
       const freshPosts: FeedPost[] = [];
-      response.items.forEach((article) => {
+      response.items.forEach((activity) => {
+        const article = activity.article;
         if (
           freshIDs.has(article.ID)
           || feedStore.isArticleDeleted(article.ID)
         ) return;
         freshIDs.add(article.ID);
-        freshPosts.push(articleToFeedPost(article));
+        const freshPost = followingTimelineItemToFeedPost(activity);
+        const previousPost = previousPostsByID.get(freshPost.id);
+        freshPosts.push(previousPost && previousPost.repostStatus !== 'unknown'
+          ? {
+            ...freshPost,
+            repostCount: previousPost.repostCount,
+            reposted: previousPost.reposted,
+            repostStatus: previousPost.repostStatus,
+          }
+          : freshPost);
       });
 
       following.items = freshPosts;
@@ -570,6 +741,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         freshPosts.map(post => post.id),
         () => currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)
           && likeGeneration === capturedLikeGeneration,
+      );
+      const capturedRepostGeneration = repostGeneration;
+      void hydrateRepostStates(
+        freshPosts.map(post => post.id),
+        () => currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)
+          && repostGeneration === capturedRepostGeneration,
       );
     } catch {
       if (currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)) {
@@ -645,12 +822,69 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
+  const toggleRepost = async (articleId: number) => {
+    const post = findPost(articleId);
+    if (!post || post.repostStatus !== 'ready' || repostPendingArticleIds.has(articleId)) {
+      return false;
+    }
+
+    const previousReposted = post.reposted;
+    const previousReposts = post.repostCount;
+    const mutationVersion = bumpRepostMutationVersion(articleId);
+    const capturedRepostGeneration = repostGeneration;
+    const capturedAuthGeneration = authGeneration;
+    const capturedViewerID = viewerID.value;
+    repostPendingArticleIds.add(articleId);
+    applyRepostStateUpdate({
+      articleId,
+      reposts: previousReposted ? Math.max(0, previousReposts - 1) : previousReposts + 1,
+      reposted: !previousReposted,
+      status: 'ready',
+    }, mutationVersion);
+
+    const isCurrent = () =>
+      isAuthenticatedForViewer(capturedViewerID)
+      && authGeneration === capturedAuthGeneration
+      && repostGeneration === capturedRepostGeneration
+      && getRepostMutationVersion(articleId) === mutationVersion
+      && repostPendingArticleIds.has(articleId);
+
+    try {
+      const result = previousReposted
+        ? await undoRepostArticle(articleId)
+        : await repostArticle(articleId);
+      if (!isCurrent()) return false;
+      const settledVersion = bumpRepostMutationVersion(articleId);
+      applyRepostStateUpdate({
+        articleId,
+        reposts: result.reposts,
+        reposted: result.reposted,
+        status: 'ready',
+      }, settledVersion);
+      repostPendingArticleIds.delete(articleId);
+      return true;
+    } catch {
+      if (!isCurrent()) return false;
+      const settledVersion = bumpRepostMutationVersion(articleId);
+      applyRepostStateUpdate({
+        articleId,
+        reposts: previousReposts,
+        reposted: previousReposted,
+        status: 'ready',
+      }, settledVersion);
+      repostPendingArticleIds.delete(articleId);
+      return false;
+    }
+  };
+
   const removeArticleLocal = (articleId: number) => {
     following.items = following.items.filter((post) => post.id !== articleId);
     forYou.items = forYou.items.filter((item) => item.post.id !== articleId);
     followingLoadedArticleIds.add(articleId);
     likePendingArticleIds.delete(articleId);
     likeMutationVersions.delete(articleId);
+    repostPendingArticleIds.delete(articleId);
+    repostMutationVersions.delete(articleId);
     pendingDeleteArticleIds.delete(articleId);
     deleteErrors.delete(articleId);
   };
@@ -716,12 +950,29 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const replaceAuthorIdentityLocal = (author: PublicAuthor) => {
-    following.items = following.items.map((post) => (
-      post.author.id === author.id ? { ...post, author } : post
-    ));
+    following.items = following.items.map((post) => {
+      const canonicalMatches = post.author.id === author.id;
+      const actorMatches = post.repostContext?.actor.id === author.id;
+      return canonicalMatches || actorMatches
+        ? {
+          ...post,
+          author: canonicalMatches ? author : post.author,
+          repostContext: actorMatches ? { actor: author } : post.repostContext,
+        }
+        : post;
+    });
     forYou.items = forYou.items.map((item) => (
-      item.post.author.id === author.id
-        ? { ...item, post: { ...item.post, author } }
+      item.post.author.id === author.id || item.post.repostContext?.actor.id === author.id
+        ? {
+          ...item,
+          post: {
+            ...item.post,
+            author: item.post.author.id === author.id ? author : item.post.author,
+            repostContext: item.post.repostContext?.actor.id === author.id
+              ? { actor: author }
+              : item.post.repostContext,
+          },
+        }
         : item
     ));
   };
@@ -740,6 +991,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   registerHomeTimelineSync({
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
+    applyRepostStateUpdateLocal,
+    applyExternalRepostStateLocal,
     applyCommentCountUpdateLocal,
     reconcileFollowStateLocal,
     removeArticleLocal,
@@ -756,7 +1009,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   watch(
     () => feedStore.recentlyPublishedPosts
-      .map((post) => `${post.id}:${post.likeStatus}`)
+      .map((post) => `${post.id}:${post.likeStatus}:${post.repostStatus}`)
       .join(','),
     () => {
       const ids = feedStore.recentlyPublishedPosts
@@ -764,13 +1017,26 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         .map((post) => post.id);
       const capturedViewerID = viewerID.value;
       const capturedAuthGeneration = authGeneration;
-      const capturedLikeGeneration = likeGeneration;
-      if (!authStore.isAuthenticated || capturedViewerID === null || ids.length === 0) return;
-      void hydrateLikeStates(ids, () =>
-        isAuthenticatedForViewer(capturedViewerID)
-        && authGeneration === capturedAuthGeneration
-        && likeGeneration === capturedLikeGeneration,
-      );
+      if (!authStore.isAuthenticated || capturedViewerID === null) return;
+      if (ids.length > 0) {
+        const capturedLikeGeneration = likeGeneration;
+        void hydrateLikeStates(ids, () =>
+          isAuthenticatedForViewer(capturedViewerID)
+          && authGeneration === capturedAuthGeneration
+          && likeGeneration === capturedLikeGeneration,
+        );
+      }
+      const repostIDs = feedStore.recentlyPublishedPosts
+        .filter((post) => post.repostStatus === 'unknown')
+        .map((post) => post.id);
+      const capturedRepostGeneration = repostGeneration;
+      if (repostIDs.length > 0) {
+        void hydrateRepostStates(repostIDs, () =>
+          isAuthenticatedForViewer(capturedViewerID)
+          && authGeneration === capturedAuthGeneration
+          && repostGeneration === capturedRepostGeneration,
+        );
+      }
     },
     { immediate: true },
   );
@@ -782,6 +1048,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     following,
     scrollY,
     likePendingArticleIds,
+    repostPendingArticleIds,
     pendingDeleteArticleIds,
     deleteErrors,
     setViewer,
@@ -793,10 +1060,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     revalidateFollowing,
     retryFollowingLoadMore,
     toggleLike,
+    toggleRepost,
     findPost,
     applyLikeStateUpdate,
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
+    applyRepostStateUpdateLocal,
+    applyExternalRepostStateLocal,
     applyCommentCountUpdateLocal,
     reconcileFollowStateLocal,
     dismissRecommendation,

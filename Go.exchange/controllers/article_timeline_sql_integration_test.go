@@ -24,7 +24,7 @@ func TestArticleTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}, &models.ArticleRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	queryLogger := &articleDetailSQLLogger{Interface: logger.Default}

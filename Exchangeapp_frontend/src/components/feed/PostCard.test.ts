@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, RouterLinkStub } from '@vue/test-utils';
 import PostCard from './PostCard.vue';
 import LikeAction from '../engagement/LikeAction.vue';
+import RepostAction from '../engagement/RepostAction.vue';
 import type { FeedPost } from '../../types/Feed';
 import { formatCompactEngagementCount } from '../../utils/engagementCount';
 
@@ -43,6 +44,9 @@ const basePost = (): FeedPost => ({
   viewCount: 1234,
   liked: false,
   likeStatus: 'ready',
+  repostCount: 0,
+  reposted: false,
+  repostStatus: 'ready',
 });
 
 describe('PostCard View metric and telemetry lifecycle', () => {
@@ -184,6 +188,38 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     await likeAction.trigger('click');
 
     expect(wrapper.emitted('toggleLike')).toEqual([[42]]);
+  });
+
+  it('renders Reply, Repost, Like, Views and keeps the canonical author under repost context', async () => {
+    const post = {
+      ...basePost(),
+      repostCount: 9,
+      reposted: true,
+      repostContext: {
+        actor: {
+          id: 11,
+          username: 'alice',
+          display_name: 'Alice',
+          avatar_url: '',
+        },
+      },
+    };
+    const wrapper = mountPostCard(post);
+    const repostAction = wrapper.findComponent(RepostAction);
+    const engagement = wrapper.find('.post-card__engagement').element.children;
+
+    expect(wrapper.find('.post-card__repost-context').text()).toBe('Alice reposted');
+    expect(repostAction.props('reposted')).toBe(true);
+    expect(repostAction.props('count')).toBe(9);
+    expect(Array.from(engagement).map(element => element.className)).toEqual([
+      'post-card__metric post-card__reply',
+      'repost-action repost-action--compact repost-action--reposted',
+      'stub-like-action',
+      'post-card__metric post-card__views',
+    ]);
+
+    await repostAction.trigger('click');
+    expect(wrapper.emitted('toggleRepost')).toEqual([[42]]);
   });
 
   it('maps unknown and unavailable like status without changing parent mutation logic', async () => {

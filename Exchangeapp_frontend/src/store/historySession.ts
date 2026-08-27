@@ -2,18 +2,26 @@ import { defineStore } from 'pinia';
 import { reactive, ref, watch } from 'vue';
 import { getLikedHistory } from '../services/historyService';
 import { getArticleLikeStates, unlikeArticle } from '../services/likeService';
+import {
+  getArticleRepostStates,
+  repostArticle,
+  undoRepostArticle,
+} from '../services/repostService';
 import type { Article } from '../types/Article';
-import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
+import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
+  applyFeedRepostStateUpdate,
   articleToFeedPost,
   setFeedPostLikeUnavailable,
+  setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import { useAuthStore } from './auth';
 import {
   registerHistorySessionSync,
   syncExternalArticleLikeState,
+  syncExternalArticleRepostState,
 } from './sessionSync';
 import type { ArticleCommentCountUpdate } from './sessionSync';
 
@@ -55,14 +63,18 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   const requestVersion = ref(0);
   const pagingVersion = ref(0);
   const likeHydrationGeneration = ref(0);
+  const repostHydrationGeneration = ref(0);
   const pendingUnlikeArticleIDs = ref(new Set<number>());
+  const repostPendingArticleIDs = ref(new Set<number>());
   const mutationErrors = ref(new Map<number, string>());
 
   const loadedArticleIDs = new Set<number>();
   const removedSnapshots = new Map<number, RemovedSnapshot>();
   const deletedArticleIDs = new Set<number>();
   const likeMutationVersions = reactive(new Map<number, number>());
+  const repostMutationVersions = reactive(new Map<number, number>());
   let freshnessVersion = 0;
+  let repostGeneration = 0;
 
   const getLikeMutationVersion = (articleID: number) =>
     likeMutationVersions.get(articleID) ?? 0;
@@ -73,16 +85,29 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return version;
   };
 
+  const getRepostMutationVersion = (articleID: number) =>
+    repostMutationVersions.get(articleID) ?? 0;
+
+  const bumpRepostMutationVersion = (articleID: number) => {
+    const version = getRepostMutationVersion(articleID) + 1;
+    repostMutationVersions.set(articleID, version);
+    return version;
+  };
+
   const clearMutationState = () => {
     pendingUnlikeArticleIDs.value.clear();
     mutationErrors.value.clear();
     likeMutationVersions.clear();
+    repostPendingArticleIDs.value.clear();
+    repostMutationVersions.clear();
+    repostGeneration += 1;
   };
 
   const clearPageState = () => {
     requestVersion.value += 1;
     pagingVersion.value += 1;
     likeHydrationGeneration.value += 1;
+    repostHydrationGeneration.value += 1;
     items.value = [];
     loaded.value = false;
     initialLoading.value = false;
@@ -137,6 +162,15 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       return false;
     }
     applyFeedLikeStateUpdate(snapshot.post, update);
+    return true;
+  };
+
+  const updateSnapshotRepostState = (articleID: number, update: FeedRepostStateUpdate) => {
+    const snapshot = removedSnapshots.get(articleID);
+    if (!snapshot) {
+      return false;
+    }
+    applyFeedRepostStateUpdate(snapshot.post, update);
     return true;
   };
 
@@ -284,6 +318,81 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     }
   };
 
+  const markRepostUnavailableLocal = (posts: FeedPost[], versions: Map<number, number>) => {
+    posts.forEach((post) => {
+      const capturedVersion = versions.get(post.id);
+      if (
+        capturedVersion === undefined
+        || getRepostMutationVersion(post.id) !== capturedVersion
+      ) return;
+      const currentPost = findPost(post.id);
+      if (currentPost && currentPost.repostStatus === 'unknown') {
+        setFeedPostRepostUnavailable(currentPost);
+      }
+    });
+  };
+
+  const hydrateRepostStates = async (
+    posts: FeedPost[],
+    capturedRequestVersion: number,
+    capturedViewerID: number,
+    capturedGeneration: number,
+  ) => {
+    const articleIDs = Array.from(new Set(posts.map(post => post.id)));
+    if (articleIDs.length === 0) return;
+
+    const hydrationGeneration = repostHydrationGeneration.value;
+    const capturedRepostGeneration = repostGeneration;
+    const capturedMutationVersions = new Map(
+      articleIDs.map(articleID => [articleID, getRepostMutationVersion(articleID)]),
+    );
+    const current = () => (
+      isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
+      && hydrationGeneration === repostHydrationGeneration.value
+      && repostGeneration === capturedRepostGeneration
+    );
+
+    try {
+      const response = await getArticleRepostStates(articleIDs);
+      if (!current()) return;
+      const readyIDs = new Set<number>();
+      response.items.forEach((item) => {
+        const capturedVersion = capturedMutationVersions.get(item.article_id);
+        const post = findPost(item.article_id);
+        if (
+          capturedVersion === undefined
+          || getRepostMutationVersion(item.article_id) !== capturedVersion
+          || !post
+        ) return;
+        readyIDs.add(item.article_id);
+        applyFeedRepostStateUpdate(post, {
+          articleId: item.article_id,
+          reposts: item.reposts,
+          reposted: item.reposted,
+          status: 'ready',
+        });
+      });
+      response.unavailable_article_ids.forEach((articleID) => {
+        const capturedVersion = capturedMutationVersions.get(articleID);
+        const post = findPost(articleID);
+        if (
+          readyIDs.has(articleID)
+          || capturedVersion === undefined
+          || getRepostMutationVersion(articleID) !== capturedVersion
+          || !post
+        ) return;
+        applyFeedRepostStateUpdate(post, {
+          articleId: articleID,
+          reposts: 0,
+          reposted: false,
+          status: 'unavailable',
+        });
+      });
+    } catch {
+      if (current()) markRepostUnavailableLocal(posts, capturedMutationVersions);
+    }
+  };
+
   const loadInitial = async (force = false) => {
     const capturedViewerID = viewerID.value;
     if (capturedViewerID === null || !authStore.isAuthenticated) {
@@ -320,6 +429,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       }
       revalidateError.value = '';
       void hydrateLikeStates(
+        newPosts,
+        capturedRequestVersion,
+        capturedViewerID,
+        capturedGeneration,
+      );
+      void hydrateRepostStates(
         newPosts,
         capturedRequestVersion,
         capturedViewerID,
@@ -370,6 +485,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       const newPosts = appendHistoryArticles(response.items ?? []);
       nextCursor.value = response.next_cursor;
       void hydrateLikeStates(
+        newPosts,
+        capturedRequestVersion,
+        capturedViewerID,
+        capturedGeneration,
+      );
+      void hydrateRepostStates(
         newPosts,
         capturedRequestVersion,
         capturedViewerID,
@@ -431,8 +552,20 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         }
         const freshPost = articleToFeedPost(article);
         const oldPost = oldByID.get(article.ID);
-        freshPosts.push(oldPost && oldPost.likeStatus !== 'unknown'
-          ? { ...freshPost, liked: oldPost.liked, likeCount: oldPost.likeCount, likeStatus: oldPost.likeStatus }
+        freshPosts.push(oldPost
+          ? {
+            ...freshPost,
+            ...(oldPost.likeStatus !== 'unknown'
+              ? { liked: oldPost.liked, likeCount: oldPost.likeCount, likeStatus: oldPost.likeStatus }
+              : {}),
+            ...(oldPost.repostStatus !== 'unknown'
+              ? {
+                reposted: oldPost.reposted,
+                repostCount: oldPost.repostCount,
+                repostStatus: oldPost.repostStatus,
+              }
+              : {}),
+          }
           : freshPost);
       });
 
@@ -450,6 +583,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       const freshForHydration = freshPosts.filter(post => post.likeStatus === 'unknown');
       void hydrateLikeStates(
         freshForHydration,
+        capturedRequestVersion,
+        capturedViewerID,
+        capturedGeneration,
+      );
+      void hydrateRepostStates(
+        freshPosts.filter(post => post.repostStatus === 'unknown'),
         capturedRequestVersion,
         capturedViewerID,
         capturedGeneration,
@@ -544,6 +683,65 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     }
   };
 
+  const toggleRepost = async (articleID: number) => {
+    const post = findPost(articleID);
+    const capturedViewerID = viewerID.value;
+    if (
+      !post
+      || post.repostStatus !== 'ready'
+      || capturedViewerID === null
+      || !authStore.isAuthenticated
+      || repostPendingArticleIDs.value.has(articleID)
+    ) return false;
+
+    const previousReposted = post.reposted;
+    const previousReposts = post.repostCount;
+    const mutationVersion = bumpRepostMutationVersion(articleID);
+    const capturedGeneration = repostGeneration;
+    const capturedViewerGeneration = viewerGeneration.value;
+    repostPendingArticleIDs.value.add(articleID);
+    applyFeedRepostStateUpdate(post, {
+      articleId: articleID,
+      reposts: previousReposted ? Math.max(0, previousReposts - 1) : previousReposts + 1,
+      reposted: !previousReposted,
+      status: 'ready',
+    });
+
+    const isCurrentMutation = () => (
+      isCurrentViewer(capturedViewerID, capturedViewerGeneration)
+      && repostGeneration === capturedGeneration
+      && getRepostMutationVersion(articleID) === mutationVersion
+      && repostPendingArticleIDs.value.has(articleID)
+    );
+
+    try {
+      const response = previousReposted
+        ? await undoRepostArticle(articleID)
+        : await repostArticle(articleID);
+      if (!isCurrentMutation()) return false;
+      repostMutationVersions.set(articleID, mutationVersion + 1);
+      syncExternalArticleRepostState({
+        articleId: articleID,
+        reposts: response.reposts,
+        reposted: response.reposted,
+        status: 'ready',
+      });
+      repostPendingArticleIDs.value.delete(articleID);
+      return true;
+    } catch {
+      if (!isCurrentMutation()) return false;
+      repostMutationVersions.set(articleID, mutationVersion + 1);
+      applyFeedRepostStateUpdate(post, {
+        articleId: articleID,
+        reposts: previousReposts,
+        reposted: previousReposted,
+        status: 'ready',
+      });
+      repostPendingArticleIDs.value.delete(articleID);
+      return false;
+    }
+  };
+
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
     if (deletedArticleIDs.has(update.articleId)) {
       removedSnapshots.delete(update.articleId);
@@ -585,6 +783,19 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return false;
   };
 
+  const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
+    if (deletedArticleIDs.has(update.articleId)) {
+      return false;
+    }
+    bumpRepostMutationVersion(update.articleId);
+    repostPendingArticleIDs.value.delete(update.articleId);
+    const post = findPost(update.articleId);
+    const snapshot = removedSnapshots.get(update.articleId);
+    if (post) return applyFeedRepostStateUpdate(post, update);
+    if (snapshot) return applyFeedRepostStateUpdate(snapshot.post, update);
+    return false;
+  };
+
   const applyCommentCountUpdateLocal = (update: ArticleCommentCountUpdate) => {
     const commentCount = normalizeCount(update.commentCount);
     if (commentCount === null) {
@@ -611,23 +822,37 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     loadedArticleIDs.delete(articleID);
     removedSnapshots.delete(articleID);
     pendingUnlikeArticleIDs.value.delete(articleID);
+    repostPendingArticleIDs.value.delete(articleID);
     mutationErrors.value.delete(articleID);
     bumpLikeMutationVersion(articleID);
+    bumpRepostMutationVersion(articleID);
     return hadItem;
   };
 
   const replaceAuthorIdentityLocal = (author: PublicAuthor) => {
     let applied = false;
     items.value = items.value.map((post) => {
-      if (post.author.id !== author.id) {
+      const canonicalMatches = post.author.id === author.id;
+      const actorMatches = post.repostContext?.actor.id === author.id;
+      if (!canonicalMatches && !actorMatches) {
         return post;
       }
       applied = true;
-      return { ...post, author };
+      return {
+        ...post,
+        author: canonicalMatches ? author : post.author,
+        repostContext: actorMatches ? { actor: author } : post.repostContext,
+      };
     });
     removedSnapshots.forEach((snapshot) => {
-      if (snapshot.post.author.id !== author.id) return;
-      snapshot.post = { ...snapshot.post, author };
+      const canonicalMatches = snapshot.post.author.id === author.id;
+      const actorMatches = snapshot.post.repostContext?.actor.id === author.id;
+      if (!canonicalMatches && !actorMatches) return;
+      snapshot.post = {
+        ...snapshot.post,
+        author: canonicalMatches ? author : snapshot.post.author,
+        repostContext: actorMatches ? { actor: author } : snapshot.post.repostContext,
+      };
       applied = true;
     });
     return applied;
@@ -641,6 +866,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
 
   registerHistorySessionSync({
     applyExternalLikeStateLocal,
+    applyExternalRepostStateLocal,
     applyCommentCountUpdateLocal,
     removeArticleLocal,
     replaceAuthorIdentityLocal,
@@ -671,8 +897,11 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     requestVersion,
     pagingVersion,
     likeHydrationGeneration,
+    repostHydrationGeneration,
     pendingUnlikeArticleIDs,
+    repostPendingArticleIDs,
     likeMutationVersions,
+    repostMutationVersions,
     mutationErrors,
     setViewer,
     loadInitial,
@@ -681,7 +910,9 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     retryLoadMore,
     revalidateHistory,
     toggleUnlike,
+    toggleRepost,
     applyExternalLikeStateLocal,
+    applyExternalRepostStateLocal,
     applyCommentCountUpdateLocal,
     removeArticleLocal,
     replaceAuthorIdentityLocal,

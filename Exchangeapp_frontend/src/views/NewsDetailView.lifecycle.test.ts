@@ -10,6 +10,7 @@ import { formatCompactEngagementCount } from '../utils/engagementCount';
 const mocks = vi.hoisted(() => ({
   getArticleById: vi.fn(),
   getArticleLikeState: vi.fn(),
+  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   getArticleComments: vi.fn(),
   getUser: vi.fn(),
   consumeAttribution: vi.fn(),
@@ -79,6 +80,12 @@ vi.mock('../services/likeService', () => ({
   getArticleLikeState: mocks.getArticleLikeState,
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
+}));
+
+vi.mock('../services/repostService', () => ({
+  getArticleRepostState: mocks.getArticleRepostState,
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
 }));
 
 vi.mock('../services/commentService', () => ({

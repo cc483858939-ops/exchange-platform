@@ -8,6 +8,7 @@ import NewsDetailView from './NewsDetailView.vue';
 const mocks = vi.hoisted(() => ({
   getArticleById: vi.fn(),
   getArticleLikeState: vi.fn(),
+  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
   getArticleComments: vi.fn(),
@@ -78,6 +79,12 @@ vi.mock('../services/likeService', () => ({
   getArticleLikeState: mocks.getArticleLikeState,
   likeArticle: mocks.likeArticle,
   unlikeArticle: mocks.unlikeArticle,
+}));
+
+vi.mock('../services/repostService', () => ({
+  getArticleRepostState: mocks.getArticleRepostState,
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
 }));
 
 vi.mock('../services/commentService', () => ({

@@ -59,6 +59,28 @@ WHERE table_schema = current_schema()
 	if viewColumn.Nullable != "NO" || !strings.Contains(viewColumn.Default, "0") {
 		t.Fatalf("articles.view_count nullable=%q default=%q", viewColumn.Nullable, viewColumn.Default)
 	}
+	if !db.Migrator().HasTable(&models.ArticleRepost{}) {
+		t.Fatal("article_reposts table does not exist")
+	}
+	var repostIndexes []struct {
+		Name string `gorm:"column:indexname"`
+	}
+	if err := db.Raw(`
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = current_schema()
+  AND tablename = 'article_reposts'
+  AND indexname IN (
+    'uidx_article_reposts_user_article',
+    'idx_article_reposts_user_created',
+    'idx_article_reposts_article'
+  )
+`).Scan(&repostIndexes).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(repostIndexes) != 3 {
+		t.Fatalf("article repost indexes=%#v", repostIndexes)
+	}
 
 	var definition string
 	if err := db.Raw(`
@@ -85,9 +107,19 @@ WHERE conrelid = 'articles'::regclass
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleRepost{})
 		db.Unscoped().Delete(&article)
 		db.Unscoped().Delete(&user)
 	})
+
+	repost := models.ArticleRepost{UserID: user.ID, ArticleID: article.ID}
+	if err := db.Create(&repost).Error; err != nil {
+		t.Fatal(err)
+	}
+	duplicateRepost := models.ArticleRepost{UserID: user.ID, ArticleID: article.ID}
+	if err := db.Create(&duplicateRepost).Error; err == nil {
+		t.Fatal("database accepted duplicate article repost relation")
+	}
 
 	if err := db.Model(&article).Update("comment_count", -1).Error; err == nil {
 		t.Fatal("database accepted a negative article comment_count")

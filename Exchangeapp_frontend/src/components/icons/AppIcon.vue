@@ -239,6 +239,17 @@
       />
     </template>
 
+    <template v-else-if="props.name === 'repost'">
+      <path
+        d="M7 6h9.25a3.75 3.75 0 0 1 3.75 3.75V12m0 0-3-3m3 3-3 3M17 18H7.75A3.75 3.75 0 0 1 4 14.25V12m0 0 3 3m-3-3 3-3"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </template>
+
     <template v-else-if="props.name === 'plus'">
       <path
         d="M12 5v14M5 12h14"
@@ -321,6 +332,7 @@ type AppIconName =
   | 'compose'
   | 'logout'
   | 'reply'
+  | 'repost'
   | 'heart'
   | 'more'
   | 'link'

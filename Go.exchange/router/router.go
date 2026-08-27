@@ -79,6 +79,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.PUT("/me/notifications/:id/read", controllers.MarkMyNotificationRead)
 		api.PUT("/me/notifications/read-all", controllers.MarkMyNotificationsReadAll)
 		api.POST("/articles", controllers.NewCreateArticleHandler(publisher))
+		api.POST("/articles/repost-states", controllers.GetArticleRepostStates)
 		api.GET("/articles/:id", controllers.GetArticleByID)
 		api.DELETE("/articles/:id", controllers.DeleteArticle)
 		api.GET("/articles/:id/comments", controllers.GetArticleComments)
@@ -88,6 +89,9 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.GET("/articles/:id/like", controllers.GetArticleLikes)
 		api.PUT("/articles/:id/like", controllers.LikeArticle)
 		api.DELETE("/articles/:id/like", controllers.UnlikeArticle)
+		api.GET("/articles/:id/repost", controllers.GetArticleRepostState)
+		api.PUT("/articles/:id/repost", controllers.RepostArticle)
+		api.DELETE("/articles/:id/repost", controllers.UndoRepostArticle)
 	}
 
 	return router, nil

@@ -173,10 +173,12 @@
             :key="post.id"
             :post="post"
             :like-pending="likePendingArticleIds.has(post.id)"
+            :repost-pending="repostPendingArticleIds.has(post.id)"
             :show-delete="canDeletePost(post)"
             :delete-pending="pendingDeleteArticleIds.has(post.id)"
             :delete-error="deleteErrors.get(post.id) || ''"
             @toggle-like="handleLikeToggle"
+            @toggle-repost="handleRepostToggle"
             @delete-post="handleDeletePost"
           />
         </div>
@@ -378,6 +380,7 @@ const followActionError = computed(() => activeSession.value?.followActionError 
 const followPending = computed(() => activeSession.value?.followPending ?? false);
 
 const likePendingArticleIds = profileStore.likePendingArticleIds;
+const repostPendingArticleIds = profileStore.repostPendingArticleIds;
 const pendingDeleteArticleIds = profileStore.pendingDeleteArticleIds;
 const deleteErrors = profileStore.deleteErrors;
 
@@ -744,6 +747,10 @@ const handleDeletePost = async (articleId: number) => {
 
 const handleLikeToggle = (articleId: number) => {
   void profileStore.toggleLike(articleId, numericUserID.value ?? undefined);
+};
+
+const handleRepostToggle = (articleId: number) => {
+  void profileStore.toggleRepost(articleId, numericUserID.value ?? undefined);
 };
 
 const goHome = () => {

@@ -2,9 +2,9 @@ import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import type { Article } from '../types/Article';
-import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
+import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
-import { applyFeedLikeStateUpdate, articleToFeedPost } from '../utils/feedPost';
+import { applyFeedLikeStateUpdate, applyFeedRepostStateUpdate, articleToFeedPost } from '../utils/feedPost';
 
 const maxRecentlyPublishedPosts = 5;
 
@@ -92,8 +92,14 @@ export const useFeedStore = defineStore('feed', () => {
 
   const replaceAuthorIdentity = (author: PublicAuthor) => {
     recentlyPublishedPosts.value = recentlyPublishedPosts.value.map((post) => (
-      post.author.id === author.id
-        ? { ...post, author }
+      post.author.id === author.id || post.repostContext?.actor.id === author.id
+        ? {
+          ...post,
+          author: post.author.id === author.id ? author : post.author,
+          repostContext: post.repostContext?.actor.id === author.id
+            ? { actor: author }
+            : post.repostContext,
+        }
         : post
     ));
   };
@@ -102,6 +108,14 @@ export const useFeedStore = defineStore('feed', () => {
     let applied = false;
     recentlyPublishedPosts.value.forEach((post) => {
       applied = applyFeedLikeStateUpdate(post, update) || applied;
+    });
+    return applied;
+  };
+
+  const applyRepostStateUpdate = (update: FeedRepostStateUpdate) => {
+    let applied = false;
+    recentlyPublishedPosts.value.forEach((post) => {
+      applied = applyFeedRepostStateUpdate(post, update) || applied;
     });
     return applied;
   };
@@ -125,6 +139,7 @@ export const useFeedStore = defineStore('feed', () => {
     isArticleDeleted,
     replaceAuthorIdentity,
     applyLikeStateUpdate,
+    applyRepostStateUpdate,
     clearRecentlyPublishedPosts,
   };
 });

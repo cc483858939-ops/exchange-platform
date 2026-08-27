@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   consumeHandoff: vi.fn(),
   getArticleById: vi.fn(),
   getArticleLikeState: vi.fn(),
+  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
   getArticleComments: vi.fn(),
@@ -73,6 +74,12 @@ vi.mock('../services/likeService', () => ({
   unlikeArticle: mocks.unlikeArticle,
 }));
 
+vi.mock('../services/repostService', () => ({
+  getArticleRepostState: mocks.getArticleRepostState,
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
+}));
+
 vi.mock('../services/commentService', () => ({
   createArticleComment: mocks.createArticleComment,
   deleteComment: mocks.deleteComment,
@@ -94,6 +101,7 @@ vi.mock('../services/articleViewTelemetry', () => ({
 
 vi.mock('../store/sessionSync', () => ({
   syncExternalArticleLikeState: vi.fn(),
+  syncExternalArticleRepostState: vi.fn(),
   syncExternalArticleRemoval: vi.fn(),
   syncExternalCommentCount: vi.fn(),
 }));
@@ -139,6 +147,9 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   viewCount: 300,
   liked: true,
   likeStatus: 'ready',
+  repostCount: 0,
+  reposted: false,
+  repostStatus: 'ready',
   ...overrides,
 });
 
@@ -230,6 +241,7 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.text()).not.toContain('Loading full article');
     expect(mounted.find('.post-detail').exists()).toBe(false);
     expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
+    expect(mocks.getArticleRepostState).not.toHaveBeenCalled();
     expect(mocks.getArticleComments).not.toHaveBeenCalled();
     expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
 
@@ -240,6 +252,7 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.post-detail__body').text()).toBe('Authoritative article body');
     expect(mocks.getArticleById).toHaveBeenCalledTimes(1);
     expect(mocks.getArticleLikeState).toHaveBeenCalledTimes(1);
+    expect(mocks.getArticleRepostState).toHaveBeenCalledTimes(1);
     expect(mocks.getArticleComments).toHaveBeenCalledTimes(1);
   });
 
@@ -275,9 +288,11 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-loading').exists()).toBe(false);
     expect(mounted.text()).not.toContain('Loading full article');
     expect(mounted.find('.test-like-action').exists()).toBe(false);
+    expect(mounted.find('.repost-action').exists()).toBe(false);
     expect(mounted.find('.post-conversation').exists()).toBe(false);
     expect(mocks.getArticleById).toHaveBeenCalledTimes(1);
     expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
+    expect(mocks.getArticleRepostState).not.toHaveBeenCalled();
     expect(mocks.getArticleComments).not.toHaveBeenCalled();
     expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
 
@@ -339,6 +354,7 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
     expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
     expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
+    expect(mocks.getArticleRepostState).not.toHaveBeenCalled();
     expect(mocks.getArticleComments).not.toHaveBeenCalled();
   });
 

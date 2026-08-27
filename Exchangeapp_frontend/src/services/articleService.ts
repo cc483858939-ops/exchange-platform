@@ -1,5 +1,6 @@
 import apiClient from '../axios';
 import type { Article } from '../types/Article';
+import type { PublicAuthor } from '../types/User';
 import { normalizeResourceID } from './resourceId';
 
 export type CreateArticlePayload = {
@@ -23,7 +24,20 @@ export type ArticlePageResponse = {
   next_cursor: string | null;
 };
 
-export type FollowingTimelineResponse = ArticlePageResponse;
+export type FollowingActivityType = 'post' | 'repost';
+
+export interface FollowingTimelineItem {
+  activity_type: FollowingActivityType;
+  activity_at: string;
+  source_id: number;
+  actor: PublicAuthor;
+  article: Article;
+}
+
+export interface FollowingTimelineResponse {
+  items: FollowingTimelineItem[];
+  next_cursor: string | null;
+}
 
 export async function getFollowingTimeline(
   options: FollowingTimelineQuery = {},

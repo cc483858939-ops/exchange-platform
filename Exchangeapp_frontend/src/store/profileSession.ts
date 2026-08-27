@@ -14,19 +14,27 @@ import {
   type UserFollowState,
 } from '../services/userService';
 import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
+import {
+  getArticleRepostStates,
+  repostArticle,
+  undoRepostArticle,
+} from '../services/repostService';
 import type { Article } from '../types/Article';
-import type { FeedLikeStateUpdate, FeedPost } from '../types/Feed';
+import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import type { PublicAuthor, PublicUser } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
+  applyFeedRepostStateUpdate,
   articleToFeedPost,
   setFeedPostLikeUnavailable,
+  setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import {
   registerProfileSessionSync,
   syncProfileArticleRemoval,
   syncProfileAuthorIdentity,
   syncProfileLikeState,
+  syncProfileRepostState,
 } from './sessionSync';
 import type { ArticleCommentCountUpdate } from './sessionSync';
 import { syncProfileFollowState } from './sessionSync';
@@ -92,12 +100,15 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const viewerGeneration = ref(0);
   const sessions = reactive(new Map<number, ProfileSessionEntry>());
   const likePendingArticleIds = reactive(new Set<number>());
+  const repostPendingArticleIds = reactive(new Set<number>());
   const pendingDeleteArticleIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
   const deleteTargetProfileIDs = new Map<number, number>();
   const deleteMutationVersions = new Map<number, number>();
   const likeMutationVersions = new Map<number, number>();
+  const repostMutationVersions = new Map<number, number>();
   let likeGeneration = 0;
+  let repostGeneration = 0;
   let accessClock = 0;
 
   const nextAccessTime = () => {
@@ -174,6 +185,12 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     likeMutationVersions.clear();
   };
 
+  const clearRepostWork = () => {
+    repostGeneration += 1;
+    repostPendingArticleIds.clear();
+    repostMutationVersions.clear();
+  };
+
   const setViewer = (rawViewerID: unknown) => {
     const nextViewerID = normalizeID(rawViewerID);
     if (nextViewerID === viewerID.value) return false;
@@ -181,6 +198,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     viewerGeneration.value += 1;
     sessions.clear();
     clearLikeWork();
+    clearRepostWork();
     pendingDeleteArticleIds.clear();
     deleteErrors.clear();
     deleteTargetProfileIDs.clear();
@@ -254,6 +272,38 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return applyLikeStateUpdateLocal(update);
   };
 
+  const getRepostMutationVersion = (articleId: number) =>
+    repostMutationVersions.get(articleId) ?? 0;
+
+  const bumpRepostMutationVersion = (articleId: number) => {
+    const next = getRepostMutationVersion(articleId) + 1;
+    repostMutationVersions.set(articleId, next);
+    return next;
+  };
+
+  const applyRepostStateUpdateLocal = (
+    update: FeedRepostStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    if (
+      expectedVersion !== undefined
+      && getRepostMutationVersion(update.articleId) !== expectedVersion
+    ) {
+      return false;
+    }
+    let applied = false;
+    forEachProfilePost(update.articleId, (post) => {
+      applied = applyFeedRepostStateUpdate(post, update) || applied;
+    });
+    return applied;
+  };
+
+  const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
+    bumpRepostMutationVersion(update.articleId);
+    repostPendingArticleIds.delete(update.articleId);
+    return applyRepostStateUpdateLocal(update);
+  };
+
   const applyCommentCountUpdateEverywhereLocal = (update: ArticleCommentCountUpdate) => {
     const commentCount = normalizeCommentCount(update.commentCount);
     if (commentCount === null) return false;
@@ -286,6 +336,19 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     const applied = applyLikeStateUpdateLocal(update);
     feedStore.applyLikeStateUpdate(update);
     syncProfileLikeState(update);
+    return applied;
+  };
+
+  const applyRepostStateUpdateEverywhere = (
+    update: FeedRepostStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    const applied = applyRepostStateUpdateLocal(update, expectedVersion);
+    if (expectedVersion !== undefined && !applied) {
+      return false;
+    }
+    feedStore.applyRepostStateUpdate(update);
+    syncProfileRepostState(update);
     return applied;
   };
 
@@ -356,6 +419,68 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
+  const markRepostUnavailableLocal = (articleIds: number[], versions: Map<number, number>) => {
+    articleIds.forEach((articleId) => {
+      const capturedVersion = versions.get(articleId);
+      if (
+        capturedVersion === undefined
+        || getRepostMutationVersion(articleId) !== capturedVersion
+      ) return;
+      forEachProfilePost(articleId, (post) => {
+        if (post.repostStatus === 'unknown') setFeedPostRepostUnavailable(post);
+      });
+    });
+  };
+
+  const hydrateRepostStates = async (
+    articleIds: number[],
+    isCurrent: () => boolean,
+  ) => {
+    const uniqueIDs = Array.from(new Set(articleIds));
+    if (uniqueIDs.length === 0) return;
+    const versions = new Map(uniqueIDs.map((id) => [id, getRepostMutationVersion(id)]));
+    const capturedRepostGeneration = repostGeneration;
+    try {
+      const response = await getArticleRepostStates(uniqueIDs);
+      if (!isCurrent() || capturedRepostGeneration !== repostGeneration) return;
+      const readyIDs = new Set<number>();
+      response.items.forEach((item) => {
+        const capturedVersion = versions.get(item.article_id);
+        if (
+          capturedVersion === undefined
+          || getRepostMutationVersion(item.article_id) !== capturedVersion
+          || !findPost(item.article_id)
+        ) return;
+        readyIDs.add(item.article_id);
+        applyRepostStateUpdateEverywhere({
+          articleId: item.article_id,
+          reposts: item.reposts,
+          reposted: item.reposted,
+          status: 'ready',
+        }, capturedVersion);
+      });
+      response.unavailable_article_ids.forEach((articleId) => {
+        const capturedVersion = versions.get(articleId);
+        if (
+          readyIDs.has(articleId)
+          || capturedVersion === undefined
+          || getRepostMutationVersion(articleId) !== capturedVersion
+          || !findPost(articleId)
+        ) return;
+        applyRepostStateUpdateEverywhere({
+          articleId,
+          reposts: 0,
+          reposted: false,
+          status: 'unavailable',
+        }, capturedVersion);
+      });
+    } catch {
+      if (isCurrent() && capturedRepostGeneration === repostGeneration) {
+        markRepostUnavailableLocal(uniqueIDs, versions);
+      }
+    }
+  };
+
   const appendArticles = (session: ProfileSessionEntry, rawArticles: Article[]) => {
     const newPosts = rawArticles
       .filter((article) => {
@@ -416,6 +541,10 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         capturedViewerGeneration,
         () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
       );
+      void hydrateRepostStates(
+        newPosts.map((post) => post.id),
+        () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
+      );
     } catch (error) {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
         session.articlesInitialError = getErrorStatus(error) === 404
@@ -462,6 +591,10 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       void hydrateLikeStates(
         newPosts.map((post) => post.id),
         capturedViewerGeneration,
+        () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
+      );
+      void hydrateRepostStates(
+        newPosts.map((post) => post.id),
         () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
       );
     } catch (error) {
@@ -648,6 +781,67 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
+  const toggleRepost = async (articleId: number, rawUserID?: unknown) => {
+    const post = findPost(articleId, rawUserID);
+    const capturedViewerID = viewerID.value;
+    if (
+      !post
+      || post.repostStatus !== 'ready'
+      || capturedViewerID === null
+      || repostPendingArticleIds.has(articleId)
+      || !authStore.isAuthenticated
+    ) return false;
+
+    const previousReposted = post.reposted;
+    const previousReposts = post.repostCount;
+    const mutationVersion = bumpRepostMutationVersion(articleId);
+    const capturedGeneration = repostGeneration;
+    const capturedViewerGeneration = viewerGeneration.value;
+    repostPendingArticleIds.add(articleId);
+    applyRepostStateUpdateEverywhere({
+      articleId,
+      reposts: previousReposted ? Math.max(0, previousReposts - 1) : previousReposts + 1,
+      reposted: !previousReposted,
+      status: 'ready',
+    }, mutationVersion);
+
+    const isCurrent = () => (
+      authStore.isAuthenticated
+      && viewerID.value === capturedViewerID
+      && viewerGeneration.value === capturedViewerGeneration
+      && repostGeneration === capturedGeneration
+      && (repostMutationVersions.get(articleId) ?? 0) === mutationVersion
+      && repostPendingArticleIds.has(articleId)
+    );
+
+    try {
+      const response = previousReposted
+        ? await undoRepostArticle(articleId)
+        : await repostArticle(articleId);
+      if (!isCurrent()) return false;
+      repostMutationVersions.set(articleId, mutationVersion + 1);
+      applyRepostStateUpdateEverywhere({
+        articleId,
+        reposts: response.reposts,
+        reposted: response.reposted,
+        status: 'ready',
+      }, mutationVersion + 1);
+      repostPendingArticleIds.delete(articleId);
+      return true;
+    } catch {
+      if (!isCurrent()) return false;
+      repostMutationVersions.set(articleId, mutationVersion + 1);
+      applyRepostStateUpdateEverywhere({
+        articleId,
+        reposts: previousReposts,
+        reposted: previousReposted,
+        status: 'ready',
+      }, mutationVersion + 1);
+      repostPendingArticleIds.delete(articleId);
+      return false;
+    }
+  };
+
   const removeArticleEverywhereLocal = (articleId: number) => {
     sessions.forEach((session) => {
       const removedFromSession = session.articles.some((post) => post.id === articleId);
@@ -661,6 +855,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     });
     likePendingArticleIds.delete(articleId);
     likeMutationVersions.delete(articleId);
+    repostPendingArticleIds.delete(articleId);
+    bumpRepostMutationVersion(articleId);
     pendingDeleteArticleIds.delete(articleId);
     deleteErrors.delete(articleId);
     deleteTargetProfileIDs.delete(articleId);
@@ -736,9 +932,17 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       if (session.user?.id === author.id) {
         session.user = { ...session.user, ...author };
       }
-      session.articles = session.articles.map((post) => (
-        post.author.id === author.id ? { ...post, author } : post
-      ));
+      session.articles = session.articles.map((post) => {
+        const canonicalMatches = post.author.id === author.id;
+        const actorMatches = post.repostContext?.actor.id === author.id;
+        return canonicalMatches || actorMatches
+          ? {
+            ...post,
+            author: canonicalMatches ? author : post.author,
+            repostContext: actorMatches ? { actor: author } : post.repostContext,
+          }
+          : post;
+      });
     });
   };
 
@@ -858,6 +1062,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   registerProfileSessionSync({
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
+    applyRepostStateUpdateLocal,
+    applyExternalRepostStateLocal,
     applyCommentCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
     removeArticleEverywhereLocal,
@@ -878,6 +1084,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     sessions,
     maxProfileSessions,
     likePendingArticleIds,
+    repostPendingArticleIds,
     pendingDeleteArticleIds,
     deleteErrors,
     setViewer,
@@ -892,10 +1099,13 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     loadFollowState,
     toggleFollow,
     toggleLike,
+    toggleRepost,
     deletePost,
     applyLikeStateUpdateEverywhere,
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
+    applyRepostStateUpdateLocal,
+    applyExternalRepostStateLocal,
     applyCommentCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
     removeArticleEverywhere,

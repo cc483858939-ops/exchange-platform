@@ -78,6 +78,17 @@
               <span>{{ commentCount }}</span>
             </button>
 
+            <RepostAction
+              :key="articleId"
+              :reposted="reposted"
+              :count="repostCount"
+              :disabled="!authStore.isAuthenticated || repostStateUnavailable"
+              :loading="repostStateLoading"
+              :pending="repostSubmitting"
+              :ariaLabel="detailRepostLabel"
+              variant="detail"
+              @toggle="toggleRepost"
+            />
             <LikeAction
               :key="articleId"
               :liked="liked"
@@ -100,6 +111,14 @@
               <span>{{ detailPresentation.commentCount }}</span>
             </span>
             <span
+              class="post-detail__metric post-detail__repost"
+              :aria-label="presentationRepostLabel"
+              :title="presentationRepostLabel"
+            >
+              <AppIcon name="repost" :size="18" />
+              <span>{{ detailPresentation.repostCount }}</span>
+            </span>
+            <span
               class="post-detail__metric post-detail__like"
               :aria-label="presentationLikeLabel"
               :title="presentationLikeLabel"
@@ -115,6 +134,11 @@
           class="detail-inline-error"
           role="status"
         >{{ likeError }}</p>
+        <p
+          v-if="detailPresentation.kind === 'article' && repostError"
+          class="detail-inline-error"
+          role="status"
+        >{{ repostError }}</p>
         <p
           v-if="detailPresentation.kind === 'article' && deleteError"
           class="detail-inline-error"
@@ -193,12 +217,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
+import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import CommentComposer from '../components/comments/CommentComposer.vue';
 import CommentList from '../components/comments/CommentList.vue';
 import { createArticleComment, deleteComment, getArticleComments } from '../services/commentService';
 import { deleteArticle, getArticleById } from '../services/articleService';
 import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
+import { getArticleRepostState, repostArticle, undoRepostArticle } from '../services/repostService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { createArticleViewEventID, getArticleViewTelemetry } from '../services/articleViewTelemetry';
@@ -209,6 +235,7 @@ import { useFeedStore } from '../store/feed';
 import { useReplyDraftStore } from '../store/replyDraft';
 import {
   syncExternalArticleLikeState,
+  syncExternalArticleRepostState,
   syncExternalArticleRemoval,
   syncExternalCommentCount,
 } from '../store/sessionSync';
@@ -244,6 +271,12 @@ const likeCount = ref(0);
 const likeStateLoading = ref(false);
 const likeSubmitting = ref(false);
 const likeError = ref('');
+const reposted = ref(false);
+const repostCount = ref(0);
+const repostStateLoading = ref(false);
+const repostSubmitting = ref(false);
+const repostError = ref('');
+const repostStateUnavailable = ref(false);
 
 const comments = ref<ArticleComment[]>([]);
 const nextCursor = ref<string | null>(null);
@@ -262,6 +295,8 @@ let detailRequestVersion = 0;
 let deleteRequestVersion = 0;
 let likeRequestVersion = 0;
 let likeMutationVersion = 0;
+let repostRequestVersion = 0;
+let repostMutationVersion = 0;
 let commentsRequestVersion = 0;
 let replyIntentTask: Promise<void> | null = null;
 let replyIntentRetryRequested = false;
@@ -289,6 +324,8 @@ type DetailPresentation = {
   createdAt: string;
   coverUrl: string;
   likeCount: number;
+  repostCount: number;
+  reposted: boolean;
   commentCount: number;
   viewCount: number;
 };
@@ -303,6 +340,8 @@ const detailPresentation = computed<DetailPresentation | null>(() => {
       createdAt: article.value.CreatedAt,
       coverUrl: article.value.cover_image_url || '',
       likeCount: likeCount.value,
+      repostCount: repostCount.value,
+      reposted: reposted.value,
       commentCount: commentCount.value,
       viewCount: viewCount.value,
     };
@@ -317,6 +356,8 @@ const detailPresentation = computed<DetailPresentation | null>(() => {
       createdAt: handoffPost.value.createdAt,
       coverUrl: handoffPost.value.coverImageUrl,
       likeCount: handoffPost.value.likeCount,
+      repostCount: handoffPost.value.repostCount,
+      reposted: handoffPost.value.reposted,
       commentCount: handoffPost.value.commentCount,
       viewCount: handoffPost.value.viewCount,
     };
@@ -333,6 +374,11 @@ const presentationLikeLabel = computed(() => {
 const presentationCommentLabel = computed(() => {
   const count = detailPresentation.value?.commentCount ?? 0;
   return String(count) + (count === 1 ? ' reply' : ' replies');
+});
+
+const presentationRepostLabel = computed(() => {
+  const count = detailPresentation.value?.repostCount ?? 0;
+  return String(count) + (count === 1 ? ' repost' : ' reposts');
 });
 
 const articleFailureTitle = computed(() => {
@@ -404,7 +450,13 @@ const detailLikeLabel = computed(() => {
     ? 'Unlike post, ' + count
     : 'Like post, ' + count;
 });
-
+const detailRepostLabel = computed(() => {
+  const count = String(repostCount.value)
+    + (repostCount.value === 1 ? ' repost' : ' reposts');
+  return reposted.value
+    ? 'Undo repost, ' + count
+    : 'Repost post, ' + count;
+});
 const canDeleteArticle = computed(() => Boolean(
   article.value
   && authStore.isAuthenticated
@@ -529,6 +581,17 @@ const resetLikeState = () => {
   likeStateLoading.value = false;
   likeSubmitting.value = false;
   likeError.value = '';
+};
+
+const resetRepostState = () => {
+  repostRequestVersion += 1;
+  repostMutationVersion += 1;
+  reposted.value = false;
+  repostCount.value = 0;
+  repostStateLoading.value = false;
+  repostSubmitting.value = false;
+  repostError.value = '';
+  repostStateUnavailable.value = false;
 };
 
 const resetCommentsState = () => {
@@ -664,6 +727,50 @@ const loadLikeState = async (id: string, detailVersion: number) => {
   }
 };
 
+const loadRepostState = async (id: string, detailVersion: number) => {
+  if (!authStore.isAuthenticated) {
+    return;
+  }
+
+  const requestVersion = ++repostRequestVersion;
+  const mutationVersionAtStart = repostMutationVersion;
+  repostStateLoading.value = true;
+  repostError.value = '';
+  repostStateUnavailable.value = false;
+
+  try {
+    const response = await getArticleRepostState(id);
+    if (
+      detailVersion !== detailRequestVersion
+      || requestVersion !== repostRequestVersion
+      || mutationVersionAtStart !== repostMutationVersion
+    ) {
+      return;
+    }
+
+    reposted.value = response.reposted;
+    repostCount.value = clampCount(response.reposts);
+    repostStateUnavailable.value = false;
+  } catch {
+    if (
+      detailVersion === detailRequestVersion
+      && requestVersion === repostRequestVersion
+      && mutationVersionAtStart === repostMutationVersion
+    ) {
+      repostError.value = 'Repost status is unavailable. You can still try again.';
+      repostStateUnavailable.value = true;
+    }
+  } finally {
+    if (
+      detailVersion === detailRequestVersion
+      && requestVersion === repostRequestVersion
+      && mutationVersionAtStart === repostMutationVersion
+    ) {
+      repostStateLoading.value = false;
+    }
+  }
+};
+
 const toggleLike = async () => {
   if (
     !article.value ||
@@ -708,6 +815,57 @@ const toggleLike = async () => {
   } finally {
     if (detailVersion === detailRequestVersion && mutationVersion === likeMutationVersion) {
       likeSubmitting.value = false;
+    }
+  }
+};
+
+const toggleRepost = async () => {
+  if (
+    !article.value
+    || !authStore.isAuthenticated
+    || repostStateLoading.value
+    || repostSubmitting.value
+    || repostStateUnavailable.value
+  ) {
+    return;
+  }
+
+  const detailVersion = detailRequestVersion;
+  const id = articleId.value;
+  const mutationVersion = ++repostMutationVersion;
+  const previousReposted = reposted.value;
+  const previousCount = repostCount.value;
+
+  repostSubmitting.value = true;
+  repostError.value = '';
+  repostStateUnavailable.value = false;
+  reposted.value = !previousReposted;
+  repostCount.value = Math.max(0, previousCount + (reposted.value ? 1 : -1));
+
+  try {
+    const response = previousReposted ? await undoRepostArticle(id) : await repostArticle(id);
+    if (detailVersion !== detailRequestVersion || mutationVersion !== repostMutationVersion) {
+      return;
+    }
+
+    reposted.value = response.reposted;
+    repostCount.value = clampCount(response.reposts);
+    syncExternalArticleRepostState({
+      articleId: Number(id),
+      reposts: repostCount.value,
+      reposted: response.reposted,
+      status: 'ready',
+    });
+  } catch {
+    if (detailVersion === detailRequestVersion && mutationVersion === repostMutationVersion) {
+      reposted.value = previousReposted;
+      repostCount.value = Math.max(0, previousCount);
+      repostError.value = 'Could not update repost. Please try again.';
+      repostStateUnavailable.value = false;
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && mutationVersion === repostMutationVersion) {
+      repostSubmitting.value = false;
     }
   }
 };
@@ -939,6 +1097,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
   void recommendationTelemetry.flush(false);
   resetArticleState();
   resetLikeState();
+  resetRepostState();
   resetCommentsState();
   handoffPost.value = null;
 
@@ -983,6 +1142,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       startRead(id, detailVersion);
     }
     void loadLikeState(id, detailVersion);
+    void loadRepostState(id, detailVersion);
     void loadInitialComments(id, detailVersion);
   } catch (error) {
     if (detailVersion === detailRequestVersion) {

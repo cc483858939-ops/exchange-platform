@@ -67,10 +67,12 @@
           :key="'recent-' + post.id"
           :post="post"
           :like-pending="likePendingArticleIds.has(post.id)"
+          :repost-pending="repostPendingArticleIds.has(post.id)"
           :show-delete="canDeletePost(post)"
           :delete-pending="pendingDeleteArticleIds.has(post.id)"
           :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
+          @toggle-repost="handleRepostToggle"
           @delete-post="handleDeletePost"
         />
 
@@ -101,12 +103,14 @@
           <PostCard
             :post="item.post"
             :like-pending="likePendingArticleIds.has(item.post.id)"
+            :repost-pending="repostPendingArticleIds.has(item.post.id)"
             :show-not-interested="true"
             :show-delete="canDeletePost(item.post)"
             :delete-pending="pendingDeleteArticleIds.has(item.post.id)"
             :delete-error="deleteErrors.get(item.post.id) || ''"
             @article-click="handleRecommendationClick(item.article)"
             @toggle-like="handleLikeToggle"
+            @toggle-repost="handleRepostToggle"
             @not-interested="handleNotInterested"
             @delete-post="handleDeletePost"
           />
@@ -119,10 +123,12 @@
           :key="post.id"
           :post="post"
           :like-pending="likePendingArticleIds.has(post.id)"
+          :repost-pending="repostPendingArticleIds.has(post.id)"
           :show-delete="canDeletePost(post)"
           :delete-pending="pendingDeleteArticleIds.has(post.id)"
           :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
+          @toggle-repost="handleRepostToggle"
           @delete-post="handleDeletePost"
         />
 
@@ -197,6 +203,7 @@ let followingObserver: IntersectionObserver | null = null;
 const forYouFeed = homeTimeline.forYou;
 const followingFeed = homeTimeline.following;
 const likePendingArticleIds = homeTimeline.likePendingArticleIds;
+const repostPendingArticleIds = homeTimeline.repostPendingArticleIds;
 const pendingDeleteArticleIds = homeTimeline.pendingDeleteArticleIds;
 const deleteErrors = homeTimeline.deleteErrors;
 
@@ -394,6 +401,10 @@ const handleRecommendationClick = (article: RecommendedArticle) => {
 
 const handleLikeToggle = (articleId: number) => {
   void homeTimeline.toggleLike(articleId);
+};
+
+const handleRepostToggle = (articleId: number) => {
+  void homeTimeline.toggleRepost(articleId);
 };
 
 const handleDeletePost = async (articleId: number) => {

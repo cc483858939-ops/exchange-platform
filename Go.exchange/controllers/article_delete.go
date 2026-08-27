@@ -21,7 +21,10 @@ var (
 
 	loadArticleDeleteViewer = loadActiveFollowingViewerFromDB
 
-	deleteArticleInTransaction = deleteArticleInTransactionFromDB
+	deleteArticleInTransaction        = deleteArticleInTransactionFromDB
+	deleteArticleRepostsInTransaction = func(tx *gorm.DB, articleID uint) error {
+		return tx.Where("article_id = ?", articleID).Delete(&models.ArticleRepost{}).Error
+	}
 
 	invalidateArticleDeleteDetailCache = func(articleID uint) error {
 		if global.RedisDB == nil {
@@ -69,6 +72,9 @@ func deleteArticleInTransactionFromDB(articleID, viewerID uint) error {
 			return errArticleDeleteForbidden
 		}
 
+		if err := deleteArticleRepostsInTransaction(tx, articleID); err != nil {
+			return err
+		}
 		if err := tx.Delete(&article).Error; err != nil {
 			return err
 		}

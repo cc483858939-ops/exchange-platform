@@ -164,7 +164,7 @@ func openArticleDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -204,6 +204,9 @@ func TestDeleteArticleIntegration(t *testing.T) {
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(&models.ArticleRepost{UserID: other.ID, ArticleID: article.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
 	deleteOne := func(articleID, viewerID uint) int {
 		ctx, recorder := newArticleDeleteContext(strconvArticleID(articleID), &viewerID)
 		DeleteArticle(ctx)
@@ -219,6 +222,13 @@ func TestDeleteArticleIntegration(t *testing.T) {
 	var deleted models.Article
 	if err := db.Unscoped().First(&deleted, article.ID).Error; err != nil || !deleted.DeletedAt.Valid {
 		t.Fatalf("soft deleted article=%#v err=%v", deleted, err)
+	}
+	var remainingReposts int64
+	if err := db.Model(&models.ArticleRepost{}).Where("article_id = ?", article.ID).Count(&remainingReposts).Error; err != nil {
+		t.Fatal(err)
+	}
+	if remainingReposts != 0 {
+		t.Fatalf("reposts remaining after article delete=%d", remainingReposts)
 	}
 
 	raceArticle := models.Article{AuthorID: owner.ID, Title: "race", Content: "race body", Preview: "race"}

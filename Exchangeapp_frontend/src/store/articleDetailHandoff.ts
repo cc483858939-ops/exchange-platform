@@ -14,6 +14,9 @@ export type ArticleDetailHandoff = {
 const clonePost = (post: FeedPost): FeedPost => ({
   ...post,
   author: { ...post.author },
+  repostContext: post.repostContext
+    ? { actor: { ...post.repostContext.actor } }
+    : undefined,
 });
 
 export const useArticleDetailHandoffStore = defineStore('articleDetailHandoff', () => {

@@ -36,6 +36,8 @@ const registerSinks = () => {
   const home = {
     applyLikeStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
+    applyRepostStateUpdateLocal: vi.fn().mockReturnValue(true),
+    applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyCommentCountUpdateLocal: vi.fn().mockReturnValue(true),
     reconcileFollowStateLocal: vi.fn().mockReturnValue(true),
     removeArticleLocal: vi.fn(),
@@ -44,6 +46,8 @@ const registerSinks = () => {
   const profile = {
     applyLikeStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
+    applyRepostStateUpdateLocal: vi.fn().mockReturnValue(true),
+    applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyCommentCountUpdateEverywhereLocal: vi.fn().mockReturnValue(true),
     applyExternalFollowStateLocal: vi.fn().mockReturnValue(true),
     removeArticleEverywhereLocal: vi.fn(),
@@ -54,6 +58,7 @@ const registerSinks = () => {
   };
   const history = {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
+    applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyCommentCountUpdateLocal: vi.fn().mockReturnValue(true),
     removeArticleLocal: vi.fn(),
     replaceAuthorIdentityLocal: vi.fn(),

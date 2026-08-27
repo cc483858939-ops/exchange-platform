@@ -61,6 +61,15 @@ func likedHistoryArticleIDs(items []articleResponse) []uint {
 	return ids
 }
 
+func containsLikedArticleID(items []articleResponse, want uint) bool {
+	for _, item := range items {
+		if item.ID == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLikedHistoryIntegration(t *testing.T) {
 	db := openLikedHistoryIntegrationDatabase(t)
 	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleReaction{}); err != nil {
@@ -209,7 +218,7 @@ func TestLikedHistoryIntegration(t *testing.T) {
 		}
 	}
 	for _, excluded := range []uint{unlikedArticle.ID, otherViewerArticle.ID, draftArticle.ID, futureArticle.ID, expiredArticle.ID, deletedArticle.ID, softAuthorArticle.ID} {
-		if containsArticleID(page1.Items, excluded) || containsArticleID(page2.Items, excluded) {
+		if containsLikedArticleID(page1.Items, excluded) || containsLikedArticleID(page2.Items, excluded) {
 			t.Fatalf("excluded article %d appeared", excluded)
 		}
 	}

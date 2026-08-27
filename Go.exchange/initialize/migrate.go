@@ -33,6 +33,7 @@ func RunMigrations() error {
 			&models.User{},
 			&models.UserFollow{},
 			&models.Article{},
+			&models.ArticleRepost{},
 			&models.Comment{},
 			&models.ArticleEmbedding{},
 			&models.OutboxEvent{},
@@ -63,6 +64,9 @@ func RunMigrations() error {
 			return err
 		}
 		if err := applyUserFollowConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyArticleRepostConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyRecommendationMetricsConstraints(tx); err != nil {
@@ -193,6 +197,25 @@ func applyUserFollowConstraints(tx *gorm.DB) error {
 	}
 	return nil
 }
+
+func applyArticleRepostConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_article_reposts_user_article ON article_reposts (user_id, article_id)",
+		"CREATE INDEX IF NOT EXISTS idx_article_reposts_user_created ON article_reposts (user_id, created_at DESC, id DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_article_reposts_article ON article_reposts (article_id)",
+		"ALTER TABLE article_reposts DROP CONSTRAINT IF EXISTS fk_article_reposts_user",
+		"ALTER TABLE article_reposts ADD CONSTRAINT fk_article_reposts_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE article_reposts DROP CONSTRAINT IF EXISTS fk_article_reposts_article",
+		"ALTER TABLE article_reposts ADD CONSTRAINT fk_article_reposts_article FOREIGN KEY (article_id) REFERENCES articles(id) ON UPDATE CASCADE ON DELETE CASCADE",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply article repost constraint: %w", err)
+		}
+	}
+	return nil
+}
+
 func applyArticleAuthorConstraints(tx *gorm.DB) error {
 	if !tx.Migrator().HasConstraint(&models.Article{}, "Author") {
 		if err := tx.Migrator().CreateConstraint(&models.Article{}, "Author"); err != nil {

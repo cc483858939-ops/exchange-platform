@@ -31,6 +31,9 @@ const basePost = (): FeedPost => ({
   viewCount: 300,
   liked: true,
   likeStatus: 'ready',
+  repostCount: 0,
+  reposted: false,
+  repostStatus: 'ready',
 });
 
 const setAuth = (id: number | null) => {

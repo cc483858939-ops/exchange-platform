@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   consumeHandoff: vi.fn(),
   getArticleById: vi.fn(),
   getArticleLikeState: vi.fn(),
+  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
   getArticleComments: vi.fn(),
@@ -74,6 +75,12 @@ vi.mock('../services/likeService', () => ({
   unlikeArticle: mocks.unlikeArticle,
 }));
 
+vi.mock('../services/repostService', () => ({
+  getArticleRepostState: mocks.getArticleRepostState,
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
+}));
+
 vi.mock('../services/commentService', () => ({
   createArticleComment: mocks.createArticleComment,
   deleteComment: mocks.deleteComment,
@@ -95,6 +102,7 @@ vi.mock('../services/articleViewTelemetry', () => ({
 
 vi.mock('../store/sessionSync', () => ({
   syncExternalArticleLikeState: vi.fn(),
+  syncExternalArticleRepostState: vi.fn(),
   syncExternalArticleRemoval: vi.fn(),
   syncExternalCommentCount: vi.fn(),
 }));
@@ -140,6 +148,9 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   viewCount: 300,
   liked: false,
   likeStatus: 'ready',
+  repostCount: 0,
+  reposted: false,
+  repostStatus: 'ready',
   ...overrides,
 });
 

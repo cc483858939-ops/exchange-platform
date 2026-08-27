@@ -1,7 +1,13 @@
 <template>
   <article ref="postCardRef" class="post-card">
     <div class="post-card__header">
-      <AuthorIdentity :author="post.author" :created-at="post.createdAt" />
+      <div class="post-card__author-stack">
+        <div v-if="post.repostContext" class="post-card__repost-context">
+          <AppIcon name="repost" :size="14" />
+          <span>{{ repostContextLabel }}</span>
+        </div>
+        <AuthorIdentity :author="post.author" :created-at="post.createdAt" />
+      </div>
 
       <div class="post-card__more">
         <button
@@ -112,6 +118,17 @@
         <AppIcon name="reply" :size="18" />
         <span>{{ post.commentCount }}</span>
       </RouterLink>
+      <RepostAction
+        :key="post.id"
+        :reposted="post.repostStatus === 'ready' && post.reposted"
+        :count="post.repostCount"
+        :disabled="repostUnavailable"
+        :loading="repostLoading"
+        :pending="repostPending"
+        :ariaLabel="repostLabel"
+        variant="compact"
+        @toggle="handleRepostActivation"
+      />
       <LikeAction
         :key="post.id"
         :liked="post.likeStatus === 'ready' ? post.liked : false"
@@ -147,6 +164,7 @@ import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import LikeAction from '../engagement/LikeAction.vue';
+import RepostAction from '../engagement/RepostAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
 import { getArticleViewTelemetry } from '../../services/articleViewTelemetry';
 import { useArticleDetailHandoffStore } from '../../store/articleDetailHandoff';
@@ -156,6 +174,7 @@ const props = withDefaults(defineProps<{
   post: FeedPost;
   trackView?: boolean;
   likePending?: boolean;
+  repostPending?: boolean;
   showNotInterested?: boolean;
   showDelete?: boolean;
   deletePending?: boolean;
@@ -163,6 +182,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   trackView: true,
   likePending: false,
+  repostPending: false,
   showNotInterested: false,
   showDelete: false,
   deletePending: false,
@@ -172,6 +192,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   articleClick: [post: FeedPost];
   toggleLike: [articleId: number];
+  toggleRepost: [articleId: number];
   notInterested: [articleId: number];
   deletePost: [articleId: number];
 }>();
@@ -191,6 +212,8 @@ let copyRequestVersion = 0;
 
 const likeLoading = computed(() => props.post.likeStatus === 'unknown');
 const likeUnavailable = computed(() => props.post.likeStatus === 'unavailable');
+const repostLoading = computed(() => props.post.repostStatus === 'unknown');
+const repostUnavailable = computed(() => props.post.repostStatus === 'unavailable');
 
 const handleLikeActivation = () => {
   if (props.post.likeStatus !== 'ready' || props.likePending) {
@@ -199,6 +222,24 @@ const handleLikeActivation = () => {
 
   emit('toggleLike', props.post.id);
 };
+
+const handleRepostActivation = () => {
+  if (props.post.repostStatus !== 'ready' || props.repostPending) {
+    return;
+  }
+
+  emit('toggleRepost', props.post.id);
+};
+
+const actorLabel = (author: FeedPost['author']) => (
+  author.display_name?.trim()
+  || (author.username?.trim() ? '@' + author.username.trim() : '')
+  || 'User'
+);
+
+const repostContextLabel = computed(() => (
+  `${actorLabel(props.post.repostContext?.actor ?? props.post.author)} reposted`
+));
 
 const isNormalSameTabNavigation = (event: MouseEvent) => (
   event.button === 0
@@ -441,6 +482,18 @@ onBeforeUnmount(() => {
   unobserveCurrentPost();
   closeMore();
 });
+
+const repostLabel = computed(() => {
+  const countLabel = String(props.post.repostCount)
+    + (props.post.repostCount === 1 ? ' repost' : ' reposts');
+  if (props.post.repostStatus === 'unavailable') {
+    return 'Repost unavailable, ' + countLabel;
+  }
+  if (props.post.repostStatus !== 'ready' || !props.post.reposted) {
+    return 'Repost post, ' + countLabel;
+  }
+  return 'Undo repost, ' + countLabel;
+});
 </script>
 
 <style scoped>
@@ -456,6 +509,22 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   min-width: 0;
+}
+
+.post-card__author-stack {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.post-card__repost-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px calc(var(--post-avatar-size) + var(--post-column-gap));
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .post-card__header :deep(.author-identity) {

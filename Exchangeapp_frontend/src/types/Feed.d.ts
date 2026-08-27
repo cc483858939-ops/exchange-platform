@@ -4,6 +4,12 @@ export type FeedTab = 'for-you' | 'following';
 
 export type FeedLikeStatus = 'unknown' | 'ready' | 'unavailable';
 
+export type FeedRepostStatus = 'unknown' | 'ready' | 'unavailable';
+
+export interface FeedRepostContext {
+  actor: PublicAuthor;
+}
+
 export interface FeedPost {
   id: number;
   author: PublicAuthor;
@@ -16,6 +22,10 @@ export interface FeedPost {
   viewCount: number;
   liked: boolean;
   likeStatus: FeedLikeStatus;
+  repostCount: number;
+  reposted: boolean;
+  repostStatus: FeedRepostStatus;
+  repostContext?: FeedRepostContext;
 }
 
 export interface FeedLikeStateUpdate {
@@ -23,4 +33,11 @@ export interface FeedLikeStateUpdate {
   likes: number;
   liked: boolean;
   status: FeedLikeStatus;
+}
+
+export interface FeedRepostStateUpdate {
+  articleId: number;
+  reposts: number;
+  reposted: boolean;
+  status: FeedRepostStatus;
 }

@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   getArticleLikeState: vi.fn(),
   likeArticle: vi.fn(),
   unlikeArticle: vi.fn(),
+  getArticleRepostState: vi.fn(),
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
   createArticleComment: vi.fn(),
   deleteComment: vi.fn(),
   getArticleComments: vi.fn(),
@@ -33,6 +36,7 @@ const mocks = vi.hoisted(() => ({
     markArticleDeleted: vi.fn(),
   },
   externalLike: vi.fn(),
+  externalRepost: vi.fn(),
   externalRemoval: vi.fn(),
   externalCommentCount: vi.fn(),
 }));
@@ -52,6 +56,7 @@ vi.mock('../store/articleDetailHandoff', () => ({
 }));
 vi.mock('../store/sessionSync', () => ({
   syncExternalArticleLikeState: mocks.externalLike,
+  syncExternalArticleRepostState: mocks.externalRepost,
   syncExternalArticleRemoval: mocks.externalRemoval,
   syncExternalCommentCount: mocks.externalCommentCount,
 }));
@@ -63,6 +68,11 @@ vi.mock('../services/likeService', () => ({
   getArticleLikeState: mocks.getArticleLikeState,
   likeArticle: mocks.likeArticle,
   unlikeArticle: mocks.unlikeArticle,
+}));
+vi.mock('../services/repostService', () => ({
+  getArticleRepostState: mocks.getArticleRepostState,
+  repostArticle: mocks.repostArticle,
+  undoRepostArticle: mocks.undoRepostArticle,
 }));
 vi.mock('../services/commentService', () => ({
   createArticleComment: mocks.createArticleComment,
@@ -139,6 +149,7 @@ describe('NewsDetailView mutation synchronization', () => {
     vi.clearAllMocks();
     mocks.getArticleById.mockResolvedValue(article);
     mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
+    mocks.getArticleRepostState.mockResolvedValue({ reposts: 0, reposted: false });
     mocks.getArticleComments.mockResolvedValue({ items: [comment(9)], next_cursor: null });
     mocks.getUser.mockResolvedValue({
       id: 7,
@@ -177,6 +188,44 @@ describe('NewsDetailView mutation synchronization', () => {
 
     expect(mocks.externalLike).not.toHaveBeenCalled();
     failed.unmount();
+  });
+
+  it('optimistically toggles Detail Repost, settles from server state, and syncs cached surfaces', async () => {
+    mocks.getArticleRepostState.mockResolvedValueOnce({ reposts: 8, reposted: false });
+    mocks.repostArticle.mockResolvedValueOnce({ reposts: 9, reposted: true });
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const repost = mounted.find('.repost-action');
+    expect(repost.attributes('aria-label')).toBe('Repost post, 8 reposts');
+    await repost.trigger('click');
+    expect(repost.text()).toContain('9');
+    await flushPromises();
+
+    expect(mocks.repostArticle).toHaveBeenCalledWith('42');
+    expect(mocks.externalRepost).toHaveBeenCalledWith({
+      articleId: 42,
+      reposts: 9,
+      reposted: true,
+      status: 'ready',
+    });
+    expect(repost.attributes('aria-label')).toBe('Undo repost, 9 reposts');
+    mounted.unmount();
+  });
+
+  it('rolls Detail Repost back with the specified error after mutation failure', async () => {
+    mocks.getArticleRepostState.mockResolvedValueOnce({ reposts: 8, reposted: false });
+    mocks.repostArticle.mockRejectedValueOnce(new Error('offline'));
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.repost-action').trigger('click');
+    await flushPromises();
+
+    expect(mounted.find('.repost-action').text()).toContain('8');
+    expect(mounted.find('.detail-inline-error').text()).toBe('Could not update repost. Please try again.');
+    expect(mocks.externalRepost).not.toHaveBeenCalled();
+    mounted.unmount();
   });
 
   it.each([

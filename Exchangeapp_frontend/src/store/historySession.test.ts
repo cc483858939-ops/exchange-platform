@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   getLikedHistory: vi.fn(),
   getArticleLikeStates: vi.fn(),
   unlikeArticle: vi.fn(),
+  getArticleRepostStates: vi.fn(),
+  repostArticle: vi.fn(),
+  undoRepostArticle: vi.fn(),
   historySync: null as any,
 }));
 
@@ -20,10 +23,18 @@ vi.mock('../services/likeService', () => ({
   getArticleLikeStates: mocks.getArticleLikeStates,
   unlikeArticle: mocks.unlikeArticle,
 }));
+vi.mock('../services/repostService', () => ({
+  getArticleRepostStates: mocks.getArticleRepostStates,
+  repostArticle: mocks.repostArticle,
+  undoRepostArticle: mocks.undoRepostArticle,
+}));
 vi.mock('./sessionSync', () => ({
   registerHistorySessionSync: vi.fn((sync: any) => { mocks.historySync = sync; }),
   syncExternalArticleLikeState: vi.fn((update: any) => {
     mocks.historySync?.applyExternalLikeStateLocal(update);
+  }),
+  syncExternalArticleRepostState: vi.fn((update: any) => {
+    mocks.historySync?.applyExternalRepostStateLocal(update);
   }),
 }));
 
@@ -80,6 +91,10 @@ const loadReady = async (store: ReturnType<typeof useHistorySessionStore>, ids: 
     items: ids.map(id => ({ article_id: id, likes: 4, liked: true })),
     unavailable_article_ids: [],
   });
+  mocks.getArticleRepostStates.mockResolvedValueOnce({
+    items: ids.map(id => ({ article_id: id, reposts: 2, reposted: false })),
+    unavailable_article_ids: [],
+  });
   await store.loadInitial();
   await vi.waitFor(() => expect(store.items.length).toBe(ids.length));
   await vi.waitFor(() => expect(store.items.every(item => item.likeStatus === 'ready')).toBe(true));
@@ -91,7 +106,10 @@ describe('historySession store', () => {
     mocks.historySync = null;
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getArticleLikeStates.mockResolvedValue({ items: [], unavailable_article_ids: [] });
+    mocks.getArticleRepostStates.mockResolvedValue({ items: [], unavailable_article_ids: [] });
     mocks.unlikeArticle.mockResolvedValue({ likes: 3, liked: false });
+    mocks.repostArticle.mockReset();
+    mocks.undoRepostArticle.mockReset();
   });
 
   afterEach(() => {
@@ -109,6 +127,48 @@ describe('historySession store', () => {
 
     expect(mocks.getLikedHistory).toHaveBeenCalledTimes(1);
     expect(store.items.map(item => item.id)).toEqual([1]);
+  });
+
+  it('batch-hydrates History Repost state and keeps the liked item', async () => {
+    const store = createStore();
+    mocks.getLikedHistory.mockResolvedValueOnce({ items: [article(1)], next_cursor: null });
+    mocks.getArticleRepostStates.mockResolvedValueOnce({
+      items: [{ article_id: 1, reposts: 4, reposted: true }],
+      unavailable_article_ids: [],
+    });
+
+    await store.loadInitial();
+    await vi.waitFor(() => expect(store.items[0]?.repostStatus).toBe('ready'));
+
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0]).toMatchObject({ repostCount: 4, reposted: true });
+  });
+
+  it('toggles History Repost without changing liked History membership', async () => {
+    const store = createStore();
+    await loadReady(store, [1]);
+    mocks.repostArticle.mockResolvedValue({ reposts: 3, reposted: true });
+
+    const request = store.toggleRepost(1);
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].reposted).toBe(true);
+    expect(await request).toBe(true);
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0]).toMatchObject({ repostCount: 3, reposted: true });
+  });
+
+  it('applies an external Detail Repost update to History without removing the item', async () => {
+    const store = createStore();
+    await loadReady(store, [1]);
+
+    expect(store.applyExternalRepostStateLocal({
+      articleId: 1,
+      reposts: 5,
+      reposted: true,
+      status: 'ready',
+    })).toBe(true);
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0]).toMatchObject({ repostCount: 5, reposted: true });
   });
 
   it('lets a pending request finish after the view leaves without resetting the session', async () => {
