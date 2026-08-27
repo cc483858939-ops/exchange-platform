@@ -16,19 +16,16 @@
         class="comment-composer__textarea"
         rows="1"
         :disabled="disabled || submitting"
-        placeholder="Post your reply"
+        placeholder="Post your reply..."
         aria-label="Reply content"
         @input="resizeTextarea"
       />
     </div>
 
     <div class="comment-composer__footer">
-      <div class="comment-composer__footer-copy">
-        <span class="comment-composer__hint">Keep it useful.</span>
-        <span v-if="exceedsMaxLength" class="comment-composer__validation" role="alert">
-          {{ contentLength }}/{{ maxContentLength }} characters. Please shorten your reply.
-        </span>
-      </div>
+      <span v-if="exceedsMaxLength" class="comment-composer__validation" role="alert">
+        {{ contentLength }}/{{ maxContentLength }} characters. Please shorten your reply.
+      </span>
       <button
         class="comment-composer__submit"
         type="submit"
@@ -113,7 +110,6 @@ onMounted(resizeTextarea);
 <style scoped>
 .comment-composer {
   padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--color-border);
 }
 
 .comment-composer__body {
@@ -173,19 +169,8 @@ onMounted(resizeTextarea);
   padding-left: 42px;
 }
 
-.comment-composer__footer-copy {
-  display: grid;
-  min-width: 0;
-  gap: var(--space-1);
-}
-
-.comment-composer__hint,
 .comment-composer__validation {
   font-size: 12px;
-}
-
-.comment-composer__hint {
-  color: var(--color-text-tertiary);
 }
 
 .comment-composer__validation {
@@ -217,10 +202,6 @@ onMounted(resizeTextarea);
 @media (max-width: 420px) {
   .comment-composer__footer {
     padding-left: 0;
-  }
-
-  .comment-composer__hint {
-    display: none;
   }
 }
 </style>

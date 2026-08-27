@@ -3,33 +3,43 @@
     <header class="detail-header">
       <button class="detail-header__back" type="button" aria-label="Back" @click="goBack">
         <AppIcon name="arrow-left" :size="20" />
-        <span>Post</span>
       </button>
+      <h1 class="detail-header__title">Post</h1>
     </header>
 
     <template v-if="detailPresentation">
-      <article class="article-detail">
-        <AuthorIdentity
-          :author="detailPresentation.author"
-          :created-at="detailPresentation.createdAt"
-        />
+      <article class="post-detail">
+        <div class="post-detail__author-row">
+          <AuthorIdentity
+            :author="detailPresentation.author"
+            variant="post"
+          />
+          <button
+            v-if="detailPresentation.kind === 'article' && canDeleteArticle"
+            class="post-detail__delete"
+            type="button"
+            aria-label="Delete post"
+            title="Delete post"
+            :disabled="deletePending"
+            :aria-busy="deletePending"
+            @click="handleDeleteArticle"
+          >
+            <AppIcon name="trash" :size="18" />
+          </button>
+        </div>
 
-        <h1 v-if="detailPresentation.title.trim()" class="article-detail__title">
+        <p v-if="detailPresentation.title.trim()" class="post-detail__headline">
           {{ detailPresentation.title }}
-        </h1>
-
-        <p v-if="article && article.expired_at" class="article-detail__expiry">
-          {{ articleExpiredLabel }}
         </p>
 
         <div
           ref="articleBodyRef"
-          class="article-detail__body"
-          :class="{ 'article-detail__body--loading': detailPresentation.kind === 'warm' }"
+          class="post-detail__body"
+          :class="{ 'post-detail__body--loading': detailPresentation.kind === 'warm' }"
           :aria-busy="detailPresentation.kind === 'warm' ? 'true' : undefined"
         >{{ detailPresentation.body }}</div>
 
-        <figure v-if="detailPresentation.coverUrl" class="article-detail__cover">
+        <figure v-if="detailPresentation.coverUrl" class="post-detail__cover">
           <img
             v-if="failedCoverUrl !== detailPresentation.coverUrl"
             :src="detailPresentation.coverUrl"
@@ -39,32 +49,35 @@
           />
           <div
             v-else
-            class="article-detail__cover-placeholder"
+            class="post-detail__cover-placeholder"
             role="img"
             aria-label="Post image unavailable"
           ></div>
         </figure>
 
-        <div class="article-detail__meta">
-          <span>Article</span>
-          <span v-if="detailPresentation.createdAt">
-            {{ formatArticleDate(detailPresentation.createdAt) }}
-          </span>
-          <button
-            v-if="detailPresentation.kind === 'article' && canDeleteArticle"
-            class="detail-delete-action"
-            type="button"
-            :disabled="deletePending"
-            :aria-busy="deletePending"
-            @click="handleDeleteArticle"
+        <div class="post-detail__meta">
+          <span v-if="detailPostTimestamp">{{ detailPostTimestamp }}</span>
+          <span
+            class="post-detail__views"
+            :aria-label="postViewsLabel"
+            :title="postViewsLabel"
           >
-            <AppIcon name="trash" :size="16" />
-            <span>Delete post</span>
-          </button>
+            {{ formattedViews }} Views
+          </span>
         </div>
 
-        <div class="article-detail__engagement" aria-label="Article engagement">
+        <div class="post-detail__engagement" aria-label="Post engagement">
           <template v-if="detailPresentation.kind === 'article'">
+            <button
+              class="post-detail__metric post-detail__reply"
+              type="button"
+              :aria-label="detailReplyLabel"
+              @click="focusReplyComposer"
+            >
+              <AppIcon name="reply" :size="18" />
+              <span>{{ commentCount }}</span>
+            </button>
+
             <LikeAction
               :key="articleId"
               :liked="liked"
@@ -76,49 +89,23 @@
               variant="detail"
               @toggle="toggleLike"
             />
-
-            <span class="engagement-metric">
-              <AppIcon name="reply" :size="18" />
-              <span>{{ commentCount }}</span>
-              <span class="sr-only">Replies</span>
-            </span>
-
-            <span
-              class="engagement-metric"
-              :aria-label="detailViewLabel"
-              :title="detailViewLabel"
-            >
-              <AppIcon name="analytics" :size="18" />
-              <span>{{ compactViewCount }}</span>
-              <span class="sr-only">{{ detailViewLabel }}</span>
-            </span>
           </template>
           <template v-else>
             <span
-              class="engagement-metric"
-              :aria-label="presentationLikeLabel"
-              :title="presentationLikeLabel"
-            >
-              <span>{{ detailPresentation.likeCount }}</span>
-              <span class="sr-only">Likes</span>
-            </span>
-            <span
-              class="engagement-metric"
+              class="post-detail__metric post-detail__reply"
               :aria-label="presentationCommentLabel"
               :title="presentationCommentLabel"
             >
               <AppIcon name="reply" :size="18" />
               <span>{{ detailPresentation.commentCount }}</span>
-              <span class="sr-only">Replies</span>
             </span>
             <span
-              class="engagement-metric"
-              :aria-label="presentationViewLabel"
-              :title="presentationViewLabel"
+              class="post-detail__metric post-detail__like"
+              :aria-label="presentationLikeLabel"
+              :title="presentationLikeLabel"
             >
-              <AppIcon name="analytics" :size="18" />
-              <span>{{ formatCompactEngagementCount(detailPresentation.viewCount) }}</span>
-              <span class="sr-only">{{ presentationViewLabel }}</span>
+              <AppIcon name="heart" :size="18" />
+              <span>{{ detailPresentation.likeCount }}</span>
             </span>
           </template>
         </div>
@@ -141,32 +128,22 @@
           aria-live="polite"
         >
           <span class="detail-loading__spinner" aria-hidden="true"></span>
-          <span class="sr-only">Loading full article</span>
+          <span class="sr-only">Loading full post</span>
         </div>
       </article>
 
       <section
         v-if="detailPresentation.kind === 'article'"
-        class="replies-section"
-        aria-labelledby="replies-heading"
+        class="post-conversation"
+        aria-label="Conversation"
       >
-        <div class="replies-section__heading">
-          <h2 id="replies-heading">Replies</h2>
-          <span>{{ commentCount }}</span>
-        </div>
-
         <CommentComposer
-          v-if="authStore.isAuthenticated"
           :key="articleId"
           ref="composerRef"
           :author="replyComposerAuthor"
           :submitting="commentSubmitting"
           @submit="handleCreateComment"
         />
-        <div v-else class="login-prompt">
-          <span>Log in to join the conversation.</span>
-          <RouterLink :to="{ name: 'Login' }">Log in</RouterLink>
-        </div>
 
         <p v-if="commentError" class="comment-error" role="alert">{{ commentError }}</p>
 
@@ -200,7 +177,7 @@
     </section>
 
     <section v-else class="detail-state detail-state--error">
-      <h1>{{ articleFailureTitle }}</h1>
+      <h2>{{ articleFailureTitle }}</h2>
       <p>{{ articleFailureMessage }}</p>
       <RouterLink v-if="!authStore.isAuthenticated" class="detail-state__link" :to="{ name: 'Login' }">
         Log in
@@ -239,6 +216,7 @@ import type { FeedPost } from '../types/Feed';
 import type { RecommendationTracking } from '../types/Recommendation';
 import type { PublicAuthor } from '../types/User';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
+import { formatPostDetailTimestamp } from '../utils/time';
 
 const route = useRoute();
 const router = useRouter();
@@ -354,42 +332,18 @@ const presentationCommentLabel = computed(() => {
   return String(count) + (count === 1 ? ' reply' : ' replies');
 });
 
-const presentationViewLabel = computed(() => (
-  formatAccessibleEngagementCount(detailPresentation.value?.viewCount ?? 0, 'views')
-));
-
-const formatArticleDate = (value: string) => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString();
-};
-
-const articleExpiredLabel = computed(() => {
-  if (!article.value?.expired_at) {
-    return '';
-  }
-
-  const date = new Date(article.value.expired_at);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-
-  return date.getTime() <= Date.now()
-    ? 'Expired ' + date.toLocaleString()
-    : 'Expires ' + date.toLocaleString();
-});
-
 const articleFailureTitle = computed(() => {
   if (!authStore.isAuthenticated) {
-    return 'Log in to read this article';
+    return 'Log in to view this post';
   }
-  return 'Article unavailable';
+  return 'Post unavailable';
 });
 
 const articleFailureMessage = computed(() => {
   if (!authStore.isAuthenticated) {
-    return 'Sign in to open the full article and join the conversation.';
+    return 'Sign in to open this post and join the conversation.';
   }
-  return articleError.value || 'This article could not be found.';
+  return articleError.value || 'The post could not be loaded.';
 });
 
 const currentViewerID = computed(() => {
@@ -411,10 +365,30 @@ const replyComposerAuthor = computed<PublicAuthor | null>(() => {
     avatar_url: identity.avatar_url,
   };
 });
+
+const focusReplyComposer = async () => {
+  if (!article.value || !authStore.isAuthenticated) {
+    return;
+  }
+
+  await composerRef.value?.focus();
+};
+
 const articleViewTelemetry = getArticleViewTelemetry();
 
-const compactViewCount = computed(() => formatCompactEngagementCount(viewCount.value));
-const detailViewLabel = computed(() => formatAccessibleEngagementCount(viewCount.value, 'views'));
+const detailPostTimestamp = computed(() => (
+  formatPostDetailTimestamp(detailPresentation.value?.createdAt)
+));
+const formattedViews = computed(() => (
+  formatCompactEngagementCount(detailPresentation.value?.viewCount ?? 0)
+));
+const postViewsLabel = computed(() => (
+  formatAccessibleEngagementCount(detailPresentation.value?.viewCount ?? 0, 'views')
+));
+const detailReplyLabel = computed(() => {
+  const count = commentCount.value;
+  return 'Reply to post, ' + count + (count === 1 ? ' reply' : ' replies');
+});
 const detailLikeLabel = computed(() => {
   const count = String(likeCount.value)
     + (likeCount.value === 1 ? ' like' : ' likes');
@@ -955,7 +929,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
   }
 
   if (!isValidArticleID(id)) {
-    articleError.value = 'This article URL is not valid.';
+    articleError.value = 'This post URL is not valid.';
     return;
   }
 
@@ -997,8 +971,8 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       handoffPost.value = null;
       const status = (error as { response?: { status?: number } }).response?.status;
       articleError.value = status === 404
-        ? 'This article does not exist.'
-        : 'The article could not be loaded.';
+        ? 'This post does not exist.'
+        : 'The post could not be loaded.';
     }
   } finally {
     if (detailVersion === detailRequestVersion) {
@@ -1099,144 +1073,198 @@ onBeforeUnmount(() => {
 }
 
 .detail-header__back {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: 40px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
   border: 0;
+  border-radius: 50%;
   padding: 0;
   background: transparent;
-  color: var(--color-text);
+  color: var(--color-text-secondary);
   cursor: pointer;
-  font-size: 15px;
-  font-weight: 750;
+  transition: color var(--transition-fast), background-color var(--transition-fast), transform var(--transition-fast);
 }
 
-.detail-header__back:hover {
+.detail-header__back:hover,
+.detail-header__back:focus-visible {
+  background: var(--color-surface-subtle);
   color: var(--color-accent);
+}
+
+.detail-header__back:active {
+  transform: scale(0.96);
 }
 
 .detail-header__back .app-icon {
   flex: 0 0 auto;
 }
 
-.article-detail,
-.replies-section {
+.detail-header__title {
+  margin: 0 0 0 var(--space-3);
+  color: var(--color-text);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.post-detail,
+.post-conversation {
   padding: var(--space-5);
 }
 
-.article-detail {
+.post-detail {
   border-bottom: 1px solid var(--color-border);
 }
 
-.article-detail > .author-identity {
-  margin-bottom: var(--space-5);
+.post-conversation {
+  padding-top: 0;
 }
 
-.article-detail__title {
-  margin: 0;
+.post-detail__author-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 40px;
+}
+
+.post-detail__delete {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  margin-left: auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: color var(--transition-fast), background-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.post-detail__delete:hover,
+.post-detail__delete:focus-visible {
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger);
+}
+
+.post-detail__delete:active {
+  transform: scale(0.96);
+}
+
+.post-detail__delete:disabled {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.post-detail__headline {
+  margin: var(--space-3) 0 0;
   color: var(--color-text);
-  font-size: clamp(28px, 4vw, 42px);
-  line-height: 1.1;
-  letter-spacing: -0.04em;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
 
-.article-detail__expiry {
-  display: inline-block;
-  margin: var(--space-4) 0 0;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.article-detail__body {
-  margin-top: var(--space-5);
+.post-detail__body {
+  margin-top: var(--space-3);
   color: var(--color-text);
   font-size: 16px;
-  line-height: 1.75;
+  line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.article-detail__body--loading {
+.post-detail__body--loading {
   color: var(--color-text-secondary);
 }
 
-.article-detail__cover {
+.post-detail__cover {
   aspect-ratio: 16 / 9;
-  margin: var(--space-5) 0 0;
+  margin: var(--space-3) 0 0;
   overflow: hidden;
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
 }
 
-.article-detail__cover img {
+.post-detail__cover img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.article-detail__cover-placeholder {
+.post-detail__cover-placeholder {
   width: 100%;
   height: 100%;
   background: var(--color-surface-subtle);
 }
 
-.article-detail__meta {
+.post-detail__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-5);
+  gap: var(--space-2);
+  margin-top: var(--space-3);
   color: var(--color-text-tertiary);
   font-size: 12px;
+  line-height: 1.4;
 }
 
-.detail-delete-action {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-left: auto;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--color-danger);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
+.post-detail__meta > span + span::before {
+  content: '·';
+  margin-right: var(--space-2);
+  color: var(--color-border-strong);
 }
 
-.detail-delete-action:hover,
-.detail-delete-action:focus-visible {
-  text-decoration: underline;
+.post-detail__views {
+  white-space: nowrap;
 }
 
-.detail-delete-action:disabled {
-  cursor: wait;
-  opacity: 0.64;
-}
-
-.article-detail__engagement {
+.post-detail__engagement {
   display: flex;
-  align-items: center;
-  gap: var(--space-5);
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--color-border);
-}
-
-.engagement-metric {
-  display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  min-height: 34px;
+  margin-top: var(--space-3);
+}
+
+.post-detail__metric {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-width: 40px;
+  min-height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-3);
+  background: transparent;
   color: var(--color-text-secondary);
   font-size: 13px;
 }
 
-.engagement-metric .app-icon {
+.post-detail__metric .app-icon {
   flex: 0 0 auto;
+}
+
+.post-detail__engagement > button.post-detail__metric {
+  cursor: pointer;
+  transition: color var(--transition-fast), background-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.post-detail__engagement > button.post-detail__metric:hover,
+.post-detail__engagement > button.post-detail__metric:focus-visible {
+  background: var(--color-surface-subtle);
+  color: var(--color-accent);
+}
+
+.post-detail__engagement > button.post-detail__metric:active {
+  transform: scale(0.97);
 }
 
 .detail-inline-error,
@@ -1246,47 +1274,12 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.replies-section {
-  padding-top: var(--space-4);
-}
-
-.replies-section__heading {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding-bottom: var(--space-2);
-}
-
-.replies-section__heading h2 {
-  margin: 0;
-  font-size: 20px;
-  letter-spacing: -0.02em;
-}
-
-.replies-section__heading span {
-  color: var(--color-text-tertiary);
-  font-size: 13px;
-}
-
-.login-prompt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.login-prompt a,
 .detail-state__link {
   color: var(--color-accent);
   font-weight: 750;
   text-decoration: none;
 }
 
-.login-prompt a:hover,
 .detail-state__link:hover {
   text-decoration: underline;
 }
@@ -1374,11 +1367,11 @@ onBeforeUnmount(() => {
 }
 
 .detail-state p,
-.detail-state h1 {
+.detail-state h2 {
   margin: 0;
 }
 
-.detail-state h1 {
+.detail-state h2 {
   color: var(--color-text);
   font-size: 24px;
 }
@@ -1409,18 +1402,9 @@ onBeforeUnmount(() => {
     padding-inline: var(--space-4);
   }
 
-  .article-detail,
-  .replies-section {
+  .post-detail,
+  .post-conversation {
     padding-inline: var(--space-4);
-  }
-
-  .article-detail__title {
-    font-size: 28px;
-  }
-
-  .login-prompt {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 

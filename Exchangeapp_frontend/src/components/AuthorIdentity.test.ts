@@ -47,6 +47,25 @@ describe('AuthorIdentity time display', () => {
     expect(wrapper.find('.author-meta').text()).toBe('@reader · 1h');
   });
 
+  it('uses the post identity variant without a relative timestamp', () => {
+    wrapper = mount(AuthorIdentity, {
+      props: {
+        author,
+        variant: 'post',
+        createdAt: new Date(2026, 7, 19, 11, 0, 15).toISOString(),
+      },
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>' },
+        },
+      },
+    });
+
+    expect(wrapper.get('.author-identity').classes()).toContain('author-identity--post');
+    expect(wrapper.get('.author-meta').text()).toBe('@reader');
+    expect(wrapper.get('.author-avatar').attributes('style')).toContain('--user-avatar-size: 40px');
+  });
+
   it('keeps the fallback under an avatar until the image has loaded', async () => {
     wrapper = mount(AuthorIdentity, {
       props: {

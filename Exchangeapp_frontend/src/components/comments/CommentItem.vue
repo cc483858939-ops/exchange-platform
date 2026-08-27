@@ -105,11 +105,5 @@ const emit = defineEmits<{
   .comment-item__header {
     align-items: flex-start;
   }
-
-
-  .comment-item__content,
-  .comment-item__status {
-    margin-left: 0;
-  }
 }
 </style>

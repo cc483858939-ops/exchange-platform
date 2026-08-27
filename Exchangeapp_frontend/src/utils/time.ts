@@ -40,3 +40,29 @@ export function formatPostDate(
 
   return new Intl.DateTimeFormat('en-US', options).format(date);
 }
+
+export function formatPostDetailTimestamp(
+  value: string | Date | null | undefined,
+): string {
+  if (!value) {
+    return '';
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const time = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(date);
+  const calendarDate = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(date);
+
+  return `${time} · ${calendarDate}`;
+}

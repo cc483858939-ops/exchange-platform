@@ -225,8 +225,8 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-header__back').exists()).toBe(true);
     expect(mounted.find('.detail-loading[role="status"]').exists()).toBe(true);
     expect(mounted.find('.detail-loading__spinner').exists()).toBe(true);
-    expect(mounted.text()).not.toContain('Loading article...');
-    expect(mounted.find('.article-detail').exists()).toBe(false);
+    expect(mounted.text()).not.toContain('Loading full article');
+    expect(mounted.find('.post-detail').exists()).toBe(false);
     expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
     expect(mocks.getArticleComments).not.toHaveBeenCalled();
     expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
@@ -235,7 +235,7 @@ describe('NewsDetailView warm and cold transition', () => {
     await flushPromises();
 
     expect(mounted.find('.detail-loading').exists()).toBe(false);
-    expect(mounted.find('.article-detail__body').text()).toBe('Authoritative article body');
+    expect(mounted.find('.post-detail__body').text()).toBe('Authoritative article body');
     expect(mocks.getArticleById).toHaveBeenCalledTimes(1);
     expect(mocks.getArticleLikeState).toHaveBeenCalledTimes(1);
     expect(mocks.getArticleComments).toHaveBeenCalledTimes(1);
@@ -248,7 +248,7 @@ describe('NewsDetailView warm and cold transition', () => {
     await flushPromises();
 
     expect(mounted.find('.detail-loading').exists()).toBe(false);
-    expect(mounted.find('.detail-state--error').text()).toContain('This article does not exist.');
+    expect(mounted.find('.detail-state--error').text()).toContain('This post does not exist.');
     expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
     expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
     expect(mocks.getArticleComments).not.toHaveBeenCalled();
@@ -265,15 +265,15 @@ describe('NewsDetailView warm and cold transition', () => {
 
     expect(mocks.consumeHandoff).toHaveBeenCalledWith(42);
     expect(mounted.find('.test-author').text()).toBe('warm-author');
-    expect(mounted.find('.article-detail__title').text()).toBe('Warm title');
-    expect(mounted.find('.article-detail__body').text()).toBe('Warm excerpt only');
-    expect(mounted.find('.article-detail__body').attributes('aria-busy')).toBe('true');
-    expect(mounted.find('.article-detail__cover').exists()).toBe(true);
+    expect(mounted.find('.post-detail__headline').text()).toBe('Warm title');
+    expect(mounted.find('.post-detail__body').text()).toBe('Warm excerpt only');
+    expect(mounted.find('.post-detail__body').attributes('aria-busy')).toBe('true');
+    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
     expect(mounted.find('.detail-warm-loading[role="status"]').exists()).toBe(true);
     expect(mounted.find('.detail-loading').exists()).toBe(false);
-    expect(mounted.text()).not.toContain('Loading article...');
+    expect(mounted.text()).not.toContain('Loading full article');
     expect(mounted.find('.test-like-action').exists()).toBe(false);
-    expect(mounted.find('.replies-section').exists()).toBe(false);
+    expect(mounted.find('.post-conversation').exists()).toBe(false);
     expect(mocks.getArticleById).toHaveBeenCalledTimes(1);
     expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
     expect(mocks.getArticleComments).not.toHaveBeenCalled();
@@ -308,11 +308,11 @@ describe('NewsDetailView warm and cold transition', () => {
     }));
     await flushPromises();
 
-    expect(mounted.find('.article-detail__title').text()).toBe('Server title');
-    expect(mounted.find('.article-detail__body').text()).toBe('Authoritative article body');
-    expect(mounted.find('.article-detail__body').attributes('aria-busy')).toBeUndefined();
-    expect(mounted.find('.article-detail__cover img').attributes('src')).toBe('/cover-b.png');
-    expect(mounted.find('.replies-section').exists()).toBe(true);
+    expect(mounted.find('.post-detail__headline').text()).toBe('Server title');
+    expect(mounted.find('.post-detail__body').text()).toBe('Authoritative article body');
+    expect(mounted.find('.post-detail__body').attributes('aria-busy')).toBeUndefined();
+    expect(mounted.find('.post-detail__cover img').attributes('src')).toBe('/cover-b.png');
+    expect(mounted.find('.post-conversation').exists()).toBe(true);
     expect(mounted.find('.test-like-action').exists()).toBe(true);
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
     expect(mounted.text()).not.toContain('Warm excerpt only');
@@ -327,13 +327,13 @@ describe('NewsDetailView warm and cold transition', () => {
 
     mounted = mountDetail();
     await flushPromises();
-    expect(mounted.find('.article-detail').exists()).toBe(true);
+    expect(mounted.find('.post-detail').exists()).toBe(true);
 
     request.reject({ response: { status: 404 } });
     await flushPromises();
 
-    expect(mounted.find('.article-detail').exists()).toBe(false);
-    expect(mounted.find('.detail-state--error').text()).toContain('This article does not exist.');
+    expect(mounted.find('.post-detail').exists()).toBe(false);
+    expect(mounted.find('.detail-state--error').text()).toContain('This post does not exist.');
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
     expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
     expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
@@ -386,16 +386,16 @@ describe('NewsDetailView warm and cold transition', () => {
     await flushPromises();
 
     expect(mocks.getArticleById).toHaveBeenCalledTimes(2);
-    expect(mounted.find('.article-detail__body').text()).toBe('Warm B excerpt');
+    expect(mounted.find('.post-detail__body').text()).toBe('Warm B excerpt');
 
     firstRequest.resolve(article({ ID: 42, title: 'Stale A', content: 'Stale A body' }));
     await flushPromises();
-    expect(mounted.find('.article-detail__body').text()).toBe('Warm B excerpt');
+    expect(mounted.find('.post-detail__body').text()).toBe('Warm B excerpt');
     expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
 
     secondRequest.resolve(article({ ID: 43, title: 'Server B', content: 'Server B body' }));
     await flushPromises();
-    expect(mounted.find('.article-detail__body').text()).toBe('Server B body');
+    expect(mounted.find('.post-detail__body').text()).toBe('Server B body');
     expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
     expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(
       43,
@@ -411,17 +411,17 @@ describe('NewsDetailView warm and cold transition', () => {
 
     mounted = mountDetail();
     await flushPromises();
-    await mounted.find('.article-detail__cover img').trigger('error');
+    await mounted.find('.post-detail__cover img').trigger('error');
 
-    expect(mounted.find('.article-detail__cover').exists()).toBe(true);
-    expect(mounted.find('.article-detail__cover-placeholder').exists()).toBe(true);
+    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
+    expect(mounted.find('.post-detail__cover-placeholder').exists()).toBe(true);
 
     request.resolve(article({ cover_image_url: '/cover-b.png' }));
     await flushPromises();
 
-    expect(mounted.find('.article-detail__cover').exists()).toBe(true);
-    expect(mounted.find('.article-detail__cover img').attributes('src')).toBe('/cover-b.png');
-    expect(mounted.find('.article-detail__cover-placeholder').exists()).toBe(false);
+    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
+    expect(mounted.find('.post-detail__cover img').attributes('src')).toBe('/cover-b.png');
+    expect(mounted.find('.post-detail__cover-placeholder').exists()).toBe(false);
   });
 
   it('keeps the placeholder when the authoritative response returns the same failed cover URL', async () => {
@@ -431,13 +431,13 @@ describe('NewsDetailView warm and cold transition', () => {
 
     mounted = mountDetail();
     await flushPromises();
-    await mounted.find('.article-detail__cover img').trigger('error');
+    await mounted.find('.post-detail__cover img').trigger('error');
     request.resolve(article({ cover_image_url: '/cover-a.png' }));
     await flushPromises();
 
-    expect(mounted.find('.article-detail__cover').exists()).toBe(true);
-    expect(mounted.find('.article-detail__cover-placeholder').exists()).toBe(true);
-    expect(mounted.find('.article-detail__cover img').exists()).toBe(false);
+    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
+    expect(mounted.find('.post-detail__cover-placeholder').exists()).toBe(true);
+    expect(mounted.find('.post-detail__cover img').exists()).toBe(false);
   });
 
   it('removes the cover figure when the authoritative article removes its cover', async () => {
@@ -450,6 +450,6 @@ describe('NewsDetailView warm and cold transition', () => {
     request.resolve(article({ cover_image_url: '' }));
     await flushPromises();
 
-    expect(mounted.find('.article-detail__cover').exists()).toBe(false);
+    expect(mounted.find('.post-detail__cover').exists()).toBe(false);
   });
 });

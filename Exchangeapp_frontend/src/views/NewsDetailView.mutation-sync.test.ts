@@ -185,7 +185,7 @@ describe('NewsDetailView mutation synchronization', () => {
     window.confirm = vi.fn().mockReturnValue(true);
     const mounted = mountDetail();
     await flushPromises();
-    await mounted.find('.detail-delete-action').trigger('click');
+    await mounted.find('.post-detail__delete').trigger('click');
     await flushPromises();
 
     expect(mocks.feedStore.markArticleDeleted).toHaveBeenCalledWith(42, 7);

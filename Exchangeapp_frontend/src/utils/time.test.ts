@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatPostDate } from './time';
+import { formatPostDate, formatPostDetailTimestamp } from './time';
 
 describe('formatPostDate', () => {
   const now = new Date(2026, 7, 19, 17, 0, 0);
@@ -55,5 +55,16 @@ describe('formatPostDate', () => {
     expect(formatPostDate(null, now)).toBe('');
     expect(formatPostDate(undefined, now)).toBe('');
     expect(formatPostDate('not-a-date', now)).toBe('');
+  });
+});
+
+describe('formatPostDetailTimestamp', () => {
+  it('renders an absolute clock time and calendar date', () => {
+    expect(formatPostDetailTimestamp(new Date(2026, 7, 27, 13, 42, 30)))
+      .toBe('1:42 PM · Aug 27, 2026');
+  });
+
+  it.each([null, undefined, 'not-a-date'])('returns an empty string for %s', value => {
+    expect(formatPostDetailTimestamp(value)).toBe('');
   });
 });

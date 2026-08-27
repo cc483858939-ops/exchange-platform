@@ -1,6 +1,7 @@
 <template>
   <RouterLink
     class="author-identity"
+    :class="{ 'author-identity--post': variant === 'post' }"
     :to="{ name: 'UserProfile', params: { id: author.id } }"
     :aria-label="`View ${displayName}'s profile`"
     @click.stop
@@ -10,12 +11,12 @@
       :avatar-url="author.avatar_url"
       :display-name="author.display_name"
       :username="author.username"
-      :size="30"
+      :size="variant === 'post' ? 40 : 30"
       decorative
     />
     <span class="author-copy">
       <span class="author-name">{{ displayName }}</span>
-      <span class="author-meta">@{{ username }}<span v-if="postDate"> · {{ postDate }}</span></span>
+      <span class="author-meta">@{{ username }}<span v-if="variant === 'compact' && postDate"> · {{ postDate }}</span></span>
     </span>
   </RouterLink>
 </template>
@@ -27,10 +28,13 @@ import { useNow } from '../composables/useNow';
 import { formatPostDate } from '../utils/time';
 import UserAvatar from './users/UserAvatar.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   author: PublicAuthor;
   createdAt?: string;
-}>();
+  variant?: 'compact' | 'post';
+}>(), {
+  variant: 'compact',
+});
 
 const username = computed(() => props.author.username.trim() || '?');
 const displayName = computed(() => props.author.display_name.trim() || username.value);
@@ -40,13 +44,24 @@ const postDate = computed(() => formatPostDate(props.createdAt, now.value));
 
 <style scoped>
 .author-identity {
+  --author-avatar-size: 30px;
+  --author-name-size: 13px;
+  --author-meta-size: 11px;
+  --author-gap: 9px;
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--author-gap);
   width: fit-content;
   min-width: 0;
   color: var(--color-text-secondary);
   text-decoration: none;
+}
+
+.author-identity--post {
+  --author-avatar-size: 40px;
+  --author-name-size: 15px;
+  --author-meta-size: 13px;
+  --author-gap: 12px;
 }
 
 .author-identity:hover .author-name,
@@ -56,8 +71,8 @@ const postDate = computed(() => formatPostDate(props.createdAt, now.value));
 
 .author-avatar {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: var(--author-avatar-size);
+  height: var(--author-avatar-size);
   flex: 0 0 auto;
 }
 
@@ -77,13 +92,13 @@ const postDate = computed(() => formatPostDate(props.createdAt, now.value));
 
 .author-name {
   color: var(--color-text);
-  font-size: 13px;
+  font-size: var(--author-name-size);
   font-weight: 750;
   transition: color var(--transition-fast);
 }
 
 .author-meta {
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--author-meta-size);
 }
 </style>

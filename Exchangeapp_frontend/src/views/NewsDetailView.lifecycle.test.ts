@@ -151,7 +151,7 @@ describe('NewsDetailView attributed read lifecycle', () => {
       created_at: '2026-08-15T00:00:00.000Z',
     });
     mocks.consumeAttribution.mockImplementation(() => {
-      mocks.assertBodyAtConsume(document.querySelector('.article-detail__body'));
+      mocks.assertBodyAtConsume(document.querySelector('.post-detail__body'));
       return tracking;
     });
   });
@@ -200,11 +200,11 @@ describe('NewsDetailView attributed read lifecycle', () => {
     mounted = mountDetail();
     await flushPromises();
 
-    const viewMetric = mounted.find('.article-detail__engagement .engagement-metric[aria-label]');
+    const viewMetric = mounted.find('.post-detail__views');
     expect(viewMetric.attributes('aria-label')).toBe('1,234 views');
-    expect(viewMetric.findAll('span')[1]?.text()).toBe(formatCompactEngagementCount(1234));
+    expect(viewMetric.text()).toBe(`${formatCompactEngagementCount(1234)} Views`);
     expect(mounted.find('.detail-state').exists()).toBe(false);
-    expect(mounted.find('.article-detail__body').exists()).toBe(true);
+    expect(mounted.find('.post-detail__body').exists()).toBe(true);
     expect(mocks.assertBodyAtConsume).toHaveBeenCalledWith(expect.any(HTMLElement));
     expect(trackerStart).toHaveBeenCalledTimes(1);
     expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
@@ -213,7 +213,7 @@ describe('NewsDetailView attributed read lifecycle', () => {
     await flushPromises();
     expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
     expect(viewMetric.attributes('aria-label')).toBe('1,234 views');
-    expect(viewMetric.findAll('span')[1]?.text()).toBe(formatCompactEngagementCount(1234));
+    expect(viewMetric.text()).toBe(`${formatCompactEngagementCount(1234)} Views`);
 
     mocks.routeLeave({ name: 'Home' });
     mounted.unmount();

@@ -70,9 +70,22 @@ describe('CommentComposer avatar and reply behavior', () => {
   it('accepts reply content and emits the trimmed value', async () => {
     wrapper = mount(CommentComposer, { props: { author: author() } });
 
+    expect(wrapper.get('textarea').attributes('placeholder')).toBe('Post your reply...');
+    expect(wrapper.find('.comment-composer__hint').exists()).toBe(false);
+
     await wrapper.get('textarea').setValue('  useful reply  ');
     await wrapper.get('form').trigger('submit');
 
     expect(wrapper.emitted('submit')).toEqual([['useful reply']]);
+  });
+
+  it('keeps the 1000-character validation while presenting a reply row', async () => {
+    wrapper = mount(CommentComposer, { props: { author: author() } });
+
+    await wrapper.get('textarea').setValue('a'.repeat(1001));
+
+    expect(wrapper.get('.comment-composer__validation').text())
+      .toBe('1001/1000 characters. Please shorten your reply.');
+    expect(wrapper.get('button').attributes('disabled')).toBeDefined();
   });
 });
