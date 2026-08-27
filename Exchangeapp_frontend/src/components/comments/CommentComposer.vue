@@ -38,27 +38,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import type { PublicAuthor } from '../../types/User';
 import UserAvatar from '../users/UserAvatar.vue';
 
 const props = withDefaults(defineProps<{
   author?: PublicAuthor | null;
   disabled?: boolean;
+  modelValue?: string;
   submitting?: boolean;
 }>(), {
   author: null,
   disabled: false,
+  modelValue: '',
   submitting: false,
 });
 
 const emit = defineEmits<{
+  'update:modelValue': [value: string];
   submit: [content: string];
 }>();
 
-const content = ref('');
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const maxContentLength = 1000;
+const content = computed({
+  get: () => props.modelValue,
+  set: value => emit('update:modelValue', value),
+});
 const trimmedContent = computed(() => content.value.trim());
 const contentLength = computed(() => Array.from(trimmedContent.value).length);
 const exceedsMaxLength = computed(() => contentLength.value > maxContentLength);
@@ -74,7 +80,7 @@ const resizeTextarea = () => {
 };
 
 const clear = () => {
-  content.value = '';
+  emit('update:modelValue', '');
   void nextTick(resizeTextarea);
 };
 
@@ -105,6 +111,13 @@ const submitReply = () => {
 defineExpose({ clear, focus });
 
 onMounted(resizeTextarea);
+
+watch(
+  () => props.modelValue,
+  () => {
+    void nextTick(resizeTextarea);
+  },
+);
 </script>
 
 <style scoped>

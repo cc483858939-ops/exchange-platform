@@ -141,6 +141,7 @@
           :key="articleId"
           ref="composerRef"
           :author="replyComposerAuthor"
+          v-model="replyDraftContent"
           :submitting="commentSubmitting"
           @submit="handleCreateComment"
         />
@@ -205,6 +206,7 @@ import { ArticleReadTracker, createArticleReadGeometry } from '../services/artic
 import { useAuthStore } from '../store/auth';
 import { useArticleDetailHandoffStore } from '../store/articleDetailHandoff';
 import { useFeedStore } from '../store/feed';
+import { useReplyDraftStore } from '../store/replyDraft';
 import {
   syncExternalArticleLikeState,
   syncExternalArticleRemoval,
@@ -223,6 +225,7 @@ const router = useRouter();
 const authStore = useAuthStore();
 const articleDetailHandoff = useArticleDetailHandoffStore();
 const feedStore = useFeedStore();
+const replyDraftStore = useReplyDraftStore();
 const currentIdentity = computed(() => authStore.currentIdentity);
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
@@ -364,6 +367,11 @@ const replyComposerAuthor = computed<PublicAuthor | null>(() => {
     display_name: identity.display_name,
     avatar_url: identity.avatar_url,
   };
+});
+
+const replyDraftContent = computed({
+  get: () => replyDraftStore.getDraft(Number(articleId.value)),
+  set: value => replyDraftStore.setDraft(Number(articleId.value), value),
 });
 
 const focusReplyComposer = async () => {
@@ -585,6 +593,7 @@ const handleDeleteArticle = async () => {
       return false;
     }
     syncExternalArticleRemoval(articleID);
+    replyDraftStore.clearDraft(articleID);
     finishRead('route_leave');
     void recommendationTelemetry.flush(false);
     deletePending.value = false;
@@ -783,12 +792,22 @@ const handleCreateComment = async (content: string) => {
   }
 
   const id = articleId.value;
+  const numericArticleID = Number(id);
+  const submittingViewerID = currentViewerID.value;
+  const submittedDraftSnapshot = replyDraftStore.getDraft(numericArticleID);
   const detailVersion = detailRequestVersion;
   commentSubmitting.value = true;
   commentError.value = '';
 
   try {
     const created = await createArticleComment(id, content);
+    if (
+      replyDraftStore.viewerID === submittingViewerID
+      && replyDraftStore.getDraft(numericArticleID) === submittedDraftSnapshot
+    ) {
+      replyDraftStore.clearDraft(numericArticleID);
+    }
+
     if (detailVersion !== detailRequestVersion || articleId.value !== id) {
       return;
     }
@@ -800,7 +819,6 @@ const handleCreateComment = async (content: string) => {
       articleId: Number(id),
       commentCount: commentCount.value,
     });
-    composerRef.value?.clear();
   } catch {
     if (detailVersion === detailRequestVersion) {
       commentError.value = 'Reply failed. Please try again.';
@@ -970,6 +988,9 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     if (detailVersion === detailRequestVersion) {
       handoffPost.value = null;
       const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        replyDraftStore.clearDraft(Number(id));
+      }
       articleError.value = status === 404
         ? 'This post does not exist.'
         : 'The post could not be loaded.';
@@ -1018,6 +1039,14 @@ watch(currentViewerID, (viewerID, previousViewerID) => {
   deletePending.value = false;
   deleteError.value = '';
 });
+
+watch(
+  currentViewerID,
+  viewerID => {
+    replyDraftStore.setViewer(viewerID);
+  },
+  { immediate: true },
+);
 
 watch(
   [() => route.query.reply, article, () => authStore.isAuthenticated, commentSubmitting],

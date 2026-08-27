@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia } from 'pinia';
 import NewsDetailView from './NewsDetailView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -161,6 +162,7 @@ describe('NewsDetailView LikeAction wiring', () => {
   const mountDetail = () => mount(NewsDetailView, {
     attachTo: document.body,
     global: {
+      plugins: [createPinia()],
       stubs: {
         AppIcon: { template: '<span />' },
         AuthorIdentity: { template: '<span />' },

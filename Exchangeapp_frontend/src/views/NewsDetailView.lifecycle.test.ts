@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia } from 'pinia';
 import { ArticleReadTracker } from '../services/articleReadTracker';
 import NewsDetailView from './NewsDetailView.vue';
 import { formatCompactEngagementCount } from '../utils/engagementCount';
@@ -165,6 +166,7 @@ describe('NewsDetailView attributed read lifecycle', () => {
   const mountDetail = () => mount(NewsDetailView, {
     attachTo: document.body,
     global: {
+      plugins: [createPinia()],
       stubs: {
         AppIcon: { template: '<span />' },
         AuthorIdentity: { template: '<span />' },

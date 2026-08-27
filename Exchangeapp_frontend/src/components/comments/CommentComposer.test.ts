@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
+import { nextTick } from 'vue';
 import CommentComposer from './CommentComposer.vue';
 import type { PublicAuthor } from '../../types/User';
 
@@ -67,25 +68,68 @@ describe('CommentComposer avatar and reply behavior', () => {
       .toBe('https://example.test/alice-new.jpg');
   });
 
+  it('renders the controlled model value', () => {
+    wrapper = mount(CommentComposer, {
+      props: { author: author(), modelValue: 'restored draft' },
+    });
+
+    expect(wrapper.get('textarea').element.value).toBe('restored draft');
+  });
+
+  it('emits model updates when the user edits the textarea', async () => {
+    wrapper = mount(CommentComposer, { props: { author: author(), modelValue: '' } });
+
+    await wrapper.get('textarea').setValue('hello');
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([['hello']]);
+  });
+
+  it('resizes after an external multiline draft restore', async () => {
+    wrapper = mount(CommentComposer, { props: { author: author(), modelValue: '' } });
+    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement;
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      value: 84,
+    });
+
+    await wrapper.setProps({ modelValue: 'line 1\nline 2' });
+    await nextTick();
+
+    expect(textarea.style.height).toBe('84px');
+  });
+
   it('accepts reply content and emits the trimmed value', async () => {
-    wrapper = mount(CommentComposer, { props: { author: author() } });
+    wrapper = mount(CommentComposer, {
+      props: { author: author(), modelValue: '  useful reply  ' },
+    });
 
     expect(wrapper.get('textarea').attributes('placeholder')).toBe('Post your reply...');
     expect(wrapper.find('.comment-composer__hint').exists()).toBe(false);
 
-    await wrapper.get('textarea').setValue('  useful reply  ');
     await wrapper.get('form').trigger('submit');
 
     expect(wrapper.emitted('submit')).toEqual([['useful reply']]);
   });
 
   it('keeps the 1000-character validation while presenting a reply row', async () => {
-    wrapper = mount(CommentComposer, { props: { author: author() } });
-
-    await wrapper.get('textarea').setValue('a'.repeat(1001));
+    wrapper = mount(CommentComposer, {
+      props: { author: author(), modelValue: 'a'.repeat(1001) },
+    });
 
     expect(wrapper.get('.comment-composer__validation').text())
       .toBe('1001/1000 characters. Please shorten your reply.');
     expect(wrapper.get('button').attributes('disabled')).toBeDefined();
+  });
+
+  it('keeps clear as an exposed controlled-input command', async () => {
+    wrapper = mount(CommentComposer, {
+      props: { author: author(), modelValue: 'draft' },
+    });
+
+    (wrapper.vm as unknown as { clear: () => void }).clear();
+    await wrapper.setProps({ modelValue: '' });
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([['']]);
+    expect(wrapper.get('textarea').element.value).toBe('');
   });
 });

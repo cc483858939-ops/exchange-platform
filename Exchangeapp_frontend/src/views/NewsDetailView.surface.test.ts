@@ -3,6 +3,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia } from 'pinia';
 import NewsDetailView from './NewsDetailView.vue';
 import type { Article } from '../types/Article';
 import type { FeedPost } from '../types/Feed';
@@ -155,6 +156,7 @@ const deferred = <T>() => {
 const mountDetail = () => mount(NewsDetailView, {
   attachTo: document.body,
   global: {
+    plugins: [createPinia()],
     stubs: {
       AppIcon: {
         props: ['name'],

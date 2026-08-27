@@ -3,6 +3,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia } from 'pinia';
 import NewsDetailView from './NewsDetailView.vue';
 import CommentComposer from '../components/comments/CommentComposer.vue';
 
@@ -156,6 +157,7 @@ const identity = (overrides: Partial<NonNullable<typeof mocks.authState.currentI
 const mountDetail = () => mount(NewsDetailView, {
   attachTo: document.body,
   global: {
+    plugins: [createPinia()],
     stubs: {
       AppIcon: { template: '<span />' },
       AuthorIdentity: { template: '<span />' },
