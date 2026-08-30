@@ -1,0 +1,5260 @@
+{
+  "status": "completed",
+  "environment": {
+    "gitHead": "4c4fab00784ffae3df75961987e1500b119a902e",
+    "timestamp": "2026-08-30T12:48:00.557Z",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "platform": "Win32",
+    "devicePixelRatio": 1.5,
+    "hardwareConcurrency": 32,
+    "deviceMemory": 16,
+    "longTaskSupported": true,
+    "memorySupported": true
+  },
+  "rawRuns": [
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1944.1999999284744
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2005.6000000238419
+      },
+      "scroll": {
+        "samples": 143,
+        "medianFrameMs": 12,
+        "p95FrameMs": 23.43,
+        "maxFrameMs": 1005.7,
+        "framesOver34Ms": 3,
+        "framesOver50Ms": 3,
+        "percentOver50Ms": 2.1
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 46400045,
+        "afterMount": 48642832,
+        "afterScroll": 52053256
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 40,
+        "unobserveCalls": 40,
+        "targetsBeforeCleanup": 40,
+        "currentTargets": 0,
+        "peakTargets": 40
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 38.59999990463257
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 32.5
+      },
+      "scroll": {
+        "samples": 340,
+        "medianFrameMs": 12.1,
+        "p95FrameMs": 18.2,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 1,
+        "framesOver50Ms": 1,
+        "percentOver50Ms": 0.29
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 52053256,
+        "afterMount": 55404243,
+        "afterScroll": 58766019
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 40,
+        "unobserveCalls": 40,
+        "targetsBeforeCleanup": 40,
+        "currentTargets": 0,
+        "peakTargets": 40
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1983.8000000715256
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011.7000000476837
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.8,
+        "p95FrameMs": 1006.07,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 58766019,
+        "afterMount": 60286855,
+        "afterScroll": 44537465
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 40,
+        "unobserveCalls": 40,
+        "targetsBeforeCleanup": 40,
+        "currentTargets": 0,
+        "peakTargets": 40
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1947
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.8,
+        "p95FrameMs": 1006.16,
+        "maxFrameMs": 1006.2,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 96,
+        "totalMs": 96
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 46483637,
+        "afterMount": 45459254,
+        "afterScroll": 45709371
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 50,
+        "unobserveCalls": 50,
+        "targetsBeforeCleanup": 50,
+        "currentTargets": 0,
+        "peakTargets": 50
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1932.3999999761581
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006.09,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 55,
+        "totalMs": 55
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 46744812,
+        "afterMount": 45569219,
+        "afterScroll": 45587479
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 50,
+        "unobserveCalls": 50,
+        "targetsBeforeCleanup": 50,
+        "currentTargets": 0,
+        "peakTargets": 50
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1970.1000000238419
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.95,
+        "p95FrameMs": 1006.09,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 83,
+        "totalMs": 83
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 45587479,
+        "afterMount": 45631959,
+        "afterScroll": 45650287
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 50,
+        "unobserveCalls": 50,
+        "targetsBeforeCleanup": 50,
+        "currentTargets": 0,
+        "peakTargets": 50
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1973.5
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2010.8999999761581
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.98,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 181,
+        "totalMs": 181
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 52264647,
+        "afterMount": 64470526,
+        "afterScroll": 52507191
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 120,
+        "unobserveCalls": 120,
+        "targetsBeforeCleanup": 120,
+        "currentTargets": 0,
+        "peakTargets": 120
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1972.6000000238419
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2011.6000000238419
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1006,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 165,
+        "totalMs": 165
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 52507191,
+        "afterMount": 63671087,
+        "afterScroll": 66709799
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 120,
+        "unobserveCalls": 120,
+        "targetsBeforeCleanup": 120,
+        "currentTargets": 0,
+        "peakTargets": 120
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1978.3999999761581
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2005.5
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005,
+        "p95FrameMs": 1005.86,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 180,
+        "totalMs": 180
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 66709799,
+        "afterMount": 50631657,
+        "afterScroll": 52502885
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 120,
+        "unobserveCalls": 120,
+        "targetsBeforeCleanup": 120,
+        "currentTargets": 0,
+        "peakTargets": 120
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1930.2000000476837
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2004.7999999523163
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.25,
+        "p95FrameMs": 1005.89,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 302,
+        "totalMs": 422
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 62784695,
+        "afterMount": 86006009,
+        "afterScroll": 89091713
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 220,
+        "unobserveCalls": 220,
+        "targetsBeforeCleanup": 220,
+        "currentTargets": 0,
+        "peakTargets": 220
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1929.7000000476837
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2004.6000000238419
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1006.17,
+        "maxFrameMs": 1006.2,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 305,
+        "totalMs": 368
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 89818590,
+        "afterMount": 85319684,
+        "afterScroll": 62097494
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 220,
+        "unobserveCalls": 220,
+        "targetsBeforeCleanup": 220,
+        "currentTargets": 0,
+        "peakTargets": 220
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1965.5
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2011.2999999523163
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.2,
+        "p95FrameMs": 1005.95,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 327,
+        "totalMs": 382
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 62097494,
+        "afterMount": 60226674,
+        "afterScroll": 63319244
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 220,
+        "unobserveCalls": 220,
+        "targetsBeforeCleanup": 220,
+        "currentTargets": 0,
+        "peakTargets": 220
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1912.1999999284744
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.15,
+        "p95FrameMs": 1006.04,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 395,
+        "totalMs": 533
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 93366515,
+        "afterMount": 69863013,
+        "afterScroll": 69880277
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1955.5
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.99,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 394,
+        "totalMs": 538
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 70924989,
+        "afterMount": 100445660,
+        "afterScroll": 100614266
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1910
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 407,
+        "totalMs": 468
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 70559735,
+        "afterMount": 102679017,
+        "afterScroll": 102695321
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1971.8999999761581
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2008.5
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.35,
+        "p95FrameMs": 1005.97,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 427,
+        "totalMs": 552
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 136067334,
+        "afterMount": 127955505,
+        "afterScroll": 69600216
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1950.1999999284744
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2010.7999999523163
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.25,
+        "p95FrameMs": 1006.04,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 423,
+        "totalMs": 551
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 70658938,
+        "afterMount": 98092920,
+        "afterScroll": 101380296
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1907.5
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2005.1999999284744
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.8,
+        "p95FrameMs": 1006.07,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 383,
+        "totalMs": 505
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69634654,
+        "afterMount": 100052104,
+        "afterScroll": 103339056
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1969.7999999523163
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011.1000000238419
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1002.9,
+        "p95FrameMs": 1005.88,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 43279739,
+        "afterMount": 41249072,
+        "afterScroll": 44272878
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1953.1000000238419
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011.8999999761581
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1006.09,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 51,
+        "totalMs": 51
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44354626,
+        "afterMount": 41266651,
+        "afterScroll": 44457440
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1936.2000000476837
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011.5
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 51,
+        "totalMs": 51
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44487340,
+        "afterMount": 41271859,
+        "afterScroll": 44302061
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1972.7000000476837
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1006,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 80,
+        "totalMs": 80
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 49188799,
+        "afterMount": 44134955,
+        "afterScroll": 44147323
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1972.8999999761581
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.45,
+        "p95FrameMs": 1005.88,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 71,
+        "totalMs": 71
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44147323,
+        "afterMount": 44329114,
+        "afterScroll": 44342338
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1966.3000000715256
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 76,
+        "totalMs": 76
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44342338,
+        "afterMount": 44177971,
+        "afterScroll": 44191207
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1971
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2011.3000000715256
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1006.08,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 174,
+        "totalMs": 174
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 50742131,
+        "afterMount": 63064826,
+        "afterScroll": 66221762
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1936.1000000238419
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2010.9000000953674
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.5,
+        "p95FrameMs": 1005.97,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 153,
+        "totalMs": 153
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 51759386,
+        "afterMount": 48948488,
+        "afterScroll": 51954402
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1970.8000000715256
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2010.9000000953674
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.7,
+        "p95FrameMs": 1006.13,
+        "maxFrameMs": 1006.2,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 181,
+        "totalMs": 181
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 51954402,
+        "afterMount": 63466788,
+        "afterScroll": 50831322
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 218.29999995231628
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 39.800000071525574
+      },
+      "scroll": {
+        "samples": 408,
+        "medianFrameMs": 11.9,
+        "p95FrameMs": 18.2,
+        "maxFrameMs": 24.4,
+        "framesOver34Ms": 0,
+        "framesOver50Ms": 0,
+        "percentOver50Ms": 0
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 168,
+        "totalMs": 168
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 61776822,
+        "afterMount": 87458603,
+        "afterScroll": 60792526
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 199.60000002384186
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 40.10000002384186
+      },
+      "scroll": {
+        "samples": 180,
+        "medianFrameMs": 6.2,
+        "p95FrameMs": 18.2,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 3,
+        "framesOver50Ms": 3,
+        "percentOver50Ms": 1.67
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 149,
+        "totalMs": 149
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 60792526,
+        "afterMount": 92664153,
+        "afterScroll": 83552353
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1979.1000000238419
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2010.2000000476837
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.25,
+        "p95FrameMs": 1005.95,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 314,
+        "totalMs": 365
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 83552353,
+        "afterMount": 108181665,
+        "afterScroll": 111233113
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1917.2000000476837
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 444,
+        "totalMs": 515
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68791030,
+        "afterMount": 101302261,
+        "afterScroll": 68032711
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1938.5999999046326
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.5,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 406,
+        "totalMs": 480
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69071693,
+        "afterMount": 98587811,
+        "afterScroll": 67789962
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1918.3000000715256
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1002.45,
+        "p95FrameMs": 1005.56,
+        "maxFrameMs": 1005.7,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 474,
+        "totalMs": 622
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68837232,
+        "afterMount": 68044617,
+        "afterScroll": 68210281
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1960.0999999046326
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2004.6000000238419
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1006.15,
+        "maxFrameMs": 1006.2,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 414,
+        "totalMs": 506
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69242648,
+        "afterMount": 66085682,
+        "afterScroll": 69364664
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1929.1000000238419
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2010.5
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1006.07,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 298,
+        "totalMs": 361
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69040294,
+        "afterMount": 66078794,
+        "afterScroll": 69513740
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "desktop",
+        "width": 1440,
+        "height": 900,
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1968.6000000238419
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2011.0999999046326
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.4,
+        "p95FrameMs": 1005.87,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 312,
+        "totalMs": 312
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69513740,
+        "afterMount": 65851418,
+        "afterScroll": 69135472
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1967.3000000715256
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.98,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 43238968,
+        "afterMount": 48205369,
+        "afterScroll": 43392568
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 40,
+        "unobserveCalls": 40,
+        "targetsBeforeCleanup": 40,
+        "currentTargets": 0,
+        "peakTargets": 40
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1978.8999999761581
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011.4000000953674
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.55,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 43392568,
+        "afterMount": 48348929,
+        "afterScroll": 43238372
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 40,
+        "unobserveCalls": 40,
+        "targetsBeforeCleanup": 40,
+        "currentTargets": 0,
+        "peakTargets": 40
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1975.7999999523163
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011.5
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.8,
+        "p95FrameMs": 1005.99,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 43238372,
+        "afterMount": 48196089,
+        "afterScroll": 43256852
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 40,
+        "unobserveCalls": 40,
+        "targetsBeforeCleanup": 40,
+        "currentTargets": 0,
+        "peakTargets": 40
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1972.3999999761581
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 68,
+        "totalMs": 68
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44387448,
+        "afterMount": 44218432,
+        "afterScroll": 44236172
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 50,
+        "unobserveCalls": 50,
+        "targetsBeforeCleanup": 50,
+        "currentTargets": 0,
+        "peakTargets": 50
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1964.1000000238419
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.3,
+        "p95FrameMs": 1005.68,
+        "maxFrameMs": 1005.7,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 82,
+        "totalMs": 82
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44236172,
+        "afterMount": 44221200,
+        "afterScroll": 44238516
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 50,
+        "unobserveCalls": 50,
+        "targetsBeforeCleanup": 50,
+        "currentTargets": 0,
+        "peakTargets": 50
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1983.3999999761581
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.99,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 74,
+        "totalMs": 74
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44238516,
+        "afterMount": 44222016,
+        "afterScroll": 44238924
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 50,
+        "unobserveCalls": 50,
+        "targetsBeforeCleanup": 50,
+        "currentTargets": 0,
+        "peakTargets": 50
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1969
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2011.3999999761581
+      },
+      "scroll": {
+        "samples": 10,
+        "medianFrameMs": 12.05,
+        "p95FrameMs": 1005.34,
+        "maxFrameMs": 1005.7,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 40
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 114,
+        "totalMs": 114
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 52151563,
+        "afterMount": 48991664,
+        "afterScroll": 52008222
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 120,
+        "unobserveCalls": 120,
+        "targetsBeforeCleanup": 120,
+        "currentTargets": 0,
+        "peakTargets": 120
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 104.39999997615814
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 27.90000009536743
+      },
+      "scroll": {
+        "samples": 455,
+        "medianFrameMs": 6.1,
+        "p95FrameMs": 12.2,
+        "maxFrameMs": 460.4,
+        "framesOver34Ms": 1,
+        "framesOver50Ms": 1,
+        "percentOver50Ms": 0.22
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 80,
+        "totalMs": 80
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 52008222,
+        "afterMount": 68160986,
+        "afterScroll": 51115964
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 120,
+        "unobserveCalls": 120,
+        "targetsBeforeCleanup": 120,
+        "currentTargets": 0,
+        "peakTargets": 120
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 135
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 31.399999976158142
+      },
+      "scroll": {
+        "samples": 462,
+        "medianFrameMs": 6.1,
+        "p95FrameMs": 12.29,
+        "maxFrameMs": 18.4,
+        "framesOver34Ms": 0,
+        "framesOver50Ms": 0,
+        "percentOver50Ms": 0
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 111,
+        "totalMs": 111
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 51115964,
+        "afterMount": 68152318,
+        "afterScroll": 51128364
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 120,
+        "unobserveCalls": 120,
+        "targetsBeforeCleanup": 120,
+        "currentTargets": 0,
+        "peakTargets": 120
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1966.1999999284744
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2010.6999999284744
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.75,
+        "p95FrameMs": 1005.97,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 243,
+        "totalMs": 243
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 60392073,
+        "afterMount": 58339108,
+        "afterScroll": 61447930
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 220,
+        "unobserveCalls": 220,
+        "targetsBeforeCleanup": 220,
+        "currentTargets": 0,
+        "peakTargets": 220
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1967.2000000476837
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2011.7999999523163
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1004.95,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 253,
+        "totalMs": 306
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 61447930,
+        "afterMount": 58393120,
+        "afterScroll": 61498630
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 220,
+        "unobserveCalls": 220,
+        "targetsBeforeCleanup": 220,
+        "currentTargets": 0,
+        "peakTargets": 220
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1967.1000000238419
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2010.8000000715256
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006.09,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 275,
+        "totalMs": 326
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 61498630,
+        "afterMount": 58397176,
+        "afterScroll": 61654271
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 220,
+        "unobserveCalls": 220,
+        "targetsBeforeCleanup": 220,
+        "currentTargets": 0,
+        "peakTargets": 220
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1968.3999999761581
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.8,
+        "p95FrameMs": 1005.98,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 358,
+        "totalMs": 489
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68131814,
+        "afterMount": 67859934,
+        "afterScroll": 67876794
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1956.5
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1004.95,
+        "p95FrameMs": 1005.94,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 381,
+        "totalMs": 514
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68921971,
+        "afterMount": 67855798,
+        "afterScroll": 68025595
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1953.9000000953674
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 412,
+        "totalMs": 493
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69068144,
+        "afterMount": 67867494,
+        "afterScroll": 67884922
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1930.0999999046326
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2004.6999999284744
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006.09,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 409,
+        "totalMs": 521
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68817075,
+        "afterMount": 66159033,
+        "afterScroll": 69602376
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1956.3000000715256
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2010.9000000953674
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006.07,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 400,
+        "totalMs": 479
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69602376,
+        "afterMount": 66177457,
+        "afterScroll": 69466723
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1957.2000000476837
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2010.1000000238419
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 400,
+        "totalMs": 525
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69573998,
+        "afterMount": 65923060,
+        "afterScroll": 69215414
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 300,
+        "unobserveCalls": 300,
+        "targetsBeforeCleanup": 300,
+        "currentTargets": 0,
+        "peakTargets": 300
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1964.8999999761581
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2005.8999999761581
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.95,
+        "p95FrameMs": 1006,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44356788,
+        "afterMount": 41480736,
+        "afterScroll": 44510022
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1972.0999999046326
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2012.1000000238419
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.4,
+        "p95FrameMs": 1006.04,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "longestMs": 0,
+        "totalMs": 0
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44510022,
+        "afterMount": 41330154,
+        "afterScroll": 44360056
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 20,
+        "postCards": 20,
+        "domElements": 1038,
+        "mountMs": 1963.2000000476837
+      },
+      "append": {
+        "measured": true,
+        "from": 20,
+        "to": 40,
+        "durationMs": 2011.6999999284744
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.98,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 66,
+        "totalMs": 66
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44360056,
+        "afterMount": 41329582,
+        "afterScroll": 44523546
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1975
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1002.7,
+        "p95FrameMs": 1005.72,
+        "maxFrameMs": 1005.8,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 79,
+        "totalMs": 79
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 49253457,
+        "afterMount": 44203758,
+        "afterScroll": 44216970
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1972.2000000476837
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006.17,
+        "maxFrameMs": 1006.2,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 77,
+        "totalMs": 77
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44216970,
+        "afterMount": 44244242,
+        "afterScroll": 44257370
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 50,
+        "postCards": 50,
+        "domElements": 2597,
+        "mountMs": 1974.7000000476837
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 66,
+        "totalMs": 66
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 44257370,
+        "afterMount": 44246174,
+        "afterScroll": 44411332
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1969.7000000476837
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2011.2000000476837
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005,
+        "p95FrameMs": 1005.87,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 140,
+        "totalMs": 140
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 51946660,
+        "afterMount": 49002154,
+        "afterScroll": 52005100
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1964.0999999046326
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2005.3999999761581
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1005.98,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 135,
+        "totalMs": 135
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 52005100,
+        "afterMount": 49157569,
+        "afterScroll": 52160599
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 100,
+        "postCards": 100,
+        "domElements": 5196,
+        "mountMs": 1964
+      },
+      "append": {
+        "measured": true,
+        "from": 100,
+        "to": 120,
+        "durationMs": 2011.8999999761581
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.75,
+        "p95FrameMs": 1006.14,
+        "maxFrameMs": 1006.2,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 132,
+        "totalMs": 132
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 52160599,
+        "afterMount": 49012882,
+        "afterScroll": 52016504
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1962.3999999761581
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2010.3999999761581
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.1,
+        "p95FrameMs": 1005.98,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 244,
+        "totalMs": 244
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 61771203,
+        "afterMount": 58556850,
+        "afterScroll": 61614800
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 1971.3000000715256
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 2011.5
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 248,
+        "totalMs": 248
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 61614800,
+        "afterMount": 58390850,
+        "afterScroll": 61488464
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 200,
+        "postCards": 200,
+        "domElements": 10392,
+        "mountMs": 729.6999999284744
+      },
+      "append": {
+        "measured": true,
+        "from": 200,
+        "to": 220,
+        "durationMs": 52.89999997615814
+      },
+      "scroll": {
+        "samples": 453,
+        "medianFrameMs": 6.1,
+        "p95FrameMs": 12.3,
+        "maxFrameMs": 18.3,
+        "framesOver34Ms": 0,
+        "framesOver50Ms": 0,
+        "percentOver50Ms": 0
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 261,
+        "totalMs": 261
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 61488464,
+        "afterMount": 58385526,
+        "afterScroll": 60455510
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1971
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.3,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 418,
+        "totalMs": 520
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69395987,
+        "afterMount": 68083072,
+        "afterScroll": 68096336
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1972.5
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1005.9,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 374,
+        "totalMs": 502
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68096336,
+        "afterMount": 67842972,
+        "afterScroll": 67856260
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix"
+      },
+      "render": {
+        "requestedPosts": 300,
+        "postCards": 300,
+        "domElements": 15590,
+        "mountMs": 1960.7000000476837
+      },
+      "append": {
+        "measured": false,
+        "from": 0,
+        "to": 0,
+        "durationMs": 0
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.85,
+        "p95FrameMs": 1005.98,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 380,
+        "totalMs": 513
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68879424,
+        "afterMount": 67841204,
+        "afterScroll": 67854060
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1923
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2004.8999999761581
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.3,
+        "p95FrameMs": 1005.88,
+        "maxFrameMs": 1005.9,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "longestMs": 417,
+        "totalMs": 417
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 68795441,
+        "afterMount": 66123665,
+        "afterScroll": 69413075
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1963.8000000715256
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2004.6999999284744
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1005.99,
+        "maxFrameMs": 1006,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "longestMs": 386,
+        "totalMs": 457
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69413075,
+        "afterMount": 66127388,
+        "afterScroll": 69561553
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    },
+    {
+      "scenario": {
+        "viewport": "mobile",
+        "width": 390,
+        "height": 844,
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append"
+      },
+      "render": {
+        "requestedPosts": 280,
+        "postCards": 280,
+        "domElements": 14550,
+        "mountMs": 1955.3999999761581
+      },
+      "append": {
+        "measured": true,
+        "from": 280,
+        "to": 300,
+        "durationMs": 2010.6000000238419
+      },
+      "scroll": {
+        "samples": 4,
+        "medianFrameMs": 1005.9,
+        "p95FrameMs": 1006.07,
+        "maxFrameMs": 1006.1,
+        "framesOver34Ms": 4,
+        "framesOver50Ms": 4,
+        "percentOver50Ms": 100
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "longestMs": 423,
+        "totalMs": 571
+      },
+      "memory": {
+        "supported": true,
+        "beforeMount": 69602808,
+        "afterMount": 95933961,
+        "afterScroll": 99216071
+      },
+      "observer": {
+        "supported": true,
+        "instancesCreated": 1,
+        "observeCalls": 0,
+        "unobserveCalls": 0,
+        "targetsBeforeCleanup": 0,
+        "currentTargets": 0,
+        "peakTargets": 0
+      },
+      "validation": {
+        "valid": true,
+        "issues": [],
+        "telemetryNetworkRequests": 0
+      }
+    }
+  ],
+  "summary": {
+    "rows": [
+      {
+        "key": "desktop:100:tracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1973.5,
+        "medianAppendMs": 2010.9,
+        "medianFrameMs": 1005.85,
+        "medianP95FrameMs": 1005.98,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 5196,
+        "medianPeakObservedTargets": 120,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 181,
+          "totalMs": 526
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 52507191,
+          "medianAfterMount": 63671087,
+          "medianAfterScroll": 52507191
+        }
+      },
+      {
+        "key": "desktop:100:untracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1970.8,
+        "medianAppendMs": 2010.9,
+        "medianFrameMs": 1005.7,
+        "medianP95FrameMs": 1006.08,
+        "worstMaxFrameMs": 1006.2,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 5196,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 181,
+          "totalMs": 508
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 51759386,
+          "medianAfterMount": 63064826,
+          "medianAfterScroll": 51954402
+        }
+      },
+      {
+        "key": "desktop:20:tracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1944.2,
+        "medianAppendMs": 2005.6,
+        "medianFrameMs": 12.1,
+        "medianP95FrameMs": 23.43,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 1038,
+        "medianPeakObservedTargets": 40,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 0,
+          "longestMs": 0,
+          "totalMs": 0
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 52053256,
+          "medianAfterMount": 55404243,
+          "medianAfterScroll": 52053256
+        }
+      },
+      {
+        "key": "desktop:20:untracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1953.1,
+        "medianAppendMs": 2011.5,
+        "medianFrameMs": 1005.85,
+        "medianP95FrameMs": 1006,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 1038,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 2,
+          "longestMs": 51,
+          "totalMs": 102
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 44354626,
+          "medianAfterMount": 41266651,
+          "medianAfterScroll": 44302061
+        }
+      },
+      {
+        "key": "desktop:200:tracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1930.2,
+        "medianAppendMs": 2004.8,
+        "medianFrameMs": 1005.25,
+        "medianP95FrameMs": 1005.95,
+        "worstMaxFrameMs": 1006.2,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 10392,
+        "medianPeakObservedTargets": 220,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 7,
+          "longestMs": 327,
+          "totalMs": 1172
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 62784695,
+          "medianAfterMount": 85319684,
+          "medianAfterScroll": 63319244
+        }
+      },
+      {
+        "key": "desktop:200:untracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 218.3,
+        "medianAppendMs": 40.1,
+        "medianFrameMs": 11.9,
+        "medianP95FrameMs": 18.2,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 10392,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 4,
+          "longestMs": 314,
+          "totalMs": 682
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 61776822,
+          "medianAfterMount": 92664153,
+          "medianAfterScroll": 83552353
+        }
+      },
+      {
+        "key": "desktop:280:tracked:mixed:append",
+        "viewport": "desktop",
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1950.2,
+        "medianAppendMs": 2008.5,
+        "medianFrameMs": 1005.35,
+        "medianP95FrameMs": 1006.04,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 14550,
+        "medianPeakObservedTargets": 300,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 9,
+          "longestMs": 427,
+          "totalMs": 1608
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 70658938,
+          "medianAfterMount": 100052104,
+          "medianAfterScroll": 101380296
+        }
+      },
+      {
+        "key": "desktop:280:untracked:mixed:append",
+        "viewport": "desktop",
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1960.1,
+        "medianAppendMs": 2010.5,
+        "medianFrameMs": 1005.85,
+        "medianP95FrameMs": 1006.07,
+        "worstMaxFrameMs": 1006.2,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 14550,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 5,
+          "longestMs": 414,
+          "totalMs": 1179
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 69242648,
+          "medianAfterMount": 66078794,
+          "medianAfterScroll": 69364664
+        }
+      },
+      {
+        "key": "desktop:300:tracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1912.2,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.85,
+        "medianP95FrameMs": 1005.99,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 15590,
+        "medianPeakObservedTargets": 300,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 8,
+          "longestMs": 407,
+          "totalMs": 1539
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 70924989,
+          "medianAfterMount": 100445660,
+          "medianAfterScroll": 100614266
+        }
+      },
+      {
+        "key": "desktop:300:untracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1918.3,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.5,
+        "medianP95FrameMs": 1005.9,
+        "worstMaxFrameMs": 1005.9,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 15590,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 7,
+          "longestMs": 474,
+          "totalMs": 1617
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 68837232,
+          "medianAfterMount": 98587811,
+          "medianAfterScroll": 68032711
+        }
+      },
+      {
+        "key": "desktop:50:tracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1947,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.9,
+        "medianP95FrameMs": 1006.09,
+        "worstMaxFrameMs": 1006.2,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 2597,
+        "medianPeakObservedTargets": 50,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 96,
+          "totalMs": 234
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 46483637,
+          "medianAfterMount": 45569219,
+          "medianAfterScroll": 45650287
+        }
+      },
+      {
+        "key": "desktop:50:untracked:mixed:matrix",
+        "viewport": "desktop",
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1972.7,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.85,
+        "medianP95FrameMs": 1005.9,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 2597,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 80,
+          "totalMs": 227
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 44342338,
+          "medianAfterMount": 44177971,
+          "medianAfterScroll": 44191207
+        }
+      },
+      {
+        "key": "mobile:100:tracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 100,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 135,
+        "medianAppendMs": 31.4,
+        "medianFrameMs": 6.1,
+        "medianP95FrameMs": 12.29,
+        "worstMaxFrameMs": 1005.7,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 40,
+        "medianDomElements": 5196,
+        "medianPeakObservedTargets": 120,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 114,
+          "totalMs": 305
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 52008222,
+          "medianAfterMount": 68152318,
+          "medianAfterScroll": 51128364
+        }
+      },
+      {
+        "key": "mobile:100:untracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 100,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1964.1,
+        "medianAppendMs": 2011.2,
+        "medianFrameMs": 1005.75,
+        "medianP95FrameMs": 1005.98,
+        "worstMaxFrameMs": 1006.2,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 5196,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 140,
+          "totalMs": 407
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 52005100,
+          "medianAfterMount": 49012882,
+          "medianAfterScroll": 52016504
+        }
+      },
+      {
+        "key": "mobile:20:tracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 20,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1975.8,
+        "medianAppendMs": 2011.4,
+        "medianFrameMs": 1005.8,
+        "medianP95FrameMs": 1005.98,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 1038,
+        "medianPeakObservedTargets": 40,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 0,
+          "longestMs": 0,
+          "totalMs": 0
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 43238968,
+          "medianAfterMount": 48205369,
+          "medianAfterScroll": 43256852
+        }
+      },
+      {
+        "key": "mobile:20:untracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 20,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1964.9,
+        "medianAppendMs": 2011.7,
+        "medianFrameMs": 1005.9,
+        "medianP95FrameMs": 1006,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 1038,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 1,
+          "longestMs": 66,
+          "totalMs": 66
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 44360056,
+          "medianAfterMount": 41330154,
+          "medianAfterScroll": 44510022
+        }
+      },
+      {
+        "key": "mobile:200:tracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 200,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1967.1,
+        "medianAppendMs": 2010.8,
+        "medianFrameMs": 1005.75,
+        "medianP95FrameMs": 1005.97,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 10392,
+        "medianPeakObservedTargets": 220,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 5,
+          "longestMs": 275,
+          "totalMs": 875
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 61447930,
+          "medianAfterMount": 58393120,
+          "medianAfterScroll": 61498630
+        }
+      },
+      {
+        "key": "mobile:200:untracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 200,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1962.4,
+        "medianAppendMs": 2010.4,
+        "medianFrameMs": 1005.1,
+        "medianP95FrameMs": 1005.9,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 10392,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 261,
+          "totalMs": 753
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 61614800,
+          "medianAfterMount": 58390850,
+          "medianAfterScroll": 61488464
+        }
+      },
+      {
+        "key": "mobile:280:tracked:mixed:append",
+        "viewport": "mobile",
+        "count": 280,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "append",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1956.3,
+        "medianAppendMs": 2010.1,
+        "medianFrameMs": 1005.9,
+        "medianP95FrameMs": 1006.07,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 14550,
+        "medianPeakObservedTargets": 300,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 8,
+          "longestMs": 409,
+          "totalMs": 1525
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 69573998,
+          "medianAfterMount": 66159033,
+          "medianAfterScroll": 69466723
+        }
+      },
+      {
+        "key": "mobile:280:untracked:mixed:append",
+        "viewport": "mobile",
+        "count": 280,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "append",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1955.4,
+        "medianAppendMs": 2004.9,
+        "medianFrameMs": 1005.9,
+        "medianP95FrameMs": 1005.99,
+        "worstMaxFrameMs": 1006.1,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 14550,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 6,
+          "longestMs": 423,
+          "totalMs": 1445
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 69413075,
+          "medianAfterMount": 66127388,
+          "medianAfterScroll": 69561553
+        }
+      },
+      {
+        "key": "mobile:300:tracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 300,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1956.5,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.8,
+        "medianP95FrameMs": 1005.94,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 15590,
+        "medianPeakObservedTargets": 300,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 8,
+          "longestMs": 412,
+          "totalMs": 1496
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 68921971,
+          "medianAfterMount": 67859934,
+          "medianAfterScroll": 67884922
+        }
+      },
+      {
+        "key": "mobile:300:untracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 300,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1971,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.85,
+        "medianP95FrameMs": 1005.9,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 15590,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 8,
+          "longestMs": 418,
+          "totalMs": 1535
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 68879424,
+          "medianAfterMount": 67842972,
+          "medianAfterScroll": 67856260
+        }
+      },
+      {
+        "key": "mobile:50:tracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 50,
+        "trackView": true,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1972.4,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.9,
+        "medianP95FrameMs": 1005.99,
+        "worstMaxFrameMs": 1006,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 2597,
+        "medianPeakObservedTargets": 50,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 82,
+          "totalMs": 224
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 44238516,
+          "medianAfterMount": 44221200,
+          "medianAfterScroll": 44238516
+        }
+      },
+      {
+        "key": "mobile:50:untracked:mixed:matrix",
+        "viewport": "mobile",
+        "count": 50,
+        "trackView": false,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "recordedRuns": 3,
+        "valid": true,
+        "medianMountMs": 1974.7,
+        "medianAppendMs": null,
+        "medianFrameMs": 1005.9,
+        "medianP95FrameMs": 1006,
+        "worstMaxFrameMs": 1006.2,
+        "worstFramesOver34Ms": 4,
+        "worstFramesOver50Ms": 4,
+        "worstPercentOver50Ms": 100,
+        "medianDomElements": 2597,
+        "medianPeakObservedTargets": 0,
+        "longTasks": {
+          "supported": true,
+          "totalCount": 3,
+          "longestMs": 79,
+          "totalMs": 222
+        },
+        "memory": {
+          "supported": true,
+          "medianBeforeMount": 44257370,
+          "medianAfterMount": 44244242,
+          "medianAfterScroll": 44257370
+        }
+      }
+    ],
+    "trackedVsUntracked": [
+      {
+        "viewport": "desktop",
+        "count": 100,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": 0.14,
+        "p95FramePercent": -0.01,
+        "longTaskDurationPercent": 3.54
+      },
+      {
+        "viewport": "desktop",
+        "count": 20,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": -0.46,
+        "p95FramePercent": -97.67,
+        "longTaskDurationPercent": -100
+      },
+      {
+        "viewport": "desktop",
+        "count": 200,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": 784.2,
+        "p95FramePercent": 5427.2,
+        "longTaskDurationPercent": 71.85
+      },
+      {
+        "viewport": "desktop",
+        "count": 280,
+        "fixture": "mixed",
+        "runType": "append",
+        "mountPercent": -0.51,
+        "p95FramePercent": 0,
+        "longTaskDurationPercent": 36.39
+      },
+      {
+        "viewport": "desktop",
+        "count": 300,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": -0.32,
+        "p95FramePercent": 0.01,
+        "longTaskDurationPercent": -4.82
+      },
+      {
+        "viewport": "desktop",
+        "count": 50,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": -1.3,
+        "p95FramePercent": 0.02,
+        "longTaskDurationPercent": 3.08
+      },
+      {
+        "viewport": "mobile",
+        "count": 100,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": -93.13,
+        "p95FramePercent": -98.78,
+        "longTaskDurationPercent": -25.06
+      },
+      {
+        "viewport": "mobile",
+        "count": 20,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": 0.55,
+        "p95FramePercent": 0,
+        "longTaskDurationPercent": -100
+      },
+      {
+        "viewport": "mobile",
+        "count": 200,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": 0.24,
+        "p95FramePercent": 0.01,
+        "longTaskDurationPercent": 16.2
+      },
+      {
+        "viewport": "mobile",
+        "count": 280,
+        "fixture": "mixed",
+        "runType": "append",
+        "mountPercent": 0.05,
+        "p95FramePercent": 0.01,
+        "longTaskDurationPercent": 5.54
+      },
+      {
+        "viewport": "mobile",
+        "count": 300,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": -0.74,
+        "p95FramePercent": 0,
+        "longTaskDurationPercent": -2.54
+      },
+      {
+        "viewport": "mobile",
+        "count": 50,
+        "fixture": "mixed",
+        "runType": "matrix",
+        "mountPercent": -0.12,
+        "p95FramePercent": 0,
+        "longTaskDurationPercent": 0.9
+      }
+    ],
+    "scaling": [
+      {
+        "viewport": "desktop",
+        "trackView": true,
+        "fixture": "mixed",
+        "domElements300To100": 3,
+        "mountMs300To100": 0.97,
+        "p95Frame300To100": 1,
+        "heapAfterMount300To100": 1.58
+      },
+      {
+        "viewport": "desktop",
+        "trackView": false,
+        "fixture": "mixed",
+        "domElements300To100": 3,
+        "mountMs300To100": 0.97,
+        "p95Frame300To100": 1,
+        "heapAfterMount300To100": 1.56
+      },
+      {
+        "viewport": "mobile",
+        "trackView": true,
+        "fixture": "mixed",
+        "domElements300To100": 3,
+        "mountMs300To100": 14.49,
+        "p95Frame300To100": 81.85,
+        "heapAfterMount300To100": 1
+      },
+      {
+        "viewport": "mobile",
+        "trackView": false,
+        "fixture": "mixed",
+        "domElements300To100": 3,
+        "mountMs300To100": 1,
+        "p95Frame300To100": 1,
+        "heapAfterMount300To100": 1.38
+      }
+    ]
+  },
+  "classification": "RED",
+  "bottleneck": "DOM/Vue mounted-state cost is the leading diagnostic candidate.",
+  "recommendation": "LONG-LIST OPTIMIZATION REQUIRED. Write a targeted Spec N.1 for the measured bottleneck.",
+  "failures": []
+}

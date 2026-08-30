@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vue-tsc && vite build",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "perf:build": "vite build --config vite.perf.config.ts",
+    "perf:preview": "vite preview --config vite.perf.config.ts"
   },
   "dependencies": {
     "axios": "^1.7.3",
