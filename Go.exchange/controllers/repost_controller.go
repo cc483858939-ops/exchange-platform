@@ -180,6 +180,16 @@ func normalizeArticleRepostCount(count int64) int64 {
 	return count
 }
 
+func activeArticleRepostScope(db *gorm.DB) *gorm.DB {
+	return db.
+		Table("article_reposts AS ar").
+		Joins(`
+			JOIN users AS repost_users
+			  ON repost_users.id = ar.user_id
+			 AND repost_users.deleted_at IS NULL
+		`)
+}
+
 func writeArticleRepostError(ctx *gin.Context, err error) {
 	if errors.Is(err, errArticleRepostNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "article not found"})
@@ -201,8 +211,8 @@ func loadArticleRepostStateWithDB(db *gorm.DB, userID, articleID uint, now time.
 	}
 
 	var reposts int64
-	if err := db.Model(&models.ArticleRepost{}).
-		Where("article_id = ?", articleID).
+	if err := activeArticleRepostScope(db).
+		Where("ar.article_id = ?", articleID).
 		Count(&reposts).Error; err != nil {
 		return articleRepostStateResult{}, err
 	}
@@ -276,10 +286,10 @@ func loadArticleRepostStatesFromDB(userID uint, articleIDs []uint) (articleRepos
 
 	if len(availableIDs) > 0 {
 		var counts []articleRepostCountRow
-		if err := global.Db.Model(&models.ArticleRepost{}).
-			Select("article_id, COUNT(*) AS reposts").
-			Where("article_id IN ?", availableIDs).
-			Group("article_id").
+		if err := activeArticleRepostScope(global.Db).
+			Select("ar.article_id, COUNT(*) AS reposts").
+			Where("ar.article_id IN ?", availableIDs).
+			Group("ar.article_id").
 			Scan(&counts).Error; err != nil {
 			return articleRepostStatesLoadResult{}, err
 		}

@@ -142,3 +142,121 @@ func TestArticleRepostIntegration(t *testing.T) {
 		t.Fatalf("unavailable PUT status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}, &models.ArticleRepost{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_article_reposts_user_article ON article_reposts (user_id, article_id)").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+
+	users := []models.User{
+		{Username: "repost-count-viewer-" + uuid.NewString(), Password: "secret"},
+		{Username: "repost-count-owner-" + uuid.NewString(), Password: "secret"},
+		{Username: "repost-count-alice-" + uuid.NewString(), Password: "secret", DisplayName: "Alice"},
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	viewer, owner, alice := users[0], users[1], users[2]
+	userIDs := []uint{viewer.ID, owner.ID, alice.ID}
+	t.Cleanup(func() {
+		db.Unscoped().Where("article_id IN (SELECT id FROM articles WHERE author_id IN ?)", userIDs).Delete(&models.ArticleRepost{})
+		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.ArticleRepost{})
+		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
+		db.Unscoped().Where("author_id IN ?", userIDs).Delete(&models.Article{})
+		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
+	})
+	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: alice.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	publishedAt := time.Now().UTC().Add(-time.Minute)
+	article := models.Article{
+		AuthorID:         owner.ID,
+		Title:            "Soft-deleted reposter article",
+		Content:          "Soft-deleted reposter body",
+		Preview:          "Soft-deleted reposter preview",
+		PublicationState: "published",
+		PublishedAt:      &publishedAt,
+		Model:            gorm.Model{CreatedAt: publishedAt},
+	}
+	if err := db.Create(&article).Error; err != nil {
+		t.Fatal(err)
+	}
+	repost := models.ArticleRepost{UserID: alice.ID, ArticleID: article.ID, CreatedAt: publishedAt.Add(time.Minute)}
+	if err := db.Create(&repost).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := loadArticleRepostStateWithDB(db, viewer.ID, article.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Reposts != 1 {
+		t.Fatalf("single state before delete=%#v", state)
+	}
+	states, err := loadArticleRepostStatesFromDB(viewer.ID, []uint{article.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states.States[article.ID].Reposts != 1 || len(states.Unavailable) != 0 {
+		t.Fatalf("batch state before delete=%#v", states)
+	}
+	page, status, body := requestFollowingTimeline(t, viewer.ID, "limit=50")
+	if status != http.StatusOK {
+		t.Fatalf("following before delete status=%d body=%s", status, body)
+	}
+	item := findFollowingTimelineItem(page.Items, article.ID)
+	if item == nil || item.ActivityType != followingActivityRepost || item.Actor.ID != alice.ID || item.Article.ID != article.ID {
+		t.Fatalf("following before delete item=%#v", item)
+	}
+
+	if err := db.Delete(&alice).Error; err != nil {
+		t.Fatal(err)
+	}
+	var deletedAlice models.User
+	if err := db.Unscoped().First(&deletedAlice, alice.ID).Error; err != nil || !deletedAlice.DeletedAt.Valid {
+		t.Fatalf("alice was not soft-deleted: err=%v deleted_at=%v", err, deletedAlice.DeletedAt)
+	}
+
+	state, err = loadArticleRepostStateWithDB(db, viewer.ID, article.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Reposts != 0 {
+		t.Fatalf("single state after delete=%#v", state)
+	}
+	states, err = loadArticleRepostStatesFromDB(viewer.ID, []uint{article.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states.States[article.ID].Reposts != 0 || len(states.Unavailable) != 0 {
+		t.Fatalf("batch state after delete=%#v", states)
+	}
+	var persistedRepost models.ArticleRepost
+	if err := db.Unscoped().Where("user_id = ? AND article_id = ?", alice.ID, article.ID).First(&persistedRepost).Error; err != nil {
+		t.Fatalf("repost relation was unexpectedly removed: %v", err)
+	}
+
+	page, status, body = requestFollowingTimeline(t, viewer.ID, "limit=50")
+	if status != http.StatusOK {
+		t.Fatalf("following after delete status=%d body=%s", status, body)
+	}
+	if findFollowingTimelineItem(page.Items, article.ID) != nil {
+		t.Fatalf("soft-deleted Alice activity remained: %v", followingTimelineArticleIDs(page.Items))
+	}
+}
