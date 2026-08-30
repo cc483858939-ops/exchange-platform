@@ -1,11 +1,14 @@
 import type {
   PerfClassification,
+  PerfLongTaskMetrics,
   PerfRawRun,
+  PerfRafHealth,
   PerfSummary,
   PerfSummaryLongTasks,
   PerfSummaryMemory,
   PerfSummaryRow,
   PerfSuiteResult,
+  PerfTimingHealth,
   PerfTrackedUntrackedDelta,
   PerfScalingRatio,
 } from './types';
@@ -40,6 +43,110 @@ export interface FrameMetrics {
   framesOver34Ms: number;
   framesOver50Ms: number;
   percentOver50Ms: number;
+}
+
+export const PERF_RAF_HEALTH_SAMPLES = 12;
+
+export interface RafCadenceAssessment {
+  metrics: PerfRafHealth;
+  issues: string[];
+}
+
+export interface RafHealthProbe extends RafCadenceAssessment {
+  intervals: number[];
+}
+
+export function summarizeRafCadence(intervals: number[]): PerfRafHealth {
+  const validIntervals = finiteValues(intervals).filter(interval => interval >= 0);
+  return {
+    samples: validIntervals.length,
+    medianMs: round(median(validIntervals)),
+    p95Ms: round(percentile(validIntervals, 0.95)),
+    maxMs: round(validIntervals.length > 0 ? Math.max(...validIntervals) : 0),
+  };
+}
+
+export function assessRafCadence(
+  intervals: number[],
+  phase: string,
+): RafCadenceAssessment {
+  const metrics = summarizeRafCadence(intervals);
+  const validIntervals = finiteValues(intervals).filter(interval => interval >= 0);
+  const severeIntervals = validIntervals.filter(interval => interval >= 250).length;
+  const issues: string[] = [];
+
+  if (metrics.samples < PERF_RAF_HEALTH_SAMPLES) {
+    issues.push(`${phase} RAF cadence collected ${metrics.samples}/${PERF_RAF_HEALTH_SAMPLES} intervals`);
+  }
+  if (metrics.medianMs > 50) {
+    issues.push(`${phase} RAF median interval ${metrics.medianMs} ms exceeds 50 ms`);
+  }
+  if (severeIntervals >= 2) {
+    issues.push(`${phase} RAF cadence recorded ${severeIntervals} intervals >=250 ms`);
+  }
+
+  return { metrics, issues };
+}
+
+export function assessTimingHealth(
+  preflight: RafHealthProbe,
+  postScroll: RafHealthProbe,
+  postCleanup: RafHealthProbe,
+  scrollIssues: string[],
+  visibilityLost: boolean,
+): PerfTimingHealth {
+  const postflightAssessment = assessRafCadence(
+    [...postScroll.intervals, ...postCleanup.intervals],
+    'postflight',
+  );
+  const issues = [
+    ...preflight.issues,
+    ...postScroll.issues,
+    ...postCleanup.issues,
+    ...postflightAssessment.issues,
+    ...scrollIssues,
+  ];
+  if (visibilityLost) {
+    issues.push('document visibility was hidden during the scenario');
+  }
+
+  return {
+    valid: issues.length === 0,
+    preflight: preflight.metrics,
+    postflight: summarizeRafCadence([...postScroll.intervals, ...postCleanup.intervals]),
+    visibilityLost,
+    issues: Array.from(new Set(issues)),
+  };
+}
+
+export interface ScrollTimingAssessment {
+  valid: boolean;
+  issues: string[];
+}
+
+export function assessScrollTiming(
+  deltas: number[],
+  longTasks: PerfLongTaskMetrics,
+): ScrollTimingAssessment {
+  const validDeltas = finiteValues(deltas).filter(delta => delta >= 0);
+  const largeGaps = validDeltas.filter(delta => delta >= 250);
+  const oneHzGaps = validDeltas.filter(delta => delta >= 800);
+  const largestGap = largeGaps.length > 0 ? Math.max(...largeGaps) : 0;
+  const matchingLongTask = longTasks.supported
+    && (longTasks.count ?? 0) > 0
+    && (longTasks.longestMs ?? 0) >= largestGap * 0.8;
+  const issues: string[] = [];
+
+  if (validDeltas.length < 4) {
+    issues.push(`scroll cadence collected only ${validDeltas.length} samples`);
+  }
+  if (oneHzGaps.length >= 2 || (validDeltas.length <= 5 && oneHzGaps.length >= 1)) {
+    issues.push('scroll cadence contains approximately 1 Hz intervals; browser timing is throttled');
+  } else if (validDeltas.length <= 6 && largeGaps.length >= 2 && !matchingLongTask) {
+    issues.push('scroll cadence has low sample count and large gaps without a matching long task');
+  }
+
+  return { valid: issues.length === 0, issues };
 }
 
 export function summarizeFrameDeltas(deltas: number[]): FrameMetrics {
@@ -245,7 +352,8 @@ const buildScalingRatios = (rows: PerfSummaryRow[]): PerfScalingRatio[] => {
 
 export function aggregatePerfRuns(rawRuns: PerfRawRun[]): PerfSummary {
   const groups = new Map<string, PerfRawRun[]>();
-  for (const run of rawRuns) {
+  const acceptedRuns = rawRuns.filter(run => run.validation.valid && run.timingHealth.valid);
+  for (const run of acceptedRuns) {
     const key = scenarioKey(run);
     const group = groups.get(key) ?? [];
     group.push(run);
@@ -280,7 +388,11 @@ const REQUIRED_MATRIX_COUNTS = [20, 50, 100, 200, 300] as const;
 const hasCompleteRequiredCoverage = (rawRuns: PerfRawRun[]): boolean => {
   const complete = (runs: PerfRawRun[], requireAppend: boolean): boolean => (
     runs.length >= 3
-      && runs.every(run => run.validation.valid && (!requireAppend || run.append.measured))
+      && runs.every(run => (
+        run.validation.valid
+        && run.timingHealth.valid
+        && (!requireAppend || run.append.measured)
+      ))
   );
 
   for (const viewport of ['desktop', 'mobile'] as const) {
@@ -356,7 +468,7 @@ export interface PerfDecision {
 }
 
 export function classifyPerfBaseline(rawRuns: PerfRawRun[], summary: PerfSummary): PerfDecision {
-  if (rawRuns.length === 0 || rawRuns.some(run => !run.validation.valid)) {
+  if (rawRuns.length === 0 || rawRuns.some(run => !run.validation.valid || !run.timingHealth.valid)) {
     return {
       classification: 'MEASUREMENT NOT VERIFIED',
       bottleneck: 'Scenario validation failed or no browser runs were recorded.',
@@ -442,6 +554,8 @@ export function serializePerfMarkdown(result: PerfSuiteResult): string {
     '## Environment',
     '',
     `- Git HEAD: ${result.environment.gitHead}`,
+    `- Measured harness HEAD: ${result.measuredHarnessHead}`,
+    `- Rejected timing attempts: ${result.rejectedTimingAttempts}`,
     `- Timestamp: ${result.environment.timestamp}`,
     `- User agent: ${result.environment.userAgent}`,
     `- Platform: ${result.environment.platform ?? 'not exposed'}`,
@@ -451,9 +565,16 @@ export function serializePerfMarkdown(result: PerfSuiteResult): string {
     `- Long Task API: ${result.environment.longTaskSupported ? 'supported' : 'not supported'}`,
     `- performance.memory: ${result.environment.memorySupported ? 'supported' : 'not supported'}`,
     '',
+    '## Timing validity',
+    '',
+    `- Accepted recorded runs: ${result.rawRuns.length}`,
+    `- Rejected timing attempts: ${result.rejectedTimingAttempts}`,
+    `- All accepted runs timing-valid: ${result.rawRuns.every(run => run.timingHealth.valid) ? 'yes' : 'no'}`,
+    `- Any accepted run lost visibility: ${result.rawRuns.some(run => run.timingHealth.visibilityLost) ? 'yes' : 'no'}`,
+    '',
     '## Aggregated scenarios',
     '',
-    '| Viewport | Count | Mode | Run | Runs | Mount ms | Append ms | Median frame ms | P95 frame ms | Worst max ms | >50 ms | DOM elements | Peak targets | Long tasks | Longest task ms | Heap after mount |',
+    '| Viewport | Count | Mode | Run | Runs | Mount ms | Append ms | Median frame ms | Median P95 frame ms | Worst max frame ms | Worst run >50ms % | DOM elements | Peak targets | Long tasks | Longest task ms | Heap after mount |',
     '| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
     ...result.summary.rows.map(row => `| ${row.viewport} | ${row.count} | ${row.trackView ? 'tracked' : 'untracked'} | ${row.runType} | ${row.recordedRuns} | ${display(row.medianMountMs)} | ${display(row.medianAppendMs)} | ${display(row.medianFrameMs)} | ${display(row.medianP95FrameMs)} | ${display(row.worstMaxFrameMs)} | ${display(row.worstPercentOver50Ms)}% | ${display(row.medianDomElements)} | ${display(row.medianPeakObservedTargets)} | ${display(row.longTasks.totalCount)} | ${display(row.longTasks.longestMs)} | ${display(row.memory.medianAfterMount)} |`),
     '',

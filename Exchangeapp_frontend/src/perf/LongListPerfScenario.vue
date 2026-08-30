@@ -17,7 +17,13 @@ import { useAuthStore } from '../store/auth';
 import PostCard from '../components/feed/PostCard.vue';
 import { resetArticleViewTelemetryForTests } from '../services/articleViewTelemetry';
 import { createPerfPosts } from './fixtures';
-import { summarizeFrameDeltas } from './metrics';
+import {
+  assessRafCadence,
+  assessScrollTiming,
+  assessTimingHealth,
+  PERF_RAF_HEALTH_SAMPLES,
+  summarizeFrameDeltas,
+} from './metrics';
 import { installIntersectionObserverInstrumentation } from './observerInstrumentation';
 import {
   PERF_MESSAGE_NAMESPACE,
@@ -29,6 +35,7 @@ import {
   type PerfScenarioConfig,
   type PerfScenarioMessage,
 } from './types';
+import type { RafHealthProbe } from './metrics';
 
 const props = defineProps<{
   config: PerfScenarioConfig;
@@ -46,12 +53,30 @@ let completed = false;
 // isolated Pinia instance cannot accidentally use a valid viewer from the SPA.
 authStore.clearAuth();
 
-const waitForFrame = (): Promise<number> => new Promise(resolve => {
-  window.requestAnimationFrame(resolve);
+const RAF_PROBE_TIMEOUT_MS = 750;
+
+const waitForFrame = (): Promise<number | null> => new Promise(resolve => {
+  let settled = false;
+  const timeoutID = window.setTimeout(() => {
+    settled = true;
+    resolve(null);
+  }, RAF_PROBE_TIMEOUT_MS);
+
+  window.requestAnimationFrame(timestamp => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    window.clearTimeout(timeoutID);
+    resolve(timestamp);
+  });
 });
 
 const waitForTwoFrames = async (): Promise<void> => {
-  await waitForFrame();
+  const firstFrame = await waitForFrame();
+  if (firstFrame === null) {
+    return;
+  }
   await waitForFrame();
 };
 
@@ -121,7 +146,52 @@ const collectLongTasks = (): {
   }
 };
 
-const scrollAndMeasure = async (): Promise<ReturnType<typeof summarizeFrameDeltas>> => {
+type RafProbe = RafHealthProbe;
+
+const probeRafCadence = async (phase: string): Promise<RafProbe> => {
+  if (document.visibilityState !== 'visible') {
+    const assessment = assessRafCadence([], phase);
+    return {
+      intervals: [],
+      metrics: assessment.metrics,
+      issues: [
+        ...assessment.issues,
+        `${phase} requires document.visibilityState=visible`,
+      ],
+    };
+  }
+
+  const intervals: number[] = [];
+  let previousAt = await waitForFrame();
+  while (previousAt !== null && intervals.length < PERF_RAF_HEALTH_SAMPLES) {
+    if (document.visibilityState !== 'visible') {
+      break;
+    }
+    const frameAt = await waitForFrame();
+    if (frameAt === null) {
+      break;
+    }
+    const delta = frameAt - previousAt;
+    if (Number.isFinite(delta) && delta >= 0) {
+      intervals.push(delta);
+    }
+    previousAt = frameAt;
+  }
+
+  const assessment = assessRafCadence(intervals, phase);
+  return {
+    intervals,
+    metrics: assessment.metrics,
+    issues: assessment.issues,
+  };
+};
+
+interface ScrollMeasurement {
+  metrics: ReturnType<typeof summarizeFrameDeltas>;
+  deltas: number[];
+}
+
+const scrollAndMeasure = async (): Promise<ScrollMeasurement> => {
   const documentHeight = Math.max(
     document.documentElement.scrollHeight,
     document.body.scrollHeight,
@@ -130,12 +200,18 @@ const scrollAndMeasure = async (): Promise<ReturnType<typeof summarizeFrameDelta
   const durationMs = 4_000;
   const deltas: number[] = [];
   window.scrollTo(0, 0);
-  await waitForFrame();
+  const initialFrame = await waitForFrame();
+  if (initialFrame === null) {
+    return { metrics: summarizeFrameDeltas(deltas), deltas };
+  }
 
   const startedAt = performance.now();
-  let previousAt = startedAt;
-  while (true) {
+  let previousAt = initialFrame;
+  while (document.visibilityState === 'visible') {
     const frameAt = await waitForFrame();
+    if (frameAt === null) {
+      break;
+    }
     const delta = frameAt - previousAt;
     if (Number.isFinite(delta) && delta >= 0) {
       deltas.push(delta);
@@ -151,7 +227,7 @@ const scrollAndMeasure = async (): Promise<ReturnType<typeof summarizeFrameDelta
   }
 
   await waitForFrame();
-  return summarizeFrameDeltas(deltas);
+  return { metrics: summarizeFrameDeltas(deltas), deltas };
 };
 
 const cleanup = () => {
@@ -193,7 +269,80 @@ const sendError = (error: unknown) => {
 
 const runScenario = async () => {
   let longTaskCollector: ReturnType<typeof collectLongTasks> | null = null;
+  let visibilityLost = document.visibilityState !== 'visible';
+  const handleVisibilityChange = () => {
+    if (document.visibilityState !== 'visible') {
+      visibilityLost = true;
+    }
+  };
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   try {
+    const preflight = await probeRafCadence('preflight');
+    if (document.visibilityState !== 'visible') {
+      visibilityLost = true;
+    }
+
+    if (preflight.issues.length > 0 || visibilityLost) {
+      const postScroll = await probeRafCadence('postflight after scroll');
+      const targetsBeforeCleanup = observerInstrumentation.snapshot().currentTargets;
+      const observerAfterCleanup = cleanup();
+      const postCleanup = await probeRafCadence('postflight after PostCard cleanup');
+      const timingHealth = assessTimingHealth(
+        preflight,
+        postScroll,
+        postCleanup,
+        [],
+        visibilityLost,
+      );
+      const result: PerfRawRun = {
+        scenario: {
+          viewport: config.viewport,
+          width: config.width,
+          height: config.height,
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          count: config.count,
+          trackView: config.trackView,
+          fixture: config.fixture,
+          runType: config.runType,
+        },
+        render: {
+          requestedPosts: config.count,
+          postCards: 0,
+          domElements: 0,
+          mountMs: 0,
+        },
+        append: {
+          measured: false,
+          from: 0,
+          to: 0,
+          durationMs: 0,
+        },
+        scroll: summarizeFrameDeltas([]),
+        longTasks: { supported: false },
+        memory: { supported: false },
+        observer: {
+          ...observerAfterCleanup,
+          targetsBeforeCleanup,
+        },
+        timingHealth,
+        validation: {
+          valid: false,
+          issues: timingHealth.issues,
+          telemetryNetworkRequests: 0,
+        },
+      };
+      completed = true;
+      sendMessage({
+        namespace: PERF_MESSAGE_NAMESPACE,
+        type: PERF_SCENARIO_COMPLETE,
+        runId: config.runId,
+        result,
+      });
+      return;
+    }
+
     longTaskCollector = collectLongTasks();
     const memoryBeforeMount = readHeap();
     const mountStartedAt = performance.now();
@@ -231,12 +380,30 @@ const runScenario = async () => {
       };
     }
 
-    const scroll = await scrollAndMeasure();
+    const scrollMeasurement = await scrollAndMeasure();
     await waitForFrame();
     longTaskCollector.disconnect();
+    const longTasks: PerfLongTaskMetrics = longTaskCollector.metrics.supported
+      ? {
+          supported: true,
+          count: longTaskCollector.metrics.count,
+          longestMs: longTaskCollector.metrics.longestMs,
+          totalMs: longTaskCollector.metrics.totalMs,
+        }
+      : { supported: false };
+    const scrollTiming = assessScrollTiming(scrollMeasurement.deltas, longTasks);
+    const postScroll = await probeRafCadence('postflight after scroll');
     const memoryAfterScroll = readHeap();
     const targetsBeforeCleanup = observerInstrumentation.snapshot().currentTargets;
     const observerAfterCleanup = cleanup();
+    const postCleanup = await probeRafCadence('postflight after PostCard cleanup');
+    const timingHealth = assessTimingHealth(
+      preflight,
+      postScroll,
+      postCleanup,
+      scrollTiming.issues,
+      visibilityLost,
+    );
     const memorySupported = memoryBeforeMount !== null
       && memoryAfterMount !== null
       && memoryAfterScroll !== null;
@@ -261,15 +428,6 @@ const runScenario = async () => {
     if (telemetryNetworkRequests !== 0) {
       issues.push('article-view-events network traffic was observed');
     }
-
-    const longTasks: PerfLongTaskMetrics = longTaskCollector.metrics.supported
-      ? {
-          supported: true,
-          count: longTaskCollector.metrics.count,
-          longestMs: longTaskCollector.metrics.longestMs,
-          totalMs: longTaskCollector.metrics.totalMs,
-        }
-      : { supported: false };
     const memory: PerfMemoryMetrics = memorySupported
       ? {
           supported: true,
@@ -297,16 +455,17 @@ const runScenario = async () => {
         mountMs,
       },
       append,
-      scroll,
+      scroll: scrollMeasurement.metrics,
       longTasks,
       memory,
       observer: {
         ...observerAfterCleanup,
         targetsBeforeCleanup,
       },
+      timingHealth,
       validation: {
-        valid: issues.length === 0,
-        issues,
+        valid: issues.length === 0 && timingHealth.valid,
+        issues: Array.from(new Set([...issues, ...timingHealth.issues])),
         telemetryNetworkRequests,
       },
     };
@@ -320,6 +479,8 @@ const runScenario = async () => {
   } catch (error) {
     longTaskCollector?.disconnect();
     sendError(error);
+  } finally {
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
   }
 };
 

@@ -24,7 +24,8 @@
         <span :style="{ width: `${progressPercent}%` }"></span>
       </div>
       <p v-if="running" class="perf-runner__progress-note">
-        Each scenario gets one warm-up and three recorded runs in a fresh iframe.
+        Each scenario gets one warm-up and three timing-valid recorded runs in a fresh visible iframe.
+        Timing-invalid recorded slots retry up to two additional times.
       </p>
     </section>
 
@@ -50,6 +51,10 @@
           <span>Failed executions</span>
           <strong>{{ suiteResult.failures.length }}</strong>
         </div>
+        <div>
+          <span>Rejected timing attempts</span>
+          <strong>{{ suiteResult.rejectedTimingAttempts }}</strong>
+        </div>
       </div>
 
       <div class="perf-runner__exports" aria-label="Export benchmark results">
@@ -70,8 +75,8 @@
               <th>Run</th>
               <th>Mount</th>
               <th>Append</th>
-              <th>P95 frame</th>
-              <th>&gt;50 ms</th>
+              <th>Median P95 frame</th>
+              <th>Worst run &gt;50ms %</th>
               <th>DOM</th>
               <th>Peak targets</th>
             </tr>
@@ -115,7 +120,9 @@ import {
 import {
   createPerfScenarioPlans,
   PERF_EXECUTIONS_PER_SCENARIO,
+  PERF_MAX_RECORDED_RETRIES,
   PERF_RECORDED_RUNS,
+  retryRecordedAttempt,
   scenarioPlanLabel,
   type PerfScenarioPlan,
 } from './runnerPlan';
@@ -137,6 +144,7 @@ const rawRuns = ref<PerfRawRun[]>([]);
 const failures = ref<PerfSuiteResult['failures']>([]);
 const suiteResult = ref<PerfSuiteResult | null>(null);
 const copyStatus = ref('');
+const rejectedTimingAttempts = ref(0);
 
 const progressPercent = computed(() => (
   totalExecutions > 0 ? Math.round((completedExecutions.value / totalExecutions) * 100) : 0
@@ -211,11 +219,14 @@ const runScenarioInFreshFrame = (config: PerfScenarioConfig): Promise<PerfRawRun
     frame.style.width = `${config.width}px`;
     frame.style.height = `${config.height}px`;
     frame.style.border = '0';
-    // Keep the child renderable so Chromium does not throttle requestAnimationFrame
-    // as an occluded frame. It remains visually negligible and non-interactive.
-    frame.style.opacity = '0.01';
+    // The active scenario must be genuinely visible. This iframe temporarily covers
+    // the runner so Chromium treats its requestAnimationFrame cadence as foreground.
+    frame.style.opacity = '1';
+    frame.style.visibility = 'visible';
+    frame.style.display = 'block';
     frame.style.pointerEvents = 'none';
-    frame.style.zIndex = '1';
+    frame.style.zIndex = '2147483647';
+    frame.style.background = 'var(--color-bg, #ffffff)';
 
     let settled = false;
     const timeoutID = window.setTimeout(() => {
@@ -266,6 +277,7 @@ const runSuite = async () => {
   currentScenario.value = 'Starting matrix';
   rawRuns.value = [];
   failures.value = [];
+  rejectedTimingAttempts.value = 0;
   suiteResult.value = null;
   copyStatus.value = '';
   window.__EXCHANGE_PERF_RESULT__ = undefined;
@@ -274,24 +286,52 @@ const runSuite = async () => {
   for (let planIndex = 0; planIndex < plans.length; planIndex += 1) {
     const plan = plans[planIndex];
     currentScenario.value = scenarioPlanLabel(plan);
-    for (let executionIndex = 0; executionIndex < PERF_EXECUTIONS_PER_SCENARIO; executionIndex += 1) {
-      const phase = executionIndex === 0 ? 'warm-up' : 'recorded';
-      const runNumber = executionIndex === 0 ? 0 : executionIndex;
-      const runId = `scenario-${planIndex + 1}-run-${runNumber}`;
-      try {
-        const result = await runScenarioInFreshFrame(configFor(plan, runId));
-        if (executionIndex > 0) {
-          rawRuns.value.push(result);
-        }
-      } catch (error) {
+    const warmupRunId = `scenario-${planIndex + 1}-warmup`;
+    try {
+      const warmupResult = await runScenarioInFreshFrame(configFor(plan, warmupRunId));
+      if (!warmupResult.timingHealth.valid) {
+        rejectedTimingAttempts.value += 1;
+      } else if (!warmupResult.validation.valid) {
         failures.value.push({
           scenario: scenarioPlanLabel(plan),
-          phase,
-          error: error instanceof Error ? error.message : String(error),
+          phase: 'warm-up',
+          error: warmupResult.validation.issues.join('; ') || 'warm-up validation failed',
         });
-      } finally {
-        completedExecutions.value += 1;
       }
+    } catch (error) {
+      failures.value.push({
+        scenario: scenarioPlanLabel(plan),
+        phase: 'warm-up',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      completedExecutions.value += 1;
+    }
+
+    for (let recordedIndex = 0; recordedIndex < PERF_RECORDED_RUNS; recordedIndex += 1) {
+      const retry = await retryRecordedAttempt(
+        attemptNumber => runScenarioInFreshFrame(configFor(
+          plan,
+          `scenario-${planIndex + 1}-recorded-${recordedIndex + 1}-attempt-${attemptNumber}`,
+        )),
+        result => result.validation.valid && result.timingHealth.valid,
+        result => !result.timingHealth.valid,
+        PERF_MAX_RECORDED_RETRIES,
+      );
+      rejectedTimingAttempts.value += retry.rejectedTimingAttempts;
+      if (retry.result) {
+        rawRuns.value.push(retry.result);
+      } else {
+        const resultError = retry.lastResult?.validation.issues.join('; ')
+          || retry.error
+          || 'no timing-valid result was recorded';
+        failures.value.push({
+          scenario: scenarioPlanLabel(plan),
+          phase: 'recorded',
+          error: `${resultError} (after ${retry.attempts} attempt${retry.attempts === 1 ? '' : 's'})`,
+        });
+      }
+      completedExecutions.value += 1;
     }
   }
 
@@ -299,6 +339,7 @@ const runSuite = async () => {
   const decision = classifyPerfBaseline(rawRuns.value, summary);
   const result: PerfSuiteResult = {
     status: 'completed',
+    measuredHarnessHead: environment.gitHead,
     environment,
     rawRuns: rawRuns.value,
     summary,
@@ -306,10 +347,15 @@ const runSuite = async () => {
     bottleneck: decision.bottleneck,
     recommendation: decision.recommendation,
     failures: failures.value,
+    rejectedTimingAttempts: rejectedTimingAttempts.value,
   };
   suiteResult.value = result;
   window.__EXCHANGE_PERF_RESULT__ = result;
-  currentScenario.value = failures.value.length > 0 ? 'Completed with failures' : 'Completed';
+  currentScenario.value = failures.value.length > 0
+    ? 'Completed with failures'
+    : rejectedTimingAttempts.value > 0
+      ? 'Completed with rejected timing attempts'
+      : 'Completed';
   running.value = false;
 };
 
@@ -504,7 +550,7 @@ onMounted(() => {
 
 .perf-runner__facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
   margin-top: var(--space-5);
   overflow: hidden;

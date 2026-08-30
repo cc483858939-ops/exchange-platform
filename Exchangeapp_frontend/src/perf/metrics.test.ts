@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assessRafCadence,
+  assessScrollTiming,
+  assessTimingHealth,
   aggregatePerfRuns,
   classifyPerfBaseline,
   percentile,
+  PERF_RAF_HEALTH_SAMPLES,
   serializePerfMarkdown,
   summarizeFrameDeltas,
 } from './metrics';
@@ -63,6 +67,23 @@ const rawRun = (
     currentTargets: 0,
     peakTargets: trackView ? count : 0,
   },
+  timingHealth: {
+    valid: true,
+    preflight: {
+      samples: PERF_RAF_HEALTH_SAMPLES,
+      medianMs: 16.67,
+      p95Ms: 16.67,
+      maxMs: 16.67,
+    },
+    postflight: {
+      samples: PERF_RAF_HEALTH_SAMPLES * 2,
+      medianMs: 16.67,
+      p95Ms: 16.67,
+      maxMs: 16.67,
+    },
+    visibilityLost: false,
+    issues: [],
+  },
   validation: {
     valid: true,
     issues: [],
@@ -117,7 +138,85 @@ const withViewport = (run: PerfRawRun, viewport: 'desktop' | 'mobile'): PerfRawR
   },
 });
 
+const rafProbe = (phase: string, intervals: number[]) => ({
+  intervals,
+  ...assessRafCadence(intervals, phase),
+});
+
 describe('performance metrics', () => {
+  it('accepts healthy 60Hz and 30Hz cadence but rejects 1Hz cadence', () => {
+    const sixtyHz = assessRafCadence(
+      Array.from({ length: PERF_RAF_HEALTH_SAMPLES }, () => 16.67),
+      'preflight',
+    );
+    const thirtyHz = assessRafCadence(
+      Array.from({ length: PERF_RAF_HEALTH_SAMPLES }, () => 33.33),
+      'preflight',
+    );
+    const oneHz = assessRafCadence(
+      Array.from({ length: PERF_RAF_HEALTH_SAMPLES }, () => 1000),
+      'preflight',
+    );
+
+    expect(sixtyHz.issues).toEqual([]);
+    expect(thirtyHz.issues).toEqual([]);
+    expect(oneHz.metrics.medianMs).toBe(1000);
+    expect(oneHz.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining('exceeds 50 ms'),
+      expect.stringContaining('>=250 ms'),
+    ]));
+  });
+
+  it('invalidates visibility loss and postflight throttling', () => {
+    const healthy = rafProbe(
+      'preflight',
+      Array.from({ length: PERF_RAF_HEALTH_SAMPLES }, () => 16.67),
+    );
+    const healthyPost = rafProbe(
+      'postflight after scroll',
+      Array.from({ length: PERF_RAF_HEALTH_SAMPLES }, () => 16.67),
+    );
+    const healthyCleanup = rafProbe(
+      'postflight after PostCard cleanup',
+      Array.from({ length: PERF_RAF_HEALTH_SAMPLES }, () => 16.67),
+    );
+    const visible = assessTimingHealth(healthy, healthyPost, healthyCleanup, [], false);
+    const hidden = assessTimingHealth(healthy, healthyPost, healthyCleanup, [], true);
+    const throttledPost = assessTimingHealth(
+      healthy,
+      rafProbe(
+        'postflight after scroll',
+        Array.from({ length: PERF_RAF_HEALTH_SAMPLES }, () => 1000),
+      ),
+      healthyCleanup,
+      [],
+      false,
+    );
+
+    expect(visible.valid).toBe(true);
+    expect(hidden.valid).toBe(false);
+    expect(hidden.visibilityLost).toBe(true);
+    expect(throttledPost.valid).toBe(false);
+    expect(throttledPost.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining('>=250 ms'),
+    ]));
+  });
+
+  it('distinguishes throttled scroll gaps from a long-task-backed real gap', () => {
+    const throttled = assessScrollTiming(
+      [1000, 1000, 1000, 1000],
+      { supported: false },
+    );
+    const realLongTask = assessScrollTiming(
+      [500, 500, 500, 500],
+      { supported: true, count: 4, longestMs: 500, totalMs: 2000 },
+    );
+
+    expect(throttled.valid).toBe(false);
+    expect(throttled.issues.join(' ')).toContain('1 Hz');
+    expect(realLongTask.valid).toBe(true);
+  });
+
   it('calculates interpolated percentiles and frame thresholds', () => {
     expect(percentile([1, 2, 3, 4], 0.5)).toBe(2.5);
     expect(percentile([1, 2, 3, 4], 0.95)).toBeCloseTo(3.85, 10);
@@ -154,6 +253,25 @@ describe('performance metrics', () => {
     expect(delta?.mountPercent).toBe(30);
     expect(scaling?.mountMs300To100).toBe(2.31);
     expect(scaling?.p95Frame300To100).toBe(1.24);
+  });
+
+  it('excludes timing-invalid runs from accepted aggregation', () => {
+    const invalid = rawRun(100, true, {
+      timingHealth: {
+        ...rawRun(100, true).timingHealth,
+        valid: false,
+        issues: ['preflight RAF cadence is throttled'],
+      },
+      validation: {
+        ...rawRun(100, true).validation,
+        valid: false,
+        issues: ['preflight RAF cadence is throttled'],
+      },
+    });
+    const summary = aggregatePerfRuns([rawRun(100, true), invalid]);
+
+    expect(summary.rows).toHaveLength(1);
+    expect(summary.rows[0].recordedRuns).toBe(1);
   });
 
   it('classifies only valid recorded data and serializes the report', () => {
@@ -199,8 +317,25 @@ describe('performance metrics', () => {
       bottleneck: decision.bottleneck,
       recommendation: decision.recommendation,
       failures: [],
+      measuredHarnessHead: 'test-head',
+      rejectedTimingAttempts: 0,
     };
     expect(serializePerfMarkdown(result)).toContain('Aggregated scenarios');
+    expect(serializePerfMarkdown(result)).toContain('Median P95 frame ms');
+    expect(serializePerfMarkdown(result)).toContain('Worst run >50ms %');
     expect(classifyPerfBaseline([], aggregatePerfRuns([])).classification).toBe('MEASUREMENT NOT VERIFIED');
+    expect(classifyPerfBaseline(
+      [
+        {
+          ...runs[0],
+          timingHealth: {
+            ...runs[0].timingHealth,
+            valid: false,
+            issues: ['postflight throttled'],
+          },
+        },
+      ],
+      aggregatePerfRuns([]),
+    ).classification).toBe('MEASUREMENT NOT VERIFIED');
   });
 });

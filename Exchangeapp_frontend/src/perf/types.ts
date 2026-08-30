@@ -55,6 +55,21 @@ export interface PerfScrollMetrics {
   percentOver50Ms: number;
 }
 
+export interface PerfRafHealth {
+  samples: number;
+  medianMs: number;
+  p95Ms: number;
+  maxMs: number;
+}
+
+export interface PerfTimingHealth {
+  valid: boolean;
+  preflight: PerfRafHealth;
+  postflight: PerfRafHealth;
+  visibilityLost: boolean;
+  issues: string[];
+}
+
 export interface PerfLongTaskMetrics {
   supported: boolean;
   count?: number;
@@ -93,6 +108,7 @@ export interface PerfRawRun {
   longTasks: PerfLongTaskMetrics;
   memory: PerfMemoryMetrics;
   observer: PerfObserverMetrics;
+  timingHealth: PerfTimingHealth;
   validation: PerfValidation;
 }
 
@@ -179,6 +195,7 @@ export interface PerfScenarioFailure {
 
 export interface PerfSuiteResult {
   status: 'completed';
+  measuredHarnessHead: string;
   environment: PerfEnvironment;
   rawRuns: PerfRawRun[];
   summary: PerfSummary;
@@ -186,6 +203,7 @@ export interface PerfSuiteResult {
   bottleneck: string;
   recommendation: string;
   failures: PerfScenarioFailure[];
+  rejectedTimingAttempts: number;
 }
 
 export type PerfScenarioMessage =
