@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  attributeLongTasksByPhase,
   assessRafCadence,
   assessScrollTiming,
   assessTimingHealth,
@@ -138,6 +139,31 @@ const withViewport = (run: PerfRawRun, viewport: 'desktop' | 'mobile'): PerfRawR
   },
 });
 
+const completeCoverageRuns = (): PerfRawRun[] => {
+  const runs: PerfRawRun[] = [];
+  const appendCounts = new Set([20, 100, 200]);
+  for (const viewport of ['desktop', 'mobile'] as const) {
+    for (const count of [20, 50, 100, 200, 300]) {
+      for (const trackView of [true, false]) {
+        for (let runIndex = 0; runIndex < 3; runIndex += 1) {
+          runs.push(withViewport(completeRecordedRun(
+            count,
+            trackView,
+            'matrix',
+            appendCounts.has(count) ? count : undefined,
+          ), viewport));
+        }
+      }
+    }
+    for (const trackView of [true, false]) {
+      for (let runIndex = 0; runIndex < 3; runIndex += 1) {
+        runs.push(withViewport(completeRecordedRun(280, trackView, 'append', 280), viewport));
+      }
+    }
+  }
+  return runs;
+};
+
 const rafProbe = (phase: string, intervals: number[]) => ({
   intervals,
   ...assessRafCadence(intervals, phase),
@@ -274,28 +300,146 @@ describe('performance metrics', () => {
     expect(summary.rows[0].recordedRuns).toBe(1);
   });
 
+  it('attributes long tasks to mount, append, and scroll windows', () => {
+    expect(attributeLongTasksByPhase(
+      [
+        { startTime: 10, duration: 240 },
+        { startTime: 100, duration: 30 },
+        { startTime: 200, duration: 60 },
+        { startTime: 400, duration: 90 },
+      ],
+      {
+        mount: { startTime: 0, endTime: 50 },
+        append: { startTime: 90, endTime: 150 },
+        scroll: { startTime: 180, endTime: 300 },
+      },
+    )).toEqual({
+      mount: { count: 1, longestMs: 240, totalMs: 240 },
+      append: { count: 1, longestMs: 30, totalMs: 30 },
+      scroll: { count: 1, longestMs: 60, totalMs: 60 },
+    });
+  });
+
+  it('aggregates long-task phase attribution when raw runs provide it', () => {
+    const phaseRun = (mountMs: number, scrollMs: number): PerfRawRun => {
+      const base = rawRun(100, true);
+      return {
+        ...base,
+        longTasks: {
+          ...base.longTasks,
+          phases: {
+            mount: { count: 1, longestMs: mountMs, totalMs: mountMs },
+            append: { count: 0, longestMs: 0, totalMs: 0 },
+            scroll: { count: 1, longestMs: scrollMs, totalMs: scrollMs },
+          },
+        },
+      };
+    };
+    const summary = aggregatePerfRuns([phaseRun(120, 20), phaseRun(80, 30)]);
+
+    expect(summary.rows[0].longTasks.phases).toEqual({
+      mount: { count: 2, longestMs: 120, totalMs: 200 },
+      append: { count: 0, longestMs: 0, totalMs: 0 },
+      scroll: { count: 2, longestMs: 30, totalMs: 50 },
+    });
+  });
+
+  it('does not call a small-count tracked delta an observation bottleneck', () => {
+    const runs = completeCoverageRuns().map(run => {
+      const isMobile = run.scenario.viewport === 'mobile';
+      if (isMobile && run.scenario.count === 20 && run.scenario.runType === 'matrix') {
+        return {
+          ...run,
+          render: { ...run.render, mountMs: run.scenario.trackView ? 13 : 10 },
+        };
+      }
+      if (isMobile && [200, 300].includes(run.scenario.count) && run.scenario.runType === 'matrix') {
+        return {
+          ...run,
+          render: { ...run.render, mountMs: 40 },
+          scroll: { ...run.scroll, p95FrameMs: 24 },
+          longTasks: { ...run.longTasks, count: 1, longestMs: 60, totalMs: 60 },
+        };
+      }
+      return run;
+    });
+    const decision = classifyPerfBaseline(runs, aggregatePerfRuns(runs));
+
+    expect(decision.bottleneck).toBe(
+      'No single subsystem dominates this baseline; inspect the recorded matrix before changing architecture.',
+    );
+  });
+
+  it('calls observation a bottleneck only when 200 and 300 tracked rows are materially worse', () => {
+    const runs = completeCoverageRuns().map(run => {
+      const isMobile = run.scenario.viewport === 'mobile';
+      if (isMobile && [200, 300].includes(run.scenario.count) && run.scenario.runType === 'matrix') {
+        const tracked = run.scenario.trackView;
+        return {
+          ...run,
+          render: { ...run.render, mountMs: tracked ? 60 : 30 },
+          scroll: { ...run.scroll, p95FrameMs: tracked ? 36 : 24 },
+          longTasks: {
+            ...run.longTasks,
+            count: tracked ? 3 : 1,
+            longestMs: tracked ? 120 : 60,
+            totalMs: tracked ? 120 : 60,
+          },
+        };
+      }
+      return run;
+    });
+    const decision = classifyPerfBaseline(runs, aggregatePerfRuns(runs));
+
+    expect(decision.bottleneck).toBe('Feed observation lifecycle is the leading diagnostic candidate.');
+  });
+
+  it('attributes similarly slow tracked and untracked 300-card runs to mounted-state cost', () => {
+    const runs = completeCoverageRuns().map(run => {
+      const isMobile = run.scenario.viewport === 'mobile';
+      if (isMobile && run.scenario.count === 300 && run.scenario.runType === 'matrix') {
+        const tracked = run.scenario.trackView;
+        return {
+          ...run,
+          render: { ...run.render, mountMs: tracked ? 260 : 246 },
+          longTasks: {
+            ...run.longTasks,
+            count: 3,
+            longestMs: tracked ? 280 : 285,
+            totalMs: tracked ? 766 : 750,
+          },
+        };
+      }
+      return run;
+    });
+    const decision = classifyPerfBaseline(runs, aggregatePerfRuns(runs));
+
+    expect(decision.bottleneck).toBe('DOM/Vue mounted-state cost is the leading diagnostic candidate.');
+  });
+
+  it('does not report a bottleneck when all high-count metrics are healthy', () => {
+    const runs = completeCoverageRuns().map(run => {
+      if (run.scenario.viewport === 'mobile'
+        && [200, 300].includes(run.scenario.count)
+        && run.scenario.runType === 'matrix') {
+        return {
+          ...run,
+          render: { ...run.render, mountMs: 40 },
+          scroll: { ...run.scroll, p95FrameMs: 24 },
+          longTasks: { ...run.longTasks, count: 1, longestMs: 60, totalMs: 60 },
+        };
+      }
+      return run;
+    });
+    const decision = classifyPerfBaseline(runs, aggregatePerfRuns(runs));
+
+    expect(decision.bottleneck).toBe(
+      'No single subsystem dominates this baseline; inspect the recorded matrix before changing architecture.',
+    );
+  });
+
   it('classifies only valid recorded data and serializes the report', () => {
-    const runs: PerfRawRun[] = [];
-    const appendCounts = new Set([20, 100, 200]);
-    for (const viewport of ['desktop', 'mobile'] as const) {
-      for (const count of [20, 50, 100, 200, 300]) {
-        for (const trackView of [true, false]) {
-          for (let runIndex = 0; runIndex < 3; runIndex += 1) {
-            runs.push(withViewport(completeRecordedRun(
-              count,
-              trackView,
-              'matrix',
-              appendCounts.has(count) ? count : undefined,
-            ), viewport));
-          }
-        }
-      }
-      for (const trackView of [true, false]) {
-        for (let runIndex = 0; runIndex < 3; runIndex += 1) {
-          runs.push(withViewport(completeRecordedRun(280, trackView, 'append', 280), viewport));
-        }
-      }
-    }
+    const runs = completeCoverageRuns();
     const summary = aggregatePerfRuns(runs);
     const decision = classifyPerfBaseline(runs, summary);
     expect(decision.classification).toBe('GREEN');
@@ -321,6 +465,7 @@ describe('performance metrics', () => {
       rejectedTimingAttempts: 0,
     };
     expect(serializePerfMarkdown(result)).toContain('Aggregated scenarios');
+    expect(serializePerfMarkdown(result)).toContain('Long-task phase attribution');
     expect(serializePerfMarkdown(result)).toContain('Median P95 frame ms');
     expect(serializePerfMarkdown(result)).toContain('Worst run >50ms %');
     expect(classifyPerfBaseline([], aggregatePerfRuns([])).classification).toBe('MEASUREMENT NOT VERIFIED');

@@ -18,11 +18,18 @@ import PostCard from '../components/feed/PostCard.vue';
 import { resetArticleViewTelemetryForTests } from '../services/articleViewTelemetry';
 import { createPerfPosts } from './fixtures';
 import {
+  attributeLongTasksByPhase,
   assessRafCadence,
   assessScrollTiming,
   assessTimingHealth,
   PERF_RAF_HEALTH_SAMPLES,
   summarizeFrameDeltas,
+} from './metrics';
+import type {
+  LongTaskTimingWindow,
+  PerfLongTaskEntry,
+  PerfLongTaskPhase,
+  RafHealthProbe,
 } from './metrics';
 import { installIntersectionObserverInstrumentation } from './observerInstrumentation';
 import {
@@ -35,7 +42,6 @@ import {
   type PerfScenarioConfig,
   type PerfScenarioMessage,
 } from './types';
-import type { RafHealthProbe } from './metrics';
 
 const props = defineProps<{
   config: PerfScenarioConfig;
@@ -103,25 +109,36 @@ const supportsLongTasks = (): boolean => {
 
 const collectLongTasks = (): {
   metrics: PerfLongTaskMetrics;
+  entries: () => PerfLongTaskEntry[];
   disconnect: () => void;
 } => {
   if (!supportsLongTasks()) {
     return {
       metrics: { supported: false },
+      entries: () => [],
       disconnect: () => undefined,
     };
   }
 
   const durations: number[] = [];
+  const entries: PerfLongTaskEntry[] = [];
   try {
     const observer = new PerformanceObserver(list => {
       for (const entry of list.getEntries()) {
         if (Number.isFinite(entry.duration)) {
           durations.push(entry.duration);
+          if (Number.isFinite(entry.startTime)) {
+            entries.push({
+              startTime: entry.startTime,
+              duration: entry.duration,
+            });
+          }
         }
       }
     });
-    observer.observe({ type: 'longtask', buffered: true });
+    // The collector starts after preflight, so buffered page-startup tasks would
+    // contaminate the scenario total and could not be attributed to a phase.
+    observer.observe({ type: 'longtask', buffered: false });
 
     return {
       metrics: {
@@ -136,11 +153,13 @@ const collectLongTasks = (): {
           return durations.reduce((total, duration) => total + duration, 0);
         },
       },
+      entries: () => entries.slice(),
       disconnect: () => observer.disconnect(),
     };
   } catch {
     return {
       metrics: { supported: false },
+      entries: () => [],
       disconnect: () => undefined,
     };
   }
@@ -269,6 +288,7 @@ const sendError = (error: unknown) => {
 
 const runScenario = async () => {
   let longTaskCollector: ReturnType<typeof collectLongTasks> | null = null;
+  const phaseWindows: Partial<Record<PerfLongTaskPhase, LongTaskTimingWindow>> = {};
   let visibilityLost = document.visibilityState !== 'visible';
   const handleVisibilityChange = () => {
     if (document.visibilityState !== 'visible') {
@@ -349,7 +369,9 @@ const runScenario = async () => {
     posts.value = createPerfPosts(config.count, config.fixture);
     await nextTick();
     await waitForTwoFrames();
-    const mountMs = performance.now() - mountStartedAt;
+    const mountEndedAt = performance.now();
+    phaseWindows.mount = { startTime: mountStartedAt, endTime: mountEndedAt };
+    const mountMs = mountEndedAt - mountStartedAt;
     const renderedPostCards = listRoot.value?.querySelectorAll('.post-card').length ?? 0;
     const domElements = listRoot.value?.querySelectorAll('*').length ?? 0;
     const memoryAfterMount = readHeap();
@@ -372,16 +394,22 @@ const runScenario = async () => {
       ];
       await nextTick();
       await waitForTwoFrames();
+      const appendEndedAt = performance.now();
+      phaseWindows.append = { startTime: appendStartedAt, endTime: appendEndedAt };
       append = {
         measured: true,
         from: appendFrom,
         to: appendFrom + 20,
-        durationMs: performance.now() - appendStartedAt,
+        durationMs: appendEndedAt - appendStartedAt,
       };
     }
 
+    const scrollStartedAt = performance.now();
     const scrollMeasurement = await scrollAndMeasure();
+    const scrollEndedAt = performance.now();
+    phaseWindows.scroll = { startTime: scrollStartedAt, endTime: scrollEndedAt };
     await waitForFrame();
+    const longTaskEntries = longTaskCollector.entries();
     longTaskCollector.disconnect();
     const longTasks: PerfLongTaskMetrics = longTaskCollector.metrics.supported
       ? {
@@ -389,6 +417,7 @@ const runScenario = async () => {
           count: longTaskCollector.metrics.count,
           longestMs: longTaskCollector.metrics.longestMs,
           totalMs: longTaskCollector.metrics.totalMs,
+          phases: attributeLongTasksByPhase(longTaskEntries, phaseWindows),
         }
       : { supported: false };
     const scrollTiming = assessScrollTiming(scrollMeasurement.deltas, longTasks);

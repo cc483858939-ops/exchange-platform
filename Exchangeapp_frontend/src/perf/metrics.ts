@@ -9,6 +9,8 @@ import type {
   PerfSummaryRow,
   PerfSuiteResult,
   PerfTimingHealth,
+  PerfLongTaskPhaseMetrics,
+  PerfLongTaskPhases,
   PerfTrackedUntrackedDelta,
   PerfScalingRatio,
 } from './types';
@@ -119,6 +121,54 @@ export function assessTimingHealth(
   };
 }
 
+export type PerfLongTaskPhase = keyof PerfLongTaskPhases;
+
+export interface LongTaskTimingWindow {
+  startTime: number;
+  endTime: number;
+}
+
+export interface PerfLongTaskEntry {
+  startTime: number;
+  duration: number;
+}
+
+const emptyLongTaskPhase = (): PerfLongTaskPhases['mount'] => ({
+  count: 0,
+  longestMs: 0,
+  totalMs: 0,
+});
+
+export function attributeLongTasksByPhase(
+  entries: ReadonlyArray<PerfLongTaskEntry>,
+  windows: Partial<Record<PerfLongTaskPhase, LongTaskTimingWindow>>,
+): PerfLongTaskPhases {
+  const summarizePhase = (phase: PerfLongTaskPhase): PerfLongTaskPhases['mount'] => {
+    const window = windows[phase];
+    if (!window) {
+      return emptyLongTaskPhase();
+    }
+    const phaseEntries = entries.filter(entry => (
+      Number.isFinite(entry.startTime)
+      && Number.isFinite(entry.duration)
+      && entry.duration >= 0
+      && entry.startTime >= window.startTime
+      && entry.startTime <= window.endTime
+    ));
+    return {
+      count: phaseEntries.length,
+      longestMs: round(phaseEntries.length > 0 ? Math.max(...phaseEntries.map(entry => entry.duration)) : 0),
+      totalMs: round(phaseEntries.reduce((total, entry) => total + entry.duration, 0)),
+    };
+  };
+
+  return {
+    mount: summarizePhase('mount'),
+    append: summarizePhase('append'),
+    scroll: summarizePhase('scroll'),
+  };
+}
+
 export interface ScrollTimingAssessment {
   valid: boolean;
   issues: string[];
@@ -208,7 +258,7 @@ const aggregateLongTasks = (runs: PerfRawRun[]): PerfSummaryLongTasks => {
     .map(run => run.longTasks.totalMs)
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
 
-  return {
+  const summary: PerfSummaryLongTasks = {
     supported: true,
     totalCount: counts.length > 0 ? counts.reduce((total, count) => total + count, 0) : 0,
     longestMs: longestValues.length > 0 ? round(Math.max(...longestValues)) : 0,
@@ -216,6 +266,29 @@ const aggregateLongTasks = (runs: PerfRawRun[]): PerfSummaryLongTasks => {
       ? round(totalValues.reduce((total, value) => total + value, 0))
       : 0,
   };
+
+  if (supportedRuns.some(run => run.longTasks.phases)) {
+    const aggregatePhase = (phase: keyof PerfLongTaskPhases): PerfLongTaskPhaseMetrics => {
+      const phaseValues = supportedRuns
+        .map(run => run.longTasks.phases?.[phase])
+        .filter((value): value is PerfLongTaskPhaseMetrics => Boolean(value));
+      return {
+        count: phaseValues.reduce((total, value) => total + value.count, 0),
+        longestMs: phaseValues.length > 0
+          ? round(Math.max(...phaseValues.map(value => value.longestMs)))
+          : 0,
+        totalMs: round(phaseValues.reduce((total, value) => total + value.totalMs, 0)),
+      };
+    };
+
+    summary.phases = {
+      mount: aggregatePhase('mount'),
+      append: aggregatePhase('append'),
+      scroll: aggregatePhase('scroll'),
+    };
+  }
+
+  return summary;
 };
 
 const aggregateMemory = (runs: PerfRawRun[]): PerfSummaryMemory => {
@@ -433,28 +506,96 @@ const hasRatioAbove = (ratios: PerfScalingRatio[], field: keyof PerfScalingRatio
   })
 );
 
+const materiallyWorse = (tracked: number | null, untracked: number | null): boolean => {
+  if (tracked === null || untracked === null || !Number.isFinite(tracked) || !Number.isFinite(untracked)) {
+    return false;
+  }
+  if (untracked === 0) {
+    return tracked > 0;
+  }
+  return tracked >= untracked * 1.2;
+};
+
+const materiallyDifferent = (left: number | null, right: number | null): boolean => {
+  if (left === null || right === null || !Number.isFinite(left) || !Number.isFinite(right)) {
+    return false;
+  }
+  if (left === right) {
+    return false;
+  }
+  if (right === 0) {
+    return true;
+  }
+  return Math.abs(left - right) >= Math.abs(right) * 0.2;
+};
+
+const rowMateriallyWorse = (tracked: PerfSummaryRow, untracked: PerfSummaryRow): boolean => (
+  materiallyWorse(tracked.medianMountMs, untracked.medianMountMs)
+  || materiallyWorse(tracked.medianP95FrameMs, untracked.medianP95FrameMs)
+  || materiallyWorse(tracked.longTasks.totalMs, untracked.longTasks.totalMs)
+  || materiallyWorse(tracked.longTasks.totalCount, untracked.longTasks.totalCount)
+);
+
+const isObservationBottleneck = (summary: PerfSummary): boolean => {
+  const tracked200 = findMatrixRow(summary, 'mobile', 200, true);
+  const untracked200 = findMatrixRow(summary, 'mobile', 200, false);
+  const tracked300 = findMatrixRow(summary, 'mobile', 300, true);
+  const untracked300 = findMatrixRow(summary, 'mobile', 300, false);
+  const trackedScaling = summary.scaling.find(item => item.viewport === 'mobile' && item.trackView);
+  const untrackedScaling = summary.scaling.find(item => item.viewport === 'mobile' && !item.trackView);
+
+  if (!tracked200 || !untracked200 || !tracked300 || !untracked300) {
+    return false;
+  }
+
+  const tracked300Worse = rowMateriallyWorse(tracked300, untracked300);
+  const tracked200Worse = rowMateriallyWorse(tracked200, untracked200);
+  const scalingDiverges = trackedScaling && untrackedScaling && (
+    materiallyDifferent(trackedScaling.mountMs300To100, untrackedScaling.mountMs300To100)
+    || materiallyDifferent(trackedScaling.p95Frame300To100, untrackedScaling.p95Frame300To100)
+    || materiallyDifferent(trackedScaling.heapAfterMount300To100, untrackedScaling.heapAfterMount300To100)
+  );
+
+  return tracked300Worse && (tracked200Worse || Boolean(scalingDiverges));
+};
+
+const comparable = (left: number | null, right: number | null, tolerance = 0.2): boolean => {
+  if (left === null || right === null || !Number.isFinite(left) || !Number.isFinite(right)) {
+    return false;
+  }
+  const denominator = Math.max(Math.abs(left), Math.abs(right), 1);
+  return Math.abs(left - right) <= denominator * tolerance;
+};
+
+const isMountedStateBottleneck = (summary: PerfSummary): boolean => {
+  const tracked300 = findMatrixRow(summary, 'mobile', 300, true);
+  const untracked300 = findMatrixRow(summary, 'mobile', 300, false);
+  if (!tracked300 || !untracked300) {
+    return false;
+  }
+
+  const mountIsSlowAndSimilar = tracked300.medianMountMs > 200
+    && untracked300.medianMountMs > 200
+    && comparable(tracked300.medianMountMs, untracked300.medianMountMs);
+  const longestTaskIsSlowAndSimilar = tracked300.longTasks.longestMs !== null
+    && untracked300.longTasks.longestMs !== null
+    && tracked300.longTasks.longestMs > 200
+    && untracked300.longTasks.longestMs > 200
+    && comparable(tracked300.longTasks.longestMs, untracked300.longTasks.longestMs);
+
+  return mountIsSlowAndSimilar || longestTaskIsSlowAndSimilar;
+};
+
 const determineBottleneck = (summary: PerfSummary, classification: PerfClassification): string => {
   if (classification === 'MEASUREMENT NOT VERIFIED') {
     return 'No browser conclusion; complete the real Chromium run first.';
   }
 
-  const mobileDeltas = summary.trackedVsUntracked.filter(delta => delta.viewport === 'mobile');
-  const observationDelta = mobileDeltas.find(delta => (
-    typeof delta.p95FramePercent === 'number' && delta.p95FramePercent > 20
-  ) || (
-    typeof delta.mountPercent === 'number' && delta.mountPercent > 20
-  ));
-  if (observationDelta) {
+  if (isObservationBottleneck(summary)) {
     return 'Feed observation lifecycle is the leading diagnostic candidate.';
   }
 
-  const untracked300 = findMatrixRow(summary, 'mobile', 300, false);
-  const scale = summary.scaling.find(item => item.viewport === 'mobile' && !item.trackView);
-  if (untracked300 && scale && (
-    (scale.domElements300To100 ?? 0) > 2
-    || (scale.mountMs300To100 ?? 0) > 2
-    || (scale.p95Frame300To100 ?? 0) > 2
-  )) {
+  if (isMountedStateBottleneck(summary)) {
     return 'DOM/Vue mounted-state cost is the leading diagnostic candidate.';
   }
 
@@ -543,6 +684,12 @@ const display = (value: number | null | undefined): string => (
   typeof value === 'number' && Number.isFinite(value) ? String(round(value)) : 'not supported'
 );
 
+const displayLongTaskPhase = (phase: PerfLongTaskPhaseMetrics | undefined): string => (
+  phase
+    ? `${display(phase.count)} / ${display(phase.totalMs)} / ${display(phase.longestMs)}`
+    : 'not available'
+);
+
 export function serializePerfMarkdown(result: PerfSuiteResult): string {
   const lines = [
     '# Exchange Platform Long-list Browser Performance Baseline',
@@ -577,6 +724,14 @@ export function serializePerfMarkdown(result: PerfSuiteResult): string {
     '| Viewport | Count | Mode | Run | Runs | Mount ms | Append ms | Median frame ms | Median P95 frame ms | Worst max frame ms | Worst run >50ms % | DOM elements | Peak targets | Long tasks | Longest task ms | Heap after mount |',
     '| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
     ...result.summary.rows.map(row => `| ${row.viewport} | ${row.count} | ${row.trackView ? 'tracked' : 'untracked'} | ${row.runType} | ${row.recordedRuns} | ${display(row.medianMountMs)} | ${display(row.medianAppendMs)} | ${display(row.medianFrameMs)} | ${display(row.medianP95FrameMs)} | ${display(row.worstMaxFrameMs)} | ${display(row.worstPercentOver50Ms)}% | ${display(row.medianDomElements)} | ${display(row.medianPeakObservedTargets)} | ${display(row.longTasks.totalCount)} | ${display(row.longTasks.longestMs)} | ${display(row.memory.medianAfterMount)} |`),
+    '',
+    '## Long-task phase attribution',
+    '',
+    '- Phase format: count / total ms / longest ms; entries are attributed by `startTime` within the mount, append, or scroll window.',
+    '',
+    '| Viewport | Count | Mode | Run | Mount | Append | Scroll |',
+    '| --- | ---: | --- | --- | --- | --- | --- |',
+    ...result.summary.rows.map(row => `| ${row.viewport} | ${row.count} | ${row.trackView ? 'tracked' : 'untracked'} | ${row.runType} | ${displayLongTaskPhase(row.longTasks.phases?.mount)} | ${displayLongTaskPhase(row.longTasks.phases?.append)} | ${displayLongTaskPhase(row.longTasks.phases?.scroll)} |`),
     '',
     '## Tracked versus untracked delta',
     '',

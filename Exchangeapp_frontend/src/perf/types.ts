@@ -55,6 +55,18 @@ export interface PerfScrollMetrics {
   percentOver50Ms: number;
 }
 
+export interface PerfLongTaskPhaseMetrics {
+  count: number;
+  longestMs: number;
+  totalMs: number;
+}
+
+export interface PerfLongTaskPhases {
+  mount: PerfLongTaskPhaseMetrics;
+  append: PerfLongTaskPhaseMetrics;
+  scroll: PerfLongTaskPhaseMetrics;
+}
+
 export interface PerfRafHealth {
   samples: number;
   medianMs: number;
@@ -75,6 +87,7 @@ export interface PerfLongTaskMetrics {
   count?: number;
   longestMs?: number;
   totalMs?: number;
+  phases?: PerfLongTaskPhases;
 }
 
 export interface PerfMemoryMetrics {
@@ -129,6 +142,7 @@ export interface PerfSummaryLongTasks {
   totalCount: number | null;
   longestMs: number | null;
   totalMs: number | null;
+  phases?: PerfLongTaskPhases;
 }
 
 export interface PerfSummaryMemory {
