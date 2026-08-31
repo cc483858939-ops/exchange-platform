@@ -29,6 +29,12 @@ const rawRun = (
     fixture: 'mixed',
     runType: 'matrix',
   },
+  executionContext: {
+    topLevel: true,
+    visibilityState: 'visible',
+    devicePixelRatio: 1,
+    userAgent: 'test-agent',
+  },
   render: {
     requestedPosts: count,
     postCards: count,

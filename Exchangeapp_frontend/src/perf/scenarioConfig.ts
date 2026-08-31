@@ -18,7 +18,8 @@ export function parsePerfScenarioConfig(search: string): PerfScenarioConfig {
   const runType: PerfRunType = params.get('runType') === 'append' ? 'append' : 'matrix';
 
   return {
-    runId: params.get('runId')?.trim() || 'standalone-scenario',
+    suiteId: params.get('suiteId')?.trim() || '',
+    runId: params.get('runId')?.trim() || '',
     viewport,
     width: positiveInteger(params.get('width'), defaults.width),
     height: positiveInteger(params.get('height'), defaults.height),
@@ -33,3 +34,7 @@ export function parsePerfScenarioConfig(search: string): PerfScenarioConfig {
 }
 
 export { viewportDefaults };
+
+export const hasPerfOrchestrationIds = (config: PerfScenarioConfig): boolean => (
+  config.suiteId.trim().length > 0 && config.runId.trim().length > 0
+);

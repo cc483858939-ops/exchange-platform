@@ -1,5 +1,6 @@
 <template>
   <main class="perf-scenario">
+    <p v-if="fatalError" class="perf-scenario__error" role="alert">{{ fatalError }}</p>
     <section ref="listRoot" class="perf-scenario__list" aria-label="Performance benchmark post list">
       <PostCard
         v-for="post in posts"
@@ -33,15 +34,20 @@ import type {
 } from './metrics';
 import { installIntersectionObserverInstrumentation } from './observerInstrumentation';
 import {
-  PERF_MESSAGE_NAMESPACE,
-  PERF_SCENARIO_COMPLETE,
-  PERF_SCENARIO_ERROR,
+  PERF_PENDING_STORAGE_KEY,
+  PERF_SESSION_SCHEMA_VERSION,
+  isViewportWithinTolerance,
+  perfViewportRequirement,
+} from './topLevelSuiteSession';
+import {
   type PerfLongTaskMetrics,
   type PerfMemoryMetrics,
+  type PerfPendingScenarioEnvelope,
   type PerfRawRun,
+  type PerfRawScenario,
   type PerfScenarioConfig,
-  type PerfScenarioMessage,
 } from './types';
+import { hasPerfOrchestrationIds } from './scenarioConfig';
 
 const props = defineProps<{
   config: PerfScenarioConfig;
@@ -54,6 +60,7 @@ const observerInstrumentation = installIntersectionObserverInstrumentation();
 const authStore = useAuthStore();
 let cleanedUp = false;
 let completed = false;
+const fatalError = ref<string | null>(null);
 
 // The perf preview has its own origin. Clearing that origin guarantees that this
 // isolated Pinia instance cannot accidentally use a valid viewer from the SPA.
@@ -266,22 +273,78 @@ const telemetryNetworkRequestCount = (): number => (
     .length
 );
 
-const sendMessage = (message: PerfScenarioMessage) => {
+const executionContext = (): PerfRawRun['executionContext'] => ({
+  topLevel: window.parent === window,
+  visibilityState: document.visibilityState,
+  devicePixelRatio: window.devicePixelRatio || 1,
+  userAgent: navigator.userAgent,
+});
+
+const rawScenario = (): PerfRawScenario => ({
+  viewport: config.viewport,
+  width: config.width,
+  height: config.height,
+  innerWidth: window.innerWidth,
+  innerHeight: window.innerHeight,
+  count: config.count,
+  trackView: config.trackView,
+  fixture: config.fixture,
+  runType: config.runType,
+});
+
+const executionValidationIssues = (): string[] => {
+  const issues: string[] = [];
+  const requirement = perfViewportRequirement(config.viewport);
   if (window.parent !== window) {
-    window.parent.postMessage(message, window.location.origin);
+    issues.push('Performance scenario must execute as a top-level document.');
+  }
+  if (!isViewportWithinTolerance(
+    window.innerWidth,
+    window.innerHeight,
+    requirement.width,
+    requirement.height,
+  )) {
+    issues.push(
+      `viewport ${window.innerWidth}x${window.innerHeight} does not match `
+      + `${config.viewport} target ${requirement.width}x${requirement.height} ±8px`,
+    );
+  }
+  return issues;
+};
+
+const persistPending = (pending: PerfPendingScenarioEnvelope): void => {
+  try {
+    window.sessionStorage.setItem(
+      PERF_PENDING_STORAGE_KEY,
+      JSON.stringify(pending),
+    );
+    window.location.replace('/?autorun=1&resume=1');
+  } catch (error) {
+    fatalError.value = `SESSION_STORAGE_UNAVAILABLE: ${error instanceof Error ? error.message : String(error)}`;
   }
 };
 
-const sendError = (error: unknown) => {
-  if (completed) {
-    return;
-  }
+const sendResult = (result: PerfRawRun): void => {
+  if (completed) return;
+  completed = true;
+  persistPending({
+    schemaVersion: PERF_SESSION_SCHEMA_VERSION,
+    suiteId: config.suiteId,
+    runId: config.runId,
+    type: 'result',
+    result,
+  });
+};
+
+const sendError = (error: unknown): void => {
+  if (completed) return;
   completed = true;
   cleanup();
-  sendMessage({
-    namespace: PERF_MESSAGE_NAMESPACE,
-    type: PERF_SCENARIO_ERROR,
+  persistPending({
+    schemaVersion: PERF_SESSION_SCHEMA_VERSION,
+    suiteId: config.suiteId,
     runId: config.runId,
+    type: 'error',
     error: error instanceof Error ? error.message : String(error),
   });
 };
@@ -316,17 +379,8 @@ const runScenario = async () => {
         visibilityLost,
       );
       const result: PerfRawRun = {
-        scenario: {
-          viewport: config.viewport,
-          width: config.width,
-          height: config.height,
-          innerWidth: window.innerWidth,
-          innerHeight: window.innerHeight,
-          count: config.count,
-          trackView: config.trackView,
-          fixture: config.fixture,
-          runType: config.runType,
-        },
+        scenario: rawScenario(),
+        executionContext: executionContext(),
         render: {
           requestedPosts: config.count,
           postCards: 0,
@@ -349,17 +403,14 @@ const runScenario = async () => {
         timingHealth,
         validation: {
           valid: false,
-          issues: timingHealth.issues,
+          issues: Array.from(new Set([
+            ...timingHealth.issues,
+            ...executionValidationIssues(),
+          ])),
           telemetryNetworkRequests: 0,
         },
       };
-      completed = true;
-      sendMessage({
-        namespace: PERF_MESSAGE_NAMESPACE,
-        type: PERF_SCENARIO_COMPLETE,
-        runId: config.runId,
-        result,
-      });
+      sendResult(result);
       return;
     }
 
@@ -438,6 +489,7 @@ const runScenario = async () => {
       && memoryAfterScroll !== null;
     const finalPostCards = config.count + (append.measured ? 20 : 0);
     const issues: string[] = [];
+    issues.push(...executionValidationIssues());
     if (renderedPostCards !== config.count) {
       issues.push(`requested ${config.count} cards but rendered ${renderedPostCards}`);
     }
@@ -466,17 +518,8 @@ const runScenario = async () => {
         }
       : { supported: false };
     const result: PerfRawRun = {
-      scenario: {
-        viewport: config.viewport,
-        width: config.width,
-        height: config.height,
-        innerWidth: window.innerWidth,
-        innerHeight: window.innerHeight,
-        count: config.count,
-        trackView: config.trackView,
-        fixture: config.fixture,
-        runType: config.runType,
-      },
+      scenario: rawScenario(),
+      executionContext: executionContext(),
       render: {
         requestedPosts: config.count,
         postCards: renderedPostCards,
@@ -498,13 +541,7 @@ const runScenario = async () => {
         telemetryNetworkRequests,
       },
     };
-    completed = true;
-    sendMessage({
-      namespace: PERF_MESSAGE_NAMESPACE,
-      type: PERF_SCENARIO_COMPLETE,
-      runId: config.runId,
-      result,
-    });
+    sendResult(result);
   } catch (error) {
     longTaskCollector?.disconnect();
     sendError(error);
@@ -514,6 +551,10 @@ const runScenario = async () => {
 };
 
 onMounted(() => {
+  if (!hasPerfOrchestrationIds(config)) {
+    fatalError.value = 'Missing suiteId/runId; this scenario was not launched by the top-level performance runner.';
+    return;
+  }
   void runScenario();
 });
 
@@ -526,6 +567,19 @@ onBeforeUnmount(() => {
 .perf-scenario {
   min-height: 100vh;
   background: var(--color-bg);
+}
+
+.perf-scenario__error {
+  position: fixed;
+  z-index: 1;
+  inset: 16px;
+  height: fit-content;
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-danger);
 }
 
 .perf-scenario__list {

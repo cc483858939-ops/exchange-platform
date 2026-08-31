@@ -4,9 +4,7 @@ import {
   PERF_APPEND_BASES,
   PERF_COUNTS,
   PERF_EXECUTIONS_PER_SCENARIO,
-  PERF_MAX_RECORDED_RETRIES,
   PERF_RECORDED_RUNS,
-  retryRecordedAttempt,
 } from './runnerPlan';
 
 describe('performance runner plan', () => {
@@ -26,34 +24,6 @@ describe('performance runner plan', () => {
       20, 100, 200, 280,
     ]);
     expect(PERF_EXECUTIONS_PER_SCENARIO).toBe(PERF_RECORDED_RUNS + 1);
-  });
-
-  it('retries a timing-invalid recorded slot and accepts the next valid result', async () => {
-    const attempts: number[] = [];
-    const retry = await retryRecordedAttempt(
-      async attemptNumber => {
-        attempts.push(attemptNumber);
-        return { valid: attemptNumber === 2, timingValid: attemptNumber === 2 };
-      },
-      result => result.valid && result.timingValid,
-      result => !result.timingValid,
-    );
-
-    expect(attempts).toEqual([1, 2]);
-    expect(retry.result?.valid).toBe(true);
-    expect(retry.attempts).toBe(2);
-    expect(retry.rejectedTimingAttempts).toBe(1);
-  });
-
-  it('does not fill a recorded slot when every timing attempt is invalid', async () => {
-    const retry = await retryRecordedAttempt(
-      async () => ({ valid: false, timingValid: false }),
-      result => result.valid && result.timingValid,
-      result => !result.timingValid,
-    );
-
-    expect(retry.result).toBeNull();
-    expect(retry.attempts).toBe(PERF_MAX_RECORDED_RETRIES + 1);
-    expect(retry.rejectedTimingAttempts).toBe(PERF_MAX_RECORDED_RETRIES + 1);
+    expect(plans).toHaveLength(24);
   });
 });

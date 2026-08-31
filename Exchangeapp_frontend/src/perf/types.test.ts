@@ -1,45 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import {
-  isPerfScenarioMessage,
-  PERF_MESSAGE_NAMESPACE,
-  PERF_SCENARIO_COMPLETE,
-  PERF_SCENARIO_ERROR,
-} from './types';
+import type { PerfPendingScenarioEnvelope, PerfRawRun } from './types';
 
-describe('perf postMessage protocol', () => {
-  it('accepts namespaced scenario completion and error messages', () => {
-    expect(isPerfScenarioMessage({
-      namespace: PERF_MESSAGE_NAMESPACE,
-      type: PERF_SCENARIO_COMPLETE,
-      runId: 'scenario-1-run-1',
-      result: {},
-    })).toBe(true);
-    expect(isPerfScenarioMessage({
-      namespace: PERF_MESSAGE_NAMESPACE,
-      type: PERF_SCENARIO_ERROR,
-      runId: 'scenario-1-run-1',
-      error: 'failed',
-    })).toBe(true);
-  });
+describe('performance result contracts', () => {
+  it('keeps execution context separate from performance result metrics', () => {
+    const context: PerfRawRun['executionContext'] = {
+      topLevel: true,
+      visibilityState: 'visible',
+      devicePixelRatio: 1,
+      userAgent: 'test-agent',
+    };
+    const pending: PerfPendingScenarioEnvelope = {
+      schemaVersion: 2,
+      suiteId: 'suite-1',
+      runId: 'run-1',
+      type: 'error',
+      error: 'scenario failed',
+    };
 
-  it('rejects messages with the wrong namespace, source shape, or run ID', () => {
-    expect(isPerfScenarioMessage({
-      namespace: 'other',
-      type: PERF_SCENARIO_ERROR,
-      runId: 'scenario-1-run-1',
-      error: 'failed',
-    })).toBe(false);
-    expect(isPerfScenarioMessage({
-      namespace: PERF_MESSAGE_NAMESPACE,
-      type: PERF_SCENARIO_COMPLETE,
-      runId: '',
-      result: {},
-    })).toBe(false);
-    expect(isPerfScenarioMessage({
-      namespace: PERF_MESSAGE_NAMESPACE,
-      type: PERF_SCENARIO_COMPLETE,
-      runId: 'scenario-1-run-1',
-      result: null,
-    })).toBe(false);
+    expect(context.topLevel).toBe(true);
+    expect(pending.schemaVersion).toBe(2);
+    expect(pending.type).toBe('error');
   });
 });

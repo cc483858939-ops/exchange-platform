@@ -11,6 +11,7 @@
         <button class="perf-runner__run" type="button" :disabled="running" @click="runSuite">
           {{ running ? 'Running matrix…' : suiteResult ? 'Run again' : 'Run full matrix' }}
         </button>
+        <button type="button" :disabled="runnerState.status === 'running'" @click="resetAndStart">Reset / Start New Suite</button>
         <span class="perf-runner__hint">20 / 50 / 100 / 200 / 300 · tracked / untracked</span>
       </div>
     </header>
@@ -18,15 +19,37 @@
     <section class="perf-runner__progress" aria-live="polite">
       <div class="perf-runner__progress-head">
         <strong>{{ currentScenario }}</strong>
-        <span>{{ completedExecutions }} / {{ totalExecutions }} executions</span>
+        <span>{{ completedExecutions }} / {{ totalExecutions }} logical slots</span>
       </div>
-      <div class="perf-runner__progress-track" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
+      <div
+        class="perf-runner__progress-track"
+        role="progressbar"
+        :aria-valuenow="progressPercent"
+        aria-valuemin="0"
+        aria-valuemax="100"
+      >
         <span :style="{ width: `${progressPercent}%` }"></span>
       </div>
       <p v-if="running" class="perf-runner__progress-note">
-        Each scenario gets one warm-up and three timing-valid recorded runs in a fresh visible iframe.
-        Timing-invalid recorded slots retry up to two additional times.
+        Each plan runs as a top-level document with one warm-up and three timing-valid recorded runs.
+        Timing-invalid recorded slots retry through persisted cursor transitions; retries do not add logical slots.
       </p>
+    </section>
+
+    <section v-if="runnerState.status === 'waiting-for-viewport'" class="perf-runner__notice" aria-live="polite">
+      <p class="perf-runner__eyebrow">Viewport required</p>
+      <h2>Waiting for {{ runnerState.viewportRequirement?.viewport }} viewport</h2>
+      <p>
+        Resize the current browser CSS viewport to approximately
+        {{ runnerState.viewportRequirement?.width }} × {{ runnerState.viewportRequirement?.height }} CSS px.
+        The runner will resume automatically after the resize settles.
+      </p>
+    </section>
+
+    <section v-if="runnerState.status === 'failed'" class="perf-runner__notice perf-runner__notice--error" aria-live="assertive">
+      <p class="perf-runner__eyebrow">Benchmark stopped</p>
+      <h2>{{ runnerState.fatalCode || 'RUNNER_FAILED' }}</h2>
+      <p>{{ runnerState.fatalError || 'The performance harness could not continue.' }}</p>
     </section>
 
     <section v-if="suiteResult" class="perf-runner__results">
@@ -58,6 +81,7 @@
       </div>
 
       <div class="perf-runner__exports" aria-label="Export benchmark results">
+        <button type="button" @click="copyFullJson">Copy full baseline JSON</button>
         <button type="button" @click="copyRawJson">Copy raw JSON</button>
         <button type="button" @click="copySummaryJson">Copy summary JSON</button>
         <button type="button" @click="copyMarkdown">Copy Markdown report</button>
@@ -111,7 +135,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   aggregatePerfRuns,
   classifyPerfBaseline,
@@ -120,35 +144,77 @@ import {
 import {
   createPerfScenarioPlans,
   PERF_EXECUTIONS_PER_SCENARIO,
-  PERF_MAX_RECORDED_RETRIES,
-  PERF_RECORDED_RUNS,
-  retryRecordedAttempt,
   scenarioPlanLabel,
   type PerfScenarioPlan,
 } from './runnerPlan';
 import {
-  isPerfScenarioMessage,
+  applyPendingExecution,
+  buildPerfSuiteResult,
+  completeSuite,
+  createSuiteSession,
+  failSuite,
+  getNextExecution,
+  isPerfTopLevelSuiteSession,
+  isViewportWithinTolerance,
+  markViewportWaiting,
+  parsePendingScenarioEnvelope,
+  parseSuiteSession,
+  PERF_PENDING_STORAGE_KEY,
+  PERF_SESSION_STORAGE_KEY,
+  PERF_STORAGE_PROBE_KEY,
+  perfViewportRequirement,
+  prepareNextExecution,
+  serializeSuiteSession,
+  type PerfPendingApplyResult,
+  type PerfScenarioExecution,
+  type PerfTopLevelSuiteSession,
+} from './topLevelSuiteSession';
+import {
   getPerfGitHead,
   type PerfEnvironment,
-  type PerfRawRun,
+  type PerfRunnerState,
   type PerfScenarioConfig,
   type PerfSuiteResult,
 } from './types';
 
 const plans = createPerfScenarioPlans('mixed');
 const totalExecutions = plans.length * PERF_EXECUTIONS_PER_SCENARIO;
-const running = ref(false);
-const completedExecutions = ref(0);
-const currentScenario = ref('Ready to run');
-const rawRuns = ref<PerfRawRun[]>([]);
-const failures = ref<PerfSuiteResult['failures']>([]);
+const session = ref<PerfTopLevelSuiteSession | null>(null);
 const suiteResult = ref<PerfSuiteResult | null>(null);
 const copyStatus = ref('');
-const rejectedTimingAttempts = ref(0);
+const runnerState = ref<PerfRunnerState>({
+  status: 'running',
+  acceptedRuns: 0,
+  completedSlots: 0,
+});
+let resizeTimer: number | undefined;
+let transitionInProgress = false;
+
+const running = computed(() => (
+  session.value?.status === 'running' || session.value?.status === 'waiting-for-viewport'
+));
+
+const completedExecutions = computed(() => (
+  Math.min(totalExecutions, session.value?.completedSlots ?? 0)
+));
 
 const progressPercent = computed(() => (
   totalExecutions > 0 ? Math.round((completedExecutions.value / totalExecutions) * 100) : 0
 ));
+
+const currentScenario = computed(() => {
+  const current = session.value;
+  if (!current) return 'Ready to run';
+  if (current.status === 'waiting-for-viewport') {
+    const plan = plans[current.planIndex];
+    return plan ? `Waiting · ${scenarioPlanLabel(plan)}` : 'Waiting for viewport';
+  }
+  if (current.status === 'failed') return current.fatalCode || 'Benchmark stopped';
+  if (current.status === 'completed') return 'Completed';
+  const plan = plans[current.planIndex];
+  if (!plan) return 'Finalizing';
+  return `${scenarioPlanLabel(plan)} · ${current.phase}${current.phase === 'recorded' ? ` ${current.recordedIndex + 1}/3` : ''}`;
+});
 
 const formatNumber = (value: number | null | undefined): string => (
   typeof value === 'number' && Number.isFinite(value) ? String(Math.round(value)) : 'n/a'
@@ -187,179 +253,330 @@ const captureEnvironment = (): PerfEnvironment => {
   };
 };
 
-const configFor = (plan: PerfScenarioPlan, runId: string): PerfScenarioConfig => ({
-  ...plan,
-  runId,
-});
-
-const runScenarioInFreshFrame = (config: PerfScenarioConfig): Promise<PerfRawRun> => (
-  new Promise((resolve, reject) => {
-    const frame = document.createElement('iframe');
-    const scenarioURL = new URL(window.location.href);
-    scenarioURL.search = '';
-    scenarioURL.hash = '';
-    scenarioURL.searchParams.set('scenario', '1');
-    scenarioURL.searchParams.set('runId', config.runId);
-    scenarioURL.searchParams.set('viewport', config.viewport);
-    scenarioURL.searchParams.set('width', String(config.width));
-    scenarioURL.searchParams.set('height', String(config.height));
-    scenarioURL.searchParams.set('count', String(config.count));
-    scenarioURL.searchParams.set('trackView', String(config.trackView));
-    scenarioURL.searchParams.set('fixture', config.fixture);
-    scenarioURL.searchParams.set('runType', config.runType);
-    if (typeof config.appendFrom === 'number') {
-      scenarioURL.searchParams.set('appendFrom', String(config.appendFrom));
-    }
-
-    frame.className = 'perf-runner__scenario-frame';
-    frame.title = 'Long-list performance scenario';
-    frame.style.position = 'fixed';
-    frame.style.left = '0';
-    frame.style.top = '0';
-    frame.style.width = `${config.width}px`;
-    frame.style.height = `${config.height}px`;
-    frame.style.border = '0';
-    // The active scenario must be genuinely visible. This iframe temporarily covers
-    // the runner so Chromium treats its requestAnimationFrame cadence as foreground.
-    frame.style.opacity = '1';
-    frame.style.visibility = 'visible';
-    frame.style.display = 'block';
-    frame.style.pointerEvents = 'none';
-    frame.style.zIndex = '2147483647';
-    frame.style.background = 'var(--color-bg, #ffffff)';
-
-    let settled = false;
-    const timeoutID = window.setTimeout(() => {
-      settleReject(new Error('scenario timed out after 60 seconds'));
-    }, 60_000);
-
-    const cleanup = () => {
-      window.clearTimeout(timeoutID);
-      window.removeEventListener('message', handleMessage);
-      frame.remove();
-    };
-    const settleResolve = (result: PerfRawRun) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(result);
-    };
-    const settleReject = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    const handleMessage = (event: MessageEvent<unknown>) => {
-      if (event.source !== frame.contentWindow || event.origin !== window.location.origin) {
-        return;
+const publishRunnerState = (
+  current: PerfTopLevelSuiteSession | null,
+  viewportRequirement?: PerfRunnerState['viewportRequirement'],
+): void => {
+  const effectiveViewportRequirement = current?.status === 'waiting-for-viewport'
+    ? viewportRequirement
+      ?? (plans[current.planIndex] ? perfViewportRequirement(plans[current.planIndex].viewport) : undefined)
+    : viewportRequirement;
+  const nextState: PerfRunnerState = current
+    ? {
+        status: current.status,
+        ...(current.fatalCode ? { fatalCode: current.fatalCode } : {}),
+        ...(current.fatalError ? { fatalError: current.fatalError } : {}),
+        acceptedRuns: current.rawRuns.length,
+        completedSlots: Math.min(totalExecutions, current.completedSlots),
+        ...(effectiveViewportRequirement ? { viewportRequirement: effectiveViewportRequirement } : {}),
       }
-      if (!isPerfScenarioMessage(event.data) || event.data.runId !== config.runId) {
-        return;
-      }
-      if (event.data.type === 'scenario-error') {
-        settleReject(new Error(event.data.error));
-        return;
-      }
-      settleResolve(event.data.result);
-    };
+    : {
+        status: runnerState.value.status,
+        ...(runnerState.value.fatalCode ? { fatalCode: runnerState.value.fatalCode } : {}),
+        ...(runnerState.value.fatalError ? { fatalError: runnerState.value.fatalError } : {}),
+        acceptedRuns: 0,
+        completedSlots: 0,
+      };
+  runnerState.value = nextState;
+  window.__EXCHANGE_PERF_RUNNER_STATE__ = nextState;
+  if (effectiveViewportRequirement) {
+    window.__EXCHANGE_PERF_VIEWPORT_REQUIREMENT__ = effectiveViewportRequirement;
+  } else {
+    window.__EXCHANGE_PERF_VIEWPORT_REQUIREMENT__ = undefined;
+  }
+};
 
-    window.addEventListener('message', handleMessage);
-    frame.src = scenarioURL.toString();
-    document.body.appendChild(frame);
-  })
-);
-
-const runSuite = async () => {
-  if (running.value) return;
-  running.value = true;
-  completedExecutions.value = 0;
-  currentScenario.value = 'Starting matrix';
-  rawRuns.value = [];
-  failures.value = [];
-  rejectedTimingAttempts.value = 0;
+const setRunnerFailure = (code: string, error: string, persist = true): void => {
   suiteResult.value = null;
-  copyStatus.value = '';
   window.__EXCHANGE_PERF_RESULT__ = undefined;
-  const environment = captureEnvironment();
-
-  for (let planIndex = 0; planIndex < plans.length; planIndex += 1) {
-    const plan = plans[planIndex];
-    currentScenario.value = scenarioPlanLabel(plan);
-    const warmupRunId = `scenario-${planIndex + 1}-warmup`;
-    try {
-      const warmupResult = await runScenarioInFreshFrame(configFor(plan, warmupRunId));
-      if (!warmupResult.timingHealth.valid) {
-        rejectedTimingAttempts.value += 1;
-      } else if (!warmupResult.validation.valid) {
-        failures.value.push({
-          scenario: scenarioPlanLabel(plan),
-          phase: 'warm-up',
-          error: warmupResult.validation.issues.join('; ') || 'warm-up validation failed',
-        });
+  if (session.value) {
+    const failed = failSuite(session.value, code, error);
+    session.value = failed;
+    if (persist) {
+      try {
+        window.sessionStorage.setItem(PERF_SESSION_STORAGE_KEY, serializeSuiteSession(failed));
+      } catch {
+        // The machine-readable in-memory state remains available when persistence fails.
       }
-    } catch (error) {
-      failures.value.push({
-        scenario: scenarioPlanLabel(plan),
-        phase: 'warm-up',
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      completedExecutions.value += 1;
+    }
+    publishRunnerState(failed);
+    return;
+  }
+  runnerState.value = {
+    status: 'failed',
+    fatalCode: code,
+    fatalError: error,
+    acceptedRuns: 0,
+    completedSlots: 0,
+  };
+  publishRunnerState(null);
+};
+
+const probeSessionStorage = (): boolean => {
+  try {
+    const probeValue = `${Date.now()}-${Math.random()}`;
+    window.sessionStorage.setItem(PERF_STORAGE_PROBE_KEY, probeValue);
+    const available = window.sessionStorage.getItem(PERF_STORAGE_PROBE_KEY) === probeValue;
+    window.sessionStorage.removeItem(PERF_STORAGE_PROBE_KEY);
+    return available;
+  } catch {
+    return false;
+  }
+};
+
+const removeOwnedStorage = (): boolean => {
+  try {
+    window.sessionStorage.removeItem(PERF_SESSION_STORAGE_KEY);
+    window.sessionStorage.removeItem(PERF_PENDING_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const persistSession = (current: PerfTopLevelSuiteSession): boolean => {
+  try {
+    window.sessionStorage.setItem(PERF_SESSION_STORAGE_KEY, serializeSuiteSession(current));
+    return true;
+  } catch {
+    setRunnerFailure(
+      'SESSION_STORAGE_UNAVAILABLE',
+      'The performance suite could not persist its top-level navigation state.',
+      false,
+    );
+    return false;
+  }
+};
+
+const readStoredSession = (): PerfTopLevelSuiteSession | null => {
+  try {
+    return parseSuiteSession(window.sessionStorage.getItem(PERF_SESSION_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+};
+
+const removePending = (): boolean => {
+  try {
+    window.sessionStorage.removeItem(PERF_PENDING_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const buildScenarioURL = (
+  currentSession: PerfTopLevelSuiteSession,
+  execution: PerfScenarioExecution,
+): string => {
+  const scenarioURL = new URL(window.location.href);
+  scenarioURL.search = '';
+  scenarioURL.hash = '';
+  scenarioURL.searchParams.set('scenario', '1');
+  scenarioURL.searchParams.set('suiteId', currentSession.suiteId);
+  scenarioURL.searchParams.set('runId', execution.runId);
+  scenarioURL.searchParams.set('viewport', execution.plan.viewport);
+  scenarioURL.searchParams.set('width', String(execution.plan.width));
+  scenarioURL.searchParams.set('height', String(execution.plan.height));
+  scenarioURL.searchParams.set('count', String(execution.plan.count));
+  scenarioURL.searchParams.set('trackView', String(execution.plan.trackView));
+  scenarioURL.searchParams.set('fixture', execution.plan.fixture);
+  scenarioURL.searchParams.set('runType', execution.plan.runType);
+  if (typeof execution.plan.appendFrom === 'number') {
+    scenarioURL.searchParams.set('appendFrom', String(execution.plan.appendFrom));
+  }
+  return scenarioURL.toString();
+};
+
+const completeCurrentSuite = (current: PerfTopLevelSuiteSession): void => {
+  const summary = aggregatePerfRuns(current.rawRuns);
+  const decision = classifyPerfBaseline(current.rawRuns, summary);
+  const result = buildPerfSuiteResult(current, summary, decision);
+  const completed = completeSuite(current);
+  if (!persistSession(completed)) return;
+  session.value = completed;
+  suiteResult.value = result;
+  window.__EXCHANGE_PERF_RESULT__ = result;
+  publishRunnerState(completed);
+};
+
+const continueSuite = (): void => {
+  if (transitionInProgress || !session.value) return;
+  if (session.value.status === 'failed' || session.value.status === 'completed') return;
+  transitionInProgress = true;
+  try {
+    const current = session.value;
+    const runnable = current.status === 'waiting-for-viewport'
+      ? { ...current, status: 'running' as const }
+      : current;
+    const next = getNextExecution(runnable, plans);
+    if (!next) {
+      completeCurrentSuite(runnable);
+      return;
     }
 
-    for (let recordedIndex = 0; recordedIndex < PERF_RECORDED_RUNS; recordedIndex += 1) {
-      const retry = await retryRecordedAttempt(
-        attemptNumber => runScenarioInFreshFrame(configFor(
-          plan,
-          `scenario-${planIndex + 1}-recorded-${recordedIndex + 1}-attempt-${attemptNumber}`,
-        )),
-        result => result.validation.valid && result.timingHealth.valid,
-        result => !result.timingHealth.valid,
-        PERF_MAX_RECORDED_RETRIES,
-      );
-      rejectedTimingAttempts.value += retry.rejectedTimingAttempts;
-      if (retry.result) {
-        rawRuns.value.push(retry.result);
-      } else {
-        const resultError = retry.lastResult?.validation.issues.join('; ')
-          || retry.error
-          || 'no timing-valid result was recorded';
-        failures.value.push({
-          scenario: scenarioPlanLabel(plan),
-          phase: 'recorded',
-          error: `${resultError} (after ${retry.attempts} attempt${retry.attempts === 1 ? '' : 's'})`,
-        });
+    const requirement = perfViewportRequirement(next.plan.viewport);
+    if (!isViewportWithinTolerance(
+      window.innerWidth,
+      window.innerHeight,
+      requirement.width,
+      requirement.height,
+      requirement.tolerance,
+    )) {
+      const waiting = markViewportWaiting(current, requirement);
+      if (!persistSession(waiting)) return;
+      session.value = waiting;
+      publishRunnerState(waiting, requirement);
+      return;
+    }
+
+    const prepared = prepareNextExecution(runnable, plans);
+    if (!prepared.execution) {
+      completeCurrentSuite(runnable);
+      return;
+    }
+    if (!persistSession(prepared.session)) return;
+    session.value = prepared.session;
+    publishRunnerState(prepared.session);
+    window.location.replace(buildScenarioURL(prepared.session, prepared.execution));
+  } finally {
+    transitionInProgress = false;
+  }
+};
+
+const consumePendingAndContinue = (): void => {
+  const current = session.value;
+  if (!current) return;
+  let pendingRaw: string | null;
+  try {
+    pendingRaw = window.sessionStorage.getItem(PERF_PENDING_STORAGE_KEY);
+  } catch {
+    setRunnerFailure(
+      'SESSION_STORAGE_UNAVAILABLE',
+      'The performance suite could not read its top-level navigation state.',
+      false,
+    );
+    return;
+  }
+
+  if (pendingRaw !== null) {
+    const pending = parsePendingScenarioEnvelope(pendingRaw);
+    if (!pending) {
+      removePending();
+      setRunnerFailure('INVALID_PENDING_STATE', 'The pending scenario envelope is invalid or corrupt.');
+      return;
+    }
+    if (current.processedRunIds.includes(pending.runId)) {
+      if (!removePending()) {
+        setRunnerFailure('SESSION_STORAGE_UNAVAILABLE', 'The duplicate pending scenario could not be removed.');
+        return;
       }
-      completedExecutions.value += 1;
+    } else {
+      const applied: PerfPendingApplyResult = applyPendingExecution(current, pending, plans);
+      if (applied.rejected) {
+        removePending();
+        setRunnerFailure('PENDING_CORRELATION_MISMATCH', applied.error || 'Pending scenario was rejected.');
+        return;
+      }
+      session.value = applied.session;
+      publishRunnerState(applied.session);
+      if (!persistSession(applied.session)) return;
+      if (!removePending()) {
+        setRunnerFailure('SESSION_STORAGE_UNAVAILABLE', 'The pending scenario could not be removed after persistence.');
+        return;
+      }
     }
   }
 
-  const summary = aggregatePerfRuns(rawRuns.value);
-  const decision = classifyPerfBaseline(rawRuns.value, summary);
-  const result: PerfSuiteResult = {
-    status: 'completed',
-    measuredHarnessHead: environment.gitHead,
-    environment,
-    rawRuns: rawRuns.value,
-    summary,
-    classification: decision.classification,
-    bottleneck: decision.bottleneck,
-    recommendation: decision.recommendation,
-    failures: failures.value,
-    rejectedTimingAttempts: rejectedTimingAttempts.value,
-  };
-  suiteResult.value = result;
-  window.__EXCHANGE_PERF_RESULT__ = result;
-  currentScenario.value = failures.value.length > 0
-    ? 'Completed with failures'
-    : rejectedTimingAttempts.value > 0
-      ? 'Completed with rejected timing attempts'
-      : 'Completed';
-  running.value = false;
+  const afterPending = session.value;
+  if (!afterPending) return;
+  if (afterPending.status === 'failed') {
+    publishRunnerState(afterPending);
+    return;
+  }
+  if (afterPending.status === 'completed') {
+    restoreCompletedResult(afterPending);
+    return;
+  }
+  continueSuite();
 };
 
-const copyText = async (label: string, value: string) => {
+const restoreCompletedResult = (current: PerfTopLevelSuiteSession): void => {
+  const summary = aggregatePerfRuns(current.rawRuns);
+  const decision = classifyPerfBaseline(current.rawRuns, summary);
+  const result = buildPerfSuiteResult(current, summary, decision);
+  suiteResult.value = result;
+  window.__EXCHANGE_PERF_RESULT__ = result;
+  publishRunnerState(current);
+};
+
+const startNewSuite = (): void => {
+  if (running.value) return;
+  suiteResult.value = null;
+  copyStatus.value = '';
+  window.__EXCHANGE_PERF_RESULT__ = undefined;
+  if (!probeSessionStorage()) {
+    setRunnerFailure('SESSION_STORAGE_UNAVAILABLE', 'sessionStorage is unavailable for the top-level performance suite.', false);
+    return;
+  }
+  if (!removeOwnedStorage()) {
+    setRunnerFailure('SESSION_STORAGE_UNAVAILABLE', 'The performance suite could not reset its owned session state.', false);
+    return;
+  }
+  const suiteId = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const fresh = createSuiteSession({
+    suiteId,
+    harnessHead: getPerfGitHead(),
+    environment: captureEnvironment(),
+  });
+  session.value = fresh;
+  publishRunnerState(fresh);
+  if (!persistSession(fresh)) return;
+  continueSuite();
+};
+
+const resumeSuite = (): void => {
+  if (!probeSessionStorage()) {
+    setRunnerFailure('SESSION_STORAGE_UNAVAILABLE', 'sessionStorage is unavailable for the top-level performance suite.', false);
+    return;
+  }
+  const stored = readStoredSession();
+  if (!stored || !isPerfTopLevelSuiteSession(stored)) {
+    setRunnerFailure('NO_RESUMABLE_SESSION', 'No valid v2 performance suite session is available to resume.', false);
+    return;
+  }
+  session.value = stored;
+  suiteResult.value = null;
+  window.__EXCHANGE_PERF_RESULT__ = undefined;
+  publishRunnerState(stored);
+  consumePendingAndContinue();
+};
+
+const runSuite = (): void => {
+  startNewSuite();
+};
+
+const resetAndStart = (): void => {
+  if (resizeTimer !== undefined) {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = undefined;
+  }
+  session.value = null;
+  suiteResult.value = null;
+  copyStatus.value = '';
+  window.__EXCHANGE_PERF_RESULT__ = undefined;
+  if (!removeOwnedStorage()) {
+    setRunnerFailure('SESSION_STORAGE_UNAVAILABLE', 'The performance suite could not remove its owned session state.', false);
+    return;
+  }
+  runnerState.value = { status: 'running', acceptedRuns: 0, completedSlots: 0 };
+  publishRunnerState(null);
+  startNewSuite();
+};
+
+const copyText = async (label: string, value: string): Promise<void> => {
   try {
     await navigator.clipboard.writeText(value);
     copyStatus.value = `${label} copied`;
@@ -368,28 +585,54 @@ const copyText = async (label: string, value: string) => {
   }
 };
 
-const copyRawJson = () => {
-  if (suiteResult.value) {
-    void copyText('Raw JSON', JSON.stringify(suiteResult.value.rawRuns, null, 2));
-  }
+const copyFullJson = (): void => {
+  if (suiteResult.value) void copyText('Full baseline JSON', JSON.stringify(suiteResult.value, null, 2));
 };
 
-const copySummaryJson = () => {
-  if (suiteResult.value) {
-    void copyText('Summary JSON', JSON.stringify(suiteResult.value.summary, null, 2));
-  }
+const copyRawJson = (): void => {
+  if (suiteResult.value) void copyText('Raw JSON', JSON.stringify(suiteResult.value.rawRuns, null, 2));
 };
 
-const copyMarkdown = () => {
-  if (suiteResult.value) {
-    void copyText('Markdown report', serializePerfMarkdown(suiteResult.value));
-  }
+const copySummaryJson = (): void => {
+  if (suiteResult.value) void copyText('Summary JSON', JSON.stringify(suiteResult.value.summary, null, 2));
+};
+
+const copyMarkdown = (): void => {
+  if (suiteResult.value) void copyText('Markdown report', serializePerfMarkdown(suiteResult.value));
+};
+
+const handleResize = (): void => {
+  if (session.value?.status !== 'waiting-for-viewport') return;
+  if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
+  resizeTimer = window.setTimeout(() => {
+    resizeTimer = undefined;
+    if (!session.value || session.value.status !== 'waiting-for-viewport') return;
+    continueSuite();
+  }, 250);
 };
 
 onMounted(() => {
-  if (new URLSearchParams(window.location.search).get('autorun') === '1') {
-    void runSuite();
+  window.addEventListener('resize', handleResize);
+  publishRunnerState(null);
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('autorun') !== '1') {
+    const stored = readStoredSession();
+    if (stored?.status === 'completed') {
+      session.value = stored;
+      restoreCompletedResult(stored);
+    }
+    return;
   }
+  if (params.get('resume') === '1') {
+    resumeSuite();
+  } else {
+    startNewSuite();
+  }
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize);
+  if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
 });
 </script>
 
@@ -512,6 +755,29 @@ onMounted(() => {
 
 .perf-runner__progress-note {
   margin: var(--space-2) 0 0;
+}
+
+.perf-runner__notice {
+  margin-top: 40px;
+  padding: var(--space-6);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.perf-runner__notice p:last-child {
+  margin-bottom: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+}
+
+.perf-runner__notice--error {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+}
+
+.perf-runner__notice--error .perf-runner__eyebrow,
+.perf-runner__notice--error h2 {
+  color: var(--color-danger);
 }
 
 .perf-runner__results {

@@ -17,65 +17,7 @@ export const PERF_MODES = [
 export const PERF_RECORDED_RUNS = 3;
 export const PERF_EXECUTIONS_PER_SCENARIO = PERF_RECORDED_RUNS + 1;
 export const PERF_MAX_RECORDED_RETRIES = 2;
-
-export interface PerfRetryResult<T> {
-  result: T | null;
-  lastResult: T | null;
-  attempts: number;
-  rejectedTimingAttempts: number;
-  error: string | null;
-}
-
-export async function retryRecordedAttempt<T>(
-  attempt: (attemptNumber: number) => Promise<T>,
-  isValid: (result: T) => boolean,
-  isTimingInvalid: (result: T) => boolean,
-  maxRetries = PERF_MAX_RECORDED_RETRIES,
-): Promise<PerfRetryResult<T>> {
-  const maxAttempts = Math.max(1, maxRetries + 1);
-  let lastResult: T | null = null;
-  let rejectedTimingAttempts = 0;
-  let attempts = 0;
-
-  for (let attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber += 1) {
-    attempts = attemptNumber;
-    try {
-      const result = await attempt(attemptNumber);
-      lastResult = result;
-      if (isValid(result)) {
-        return {
-          result,
-          lastResult,
-          attempts,
-          rejectedTimingAttempts,
-          error: null,
-        };
-      }
-      if (!isTimingInvalid(result)) {
-        break;
-      }
-      rejectedTimingAttempts += 1;
-    } catch (error) {
-      return {
-        result: null,
-        lastResult,
-        attempts,
-        rejectedTimingAttempts,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  return {
-    result: null,
-    lastResult,
-    attempts,
-    rejectedTimingAttempts,
-    error: null,
-  };
-}
-
-export type PerfScenarioPlan = Omit<PerfScenarioConfig, 'runId'>;
+export type PerfScenarioPlan = Omit<PerfScenarioConfig, 'suiteId' | 'runId'>;
 
 const isAppendBase = (count: number): boolean => (
   (PERF_APPEND_BASES as readonly number[]).includes(count)

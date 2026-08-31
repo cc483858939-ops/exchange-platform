@@ -1,13 +1,12 @@
-export const PERF_MESSAGE_NAMESPACE = 'exchange-platform.perf.v1' as const;
-export const PERF_SCENARIO_COMPLETE = 'scenario-complete' as const;
-export const PERF_SCENARIO_ERROR = 'scenario-error' as const;
-
 export type PerfViewport = 'desktop' | 'mobile';
 export type PerfFixture = 'mixed' | 'text-only';
 export type PerfRunType = 'matrix' | 'append';
 export type PerfClassification = 'GREEN' | 'YELLOW' | 'RED' | 'MEASUREMENT NOT VERIFIED';
+export type PerfSuiteStatus = 'running' | 'waiting-for-viewport' | 'completed' | 'failed';
+export type PerfSuitePhase = 'warmup' | 'recorded';
 
 export interface PerfScenarioConfig {
+  suiteId: string;
   runId: string;
   viewport: PerfViewport;
   width: number;
@@ -29,6 +28,13 @@ export interface PerfRawScenario {
   trackView: boolean;
   fixture: PerfFixture;
   runType: PerfRunType;
+}
+
+export interface PerfExecutionContext {
+  topLevel: boolean;
+  visibilityState: DocumentVisibilityState;
+  devicePixelRatio: number;
+  userAgent: string;
 }
 
 export interface PerfRenderMetrics {
@@ -115,6 +121,7 @@ export interface PerfValidation {
 
 export interface PerfRawRun {
   scenario: PerfRawScenario;
+  executionContext: PerfExecutionContext;
   render: PerfRenderMetrics;
   append: PerfAppendMetrics;
   scroll: PerfScrollMetrics;
@@ -220,25 +227,38 @@ export interface PerfSuiteResult {
   rejectedTimingAttempts: number;
 }
 
-export type PerfScenarioMessage =
-  | {
-      namespace: typeof PERF_MESSAGE_NAMESPACE;
-      type: typeof PERF_SCENARIO_COMPLETE;
-      runId: string;
-      result: PerfRawRun;
-    }
-  | {
-      namespace: typeof PERF_MESSAGE_NAMESPACE;
-      type: typeof PERF_SCENARIO_ERROR;
-      runId: string;
-      error: string;
-    };
+export interface PerfPendingScenarioEnvelope {
+  schemaVersion: 2;
+  suiteId: string;
+  runId: string;
+  type: 'result' | 'error';
+  result?: PerfRawRun;
+  error?: string;
+}
+
+export interface PerfViewportRequirement {
+  viewport: PerfViewport;
+  width: number;
+  height: number;
+  tolerance: number;
+}
+
+export interface PerfRunnerState {
+  status: PerfSuiteStatus;
+  fatalCode?: string;
+  fatalError?: string;
+  acceptedRuns: number;
+  completedSlots: number;
+  viewportRequirement?: PerfViewportRequirement;
+}
 
 declare const __EXCHANGE_PERF_GIT_HEAD__: string;
 
 declare global {
   interface Window {
     __EXCHANGE_PERF_RESULT__?: PerfSuiteResult;
+    __EXCHANGE_PERF_RUNNER_STATE__?: PerfRunnerState;
+    __EXCHANGE_PERF_VIEWPORT_REQUIREMENT__?: PerfViewportRequirement;
   }
 }
 
@@ -247,22 +267,3 @@ export const getPerfGitHead = (): string => (
     ? __EXCHANGE_PERF_GIT_HEAD__.trim()
     : 'unknown'
 );
-
-const isRecord = (value: unknown): value is Record<string, unknown> => (
-  Boolean(value) && typeof value === 'object'
-);
-
-export const isPerfScenarioMessage = (value: unknown): value is PerfScenarioMessage => {
-  if (!isRecord(value)
-    || value.namespace !== PERF_MESSAGE_NAMESPACE
-    || typeof value.runId !== 'string'
-    || value.runId.trim() === '') {
-    return false;
-  }
-
-  if (value.type === PERF_SCENARIO_COMPLETE) {
-    return isRecord(value.result);
-  }
-
-  return value.type === PERF_SCENARIO_ERROR && typeof value.error === 'string';
-};
