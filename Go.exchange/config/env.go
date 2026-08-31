@@ -253,8 +253,8 @@ func RecommendationTelemetryEventsPerMinute() int {
 	return limit
 }
 
-func ArticleViewEventsPerMinute() int {
-	limit := envInt("ARTICLE_VIEW_EVENTS_PER_MINUTE", 300)
+func PostViewEventsPerMinute() int {
+	limit := envInt("POST_VIEW_EVENTS_PER_MINUTE", 300)
 	if limit < 1 {
 		return 1
 	}

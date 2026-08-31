@@ -28,7 +28,7 @@ type cacheTestPayload struct {
 // TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses 测试在缓存未命中时，
 // 多个并发请求同一个 Key 是否能通过 Singleflight 机制确保只有一个请求执行回源加载逻辑。
 func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
-	articleCacheGroup = singleflight.Group{}
+	postCacheGroup = singleflight.Group{}
 
 	var loads atomic.Int32
 	var mu sync.Mutex
@@ -71,7 +71,7 @@ func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
 			defer wg.Done()
 			<-start
 
-			payload, err := loadJSONCacheWithStore("article:detail:42", time.Minute, getter, setter, loader)
+			payload, err := loadJSONCacheWithStore("post:detail:42", time.Minute, getter, setter, loader)
 			if err != nil {
 				errs <- err
 				return
@@ -98,7 +98,7 @@ func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
 // TestLoadJSONCacheWithStoreSeparatesDifferentKeys 测试不同 Key 的请求是否能正确分离，
 // 即每个 Key 都会触发各自的回源加载。
 func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
-	articleCacheGroup = singleflight.Group{}
+	postCacheGroup = singleflight.Group{}
 
 	var loads atomic.Int32
 	var mu sync.Mutex
@@ -132,7 +132,7 @@ func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
-	keys := []string{"article:detail:7", "article:detail:8"}
+	keys := []string{"post:detail:7", "post:detail:8"}
 	for _, key := range keys {
 		key := key
 		wg.Add(1)
@@ -161,8 +161,8 @@ func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
 		t.Fatalf("expected loader to run once per cache key, got %d", loads.Load())
 	}
 }
-func TestLoadJSONCacheWithStorePreservesArticleAuthorDTO(t *testing.T) {
-	articleCacheGroup = singleflight.Group{}
+func TestLoadJSONCacheWithStorePreservesPostAuthorDTO(t *testing.T) {
+	postCacheGroup = singleflight.Group{}
 	cache := map[string]string{}
 	loads := 0
 	getter := func(key string) (string, error) {
@@ -176,34 +176,35 @@ func TestLoadJSONCacheWithStorePreservesArticleAuthorDTO(t *testing.T) {
 		cache[key] = string(payload)
 		return nil
 	}
-	loader := func() (articleResponse, error) {
+	loader := func() (postResponse, error) {
 		loads++
-		return articleResponse{
-			ID:           42,
-			Title:        "cached article",
-			LikeCount:    11,
-			CommentCount: 3,
-			Author:       publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "/api/files/profile-avatars/7/avatar.jpg"},
+		return postResponse{
+			ID:         42,
+			Article:    &postArticleResponse{Title: "cached article"},
+			Visibility: "public",
+			LikeCount:  11,
+			ReplyCount: 3,
+			Author:     publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "/api/files/profile-avatars/7/avatar.jpg"},
 		}, nil
 	}
 
-	miss, err := loadJSONCacheWithStore("article:detail:v4:42", time.Minute, getter, setter, loader)
+	miss, err := loadJSONCacheWithStore("post:detail:v1:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hit, err := loadJSONCacheWithStore("article:detail:v4:42", time.Minute, getter, setter, loader)
+	hit, err := loadJSONCacheWithStore("post:detail:v1:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if loads != 1 {
 		t.Fatalf("loader calls=%d want 1", loads)
 	}
-	if miss.Author != hit.Author || hit.Author.ID != 7 || hit.Author.Username != "alice" || hit.Author.DisplayName != "Alice Chen" || hit.Author.AvatarURL != "/api/files/profile-avatars/7/avatar.jpg" || miss.LikeCount != 11 || hit.LikeCount != 11 || miss.CommentCount != 3 || hit.CommentCount != 3 {
+	if miss.Author != hit.Author || hit.Author.ID != 7 || hit.Author.Username != "alice" || hit.Author.DisplayName != "Alice Chen" || hit.Author.AvatarURL != "/api/files/profile-avatars/7/avatar.jpg" || miss.LikeCount != 11 || hit.LikeCount != 11 || miss.ReplyCount != 3 || hit.ReplyCount != 3 {
 		t.Fatalf("author was not preserved across cache hit: miss=%+v hit=%+v", miss.Author, hit.Author)
 	}
 }
 
-func TestHydrateArticleResponseAuthorsDeduplicatesAndPreservesArticleFields(t *testing.T) {
+func TestHydratePostResponseAuthorsDeduplicatesAndPreservesPostFields(t *testing.T) {
 	originalLoader := loadPublicAuthorsByIDs
 	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
 	var requested []uint
@@ -215,13 +216,13 @@ func TestHydrateArticleResponseAuthorsDeduplicatesAndPreservesArticleFields(t *t
 		}, nil
 	}
 
-	responses := []articleResponse{
-		{ID: 101, Title: "first", Content: "one", LikeCount: 4, CommentCount: 2, Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old", AvatarURL: "old.jpg"}},
-		{ID: 102, Title: "second", Content: "two", LikeCount: 5, CommentCount: 3, Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old", AvatarURL: "old.jpg"}},
-		{ID: 103, Title: "third", Content: "three", LikeCount: 6, CommentCount: 4, Author: publicAuthorResponse{ID: 8, Username: "bob", DisplayName: "Old Bob", AvatarURL: "old-bob.jpg"}},
+	responses := []postResponse{
+		{ID: 101, Article: &postArticleResponse{Title: "first"}, Content: "one", LikeCount: 4, ReplyCount: 2, Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old", AvatarURL: "old.jpg"}},
+		{ID: 102, Article: &postArticleResponse{Title: "second"}, Content: "two", LikeCount: 5, ReplyCount: 3, Author: publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Old", AvatarURL: "old.jpg"}},
+		{ID: 103, Article: &postArticleResponse{Title: "third"}, Content: "three", LikeCount: 6, ReplyCount: 4, Author: publicAuthorResponse{ID: 8, Username: "bob", DisplayName: "Old Bob", AvatarURL: "old-bob.jpg"}},
 	}
 
-	if err := hydrateArticleResponseAuthors(responses); err != nil {
+	if err := hydratePostResponseAuthors(responses); err != nil {
 		t.Fatal(err)
 	}
 	if len(requested) != 2 || requested[0] != 7 || requested[1] != 8 {
@@ -230,12 +231,12 @@ func TestHydrateArticleResponseAuthorsDeduplicatesAndPreservesArticleFields(t *t
 	if responses[0].Author.DisplayName != "Alice Chen" || responses[0].Author.AvatarURL != "new.jpg" || responses[1].Author != responses[0].Author {
 		t.Fatalf("current author identity was not applied: %#v", responses)
 	}
-	if responses[0].ID != 101 || responses[0].Title != "first" || responses[0].Content != "one" || responses[0].LikeCount != 4 || responses[0].CommentCount != 2 || responses[2].ID != 103 {
+	if responses[0].ID != 101 || responses[0].Article == nil || responses[0].Article.Title != "first" || responses[0].Content != "one" || responses[0].LikeCount != 4 || responses[0].ReplyCount != 2 || responses[2].ID != 103 {
 		t.Fatalf("non-author article fields changed: %#v", responses)
 	}
 }
 
-func TestHydrateArticleResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
+func TestHydratePostResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
 	originalLoader := loadPublicAuthorsByIDs
 	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
 	var requested []uint
@@ -246,12 +247,12 @@ func TestHydrateArticleResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
 			8: {ID: 8, Username: "bob"},
 		}, nil
 	}
-	responses := []articleResponse{
+	responses := []postResponse{
 		{Author: publicAuthorResponse{ID: 7}},
 		{Author: publicAuthorResponse{ID: 7}},
 		{Author: publicAuthorResponse{ID: 8}},
 	}
-	if err := hydrateArticleResponseAuthors(responses); err != nil {
+	if err := hydratePostResponseAuthors(responses); err != nil {
 		t.Fatal(err)
 	}
 	if len(requested) != 2 || requested[0] != 7 || requested[1] != 8 {
@@ -259,14 +260,14 @@ func TestHydrateArticleResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
 	}
 }
 
-func TestHydrateArticleResponseAuthorsRejectsMissingAuthor(t *testing.T) {
+func TestHydratePostResponseAuthorsRejectsMissingAuthor(t *testing.T) {
 	originalLoader := loadPublicAuthorsByIDs
 	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
 	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
 		return map[uint]publicAuthorResponse{}, nil
 	}
-	responses := []articleResponse{{Author: publicAuthorResponse{ID: 7, Username: "stale"}}}
-	if err := hydrateArticleResponseAuthors(responses); err == nil {
+	responses := []postResponse{{Author: publicAuthorResponse{ID: 7, Username: "stale"}}}
+	if err := hydratePostResponseAuthors(responses); err == nil {
 		t.Fatal("expected missing author hydration to fail")
 	}
 	if responses[0].Author.Username != "stale" {
@@ -274,12 +275,12 @@ func TestHydrateArticleResponseAuthorsRejectsMissingAuthor(t *testing.T) {
 	}
 }
 
-func TestLoadArticleDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *testing.T) {
-	originalCacheLoader := loadArticleDetailCache
+func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *testing.T) {
+	originalCacheLoader := loadPostDetailCache
 	originalAuthorLoader := loadPublicAuthorsByIDs
 	originalDB := global.Db
 	t.Cleanup(func() {
-		loadArticleDetailCache = originalCacheLoader
+		loadPostDetailCache = originalCacheLoader
 		loadPublicAuthorsByIDs = originalAuthorLoader
 		global.Db = originalDB
 	})
@@ -290,15 +291,15 @@ func TestLoadArticleDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(
 		return nil, nil
 	}
 	now := time.Now().UTC()
-	cached := articleResponse{
-		PublicationState: consts.ArticlePublicationStatePublished,
-		PublishedAt:      &now,
-		ID:               123,
-		Title:            "cached article",
-		Author:           publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Cached Alice", AvatarURL: "cached.jpg"},
+	cached := postResponse{
+		PublishedAt: &now,
+		ID:          123,
+		Article:     &postArticleResponse{Title: "cached article", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now},
+		Visibility:  "public",
+		Author:      publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Cached Alice", AvatarURL: "cached.jpg"},
 	}
-	loadArticleDetailCache = func(key string, loader func() (articleResponse, error)) (articleResponse, error) {
-		if key != articleDetailCacheKey("123") {
+	loadPostDetailCache = func(key string, loader func() (postResponse, error)) (postResponse, error) {
+		if key != postDetailCacheKey("123") {
 			t.Fatalf("unexpected article detail cache key: %q", key)
 		}
 		payload, err := json.Marshal(cached)
@@ -307,14 +308,14 @@ func TestLoadArticleDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(
 		}
 		return loadJSONCacheWithStore(
 			key,
-			articleCacheTTL,
+			postCacheTTL,
 			func(string) (string, error) { return string(payload), nil },
 			func(string, []byte, time.Duration) error { return nil },
 			loader,
 		)
 	}
 
-	returned, err := loadArticleDetail("123")
+	returned, err := loadPostDetail("123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,9 +324,9 @@ func TestLoadArticleDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(
 	}
 }
 
-func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testing.T) {
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 	fixture.Author.DisplayName = "Database Alice"
 	fixture.Author.AvatarURL = "database.jpg"
 	if err := db.Model(&models.User{}).Where("id = ?", fixture.Author.ID).Updates(map[string]any{
@@ -335,18 +336,18 @@ func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *tes
 		t.Fatal(err)
 	}
 
-	queryLogger := &articleDetailSQLLogger{Interface: logger.Default}
+	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
 	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
-	originalCacheLoader := loadArticleDetailCache
-	t.Cleanup(func() { loadArticleDetailCache = originalCacheLoader })
+	originalCacheLoader := loadPostDetailCache
+	t.Cleanup(func() { loadPostDetailCache = originalCacheLoader })
 
-	articleCacheGroup = singleflight.Group{}
+	postCacheGroup = singleflight.Group{}
 	cache := map[string]string{}
 	var writes int
-	loadArticleDetailCache = func(key string, loader func() (articleResponse, error)) (articleResponse, error) {
+	loadPostDetailCache = func(key string, loader func() (postResponse, error)) (postResponse, error) {
 		return loadJSONCacheWithStore(
 			key,
-			articleCacheTTL,
+			postCacheTTL,
 			func(key string) (string, error) {
 				value, ok := cache[key]
 				if !ok {
@@ -364,11 +365,11 @@ func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *tes
 	}
 
 	id := strconv.FormatUint(uint64(fixture.Article.ID), 10)
-	first, err := loadArticleDetail(id)
+	first, err := loadPostDetail(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := loadArticleDetail(id)
+	second, err := loadPostDetail(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,14 +383,14 @@ func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *tes
 	if first.Author != wantAuthor || second.Author != wantAuthor {
 		t.Fatalf("author summary was not preserved: first=%+v second=%+v want=%+v", first.Author, second.Author, wantAuthor)
 	}
-	if second.ID != first.ID || second.Title != first.Title || second.Content != first.Content {
+	if second.ID != first.ID || second.Article.Title != first.Article.Title || second.Content != first.Content {
 		t.Fatalf("cache hit changed the article response: first=%+v second=%+v", first, second)
 	}
 	if writes != 1 {
 		t.Fatalf("cache writes=%d want 1", writes)
 	}
 
-	cacheKey := articleDetailCacheKey(id)
+	cacheKey := postDetailCacheKey(id)
 	payload, ok := cache[cacheKey]
 	if !ok {
 		t.Fatalf("cache key %q was not written", cacheKey)
@@ -401,7 +402,7 @@ func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *tes
 	if payload != string(expectedPayload) {
 		t.Fatalf("cache payload was not the complete article response: got=%s want=%s", payload, expectedPayload)
 	}
-	var cachedResponse articleResponse
+	var cachedResponse postResponse
 	if err := json.Unmarshal([]byte(payload), &cachedResponse); err != nil {
 		t.Fatal(err)
 	}
@@ -410,29 +411,29 @@ func TestLoadArticleDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *tes
 	}
 
 	queries := queryLogger.snapshot()
-	articleQueries := 0
+	postQueries := 0
 	userQueries := 0
 	selectedAuthorQuery := false
 	for _, query := range queries {
 		normalized := strings.Join(strings.Fields(strings.ToLower(query)), "")
 		normalized = strings.ReplaceAll(normalized, string(rune(34)), "")
-		if strings.Contains(normalized, "fromarticles") {
-			articleQueries++
+		if strings.Contains(normalized, "fromposts") {
+			postQueries++
 		}
 		if strings.Contains(normalized, "fromusers") {
 			userQueries++
 			selectedAuthorQuery = selectedAuthorQuery || strings.Contains(normalized, "selectid,username,display_name,avatar_urlfromusers")
 		}
 	}
-	if articleQueries != 1 || userQueries != 1 {
-		t.Fatalf("expected one article query and one author preload query, got articles=%d users=%d queries=%v", articleQueries, userQueries, queries)
+	if postQueries != 1 || userQueries != 1 {
+		t.Fatalf("expected one article query and one author preload query, got posts=%d users=%d queries=%v", postQueries, userQueries, queries)
 	}
 	if !selectedAuthorQuery {
 		t.Fatalf("author preload selected more than the public summary fields: %v", queries)
 	}
 }
 
-func TestIsPublicArticleResponseAt(t *testing.T) {
+func TestIsPublicPostResponseAt(t *testing.T) {
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	past := now.Add(-time.Minute)
 	future := now.Add(time.Minute)
@@ -444,160 +445,150 @@ func TestIsPublicArticleResponseAt(t *testing.T) {
 		until *time.Time
 		want  bool
 	}{
-		{name: "published and current", state: consts.ArticlePublicationStatePublished, from: &past, want: true},
-		{name: "nil published at", state: consts.ArticlePublicationStatePublished, want: false},
+		{name: "published and current", state: consts.PostPublicationStatePublished, from: &past, want: true},
+		{name: "nil published at", state: consts.PostPublicationStatePublished, want: false},
 		{name: "unpublished", state: "draft", from: &past, want: false},
-		{name: "future", state: consts.ArticlePublicationStatePublished, from: &future, want: false},
-		{name: "expired", state: consts.ArticlePublicationStatePublished, from: &past, until: &expired, want: false},
+		{name: "future", state: consts.PostPublicationStatePublished, from: &future, want: false},
+		{name: "expired", state: consts.PostPublicationStatePublished, from: &past, until: &expired, want: false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			response := articleResponse{
-				PublicationState: testCase.state,
-				PublishedAt:      testCase.from,
-				ExpiredAt:        testCase.until,
+			response := postResponse{
+				PublishedAt: testCase.from,
+				Visibility:  "public",
 			}
-			if got := isPublicArticleResponseAt(response, now); got != testCase.want {
+			if testCase.name != "nil published at" {
+				response.Article = &postArticleResponse{PublicationState: testCase.state, PublishedAt: testCase.from, ExpiredAt: testCase.until}
+			}
+			if got := isPublicPostResponseAt(response, now); got != testCase.want {
 				t.Fatalf("public=%v want=%v response=%#v", got, testCase.want, response)
 			}
 		})
 	}
 }
 
-func TestLoadArticleDetailRejectsInvalidCachedResponseAndBestEffortDeletes(t *testing.T) {
-	originalCacheLoader := loadArticleDetailCache
-	originalInvalidator := invalidateArticleDetailCacheKey
+func TestLoadPostDetailRejectsInvalidCachedResponseAndBestEffortDeletes(t *testing.T) {
+	originalCacheLoader := loadPostDetailCache
+	originalInvalidator := invalidatePostDetailCacheKey
 	originalDB := global.Db
 	t.Cleanup(func() {
-		loadArticleDetailCache = originalCacheLoader
-		invalidateArticleDetailCacheKey = originalInvalidator
+		loadPostDetailCache = originalCacheLoader
+		invalidatePostDetailCacheKey = originalInvalidator
 		global.Db = originalDB
 	})
 
 	global.Db = nil
 	now := time.Now().UTC()
 	future := now.Add(time.Hour)
-	loadArticleDetailCache = func(string, func() (articleResponse, error)) (articleResponse, error) {
-		return articleResponse{
-			ID:               42,
-			PublicationState: consts.ArticlePublicationStatePublished,
-			PublishedAt:      &future,
-			Author:           publicAuthorResponse{ID: 7, Username: "cached"},
+	loadPostDetailCache = func(string, func() (postResponse, error)) (postResponse, error) {
+		return postResponse{
+			ID:          42,
+			PublishedAt: &future,
+			Article:     &postArticleResponse{PublicationState: consts.PostPublicationStatePublished, PublishedAt: &future},
+			Visibility:  "public",
+			Author:      publicAuthorResponse{ID: 7, Username: "cached"},
 		}, nil
 	}
 	var deletedKey string
-	invalidateArticleDetailCacheKey = func(key string) error {
+	invalidatePostDetailCacheKey = func(key string) error {
 		deletedKey = key
 		return gorm.ErrInvalidData
 	}
 
-	_, err := loadArticleDetail("42")
+	_, err := loadPostDetail("42")
 	if err != gorm.ErrRecordNotFound {
 		t.Fatalf("invalid cached response error=%v want=%v", err, gorm.ErrRecordNotFound)
 	}
-	if deletedKey != articleDetailCacheKey("42") {
+	if deletedKey != postDetailCacheKey("42") {
 		t.Fatalf("deleted key=%q", deletedKey)
 	}
 }
 
-func TestLoadArticleDetailMissFiltersNonPublicArticlesIntegration(t *testing.T) {
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+func TestLoadPostDetailMissFiltersNonPublicArticlesIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	futurePublishedAt := now.Add(time.Hour)
 	expiredAt := now.Add(-time.Hour)
-	articles := []models.Article{
+	posts := []models.Post{
 		{
-			AuthorID:         fixture.Author.ID,
-			Title:            "detail-valid",
-			Preview:          "preview",
-			PublicationState: consts.ArticlePublicationStatePublished,
-			PublishedAt:      &now,
+			AuthorID: fixture.Author.ID, Content: "detail-valid", Visibility: "public",
 		},
 		{
-			AuthorID:         fixture.Author.ID,
-			Title:            "detail-future",
-			Preview:          "preview",
-			PublicationState: consts.ArticlePublicationStatePublished,
-			PublishedAt:      &futurePublishedAt,
+			AuthorID: fixture.Author.ID, Content: "detail-future", Visibility: "public",
 		},
 		{
-			AuthorID:         fixture.Author.ID,
-			Title:            "detail-nil-published",
-			Preview:          "preview",
-			PublicationState: consts.ArticlePublicationStatePublished,
+			AuthorID: fixture.Author.ID, Content: "detail-short", Visibility: "public",
 		},
 		{
-			AuthorID:         fixture.Author.ID,
-			Title:            "detail-draft",
-			Preview:          "preview",
-			PublicationState: "draft",
-			PublishedAt:      &now,
+			AuthorID: fixture.Author.ID, Content: "detail-draft", Visibility: "public",
 		},
 		{
-			AuthorID:         fixture.Author.ID,
-			Title:            "detail-expired",
-			Preview:          "preview",
-			PublicationState: consts.ArticlePublicationStatePublished,
-			PublishedAt:      &now,
-			ExpiredAt:        &expiredAt,
+			AuthorID: fixture.Author.ID, Content: "detail-expired", Visibility: "public",
 		},
 		{
-			AuthorID:         fixture.Author.ID,
-			Title:            "detail-deleted",
-			Preview:          "preview",
-			PublicationState: consts.ArticlePublicationStatePublished,
-			PublishedAt:      &now,
+			AuthorID: fixture.Author.ID, Content: "detail-deleted", Visibility: "public",
 		},
 	}
-	if err := db.Create(&articles).Error; err != nil {
+	if err := db.Create(&posts).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delete(&articles[len(articles)-1]).Error; err != nil {
+	postArticles := []models.PostArticle{
+		{PostID: posts[0].ID, Title: "detail-valid", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now},
+		{PostID: posts[1].ID, Title: "detail-future", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &futurePublishedAt},
+		{PostID: posts[3].ID, Title: "detail-draft", Preview: "preview", PublicationState: "draft", PublishedAt: &now},
+		{PostID: posts[4].ID, Title: "detail-expired", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now, ExpiredAt: &expiredAt},
+		{PostID: posts[5].ID, Title: "detail-deleted", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now},
+	}
+	if err := db.Create(&postArticles).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&posts[len(posts)-1]).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		ids := make([]uint, 0, len(articles))
-		for _, article := range articles {
-			ids = append(ids, article.ID)
+		ids := make([]uint, 0, len(posts))
+		for _, post := range posts {
+			ids = append(ids, post.ID)
 		}
-		db.Unscoped().Where("id IN ?", ids).Delete(&models.Article{})
+		db.Unscoped().Where("post_id IN ?", ids).Delete(&models.PostArticle{})
+		db.Unscoped().Where("id IN ?", ids).Delete(&models.Post{})
 	})
 
-	originalCacheLoader := loadArticleDetailCache
+	originalCacheLoader := loadPostDetailCache
 	originalDB := global.Db
 	t.Cleanup(func() {
-		loadArticleDetailCache = originalCacheLoader
+		loadPostDetailCache = originalCacheLoader
 		global.Db = originalDB
 	})
 	global.Db = db
-	loadArticleDetailCache = func(_ string, loader func() (articleResponse, error)) (articleResponse, error) {
+	loadPostDetailCache = func(_ string, loader func() (postResponse, error)) (postResponse, error) {
 		return loader()
 	}
 
-	validID := strconv.FormatUint(uint64(articles[0].ID), 10)
-	response, err := loadArticleDetail(validID)
+	validID := strconv.FormatUint(uint64(posts[0].ID), 10)
+	response, err := loadPostDetail(validID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.ID != articles[0].ID || response.Author.ID != fixture.Author.ID {
+	if response.ID != posts[0].ID || response.Author.ID != fixture.Author.ID {
 		t.Fatalf("valid detail response=%#v", response)
 	}
-	for _, article := range articles[1:] {
-		_, err := loadArticleDetail(strconv.FormatUint(uint64(article.ID), 10))
+	for _, index := range []int{1, 3, 4, 5} {
+		_, err := loadPostDetail(strconv.FormatUint(uint64(posts[index].ID), 10))
 		if err != gorm.ErrRecordNotFound {
-			t.Fatalf("non-public article %d error=%v want=%v", article.ID, err, gorm.ErrRecordNotFound)
+			t.Fatalf("ineligible post %d error=%v want=%v", posts[index].ID, err, gorm.ErrRecordNotFound)
 		}
 	}
 }
 
-type articleDetailSQLLogger struct {
+type postDetailSQLLogger struct {
 	logger.Interface
 	mu      sync.Mutex
 	queries []string
 }
 
-func (l *articleDetailSQLLogger) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+func (l *postDetailSQLLogger) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
 	if fc == nil {
 		return
 	}
@@ -607,7 +598,7 @@ func (l *articleDetailSQLLogger) Trace(_ context.Context, _ time.Time, fc func()
 	l.queries = append(l.queries, query)
 }
 
-func (l *articleDetailSQLLogger) snapshot() []string {
+func (l *postDetailSQLLogger) snapshot() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]string(nil), l.queries...)
@@ -616,7 +607,7 @@ func (l *articleDetailSQLLogger) snapshot() []string {
 // TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading 测试缓存命中场景：
 // 如果缓存中已经有数据，则直接返回，不再触发回源逻辑。
 func TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading(t *testing.T) {
-	articleCacheGroup = singleflight.Group{}
+	postCacheGroup = singleflight.Group{}
 
 	var loads atomic.Int32
 	getter := func(string) (string, error) {
@@ -630,7 +621,7 @@ func TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading(t *testing.T) 
 		return cacheTestPayload{Value: "db"}, nil
 	}
 
-	payload, err := loadJSONCacheWithStore("articles", time.Minute, getter, setter, loader)
+	payload, err := loadJSONCacheWithStore("posts", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

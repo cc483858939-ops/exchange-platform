@@ -15,8 +15,7 @@ type Notification struct {
 	RecipientID   uint       `gorm:"not null"`
 	ActorID       uint       `gorm:"not null"`
 	Type          string     `gorm:"column:notification_type;size:32;not null"`
-	ArticleID     *uint      `gorm:"column:article_id"`
-	CommentID     *uint      `gorm:"column:comment_id"`
+	PostID        *uint      `gorm:"column:post_id"`
 	DedupeKey     string     `gorm:"size:192;not null"`
 	SourceVersion int64      `gorm:"not null;default:0"`
 	ActivityAt    time.Time  `gorm:"not null"`

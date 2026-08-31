@@ -5,13 +5,13 @@ import { Counter, Rate, Trend } from 'k6/metrics';
 const baseURL = __ENV.BASE_URL || 'http://127.0.0.1:3000';
 const virtualUsers = Number(__ENV.VUS || 10);
 const duration = __ENV.DURATION || '20s';
-const articleIDs = String(__ENV.ARTICLE_IDS || '')
+const postIDs = String(__ENV.POST_IDS || '')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
 
-if (articleIDs.length === 0) {
-  throw new Error('ARTICLE_IDS must contain one or more comma-separated article IDs');
+if (postIDs.length === 0) {
+  throw new Error('POST_IDS must contain one or more comma-separated Post IDs');
 }
 
 export const options = {
@@ -30,7 +30,7 @@ function jsonParams(token) {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    tags: { endpoint: 'article_like' },
+    tags: { endpoint: 'post_like' },
   };
 }
 
@@ -56,20 +56,20 @@ export function setup() {
     users.push({ username, token });
   }
 
-  return { runID, users, articleIDs };
+  return { runID, users, postIDs };
 }
 
 export default function (data) {
   const user = data.users[(__VU - 1) % data.users.length];
-  const articleID = data.articleIDs[(__VU - 1) % data.articleIDs.length];
+  const postID = data.postIDs[(__VU - 1) % data.postIDs.length];
   let liked = false;
 
-  // Each VU owns a user/article pair, so every successful request is a real
+  // Each VU owns a user/Post pair, so every successful request is a real
   // state transition rather than an idempotent no-op.
   while (true) {
     const expectedLiked = !liked;
     const method = expectedLiked ? 'PUT' : 'DELETE';
-    const response = http.request(method, `${baseURL}/api/articles/${articleID}/like`, null, jsonParams(user.token));
+    const response = http.request(method, `${baseURL}/api/posts/${postID}/like`, null, jsonParams(user.token));
     mutationLatency.add(response.timings.duration);
 
     let body;

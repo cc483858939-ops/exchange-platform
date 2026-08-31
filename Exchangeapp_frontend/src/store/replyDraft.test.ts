@@ -27,7 +27,7 @@ describe('replyDraft store', () => {
     expect(store.getDraft(42)).toBe('hello');
   });
 
-  it('keeps drafts isolated per article', () => {
+  it('keeps drafts isolated per post', () => {
     const store = useReplyDraftStore();
     store.setViewer(7);
 
@@ -63,7 +63,7 @@ describe('replyDraft store', () => {
     expect(store.getDraft(42)).toBe(raw);
   });
 
-  it('removes an article draft when its content becomes empty', () => {
+  it('removes a post draft when its content becomes empty', () => {
     const store = useReplyDraftStore();
     store.setViewer(7);
     store.setDraft(42, 'draft A');
@@ -76,21 +76,21 @@ describe('replyDraft store', () => {
     expect(store.drafts).toEqual({ '43': 'draft B' });
   });
 
-  it('ignores writes without a valid viewer or article ID', () => {
+  it('ignores writes without a valid viewer or post ID', () => {
     const store = useReplyDraftStore();
-    const invalidArticleIDs: Array<number | string> = [0, -1, NaN, Infinity, 1.5, 'abc', '42.5'];
+    const invalidPostIDs: Array<number | string> = [0, -1, NaN, Infinity, 1.5, 'abc', '42.5'];
 
-    invalidArticleIDs.forEach(articleID => store.setDraft(articleID, 'should not persist'));
+    invalidPostIDs.forEach(postID => store.setDraft(postID, 'should not persist'));
     expect(store.drafts).toEqual({});
 
     store.setViewer(7);
-    invalidArticleIDs.forEach(articleID => store.setDraft(articleID, 'should not persist'));
+    invalidPostIDs.forEach(postID => store.setDraft(postID, 'should not persist'));
 
     expect(store.drafts).toEqual({});
-    invalidArticleIDs.forEach(articleID => expect(store.getDraft(articleID)).toBe(''));
+    invalidPostIDs.forEach(postID => expect(store.getDraft(postID)).toBe(''));
   });
 
-  it('clears all article drafts without changing the viewer', () => {
+  it('clears all post drafts without changing the viewer', () => {
     const store = useReplyDraftStore();
     store.setViewer(7);
     store.setDraft(42, 'draft A');

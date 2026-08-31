@@ -23,14 +23,14 @@ import (
 	"gorm.io/gorm"
 )
 
-type commentIntegrationFixture struct {
+type replyIntegrationFixture struct {
 	Author    models.User
 	Commenter models.User
 	Other     models.User
-	Article   models.Article
+	Article   models.Post
 }
 
-func openCommentIntegrationDatabase(t *testing.T) *gorm.DB {
+func openReplyIntegrationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -40,7 +40,7 @@ func openCommentIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.Comment{}, &models.ArticleBehavior{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostBehavior{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
@@ -57,9 +57,9 @@ func openCommentIntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func newCommentIntegrationFixture(t *testing.T, db *gorm.DB) commentIntegrationFixture {
+func newReplyIntegrationFixture(t *testing.T, db *gorm.DB) replyIntegrationFixture {
 	t.Helper()
-	fixture := commentIntegrationFixture{
+	fixture := replyIntegrationFixture{
 		Author:    models.User{Username: "comment-author-" + uuid.NewString(), Password: "test"},
 		Commenter: models.User{Username: "commenter-" + uuid.NewString(), Password: "test", DisplayName: "Old Name", AvatarURL: "old.jpg"},
 		Other:     models.User{Username: "commenter-other-" + uuid.NewString(), Password: "test"},
@@ -74,26 +74,27 @@ func newCommentIntegrationFixture(t *testing.T, db *gorm.DB) commentIntegrationF
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	fixture.Article = models.Article{
-		AuthorID:         fixture.Author.ID,
-		Title:            "comment fixture",
-		Preview:          "comment fixture",
-		PublicationState: consts.ArticlePublicationStatePublished,
-		PublishedAt:      &now,
+	fixture.Article = models.Post{
+		Model: gorm.Model{CreatedAt: now, UpdatedAt: now}, AuthorID: fixture.Author.ID,
+		Content: "comment fixture", Visibility: "public",
 	}
 	if err := db.Create(&fixture.Article).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(&models.PostArticle{PostID: fixture.Article.ID, Title: "comment fixture", Preview: "comment fixture", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now}).Error; err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id = ?", fixture.Article.ID).Delete(&models.Comment{})
-		db.Unscoped().Where("article_id = ? OR user_id IN ?", fixture.Article.ID, []uint{fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("reply_to_post_id = ?", fixture.Article.ID).Delete(&models.Post{})
+		db.Unscoped().Where("post_id = ?", fixture.Article.ID).Delete(&models.PostArticle{})
+		db.Unscoped().Where("post_id = ? OR user_id IN ?", fixture.Article.ID, []uint{fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.PostBehavior{})
 		db.Unscoped().Delete(&fixture.Article)
 		db.Unscoped().Where("id IN ?", []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.User{})
 	})
 	return fixture
 }
 
-func newCommentIntegrationContext(method, target, id, body string, userID uint) (*gin.Context, *httptest.ResponseRecorder) {
+func newReplyIntegrationContext(method, target, id, body string, userID uint) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(method, target, strings.NewReader(body))
@@ -107,24 +108,26 @@ func newCommentIntegrationContext(method, target, id, body string, userID uint) 
 	return ctx, recorder
 }
 
-func createCommentRecord(t *testing.T, db *gorm.DB, articleID, userID uint, content string, createdAt time.Time) models.Comment {
+func createReplyRecord(t *testing.T, db *gorm.DB, postID, userID uint, content string, createdAt time.Time) models.Post {
 	t.Helper()
-	comment := models.Comment{ArticleID: articleID, UserID: userID, Content: content}
+	conversationID := postID
+	comment := models.Post{AuthorID: userID, ReplyToPostID: &postID, ConversationID: &conversationID, Content: content, Visibility: "public"}
 	if !createdAt.IsZero() {
-		comment.CreatedAt = createdAt
+		comment.Model.CreatedAt = createdAt
+		comment.Model.UpdatedAt = createdAt
 	}
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&comment).Error; err != nil {
 			return err
 		}
-		result := tx.Model(&models.Article{}).
-			Where("id = ?", articleID).
-			UpdateColumn("comment_count", gorm.Expr("comment_count + 1"))
+		result := tx.Model(&models.Post{}).
+			Where("id = ?", postID).
+			UpdateColumn("reply_count", gorm.Expr("reply_count + 1"))
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return errors.New("fixture article counter update affected an unexpected number of rows")
+			return errors.New("fixture post counter update affected an unexpected number of rows")
 		}
 		return nil
 	}); err != nil {
@@ -133,48 +136,48 @@ func createCommentRecord(t *testing.T, db *gorm.DB, articleID, userID uint, cont
 	return comment
 }
 
-func TestCreateArticleCommentIntegration(t *testing.T) {
+func TestCreatePostReplyIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 
-	ctx, recorder := newCommentIntegrationContext(
+	ctx, recorder := newReplyIntegrationContext(
 		http.MethodPost,
-		"/api/articles/"+strconvUint(fixture.Article.ID)+"/comments",
+		"/api/posts",
 		strconvUint(fixture.Article.ID),
-		`{"content":"  hello  ","user_id":999,"author_id":999,"article_id":999}`,
+		`{"content":"  hello  ","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`,"user_id":999,"author_id":999,"post_id":999}`,
 		fixture.Commenter.ID,
 	)
-	CreateArticleComment(ctx)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	var response commentResponse
+	var response replyResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ArticleID != fixture.Article.ID || response.Content != "hello" || response.Author.ID != fixture.Commenter.ID || response.Author.Username != fixture.Commenter.Username || response.Author.DisplayName != "Old Name" || response.Author.AvatarURL != "old.jpg" {
+	if response.ReplyToPostID == nil || *response.ReplyToPostID != fixture.Article.ID || response.Content != "hello" || response.Author.ID != fixture.Commenter.ID || response.Author.Username != fixture.Commenter.Username || response.Author.DisplayName != "Old Name" || response.Author.AvatarURL != "old.jpg" {
 		t.Fatalf("response=%#v", response)
 	}
-	var comment models.Comment
+	var comment models.Post
 	if err := db.First(&comment, response.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if comment.ArticleID != fixture.Article.ID || comment.UserID != fixture.Commenter.ID || comment.Content != "hello" {
+	if comment.ReplyToPostID == nil || *comment.ReplyToPostID != fixture.Article.ID || comment.AuthorID != fixture.Commenter.ID || comment.Content != "hello" {
 		t.Fatalf("stored comment=%#v", comment)
 	}
 
-	if commentArticleCount(t, db, fixture.Article.ID) != 1 {
-		t.Fatalf("count after first create=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 1 {
+		t.Fatalf("count after first create=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
-	ctx, recorder = newCommentIntegrationContext(http.MethodPost, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), `{"content":"second"}`, fixture.Commenter.ID)
-	CreateArticleComment(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"second","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, fixture.Commenter.ID)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("second create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 2 {
-		t.Fatalf("count after second create=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 2 {
+		t.Fatalf("count after second create=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 
 	for _, forbidden := range []string{"user_id", "UserID", "password", "Password", "DeletedAt"} {
@@ -183,57 +186,57 @@ func TestCreateArticleCommentIntegration(t *testing.T) {
 		}
 	}
 
-	ctx, recorder = newCommentIntegrationContext(http.MethodPost, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), `{"content":"missing user"}`, 0)
-	CreateArticleComment(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"missing user","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, 0)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("missing user status=%d", recorder.Code)
 	}
 
 	expiredAt := time.Now().Add(-time.Hour)
-	if err := db.Model(&fixture.Article).Update("expired_at", expiredAt).Error; err != nil {
+	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", fixture.Article.ID).Update("expired_at", expiredAt).Error; err != nil {
 		t.Fatal(err)
 	}
-	ctx, recorder = newCommentIntegrationContext(http.MethodPost, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), `{"content":"expired"}`, fixture.Commenter.ID)
-	CreateArticleComment(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"expired","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, fixture.Commenter.ID)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expired article status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 2 {
-		t.Fatalf("expired create changed count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 2 {
+		t.Fatalf("expired create changed count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 }
 
-func TestGetArticleCommentsCursorIntegration(t *testing.T) {
+func TestGetPostCommentsCursorIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	comments := []models.Comment{
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "first", now),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "fourth", now),
+	posts := []models.Post{
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "first", now),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "fourth", now),
 	}
-	removed := createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "removed", now.Add(-time.Second))
+	removed := createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "removed", now.Add(-time.Second))
 	softDeleteCounterAwareComment(t, db, removed)
 
-	otherArticle := models.Article{AuthorID: fixture.Author.ID, Title: "other comment article", Preview: "other"}
+	otherArticle := models.Post{AuthorID: fixture.Author.ID, Content: "other post", Visibility: "public"}
 	if err := db.Create(&otherArticle).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id = ?", otherArticle.ID).Delete(&models.Comment{})
+		db.Unscoped().Where("reply_to_post_id = ?", otherArticle.ID).Delete(&models.Post{})
 		db.Unscoped().Delete(&otherArticle)
 	})
-	createCommentRecord(t, db, otherArticle.ID, fixture.Commenter.ID, "unrelated", now.Add(time.Second))
+	createReplyRecord(t, db, otherArticle.ID, fixture.Commenter.ID, "unrelated", now.Add(time.Second))
 
-	path := "/api/articles/" + strconvUint(fixture.Article.ID) + "/comments?limit=2"
-	ctx, recorder := newCommentIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
-	GetArticleComments(ctx)
+	path := "/api/posts/" + strconvUint(fixture.Article.ID) + "/replies?limit=2"
+	ctx, recorder := newReplyIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("first page status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var first commentListResponse
+	var first replyListResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &first); err != nil {
 		t.Fatal(err)
 	}
@@ -245,12 +248,12 @@ func TestGetArticleCommentsCursorIntegration(t *testing.T) {
 	}
 
 	secondPath := path + "&cursor=" + *first.NextCursor
-	ctx, recorder = newCommentIntegrationContext(http.MethodGet, secondPath, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
-	GetArticleComments(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodGet, secondPath, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("second page status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var second commentListResponse
+	var second replyListResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &second); err != nil {
 		t.Fatal(err)
 	}
@@ -264,79 +267,79 @@ func TestGetArticleCommentsCursorIntegration(t *testing.T) {
 			t.Fatalf("duplicate item id=%d", item.ID)
 		}
 		seen[item.ID] = struct{}{}
-		if item.ArticleID != fixture.Article.ID || item.ID == removed.ID {
+		if item.ReplyToPostID == nil || *item.ReplyToPostID != fixture.Article.ID || item.ID == removed.ID {
 			t.Fatalf("unexpected item=%#v", item)
 		}
 	}
-	for _, comment := range comments {
+	for _, comment := range posts {
 		if _, exists := seen[comment.ID]; !exists {
 			t.Fatalf("missing comment id=%d", comment.ID)
 		}
 	}
 }
 
-func TestDeleteCommentRowsAffectedIntegration(t *testing.T) {
+func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 
-	owned := createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "owned", time.Time{})
-	ctx, recorder := newCommentIntegrationContext(http.MethodDelete, "/api/comments/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Other.ID)
-	DeleteComment(ctx)
+	owned := createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "owned", time.Time{})
+	ctx, recorder := newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Other.ID)
+	DeletePostReply(ctx)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("other user delete status=%d", recorder.Code)
 	}
-	if err := db.First(&models.Comment{}, owned.ID).Error; err != nil {
+	if err := db.First(&models.Post{}, owned.ID).Error; err != nil {
 		t.Fatalf("forbidden delete removed comment: %v", err)
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 1 {
-		t.Fatalf("forbidden delete changed count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 1 {
+		t.Fatalf("forbidden delete changed count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 
-	ctx, recorder = newCommentIntegrationContext(http.MethodDelete, "/api/comments/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
-	DeleteComment(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
+	DeletePostReply(ctx)
 	if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 {
 		t.Fatalf("owner delete status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	var deleted models.Comment
+	var deleted models.Post
 	if err := db.Unscoped().First(&deleted, owned.ID).Error; err != nil || !deleted.DeletedAt.Valid {
 		t.Fatalf("soft deleted=%#v err=%v", deleted, err)
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("owner delete count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("owner delete count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
-	ctx, recorder = newCommentIntegrationContext(http.MethodDelete, "/api/comments/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
-	DeleteComment(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
+	DeletePostReply(ctx)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("repeat delete status=%d", recorder.Code)
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("repeat delete changed count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("repeat delete changed count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 
-	expiring := createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "expire then delete", time.Time{})
+	expiring := createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "expire then delete", time.Time{})
 	expiredAt := time.Now().Add(-time.Hour)
 	if err := db.Model(&fixture.Article).Update("expired_at", expiredAt).Error; err != nil {
 		t.Fatal(err)
 	}
-	ctx, recorder = newCommentIntegrationContext(http.MethodDelete, "/api/comments/"+strconvUint(expiring.ID), strconvUint(expiring.ID), "", fixture.Commenter.ID)
-	DeleteComment(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(expiring.ID), strconvUint(expiring.ID), "", fixture.Commenter.ID)
+	DeletePostReply(ctx)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("delete after article expiry status=%d", recorder.Code)
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("delete after expiry count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("delete after expiry count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 
-	concurrent := createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "concurrent delete", time.Time{})
+	concurrent := createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "concurrent delete", time.Time{})
 	var waitGroup sync.WaitGroup
 	statuses := make(chan int, 2)
 	for range 2 {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			deleteCtx, deleteRecorder := newCommentIntegrationContext(http.MethodDelete, "/api/comments/"+strconvUint(concurrent.ID), strconvUint(concurrent.ID), "", fixture.Commenter.ID)
-			DeleteComment(deleteCtx)
+			deleteCtx, deleteRecorder := newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(concurrent.ID), strconvUint(concurrent.ID), "", fixture.Commenter.ID)
+			DeletePostReply(deleteCtx)
 			statuses <- deleteRecorder.Code
 		}()
 	}
@@ -357,23 +360,23 @@ func TestDeleteCommentRowsAffectedIntegration(t *testing.T) {
 	if successes != 1 || notFound != 1 {
 		t.Fatalf("concurrent delete successes=%d notFound=%d", successes, notFound)
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("concurrent delete count=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("concurrent delete count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 }
-func TestGetArticleCommentsEmptyFeed(t *testing.T) {
+func TestGetPostCommentsEmptyFeed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 
-	ctx, recorder := newCommentIntegrationContext(
+	ctx, recorder := newReplyIntegrationContext(
 		http.MethodGet,
-		"/api/articles/"+strconvUint(fixture.Article.ID)+"/comments?limit=20",
+		"/api/posts/"+strconvUint(fixture.Article.ID)+"/replies?limit=20",
 		strconvUint(fixture.Article.ID),
 		"",
 		fixture.Commenter.ID,
 	)
-	GetArticleComments(ctx)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -390,49 +393,49 @@ func TestGetArticleCommentsEmptyFeed(t *testing.T) {
 	}
 }
 
-func TestCommentCursorStableAfterDelete(t *testing.T) {
+func TestReplyCursorStableAfterDelete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	comments := []models.Comment{
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "newest", now),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now.Add(-time.Second)),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now.Add(-2*time.Second)),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "oldest", now.Add(-3*time.Second)),
+	posts := []models.Post{
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "newest", now),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now.Add(-time.Second)),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now.Add(-2*time.Second)),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "oldest", now.Add(-3*time.Second)),
 	}
 
-	path := "/api/articles/" + strconvUint(fixture.Article.ID) + "/comments?limit=2"
-	ctx, recorder := newCommentIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
-	GetArticleComments(ctx)
+	path := "/api/posts/" + strconvUint(fixture.Article.ID) + "/replies?limit=2"
+	ctx, recorder := newReplyIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("first page status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var first commentListResponse
+	var first replyListResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &first); err != nil {
 		t.Fatal(err)
 	}
 	if len(first.Items) != 2 || first.NextCursor == nil {
 		t.Fatalf("first page=%#v", first)
 	}
-	if first.Items[0].ID != comments[0].ID || first.Items[1].ID != comments[1].ID {
+	if first.Items[0].ID != posts[0].ID || first.Items[1].ID != posts[1].ID {
 		t.Fatalf("unexpected first page=%#v", first.Items)
 	}
 
-	softDeleteCounterAwareComment(t, db, comments[0])
-	ctx, recorder = newCommentIntegrationContext(http.MethodGet, path+"&cursor="+*first.NextCursor, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
-	GetArticleComments(ctx)
+	softDeleteCounterAwareComment(t, db, posts[0])
+	ctx, recorder = newReplyIntegrationContext(http.MethodGet, path+"&cursor="+*first.NextCursor, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("second page status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var second commentListResponse
+	var second replyListResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &second); err != nil {
 		t.Fatal(err)
 	}
 	if len(second.Items) != 2 || second.NextCursor != nil {
 		t.Fatalf("second page=%#v", second)
 	}
-	for index, expected := range []models.Comment{comments[2], comments[3]} {
+	for index, expected := range []models.Post{posts[2], posts[3]} {
 		if second.Items[index].ID != expected.ID {
 			t.Fatalf("second page item %d id=%d want=%d", index, second.Items[index].ID, expected.ID)
 		}
@@ -446,25 +449,25 @@ func TestCommentCursorStableAfterDelete(t *testing.T) {
 	}
 }
 
-func TestCommentCursorStableAfterNewComment(t *testing.T) {
+func TestReplyCursorStableAfterNewComment(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	comments := []models.Comment{
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "newest", now),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now.Add(-time.Second)),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now.Add(-2*time.Second)),
-		createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "oldest", now.Add(-3*time.Second)),
+	posts := []models.Post{
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "newest", now),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "second", now.Add(-time.Second)),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "third", now.Add(-2*time.Second)),
+		createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "oldest", now.Add(-3*time.Second)),
 	}
 
-	path := "/api/articles/" + strconvUint(fixture.Article.ID) + "/comments?limit=2"
-	ctx, recorder := newCommentIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
-	GetArticleComments(ctx)
+	path := "/api/posts/" + strconvUint(fixture.Article.ID) + "/replies?limit=2"
+	ctx, recorder := newReplyIntegrationContext(http.MethodGet, path, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("first page status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var first commentListResponse
+	var first replyListResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &first); err != nil {
 		t.Fatal(err)
 	}
@@ -472,20 +475,20 @@ func TestCommentCursorStableAfterNewComment(t *testing.T) {
 		t.Fatalf("first page=%#v", first)
 	}
 
-	inserted := createCommentRecord(t, db, fixture.Article.ID, fixture.Other.ID, "inserted after first page", now.Add(time.Second))
-	ctx, recorder = newCommentIntegrationContext(http.MethodGet, path+"&cursor="+*first.NextCursor, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
-	GetArticleComments(ctx)
+	inserted := createReplyRecord(t, db, fixture.Article.ID, fixture.Other.ID, "inserted after first page", now.Add(time.Second))
+	ctx, recorder = newReplyIntegrationContext(http.MethodGet, path+"&cursor="+*first.NextCursor, strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("second page status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var second commentListResponse
+	var second replyListResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &second); err != nil {
 		t.Fatal(err)
 	}
 	if len(second.Items) != 2 || second.NextCursor != nil {
 		t.Fatalf("second page=%#v", second)
 	}
-	for index, expected := range []models.Comment{comments[2], comments[3]} {
+	for index, expected := range []models.Post{posts[2], posts[3]} {
 		if second.Items[index].ID != expected.ID {
 			t.Fatalf("second page item %d id=%d want=%d", index, second.Items[index].ID, expected.ID)
 		}
@@ -496,11 +499,11 @@ func TestCommentCursorStableAfterNewComment(t *testing.T) {
 		}
 	}
 }
-func TestCommentAuthorUsesCurrentUserIdentityIntegration(t *testing.T) {
+func TestReplyAuthorUsesCurrentUserIdentityIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
-	historical := createCommentRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "historical", time.Now().UTC())
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
+	historical := createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "historical", time.Now().UTC())
 
 	if err := db.Model(&fixture.Commenter).Updates(map[string]interface{}{
 		"display_name": "New Name",
@@ -509,19 +512,19 @@ func TestCommentAuthorUsesCurrentUserIdentityIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, recorder := newCommentIntegrationContext(http.MethodGet, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
-	GetArticleComments(ctx)
+	ctx, recorder := newReplyIntegrationContext(http.MethodGet, "/api/posts/"+strconvUint(fixture.Article.ID)+"/replies", strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
+	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("historical comments status=%d body=%s", recorder.Code, recorder.Body.String())
+		t.Fatalf("historical posts status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var comments commentListResponse
-	if err := json.Unmarshal(recorder.Body.Bytes(), &comments); err != nil {
+	var posts replyListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &posts); err != nil {
 		t.Fatal(err)
 	}
-	var historicalResponse *commentResponse
-	for index := range comments.Items {
-		if comments.Items[index].ID == historical.ID {
-			historicalResponse = &comments.Items[index]
+	var historicalResponse *replyResponse
+	for index := range posts.Items {
+		if posts.Items[index].ID == historical.ID {
+			historicalResponse = &posts.Items[index]
 			break
 		}
 	}
@@ -529,12 +532,12 @@ func TestCommentAuthorUsesCurrentUserIdentityIntegration(t *testing.T) {
 		t.Fatalf("historical comment identity=%#v", historicalResponse)
 	}
 
-	ctx, recorder = newCommentIntegrationContext(http.MethodPost, "/api/articles/"+strconvUint(fixture.Article.ID)+"/comments", strconvUint(fixture.Article.ID), `{"content":"new comment"}`, fixture.Commenter.ID)
-	CreateArticleComment(ctx)
+	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"new reply","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, fixture.Commenter.ID)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("new comment status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var created commentResponse
+	var created replyResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}

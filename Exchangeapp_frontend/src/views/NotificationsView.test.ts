@@ -36,8 +36,8 @@ const notification = (id: number, read = false, avatarURL = ''): Notification =>
   id,
   type: 'post_liked',
   actor: { id: 9, username: 'alice', display_name: 'Alice', avatar_url: avatarURL },
-  article_id: 42,
-  comment_id: null,
+  post_id: 42,
+  conversation_id: 42,
   activity_at: '2026-08-22T12:00:00.000Z',
   read,
 });
@@ -126,7 +126,7 @@ describe('NotificationsView', () => {
     await flushPromises();
 
     await wrapper.find('.notification-card__open').trigger('click');
-    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'NewsDetail', params: { id: '42' } });
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'PostDetail', params: { id: '42' } });
     expect(store.pendingReadIDs.has(1)).toBe(true);
     expect(wrapper.find('.notification-card--unread').exists()).toBe(false);
 

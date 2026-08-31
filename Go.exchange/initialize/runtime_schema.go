@@ -17,15 +17,15 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-const RequiredSchemaVersion int64 = 1
+const RequiredSchemaVersion int64 = 2
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 1
-	PublishedSchemaCompatibilityFloor int64 = 1
+	PublishedSchemaCurrentVersion     int64 = 2
+	PublishedSchemaCompatibilityFloor int64 = 2
 )
 
 const runtimeSchemaStateID uint = 1
@@ -33,7 +33,7 @@ const runtimeSchemaStateID uint = 1
 type SchemaValidationOptions struct {
 	RequiredVersion     int64
 	IncludeWorkerTables bool
-	// EmbeddingEnabled is retained for caller compatibility. ArticleEmbedding
+	// EmbeddingEnabled is retained for caller compatibility. PostEmbedding
 	// is part of the API schema contract regardless of runtime feature flags.
 	EmbeddingEnabled bool
 }
@@ -64,21 +64,122 @@ type schemaCanary struct {
 	Columns []string
 }
 
+type schemaObjectCanary struct {
+	Table       string
+	Constraints []string
+	Indexes     []string
+}
+
+type legacySchemaColumn struct {
+	Table  string
+	Column string
+}
+
+var legacyContentTableNames = []string{
+	"articles",
+	"comments",
+	"article_reaction",
+	"article_reposts",
+	"article_embeddings",
+	"article_behaviors",
+	"user_article_reco_states",
+}
+
+var legacyRuntimeColumns = []legacySchemaColumn{
+	{Table: "notifications", Column: "article_id"},
+	{Table: "notifications", Column: "comment_id"},
+	{Table: "recommendation_result_traces", Column: "article_id"},
+	{Table: "recommendation_daily_metrics", Column: "article_id"},
+}
+
+var postSchemaObjectCanaries = []schemaObjectCanary{
+	{
+		Table: "posts",
+		Constraints: []string{
+			"fk_posts_author",
+			"fk_posts_reply_to_post",
+			"fk_posts_quote_post",
+			"fk_posts_conversation",
+			"chk_posts_visibility_public",
+			"chk_posts_reply_quote_exclusive",
+			"chk_posts_conversation_shape",
+			"chk_posts_like_count_nonnegative",
+			"chk_posts_reply_count_nonnegative",
+			"chk_posts_view_count_nonnegative",
+			"chk_posts_like_sync_version_nonnegative",
+		},
+		Indexes: []string{
+			"idx_posts_author_created",
+			"idx_posts_reply_to_created",
+			"idx_posts_conversation_created",
+			"idx_posts_quote",
+			"idx_posts_deleted_at",
+		},
+	},
+	{
+		Table: "post_articles",
+		Constraints: []string{
+			"fk_post_articles_post",
+			"chk_post_articles_publication_state",
+		},
+	},
+	{
+		Table: "post_reaction",
+		Constraints: []string{
+			"fk_post_reaction_user",
+			"fk_post_reaction_post",
+		},
+	},
+	{
+		Table: "post_reposts",
+		Constraints: []string{
+			"fk_post_reposts_user",
+			"fk_post_reposts_post",
+		},
+		Indexes: []string{
+			"uidx_post_reposts_user_post",
+			"idx_post_reposts_user_created",
+			"idx_post_reposts_post",
+		},
+	},
+	{
+		Table: "post_embeddings",
+		Constraints: []string{
+			"fk_post_embeddings_post",
+			"chk_post_embeddings_vector_dimensions",
+		},
+	},
+	{
+		Table: "post_behaviors",
+		Constraints: []string{
+			"fk_post_behaviors_user",
+			"fk_post_behaviors_post",
+		},
+	},
+	{
+		Table: "user_post_reco_states",
+		Constraints: []string{
+			"fk_user_post_reco_states_user",
+			"fk_user_post_reco_states_post",
+		},
+	},
+}
+
 var apiSchemaModels = []interface{}{
 	&models.User{},
 	&models.UserFollow{},
-	&models.Article{},
-	&models.ArticleRepost{},
-	&models.Comment{},
-	&models.ArticleReaction{},
+	&models.Post{},
+	&models.PostArticle{},
+	&models.PostRepost{},
+	&models.PostReaction{},
 	&models.Notification{},
 	&models.RecommendationRequest{},
 	&models.RecommendationResultTrace{},
 	&models.OutboxEvent{},
 	&models.ExchangeRate{},
-	&models.ArticleEmbedding{},
-	&models.ArticleBehavior{},
-	&models.UserArticleRecoState{},
+	&models.PostEmbedding{},
+	&models.PostBehavior{},
+	&models.UserPostRecoState{},
 	&models.UserRecoProfile{},
 	&models.UserAuthorAffinity{},
 	&models.UserRecoProfileDirty{},
@@ -95,6 +196,12 @@ type schemaMetadataRow struct {
 	TableSchema  string `gorm:"column:table_schema"`
 	RelationKind string `gorm:"column:relation_kind"`
 	ColumnName   string `gorm:"column:column_name"`
+}
+
+type schemaObjectMetadataRow struct {
+	TableName   string `gorm:"column:table_name"`
+	TableSchema string `gorm:"column:table_schema"`
+	ObjectName  string `gorm:"column:object_name"`
 }
 
 // runtimeSchemaCanaries derives the contract from GORM metadata. This keeps
@@ -174,7 +281,7 @@ func validateRuntimeSchema(ctx context.Context, db *gorm.DB, options SchemaValid
 		}
 		return schemaError("schema_state_unavailable")
 	}
-	if state.CurrentVersion < 1 || state.CompatibilityFloor < 1 ||
+	if state.CurrentVersion < RequiredSchemaVersion || state.CompatibilityFloor < RequiredSchemaVersion ||
 		state.CompatibilityFloor > state.CurrentVersion ||
 		state.CompatibilityFloor > options.RequiredVersion || options.RequiredVersion > state.CurrentVersion {
 		return schemaError("schema_incompatible")
@@ -186,6 +293,9 @@ func validateRuntimeSchema(ctx context.Context, db *gorm.DB, options SchemaValid
 func validateSchemaCanaries(ctx context.Context, db *gorm.DB, options SchemaValidationOptions) error {
 	if err := ctx.Err(); err != nil {
 		return schemaError("schema_check_timeout")
+	}
+	if err := validateLegacySchemaAbsence(ctx, db); err != nil {
+		return err
 	}
 	canaries, err := runtimeSchemaCanaries(db, options.IncludeWorkerTables)
 	if err != nil {
@@ -233,7 +343,168 @@ ORDER BY resolved_relations.table_name, attribute.attnum
 		}
 		return schemaError("schema_check_unavailable")
 	}
-	return validateResolvedSchema(canaries, rows)
+	if err := validateResolvedSchema(canaries, rows); err != nil {
+		return err
+	}
+	return validatePostSchemaObjects(ctx, db)
+}
+
+func validatePostSchemaObjects(ctx context.Context, db *gorm.DB) error {
+	if err := ctx.Err(); err != nil {
+		return schemaError("schema_check_timeout")
+	}
+	if len(postSchemaObjectCanaries) == 0 {
+		return nil
+	}
+	tables := make([]string, 0, len(postSchemaObjectCanaries))
+	for _, canary := range postSchemaObjectCanaries {
+		tables = append(tables, canary.Table)
+	}
+	const resolvedTables = `
+WITH search_path AS (
+    SELECT schema_name, ordinality
+    FROM unnest(current_schemas(false))
+         WITH ORDINALITY AS path(schema_name, ordinality)
+),
+resolved_relations AS (
+    SELECT DISTINCT ON (class.relname)
+           class.relname AS table_name,
+           namespace.nspname AS table_schema,
+           class.oid AS relation_oid,
+           search_path.ordinality
+    FROM search_path
+    JOIN pg_namespace AS namespace
+      ON namespace.nspname = search_path.schema_name
+    JOIN pg_class AS class
+      ON class.relnamespace = namespace.oid
+    WHERE class.relname IN ?
+    ORDER BY class.relname, search_path.ordinality
+)
+`
+
+	var constraintRows []schemaObjectMetadataRow
+	if err := db.WithContext(ctx).Raw(resolvedTables+`
+SELECT resolved_relations.table_name,
+       resolved_relations.table_schema,
+       constraint.conname AS object_name
+FROM resolved_relations
+JOIN pg_constraint AS constraints_catalog
+  ON constraints_catalog.conrelid = resolved_relations.relation_oid
+`, tables).Scan(&constraintRows).Error; err != nil {
+		if isSchemaCheckTimeout(ctx, err) {
+			return schemaError("schema_check_timeout")
+		}
+		return schemaError("schema_check_unavailable")
+	}
+
+	var indexRows []schemaObjectMetadataRow
+	if err := db.WithContext(ctx).Raw(resolvedTables+`
+SELECT resolved_relations.table_name,
+       resolved_relations.table_schema,
+       indexes.indexname AS object_name
+FROM resolved_relations
+JOIN pg_indexes AS indexes
+  ON indexes.schemaname = resolved_relations.table_schema
+ AND indexes.tablename = resolved_relations.table_name
+`, tables).Scan(&indexRows).Error; err != nil {
+		if isSchemaCheckTimeout(ctx, err) {
+			return schemaError("schema_check_timeout")
+		}
+		return schemaError("schema_check_unavailable")
+	}
+
+	return validateSchemaObjects(postSchemaObjectCanaries, constraintRows, indexRows)
+}
+
+func validateSchemaObjects(canaries []schemaObjectCanary, constraintRows, indexRows []schemaObjectMetadataRow) error {
+	constraints := make(map[string]map[string]struct{}, len(constraintRows))
+	for _, row := range constraintRows {
+		if constraints[row.TableName] == nil {
+			constraints[row.TableName] = make(map[string]struct{})
+		}
+		constraints[row.TableName][row.ObjectName] = struct{}{}
+	}
+	indexes := make(map[string]map[string]struct{}, len(indexRows))
+	for _, row := range indexRows {
+		if indexes[row.TableName] == nil {
+			indexes[row.TableName] = make(map[string]struct{})
+		}
+		indexes[row.TableName][row.ObjectName] = struct{}{}
+	}
+	for _, canary := range canaries {
+		for _, constraint := range canary.Constraints {
+			if _, exists := constraints[canary.Table][constraint]; !exists {
+				return schemaError("schema_constraint_missing")
+			}
+		}
+		for _, index := range canary.Indexes {
+			if _, exists := indexes[canary.Table][index]; !exists {
+				return schemaError("schema_index_missing")
+			}
+		}
+	}
+	return nil
+}
+
+func validateLegacySchemaAbsence(ctx context.Context, db *gorm.DB) error {
+	if err := ctx.Err(); err != nil {
+		return schemaError("schema_check_timeout")
+	}
+
+	var tableRows []schemaMetadataRow
+	if err := db.WithContext(ctx).Raw(`
+SELECT class.relname AS table_name,
+       namespace.nspname AS table_schema,
+       class.relkind::text AS relation_kind
+FROM pg_namespace AS namespace
+JOIN pg_class AS class
+  ON class.relnamespace = namespace.oid
+WHERE namespace.nspname = ANY(current_schemas(false))
+  AND class.relname IN ?
+`, legacyContentTableNames).Scan(&tableRows).Error; err != nil {
+		if isSchemaCheckTimeout(ctx, err) {
+			return schemaError("schema_check_timeout")
+		}
+		return schemaError("schema_check_unavailable")
+	}
+
+	var columnRows []schemaMetadataRow
+	legacyColumnPredicates := make([]string, 0, len(legacyRuntimeColumns))
+	legacyColumnArgs := make([]interface{}, 0, len(legacyRuntimeColumns)*2)
+	for _, legacyColumn := range legacyRuntimeColumns {
+		legacyColumnPredicates = append(legacyColumnPredicates, "(class.relname = ? AND attribute.attname = ?)")
+		legacyColumnArgs = append(legacyColumnArgs, legacyColumn.Table, legacyColumn.Column)
+	}
+	legacyColumnQuery := `
+SELECT class.relname AS table_name,
+       namespace.nspname AS table_schema,
+       class.relkind::text AS relation_kind,
+       attribute.attname AS column_name
+FROM pg_namespace AS namespace
+JOIN pg_class AS class
+  ON class.relnamespace = namespace.oid
+JOIN pg_attribute AS attribute
+  ON attribute.attrelid = class.oid
+ AND attribute.attnum > 0
+ AND NOT attribute.attisdropped
+WHERE namespace.nspname = ANY(current_schemas(false))
+  AND (` + strings.Join(legacyColumnPredicates, " OR ") + `)
+`
+	if err := db.WithContext(ctx).Raw(legacyColumnQuery, legacyColumnArgs...).Scan(&columnRows).Error; err != nil {
+		if isSchemaCheckTimeout(ctx, err) {
+			return schemaError("schema_check_timeout")
+		}
+		return schemaError("schema_check_unavailable")
+	}
+
+	return validateLegacySchemaMetadata(tableRows, columnRows)
+}
+
+func validateLegacySchemaMetadata(tableRows, columnRows []schemaMetadataRow) error {
+	if len(tableRows) > 0 || len(columnRows) > 0 {
+		return schemaError("schema_legacy_content_present")
+	}
+	return nil
 }
 
 type resolvedSchemaMetadata struct {

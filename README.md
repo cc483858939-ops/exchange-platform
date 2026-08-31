@@ -4,9 +4,9 @@
 
 NexusFeed 是一个面向内容场景的全栈个性化推荐平台，采用 Go + Vue 构建，围绕内容发布、用户行为采集、个性化召回与排序、推荐效果追踪以及异步事件处理，构建完整的 Feed 推荐链路。
 
-平台同时提供用户认证、文章与评论、点赞、Following Feed、用户关系、文件存储和汇率查询等业务能力，并通过 PostgreSQL、Redis、Kafka、MinIO、Prometheus 和 Grafana 构成本地开发与可观测基础设施。
+平台同时提供用户认证、统一 Post（短帖、回复、引用和长文）内容、点赞、Following Feed、用户关系、文件存储和汇率查询等业务能力，并通过 PostgreSQL、Redis、Kafka、MinIO、Prometheus 和 Grafana 构成本地开发与可观测基础设施。
 
-当前推荐实现以行为信号、文章 embedding 和可配置的确定性规则为基础，核心组合为：
+当前推荐实现以行为信号、Post embedding 和可配置的确定性规则为基础，核心组合为：
 
 ```text
 multi-source recall + multi-signal ranking + embedding-based semantic personalization
@@ -16,14 +16,14 @@ multi-source recall + multi-signal ranking + embedding-based semantic personaliz
 
 ### 个性化推荐
 
-- **For You Feed**：面向当前用户生成个性化文章推荐结果。
+- **For You Feed**：面向当前用户生成个性化 Post 推荐结果。
 - **Multi-source recall**：从 Recent Semantic、Evergreen Semantic、Following、Recent、Trending 五类来源召回候选，并进行合并与去重。
 - **正负兴趣信号**：分别构建用户正向兴趣向量与负向兴趣向量；点赞、回复、点击和阅读结果等行为可参与兴趣建模。
-- **Embedding 语义个性化**：使用用户兴趣向量与文章 embedding 的 similarity 计算语义相关性，支持正向与负向语义信号。
-- **Multi-signal ranking**：综合 semantic similarity、interaction affinity、follow bonus、freshness、time-decayed trending 等信号，并使用确定性的文章 ID 作为最终 tie-breaker。
+- **Embedding 语义个性化**：使用用户兴趣向量与 Post embedding 的 similarity 计算语义相关性，支持正向与负向语义信号。
+- **Multi-signal ranking**：综合 semantic similarity、interaction affinity、follow bonus、freshness、time-decayed trending 等信号，并使用确定性的 Post ID 作为最终 tie-breaker。
 - **过滤与历史控制**：过滤自身文章、已交互内容、负向兴趣内容和不符合公开范围的内容，并结合已推荐历史进行 fresh/soft-served 控制。
 - **多样性选择**：通过作者窗口、作者多样性、网络内外平衡和 embedding 内容相似度惩罚，降低推荐结果重复。
-- **推荐元数据与追踪**：每次推荐请求生成 request metadata；结果可持久化 `RecommendationResultTrace`，推荐卡片可携带绑定请求、文章、位置和 ranker 上下文的 tracking token。
+- **推荐元数据与追踪**：每次推荐请求生成 request metadata；结果可持久化 `RecommendationResultTrace`，推荐卡片可携带绑定请求、Post、位置和 ranker 上下文的 tracking token。
 
 推荐链路的详细实现契约见 [Recommendation Feed V3](Go.exchange/docs/recommendation-feed-v3.md)。
 
@@ -46,7 +46,7 @@ flowchart TD
     F --> G[Recommendation Telemetry]
 ```
 
-一次 For You 请求会加载用户已有的行为与反馈信号，生成兴趣 profile，召回并合并候选文章，再通过多信号排序和多样性选择生成结果。
+一次 For You 请求会加载用户已有的行为与反馈信号，生成兴趣 profile，召回并合并候选 Post，再通过多信号排序和多样性选择生成结果。
 
 ## 推荐反馈闭环
 
@@ -72,18 +72,18 @@ flowchart LR
 
 推荐请求会生成 UUID request ID；signed tracking token 将用户、文章、请求、位置、策略/ranker、token 生命周期以及阅读策略上下文绑定在一起。客户端提交交互事件后，服务端校验 token 与事件字段，再将有效事件作为 Kafka envelope 异步发布。
 
-Telemetry consumer 会校验单条行为、通过 ConsumerInbox 去重，并批量更新推荐指标和紧凑的 ArticleBehavior projection。协议与阅读/Feed dwell 测量边界见 [Recommendation Telemetry V2](Go.exchange/docs/recommendation-telemetry-v2.md)。
+Telemetry consumer 会校验单条行为、通过 ConsumerInbox 去重，并批量更新推荐指标和紧凑的 PostBehavior projection。协议与阅读/Feed dwell 测量边界见 [Recommendation Telemetry V2](Go.exchange/docs/recommendation-telemetry-v2.md)。
 
 ## 内容与用户系统
 
 NexusFeed 仍是完整的 full-stack content application，而不是只展示算法的 Demo：
 
 - 用户注册、登录、JWT Token 鉴权和 Refresh Token 刷新
-- 创建文章、文章列表、文章详情和删除文章
-- 文章评论的创建、查询和删除
-- 文章封面与用户头像上传
-- 点赞、取消点赞和批量查询文章点赞状态
-- Following Feed 与用户文章列表
+- 创建 Post、Post 列表、Post 详情和删除 Post
+- 回复的创建、查询和删除
+- 长文封面与用户头像上传
+- 点赞、取消点赞和批量查询 Post 点赞状态
+- Following Feed 与用户 Post 列表
 - 用户资料、用户搜索、关注/取消关注、followers 和 following 列表
 
 ### 高并发互动处理
@@ -276,29 +276,28 @@ API 和 worker 在容器内启动 pprof server；当前 Compose 没有将其作�
 需要认证：
 
 ```header
-GET  /api/recommendations/articles
+GET  /api/recommendations/posts
 POST /api/recommendation-events
-POST /api/article-view-events
+POST /api/post-view-events
 ```
 
-POST /api/recommendation-events 接受 impression、click、read_end、feed_dwell 和 not_interested 事件。GET /api/recommendations/articles 返回 For You 推荐结果，并在 telemetry 配置启用且请求命中 rollout 时附带 tracking metadata。
+POST /api/recommendation-events 接受 impression、click、read_end、feed_dwell 和 not_interested 事件。GET /api/recommendations/posts 返回 For You 推荐结果，并在 telemetry 配置启用且请求命中 rollout 时附带 tracking metadata。
 
 ### 内容与社交接口
 
 需要认证：
 
 ```header
-POST   /api/articles
-GET    /api/articles/:id
-DELETE /api/articles/:id
-GET    /api/articles/:id/comments
-POST   /api/articles/:id/comments
-DELETE /api/comments/:id
+POST   /api/posts
+GET    /api/posts/:id
+DELETE /api/posts/:id
+GET    /api/posts/:id/replies
+POST   /api/posts (with reply_to_post_id)
 
-POST   /api/articles/like-states
-GET    /api/articles/:id/like
-PUT    /api/articles/:id/like
-DELETE /api/articles/:id/like
+POST   /api/posts/like-states
+GET    /api/posts/:id/like
+PUT    /api/posts/:id/like
+DELETE /api/posts/:id/like
 
 POST   /api/uploads/article-cover
 POST   /api/uploads/profile-avatar
@@ -306,7 +305,7 @@ POST   /api/uploads/profile-avatar
 GET    /api/users/search
 GET    /api/users/:id
 PATCH  /api/users/:id
-GET    /api/users/:id/articles?limit=20&cursor=...
+GET    /api/users/:id/posts?limit=20&cursor=...
 GET    /api/users/:id/follow
 PUT    /api/users/:id/follow
 DELETE /api/users/:id/follow
@@ -315,7 +314,7 @@ GET    /api/users/:id/following
 GET    /api/feed/following?limit=20&cursor=...
 ```
 
-Following 和 user-articles endpoints 返回 {"items": [], "next_cursor": null} 形状；cursor 是 opaque cursor。
+Following 和 user-post endpoints 返回 {"items": [], "next_cursor": null} 形状；cursor 是 opaque cursor。
 
 ### 认证接口
 

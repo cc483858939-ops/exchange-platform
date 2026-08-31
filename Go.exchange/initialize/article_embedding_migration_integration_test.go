@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestArticleEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
+func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -32,7 +32,7 @@ func TestArticleEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	}
 
 	var definition string
-	if err := db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'article_embeddings'::regclass AND conname = 'chk_article_embeddings_vector_dimensions'").Scan(&definition).Error; err != nil {
+	if err := db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'post_embeddings'::regclass AND conname = 'chk_post_embeddings_vector_dimensions'").Scan(&definition).Error; err != nil {
 		t.Fatal(err)
 	}
 	normalized := strings.ToLower(definition)
@@ -44,31 +44,31 @@ func TestArticleEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	article := models.Article{AuthorID: user.ID, Title: "dimension test", Content: "body", PublicationState: "published"}
+	article := models.Post{AuthorID: user.ID, Content: "body", Visibility: "public"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleEmbedding{})
-		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Article{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostEmbedding{})
+		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 
-	if err := db.Create(&models.ArticleEmbedding{
-		ArticleID: article.ID, Version: "v1", Model: "test", Dimensions: 3,
+	if err := db.Create(&models.PostEmbedding{
+		PostID: article.ID, Version: "v1", Model: "test", Dimensions: 3,
 		Embedding: pgvector.NewVector([]float32{1, 2}), ContentHash: "bad",
 	}).Error; err == nil {
 		t.Fatal("database accepted a vector whose dimensions do not match the declaration")
 	}
-	if err := db.Create(&models.ArticleEmbedding{
-		ArticleID: article.ID, Version: "v1", Model: "test", Dimensions: 2,
+	if err := db.Create(&models.PostEmbedding{
+		PostID: article.ID, Version: "v1", Model: "test", Dimensions: 2,
 		Embedding: pgvector.NewVector([]float32{1, 2}), ContentHash: "good",
 	}).Error; err != nil {
 		t.Fatalf("database rejected matching vector dimensions: %v", err)
 	}
 }
 
-func TestLegacyArticleEmbeddingJobCleanupIntegration(t *testing.T) {
+func TestLegacyPostEmbeddingJobCleanupIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")

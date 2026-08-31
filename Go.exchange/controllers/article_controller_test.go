@@ -10,150 +10,162 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
-func stubCreateArticleAuthor(t *testing.T) {
-	original := loadArticleAuthorForCreate
-	t.Cleanup(func() { loadArticleAuthorForCreate = original })
-	loadArticleAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
+func stubCreatePostAuthor(t *testing.T) {
+	original := loadPostAuthorForCreate
+	t.Cleanup(func() { loadPostAuthorForCreate = original })
+	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "/api/files/profile-avatars/7/avatar.jpg"}, nil
 	}
 }
 
-func stubArticleCreatePersistence(t *testing.T, persisted *models.Article, id uint) {
-	original := persistArticle
-	t.Cleanup(func() { persistArticle = original })
-	persistArticle = func(article *models.Article) error {
-		article.ID = id
+func stubPostCreatePersistence(t *testing.T, persisted *models.Post, id uint) {
+	original := persistPostGraphFn
+	t.Cleanup(func() { persistPostGraphFn = original })
+	persistPostGraphFn = func(post *models.Post, article **models.PostArticle, userID uint, content string, req createPostRequest, now time.Time) error {
+		*post = models.Post{Model: gorm.Model{ID: id, CreatedAt: now, UpdatedAt: now}, AuthorID: userID, Content: content, Visibility: "public"}
+		if req.Article != nil {
+			*article = &models.PostArticle{PostID: id, Title: strings.TrimSpace(req.Article.Title), Preview: strings.TrimSpace(req.Article.Preview), CoverImageURL: strings.TrimSpace(req.Article.CoverImageURL), PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now, ExpiredAt: req.Article.ExpiredAt}
+		}
 		if persisted != nil {
-			*persisted = *article
+			*persisted = *post
 		}
 		return nil
 	}
 }
 
-func TestCreateArticleBuildsPublishedRecord(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	stubArticleCreatePersistence(t, nil, 42)
+func TestCreatePostBuildsPublishedRecord(t *testing.T) {
+	stubCreatePostAuthor(t)
+	stubPostCreatePersistence(t, nil, 42)
 	gin.SetMode(gin.TestMode)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	createArticle(ctx, nil)
+	createPost(ctx, nil)
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response articleResponse
+	var response postResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ID != 42 || response.PublicationState != consts.ArticlePublicationStatePublished || response.Title != "" || response.Content != "c" {
+	if response.ID != 42 || response.PublishedAt == nil || response.Article != nil || response.Content != "c" {
 		t.Fatalf("response=%#v", response)
 	}
 }
 
-func TestCreateArticleTrimsTextFields(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	var persisted models.Article
-	stubArticleCreatePersistence(t, &persisted, 43)
+func TestCreatePostTrimsTextFields(t *testing.T) {
+	stubCreatePostAuthor(t)
+	var persisted models.Post
+	stubPostCreatePersistence(t, &persisted, 43)
 	gin.SetMode(gin.TestMode)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"title\":\"  title  \",\"content\":\"  canonical body  \",\"preview\":\"  summary  \"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"  canonical body  \",\"article\":{\"title\":\"  title  \",\"preview\":\"  summary  \"}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createArticle(ctx, nil)
+	createPost(ctx, nil)
 
-	if recorder.Code != http.StatusCreated || persisted.Title != "title" || persisted.Content != "canonical body" || persisted.Preview != "summary" {
+	if recorder.Code != http.StatusCreated || persisted.Content != "canonical body" {
 		t.Fatalf("status=%d article=%#v", recorder.Code, persisted)
 	}
 }
 
-func TestCreateArticleDoesNotPersistInvalidCover(t *testing.T) {
-	stubCreateArticleAuthor(t)
+func TestCreatePostDoesNotPersistInvalidCover(t *testing.T) {
+	stubCreatePostAuthor(t)
 	gin.SetMode(gin.TestMode)
-	originalCreate := persistArticle
-	t.Cleanup(func() { persistArticle = originalCreate })
+	originalCreate := persistPostGraphFn
+	t.Cleanup(func() { persistPostGraphFn = originalCreate })
 	called := false
-	persistArticle = func(*models.Article) error { called = true; return errors.New("must not persist") }
+	persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
+		called = true
+		return errors.New("must not persist")
+	}
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\",\"cover_image_url\":\"https://invalid\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\",\"article\":{\"title\":\"title\",\"preview\":\"preview\",\"cover_image_url\":\"https://invalid\"}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createArticle(ctx, nil)
+	createPost(ctx, nil)
 
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t", recorder.Code, called)
 	}
 }
 
-func TestCreateArticlePersistsWithoutCover(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	stubArticleCreatePersistence(t, nil, 42)
+func TestCreatePostPersistsWithoutCover(t *testing.T) {
+	stubCreatePostAuthor(t)
+	stubPostCreatePersistence(t, nil, 42)
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createArticle(ctx, nil)
-	if recorder.Code != http.StatusCreated || !bytes.Contains(recorder.Body.Bytes(), []byte("\"cover_image_url\":\"\"")) {
+	createPost(ctx, nil)
+	if recorder.Code != http.StatusCreated || !bytes.Contains(recorder.Body.Bytes(), []byte("\"article\":null")) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestCreateArticleRejectsWhitespaceOnlyContent(t *testing.T) {
-	stubCreateArticleAuthor(t)
+func TestCreatePostRejectsWhitespaceOnlyContent(t *testing.T) {
+	stubCreatePostAuthor(t)
 	gin.SetMode(gin.TestMode)
-	originalCreate := persistArticle
-	t.Cleanup(func() { persistArticle = originalCreate })
+	originalCreate := persistPostGraphFn
+	t.Cleanup(func() { persistPostGraphFn = originalCreate })
 	called := false
-	persistArticle = func(*models.Article) error { called = true; return errors.New("must not persist") }
+	persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
+		called = true
+		return errors.New("must not persist")
+	}
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\" \\t\\n \"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\" \\t\\n \"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createArticle(ctx, nil)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t body=%s", recorder.Code, called, recorder.Body.String())
 	}
 }
 
-func TestCreateArticleRejectsMissingUserContext(t *testing.T) {
+func TestCreatePostRejectsMissingUserContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createArticle(ctx, nil)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestCreateArticleIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	var persisted models.Article
-	stubArticleCreatePersistence(t, &persisted, 42)
+func TestCreatePostIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
+	stubCreatePostAuthor(t)
+	var persisted models.Post
+	stubPostCreatePersistence(t, &persisted, 42)
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\",\"author_id\":999,\"author\":{\"id\":999}}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\",\"author_id\":999,\"author\":{\"id\":999}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createArticle(ctx, nil)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusCreated || persisted.AuthorID != 7 {
 		t.Fatalf("status=%d author_id=%d body=%s", recorder.Code, persisted.AuthorID, recorder.Body.String())
 	}
@@ -167,9 +179,9 @@ func TestCreateArticleIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
 	}
 }
 
-func TestCreateArticlePublishesEmbeddingRequestAfterPersistence(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	stubArticleCreatePersistence(t, nil, 44)
+func TestCreatePostPublishesEmbeddingRequestAfterPersistence(t *testing.T) {
+	stubCreatePostAuthor(t)
+	stubPostCreatePersistence(t, nil, 44)
 	originalConfig := config.AppConfig
 	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true, Version: "test-version"}}
 	t.Cleanup(func() { config.AppConfig = originalConfig })
@@ -178,23 +190,23 @@ func TestCreateArticlePublishesEmbeddingRequestAfterPersistence(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	NewCreateArticleHandler(publisher)(ctx)
+	NewCreatePostHandler(publisher)(ctx)
 
 	if recorder.Code != http.StatusCreated || publisher.calls != 1 || len(publisher.events) != 1 {
 		t.Fatalf("status=%d calls=%d events=%d body=%s", recorder.Code, publisher.calls, len(publisher.events), recorder.Body.String())
 	}
 	event := publisher.events[0]
-	if event.Type != eventing.EventTypeArticleEmbeddingRequested || event.AggregateID != "44" || string(event.Payload) != "{\"article_id\":44}" {
+	if event.Type != eventing.EventTypePostEmbeddingRequested || event.AggregateID != "44" || string(event.Payload) != "{\"post_id\":44}" {
 		t.Fatalf("event=%#v", event)
 	}
 }
 
-func TestCreateArticleReturnsCreatedWhenEmbeddingPublishFails(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	stubArticleCreatePersistence(t, nil, 45)
+func TestCreatePostReturnsCreatedWhenEmbeddingPublishFails(t *testing.T) {
+	stubCreatePostAuthor(t)
+	stubPostCreatePersistence(t, nil, 45)
 	originalConfig := config.AppConfig
 	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true}}
 	t.Cleanup(func() { config.AppConfig = originalConfig })
@@ -203,19 +215,19 @@ func TestCreateArticleReturnsCreatedWhenEmbeddingPublishFails(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	NewCreateArticleHandler(publisher)(ctx)
+	NewCreatePostHandler(publisher)(ctx)
 
 	if recorder.Code != http.StatusCreated || publisher.calls != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}
 }
 
-func TestCreateArticleDoesNotPublishWhenEmbeddingDisabled(t *testing.T) {
-	stubCreateArticleAuthor(t)
-	stubArticleCreatePersistence(t, nil, 46)
+func TestCreatePostDoesNotPublishWhenEmbeddingDisabled(t *testing.T) {
+	stubCreatePostAuthor(t)
+	stubPostCreatePersistence(t, nil, 46)
 	originalConfig := config.AppConfig
 	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: false}}
 	t.Cleanup(func() { config.AppConfig = originalConfig })
@@ -224,10 +236,10 @@ func TestCreateArticleDoesNotPublishWhenEmbeddingDisabled(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/articles", bytes.NewBufferString("{\"content\":\"c\"}"))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	NewCreateArticleHandler(publisher)(ctx)
+	NewCreatePostHandler(publisher)(ctx)
 
 	if recorder.Code != http.StatusCreated || publisher.calls != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())

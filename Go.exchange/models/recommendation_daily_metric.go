@@ -14,7 +14,7 @@ type RecommendationDailyMetric struct {
 	SelectionMode          string    `json:"selection_mode" gorm:"size:16;primaryKey;not null;default:'ranked'"`
 	ExplorationReason      string    `json:"exploration_reason" gorm:"size:32;primaryKey;not null;default:''"`
 	Position               int       `json:"position" gorm:"primaryKey;check:chk_recommendation_metric_position,position > 0"`
-	ArticleID              uint      `json:"article_id" gorm:"primaryKey"`
+	PostID                 uint      `json:"post_id" gorm:"primaryKey"`
 	ImpressionCount        int64     `json:"impression_count" gorm:"not null;default:0;check:chk_recommendation_metric_impressions,impression_count >= 0"`
 	ClickCount             int64     `json:"click_count" gorm:"not null;default:0;check:chk_recommendation_metric_clicks,click_count >= 0"`
 	QualifiedReadCount     int64     `json:"qualified_read_count" gorm:"not null;default:0;check:chk_recommendation_metric_qualified_reads,qualified_read_count >= 0"`

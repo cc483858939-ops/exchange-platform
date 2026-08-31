@@ -33,7 +33,7 @@ func openLikedHistoryIntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func requestLikedHistory(t *testing.T, viewerID uint, query string) (articlePageResponse, int, string) {
+func requestLikedHistory(t *testing.T, viewerID uint, query string) (postPageResponse, int, string) {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -44,7 +44,7 @@ func requestLikedHistory(t *testing.T, viewerID uint, query string) (articlePage
 	ctx.Request = httptest.NewRequest(http.MethodGet, path, nil)
 	ctx.Set("user_id", viewerID)
 	GetMyLikedHistory(ctx)
-	var response articlePageResponse
+	var response postPageResponse
 	if recorder.Code == http.StatusOK {
 		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
@@ -53,7 +53,7 @@ func requestLikedHistory(t *testing.T, viewerID uint, query string) (articlePage
 	return response, recorder.Code, recorder.Body.String()
 }
 
-func likedHistoryArticleIDs(items []articleResponse) []uint {
+func likedHistoryPostIDs(items []postResponse) []uint {
 	ids := make([]uint, 0, len(items))
 	for _, item := range items {
 		ids = append(ids, item.ID)
@@ -61,7 +61,7 @@ func likedHistoryArticleIDs(items []articleResponse) []uint {
 	return ids
 }
 
-func containsLikedArticleID(items []articleResponse, want uint) bool {
+func containsLikedPostID(items []postResponse, want uint) bool {
 	for _, item := range items {
 		if item.ID == want {
 			return true
@@ -72,7 +72,7 @@ func containsLikedArticleID(items []articleResponse, want uint) bool {
 
 func TestLikedHistoryIntegration(t *testing.T) {
 	db := openLikedHistoryIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleReaction{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,36 +93,33 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	viewer, otherViewer, author, softAuthor, emptyViewer := users[0], users[1], users[2], users[3], users[4]
 	userIDs := []uint{viewer.ID, otherViewer.ID, author.ID, softAuthor.ID, emptyViewer.ID}
 
-	var articleIDs []uint
+	var postIDs []uint
 	t.Cleanup(func() {
-		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.ArticleReaction{})
-		if len(articleIDs) > 0 {
-			db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.PostReaction{})
+		if len(postIDs) > 0 {
+			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 		}
 		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
 	})
 
 	baseTime := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
-	createArticle := func(authorID uint, title string, createdAt time.Time, publicationState string, publishedAt *time.Time, expiredAt *time.Time) models.Article {
-		article := models.Article{
-			AuthorID:         authorID,
-			Title:            title,
-			Content:          title + " body",
-			Preview:          "preview",
-			PublicationState: publicationState,
-			PublishedAt:      publishedAt,
-			ExpiredAt:        expiredAt,
-			Model:            gorm.Model{CreatedAt: createdAt},
+	createArticle := func(authorID uint, title string, createdAt time.Time, publicationState string, publishedAt *time.Time, expiredAt *time.Time) models.Post {
+		article := models.Post{
+			AuthorID: authorID, Content: title + " body", Visibility: "public",
+			Model: gorm.Model{CreatedAt: createdAt, UpdatedAt: createdAt},
 		}
 		if err := db.Create(&article).Error; err != nil {
 			t.Fatal(err)
 		}
-		articleIDs = append(articleIDs, article.ID)
+		if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: "preview", PublicationState: publicationState, PublishedAt: publishedAt, ExpiredAt: expiredAt}).Error; err != nil {
+			t.Fatal(err)
+		}
+		postIDs = append(postIDs, article.ID)
 		return article
 	}
-	createPublished := func(authorID uint, title string, createdAt time.Time) models.Article {
+	createPublished := func(authorID uint, title string, createdAt time.Time) models.Post {
 		publishedAt := createdAt
-		return createArticle(authorID, title, createdAt, consts.ArticlePublicationStatePublished, &publishedAt, nil)
+		return createArticle(authorID, title, createdAt, consts.PostPublicationStatePublished, &publishedAt, nil)
 	}
 
 	newReactionOldArticle := createPublished(author.ID, "reaction newer, article older", baseTime.Add(1*time.Hour))
@@ -133,13 +130,13 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	otherViewerArticle := createPublished(author.ID, "other viewer only", baseTime.Add(14*time.Hour))
 
 	draftArticle := createPublished(author.ID, "draft", baseTime.Add(15*time.Hour))
-	if err := db.Model(&draftArticle).Update("publication_state", "draft").Error; err != nil {
+	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", draftArticle.ID).Update("publication_state", "draft").Error; err != nil {
 		t.Fatal(err)
 	}
 	futurePublishedAt := time.Now().UTC().Add(24 * time.Hour)
-	futureArticle := createArticle(author.ID, "future", baseTime.Add(16*time.Hour), consts.ArticlePublicationStatePublished, &futurePublishedAt, nil)
+	futureArticle := createArticle(author.ID, "future", baseTime.Add(16*time.Hour), consts.PostPublicationStatePublished, &futurePublishedAt, nil)
 	expiredAt := time.Now().UTC().Add(-time.Hour)
-	expiredArticle := createArticle(author.ID, "expired", baseTime.Add(17*time.Hour), consts.ArticlePublicationStatePublished, func() *time.Time {
+	expiredArticle := createArticle(author.ID, "expired", baseTime.Add(17*time.Hour), consts.PostPublicationStatePublished, func() *time.Time {
 		publishedAt := baseTime.Add(17 * time.Hour)
 		return &publishedAt
 	}(), &expiredAt)
@@ -152,11 +149,11 @@ func TestLikedHistoryIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	createReaction := func(articleID, userID uint, liked bool, stateChangedAt time.Time, version int64) models.ArticleReaction {
-		reaction := models.ArticleReaction{
+	createReaction := func(postID, userID uint, liked bool, stateChangedAt time.Time, version int64) models.PostReaction {
+		reaction := models.PostReaction{
 			UserID:         userID,
-			ArticleID:      articleID,
-			Reaction:       models.ArticleReactionLike,
+			PostID:         postID,
+			Reaction:       models.PostReactionLike,
 			Liked:          liked,
 			Version:        version,
 			StateChangedAt: stateChangedAt,
@@ -179,16 +176,16 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	createReaction(deletedArticle.ID, viewer.ID, true, baseTime.Add(13*time.Hour), 1)
 	createReaction(softAuthorArticle.ID, viewer.ID, true, baseTime.Add(14*time.Hour), 1)
 
-	queryLogger := &articleDetailSQLLogger{Interface: logger.Default}
+	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
 	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
 	page1, status, body := requestLikedHistory(t, viewer.ID, "limit=2")
 	if status != http.StatusOK || len(page1.Items) != 2 || page1.NextCursor == nil {
 		t.Fatalf("page1 status=%d body=%s response=%#v", status, body, page1)
 	}
-	if got := likedHistoryArticleIDs(page1.Items); len(got) != 2 || got[0] != newReactionOldArticle.ID || got[1] != tieLowerIDArticle.ID {
+	if got := likedHistoryPostIDs(page1.Items); len(got) != 2 || got[0] != newReactionOldArticle.ID || got[1] != tieLowerIDArticle.ID {
 		t.Fatalf("page1 order=%v", got)
 	}
-	if page1.Items[0].Title != "reaction newer, article older" || page1.Items[0].Author.ID != author.ID || page1.Items[0].Author.DisplayName != "History Author" || page1.Items[0].Author.AvatarURL != "author.jpg" {
+	if page1.Items[0].Article == nil || page1.Items[0].Article.Title != "reaction newer, article older" || page1.Items[0].Author.ID != author.ID || page1.Items[0].Author.DisplayName != "History Author" || page1.Items[0].Author.AvatarURL != "author.jpg" {
 		t.Fatalf("canonical article response=%#v", page1.Items[0])
 	}
 
@@ -196,7 +193,7 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cursor.StateChangedAt.IsZero() || cursor.ArticleID != tieLowerIDArticle.ID {
+	if cursor.StateChangedAt.IsZero() || cursor.PostID != tieLowerIDArticle.ID {
 		t.Fatalf("reaction metadata cursor=%#v", cursor)
 	}
 
@@ -204,10 +201,10 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	if status != http.StatusOK || len(page2.Items) != 2 || page2.NextCursor != nil {
 		t.Fatalf("page2 status=%d body=%s response=%#v", status, body, page2)
 	}
-	if got := likedHistoryArticleIDs(page2.Items); len(got) != 2 || got[0] != tieHigherIDArticle.ID || got[1] != oldReactionNewArticle.ID {
+	if got := likedHistoryPostIDs(page2.Items); len(got) != 2 || got[0] != tieHigherIDArticle.ID || got[1] != oldReactionNewArticle.ID {
 		t.Fatalf("page2 order=%v", got)
 	}
-	allIDs := append(likedHistoryArticleIDs(page1.Items), likedHistoryArticleIDs(page2.Items)...)
+	allIDs := append(likedHistoryPostIDs(page1.Items), likedHistoryPostIDs(page2.Items)...)
 	expectedIDs := []uint{newReactionOldArticle.ID, tieLowerIDArticle.ID, tieHigherIDArticle.ID, oldReactionNewArticle.ID}
 	if len(allIDs) != len(expectedIDs) {
 		t.Fatalf("all ids=%v expected=%v", allIDs, expectedIDs)
@@ -218,7 +215,7 @@ func TestLikedHistoryIntegration(t *testing.T) {
 		}
 	}
 	for _, excluded := range []uint{unlikedArticle.ID, otherViewerArticle.ID, draftArticle.ID, futureArticle.ID, expiredArticle.ID, deletedArticle.ID, softAuthorArticle.ID} {
-		if containsLikedArticleID(page1.Items, excluded) || containsLikedArticleID(page2.Items, excluded) {
+		if containsLikedPostID(page1.Items, excluded) || containsLikedPostID(page2.Items, excluded) {
 			t.Fatalf("excluded article %d appeared", excluded)
 		}
 	}
@@ -229,8 +226,8 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	}
 
 	relikedAt := baseTime.Add(20 * time.Hour)
-	if err := db.Model(&models.ArticleReaction{}).
-		Where("user_id = ? AND article_id = ?", viewer.ID, oldReactionNewArticle.ID).
+	if err := db.Model(&models.PostReaction{}).
+		Where("user_id = ? AND post_id = ?", viewer.ID, oldReactionNewArticle.ID).
 		Updates(map[string]interface{}{"liked": true, "state_changed_at": relikedAt, "reaction_version": int64(2)}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +240,7 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	membershipQueries := 0
 	for _, query := range queries {
 		normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
-		if strings.Contains(normalized, "from article_reaction") {
+		if strings.Contains(normalized, "from post_reaction") {
 			membershipQueries++
 		}
 	}

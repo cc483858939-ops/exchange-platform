@@ -3,22 +3,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia } from 'pinia';
-import NewsDetailView from './NewsDetailView.vue';
+import PostDetailView from './PostDetailView.vue';
 
 const mocks = vi.hoisted(() => ({
-  getArticleById: vi.fn(),
-  getArticleLikeState: vi.fn(),
-  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
-  getArticleComments: vi.fn(),
+  getPostById: vi.fn(),
+  getPostLikeState: vi.fn(),
+  getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
+  getPostReplies: vi.fn(),
   getUser: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
     recordReadEnd: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
   },
-  articleViewTelemetry: {
+  postViewTelemetry: {
     enqueue: vi.fn(),
   },
   routeLeave: vi.fn(),
@@ -38,7 +38,7 @@ const mocks = vi.hoisted(() => ({
   },
   feedStore: {
     viewerID: 7,
-    markArticleDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
   },
 }));
 
@@ -62,13 +62,13 @@ vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
 
-vi.mock('../store/articleDetailHandoff', () => ({
-  useArticleDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
+vi.mock('../store/postDetailHandoff', () => ({
+  usePostDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: vi.fn(),
-  getArticleById: mocks.getArticleById,
+vi.mock('../services/postService', () => ({
+  deletePost: vi.fn(),
+  getPostById: mocks.getPostById,
 }));
 
 vi.mock('../services/userService', () => ({
@@ -76,21 +76,21 @@ vi.mock('../services/userService', () => ({
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeState: mocks.getArticleLikeState,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeState: mocks.getPostLikeState,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 vi.mock('../services/repostService', () => ({
-  getArticleRepostState: mocks.getArticleRepostState,
-  repostArticle: vi.fn(),
-  undoRepostArticle: vi.fn(),
+  getPostRepostState: mocks.getPostRepostState,
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
 }));
 
-vi.mock('../services/commentService', () => ({
-  createArticleComment: vi.fn(),
-  deleteComment: vi.fn(),
-  getArticleComments: mocks.getArticleComments,
+vi.mock('../services/replyService', () => ({
+  createPostReply: vi.fn(),
+  deletePostReply: vi.fn(),
+  getPostReplies: mocks.getPostReplies,
 }));
 
 vi.mock('../services/recommendationAttribution', () => ({
@@ -101,32 +101,41 @@ vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
 }));
 
-vi.mock('../services/articleViewTelemetry', () => ({
-  createArticleViewEventID: () => '00000000-0000-4000-8000-000000000042',
-  getArticleViewTelemetry: () => mocks.articleViewTelemetry,
+vi.mock('../services/postViewTelemetry', () => ({
+  createPostViewEventID: () => '00000000-0000-4000-8000-000000000042',
+  getPostViewTelemetry: () => mocks.postViewTelemetry,
 }));
 
-const article = {
-  ID: 42,
-  CreatedAt: '2026-08-15T00:00:00.000Z',
-  UpdatedAt: '2026-08-15T00:00:00.000Z',
-  title: 'Tracked article',
-  content: 'Article body',
-  preview: 'Article body',
-  cover_image_url: '',
-  publication_state: 'published',
+const post = {
+  id: 42,
+  created_at: '2026-08-15T00:00:00.000Z',
+  updated_at: '2026-08-15T00:00:00.000Z',
   published_at: '2026-08-15T00:00:00.000Z',
-  expired_at: null,
-  like_count: 3,
-  comment_count: 0,
-  view_count: 1234,
-  like_sync_version: 1,
   author: {
     id: 7,
     username: 'author',
     display_name: 'Author',
     avatar_url: '',
   },
+  content: 'Post body',
+  conversation_id: 42,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  article: {
+    title: 'Post 42',
+    preview: 'Post body',
+    cover_image_url: '',
+    publication_state: 'published',
+    published_at: '2026-08-15T00:00:00.000Z',
+    expired_at: null,
+  },
+  like_count: 3,
+  reply_count: 2,
+  view_count: 12,
+  deleted: false,
 };
 
 type LikeResult = { liked: boolean; likes: number };
@@ -141,15 +150,15 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
-describe('NewsDetailView LikeAction wiring', () => {
+describe('PostDetailView LikeAction wiring', () => {
   let mounted: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.routeLeave.mockReset();
-    mocks.getArticleById.mockResolvedValue(article);
-    mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
-    mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getPostById.mockResolvedValue(post);
+    mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
+    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUser.mockResolvedValue({
       id: 7,
       username: 'reader',
@@ -166,15 +175,15 @@ describe('NewsDetailView LikeAction wiring', () => {
     mounted = null;
   });
 
-  const mountDetail = () => mount(NewsDetailView, {
+  const mountDetail = () => mount(PostDetailView, {
     attachTo: document.body,
     global: {
       plugins: [createPinia()],
       stubs: {
         AppIcon: { template: '<span />' },
         AuthorIdentity: { template: '<span />' },
-        CommentComposer: { template: '<div />' },
-        CommentList: { template: '<div />' },
+        ReplyComposer: { template: '<div />' },
+        ReplyList: { template: '<div />' },
         RouterLink: { template: '<a><slot /></a>' },
         LikeAction: {
           props: ['liked', 'count', 'disabled', 'loading', 'pending', 'ariaLabel', 'ariaPressed', 'variant'],
@@ -187,7 +196,7 @@ describe('NewsDetailView LikeAction wiring', () => {
 
   it('forwards detail like state, labels, and pending state before success reconciliation', async () => {
     const request = deferred<LikeResult>();
-    mocks.likeArticle.mockReturnValueOnce(request.promise);
+    mocks.likePost.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
@@ -203,7 +212,7 @@ describe('NewsDetailView LikeAction wiring', () => {
     expect(likeAction.attributes('data-liked')).toBe('true');
     expect(likeAction.attributes('data-count')).toBe('4');
     expect(likeAction.attributes('data-pending')).toBe('true');
-    expect(mocks.likeArticle).toHaveBeenCalledWith('42');
+    expect(mocks.likePost).toHaveBeenCalledWith('42');
 
     request.resolve({ liked: true, likes: 4 });
     await flushPromises();
@@ -215,7 +224,7 @@ describe('NewsDetailView LikeAction wiring', () => {
 
   it('rolls back optimistic detail like state on failure without changing the wiring path', async () => {
     const request = deferred<LikeResult>();
-    mocks.likeArticle.mockReturnValueOnce(request.promise);
+    mocks.likePost.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
@@ -234,3 +243,5 @@ describe('NewsDetailView LikeAction wiring', () => {
     expect(mounted.find('.detail-inline-error').text()).toBe('Like failed. Please try again.');
   });
 });
+
+

@@ -18,10 +18,10 @@ import (
 	"gorm.io/gorm"
 )
 
-func newArticleDeleteContext(id string, viewerID *uint) (*gin.Context, *httptest.ResponseRecorder) {
+func newPostDeleteContext(id string, viewerID *uint) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodDelete, "/api/articles/"+id, nil)
+	ctx.Request = httptest.NewRequest(http.MethodDelete, "/api/posts/"+id, nil)
 	ctx.Params = gin.Params{{Key: "id", Value: id}}
 	if viewerID != nil {
 		ctx.Set("user_id", *viewerID)
@@ -29,74 +29,74 @@ func newArticleDeleteContext(id string, viewerID *uint) (*gin.Context, *httptest
 	return ctx, recorder
 }
 
-func stubArticleDeleteDependencies(t *testing.T, transactionErr error) {
+func stubPostDeleteDependencies(t *testing.T, transactionErr error) {
 	t.Helper()
-	originalViewer := loadArticleDeleteViewer
-	originalTransaction := deleteArticleInTransaction
-	originalDetail := invalidateArticleDeleteDetailCache
-	originalLikes := cleanupDeletedArticleLikeState
+	originalViewer := loadPostDeleteViewer
+	originalTransaction := deletePostInTransaction
+	originalDetail := invalidatePostDeleteDetailCache
+	originalLikes := cleanupDeletedPostLikeState
 	t.Cleanup(func() {
-		loadArticleDeleteViewer = originalViewer
-		deleteArticleInTransaction = originalTransaction
-		invalidateArticleDeleteDetailCache = originalDetail
-		cleanupDeletedArticleLikeState = originalLikes
+		loadPostDeleteViewer = originalViewer
+		deletePostInTransaction = originalTransaction
+		invalidatePostDeleteDetailCache = originalDetail
+		cleanupDeletedPostLikeState = originalLikes
 	})
 
-	loadArticleDeleteViewer = func(uint) error { return nil }
-	deleteArticleInTransaction = func(uint, uint) error { return transactionErr }
-	invalidateArticleDeleteDetailCache = func(uint) error { return nil }
-	cleanupDeletedArticleLikeState = func(uint) error { return nil }
+	loadPostDeleteViewer = func(uint) error { return nil }
+	deletePostInTransaction = func(uint, uint) error { return transactionErr }
+	invalidatePostDeleteDetailCache = func(uint) error { return nil }
+	cleanupDeletedPostLikeState = func(uint) error { return nil }
 }
 
-func TestDeleteArticleRejectsInvalidID(t *testing.T) {
+func TestDeletePostRejectsInvalidID(t *testing.T) {
 	for _, id := range []string{"0", "-1", "abc"} {
-		ctx, recorder := newArticleDeleteContext(id, nil)
-		DeleteArticle(ctx)
+		ctx, recorder := newPostDeleteContext(id, nil)
+		DeletePost(ctx)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("id=%q status=%d body=%s", id, recorder.Code, recorder.Body.String())
 		}
 	}
 }
 
-func TestDeleteArticleRejectsMissingAuthContext(t *testing.T) {
-	ctx, recorder := newArticleDeleteContext("42", nil)
-	DeleteArticle(ctx)
+func TestDeletePostRejectsMissingAuthContext(t *testing.T) {
+	ctx, recorder := newPostDeleteContext("42", nil)
+	DeletePost(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestDeleteArticleRejectsMissingOrInactiveViewer(t *testing.T) {
-	originalViewer := loadArticleDeleteViewer
-	t.Cleanup(func() { loadArticleDeleteViewer = originalViewer })
-	loadArticleDeleteViewer = func(uint) error { return gorm.ErrRecordNotFound }
+func TestDeletePostRejectsMissingOrInactiveViewer(t *testing.T) {
+	originalViewer := loadPostDeleteViewer
+	t.Cleanup(func() { loadPostDeleteViewer = originalViewer })
+	loadPostDeleteViewer = func(uint) error { return gorm.ErrRecordNotFound }
 
 	viewerID := uint(7)
-	ctx, recorder := newArticleDeleteContext("42", &viewerID)
-	DeleteArticle(ctx)
+	ctx, recorder := newPostDeleteContext("42", &viewerID)
+	DeletePost(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestDeleteArticleMapsMissingAndForbiddenTransactions(t *testing.T) {
+func TestDeletePostMapsMissingAndForbiddenTransactions(t *testing.T) {
 	viewerID := uint(7)
 	for _, testCase := range []struct {
 		name string
 		err  error
 		want int
 	}{
-		{name: "missing", err: errArticleDeleteNotFound, want: http.StatusNotFound},
-		{name: "forbidden", err: errArticleDeleteForbidden, want: http.StatusForbidden},
+		{name: "missing", err: errPostDeleteNotFound, want: http.StatusNotFound},
+		{name: "forbidden", err: errPostDeleteForbidden, want: http.StatusForbidden},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			stubArticleDeleteDependencies(t, testCase.err)
-			ctx, recorder := newArticleDeleteContext("42", &viewerID)
-			DeleteArticle(ctx)
+			stubPostDeleteDependencies(t, testCase.err)
+			ctx, recorder := newPostDeleteContext("42", &viewerID)
+			DeletePost(ctx)
 			if recorder.Code != testCase.want {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 			}
-			if testCase.want == http.StatusNotFound && recorder.Body.String() != "{\"error\":\"article not found\"}" {
+			if testCase.want == http.StatusNotFound && recorder.Body.String() != "{\"error\":\"post not found\"}" {
 				t.Fatalf("body=%s", recorder.Body.String())
 			}
 			if testCase.want == http.StatusForbidden && recorder.Body.String() != "{\"error\":\"forbidden\"}" {
@@ -106,21 +106,21 @@ func TestDeleteArticleMapsMissingAndForbiddenTransactions(t *testing.T) {
 	}
 }
 
-func TestDeleteArticleOwnerReturnsNoContentAndCleansUpOnce(t *testing.T) {
+func TestDeletePostOwnerReturnsNoContentAndCleansUpOnce(t *testing.T) {
 	viewerID := uint(7)
 	var detailCalls, likeCalls int
-	stubArticleDeleteDependencies(t, nil)
-	invalidateArticleDeleteDetailCache = func(uint) error {
+	stubPostDeleteDependencies(t, nil)
+	invalidatePostDeleteDetailCache = func(uint) error {
 		detailCalls++
 		return errors.New("detail cache unavailable")
 	}
-	cleanupDeletedArticleLikeState = func(uint) error {
+	cleanupDeletedPostLikeState = func(uint) error {
 		likeCalls++
 		return errors.New("redis unavailable")
 	}
 
-	ctx, recorder := newArticleDeleteContext("42", &viewerID)
-	DeleteArticle(ctx)
+	ctx, recorder := newPostDeleteContext("42", &viewerID)
+	DeletePost(ctx)
 	ctx.Writer.WriteHeaderNow()
 	if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
@@ -130,23 +130,23 @@ func TestDeleteArticleOwnerReturnsNoContentAndCleansUpOnce(t *testing.T) {
 	}
 }
 
-func TestDeleteArticleDoesNotCleanUpRejectedRequest(t *testing.T) {
+func TestDeletePostDoesNotCleanUpRejectedRequest(t *testing.T) {
 	viewerID := uint(7)
 	for _, testCase := range []struct {
 		name string
 		err  error
 	}{
-		{name: "not found", err: errArticleDeleteNotFound},
-		{name: "forbidden", err: errArticleDeleteForbidden},
+		{name: "not found", err: errPostDeleteNotFound},
+		{name: "forbidden", err: errPostDeleteForbidden},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			stubArticleDeleteDependencies(t, testCase.err)
+			stubPostDeleteDependencies(t, testCase.err)
 			var calls int
 
-			invalidateArticleDeleteDetailCache = func(uint) error { calls++; return nil }
-			cleanupDeletedArticleLikeState = func(uint) error { calls++; return nil }
-			ctx, _ := newArticleDeleteContext("42", &viewerID)
-			DeleteArticle(ctx)
+			invalidatePostDeleteDetailCache = func(uint) error { calls++; return nil }
+			cleanupDeletedPostLikeState = func(uint) error { calls++; return nil }
+			ctx, _ := newPostDeleteContext("42", &viewerID)
+			DeletePost(ctx)
 			if calls != 0 {
 				t.Fatalf("cleanup calls=%d", calls)
 			}
@@ -154,7 +154,7 @@ func TestDeleteArticleDoesNotCleanUpRejectedRequest(t *testing.T) {
 	}
 }
 
-func openArticleDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
+func openPostDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -164,15 +164,15 @@ func openArticleDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
 }
 
-func TestDeleteArticleIntegration(t *testing.T) {
+func TestDeletePostIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openArticleDeleteIntegrationDatabase(t)
+	db := openPostDeleteIntegrationDatabase(t)
 	originalDB := global.Db
 	global.Db = db
 	t.Cleanup(func() { global.Db = originalDB })
@@ -186,30 +186,30 @@ func TestDeleteArticleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("author_id IN ?", []uint{owner.ID, other.ID}).Delete(&models.Article{})
+		db.Unscoped().Where("author_id IN ?", []uint{owner.ID, other.ID}).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{owner.ID, other.ID}).Delete(&models.User{})
 	})
 
-	forbiddenArticle := models.Article{AuthorID: owner.ID, Title: "forbidden fixture", Content: "forbidden body", Preview: "forbidden"}
+	forbiddenArticle := models.Post{AuthorID: owner.ID, Content: "forbidden body", Visibility: "public"}
 	if err := db.Create(&forbiddenArticle).Error; err != nil {
 		t.Fatal(err)
 	}
-	ctx, recorder := newArticleDeleteContext(strconvArticleID(forbiddenArticle.ID), &other.ID)
-	DeleteArticle(ctx)
+	ctx, recorder := newPostDeleteContext(strconvPostID(forbiddenArticle.ID), &other.ID)
+	DeletePost(ctx)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("forbidden status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	article := models.Article{AuthorID: owner.ID, Title: "delete fixture", Content: "delete fixture body", Preview: "delete fixture"}
+	article := models.Post{AuthorID: owner.ID, Content: "delete fixture body", Visibility: "public"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&models.ArticleRepost{UserID: other.ID, ArticleID: article.ID}).Error; err != nil {
+	if err := db.Create(&models.PostRepost{UserID: other.ID, PostID: article.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	deleteOne := func(articleID, viewerID uint) int {
-		ctx, recorder := newArticleDeleteContext(strconvArticleID(articleID), &viewerID)
-		DeleteArticle(ctx)
+	deleteOne := func(postID, viewerID uint) int {
+		ctx, recorder := newPostDeleteContext(strconvPostID(postID), &viewerID)
+		DeletePost(ctx)
 		ctx.Writer.WriteHeaderNow()
 		return recorder.Code
 	}
@@ -219,19 +219,19 @@ func TestDeleteArticleIntegration(t *testing.T) {
 	if status := deleteOne(article.ID, owner.ID); status != http.StatusNotFound {
 		t.Fatalf("repeat delete status=%d", status)
 	}
-	var deleted models.Article
+	var deleted models.Post
 	if err := db.Unscoped().First(&deleted, article.ID).Error; err != nil || !deleted.DeletedAt.Valid {
 		t.Fatalf("soft deleted article=%#v err=%v", deleted, err)
 	}
 	var remainingReposts int64
-	if err := db.Model(&models.ArticleRepost{}).Where("article_id = ?", article.ID).Count(&remainingReposts).Error; err != nil {
+	if err := db.Model(&models.PostRepost{}).Where("post_id = ?", article.ID).Count(&remainingReposts).Error; err != nil {
 		t.Fatal(err)
 	}
 	if remainingReposts != 0 {
 		t.Fatalf("reposts remaining after article delete=%d", remainingReposts)
 	}
 
-	raceArticle := models.Article{AuthorID: owner.ID, Title: "race", Content: "race body", Preview: "race"}
+	raceArticle := models.Post{AuthorID: owner.ID, Content: "race body", Visibility: "public"}
 	if err := db.Create(&raceArticle).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -258,6 +258,6 @@ func TestDeleteArticleIntegration(t *testing.T) {
 		t.Fatalf("race successes=%d notFound=%d", successes, notFound)
 	}
 }
-func strconvArticleID(id uint) string {
+func strconvPostID(id uint) string {
 	return strconv.FormatUint(uint64(id), 10)
 }

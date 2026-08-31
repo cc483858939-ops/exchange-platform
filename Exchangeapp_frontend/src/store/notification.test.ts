@@ -22,8 +22,8 @@ const notification = (id: number, read = false): Notification => ({
   id,
   type: 'post_liked',
   actor: { id: 9, username: 'alice', display_name: 'Alice', avatar_url: '' },
-  article_id: 42,
-  comment_id: null,
+  post_id: 42,
+  conversation_id: 42,
   activity_at: '2026-08-22T12:00:00.000Z',
   read,
 });

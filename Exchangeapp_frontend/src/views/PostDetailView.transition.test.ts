@@ -4,8 +4,8 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
-import NewsDetailView from './NewsDetailView.vue';
-import type { Article } from '../types/Article';
+import PostDetailView from './PostDetailView.vue';
+import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
 
 const mocks = vi.hoisted(() => ({
@@ -19,25 +19,25 @@ const mocks = vi.hoisted(() => ({
   authStore: null as any,
   feedStore: {
     viewerID: 7,
-    markArticleDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
   },
   handoffStore: null as any,
   consumeHandoff: vi.fn(),
-  getArticleById: vi.fn(),
-  getArticleLikeState: vi.fn(),
-  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
-  getArticleComments: vi.fn(),
-  createArticleComment: vi.fn(),
-  deleteComment: vi.fn(),
-  deleteArticle: vi.fn(),
+  getPostById: vi.fn(),
+  getPostLikeState: vi.fn(),
+  getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
+  getPostReplies: vi.fn(),
+  createPostReply: vi.fn(),
+  deletePostReply: vi.fn(),
+  deletePost: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
     recordReadEnd: vi.fn(),
     flush: vi.fn(),
   },
-  articleViewTelemetry: {
+  postViewTelemetry: {
     enqueue: vi.fn(),
   },
   composerFocus: vi.fn(),
@@ -59,31 +59,31 @@ vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
 
-vi.mock('../store/articleDetailHandoff', () => ({
-  useArticleDetailHandoffStore: () => mocks.handoffStore,
+vi.mock('../store/postDetailHandoff', () => ({
+  usePostDetailHandoffStore: () => mocks.handoffStore,
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: mocks.deleteArticle,
-  getArticleById: mocks.getArticleById,
+vi.mock('../services/postService', () => ({
+  deletePost: mocks.deletePost,
+  getPostById: mocks.getPostById,
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeState: mocks.getArticleLikeState,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeState: mocks.getPostLikeState,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 vi.mock('../services/repostService', () => ({
-  getArticleRepostState: mocks.getArticleRepostState,
-  repostArticle: vi.fn(),
-  undoRepostArticle: vi.fn(),
+  getPostRepostState: mocks.getPostRepostState,
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
 }));
 
-vi.mock('../services/commentService', () => ({
-  createArticleComment: mocks.createArticleComment,
-  deleteComment: mocks.deleteComment,
-  getArticleComments: mocks.getArticleComments,
+vi.mock('../services/replyService', () => ({
+  createPostReply: mocks.createPostReply,
+  deletePostReply: mocks.deletePostReply,
+  getPostReplies: mocks.getPostReplies,
 }));
 
 vi.mock('../services/recommendationAttribution', () => ({
@@ -94,41 +94,64 @@ vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
 }));
 
-vi.mock('../services/articleViewTelemetry', () => ({
-  createArticleViewEventID: () => '00000000-0000-4000-8000-000000000042',
-  getArticleViewTelemetry: () => mocks.articleViewTelemetry,
+vi.mock('../services/postViewTelemetry', () => ({
+  createPostViewEventID: () => '00000000-0000-4000-8000-000000000042',
+  getPostViewTelemetry: () => mocks.postViewTelemetry,
 }));
 
 vi.mock('../store/sessionSync', () => ({
-  syncExternalArticleLikeState: vi.fn(),
-  syncExternalArticleRepostState: vi.fn(),
-  syncExternalArticleRemoval: vi.fn(),
-  syncExternalCommentCount: vi.fn(),
+  syncExternalPostLikeState: vi.fn(),
+  syncExternalPostRepostState: vi.fn(),
+  syncExternalPostRemoval: vi.fn(),
+  syncExternalReplyCount: vi.fn(),
 }));
 
-const article = (overrides: Partial<Article> = {}): Article => ({
-  ID: 42,
-  CreatedAt: '2026-08-26T00:00:00.000Z',
-  UpdatedAt: '2026-08-26T00:00:00.000Z',
-  title: 'Server title',
-  content: 'Authoritative article body',
-  preview: 'Server preview',
-  cover_image_url: '',
-  publication_state: 'published',
-  published_at: '2026-08-26T00:00:00.000Z',
-  expired_at: null,
-  like_count: 11,
-  comment_count: 4,
-  view_count: 321,
-  like_sync_version: 1,
-  author: {
-    id: 7,
-    username: 'server-author',
-    display_name: 'Server Author',
-    avatar_url: '/server-author.png',
-  },
-  ...overrides,
-});
+type CanonicalPostOverrides = Partial<Post> & {
+  title?: string;
+  preview?: string;
+  cover_image_url?: string;
+};
+
+const canonicalPost = (input: CanonicalPostOverrides = {}): Post => {
+  const {
+    title,
+    preview,
+    cover_image_url,
+    ...overrides
+  } = input;
+  return {
+    id: 42,
+    created_at: '2026-08-26T00:00:00.000Z',
+    updated_at: '2026-08-26T00:00:00.000Z',
+    published_at: '2026-08-26T00:00:00.000Z',
+    author: {
+      id: 7,
+      username: 'server-author',
+      display_name: 'Server Author',
+      avatar_url: '/server-author.png',
+    },
+    content: 'Authoritative post body',
+    conversation_id: 42,
+    reply_to_post_id: null,
+    quote_post_id: null,
+    reply_to_post: null,
+    quote_post: null,
+    visibility: 'public',
+    article: {
+      title: title ?? 'Server title',
+      preview: preview ?? 'Server preview',
+      cover_image_url: cover_image_url ?? '',
+      publication_state: 'published',
+      published_at: '2026-08-26T00:00:00.000Z',
+      expired_at: null,
+    },
+    like_count: 11,
+    reply_count: 4,
+    view_count: 321,
+    deleted: false,
+    ...overrides,
+  };
+};
 
 const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   id: 42,
@@ -143,7 +166,7 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   coverImageUrl: '/cover-a.png',
   createdAt: '2026-08-25T00:00:00.000Z',
   likeCount: 10,
-  commentCount: 3,
+  replyCount: 3,
   viewCount: 300,
   liked: true,
   likeStatus: 'ready',
@@ -163,7 +186,7 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
-const mountDetail = () => mount(NewsDetailView, {
+const mountDetail = () => mount(PostDetailView, {
   attachTo: document.body,
   global: {
     plugins: [createPinia()],
@@ -178,20 +201,20 @@ const mountDetail = () => mount(NewsDetailView, {
         emits: ['toggle'],
         template: '<button class="test-like-action" type="button">{{ count }}</button>',
       },
-      CommentComposer: {
+      ReplyComposer: {
         methods: {
           focus: mocks.composerFocus,
           clear: vi.fn(),
         },
         template: '<div class="test-composer" />',
       },
-      CommentList: { template: '<div class="test-comment-list" />' },
+      ReplyList: { template: '<div class="test-comment-list" />' },
       RouterLink: { template: '<a class="test-link"><slot /></a>' },
     },
   },
 });
 
-describe('NewsDetailView warm and cold transition', () => {
+describe('PostDetailView warm and cold transition', () => {
   let mounted: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
@@ -213,9 +236,9 @@ describe('NewsDetailView warm and cold transition', () => {
     });
     mocks.handoffStore = { consume: mocks.consumeHandoff };
     mocks.consumeHandoff.mockReturnValue(null);
-    mocks.getArticleById.mockResolvedValue(article());
-    mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 11 });
-    mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getPostById.mockResolvedValue(canonicalPost());
+    mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 11 });
+    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.composerFocus.mockResolvedValue(true);
     mocks.telemetry.flush.mockResolvedValue(undefined);
@@ -229,8 +252,8 @@ describe('NewsDetailView warm and cold transition', () => {
   });
 
   it('shows the Post header and circular cold spinner without visible loading text', async () => {
-    const request = deferred<Article>();
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    const request = deferred<Post>();
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
@@ -240,40 +263,40 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-loading__spinner').exists()).toBe(true);
     expect(mounted.text()).not.toContain('Loading full article');
     expect(mounted.find('.post-detail').exists()).toBe(false);
-    expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
-    expect(mocks.getArticleRepostState).not.toHaveBeenCalled();
-    expect(mocks.getArticleComments).not.toHaveBeenCalled();
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.getPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.getPostRepostState).not.toHaveBeenCalled();
+    expect(mocks.getPostReplies).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
 
-    request.resolve(article());
+    request.resolve(canonicalPost());
     await flushPromises();
 
     expect(mounted.find('.detail-loading').exists()).toBe(false);
-    expect(mounted.find('.post-detail__body').text()).toBe('Authoritative article body');
-    expect(mocks.getArticleById).toHaveBeenCalledTimes(1);
-    expect(mocks.getArticleLikeState).toHaveBeenCalledTimes(1);
-    expect(mocks.getArticleRepostState).toHaveBeenCalledTimes(1);
-    expect(mocks.getArticleComments).toHaveBeenCalledTimes(1);
+    expect(mounted.find('.post-detail__body').text()).toBe('Authoritative post body');
+    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostLikeState).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostRepostState).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostReplies).toHaveBeenCalledTimes(1);
   });
 
   it('removes the cold spinner and shows the existing error UI on a 404', async () => {
-    mocks.getArticleById.mockRejectedValueOnce({ response: { status: 404 } });
+    mocks.getPostById.mockRejectedValueOnce({ response: { status: 404 } });
 
     mounted = mountDetail();
     await flushPromises();
 
     expect(mounted.find('.detail-loading').exists()).toBe(false);
     expect(mounted.find('.detail-state--error').text()).toContain('This post does not exist.');
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
-    expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
-    expect(mocks.getArticleComments).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.getPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.getPostReplies).not.toHaveBeenCalled();
   });
 
   it('renders a warm handoff immediately without starting authoritative work early', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     const warmPost = post();
     mocks.consumeHandoff.mockReturnValueOnce(warmPost);
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
@@ -290,37 +313,37 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.test-like-action').exists()).toBe(false);
     expect(mounted.find('.repost-action').exists()).toBe(false);
     expect(mounted.find('.post-conversation').exists()).toBe(false);
-    expect(mocks.getArticleById).toHaveBeenCalledTimes(1);
-    expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
-    expect(mocks.getArticleRepostState).not.toHaveBeenCalled();
-    expect(mocks.getArticleComments).not.toHaveBeenCalled();
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.getPostRepostState).not.toHaveBeenCalled();
+    expect(mocks.getPostReplies).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
 
-    request.resolve(article());
+    request.resolve(canonicalPost());
     await flushPromises();
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
   });
 
   it('replaces warm presentation with authoritative title, body, cover, counts, and replies', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post({
       title: 'Warm title',
       excerpt: 'Warm excerpt only',
       coverImageUrl: '/cover-a.png',
       likeCount: 10,
-      commentCount: 3,
+      replyCount: 3,
       viewCount: 300,
     }));
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
-    request.resolve(article({
+    request.resolve(canonicalPost({
       title: 'Server title',
       content: 'Authoritative article body',
       cover_image_url: '/cover-b.png',
       like_count: 11,
-      comment_count: 4,
+      reply_count: 4,
       view_count: 321,
     }));
     await flushPromises();
@@ -334,13 +357,13 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
     expect(mounted.text()).not.toContain('Warm excerpt only');
     expect(mounted.text()).toContain('4');
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
   });
 
   it('removes stale warm content on a 404 without starting detail side effects', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post());
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
@@ -352,17 +375,17 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.post-detail').exists()).toBe(false);
     expect(mounted.find('.detail-state--error').text()).toContain('This post does not exist.');
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
-    expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
-    expect(mocks.getArticleRepostState).not.toHaveBeenCalled();
-    expect(mocks.getArticleComments).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.getPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.getPostRepostState).not.toHaveBeenCalled();
+    expect(mocks.getPostReplies).not.toHaveBeenCalled();
   });
 
   it('keeps reply intent in the URL during warm loading and consumes it after success', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     mocks.route.query.reply = '1';
     mocks.consumeHandoff.mockReturnValueOnce(post());
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
@@ -371,15 +394,15 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.test-composer').exists()).toBe(false);
     expect(mocks.composerFocus).not.toHaveBeenCalled();
     expect(mocks.router.replace).not.toHaveBeenCalled();
-    expect(mocks.getArticleComments).not.toHaveBeenCalled();
+    expect(mocks.getPostReplies).not.toHaveBeenCalled();
 
-    request.resolve(article());
+    request.resolve(canonicalPost());
     await flushPromises();
 
     expect(mounted.find('.test-composer').exists()).toBe(true);
     expect(mocks.composerFocus).toHaveBeenCalledTimes(1);
     expect(mocks.router.replace).toHaveBeenCalledWith({
-      name: 'NewsDetail',
+      name: 'PostDetail',
       params: { id: '42' },
       query: {},
       hash: '',
@@ -387,14 +410,14 @@ describe('NewsDetailView warm and cold transition', () => {
   });
 
   it('keeps the current route presentation when an older detail request resolves last', async () => {
-    const firstRequest = deferred<Article>();
-    const secondRequest = deferred<Article>();
+    const firstRequest = deferred<Post>();
+    const secondRequest = deferred<Post>();
     mocks.consumeHandoff.mockImplementation((id: number) => id === 43 ? post({
       id: 43,
       title: 'Warm B',
       excerpt: 'Warm B excerpt',
     }) : null);
-    mocks.getArticleById
+    mocks.getPostById
       .mockImplementationOnce(() => firstRequest.promise)
       .mockImplementationOnce(() => secondRequest.promise);
 
@@ -403,29 +426,29 @@ describe('NewsDetailView warm and cold transition', () => {
     mocks.route.params.id = '43';
     await flushPromises();
 
-    expect(mocks.getArticleById).toHaveBeenCalledTimes(2);
+    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
     expect(mounted.find('.post-detail__body').text()).toBe('Warm B excerpt');
 
-    firstRequest.resolve(article({ ID: 42, title: 'Stale A', content: 'Stale A body' }));
+    firstRequest.resolve(canonicalPost({ id: 42, title: 'Stale A', content: 'Stale A body' }));
     await flushPromises();
     expect(mounted.find('.post-detail__body').text()).toBe('Warm B excerpt');
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
 
-    secondRequest.resolve(article({ ID: 43, title: 'Server B', content: 'Server B body' }));
+    secondRequest.resolve(canonicalPost({ id: 43, title: 'Server B', content: 'Server B body' }));
     await flushPromises();
     expect(mounted.find('.post-detail__body').text()).toBe('Server B body');
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(
+    expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledWith(
       43,
       expect.any(String),
-      'article_detail',
+      'post_detail',
     );
   });
 
   it('keeps a failed warm cover slot and retries a different authoritative URL', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post({ coverImageUrl: '/cover-a.png' }));
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
@@ -434,7 +457,7 @@ describe('NewsDetailView warm and cold transition', () => {
     expect(mounted.find('.post-detail__cover').exists()).toBe(true);
     expect(mounted.find('.post-detail__cover-placeholder').exists()).toBe(true);
 
-    request.resolve(article({ cover_image_url: '/cover-b.png' }));
+    request.resolve(canonicalPost({ cover_image_url: '/cover-b.png' }));
     await flushPromises();
 
     expect(mounted.find('.post-detail__cover').exists()).toBe(true);
@@ -443,14 +466,14 @@ describe('NewsDetailView warm and cold transition', () => {
   });
 
   it('keeps the placeholder when the authoritative response returns the same failed cover URL', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post({ coverImageUrl: '/cover-a.png' }));
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
     await mounted.find('.post-detail__cover img').trigger('error');
-    request.resolve(article({ cover_image_url: '/cover-a.png' }));
+    request.resolve(canonicalPost({ cover_image_url: '/cover-a.png' }));
     await flushPromises();
 
     expect(mounted.find('.post-detail__cover').exists()).toBe(true);
@@ -459,13 +482,13 @@ describe('NewsDetailView warm and cold transition', () => {
   });
 
   it('removes the cover figure when the authoritative article removes its cover', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post({ coverImageUrl: '/cover-a.png' }));
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
-    request.resolve(article({ cover_image_url: '' }));
+    request.resolve(canonicalPost({ cover_image_url: '' }));
     await flushPromises();
 
     expect(mounted.find('.post-detail__cover').exists()).toBe(false);

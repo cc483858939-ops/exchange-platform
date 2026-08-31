@@ -25,7 +25,7 @@ func loadMaterializedCandidateAuthorContext(userID uint, profile *userInterestPr
 	authorIDs := make([]uint, 0, len(candidates))
 	seen := make(map[uint]struct{}, len(candidates))
 	for _, candidate := range candidates {
-		authorID := candidate.Article.AuthorID
+		authorID := candidate.Post.AuthorID
 		if authorID == 0 {
 			continue
 		}

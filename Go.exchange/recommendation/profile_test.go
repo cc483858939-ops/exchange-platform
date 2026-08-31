@@ -10,14 +10,14 @@ import (
 
 func TestBuildInterestProfileGoldenVectorsAndCounts(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	quick := UserArticleOutcome{ArticleID: 2, NegativeSignal: &UserArticleSignal{SignalType: "quick_bounce", OccurredAt: now}}
-	like := UserArticleOutcome{ArticleID: 1, PositiveSignals: []UserArticleSignal{{SignalType: "like", OccurredAt: now}}}
+	quick := UserPostOutcome{PostID: 2, NegativeSignal: &UserPostSignal{SignalType: "quick_bounce", OccurredAt: now}}
+	like := UserPostOutcome{PostID: 1, PositiveSignals: []UserPostSignal{{SignalType: "like", OccurredAt: now}}}
 	cfg := config.RecommendationConfig{
 		BehaviorWeights:    config.RecommendationBehaviorWeights{Like: 6, QuickBounce: -3},
-		SignalHalfLifeDays: 14, PositiveSignalCoexistBonus: 1, PositiveArticleWeightCap: 7,
+		SignalHalfLifeDays: 14, PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 		NegativeConfidenceSaturationScale: 12,
 	}
-	built, err := BuildInterestProfile(CanonicalizationResult{Outcomes: []UserArticleOutcome{like, quick}, InteractedArticleIDs: []uint{1, 2}}, now, cfg, "embedding-v1", func(_ []uint, _ string) (map[uint][]float32, error) {
+	built, err := BuildInterestProfile(CanonicalizationResult{Outcomes: []UserPostOutcome{like, quick}, InteractedPostIDs: []uint{1, 2}}, now, cfg, "embedding-v1", func(_ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {3, 4}, 2: {1, 0}}, nil
 	})
 	if err != nil {

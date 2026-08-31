@@ -58,7 +58,7 @@ func TestClassifyRecommendationReadRejectsInvalidMeasurements(t *testing.T) {
 	}
 }
 
-func TestEstimateArticleReadTime(t *testing.T) {
+func TestEstimatePostReadTime(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
@@ -81,7 +81,7 @@ func TestEstimateArticleReadTime(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := estimateArticleReadTime(tc.content); got != tc.want {
+			if got := estimatePostReadTime(tc.content); got != tc.want {
 				t.Fatalf("estimate=%s want=%s", got, tc.want)
 			}
 		})

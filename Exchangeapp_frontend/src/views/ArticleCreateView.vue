@@ -92,7 +92,7 @@
               <summary>Additional details</summary>
               <div class="composer-details__fields">
                 <div class="composer-field">
-                  <label for="article-title">Headline (optional)</label>
+                  <label for="article-title">Headline</label>
                   <input
                     id="article-title"
                     v-model="title"
@@ -119,7 +119,7 @@
                 </div>
 
                 <div class="composer-field">
-                  <label for="article-preview">Summary (optional)</label>
+                  <label for="article-preview">Summary</label>
                   <textarea
                     id="article-preview"
                     v-model="preview"
@@ -233,7 +233,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { createArticle, uploadArticleCover } from '../services/articleService';
+import { createPost, uploadArticleCover } from '../services/postService';
 import { useAuthStore } from '../store/auth';
 import { useArticleDraftStore } from '../store/articleDraft';
 import { useFeedStore } from '../store/feed';
@@ -313,6 +313,9 @@ const previewLength = computed(() => codePointLength(preview.value));
 const contentLength = computed(() => codePointLength(content.value));
 
 const titleError = computed(() => {
+  if (validationAttempted.value && !title.value.trim()) {
+    return 'Headline is required.';
+  }
   if (titleLength.value > maxTitleLength) {
     return 'Headline must be ' + maxTitleLength + ' characters or fewer.';
   }
@@ -320,6 +323,9 @@ const titleError = computed(() => {
 });
 
 const previewError = computed(() => {
+  if (validationAttempted.value && !preview.value.trim()) {
+    return 'Summary is required.';
+  }
   if (previewLength.value > maxPreviewLength) {
     return 'Summary must be ' + maxPreviewLength + ' characters or fewer.';
   }
@@ -338,6 +344,8 @@ const contentError = computed(() => {
 
 const canPublish = computed(() => (
   authStore.isAuthenticated
+  && Boolean(title.value.trim())
+  && Boolean(preview.value.trim())
   && titleLength.value <= maxTitleLength
   && previewLength.value <= maxPreviewLength
   && Boolean(content.value.trim())
@@ -510,27 +518,30 @@ const submitArticle = async () => {
 
     phase.value = 'publishing';
     try {
-      const article = await createArticle(
-        coverImageURL
-          ? { ...draft, cover_image_url: coverImageURL }
-          : draft,
-      );
+      const post = await createPost({
+        content: draft.content,
+        article: {
+          title: draft.title,
+          preview: draft.preview,
+          cover_image_url: coverImageURL,
+        },
+      });
       if (
         !isCurrentPublishAttempt(publishAttempt, publisherUserID, selectedCover)
       ) {
         return;
       }
-      if (article.author?.id !== publisherUserID) {
+      if (post.author?.id !== publisherUserID) {
         publishError.value = 'The post was saved, but your account changed during publishing. It was not added to this Home feed.';
         return;
       }
 
-      if (!feedStore.registerPublishedArticle(article, publisherUserID)) {
+      if (!feedStore.registerPublishedPost(post, publisherUserID)) {
         publishError.value = 'The post was published, but Home could not update for this account. Your draft was preserved.';
         return;
       }
-      profileSessionStore.registerPublishedArticle(article, publisherUserID);
-      authStore.syncCurrentIdentityProfile(article.author);
+      profileSessionStore.registerPublishedPost(post, publisherUserID);
+      authStore.syncCurrentIdentityProfile(post.author);
       articleDraft.clear();
 
       await router.replace({

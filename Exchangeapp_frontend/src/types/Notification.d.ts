@@ -11,8 +11,8 @@ export interface Notification {
   id: number;
   type: NotificationType;
   actor: NotificationActor;
-  article_id: number | null;
-  comment_id: number | null;
+  post_id: number | null;
+  conversation_id: number | null;
   activity_at: string;
   read: boolean;
 }

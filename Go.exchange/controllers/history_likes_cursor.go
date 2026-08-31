@@ -21,7 +21,7 @@ const (
 type likedHistoryCursor struct {
 	Version        int       `json:"v"`
 	StateChangedAt time.Time `json:"state_changed_at"`
-	ArticleID      uint      `json:"article_id"`
+	PostID      uint      `json:"post_id"`
 }
 
 func parseLikedHistoryPageQuery(ctx *gin.Context) (int, *likedHistoryCursor, error) {
@@ -49,7 +49,7 @@ func parseLikedHistoryPageQuery(ctx *gin.Context) (int, *likedHistoryCursor, err
 }
 
 func encodeLikedHistoryCursor(cursor likedHistoryCursor) (string, error) {
-	if cursor.Version != likedHistoryCursorVersion || cursor.StateChangedAt.IsZero() || cursor.ArticleID == 0 {
+	if cursor.Version != likedHistoryCursorVersion || cursor.StateChangedAt.IsZero() || cursor.PostID == 0 {
 		return "", errors.New("invalid cursor")
 	}
 	payload, err := json.Marshal(cursor)
@@ -71,7 +71,7 @@ func decodeLikedHistoryCursor(raw string) (likedHistoryCursor, error) {
 	if err := json.Unmarshal(payload, &cursor); err != nil {
 		return likedHistoryCursor{}, errors.New("invalid cursor")
 	}
-	if cursor.Version != likedHistoryCursorVersion || cursor.StateChangedAt.IsZero() || cursor.ArticleID == 0 {
+	if cursor.Version != likedHistoryCursorVersion || cursor.StateChangedAt.IsZero() || cursor.PostID == 0 {
 		return likedHistoryCursor{}, errors.New("invalid cursor")
 	}
 	return cursor, nil

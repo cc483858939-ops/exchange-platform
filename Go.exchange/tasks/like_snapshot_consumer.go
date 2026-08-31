@@ -56,7 +56,7 @@ func runLikeSnapshotProjectionConsumer(ctx context.Context) {
 			return
 		}
 		event, err := eventing.DecodeEnvelope(message.Value)
-		if err == nil && event.Type == eventing.EventTypeArticleLikeSnapshot {
+		if err == nil && event.Type == eventing.EventTypePostLikeSnapshot {
 			err = applyLikeSnapshotEvent(event)
 		}
 		if err != nil {
@@ -76,11 +76,11 @@ func runLikeSnapshotProjectionConsumer(ctx context.Context) {
 }
 
 func applyLikeSnapshotEvent(event eventing.Envelope) error {
-	var payload eventing.ArticleLikeSnapshotPayload
+	var payload eventing.PostLikeSnapshotPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("decode like snapshot: %w", err)
 	}
-	if payload.ArticleID == 0 || payload.Version <= 0 || payload.LikeCount < 0 {
+	if payload.PostID == 0 || payload.Version <= 0 || payload.LikeCount < 0 {
 		return fmt.Errorf("invalid like snapshot payload")
 	}
 	return global.Db.Transaction(func(tx *gorm.DB) error {
@@ -88,8 +88,8 @@ func applyLikeSnapshotEvent(event eventing.Envelope) error {
 		if err != nil || !first {
 			return err
 		}
-		return tx.Model(&models.Article{}).
-			Where("id = ? AND like_sync_version < ?", payload.ArticleID, payload.Version).
+		return tx.Model(&models.Post{}).
+			Where("id = ? AND like_sync_version < ?", payload.PostID, payload.Version).
 			Updates(map[string]interface{}{"like_count": payload.LikeCount, "like_sync_version": payload.Version}).Error
 	})
 }

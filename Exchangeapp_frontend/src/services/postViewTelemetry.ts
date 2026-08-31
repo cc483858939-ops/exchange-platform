@@ -1,66 +1,66 @@
 import { isAxiosError } from 'axios';
 import apiClient from '../axios';
 
-export type ArticleViewSource = 'article_detail' | 'feed';
+export type PostViewSource = 'post_detail' | 'feed';
 
-export type ArticleViewEvent = {
+export type PostViewEvent = {
   event_id: string;
-  article_id: number;
+  post_id: number;
   occurred_at: string;
-  source: ArticleViewSource;
+  source: PostViewSource;
 };
 
-export type QueuedArticleViewEvent = ArticleViewEvent & {
+export type QueuedPostViewEvent = PostViewEvent & {
   owner_user_id: number;
 };
 
-type ArticleViewEventResult = {
+type PostViewEventResult = {
   event_id: string;
   status: 'accepted' | 'rejected';
   reason?: string;
 };
 
-type ArticleViewBatchResponse = {
+type PostViewBatchResponse = {
   accepted: number;
   rejected: number;
-  results: ArticleViewEventResult[];
+  results: PostViewEventResult[];
 };
 
 type CurrentUserIDGetter = () => number | null;
 
 type FeedObservation = {
-  articleID: number;
+  postID: number;
   intersectionRatio: number;
   timer: number | null;
   emitted: boolean;
 };
 
-const storageKey = 'article_view_telemetry_queue_v2';
+const storageKey = 'post_view_telemetry_queue_v1';
 const maxBufferedEvents = 200;
 const maxBatchEvents = 50;
 const feedQualificationThreshold = 0.5;
 const feedQualificationDurationMS = 1000;
 const retryDelaysMS = [1000, 2000, 5000, 10000, 30000, 60000];
 
-let sharedClient: ArticleViewTelemetryClient | null = null;
+let sharedClient: PostViewTelemetryClient | null = null;
 
 const isValidUserID = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
-const isValidSource = (value: unknown): value is ArticleViewSource =>
-  value === 'article_detail' || value === 'feed';
+const isValidSource = (value: unknown): value is PostViewSource =>
+  value === 'post_detail' || value === 'feed';
 
-const isValidQueuedEvent = (value: unknown): value is QueuedArticleViewEvent => {
+const isValidQueuedEvent = (value: unknown): value is QueuedPostViewEvent => {
   if (!value || typeof value !== 'object') {
     return false;
   }
-  const event = value as Partial<QueuedArticleViewEvent>;
+  const event = value as Partial<QueuedPostViewEvent>;
   return isValidUserID(event.owner_user_id)
     && typeof event.event_id === 'string'
     && event.event_id.trim().length > 0
-    && typeof event.article_id === 'number'
-    && Number.isSafeInteger(event.article_id)
-    && event.article_id > 0
+    && typeof event.post_id === 'number'
+    && Number.isSafeInteger(event.post_id)
+    && event.post_id > 0
     && typeof event.occurred_at === 'string'
     && event.occurred_at.trim().length > 0
     && isValidSource(event.source);
@@ -95,7 +95,7 @@ const getRetryAfterMS = (error: unknown): number => {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
 };
 
-export function createArticleViewEventID(): string {
+export function createPostViewEventID(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
     return globalThis.crypto.randomUUID();
   }
@@ -107,8 +107,8 @@ export function createArticleViewEventID(): string {
   });
 }
 
-export class ArticleViewTelemetryClient {
-  private queue: QueuedArticleViewEvent[] = [];
+export class PostViewTelemetryClient {
+  private queue: QueuedPostViewEvent[] = [];
   private inFlight = false;
   private pendingFlush = false;
   private retryTimer: number | null = null;
@@ -161,17 +161,17 @@ export class ArticleViewTelemetryClient {
   }
 
   enqueue(
-    articleID: number,
+    postID: number,
     eventID: string,
-    source: ArticleViewSource,
+    source: PostViewSource,
     occurredAt = new Date().toISOString(),
   ): boolean {
     const ownerUserID = this.getCurrentUserID();
     const normalizedEventID = eventID.trim();
     if (
       !isValidUserID(ownerUserID)
-      || !Number.isSafeInteger(articleID)
-      || articleID <= 0
+      || !Number.isSafeInteger(postID)
+      || postID <= 0
       || !normalizedEventID
       || !isValidSource(source)
     ) {
@@ -181,7 +181,7 @@ export class ArticleViewTelemetryClient {
     const existingEvent = this.queue.find(event => event.event_id === normalizedEventID);
     if (existingEvent) {
       const isSameLogicalEvent = existingEvent.owner_user_id === ownerUserID
-        && existingEvent.article_id === articleID
+        && existingEvent.post_id === postID
         && existingEvent.source === source;
       if (!isSameLogicalEvent) {
         return false;
@@ -193,7 +193,7 @@ export class ArticleViewTelemetryClient {
     this.queue.push({
       owner_user_id: ownerUserID,
       event_id: normalizedEventID,
-      article_id: articleID,
+      post_id: postID,
       occurred_at: occurredAt,
       source,
     });
@@ -203,13 +203,13 @@ export class ArticleViewTelemetryClient {
     return true;
   }
 
-  observeFeedCard(element: HTMLElement, articleID: number): void {
-    if (this.stopped || !this.feedObserver || !Number.isSafeInteger(articleID) || articleID <= 0) {
+  observeFeedCard(element: HTMLElement, postID: number): void {
+    if (this.stopped || !this.feedObserver || !Number.isSafeInteger(postID) || postID <= 0) {
       return;
     }
     this.unobserveFeedCard(element);
     const observation: FeedObservation = {
-      articleID,
+      postID,
       intersectionRatio: 0,
       timer: null,
       emitted: false,
@@ -248,10 +248,10 @@ export class ArticleViewTelemetryClient {
     this.inFlight = true;
     let terminal = false;
     try {
-      const response = await apiClient.post<ArticleViewBatchResponse>('/article-view-events', {
-        events: batch.map(({ event_id, article_id, occurred_at, source }) => ({
+      const response = await apiClient.post<PostViewBatchResponse>('/post-view-events', {
+        events: batch.map(({ event_id, post_id, occurred_at, source }) => ({
           event_id,
-          article_id,
+          post_id,
           occurred_at,
           source,
         })),
@@ -262,7 +262,7 @@ export class ArticleViewTelemetryClient {
     } catch (error) {
       const status = getErrorStatus(error);
       if (status === 422) {
-        const responseData = (error as { response?: { data?: ArticleViewBatchResponse } } | null)?.response?.data;
+        const responseData = (error as { response?: { data?: PostViewBatchResponse } } | null)?.response?.data;
         const resultIDs = this.resultIDs(responseData);
         if (resultIDs.size > 0) {
           this.removeEventIDs(resultIDs);
@@ -338,8 +338,8 @@ export class ArticleViewTelemetryClient {
         return;
       }
       const accepted = this.enqueue(
-        observation.articleID,
-        createArticleViewEventID(),
+        observation.postID,
+        createPostViewEventID(),
         'feed',
       );
       if (accepted) {
@@ -382,8 +382,8 @@ export class ArticleViewTelemetryClient {
   }
 
   private removeTerminalResults(
-    batch: QueuedArticleViewEvent[],
-    response: ArticleViewBatchResponse,
+    batch: QueuedPostViewEvent[],
+    response: PostViewBatchResponse,
     status: number,
   ): void {
     const resultIDs = this.resultIDs(response);
@@ -396,7 +396,7 @@ export class ArticleViewTelemetryClient {
     }
   }
 
-  private resultIDs(response: ArticleViewBatchResponse | undefined): Set<string> {
+  private resultIDs(response: PostViewBatchResponse | undefined): Set<string> {
     const resultIDs = new Set<string>();
     if (!Array.isArray(response?.results)) {
       return resultIDs;
@@ -414,7 +414,7 @@ export class ArticleViewTelemetryClient {
     this.persistQueue();
   }
 
-  private dropBatch(batch: QueuedArticleViewEvent[]): void {
+  private dropBatch(batch: QueuedPostViewEvent[]): void {
     const eventIDs = new Set(batch.map(event => event.event_id));
     this.removeEventIDs(eventIDs);
   }
@@ -452,7 +452,7 @@ export class ArticleViewTelemetryClient {
       && this.queue.some(event => event.owner_user_id === currentUserID);
   }
 
-  private loadQueue(): QueuedArticleViewEvent[] {
+  private loadQueue(): QueuedPostViewEvent[] {
     try {
       const raw = sessionStorage.getItem(storageKey);
       if (!raw) {
@@ -477,21 +477,22 @@ export class ArticleViewTelemetryClient {
   }
 }
 
-export function initializeArticleViewTelemetry(
+export function initializePostViewTelemetry(
   getCurrentUserID: CurrentUserIDGetter,
-): ArticleViewTelemetryClient {
+): PostViewTelemetryClient {
   if (!sharedClient) {
-    sharedClient = new ArticleViewTelemetryClient(getCurrentUserID);
+    sharedClient = new PostViewTelemetryClient(getCurrentUserID);
     sharedClient.start();
   }
   return sharedClient;
 }
 
-export function getArticleViewTelemetry(): ArticleViewTelemetryClient {
-  return sharedClient ?? initializeArticleViewTelemetry(() => null);
+export function getPostViewTelemetry(): PostViewTelemetryClient {
+  return sharedClient ?? initializePostViewTelemetry(() => null);
 }
 
-export function resetArticleViewTelemetryForTests(): void {
+export function resetPostViewTelemetryForTests(): void {
   sharedClient?.stop();
   sharedClient = null;
 }
+

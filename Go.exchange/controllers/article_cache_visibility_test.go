@@ -11,75 +11,70 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestLoadArticleDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
+func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 	now := time.Now().UTC()
 	past := now.Add(-time.Minute)
 	future := now.Add(time.Minute)
 	expired := now.Add(-time.Minute)
 	cases := []struct {
 		name     string
-		response articleResponse
+		response postResponse
 	}{
 		{
 			name: "expired",
-			response: articleResponse{
-				ID:               42,
-				PublicationState: consts.ArticlePublicationStatePublished,
-				PublishedAt:      &past,
-				ExpiredAt:        &expired,
+			response: postResponse{
+				ID: 42, PublishedAt: &past,
+				Article: &postArticleResponse{PublicationState: consts.PostPublicationStatePublished, PublishedAt: &past, ExpiredAt: &expired},
 			},
 		},
 		{
 			name: "future",
-			response: articleResponse{
-				ID:               42,
-				PublicationState: consts.ArticlePublicationStatePublished,
-				PublishedAt:      &future,
+			response: postResponse{
+				ID: 42, PublishedAt: &future,
+				Article: &postArticleResponse{PublicationState: consts.PostPublicationStatePublished, PublishedAt: &future},
 			},
 		},
 		{
 			name: "missing published at",
-			response: articleResponse{
-				ID:               42,
-				PublicationState: consts.ArticlePublicationStatePublished,
+			response: postResponse{
+				ID: 42,
 			},
 		},
 		{
 			name: "unpublished",
-			response: articleResponse{
-				ID:               42,
-				PublicationState: "draft",
-				PublishedAt:      &past,
+			response: postResponse{
+				ID: 42, PublishedAt: &past,
+				Article: &postArticleResponse{PublicationState: "draft", PublishedAt: &past},
 			},
 		},
 	}
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			originalCacheLoader := loadArticleDetailCache
-			originalInvalidator := invalidateArticleDetailCacheKey
+			originalCacheLoader := loadPostDetailCache
+			originalInvalidator := invalidatePostDetailCacheKey
 			originalDB := global.Db
 			t.Cleanup(func() {
-				loadArticleDetailCache = originalCacheLoader
-				invalidateArticleDetailCacheKey = originalInvalidator
+				loadPostDetailCache = originalCacheLoader
+				invalidatePostDetailCacheKey = originalInvalidator
 				global.Db = originalDB
 			})
 
 			global.Db = nil
-			loadArticleDetailCache = func(string, func() (articleResponse, error)) (articleResponse, error) {
+			loadPostDetailCache = func(string, func() (postResponse, error)) (postResponse, error) {
 				return testCase.response, nil
 			}
 			var deletedKey string
-			invalidateArticleDetailCacheKey = func(key string) error {
+			invalidatePostDetailCacheKey = func(key string) error {
 				deletedKey = key
 				return errors.New("redis unavailable")
 			}
 
-			_, err := loadArticleDetail("42")
+			_, err := loadPostDetail("42")
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				t.Fatalf("error=%v want=%v", err, gorm.ErrRecordNotFound)
 			}
-			if deletedKey != articleDetailCacheKey("42") {
+			if deletedKey != postDetailCacheKey("42") {
 				t.Fatalf("deleted key=%q", deletedKey)
 			}
 		})

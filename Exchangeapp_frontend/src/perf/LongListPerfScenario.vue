@@ -16,7 +16,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useAuthStore } from '../store/auth';
 import PostCard from '../components/feed/PostCard.vue';
-import { resetArticleViewTelemetryForTests } from '../services/articleViewTelemetry';
+import { resetPostViewTelemetryForTests } from '../services/postViewTelemetry';
 import { createPerfPosts } from './fixtures';
 import {
   attributeLongTasksByPhase,
@@ -260,7 +260,7 @@ const cleanup = () => {
   if (cleanedUp) {
     return observerInstrumentation.snapshot();
   }
-  resetArticleViewTelemetryForTests();
+  resetPostViewTelemetryForTests();
   const snapshot = observerInstrumentation.snapshot();
   observerInstrumentation.restore();
   cleanedUp = true;
@@ -269,7 +269,7 @@ const cleanup = () => {
 
 const telemetryNetworkRequestCount = (): number => (
   performance.getEntriesByType('resource')
-    .filter(entry => entry.name.includes('article-view-events'))
+    .filter(entry => entry.name.includes('post-view-events'))
     .length
 );
 
@@ -507,7 +507,7 @@ const runScenario = async () => {
     }
     const telemetryNetworkRequests = telemetryNetworkRequestCount();
     if (telemetryNetworkRequests !== 0) {
-      issues.push('article-view-events network traffic was observed');
+      issues.push('post-view-events network traffic was observed');
     }
     const memory: PerfMemoryMetrics = memorySupported
       ? {

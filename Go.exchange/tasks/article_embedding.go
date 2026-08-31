@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/consts"
 	"Go.exchange/embeddings"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
@@ -28,52 +27,61 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const articleEmbeddingConsumerRestartDelay = 2 * time.Second
+const postEmbeddingConsumerRestartDelay = 2 * time.Second
 
-type articleEmbeddingMessageReader interface {
+type postEmbeddingMessageReader interface {
 	FetchMessage(context.Context) (kafka.Message, error)
 	CommitMessages(context.Context, ...kafka.Message) error
 	Close() error
 }
 
-type articleEmbeddingStore interface {
-	GetArticle(context.Context, uint) (models.Article, error)
-	GetEmbedding(context.Context, uint) (models.ArticleEmbedding, error)
-	UpsertEmbedding(context.Context, models.ArticleEmbedding) error
+type postEmbeddingStore interface {
+	GetPost(context.Context, uint) (models.Post, error)
+	GetEmbedding(context.Context, uint) (models.PostEmbedding, error)
+	UpsertEmbedding(context.Context, models.PostEmbedding) error
 }
 
-type atomicArticleEmbeddingStore interface {
-	UpsertEmbeddingAndInvalidateProfiles(context.Context, models.ArticleEmbedding, time.Time) error
+type atomicPostEmbeddingStore interface {
+	UpsertEmbeddingAndInvalidateProfiles(context.Context, models.PostEmbedding, time.Time) error
 }
 
-type gormArticleEmbeddingStore struct {
+type gormPostEmbeddingStore struct {
 	db *gorm.DB
 }
 
-func (s gormArticleEmbeddingStore) GetArticle(ctx context.Context, articleID uint) (models.Article, error) {
-	var article models.Article
+func (s gormPostEmbeddingStore) GetPost(ctx context.Context, postID uint) (models.Post, error) {
+	var post models.Post
+	if s.db == nil {
+		return post, errors.New("database is not initialized")
+	}
+	err := s.db.WithContext(ctx).First(&post, postID).Error
+	return post, err
+}
+
+func (s gormPostEmbeddingStore) GetPostArticle(ctx context.Context, postID uint) (models.PostArticle, error) {
+	var article models.PostArticle
 	if s.db == nil {
 		return article, errors.New("database is not initialized")
 	}
-	err := s.db.WithContext(ctx).First(&article, articleID).Error
+	err := s.db.WithContext(ctx).Where("post_id = ?", postID).First(&article).Error
 	return article, err
 }
 
-func (s gormArticleEmbeddingStore) GetEmbedding(ctx context.Context, articleID uint) (models.ArticleEmbedding, error) {
-	var embedding models.ArticleEmbedding
+func (s gormPostEmbeddingStore) GetEmbedding(ctx context.Context, postID uint) (models.PostEmbedding, error) {
+	var embedding models.PostEmbedding
 	if s.db == nil {
 		return embedding, errors.New("database is not initialized")
 	}
-	err := s.db.WithContext(ctx).Where("article_id = ?", articleID).First(&embedding).Error
+	err := s.db.WithContext(ctx).Where("post_id = ?", postID).First(&embedding).Error
 	return embedding, err
 }
 
-func (s gormArticleEmbeddingStore) UpsertEmbedding(ctx context.Context, embedding models.ArticleEmbedding) error {
+func (s gormPostEmbeddingStore) UpsertEmbedding(ctx context.Context, embedding models.PostEmbedding) error {
 	if s.db == nil {
 		return errors.New("database is not initialized")
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "article_id"}},
+		Columns: []clause.Column{{Name: "post_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"version": embedding.Version, "model": embedding.Model, "dimensions": embedding.Dimensions,
 			"embedding": embedding.Embedding, "content_hash": embedding.ContentHash, "updated_at": embedding.UpdatedAt,
@@ -85,13 +93,13 @@ func (s gormArticleEmbeddingStore) UpsertEmbedding(ctx context.Context, embeddin
 // authoritative user fan-out in one transaction. The fan-out intentionally
 // reads source behavior and reaction tables because the canonical state table
 // may not exist yet for a first interaction.
-func (s gormArticleEmbeddingStore) UpsertEmbeddingAndInvalidateProfiles(ctx context.Context, embedding models.ArticleEmbedding, now time.Time) error {
+func (s gormPostEmbeddingStore) UpsertEmbeddingAndInvalidateProfiles(ctx context.Context, embedding models.PostEmbedding, now time.Time) error {
 	if s.db == nil {
 		return errors.New("database is not initialized")
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "article_id"}},
+			Columns: []clause.Column{{Name: "post_id"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
 				"version": embedding.Version, "model": embedding.Model, "dimensions": embedding.Dimensions,
 				"embedding": embedding.Embedding, "content_hash": embedding.ContentHash, "updated_at": embedding.UpdatedAt,
@@ -101,95 +109,95 @@ func (s gormArticleEmbeddingStore) UpsertEmbeddingAndInvalidateProfiles(ctx cont
 		}
 		var users []uint
 		if err := tx.Raw(`
-SELECT user_id FROM article_behaviors WHERE article_id = ?
+SELECT user_id FROM post_behaviors WHERE post_id = ?
 UNION
-SELECT user_id FROM article_reaction WHERE article_id = ?`, embedding.ArticleID, embedding.ArticleID).Scan(&users).Error; err != nil {
+SELECT user_id FROM post_reaction WHERE post_id = ?`, embedding.PostID, embedding.PostID).Scan(&users).Error; err != nil {
 			return err
 		}
-		return recommendation.InvalidateProfiles(tx, users, "article_embedding_changed", now)
+		return recommendation.InvalidateProfiles(tx, users, "post_embedding_changed", now)
 	})
 }
 
-var newArticleEmbedder = func(cfg config.EmbeddingConfig) (embeddings.Embedder, error) {
+var newPostEmbedder = func(cfg config.EmbeddingConfig) (embeddings.Embedder, error) {
 	return embeddings.NewOpenAICompatibleEmbedder(cfg)
 }
 
-var newArticleEmbeddingReader = func(cfg config.KafkaConfig, topic, groupID string) (articleEmbeddingMessageReader, error) {
+var newPostEmbeddingReader = func(cfg config.KafkaConfig, topic, groupID string) (postEmbeddingMessageReader, error) {
 	return eventing.NewKafkaReader(cfg, topic, groupID)
 }
 
-func startArticleEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
+func startPostEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
 	if config.AppConfig == nil || !config.AppConfig.Embedding.Enabled ||
-		strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingTopic) == "" ||
-		strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingGroupID) == "" {
+		strings.TrimSpace(config.AppConfig.Kafka.PostEmbeddingTopic) == "" ||
+		strings.TrimSpace(config.AppConfig.Kafka.PostEmbeddingGroupID) == "" {
 		return
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		PipelineStarted(PipelineArticleEmbedding)
-		defer PipelineStopped(PipelineArticleEmbedding)
+		PipelineStarted(PipelinePostEmbedding)
+		defer PipelineStopped(PipelinePostEmbedding)
 		for {
-			runArticleEmbeddingConsumer(ctx)
+			runPostEmbeddingConsumer(ctx)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(articleEmbeddingConsumerRestartDelay):
+			case <-time.After(postEmbeddingConsumerRestartDelay):
 			}
 		}
 	}()
 }
 
-func runArticleEmbeddingConsumer(ctx context.Context) {
+func runPostEmbeddingConsumer(ctx context.Context) {
 	if config.AppConfig == nil {
 		return
 	}
 	if global.Db == nil {
-		PipelineFailure(PipelineArticleEmbedding, "database_unavailable", 0)
-		log.Printf("[ArticleEmbedding] consumer disabled: database is not initialized")
+		PipelineFailure(PipelinePostEmbedding, "database_unavailable", 0)
+		log.Printf("[PostEmbedding] consumer disabled: database is not initialized")
 		return
 	}
 	activeVersion := strings.TrimSpace(config.ActiveEmbeddingVersion())
 	if activeVersion == "" {
-		PipelineFailure(PipelineArticleEmbedding, "embedding_config_invalid", 0)
-		log.Printf("[ArticleEmbedding] consumer disabled: active embedding version is empty")
+		PipelineFailure(PipelinePostEmbedding, "embedding_config_invalid", 0)
+		log.Printf("[PostEmbedding] consumer disabled: active embedding version is empty")
 		return
 	}
-	embedder, err := newArticleEmbedder(config.AppConfig.Embedding)
+	embedder, err := newPostEmbedder(config.AppConfig.Embedding)
 	if err != nil {
-		PipelineFailure(PipelineArticleEmbedding, "embedding_provider_unavailable", 0)
-		log.Printf("[ArticleEmbedding] create embedder: %v", err)
+		PipelineFailure(PipelinePostEmbedding, "embedding_provider_unavailable", 0)
+		log.Printf("[PostEmbedding] create embedder: %v", err)
 		return
 	}
-	topic := strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingTopic)
-	groupID := strings.TrimSpace(config.AppConfig.Kafka.ArticleEmbeddingGroupID)
-	reader, err := newArticleEmbeddingReader(config.AppConfig.Kafka, topic, groupID)
+	topic := strings.TrimSpace(config.AppConfig.Kafka.PostEmbeddingTopic)
+	groupID := strings.TrimSpace(config.AppConfig.Kafka.PostEmbeddingGroupID)
+	reader, err := newPostEmbeddingReader(config.AppConfig.Kafka, topic, groupID)
 	if err != nil {
-		PipelineFailure(PipelineArticleEmbedding, "kafka_reader_unavailable", 0)
-		log.Printf("[ArticleEmbedding] create Kafka reader: %v", err)
+		PipelineFailure(PipelinePostEmbedding, "kafka_reader_unavailable", 0)
+		log.Printf("[PostEmbedding] create Kafka reader: %v", err)
 		return
 	}
 	defer func() {
 		if closeErr := reader.Close(); closeErr != nil {
-			log.Printf("[ArticleEmbedding] close Kafka reader: %v", closeErr)
+			log.Printf("[PostEmbedding] close Kafka reader: %v", closeErr)
 		}
 	}()
-	store := gormArticleEmbeddingStore{db: global.Db}
-	if err := consumeArticleEmbeddingMessages(ctx, reader, embedder, store, activeVersion); err != nil && ctx.Err() == nil {
-		PipelineFailure(PipelineArticleEmbedding, "projection_failed", 0)
-		log.Printf("[ArticleEmbedding] consume: %v", err)
+	store := gormPostEmbeddingStore{db: global.Db}
+	if err := consumePostEmbeddingMessages(ctx, reader, embedder, store, activeVersion); err != nil && ctx.Err() == nil {
+		PipelineFailure(PipelinePostEmbedding, "projection_failed", 0)
+		log.Printf("[PostEmbedding] consume: %v", err)
 	}
 }
 
-func consumeArticleEmbeddingMessages(ctx context.Context, reader articleEmbeddingMessageReader, embedder embeddings.Embedder, store articleEmbeddingStore, activeVersion string) error {
+func consumePostEmbeddingMessages(ctx context.Context, reader postEmbeddingMessageReader, embedder embeddings.Embedder, store postEmbeddingStore, activeVersion string) error {
 	if reader == nil {
-		return errors.New("article embedding message reader is nil")
+		return errors.New("post embedding message reader is nil")
 	}
 	if embedder == nil {
-		return errors.New("article embedding provider is nil")
+		return errors.New("post embedding provider is nil")
 	}
 	if store == nil {
-		return errors.New("article embedding store is nil")
+		return errors.New("post embedding store is nil")
 	}
 	for {
 		message, err := reader.FetchMessage(ctx)
@@ -197,62 +205,74 @@ func consumeArticleEmbeddingMessages(ctx context.Context, reader articleEmbeddin
 			return err
 		}
 		started := time.Now()
-		processErr := processArticleEmbeddingMessage(ctx, message, embedder, store, activeVersion)
-		metrics.ObserveArticleEmbeddingProcessingDuration(time.Since(started))
+		processErr := processPostEmbeddingMessage(ctx, message, embedder, store, activeVersion)
+		metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
 		if processErr != nil {
 			return processErr
 		}
 		if err := reader.CommitMessages(ctx, message); err != nil {
-			metrics.RecordArticleEmbeddingFailure("kafka_commit")
+			metrics.RecordPostEmbeddingFailure("kafka_commit")
 			return err
 		}
 		backlog := int64(0)
 		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
 			backlog = kafkaBacklog(statsReader)
 		}
-		PipelineCommit(PipelineArticleEmbedding, time.Now().UTC(), backlog)
+		PipelineCommit(PipelinePostEmbedding, time.Now().UTC(), backlog)
 	}
 }
 
-func processArticleEmbeddingMessage(ctx context.Context, message kafka.Message, embedder embeddings.Embedder, store articleEmbeddingStore, activeVersion string) error {
-	articleID, err := decodeArticleEmbeddingRequest(message.Value)
+func processPostEmbeddingMessage(ctx context.Context, message kafka.Message, embedder embeddings.Embedder, store postEmbeddingStore, activeVersion string) error {
+	postID, err := decodePostEmbeddingRequest(message.Value)
 	if err != nil {
-		log.Printf("[ArticleEmbedding] discard poison message: %v", err)
-		metrics.RecordArticleEmbeddingFailure("decode")
-		metrics.RecordArticleEmbeddingEvent("invalid_event")
+		log.Printf("[PostEmbedding] discard poison message: %v", err)
+		metrics.RecordPostEmbeddingFailure("decode")
+		metrics.RecordPostEmbeddingEvent("invalid_event")
 		return nil
 	}
 	if store == nil {
-		return errors.New("article embedding store is nil")
+		return errors.New("post embedding store is nil")
 	}
 	activeVersion = strings.TrimSpace(activeVersion)
 	if activeVersion == "" {
 		return errors.New("active embedding version is required")
 	}
-	article, err := store.GetArticle(ctx, articleID)
+	post, err := store.GetPost(ctx, postID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			metrics.RecordArticleEmbeddingEvent("article_missing")
+			metrics.RecordPostEmbeddingEvent("post_missing")
 			return nil
 		}
-		metrics.RecordArticleEmbeddingFailure("db_read")
+		metrics.RecordPostEmbeddingFailure("db_read")
 		return err
 	}
-	if article.PublicationState != consts.ArticlePublicationStatePublished || article.PublishedAt == nil {
-		metrics.RecordArticleEmbeddingEvent("article_unavailable")
-		return nil
+	var postArticle *models.PostArticle
+	if metadataStore, ok := store.(interface {
+		GetPostArticle(context.Context, uint) (models.PostArticle, error)
+	}); ok {
+		metadata, metadataErr := metadataStore.GetPostArticle(ctx, postID)
+		if metadataErr == nil {
+			postArticle = &metadata
+		} else if !errors.Is(metadataErr, gorm.ErrRecordNotFound) {
+			metrics.RecordPostEmbeddingFailure("db_read")
+			return metadataErr
+		}
+	}
+	title, preview := "", ""
+	if postArticle != nil {
+		title, preview = postArticle.Title, postArticle.Preview
 	}
 
-	text := embeddings.BuildArticleEmbeddingText(article.Title, article.Content)
-	contentHash := embeddings.ArticleEmbeddingContentHash(article.Title, article.Content)
+	text := embeddings.BuildPostEmbeddingText(title, preview, post.Content)
+	contentHash := embeddings.PostEmbeddingContentHash(title, preview, post.Content)
 
-	existing, lookupErr := store.GetEmbedding(ctx, articleID)
+	existing, lookupErr := store.GetEmbedding(ctx, postID)
 	if lookupErr == nil && existing.Version == activeVersion && existing.ContentHash == contentHash {
-		metrics.RecordArticleEmbeddingEvent("up_to_date")
+		metrics.RecordPostEmbeddingEvent("up_to_date")
 		return nil
 	}
 	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
-		metrics.RecordArticleEmbeddingFailure("db_read")
+		metrics.RecordPostEmbeddingFailure("db_read")
 		return lookupErr
 	}
 
@@ -262,84 +282,84 @@ func processArticleEmbeddingMessage(ctx context.Context, message kafka.Message, 
 			return ctx.Err()
 		}
 		if embeddings.IsRetryableProviderError(err) {
-			metrics.RecordArticleEmbeddingFailure("provider")
+			metrics.RecordPostEmbeddingFailure("provider")
 			return err
 		}
-		log.Printf("[ArticleEmbedding] permanent provider error article=%d: %v", articleID, err)
-		metrics.RecordArticleEmbeddingFailure("provider")
-		metrics.RecordArticleEmbeddingEvent("provider_non_retryable")
+		log.Printf("[PostEmbedding] permanent provider error post=%d: %v", postID, err)
+		metrics.RecordPostEmbeddingFailure("provider")
+		metrics.RecordPostEmbeddingEvent("provider_non_retryable")
 		return nil
 	}
-	if len(result.Vectors) != 1 || !validArticleEmbeddingVector(result.Vectors[0]) {
-		metrics.RecordArticleEmbeddingFailure("provider")
+	if len(result.Vectors) != 1 || !validPostEmbeddingVector(result.Vectors[0]) {
+		metrics.RecordPostEmbeddingFailure("provider")
 		return errors.New("embedding provider returned an invalid single vector")
 	}
 	modelName := strings.TrimSpace(result.Model)
 	if modelName == "" {
-		metrics.RecordArticleEmbeddingFailure("provider")
+		metrics.RecordPostEmbeddingFailure("provider")
 		return errors.New("embedding provider returned an empty model")
 	}
 	dimensions := len(result.Vectors[0])
 	if dimensions <= 0 {
-		metrics.RecordArticleEmbeddingFailure("provider")
+		metrics.RecordPostEmbeddingFailure("provider")
 		return errors.New("embedding provider returned invalid dimensions")
 	}
 
 	now := time.Now().UTC()
 	vector := pgvector.NewVector(result.Vectors[0])
-	embedding := models.ArticleEmbedding{
-		ArticleID: articleID, Version: activeVersion, Model: modelName,
+	embedding := models.PostEmbedding{
+		PostID: postID, Version: activeVersion, Model: modelName,
 		Dimensions: dimensions, Embedding: vector, ContentHash: contentHash,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	var upsertErr error
-	if atomicStore, ok := store.(atomicArticleEmbeddingStore); ok {
+	if atomicStore, ok := store.(atomicPostEmbeddingStore); ok {
 		upsertErr = atomicStore.UpsertEmbeddingAndInvalidateProfiles(ctx, embedding, now)
 	} else {
 		upsertErr = store.UpsertEmbedding(ctx, embedding)
 	}
 	if upsertErr != nil {
-		metrics.RecordArticleEmbeddingFailure("db_upsert")
+		metrics.RecordPostEmbeddingFailure("db_upsert")
 		return upsertErr
 	}
-	metrics.RecordArticleEmbeddingEvent("generated")
+	metrics.RecordPostEmbeddingEvent("generated")
 	return nil
 }
 
-func decodeArticleEmbeddingRequest(raw []byte) (uint, error) {
+func decodePostEmbeddingRequest(raw []byte) (uint, error) {
 	event, err := eventing.DecodeEnvelope(raw)
 	if err != nil {
 		return 0, err
 	}
 	if _, err := uuid.Parse(event.ID); err != nil {
-		return 0, errors.New("article embedding event id must be a UUID")
+		return 0, errors.New("post embedding event id must be a UUID")
 	}
-	if event.Type != eventing.EventTypeArticleEmbeddingRequested {
-		return 0, fmt.Errorf("unexpected article embedding event type %q", event.Type)
+	if event.Type != eventing.EventTypePostEmbeddingRequested {
+		return 0, fmt.Errorf("unexpected post embedding event type %q", event.Type)
 	}
 	if event.SchemaVersion != 1 {
-		return 0, fmt.Errorf("unsupported article embedding schema version %d", event.SchemaVersion)
+		return 0, fmt.Errorf("unsupported post embedding schema version %d", event.SchemaVersion)
 	}
-	if event.AggregateType != "article" {
-		return 0, fmt.Errorf("unexpected article embedding aggregate type %q", event.AggregateType)
+	if event.AggregateType != "post" {
+		return 0, fmt.Errorf("unexpected post embedding aggregate type %q", event.AggregateType)
 	}
 	if event.OccurredAt.IsZero() {
-		return 0, errors.New("article embedding occurred_at is required")
+		return 0, errors.New("post embedding occurred_at is required")
 	}
-	var payload eventing.ArticleEmbeddingRequestedPayload
+	var payload eventing.PostEmbeddingRequestedPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return 0, fmt.Errorf("decode article embedding payload: %w", err)
+		return 0, fmt.Errorf("decode post embedding payload: %w", err)
 	}
-	if payload.ArticleID == 0 {
-		return 0, errors.New("article embedding payload article_id is required")
+	if payload.PostID == 0 {
+		return 0, errors.New("post embedding payload post_id is required")
 	}
-	if event.AggregateID != strconv.FormatUint(uint64(payload.ArticleID), 10) {
-		return 0, errors.New("article embedding aggregate_id does not match payload article_id")
+	if event.AggregateID != strconv.FormatUint(uint64(payload.PostID), 10) {
+		return 0, errors.New("post embedding aggregate_id does not match payload post_id")
 	}
-	return payload.ArticleID, nil
+	return payload.PostID, nil
 }
 
-func validArticleEmbeddingVector(vector []float32) bool {
+func validPostEmbeddingVector(vector []float32) bool {
 	if len(vector) == 0 {
 		return false
 	}

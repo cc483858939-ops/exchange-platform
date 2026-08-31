@@ -19,17 +19,17 @@ import (
 const (
 	defaultRecommendationLimit              = 20
 	maxRecommendationLimit                  = 50
-	recommendationFeedbackArticleLimit      = recommendation.ProfileReplyLimit
-	recommendationRecentViewArticleLimit    = recommendation.ProfileRecentViewLimit
+	recommendationFeedbackPostLimit         = recommendation.ProfileReplyLimit
+	recommendationRecentViewPostLimit       = recommendation.ProfileRecentViewLimit
 	recommendationCandidateRetrievalVersion = "social_semantic_materialized_profile_v4"
 )
 
-type articleBehaviorSignal struct {
-	Behavior models.ArticleBehavior
+type postBehaviorSignal struct {
+	Behavior models.PostBehavior
 }
 
 type embeddingCandidate struct {
-	ArticleID                  uint
+	PostID                     uint
 	PositiveSemanticSimilarity float64
 	FromSemantic               bool
 	FromFollowing              bool
@@ -39,22 +39,13 @@ type embeddingCandidate struct {
 	LastServedAt               time.Time
 }
 
-type recommendedArticleResponse struct {
-	ID            uint                            `json:"id"`
-	Title         string                          `json:"title"`
-	Content       string                          `json:"content"`
-	Preview       string                          `json:"preview"`
-	CoverImageURL string                          `json:"cover_image_url"`
-	LikeCount     int64                           `json:"like_count"`
-	CommentCount  int64                           `json:"comment_count"`
-	ViewCount     int64                           `json:"view_count"`
-	CreatedAt     time.Time                       `json:"created_at"`
-	Author        publicAuthorResponse            `json:"author"`
-	Score         float64                         `json:"score"`
-	Tracking      *recommendationTrackingResponse `json:"tracking,omitempty"`
+type recommendedPostResponse struct {
+	Post     postResponse                    `json:"post"`
+	Score    float64                         `json:"score"`
+	Tracking *recommendationTrackingResponse `json:"tracking,omitempty"`
 }
 
-func GetArticleRecommendations(ctx *gin.Context) {
+func GetPostRecommendations(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
@@ -77,7 +68,7 @@ func GetArticleRecommendations(ctx *gin.Context) {
 	if err != nil {
 		log.Printf("[Recommendation] served history for user %d: %v", userID, err)
 		metrics.RecordRecommendationServedHistoryLoadFailure()
-		served = map[uint]servedArticle{}
+		served = map[uint]servedPost{}
 	}
 	freshSet, err := loadRecommendationCandidateSet(userID, profile, served, now, cfg, false)
 	if err != nil {
@@ -268,17 +259,17 @@ func parseRecommendationLimit(raw string) int {
 
 func strconvUint(id uint) string { return strconv.FormatUint(uint64(id), 10) }
 
-func articleIDs(articles []models.Article) []uint {
-	ids := make([]uint, 0, len(articles))
-	for _, article := range articles {
-		if article.ID != 0 {
-			ids = append(ids, article.ID)
+func postIDs(posts []models.Post) []uint {
+	ids := make([]uint, 0, len(posts))
+	for _, post := range posts {
+		if post.ID != 0 {
+			ids = append(ids, post.ID)
 		}
 	}
 	return ids
 }
 
-func articleIDList(set map[uint]struct{}) []uint {
+func postIDList(set map[uint]struct{}) []uint {
 	if len(set) == 0 {
 		return nil
 	}

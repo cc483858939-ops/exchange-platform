@@ -1,42 +1,25 @@
 package controllers
 
 import (
-	"errors"
 	"time"
 
 	"Go.exchange/models"
 )
 
-type commentResponse struct {
-	ID        uint                 `json:"id"`
-	ArticleID uint                 `json:"article_id"`
-	Content   string               `json:"content"`
-	CreatedAt time.Time            `json:"created_at"`
-	Author    publicAuthorResponse `json:"author"`
+type replyResponse = postResponse
+
+type replyListResponse struct {
+	Items      []replyResponse `json:"items"`
+	NextCursor *string         `json:"next_cursor"`
 }
 
-type commentListResponse struct {
-	Items      []commentResponse `json:"items"`
-	NextCursor *string           `json:"next_cursor"`
-}
-
-func publicAuthorFromComment(comment models.Comment) (publicAuthorResponse, error) {
-	if comment.UserID == 0 || comment.Author.ID == 0 || comment.Author.ID != comment.UserID {
-		return publicAuthorResponse{}, errors.New("comment author is missing or invalid")
-	}
-	return publicAuthorFromUser(comment.Author), nil
-}
-
-func newCommentResponse(comment models.Comment) (commentResponse, error) {
-	author, err := publicAuthorFromComment(comment)
+func newReplyResponse(post models.Post) (replyResponse, error) {
+	response, err := newPostResponse(post)
 	if err != nil {
-		return commentResponse{}, err
+		return replyResponse{}, err
 	}
-	return commentResponse{
-		ID:        comment.ID,
-		ArticleID: comment.ArticleID,
-		Content:   comment.Content,
-		CreatedAt: comment.CreatedAt,
-		Author:    author,
-	}, nil
+	if post.ReplyToPostID != nil {
+		response.ReplyToPost = loadPostReference(post.ReplyToPostID, time.Now().UTC())
+	}
+	return response, nil
 }

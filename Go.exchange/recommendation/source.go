@@ -14,13 +14,13 @@ import (
 const (
 	ProfileRecentViewLimit = 200
 	ProfileReplyLimit      = 500
-	ArticleBehaviorView    = "view"
-	ArticleBehaviorReply   = "reply"
+	PostBehaviorView    = "view"
+	PostBehaviorReply   = "reply"
 )
 
 type FeedbackEvent struct {
 	EventID     string
-	ArticleID   uint
+	PostID   uint
 	EventType   string
 	OccurredAt  time.Time
 	ReceivedAt  time.Time
@@ -33,7 +33,7 @@ type ReactionState struct {
 }
 
 type SourceSignals struct {
-	Behaviors []models.ArticleBehavior
+	Behaviors []models.PostBehavior
 	Feedback  []FeedbackEvent
 	Reactions map[uint]ReactionState
 }
@@ -45,24 +45,24 @@ func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (Sourc
 	if db == nil {
 		return SourceSignals{}, errors.New("database is not initialized")
 	}
-	var views []models.ArticleBehavior
-	if err := db.Where("user_id = ? AND action = ?", userID, ArticleBehaviorView).
+	var views []models.PostBehavior
+	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorView).
 		Order("last_seen_at DESC, id DESC").Limit(ProfileRecentViewLimit).Find(&views).Error; err != nil {
 		return SourceSignals{}, err
 	}
-	var replies []models.ArticleBehavior
-	if err := db.Where("user_id = ? AND action = ?", userID, ArticleBehaviorReply).
+	var replies []models.PostBehavior
+	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorReply).
 		Order("last_seen_at DESC, id DESC").Limit(ProfileReplyLimit).Find(&replies).Error; err != nil {
 		return SourceSignals{}, err
 	}
-	behaviors := make([]models.ArticleBehavior, 0, len(views)+len(replies))
+	behaviors := make([]models.PostBehavior, 0, len(views)+len(replies))
 	for _, row := range views {
-		if row.ArticleID != 0 {
+		if row.PostID != 0 {
 			behaviors = append(behaviors, row)
 		}
 	}
 	for _, row := range replies {
-		if row.ArticleID != 0 {
+		if row.PostID != 0 {
 			behaviors = append(behaviors, row)
 		}
 	}
@@ -73,7 +73,7 @@ func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (Sourc
 		eventing.RecommendationBehaviorActionReadQuickBounce,
 		eventing.RecommendationBehaviorActionReadNeutral,
 	}
-	var feedbackRows []models.ArticleBehavior
+	var feedbackRows []models.PostBehavior
 	if err := db.Where("user_id = ? AND ((action IN ? AND last_seen_at >= ?) OR action = ?)",
 		userID, actions, lookbackStart, eventing.RecommendationBehaviorActionNotInterested).
 		Order("last_seen_at DESC, id DESC").Find(&feedbackRows).Error; err != nil {
@@ -81,11 +81,11 @@ func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (Sourc
 	}
 	feedback := make([]FeedbackEvent, 0, len(feedbackRows))
 	for _, row := range feedbackRows {
-		if row.ArticleID == 0 {
+		if row.PostID == 0 {
 			continue
 		}
 		event := FeedbackEvent{
-			EventID: strconv.FormatUint(uint64(row.ID), 10), ArticleID: row.ArticleID,
+			EventID: strconv.FormatUint(uint64(row.ID), 10), PostID: row.PostID,
 			OccurredAt: row.LastSeenAt, ReceivedAt: row.UpdatedAt,
 		}
 		if event.ReceivedAt.IsZero() {
@@ -114,14 +114,14 @@ func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (Sourc
 		feedback = append(feedback, event)
 	}
 
-	var reactionRows []models.ArticleReaction
-	if err := db.Where("user_id = ?", userID).Order("article_id ASC").Find(&reactionRows).Error; err != nil {
+	var reactionRows []models.PostReaction
+	if err := db.Where("user_id = ?", userID).Order("post_id ASC").Find(&reactionRows).Error; err != nil {
 		return SourceSignals{}, err
 	}
 	reactions := make(map[uint]ReactionState, len(reactionRows))
 	for _, row := range reactionRows {
-		if row.ArticleID != 0 {
-			reactions[row.ArticleID] = ReactionState{Liked: row.Liked, StateChangedAt: row.StateChangedAt}
+		if row.PostID != 0 {
+			reactions[row.PostID] = ReactionState{Liked: row.Liked, StateChangedAt: row.StateChangedAt}
 		}
 	}
 	return SourceSignals{Behaviors: behaviors, Feedback: feedback, Reactions: reactions}, nil

@@ -32,19 +32,19 @@ func RunMigrations() error {
 		if err := tx.AutoMigrate(
 			&models.User{},
 			&models.UserFollow{},
-			&models.Article{},
-			&models.ArticleRepost{},
-			&models.Comment{},
-			&models.ArticleEmbedding{},
+			&models.Post{},
+			&models.PostArticle{},
+			&models.PostRepost{},
+			&models.PostEmbedding{},
 			&models.OutboxEvent{},
 			&models.Notification{},
 			&models.ConsumerInbox{},
-			&models.ArticleBehavior{},
-			&models.ArticleReaction{},
+			&models.PostBehavior{},
+			&models.PostReaction{},
 			&models.RecommendationDailyMetric{},
 			&models.RecommendationRequest{},
 			&models.RecommendationResultTrace{},
-			&models.UserArticleRecoState{},
+			&models.UserPostRecoState{},
 			&models.UserRecoProfile{},
 			&models.UserAuthorAffinity{},
 			&models.UserRecoProfileDirty{},
@@ -54,25 +54,31 @@ func RunMigrations() error {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
 
-		if err := applyLegacyAISchemaCleanup(tx); err != nil {
+		if err := applyLegacyPostEmbeddingJobCleanup(tx); err != nil {
 			return err
 		}
-		if err := applyLegacyArticleEmbeddingJobCleanup(tx); err != nil {
+		if err := applyPostSchemaConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyArticleEmbeddingConstraints(tx); err != nil {
+		if err := applyPostArticleConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyPostEmbeddingConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyUserFollowConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyArticleRepostConstraints(tx); err != nil {
+		if err := applyPostRepostConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyRecommendationMetricsConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyArticleReactionConstraints(tx); err != nil {
+		if err := applyPostReactionConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyPostBehaviorConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyRecommendationTrendingSchemaCleanup(tx); err != nil {
@@ -90,15 +96,6 @@ func RunMigrations() error {
 		if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
 			return err
 		}
-		if err := applyArticleAuthorConstraints(tx); err != nil {
-			return err
-		}
-		if err := applyArticleEngagementConstraints(tx); err != nil {
-			return err
-		}
-		if err := applyCommentConstraints(tx); err != nil {
-			return err
-		}
 		if err := applyOutboxSchema(tx); err != nil {
 			return err
 		}
@@ -106,11 +103,11 @@ func RunMigrations() error {
 			return err
 		}
 		if err := tx.Exec(`
-UPDATE article_reaction
+UPDATE post_reaction
 SET liked = (reaction = 1)
 WHERE reaction_version = 0
 `).Error; err != nil {
-			return fmt.Errorf("backfill article reaction tombstones: %w", err)
+			return fmt.Errorf("backfill post reaction tombstones: %w", err)
 		}
 		if err := validateMigratedSchema(tx); err != nil {
 			return err
@@ -119,19 +116,87 @@ WHERE reaction_version = 0
 	})
 }
 
+// applyLegacyPostEmbeddingJobCleanup removes the obsolete one-off work table.
+// It does not migrate or rewrite any content rows.
+func applyLegacyPostEmbeddingJobCleanup(tx *gorm.DB) error {
+	if err := tx.Exec("DROP TABLE IF EXISTS article_embedding_jobs").Error; err != nil {
+		return fmt.Errorf("drop legacy post embedding jobs: %w", err)
+	}
+	return nil
+}
+
+func applyPostSchemaConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_author",
+		"ALTER TABLE posts ADD CONSTRAINT fk_posts_author FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_reply_to_post",
+		"ALTER TABLE posts ADD CONSTRAINT fk_posts_reply_to_post FOREIGN KEY (reply_to_post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_quote_post",
+		"ALTER TABLE posts ADD CONSTRAINT fk_posts_quote_post FOREIGN KEY (quote_post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_conversation",
+		"ALTER TABLE posts ADD CONSTRAINT fk_posts_conversation FOREIGN KEY (conversation_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_visibility_public",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_visibility_public CHECK (visibility = 'public')",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_reply_quote_exclusive",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_reply_quote_exclusive CHECK (NOT (reply_to_post_id IS NOT NULL AND quote_post_id IS NOT NULL))",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_conversation_shape",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_conversation_shape CHECK ((reply_to_post_id IS NULL AND conversation_id IS NULL) OR (reply_to_post_id IS NOT NULL AND conversation_id IS NOT NULL))",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_like_count_nonnegative",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_like_count_nonnegative CHECK (like_count >= 0)",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_reply_count_nonnegative",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_reply_count_nonnegative CHECK (reply_count >= 0)",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_view_count_nonnegative",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_view_count_nonnegative CHECK (view_count >= 0)",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_like_sync_version_nonnegative",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_like_sync_version_nonnegative CHECK (like_sync_version >= 0)",
+		"CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts (author_id, created_at DESC, id DESC) WHERE deleted_at IS NULL",
+		"CREATE INDEX IF NOT EXISTS idx_posts_reply_to_created ON posts (reply_to_post_id, created_at DESC, id DESC) WHERE deleted_at IS NULL",
+		"CREATE INDEX IF NOT EXISTS idx_posts_conversation_created ON posts (conversation_id, created_at DESC, id DESC) WHERE deleted_at IS NULL",
+		"CREATE INDEX IF NOT EXISTS idx_posts_quote ON posts (quote_post_id) WHERE quote_post_id IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_posts_deleted_at ON posts (deleted_at)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply post schema constraints: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyPostArticleConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE post_articles ALTER COLUMN post_id SET NOT NULL",
+		"ALTER TABLE post_articles ALTER COLUMN title SET NOT NULL",
+		"ALTER TABLE post_articles ALTER COLUMN preview SET NOT NULL",
+		"ALTER TABLE post_articles ALTER COLUMN cover_image_url SET NOT NULL",
+		"ALTER TABLE post_articles ALTER COLUMN publication_state SET NOT NULL",
+		"ALTER TABLE post_articles ALTER COLUMN published_at SET NOT NULL",
+		"ALTER TABLE post_articles DROP CONSTRAINT IF EXISTS fk_post_articles_post",
+		"ALTER TABLE post_articles ADD CONSTRAINT fk_post_articles_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_articles DROP CONSTRAINT IF EXISTS chk_post_articles_publication_state",
+		"ALTER TABLE post_articles ADD CONSTRAINT chk_post_articles_publication_state CHECK (publication_state = 'published')",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply post article constraints: %w", err)
+		}
+	}
+	return nil
+}
+
 func applyRecommendationProfileMaterializationSchema(tx *gorm.DB) error {
 	statements := []string{
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_profile_status",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_profile_status CHECK (profile_status IN ('hit','stale','miss','incompatible'))",
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_profile_age",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_profile_age CHECK (profile_age_ms >= 0)",
-		"CREATE INDEX IF NOT EXISTS idx_user_article_reco_states_article_user ON user_article_reco_states (article_id, user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_user_post_reco_states_post_user ON user_post_reco_states (post_id, user_id)",
 		"CREATE INDEX IF NOT EXISTS idx_user_reco_profile_dirty_due ON user_reco_profile_dirty (next_attempt_at, dirty_at, user_id)",
 		"CREATE INDEX IF NOT EXISTS idx_user_reco_profiles_next_rebuild ON user_reco_profiles (next_rebuild_at, user_id)",
-		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS fk_user_article_reco_states_user",
-		"ALTER TABLE user_article_reco_states ADD CONSTRAINT fk_user_article_reco_states_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
-		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS fk_user_article_reco_states_article",
-		"ALTER TABLE user_article_reco_states ADD CONSTRAINT fk_user_article_reco_states_article FOREIGN KEY (article_id) REFERENCES articles(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_post_reco_states DROP CONSTRAINT IF EXISTS fk_user_post_reco_states_user",
+		"ALTER TABLE user_post_reco_states ADD CONSTRAINT fk_user_post_reco_states_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_post_reco_states DROP CONSTRAINT IF EXISTS fk_user_post_reco_states_post",
+		"ALTER TABLE user_post_reco_states ADD CONSTRAINT fk_user_post_reco_states_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE user_reco_profiles DROP CONSTRAINT IF EXISTS fk_user_reco_profiles_user",
 		"ALTER TABLE user_reco_profiles ADD CONSTRAINT fk_user_reco_profiles_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE user_author_affinities DROP CONSTRAINT IF EXISTS fk_user_author_affinities_user",
@@ -140,10 +205,10 @@ func applyRecommendationProfileMaterializationSchema(tx *gorm.DB) error {
 		"ALTER TABLE user_author_affinities ADD CONSTRAINT fk_user_author_affinities_author FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE user_reco_profile_dirty DROP CONSTRAINT IF EXISTS fk_user_reco_profile_dirty_user",
 		"ALTER TABLE user_reco_profile_dirty ADD CONSTRAINT fk_user_reco_profile_dirty_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
-		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS chk_user_article_reco_states_passive_signal",
-		"ALTER TABLE user_article_reco_states ADD CONSTRAINT chk_user_article_reco_states_passive_signal CHECK (passive_signal IN ('', 'view', 'click', 'qualified_read', 'neutral_read', 'quick_bounce'))",
-		"ALTER TABLE user_article_reco_states DROP CONSTRAINT IF EXISTS chk_user_article_reco_states_negative_signal",
-		"ALTER TABLE user_article_reco_states ADD CONSTRAINT chk_user_article_reco_states_negative_signal CHECK (negative_signal IN ('', 'quick_bounce', 'not_interested'))",
+		"ALTER TABLE user_post_reco_states DROP CONSTRAINT IF EXISTS chk_user_post_reco_states_passive_signal",
+		"ALTER TABLE user_post_reco_states ADD CONSTRAINT chk_user_post_reco_states_passive_signal CHECK (passive_signal IN ('', 'view', 'click', 'qualified_read', 'neutral_read', 'quick_bounce'))",
+		"ALTER TABLE user_post_reco_states DROP CONSTRAINT IF EXISTS chk_user_post_reco_states_negative_signal",
+		"ALTER TABLE user_post_reco_states ADD CONSTRAINT chk_user_post_reco_states_negative_signal CHECK (negative_signal IN ('', 'quick_bounce', 'not_interested'))",
 		"ALTER TABLE user_reco_profiles DROP CONSTRAINT IF EXISTS chk_user_reco_profiles_dimensions",
 		"ALTER TABLE user_reco_profiles ADD CONSTRAINT chk_user_reco_profiles_dimensions CHECK ((positive_vector IS NULL AND negative_vector IS NULL AND dimensions = 0) OR ((positive_vector IS NOT NULL OR negative_vector IS NOT NULL) AND dimensions > 0 AND (positive_vector IS NULL OR vector_dims(positive_vector) = dimensions) AND (negative_vector IS NULL OR vector_dims(negative_vector) = dimensions)))",
 		"ALTER TABLE user_reco_profiles DROP CONSTRAINT IF EXISTS chk_user_reco_profiles_counts",
@@ -165,14 +230,16 @@ func applyRecommendationProfileMaterializationSchema(tx *gorm.DB) error {
 	return nil
 }
 
-func applyArticleEmbeddingConstraints(tx *gorm.DB) error {
+func applyPostEmbeddingConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE article_embeddings DROP CONSTRAINT IF EXISTS chk_article_embeddings_vector_dimensions",
-		"ALTER TABLE article_embeddings ADD CONSTRAINT chk_article_embeddings_vector_dimensions CHECK (vector_dims(embedding) = dimensions)",
+		"ALTER TABLE post_embeddings DROP CONSTRAINT IF EXISTS fk_post_embeddings_post",
+		"ALTER TABLE post_embeddings ADD CONSTRAINT fk_post_embeddings_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_embeddings DROP CONSTRAINT IF EXISTS chk_post_embeddings_vector_dimensions",
+		"ALTER TABLE post_embeddings ADD CONSTRAINT chk_post_embeddings_vector_dimensions CHECK (vector_dims(embedding) = dimensions)",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply article embedding constraint: %w", err)
+			return fmt.Errorf("apply post embedding constraint: %w", err)
 		}
 	}
 	return nil
@@ -198,113 +265,56 @@ func applyUserFollowConstraints(tx *gorm.DB) error {
 	return nil
 }
 
-func applyArticleRepostConstraints(tx *gorm.DB) error {
+func applyPostRepostConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_article_reposts_user_article ON article_reposts (user_id, article_id)",
-		"CREATE INDEX IF NOT EXISTS idx_article_reposts_user_created ON article_reposts (user_id, created_at DESC, id DESC)",
-		"CREATE INDEX IF NOT EXISTS idx_article_reposts_article ON article_reposts (article_id)",
-		"ALTER TABLE article_reposts DROP CONSTRAINT IF EXISTS fk_article_reposts_user",
-		"ALTER TABLE article_reposts ADD CONSTRAINT fk_article_reposts_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
-		"ALTER TABLE article_reposts DROP CONSTRAINT IF EXISTS fk_article_reposts_article",
-		"ALTER TABLE article_reposts ADD CONSTRAINT fk_article_reposts_article FOREIGN KEY (article_id) REFERENCES articles(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_reposts_user_post ON post_reposts (user_id, post_id)",
+		"CREATE INDEX IF NOT EXISTS idx_post_reposts_user_created ON post_reposts (user_id, created_at DESC, id DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_post_reposts_post ON post_reposts (post_id)",
+		"ALTER TABLE post_reposts DROP CONSTRAINT IF EXISTS fk_post_reposts_user",
+		"ALTER TABLE post_reposts ADD CONSTRAINT fk_post_reposts_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_reposts DROP CONSTRAINT IF EXISTS fk_post_reposts_post",
+		"ALTER TABLE post_reposts ADD CONSTRAINT fk_post_reposts_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply article repost constraint: %w", err)
+			return fmt.Errorf("apply post repost constraint: %w", err)
 		}
 	}
 	return nil
 }
 
-func applyArticleAuthorConstraints(tx *gorm.DB) error {
-	if !tx.Migrator().HasConstraint(&models.Article{}, "Author") {
-		if err := tx.Migrator().CreateConstraint(&models.Article{}, "Author"); err != nil {
-			return fmt.Errorf("create article author foreign key: %w", err)
-		}
-	}
-	if err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_articles_author_published ON articles (author_id, published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL").Error; err != nil {
-		return fmt.Errorf("create article author index: %w", err)
-	}
-	return nil
-}
-
-func applyArticleEngagementConstraints(tx *gorm.DB) error {
+func applyPostReactionConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE articles DROP CONSTRAINT IF EXISTS chk_articles_comment_count_nonnegative",
-		"ALTER TABLE articles ADD CONSTRAINT chk_articles_comment_count_nonnegative CHECK (comment_count >= 0)",
-		"UPDATE articles SET view_count = 0 WHERE view_count IS NULL",
-		"ALTER TABLE articles ALTER COLUMN view_count SET DEFAULT 0",
-		"ALTER TABLE articles ALTER COLUMN view_count SET NOT NULL",
-		"ALTER TABLE articles DROP CONSTRAINT IF EXISTS chk_articles_view_count_nonnegative",
-		"ALTER TABLE articles ADD CONSTRAINT chk_articles_view_count_nonnegative CHECK (view_count >= 0)",
+		"ALTER TABLE post_reaction DROP CONSTRAINT IF EXISTS fk_post_reaction_user",
+		"ALTER TABLE post_reaction ADD CONSTRAINT fk_post_reaction_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_reaction DROP CONSTRAINT IF EXISTS fk_post_reaction_post",
+		"ALTER TABLE post_reaction ADD CONSTRAINT fk_post_reaction_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_reaction ALTER COLUMN liked DROP DEFAULT",
+		"ALTER TABLE post_reaction ADD COLUMN IF NOT EXISTS state_changed_at TIMESTAMPTZ",
+		"UPDATE post_reaction SET state_changed_at = COALESCE(state_changed_at, updated_at, CURRENT_TIMESTAMP)",
+		"ALTER TABLE post_reaction ALTER COLUMN state_changed_at SET NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_post_reaction_user_liked_state ON post_reaction (user_id, liked, state_changed_at DESC, post_id)",
+		"CREATE INDEX IF NOT EXISTS idx_post_behavior_user_view_seen ON post_behaviors (user_id, action, last_seen_at DESC, id DESC) WHERE action = 'view'",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply article engagement constraint: %w", err)
+			return fmt.Errorf("apply post reaction constraint: %w", err)
 		}
 	}
 	return nil
 }
 
-func applyCommentConstraints(tx *gorm.DB) error {
-	if !tx.Migrator().HasConstraint(&models.Comment{}, "Article") {
-		if err := tx.Migrator().CreateConstraint(&models.Comment{}, "Article"); err != nil {
-			return fmt.Errorf("create comment article foreign key: %w", err)
-		}
-	}
-	if !tx.Migrator().HasConstraint(&models.Comment{}, "Author") {
-		if err := tx.Migrator().CreateConstraint(&models.Comment{}, "Author"); err != nil {
-			return fmt.Errorf("create comment author foreign key: %w", err)
-		}
-	}
-	if err := tx.Exec(`
-CREATE INDEX IF NOT EXISTS idx_comments_article_created
-ON comments (article_id, created_at DESC, id DESC)
-WHERE deleted_at IS NULL
-`).Error; err != nil {
-		return fmt.Errorf("create comment cursor index: %w", err)
-	}
-	return nil
-}
-func applyArticleReactionConstraints(tx *gorm.DB) error {
+func applyPostBehaviorConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE article_reaction ALTER COLUMN liked DROP DEFAULT",
-		"ALTER TABLE article_reaction ADD COLUMN IF NOT EXISTS state_changed_at TIMESTAMPTZ",
-		"UPDATE article_reaction SET state_changed_at = COALESCE(state_changed_at, updated_at, CURRENT_TIMESTAMP)",
-		"ALTER TABLE article_reaction ALTER COLUMN state_changed_at SET NOT NULL",
-		"CREATE INDEX IF NOT EXISTS idx_article_reaction_user_liked_state_article ON article_reaction (user_id, liked, state_changed_at DESC, article_id)",
-		"CREATE INDEX IF NOT EXISTS idx_article_behavior_user_view_seen ON article_behaviors (user_id, action, last_seen_at DESC, id DESC) WHERE action = 'view'",
+		"ALTER TABLE post_behaviors DROP CONSTRAINT IF EXISTS fk_post_behaviors_user",
+		"ALTER TABLE post_behaviors ADD CONSTRAINT fk_post_behaviors_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_behaviors DROP CONSTRAINT IF EXISTS fk_post_behaviors_post",
+		"ALTER TABLE post_behaviors ADD CONSTRAINT fk_post_behaviors_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply article reaction constraint: %w", err)
+			return fmt.Errorf("apply post behavior constraint: %w", err)
 		}
-	}
-	return nil
-}
-
-func applyLegacyAISchemaCleanup(tx *gorm.DB) error {
-	statements := []string{
-		"DROP TABLE IF EXISTS article_analysis_jobs",
-		"ALTER TABLE articles DROP COLUMN IF EXISTS summary",
-		"ALTER TABLE articles DROP COLUMN IF EXISTS tags",
-		"ALTER TABLE articles DROP COLUMN IF EXISTS category",
-		"ALTER TABLE articles DROP COLUMN IF EXISTS analysis_state",
-		"ALTER TABLE articles DROP COLUMN IF EXISTS analysis_version",
-		"DROP INDEX IF EXISTS idx_articles_recommendation",
-		"DROP INDEX IF EXISTS idx_articles_recommendation_category_created",
-	}
-	for _, statement := range statements {
-		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("remove legacy AI schema: %w", err)
-		}
-	}
-	return nil
-}
-
-func applyLegacyArticleEmbeddingJobCleanup(tx *gorm.DB) error {
-	if err := tx.Exec("DROP TABLE IF EXISTS article_embedding_jobs").Error; err != nil {
-		return fmt.Errorf("drop legacy article embedding jobs: %w", err)
 	}
 	return nil
 }
@@ -328,9 +338,10 @@ func applyRecommendationTrendingSchemaCleanup(tx *gorm.DB) error {
 
 func applyRecommendationRetrievalV3Indexes(tx *gorm.DB) error {
 	statements := []string{
-		"DROP INDEX IF EXISTS idx_articles_recommendation_popular",
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_recent ON articles (published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL",
-		"CREATE INDEX IF NOT EXISTS idx_articles_recommendation_trending ON articles (published_at DESC, id DESC) WHERE deleted_at IS NULL AND publication_state = 'published' AND published_at IS NOT NULL AND (like_count > 0 OR comment_count > 0)",
+		"DROP INDEX IF EXISTS idx_posts_recommendation_popular",
+		"CREATE INDEX IF NOT EXISTS idx_posts_recommendation_recent ON posts (created_at DESC, id DESC) WHERE deleted_at IS NULL AND visibility = 'public' AND reply_to_post_id IS NULL",
+		"CREATE INDEX IF NOT EXISTS idx_posts_recommendation_trending ON posts (created_at DESC, id DESC) WHERE deleted_at IS NULL AND visibility = 'public' AND reply_to_post_id IS NULL AND (like_count > 0 OR reply_count > 0)",
+		"CREATE INDEX IF NOT EXISTS idx_post_articles_recommendation_published ON post_articles (published_at DESC, post_id) WHERE publication_state = 'published' AND published_at IS NOT NULL",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
@@ -368,14 +379,14 @@ func applyRecommendationTraceConstraints(tx *gorm.DB) error {
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_personalization_mode",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_personalization_mode CHECK (personalization_mode IN ('semantic_social', 'social_only', 'cold_start'))",
 		"DROP INDEX IF EXISTS uidx_recommendation_result_trace_request_article",
-		"CREATE UNIQUE INDEX uidx_recommendation_result_trace_request_article ON recommendation_result_traces (request_id, article_id)",
-		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_article ON recommendation_result_traces (article_id)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_recommendation_result_trace_request_post ON recommendation_result_traces (request_id, post_id)",
+		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_post ON recommendation_result_traces (post_id)",
 		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_created ON recommendation_result_traces (created_at)",
 		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_expires ON recommendation_result_traces (expires_at)",
 		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS fk_recommendation_result_traces_request",
 		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT fk_recommendation_result_traces_request FOREIGN KEY (request_id) REFERENCES recommendation_requests(request_id) ON UPDATE CASCADE ON DELETE CASCADE",
-		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS fk_recommendation_result_traces_article",
-		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT fk_recommendation_result_traces_article FOREIGN KEY (article_id) REFERENCES articles(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS fk_recommendation_result_traces_post",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT fk_recommendation_result_traces_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
@@ -444,7 +455,7 @@ func applyRecommendationExplorationSchema(tx *gorm.DB) error {
 		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_provenance",
 		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_provenance CHECK ((selection_mode = 'ranked' AND exploration_reason = '') OR (exploration_opportunity AND selection_mode = 'exploration' AND exploration_reason IN ('recent', 'novel_author', 'recent_novel_author')))",
 		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS recommendation_daily_metrics_pkey",
-		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT recommendation_daily_metrics_pkey PRIMARY KEY (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, article_id)",
+		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT recommendation_daily_metrics_pkey PRIMARY KEY (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, post_id)",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {

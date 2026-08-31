@@ -72,11 +72,60 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := insertIntegrationState(tx, PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor); err != nil {
 		t.Fatalf("insert runtime schema state: %v", err)
 	}
+	if err := applyPostSchemaConstraints(tx); err != nil {
+		t.Fatalf("apply Post schema constraints: %v", err)
+	}
+	if err := applyPostArticleConstraints(tx); err != nil {
+		t.Fatalf("apply PostArticle constraints: %v", err)
+	}
+	if err := applyPostEmbeddingConstraints(tx); err != nil {
+		t.Fatalf("apply PostEmbedding constraints: %v", err)
+	}
+	if err := applyPostRepostConstraints(tx); err != nil {
+		t.Fatalf("apply PostRepost constraints: %v", err)
+	}
+	if err := applyPostReactionConstraints(tx); err != nil {
+		t.Fatalf("apply PostReaction constraints: %v", err)
+	}
+	if err := applyPostBehaviorConstraints(tx); err != nil {
+		t.Fatalf("apply PostBehavior constraints: %v", err)
+	}
+	if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
+		t.Fatalf("apply UserPostRecoState constraints: %v", err)
+	}
 
 	apiOptions := SchemaValidationOptions{RequiredVersion: RequiredSchemaVersion, EmbeddingEnabled: false}
 	workerOptions := SchemaValidationOptions{RequiredVersion: RequiredSchemaVersion, IncludeWorkerTables: true}
 	expectIntegrationSchemaCode(t, tx, apiOptions, "")
 	expectIntegrationSchemaCode(t, tx, workerOptions, "")
+
+	withIntegrationSavepoint(t, tx, "missing_post_constraint", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "posts") + " DROP CONSTRAINT chk_posts_visibility_public").Error; err != nil {
+			t.Fatalf("drop Post visibility constraint: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
+	})
+
+	withIntegrationSavepoint(t, tx, "missing_post_index", func() {
+		if err := tx.Exec("DROP INDEX " + qualifiedIntegrationTable(primarySchema, "idx_posts_author_created")).Error; err != nil {
+			t.Fatalf("drop Post author index: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_index_missing")
+	})
+
+	withIntegrationSavepoint(t, tx, "legacy_content_table", func() {
+		if err := tx.Exec("CREATE TABLE " + qualifiedIntegrationTable(primarySchema, "articles") + " (id BIGINT)").Error; err != nil {
+			t.Fatalf("create legacy articles table: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_legacy_content_present")
+	})
+
+	withIntegrationSavepoint(t, tx, "legacy_runtime_column", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "notifications") + " ADD COLUMN article_id BIGINT").Error; err != nil {
+			t.Fatalf("add legacy notification column: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_legacy_content_present")
+	})
 
 	withIntegrationSavepoint(t, tx, "missing_state", func() {
 		if err := tx.Exec("DROP TABLE " + qualifiedIntegrationTable(primarySchema, "runtime_schema_state")).Error; err != nil {
@@ -114,7 +163,7 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	})
 
 	withIntegrationSavepoint(t, tx, "missing_embedding_column", func() {
-		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "article_embeddings") + " DROP COLUMN " + quoteIntegrationIdentifier("embedding")).Error; err != nil {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "post_embeddings") + " DROP COLUMN " + quoteIntegrationIdentifier("embedding")).Error; err != nil {
 			t.Fatalf("drop article embedding column: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_column_missing")

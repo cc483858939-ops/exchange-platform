@@ -13,7 +13,7 @@ import (
 
 type recommendationFeedbackEvent struct {
 	EventID     string
-	ArticleID   uint
+	PostID   uint
 	EventType   string
 	OccurredAt  time.Time
 	ReceivedAt  time.Time
@@ -29,16 +29,16 @@ type recommendationReactionState struct {
 	StateChangedAt time.Time
 }
 
-type userArticleSignal struct {
+type userPostSignal struct {
 	SignalType string
 	OccurredAt time.Time
 }
 
-type userArticleOutcome struct {
-	ArticleID       uint
-	PositiveSignals []userArticleSignal
-	NegativeSignal  *userArticleSignal
-	PassiveSignal   *userArticleSignal
+type userPostOutcome struct {
+	PostID       uint
+	PositiveSignals []userPostSignal
+	NegativeSignal  *userPostSignal
+	PassiveSignal   *userPostSignal
 }
 
 const (
@@ -47,29 +47,29 @@ const (
 	recommendationFeedbackEventTypeNotInterested = models.RecommendationEventTypeNotInterested
 )
 
-var loadRecommendationBehaviorSignals = func(userID uint) ([]articleBehaviorSignal, error) {
+var loadRecommendationBehaviorSignals = func(userID uint) ([]postBehaviorSignal, error) {
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	var views []models.ArticleBehavior
-	if err := global.Db.Where("user_id = ? AND action = ?", userID, ArticleBehaviorActionView).
-		Order("last_seen_at DESC, id DESC").Limit(recommendationRecentViewArticleLimit).Find(&views).Error; err != nil {
+	var views []models.PostBehavior
+	if err := global.Db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionView).
+		Order("last_seen_at DESC, id DESC").Limit(recommendationRecentViewPostLimit).Find(&views).Error; err != nil {
 		return nil, err
 	}
-	var replies []models.ArticleBehavior
-	if err := global.Db.Where("user_id = ? AND action = ?", userID, ArticleBehaviorActionReply).
-		Order("last_seen_at DESC, id DESC").Limit(recommendationFeedbackArticleLimit).Find(&replies).Error; err != nil {
+	var replies []models.PostBehavior
+	if err := global.Db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionReply).
+		Order("last_seen_at DESC, id DESC").Limit(recommendationFeedbackPostLimit).Find(&replies).Error; err != nil {
 		return nil, err
 	}
-	result := make([]articleBehaviorSignal, 0, len(views)+len(replies))
+	result := make([]postBehaviorSignal, 0, len(views)+len(replies))
 	for _, behavior := range views {
-		if behavior.ArticleID != 0 {
-			result = append(result, articleBehaviorSignal{Behavior: behavior})
+		if behavior.PostID != 0 {
+			result = append(result, postBehaviorSignal{Behavior: behavior})
 		}
 	}
 	for _, behavior := range replies {
-		if behavior.ArticleID != 0 {
-			result = append(result, articleBehaviorSignal{Behavior: behavior})
+		if behavior.PostID != 0 {
+			result = append(result, postBehaviorSignal{Behavior: behavior})
 		}
 	}
 	return result, nil
@@ -85,7 +85,7 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 		eventing.RecommendationBehaviorActionReadQuickBounce,
 		eventing.RecommendationBehaviorActionReadNeutral,
 	}
-	var behaviors []models.ArticleBehavior
+	var behaviors []models.PostBehavior
 	if err := global.Db.Where("user_id = ? AND ((action IN ? AND last_seen_at >= ?) OR action = ?)",
 		userID, actions, lookbackStart, eventing.RecommendationBehaviorActionNotInterested).
 		Order("last_seen_at DESC, id DESC").Find(&behaviors).Error; err != nil {
@@ -93,11 +93,11 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 	}
 	result := make([]recommendationFeedbackSignal, 0, len(behaviors))
 	for _, behavior := range behaviors {
-		if behavior.ArticleID == 0 {
+		if behavior.PostID == 0 {
 			continue
 		}
 		event := recommendationFeedbackEvent{
-			EventID: strconv.FormatUint(uint64(behavior.ID), 10), ArticleID: behavior.ArticleID,
+			EventID: strconv.FormatUint(uint64(behavior.ID), 10), PostID: behavior.PostID,
 			OccurredAt: behavior.LastSeenAt, ReceivedAt: behavior.UpdatedAt,
 		}
 		if event.ReceivedAt.IsZero() {
@@ -132,14 +132,14 @@ var loadRecommendationReactionStates = func(userID uint) (map[uint]recommendatio
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	var reactions []models.ArticleReaction
-	if err := global.Db.Where("user_id = ?", userID).Order("article_id ASC").Find(&reactions).Error; err != nil {
+	var reactions []models.PostReaction
+	if err := global.Db.Where("user_id = ?", userID).Order("post_id ASC").Find(&reactions).Error; err != nil {
 		return nil, err
 	}
 	states := make(map[uint]recommendationReactionState, len(reactions))
 	for _, reaction := range reactions {
-		if reaction.ArticleID != 0 {
-			states[reaction.ArticleID] = recommendationReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
+		if reaction.PostID != 0 {
+			states[reaction.PostID] = recommendationReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
 		}
 	}
 	return states, nil
@@ -185,13 +185,13 @@ func setLatestRecommendationEvent(target **recommendationFeedbackEvent, candidat
 	}
 }
 
-type recommendationArticleFeedbackState struct {
+type recommendationPostFeedbackState struct {
 	Click         *recommendationFeedbackEvent
 	ReadEnd       *recommendationFeedbackEvent
 	NotInterested *recommendationFeedbackEvent
 }
 
-func resolveRecommendationPassiveOutcome(state *recommendationArticleFeedbackState, view models.ArticleBehavior) (string, time.Time) {
+func resolveRecommendationPassiveOutcome(state *recommendationPostFeedbackState, view models.PostBehavior) (string, time.Time) {
 	var click, readEnd *recommendationFeedbackEvent
 	if state != nil {
 		click, readEnd = state.Click, state.ReadEnd
@@ -200,7 +200,7 @@ func resolveRecommendationPassiveOutcome(state *recommendationArticleFeedbackSta
 		if click != nil && click.OccurredAt.After(readEnd.OccurredAt) {
 			return "click", click.OccurredAt
 		}
-		if view.ArticleID != 0 && view.LastSeenAt.After(readEnd.OccurredAt) {
+		if view.PostID != 0 && view.LastSeenAt.After(readEnd.OccurredAt) {
 			return "view", view.LastSeenAt
 		}
 		return normalizeRecommendationFeedbackSignal(*readEnd), readEnd.OccurredAt
@@ -208,40 +208,40 @@ func resolveRecommendationPassiveOutcome(state *recommendationArticleFeedbackSta
 	if click != nil {
 		return "click", click.OccurredAt
 	}
-	if view.ArticleID != 0 {
+	if view.PostID != 0 {
 		return "view", view.LastSeenAt
 	}
 	return "", time.Time{}
 }
 
-func canonicalizeRecommendationOutcomes(behaviors []articleBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState) []userArticleOutcome {
-	behaviorRows := make([]models.ArticleBehavior, 0, len(behaviors))
+func canonicalizeRecommendationOutcomes(behaviors []postBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState) []userPostOutcome {
+	behaviorRows := make([]models.PostBehavior, 0, len(behaviors))
 	for _, item := range behaviors {
 		behaviorRows = append(behaviorRows, item.Behavior)
 	}
 	feedbackRows := make([]recommendation.FeedbackEvent, 0, len(feedback))
 	for _, item := range feedback {
 		feedbackRows = append(feedbackRows, recommendation.FeedbackEvent{
-			EventID: item.Event.EventID, ArticleID: item.Event.ArticleID, EventType: item.Event.EventType,
+			EventID: item.Event.EventID, PostID: item.Event.PostID, EventType: item.Event.EventType,
 			OccurredAt: item.Event.OccurredAt, ReceivedAt: item.Event.ReceivedAt, ReadOutcome: item.Event.ReadOutcome,
 		})
 	}
 	reactionRows := make(map[uint]recommendation.ReactionState, len(reactions))
-	for articleID, reaction := range reactions {
-		reactionRows[articleID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
+	for postID, reaction := range reactions {
+		reactionRows[postID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
 	}
 	result := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
-	outcomes := make([]userArticleOutcome, 0, len(result.Outcomes))
+	outcomes := make([]userPostOutcome, 0, len(result.Outcomes))
 	for _, item := range result.Outcomes {
-		outcome := userArticleOutcome{ArticleID: item.ArticleID}
+		outcome := userPostOutcome{PostID: item.PostID}
 		for _, signal := range item.PositiveSignals {
-			outcome.PositiveSignals = append(outcome.PositiveSignals, userArticleSignal{SignalType: signal.SignalType, OccurredAt: signal.OccurredAt})
+			outcome.PositiveSignals = append(outcome.PositiveSignals, userPostSignal{SignalType: signal.SignalType, OccurredAt: signal.OccurredAt})
 		}
 		if item.NegativeSignal != nil {
-			outcome.NegativeSignal = &userArticleSignal{SignalType: item.NegativeSignal.SignalType, OccurredAt: item.NegativeSignal.OccurredAt}
+			outcome.NegativeSignal = &userPostSignal{SignalType: item.NegativeSignal.SignalType, OccurredAt: item.NegativeSignal.OccurredAt}
 		}
 		if item.PassiveSignal != nil {
-			outcome.PassiveSignal = &userArticleSignal{SignalType: item.PassiveSignal.SignalType, OccurredAt: item.PassiveSignal.OccurredAt}
+			outcome.PassiveSignal = &userPostSignal{SignalType: item.PassiveSignal.SignalType, OccurredAt: item.PassiveSignal.OccurredAt}
 		}
 		outcomes = append(outcomes, outcome)
 	}

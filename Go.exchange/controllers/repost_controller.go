@@ -13,48 +13,48 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-var errArticleRepostNotFound = errors.New("article not found")
+var errPostRepostNotFound = errors.New("post not found")
 
-type articleRepostStateResult struct {
+type postRepostStateResult struct {
 	Reposts  int64
 	Reposted bool
 }
 
-type articleRepostMutationResult = articleRepostStateResult
+type postRepostMutationResult = postRepostStateResult
 
-type articleRepostStatesRequest struct {
-	ArticleIDs []uint `json:"article_ids"`
+type postRepostStatesRequest struct {
+	PostIDs []uint `json:"post_ids"`
 }
 
-type articleRepostStateItem struct {
-	ArticleID uint  `json:"article_id"`
+type postRepostStateItem struct {
+	PostID uint  `json:"post_id"`
 	Reposts   int64 `json:"reposts"`
 	Reposted  bool  `json:"reposted"`
 }
 
-type articleRepostStatesResponse struct {
-	Items                 []articleRepostStateItem `json:"items"`
-	UnavailableArticleIDs []uint                   `json:"unavailable_article_ids"`
+type postRepostStatesResponse struct {
+	Items                 []postRepostStateItem `json:"items"`
+	UnavailablePostIDs []uint                   `json:"unavailable_post_ids"`
 }
 
-type articleRepostStatesLoadResult struct {
-	States      map[uint]articleRepostStateResult
+type postRepostStatesLoadResult struct {
+	States      map[uint]postRepostStateResult
 	Unavailable []uint
 }
 
-type articleRepostCountRow struct {
-	ArticleID uint  `gorm:"column:article_id"`
+type postRepostCountRow struct {
+	PostID uint  `gorm:"column:post_id"`
 	Reposts   int64 `gorm:"column:reposts"`
 }
 
-const maxArticleRepostStateIDs = 100
+const maxPostRepostStateIDs = 100
 
-var loadArticleRepostState = loadArticleRepostStateFromDB
-var mutateArticleRepost = mutateArticleRepostFromDB
-var loadArticleRepostStates = loadArticleRepostStatesFromDB
+var loadPostRepostState = loadPostRepostStateFromDB
+var mutatePostRepost = mutatePostRepostFromDB
+var loadPostRepostStates = loadPostRepostStatesFromDB
 
-func GetArticleRepostState(ctx *gin.Context) {
-	articleID, ok := articleIDFromContext(ctx)
+func GetPostRepostState(ctx *gin.Context) {
+	postID, ok := postIDFromContext(ctx)
 	if !ok {
 		return
 	}
@@ -64,29 +64,29 @@ func GetArticleRepostState(ctx *gin.Context) {
 		return
 	}
 
-	result, err := loadArticleRepostState(userID, articleID)
+	result, err := loadPostRepostState(userID, postID)
 	if err != nil {
-		writeArticleRepostError(ctx, err)
+		writePostRepostError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, articleRepostStatePayload(result))
+	ctx.JSON(http.StatusOK, postRepostStatePayload(result))
 }
 
-// GetArticleRepost is kept as a descriptive handler alias for route wiring and tests.
-func GetArticleRepost(ctx *gin.Context) {
-	GetArticleRepostState(ctx)
+// GetPostRepost is kept as a descriptive handler alias for route wiring and tests.
+func GetPostRepost(ctx *gin.Context) {
+	GetPostRepostState(ctx)
 }
 
-func RepostArticle(ctx *gin.Context) {
-	mutateArticleRepostRequest(ctx, true)
+func RepostPost(ctx *gin.Context) {
+	mutatePostRepostRequest(ctx, true)
 }
 
-func UndoRepostArticle(ctx *gin.Context) {
-	mutateArticleRepostRequest(ctx, false)
+func UndoRepostPost(ctx *gin.Context) {
+	mutatePostRepostRequest(ctx, false)
 }
 
-func mutateArticleRepostRequest(ctx *gin.Context, reposted bool) {
-	articleID, ok := articleIDFromContext(ctx)
+func mutatePostRepostRequest(ctx *gin.Context, reposted bool) {
+	postID, ok := postIDFromContext(ctx)
 	if !ok {
 		return
 	}
@@ -96,37 +96,37 @@ func mutateArticleRepostRequest(ctx *gin.Context, reposted bool) {
 		return
 	}
 
-	result, err := mutateArticleRepost(userID, articleID, reposted)
+	result, err := mutatePostRepost(userID, postID, reposted)
 	if err != nil {
-		writeArticleRepostError(ctx, err)
+		writePostRepostError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, articleRepostStatePayload(result))
+	ctx.JSON(http.StatusOK, postRepostStatePayload(result))
 }
 
-func GetArticleRepostStates(ctx *gin.Context) {
-	var request articleRepostStatesRequest
+func GetPostRepostStates(ctx *gin.Context) {
+	var request postRepostStatesRequest
 	if err := ctx.ShouldBindJSON(&request); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid article_ids"})
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post_ids"})
 		return
 	}
-	if len(request.ArticleIDs) == 0 || len(request.ArticleIDs) > maxArticleRepostStateIDs {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "article_ids must contain between 1 and 100 ids"})
+	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostRepostStateIDs {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain between 1 and 100 ids"})
 		return
 	}
 
-	uniqueIDs := make([]uint, 0, len(request.ArticleIDs))
-	seen := make(map[uint]struct{}, len(request.ArticleIDs))
-	for _, articleID := range request.ArticleIDs {
-		if articleID == 0 {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "article_ids must contain positive ids"})
+	uniqueIDs := make([]uint, 0, len(request.PostIDs))
+	seen := make(map[uint]struct{}, len(request.PostIDs))
+	for _, postID := range request.PostIDs {
+		if postID == 0 {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain positive ids"})
 			return
 		}
-		if _, exists := seen[articleID]; exists {
+		if _, exists := seen[postID]; exists {
 			continue
 		}
-		seen[articleID] = struct{}{}
-		uniqueIDs = append(uniqueIDs, articleID)
+		seen[postID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, postID)
 	}
 
 	userID, ok := userIDFromContext(ctx)
@@ -134,55 +134,55 @@ func GetArticleRepostStates(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	result, err := loadArticleRepostStates(userID, uniqueIDs)
+	result, err := loadPostRepostStates(userID, uniqueIDs)
 	if err != nil {
-		writeArticleRepostError(ctx, err)
+		writePostRepostError(ctx, err)
 		return
 	}
 
-	response := articleRepostStatesResponse{
-		Items:                 make([]articleRepostStateItem, 0, len(result.States)),
-		UnavailableArticleIDs: make([]uint, 0, len(result.Unavailable)),
+	response := postRepostStatesResponse{
+		Items:                 make([]postRepostStateItem, 0, len(result.States)),
+		UnavailablePostIDs: make([]uint, 0, len(result.Unavailable)),
 	}
 	unavailable := make(map[uint]struct{}, len(result.Unavailable))
-	for _, articleID := range result.Unavailable {
-		unavailable[articleID] = struct{}{}
+	for _, postID := range result.Unavailable {
+		unavailable[postID] = struct{}{}
 	}
-	for _, articleID := range uniqueIDs {
-		if state, available := result.States[articleID]; available {
-			response.Items = append(response.Items, articleRepostStateItem{
-				ArticleID: articleID,
-				Reposts:   normalizeArticleRepostCount(state.Reposts),
+	for _, postID := range uniqueIDs {
+		if state, available := result.States[postID]; available {
+			response.Items = append(response.Items, postRepostStateItem{
+				PostID: postID,
+				Reposts:   normalizePostRepostCount(state.Reposts),
 				Reposted:  state.Reposted,
 			})
 			continue
 		}
-		if _, markedUnavailable := unavailable[articleID]; markedUnavailable {
-			response.UnavailableArticleIDs = append(response.UnavailableArticleIDs, articleID)
+		if _, markedUnavailable := unavailable[postID]; markedUnavailable {
+			response.UnavailablePostIDs = append(response.UnavailablePostIDs, postID)
 			continue
 		}
-		response.UnavailableArticleIDs = append(response.UnavailableArticleIDs, articleID)
+		response.UnavailablePostIDs = append(response.UnavailablePostIDs, postID)
 	}
 	ctx.JSON(http.StatusOK, response)
 }
 
-func articleRepostStatePayload(result articleRepostStateResult) gin.H {
+func postRepostStatePayload(result postRepostStateResult) gin.H {
 	return gin.H{
-		"reposts":  normalizeArticleRepostCount(result.Reposts),
+		"reposts":  normalizePostRepostCount(result.Reposts),
 		"reposted": result.Reposted,
 	}
 }
 
-func normalizeArticleRepostCount(count int64) int64 {
+func normalizePostRepostCount(count int64) int64 {
 	if count < 0 {
 		return 0
 	}
 	return count
 }
 
-func activeArticleRepostScope(db *gorm.DB) *gorm.DB {
+func activePostRepostScope(db *gorm.DB) *gorm.DB {
 	return db.
-		Table("article_reposts AS ar").
+		Table("post_reposts AS ar").
 		Joins(`
 			JOIN users AS repost_users
 			  ON repost_users.id = ar.user_id
@@ -190,151 +190,151 @@ func activeArticleRepostScope(db *gorm.DB) *gorm.DB {
 		`)
 }
 
-func writeArticleRepostError(ctx *gin.Context, err error) {
-	if errors.Is(err, errArticleRepostNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "article not found"})
+func writePostRepostError(ctx *gin.Context, err error) {
+	if errors.Is(err, errPostRepostNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return
 	}
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 
-func loadArticleRepostStateFromDB(userID, articleID uint) (articleRepostStateResult, error) {
+func loadPostRepostStateFromDB(userID, postID uint) (postRepostStateResult, error) {
 	if global.Db == nil {
-		return articleRepostStateResult{}, errors.New("database is not initialized")
+		return postRepostStateResult{}, errors.New("database is not initialized")
 	}
-	return loadArticleRepostStateWithDB(global.Db, userID, articleID, time.Now().UTC())
+	return loadPostRepostStateWithDB(global.Db, userID, postID, time.Now().UTC())
 }
 
-func loadArticleRepostStateWithDB(db *gorm.DB, userID, articleID uint, now time.Time) (articleRepostStateResult, error) {
-	if err := requirePublicArticle(db, articleID, now); err != nil {
-		return articleRepostStateResult{}, err
+func loadPostRepostStateWithDB(db *gorm.DB, userID, postID uint, now time.Time) (postRepostStateResult, error) {
+	if err := requirePublicPost(db, postID, now); err != nil {
+		return postRepostStateResult{}, err
 	}
 
 	var reposts int64
-	if err := activeArticleRepostScope(db).
-		Where("ar.article_id = ?", articleID).
+	if err := activePostRepostScope(db).
+		Where("ar.post_id = ?", postID).
 		Count(&reposts).Error; err != nil {
-		return articleRepostStateResult{}, err
+		return postRepostStateResult{}, err
 	}
 
-	var relation models.ArticleRepost
-	err := db.Where("user_id = ? AND article_id = ?", userID, articleID).
+	var relation models.PostRepost
+	err := db.Where("user_id = ? AND post_id = ?", userID, postID).
 		Select("id").First(&relation).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return articleRepostStateResult{}, err
+		return postRepostStateResult{}, err
 	}
-	return articleRepostStateResult{
-		Reposts:  normalizeArticleRepostCount(reposts),
+	return postRepostStateResult{
+		Reposts:  normalizePostRepostCount(reposts),
 		Reposted: err == nil,
 	}, nil
 }
 
-func mutateArticleRepostFromDB(userID, articleID uint, reposted bool) (articleRepostMutationResult, error) {
+func mutatePostRepostFromDB(userID, postID uint, reposted bool) (postRepostMutationResult, error) {
 	if global.Db == nil {
-		return articleRepostMutationResult{}, errors.New("database is not initialized")
+		return postRepostMutationResult{}, errors.New("database is not initialized")
 	}
 
-	var result articleRepostMutationResult
+	var result postRepostMutationResult
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
-		if err := requirePublicArticle(tx, articleID, time.Now().UTC()); err != nil {
+		if err := requirePublicPost(tx, postID, time.Now().UTC()); err != nil {
 			return err
 		}
 
 		if reposted {
 			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "user_id"}, {Name: "article_id"}},
+				Columns:   []clause.Column{{Name: "user_id"}, {Name: "post_id"}},
 				DoNothing: true,
-			}).Create(&models.ArticleRepost{UserID: userID, ArticleID: articleID}).Error; err != nil {
+			}).Create(&models.PostRepost{UserID: userID, PostID: postID}).Error; err != nil {
 				return err
 			}
-		} else if err := tx.Where("user_id = ? AND article_id = ?", userID, articleID).
-			Delete(&models.ArticleRepost{}).Error; err != nil {
+		} else if err := tx.Where("user_id = ? AND post_id = ?", userID, postID).
+			Delete(&models.PostRepost{}).Error; err != nil {
 			return err
 		}
 
 		var err error
-		result, err = loadArticleRepostStateWithDB(tx, userID, articleID, time.Now().UTC())
+		result, err = loadPostRepostStateWithDB(tx, userID, postID, time.Now().UTC())
 		return err
 	})
 	return result, err
 }
 
-func loadArticleRepostStatesFromDB(userID uint, articleIDs []uint) (articleRepostStatesLoadResult, error) {
-	result := articleRepostStatesLoadResult{
-		States:      make(map[uint]articleRepostStateResult, len(articleIDs)),
+func loadPostRepostStatesFromDB(userID uint, postIDs []uint) (postRepostStatesLoadResult, error) {
+	result := postRepostStatesLoadResult{
+		States:      make(map[uint]postRepostStateResult, len(postIDs)),
 		Unavailable: make([]uint, 0),
 	}
 	if global.Db == nil {
 		return result, errors.New("database is not initialized")
 	}
-	if len(articleIDs) == 0 {
+	if len(postIDs) == 0 {
 		return result, nil
 	}
 
 	now := time.Now().UTC()
 	var availableIDs []uint
-	if err := publicArticleScope(global.Db.Model(&models.Article{}), now).
-		Where("articles.id IN ?", articleIDs).
-		Pluck("articles.id", &availableIDs).Error; err != nil {
-		return articleRepostStatesLoadResult{}, err
+	if err := publicPostScope(global.Db.Model(&models.Post{}), now).
+		Where("posts.id IN ?", postIDs).
+		Pluck("posts.id", &availableIDs).Error; err != nil {
+		return postRepostStatesLoadResult{}, err
 	}
 	available := make(map[uint]struct{}, len(availableIDs))
-	for _, articleID := range availableIDs {
-		available[articleID] = struct{}{}
-		result.States[articleID] = articleRepostStateResult{}
+	for _, postID := range availableIDs {
+		available[postID] = struct{}{}
+		result.States[postID] = postRepostStateResult{}
 	}
 
 	if len(availableIDs) > 0 {
-		var counts []articleRepostCountRow
-		if err := activeArticleRepostScope(global.Db).
-			Select("ar.article_id, COUNT(*) AS reposts").
-			Where("ar.article_id IN ?", availableIDs).
-			Group("ar.article_id").
+		var counts []postRepostCountRow
+		if err := activePostRepostScope(global.Db).
+			Select("ar.post_id, COUNT(*) AS reposts").
+			Where("ar.post_id IN ?", availableIDs).
+			Group("ar.post_id").
 			Scan(&counts).Error; err != nil {
-			return articleRepostStatesLoadResult{}, err
+			return postRepostStatesLoadResult{}, err
 		}
 		for _, count := range counts {
-			state := result.States[count.ArticleID]
-			state.Reposts = normalizeArticleRepostCount(count.Reposts)
-			result.States[count.ArticleID] = state
+			state := result.States[count.PostID]
+			state.Reposts = normalizePostRepostCount(count.Reposts)
+			result.States[count.PostID] = state
 		}
 
 		var repostedIDs []uint
-		if err := global.Db.Model(&models.ArticleRepost{}).
-			Where("user_id = ? AND article_id IN ?", userID, availableIDs).
-			Pluck("article_id", &repostedIDs).Error; err != nil {
-			return articleRepostStatesLoadResult{}, err
+		if err := global.Db.Model(&models.PostRepost{}).
+			Where("user_id = ? AND post_id IN ?", userID, availableIDs).
+			Pluck("post_id", &repostedIDs).Error; err != nil {
+			return postRepostStatesLoadResult{}, err
 		}
-		for _, articleID := range repostedIDs {
-			state := result.States[articleID]
+		for _, postID := range repostedIDs {
+			state := result.States[postID]
 			state.Reposted = true
-			result.States[articleID] = state
+			result.States[postID] = state
 		}
 	}
 
-	for _, articleID := range articleIDs {
-		if _, ok := available[articleID]; !ok {
-			result.Unavailable = append(result.Unavailable, articleID)
+	for _, postID := range postIDs {
+		if _, ok := available[postID]; !ok {
+			result.Unavailable = append(result.Unavailable, postID)
 		}
 	}
 	return result, nil
 }
 
-func requirePublicArticle(db *gorm.DB, articleID uint, now time.Time) error {
+func requirePublicPost(db *gorm.DB, postID uint, now time.Time) error {
 	if db == nil {
 		return errors.New("database is not initialized")
 	}
-	if articleID == 0 {
-		return errArticleRepostNotFound
+	if postID == 0 {
+		return errPostRepostNotFound
 	}
 
 	var id uint
-	err := publicArticleScope(db.Model(&models.Article{}), now).
-		Where("articles.id = ?", articleID).
-		Select("articles.id").
+	err := publicPostScope(db.Model(&models.Post{}), now).
+		Where("posts.id = ?", postID).
+		Select("posts.id").
 		Take(&id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return errArticleRepostNotFound
+		return errPostRepostNotFound
 	}
 	return err
 }

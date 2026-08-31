@@ -20,7 +20,7 @@ func TestApplyRecommendationMetricsEventClassifiesInvalidPayload(t *testing.T) {
 func TestAggregateRecommendationMetricsPreservesFullMetricDimensions(t *testing.T) {
 	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
-		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(),
+		UserID: 7, PostID: 42, RequestID: uuid.NewString(),
 		Scene: "recommendation_page", Position: 1,
 		RankerVersion: "embedding_v1", RankerConfigHash: "config-a",
 		StrategyID: "strategy-a", ReceivedAt: now, SelectionMode: eventing.RecommendationSelectionModeRanked,
@@ -61,12 +61,12 @@ func TestAggregateRecommendationMetricsPreservesFullMetricDimensions(t *testing.
 func TestAggregateRecommendationMetricsSeparatesExplorationProvenanceDimensions(t *testing.T) {
 	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
-		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		UserID: 7, PostID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
 		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
 		SelectionMode: eventing.RecommendationSelectionModeRanked,
 	}
 	variants := []eventing.RecommendationBehaviorPayload{base, {
-		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		UserID: 7, PostID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
 		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
 		ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: eventing.RecommendationExplorationReasonRecent,
 	}}
@@ -86,13 +86,13 @@ func TestAggregateRecommendationMetricsSeparatesExplorationProvenanceDimensions(
 func TestAggregateRecommendationMetricsSeparatesAllThreeProvenanceStates(t *testing.T) {
 	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
-		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		UserID: 7, PostID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
 		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
 	}
 	variants := []eventing.RecommendationBehaviorPayload{
-		{UserID: base.UserID, ArticleID: base.ArticleID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, SelectionMode: eventing.RecommendationSelectionModeRanked},
-		{UserID: base.UserID, ArticleID: base.ArticleID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeRanked},
-		{UserID: base.UserID, ArticleID: base.ArticleID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: eventing.RecommendationExplorationReasonRecent},
+		{UserID: base.UserID, PostID: base.PostID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, SelectionMode: eventing.RecommendationSelectionModeRanked},
+		{UserID: base.UserID, PostID: base.PostID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeRanked},
+		{UserID: base.UserID, PostID: base.PostID, RequestID: base.RequestID, Scene: base.Scene, Position: base.Position, RankerVersion: base.RankerVersion, RankerConfigHash: base.RankerConfigHash, StrategyID: base.StrategyID, ReceivedAt: base.ReceivedAt, ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: eventing.RecommendationExplorationReasonRecent},
 	}
 	records := make([]recommendationMetricEvent, 0, len(variants))
 	firstDelivery := make(map[string]struct{}, len(variants))
@@ -127,7 +127,7 @@ func TestAggregateRecommendationMetricsSeparatesExplorationReasons(t *testing.T)
 		record := recommendationMetricEvent{
 			Envelope: eventing.Envelope{ID: uuid.NewString(), Type: eventing.EventTypeRecommendationImpression, OccurredAt: now},
 			Payload: eventing.RecommendationBehaviorPayload{
-				UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+				UserID: 7, PostID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
 				RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
 				ExplorationOpportunity: true, SelectionMode: eventing.RecommendationSelectionModeExploration, ExplorationReason: reason,
 			},
@@ -151,7 +151,7 @@ func TestAggregateRecommendationMetricsSeparatesExplorationReasons(t *testing.T)
 func TestAggregateRecommendationBehaviorIgnoresSelectionProvenance(t *testing.T) {
 	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
-		UserID: 7, ArticleID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+		UserID: 7, PostID: 42, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
 		RankerVersion: "rules_v4", RankerConfigHash: "config-a", StrategyID: "strategy-a", ReceivedAt: now,
 	}
 	records := []recommendationMetricEvent{}

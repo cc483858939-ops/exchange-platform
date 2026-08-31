@@ -1,10 +1,9 @@
 import apiClient from '../axios';
-import type { Article } from '../types/Article';
-import type { ArticlePageResponse } from './articleService';
+import type { PostPageResponse } from '../types/Post';
 import type { PublicUser } from '../types/User';
 import { normalizeResourceID } from './resourceId';
 
-export type UserArticleQuery = {
+export type UserPostQuery = {
   limit?: number;
   cursor?: string;
 };
@@ -36,12 +35,12 @@ export async function getUser(userId: number | string): Promise<PublicUser> {
   return response.data;
 }
 
-export async function getUserArticles(
+export async function getUserPosts(
   userId: number | string,
-  options: UserArticleQuery = {},
-): Promise<ArticlePageResponse> {
+  options: UserPostQuery = {},
+): Promise<PostPageResponse> {
   const id = normalizeResourceID(userId, 'user');
-  const response = await apiClient.get<ArticlePageResponse>(`/users/${id}/articles`, { params: options });
+  const response = await apiClient.get<PostPageResponse>(`/users/${id}/posts`, { params: options });
   return response.data;
 }
 

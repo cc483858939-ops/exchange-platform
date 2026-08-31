@@ -63,7 +63,7 @@ func recommendationReadDwellThreshold(estimatedReadTimeMS, numerator, maximum in
 	return rounded
 }
 
-func estimateArticleReadTime(content string) time.Duration {
+func estimatePostReadTime(content string) time.Duration {
 	var cjkCharacters int64
 	var latinWords int64
 	inLatinWord := false

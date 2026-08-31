@@ -13,24 +13,24 @@ import (
 )
 
 const (
-	articleCursorVersion = 1
-	defaultArticleLimit  = 20
-	maxArticleLimit      = 50
+	postCursorVersion = 2
+	defaultPostLimit  = 20
+	maxPostLimit      = 50
 )
 
-type articleCursor struct {
+type postCursor struct {
 	Version     int       `json:"v"`
 	PublishedAt time.Time `json:"published_at"`
 	ID          uint      `json:"id"`
 }
 
-type articlePageResponse struct {
-	Items      []articleResponse `json:"items"`
-	NextCursor *string           `json:"next_cursor"`
+type postPageResponse struct {
+	Items      []postResponse `json:"items"`
+	NextCursor *string        `json:"next_cursor"`
 }
 
-func parseArticlePageQuery(ctx *gin.Context) (int, *articleCursor, error) {
-	limit := defaultArticleLimit
+func parsePostPageQuery(ctx *gin.Context) (int, *postCursor, error) {
+	limit := defaultPostLimit
 	if raw, exists := ctx.GetQuery("limit"); exists {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
@@ -38,23 +38,23 @@ func parseArticlePageQuery(ctx *gin.Context) (int, *articleCursor, error) {
 		}
 		limit = parsed
 	}
-	if limit > maxArticleLimit {
-		limit = maxArticleLimit
+	if limit > maxPostLimit {
+		limit = maxPostLimit
 	}
 
 	raw, exists := ctx.GetQuery("cursor")
 	if !exists {
 		return limit, nil, nil
 	}
-	cursor, err := decodeArticleCursor(raw)
+	cursor, err := decodePostCursor(raw)
 	if err != nil {
 		return 0, nil, err
 	}
 	return limit, &cursor, nil
 }
 
-func encodeArticleCursor(cursor articleCursor) (string, error) {
-	if cursor.Version != articleCursorVersion || cursor.PublishedAt.IsZero() || cursor.ID == 0 {
+func encodePostCursor(cursor postCursor) (string, error) {
+	if cursor.Version != postCursorVersion || cursor.PublishedAt.IsZero() || cursor.ID == 0 {
 		return "", errors.New("invalid cursor")
 	}
 	payload, err := json.Marshal(cursor)
@@ -64,49 +64,49 @@ func encodeArticleCursor(cursor articleCursor) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
-func decodeArticleCursor(raw string) (articleCursor, error) {
+func decodePostCursor(raw string) (postCursor, error) {
 	if strings.TrimSpace(raw) == "" {
-		return articleCursor{}, errors.New("invalid cursor")
+		return postCursor{}, errors.New("invalid cursor")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return articleCursor{}, errors.New("invalid cursor")
+		return postCursor{}, errors.New("invalid cursor")
 	}
-	var cursor articleCursor
-	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != articleCursorVersion || cursor.PublishedAt.IsZero() || cursor.ID == 0 {
-		return articleCursor{}, errors.New("invalid cursor")
+	var cursor postCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != postCursorVersion || cursor.PublishedAt.IsZero() || cursor.ID == 0 {
+		return postCursor{}, errors.New("invalid cursor")
 	}
 	return cursor, nil
 }
 
-func buildArticlePageResponse(articles []articleResponse, limit int) (articlePageResponse, error) {
-	hasMore := len(articles) > limit
+func buildPostPageResponse(posts []postResponse, limit int) (postPageResponse, error) {
+	hasMore := len(posts) > limit
 	if hasMore {
-		articles = articles[:limit]
+		posts = posts[:limit]
 	}
-	items := make([]articleResponse, len(articles))
-	copy(items, articles)
-	response := articlePageResponse{Items: items}
+	items := make([]postResponse, len(posts))
+	copy(items, posts)
+	response := postPageResponse{Items: items}
 	if !hasMore {
 		return response, nil
 	}
 
 	last := items[len(items)-1]
 	if last.PublishedAt == nil {
-		return articlePageResponse{}, errors.New("public article is missing published_at")
+		return postPageResponse{}, errors.New("public post is missing published_at")
 	}
-	nextCursor, err := encodeArticleCursor(articleCursor{
-		Version:     articleCursorVersion,
+	nextCursor, err := encodePostCursor(postCursor{
+		Version:     postCursorVersion,
 		PublishedAt: *last.PublishedAt,
 		ID:          last.ID,
 	})
 	if err != nil {
-		return articlePageResponse{}, err
+		return postPageResponse{}, err
 	}
 	response.NextCursor = &nextCursor
 	return response, nil
 }
 
-func writeArticleTimelineStoreError(ctx *gin.Context) {
+func writePostTimelineStoreError(ctx *gin.Context) {
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }

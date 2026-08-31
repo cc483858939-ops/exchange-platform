@@ -27,12 +27,12 @@ const mocks = vi.hoisted(() => ({
     replace: vi.fn(),
   },
   feedStore: {
-    registerPublishedArticle: vi.fn(),
+    registerPublishedPost: vi.fn(),
   },
   profileSessionStore: {
-    registerPublishedArticle: vi.fn(),
+    registerPublishedPost: vi.fn(),
   },
-  createArticle: vi.fn(),
+  createPost: vi.fn(),
   uploadArticleCover: vi.fn(),
 }));
 
@@ -47,7 +47,6 @@ vi.mock('../store/auth', async () => {
     useAuthStore: () => mocks.authStore,
   };
 });
-
 vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
@@ -56,8 +55,8 @@ vi.mock('../store/profileSession', () => ({
   useProfileSessionStore: () => mocks.profileSessionStore,
 }));
 
-vi.mock('../services/articleService', () => ({
-  createArticle: mocks.createArticle,
+vi.mock('../services/postService', () => ({
+  createPost: mocks.createPost,
   uploadArticleCover: mocks.uploadArticleCover,
 }));
 
@@ -79,7 +78,6 @@ const mountPage = () => mount(ArticleCreateView, {
     },
   },
 });
-
 const selectValidCover = async (wrapper: VueWrapper) => {
   const file = new File(['image-bytes'], 'cover.png', { type: 'image/png' });
   return selectCover(wrapper, file);
@@ -114,14 +112,16 @@ describe('ArticleCreateView cover picker', () => {
       display_name: 'Alice Smith',
       avatar_url: '',
     };
-    mocks.createArticle.mockResolvedValue({ id: 101, author: { id: 7 } });
+    mocks.createPost.mockResolvedValue({ id: 101, author: { id: 7 } });
     mocks.uploadArticleCover.mockResolvedValue('https://example.test/cover.jpg');
-    mocks.feedStore.registerPublishedArticle.mockReturnValue(true);
+    mocks.feedStore.registerPublishedPost.mockReturnValue(true);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
     const draft = useArticleDraftStore();
     draft.clear();
     draft.setViewer(7);
+    draft.setTitle('Test headline');
+    draft.setPreview('Test summary');
   });
 
   afterEach(() => {
@@ -145,13 +145,13 @@ describe('ArticleCreateView cover picker', () => {
     await trigger.trigger('click');
 
     expect(inputClick).toHaveBeenCalledOnce();
-    expect(mocks.createArticle).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
     expect(mocks.router.replace).not.toHaveBeenCalled();
   });
 
   it('disables the empty trigger while publishing', async () => {
     const publish = deferred<{ id: number; author: { id: number } }>();
-    mocks.createArticle.mockReturnValue(publish.promise);
+    mocks.createPost.mockReturnValue(publish.promise);
     wrapper = mountPage();
 
     await wrapper.get('#article-content').setValue('A post in progress');
@@ -248,7 +248,7 @@ describe('ArticleCreateView cover picker', () => {
     await flushPromises();
 
     expect(mocks.uploadArticleCover).toHaveBeenCalledWith(file);
-    expect(mocks.createArticle).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
     expect(useArticleDraftStore().content).toBe('Keep this after upload failure');
     expect(useArticleDraftStore().coverFile).toBe(file);
     expect(useArticleDraftStore().uploadedCoverURL).toBe('');
@@ -256,7 +256,7 @@ describe('ArticleCreateView cover picker', () => {
   });
 
   it('reuses a successful upload URL when create fails and the user retries', async () => {
-    mocks.createArticle
+    mocks.createPost
       .mockRejectedValueOnce(new Error('create failed'))
       .mockResolvedValueOnce({
         id: 101,
@@ -276,11 +276,13 @@ describe('ArticleCreateView cover picker', () => {
     await wrapper.get('form').trigger('submit');
     await flushPromises();
     expect(mocks.uploadArticleCover).toHaveBeenCalledTimes(1);
-    expect(mocks.createArticle).toHaveBeenLastCalledWith({
-      title: '',
-      preview: '',
+    expect(mocks.createPost).toHaveBeenLastCalledWith({
       content: 'Retry with the same uploaded cover',
-      cover_image_url: 'https://example.test/cover.jpg',
+      article: {
+        title: 'Test headline',
+        preview: 'Test summary',
+        cover_image_url: 'https://example.test/cover.jpg',
+      },
     });
   });
 
@@ -323,8 +325,8 @@ describe('ArticleCreateView cover picker', () => {
     upload.resolve('https://example.test/stale-cover.jpg');
     await flushPromises();
 
-    expect(mocks.createArticle).not.toHaveBeenCalled();
-    expect(mocks.feedStore.registerPublishedArticle).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(mocks.feedStore.registerPublishedPost).not.toHaveBeenCalled();
     expect(mocks.router.replace).not.toHaveBeenCalled();
     expect(useArticleDraftStore().uploadedCoverURL).toBe('');
   });

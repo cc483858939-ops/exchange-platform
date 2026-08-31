@@ -59,7 +59,7 @@ func validateRecommendationReadPayload(eventType string, input recommendationEve
 
 func isRecommendationExitType(exitType string) bool {
 	switch exitType {
-	case "back_to_recommendation", "navigate_to_article", "route_leave", "page_hide", "refresh", "unknown":
+	case "back_to_recommendation", "navigate_to_post", "route_leave", "page_hide", "refresh", "unknown":
 		return true
 	default:
 		return false

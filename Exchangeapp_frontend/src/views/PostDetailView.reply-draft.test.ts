@@ -4,10 +4,9 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, type Pinia } from 'pinia';
 import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import NewsDetailView from './NewsDetailView.vue';
+import PostDetailView from './PostDetailView.vue';
 import { useReplyDraftStore } from '../store/replyDraft';
-import type { Article } from '../types/Article';
-import type { ArticleComment } from '../types/Comment';
+import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
 
 const mocks = vi.hoisted(() => ({
@@ -21,29 +20,29 @@ const mocks = vi.hoisted(() => ({
   authStore: null as any,
   feedStore: {
     viewerID: 7,
-    markArticleDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
   },
   handoffStore: null as any,
   consumeHandoff: vi.fn(),
-  getArticleById: vi.fn(),
-  getArticleLikeState: vi.fn(),
-  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
-  getArticleComments: vi.fn(),
-  createArticleComment: vi.fn(),
-  deleteComment: vi.fn(),
-  deleteArticle: vi.fn(),
+  getPostById: vi.fn(),
+  getPostLikeState: vi.fn(),
+  getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
+  getPostReplies: vi.fn(),
+  createPostReply: vi.fn(),
+  deletePostReply: vi.fn(),
+  deletePost: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
     recordReadEnd: vi.fn(),
     flush: vi.fn(),
   },
-  articleViewTelemetry: {
+  postViewTelemetry: {
     enqueue: vi.fn(),
   },
   externalRemoval: vi.fn(),
-  externalCommentCount: vi.fn(),
+  externalReplyCount: vi.fn(),
 }));
 
 vi.mock('vue-router', () => ({
@@ -62,31 +61,31 @@ vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
 
-vi.mock('../store/articleDetailHandoff', () => ({
-  useArticleDetailHandoffStore: () => mocks.handoffStore,
+vi.mock('../store/postDetailHandoff', () => ({
+  usePostDetailHandoffStore: () => mocks.handoffStore,
 }));
 
-vi.mock('../services/articleService', () => ({
-  getArticleById: mocks.getArticleById,
-  deleteArticle: mocks.deleteArticle,
+vi.mock('../services/postService', () => ({
+  getPostById: mocks.getPostById,
+  deletePost: mocks.deletePost,
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeState: mocks.getArticleLikeState,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeState: mocks.getPostLikeState,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 vi.mock('../services/repostService', () => ({
-  getArticleRepostState: mocks.getArticleRepostState,
-  repostArticle: vi.fn(),
-  undoRepostArticle: vi.fn(),
+  getPostRepostState: mocks.getPostRepostState,
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
 }));
 
-vi.mock('../services/commentService', () => ({
-  getArticleComments: mocks.getArticleComments,
-  createArticleComment: mocks.createArticleComment,
-  deleteComment: mocks.deleteComment,
+vi.mock('../services/replyService', () => ({
+  getPostReplies: mocks.getPostReplies,
+  createPostReply: mocks.createPostReply,
+  deletePostReply: mocks.deletePostReply,
 }));
 
 vi.mock('../services/recommendationAttribution', () => ({
@@ -97,39 +96,48 @@ vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
 }));
 
-vi.mock('../services/articleViewTelemetry', () => ({
-  createArticleViewEventID: () => '00000000-0000-4000-8000-000000000042',
-  getArticleViewTelemetry: () => mocks.articleViewTelemetry,
+vi.mock('../services/postViewTelemetry', () => ({
+  createPostViewEventID: () => '00000000-0000-4000-8000-000000000042',
+  getPostViewTelemetry: () => mocks.postViewTelemetry,
 }));
 
 vi.mock('../store/sessionSync', () => ({
-  syncExternalArticleLikeState: vi.fn(),
-  syncExternalArticleRepostState: vi.fn(),
-  syncExternalArticleRemoval: mocks.externalRemoval,
-  syncExternalCommentCount: mocks.externalCommentCount,
+  syncExternalPostLikeState: vi.fn(),
+  syncExternalPostRepostState: vi.fn(),
+  syncExternalPostRemoval: mocks.externalRemoval,
+  syncExternalReplyCount: mocks.externalReplyCount,
 }));
 
-const article = (id = 42, overrides: Partial<Article> = {}): Article => ({
-  ID: id,
-  CreatedAt: '2026-08-27T13:42:00.000Z',
-  UpdatedAt: '2026-08-27T13:42:00.000Z',
-  title: `Post ${id}`,
-  content: `Post ${id} body`,
-  preview: `Post ${id} preview`,
-  cover_image_url: '',
-  publication_state: 'published',
+const post = (id = 42, overrides: Partial<Post> = {}): Post => ({
+  id,
+  created_at: '2026-08-27T13:42:00.000Z',
+  updated_at: '2026-08-27T13:42:00.000Z',
   published_at: '2026-08-27T13:42:00.000Z',
-  expired_at: null,
-  like_count: 3,
-  comment_count: 0,
-  view_count: 12,
-  like_sync_version: 1,
   author: {
     id: 7,
     username: 'author',
     display_name: 'Author',
     avatar_url: '',
   },
+  content: `Post ${id} body`,
+  conversation_id: id,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  article: {
+    title: `Post ${id}`,
+    preview: `Post ${id} preview`,
+    cover_image_url: '',
+    publication_state: 'published',
+    published_at: '2026-08-27T13:42:00.000Z',
+    expired_at: null,
+  },
+  like_count: 3,
+  reply_count: 0,
+  view_count: 12,
+  deleted: false,
   ...overrides,
 });
 
@@ -146,7 +154,7 @@ const warmPost = (id = 42): FeedPost => ({
   coverImageUrl: '',
   createdAt: '2026-08-27T13:42:00.000Z',
   likeCount: 3,
-  commentCount: 0,
+  replyCount: 0,
   viewCount: 12,
   liked: false,
   likeStatus: 'ready',
@@ -155,17 +163,29 @@ const warmPost = (id = 42): FeedPost => ({
   repostStatus: 'ready',
 });
 
-const comment = (id: number, articleID = 42): ArticleComment => ({
+const reply = (id: number, postID = 42): Post => ({
   id,
-  article_id: articleID,
-  content: `Reply ${id}`,
   created_at: '2026-08-27T13:42:00.000Z',
+  updated_at: '2026-08-27T13:42:00.000Z',
+  published_at: '2026-08-27T13:42:00.000Z',
   author: {
     id: 8,
     username: 'commenter',
     display_name: 'Commenter',
     avatar_url: '',
   },
+  content: `Reply ${id}`,
+  conversation_id: postID,
+  reply_to_post_id: postID,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  article: null,
+  like_count: 0,
+  reply_count: 0,
+  view_count: 0,
+  deleted: false,
 });
 
 const deferred = <T>() => {
@@ -184,10 +204,10 @@ let scrollIntoViewMock: ReturnType<typeof vi.fn>;
 const draftStore = () => useReplyDraftStore(pinia);
 
 const textareaValue = (wrapper: ReturnType<typeof mount>) => (
-  (wrapper.get('.comment-composer__textarea').element as HTMLTextAreaElement).value
+  (wrapper.get('.reply-composer__textarea').element as HTMLTextAreaElement).value
 );
 
-const mountDetail = () => mount(NewsDetailView, {
+const mountDetail = () => mount(PostDetailView, {
   attachTo: document.body,
   global: {
     plugins: [pinia],
@@ -202,13 +222,13 @@ const mountDetail = () => mount(NewsDetailView, {
         emits: ['toggle'],
         template: '<button class="test-like" type="button" @click="$emit(\'toggle\')">{{ count }}</button>',
       },
-      CommentList: { template: '<div class="test-comments" />' },
+      ReplyList: { template: '<div class="test-comments" />' },
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
 });
 
-describe('NewsDetailView persistent reply drafts', () => {
+describe('PostDetailView persistent reply drafts', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
@@ -240,14 +260,14 @@ describe('NewsDetailView persistent reply drafts', () => {
       },
     });
     mocks.feedStore.viewerID = 7;
-    mocks.feedStore.markArticleDeleted.mockReturnValue(true);
+    mocks.feedStore.markPostDeleted.mockReturnValue(true);
     mocks.handoffStore = { consume: mocks.consumeHandoff };
     mocks.consumeHandoff.mockReturnValue(null);
-    mocks.getArticleById.mockImplementation((id: string) => Promise.resolve(article(Number(id))));
-    mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
-    mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
-    mocks.createArticleComment.mockReset();
-    mocks.deleteArticle.mockResolvedValue(undefined);
+    mocks.getPostById.mockImplementation((id: string) => Promise.resolve(post(Number(id))));
+    mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
+    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.createPostReply.mockReset();
+    mocks.deletePost.mockResolvedValue(undefined);
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.telemetry.flush.mockResolvedValue(undefined);
   });
@@ -262,7 +282,7 @@ describe('NewsDetailView persistent reply drafts', () => {
     wrapper = mountDetail();
     await flushPromises();
 
-    await wrapper.get('.comment-composer__textarea').setValue('draft 42');
+    await wrapper.get('.reply-composer__textarea').setValue('draft 42');
     expect(draftStore().getDraft(42)).toBe('draft 42');
 
     wrapper.unmount();
@@ -276,12 +296,12 @@ describe('NewsDetailView persistent reply drafts', () => {
   it('keeps drafts isolated while navigating between posts', async () => {
     wrapper = mountDetail();
     await flushPromises();
-    await wrapper.get('.comment-composer__textarea').setValue('draft A');
+    await wrapper.get('.reply-composer__textarea').setValue('draft A');
 
     mocks.route.params.id = '43';
     await flushPromises();
     expect(textareaValue(wrapper)).toBe('');
-    await wrapper.get('.comment-composer__textarea').setValue('draft B');
+    await wrapper.get('.reply-composer__textarea').setValue('draft B');
 
     mocks.route.params.id = '42';
     await flushPromises();
@@ -291,79 +311,79 @@ describe('NewsDetailView persistent reply drafts', () => {
   });
 
   it('does not mount or expose the draft during warm handoff loading', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     draftStore().setViewer(7);
     draftStore().setDraft(42, 'warm-hidden draft');
     mocks.consumeHandoff.mockReturnValueOnce(warmPost());
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     wrapper = mountDetail();
     await flushPromises();
 
     expect(wrapper.find('.post-conversation').exists()).toBe(false);
-    expect(wrapper.find('.comment-composer__textarea').exists()).toBe(false);
+    expect(wrapper.find('.reply-composer__textarea').exists()).toBe(false);
 
-    request.resolve(article());
+    request.resolve(post());
     await flushPromises();
 
     expect(textareaValue(wrapper)).toBe('warm-hidden draft');
   });
 
   it('clears only the submitted draft after a successful reply', async () => {
-    const request = deferred<ArticleComment>();
-    mocks.createArticleComment.mockReturnValueOnce(request.promise);
+    const request = deferred<Post>();
+    mocks.createPostReply.mockReturnValueOnce(request.promise);
     wrapper = mountDetail();
     await flushPromises();
 
-    await wrapper.get('.comment-composer__textarea').setValue('  useful reply  ');
-    await wrapper.get('.comment-composer').trigger('submit');
+    await wrapper.get('.reply-composer__textarea').setValue('  useful reply  ');
+    await wrapper.get('.reply-composer').trigger('submit');
 
-    expect(mocks.createArticleComment).toHaveBeenCalledWith('42', 'useful reply');
+    expect(mocks.createPostReply).toHaveBeenCalledWith('42', 'useful reply');
     expect(draftStore().getDraft(42)).toBe('  useful reply  ');
 
-    request.resolve(comment(101));
+    request.resolve(reply(101));
     await flushPromises();
 
     expect(draftStore().getDraft(42)).toBe('');
     expect(textareaValue(wrapper)).toBe('');
-    expect(mocks.externalCommentCount).toHaveBeenCalledWith({
-      articleId: 42,
-      commentCount: 1,
+    expect(mocks.externalReplyCount).toHaveBeenCalledWith({
+      postId: 42,
+      replyCount: 1,
     });
   });
 
   it('preserves the draft on failure and allows retry without retyping', async () => {
-    mocks.createArticleComment
+    mocks.createPostReply
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce(comment(102));
+      .mockResolvedValueOnce(reply(102));
     wrapper = mountDetail();
     await flushPromises();
 
-    await wrapper.get('.comment-composer__textarea').setValue('retry me');
-    await wrapper.get('.comment-composer').trigger('submit');
+    await wrapper.get('.reply-composer__textarea').setValue('retry me');
+    await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
 
     expect(draftStore().getDraft(42)).toBe('retry me');
-    expect(wrapper.get('.comment-error').text()).toBe('Reply failed. Please try again.');
+    expect(wrapper.get('.reply-error').text()).toBe('Reply failed. Please try again.');
 
-    await wrapper.get('.comment-composer').trigger('submit');
+    await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
 
-    expect(mocks.createArticleComment).toHaveBeenNthCalledWith(2, '42', 'retry me');
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'retry me');
     expect(draftStore().getDraft(42)).toBe('');
   });
 
   it('does not clear a newer draft that replaces the submitted snapshot', async () => {
-    const request = deferred<ArticleComment>();
-    mocks.createArticleComment.mockReturnValueOnce(request.promise);
+    const request = deferred<Post>();
+    mocks.createPostReply.mockReturnValueOnce(request.promise);
     wrapper = mountDetail();
     await flushPromises();
 
-    await wrapper.get('.comment-composer__textarea').setValue('draft A');
-    await wrapper.get('.comment-composer').trigger('submit');
+    await wrapper.get('.reply-composer__textarea').setValue('draft A');
+    await wrapper.get('.reply-composer').trigger('submit');
     draftStore().setDraft(42, 'draft B');
 
-    request.resolve(comment(103));
+    request.resolve(reply(103));
     await flushPromises();
 
     expect(draftStore().getDraft(42)).toBe('draft B');
@@ -371,30 +391,30 @@ describe('NewsDetailView persistent reply drafts', () => {
   });
 
   it('clears a late successful Post A reply without mutating Post B', async () => {
-    const request = deferred<ArticleComment>();
-    mocks.createArticleComment.mockReturnValueOnce(request.promise);
+    const request = deferred<Post>();
+    mocks.createPostReply.mockReturnValueOnce(request.promise);
     wrapper = mountDetail();
     await flushPromises();
 
-    await wrapper.get('.comment-composer__textarea').setValue('draft A');
-    await wrapper.get('.comment-composer').trigger('submit');
+    await wrapper.get('.reply-composer__textarea').setValue('draft A');
+    await wrapper.get('.reply-composer').trigger('submit');
 
     mocks.route.params.id = '43';
     await flushPromises();
     draftStore().setDraft(43, 'draft B');
 
-    request.resolve(comment(104, 42));
+    request.resolve(reply(104, 42));
     await flushPromises();
 
     expect(draftStore().getDraft(42)).toBe('');
     expect(draftStore().getDraft(43)).toBe('draft B');
-    expect(mocks.externalCommentCount).not.toHaveBeenCalled();
+    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
   });
 
   it('preserves drafts across same-viewer identity replacement', async () => {
     wrapper = mountDetail();
     await flushPromises();
-    await wrapper.get('.comment-composer__textarea').setValue('same viewer draft');
+    await wrapper.get('.reply-composer__textarea').setValue('same viewer draft');
 
     mocks.authStore.currentIdentity = {
       id: 7,
@@ -411,7 +431,7 @@ describe('NewsDetailView persistent reply drafts', () => {
   it('clears drafts when the account changes or logs out', async () => {
     wrapper = mountDetail();
     await flushPromises();
-    await wrapper.get('.comment-composer__textarea').setValue('private draft');
+    await wrapper.get('.reply-composer__textarea').setValue('private draft');
 
     mocks.authStore.currentIdentity = {
       id: 8,
@@ -430,13 +450,13 @@ describe('NewsDetailView persistent reply drafts', () => {
 
     expect(draftStore().viewerID).toBeNull();
     expect(draftStore().drafts).toEqual({});
-    expect(wrapper.find('.comment-composer').exists()).toBe(false);
+    expect(wrapper.find('.reply-composer').exists()).toBe(false);
   });
 
   it('clears a draft for a current canonical 404 but preserves it for a generic failure', async () => {
     draftStore().setViewer(7);
     draftStore().setDraft(42, 'remove on 404');
-    mocks.getArticleById.mockRejectedValueOnce({ response: { status: 404 } });
+    mocks.getPostById.mockRejectedValueOnce({ response: { status: 404 } });
 
     wrapper = mountDetail();
     await flushPromises();
@@ -447,7 +467,7 @@ describe('NewsDetailView persistent reply drafts', () => {
     wrapper.unmount();
     wrapper = null;
     draftStore().setDraft(42, 'keep on network error');
-    mocks.getArticleById.mockRejectedValueOnce(new Error('offline'));
+    mocks.getPostById.mockRejectedValueOnce(new Error('offline'));
     wrapper = mountDetail();
     await flushPromises();
 
@@ -461,9 +481,9 @@ describe('NewsDetailView persistent reply drafts', () => {
     draftStore().setViewer(7);
     draftStore().setDraft(42, 'post draft');
     if (error) {
-      mocks.deleteArticle.mockRejectedValueOnce(error);
+      mocks.deletePost.mockRejectedValueOnce(error);
     } else {
-      mocks.deleteArticle.mockResolvedValueOnce(undefined);
+      mocks.deletePost.mockResolvedValueOnce(undefined);
     }
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -486,7 +506,7 @@ describe('NewsDetailView persistent reply drafts', () => {
 
     expect(textareaValue(wrapper)).toBe('unfinished reply');
     expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(wrapper.get('.comment-composer__textarea').element);
+    expect(document.activeElement).toBe(wrapper.get('.reply-composer__textarea').element);
     expect(mocks.router.replace).toHaveBeenCalledTimes(1);
     expect(mocks.router.replace).toHaveBeenCalledWith(expect.objectContaining({ query: {} }));
     expect(draftStore().getDraft(42)).toBe('unfinished reply');
@@ -502,7 +522,8 @@ describe('NewsDetailView persistent reply drafts', () => {
     await flushPromises();
 
     expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(wrapper.get('.comment-composer__textarea').element);
+    expect(document.activeElement).toBe(wrapper.get('.reply-composer__textarea').element);
     expect(textareaValue(wrapper)).toBe('existing draft');
   });
 });
+

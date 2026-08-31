@@ -3,20 +3,19 @@ import { reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import { useFeedStore } from './feed';
 import {
-  deleteArticle,
+  deletePost as deletePostRequest,
   getFollowingTimeline,
   type FollowingTimelineItem,
-} from '../services/articleService';
-import { getArticleRecommendations } from '../services/recommendationService';
-import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
+} from '../services/postService';
+import { getPostRecommendations } from '../services/recommendationService';
+import { getPostLikeStates, likePost, unlikePost } from '../services/likeService';
 import {
-  getArticleRepostStates,
-  repostArticle,
-  undoRepostArticle,
+  getPostRepostStates,
+  repostPost,
+  undoRepostPost,
 } from '../services/repostService';
 import type { UserFollowState } from '../services/userService';
-import type { Article } from '../types/Article';
-import type { RecommendedArticle } from '../types/Recommendation';
+import type { RecommendedPost } from '../types/Recommendation';
 import type {
   FeedLikeStateUpdate,
   FeedPost,
@@ -27,22 +26,21 @@ import type { PublicAuthor } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
-  followingTimelineItemToFeedPost,
-  recommendationToFeedPost,
+  postToFeedPost,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import {
   registerHomeTimelineSync,
-  syncHomeArticleRemoval,
+  syncHomePostRemoval,
   syncHomeAuthorIdentity,
   syncHomeLikeState,
   syncHomeRepostState,
 } from './sessionSync';
-import type { ArticleCommentCountUpdate } from './sessionSync';
+import type { PostReplyCountUpdate } from './sessionSync';
 
 export type HomeRecommendationItem = {
-  article: RecommendedArticle;
+  recommendation: RecommendedPost;
   post: FeedPost;
 };
 
@@ -72,7 +70,7 @@ const normalizeID = (value: unknown): number | null => {
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
-const normalizeCommentCount = (value: unknown) => {
+const normalizeReplyCount = (value: unknown) => {
   const count = Number(value);
   return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : null;
 };
@@ -105,12 +103,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     'for-you': 0,
     following: 0,
   });
-  const likePendingArticleIds = reactive(new Set<number>());
-  const repostPendingArticleIds = reactive(new Set<number>());
-  const pendingDeleteArticleIds = reactive(new Set<number>());
+  const likePendingPostIds = reactive(new Set<number>());
+  const repostPendingPostIds = reactive(new Set<number>());
+  const pendingDeletePostIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
 
-  const followingLoadedArticleIds = new Set<number>();
+  const followingLoadedPostIds = new Set<number>();
   const likeMutationVersions = new Map<number, number>();
   const repostMutationVersions = new Map<number, number>();
   let authGeneration = 0;
@@ -122,13 +120,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const clearLikeWork = () => {
     likeGeneration += 1;
-    likePendingArticleIds.clear();
+    likePendingPostIds.clear();
     likeMutationVersions.clear();
   };
 
   const clearRepostWork = () => {
     repostGeneration += 1;
-    repostPendingArticleIds.clear();
+    repostPendingPostIds.clear();
     repostMutationVersions.clear();
   };
 
@@ -153,14 +151,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     following.stale = false;
     following.revalidating = false;
     following.revalidateError = false;
-    followingLoadedArticleIds.clear();
+    followingLoadedPostIds.clear();
   };
 
   const clearForViewer = () => {
     authGeneration += 1;
     clearLikeWork();
     clearRepostWork();
-    pendingDeleteArticleIds.clear();
+    pendingDeletePostIds.clear();
     deleteErrors.clear();
     activeTab.value = 'for-you';
     scrollY['for-you'] = 0;
@@ -190,42 +188,42 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     scrollY[tab] = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
-  const getLikeMutationVersion = (articleId: number) =>
-    likeMutationVersions.get(articleId) ?? 0;
+  const getLikeMutationVersion = (postId: number) =>
+    likeMutationVersions.get(postId) ?? 0;
 
-  const bumpLikeMutationVersion = (articleId: number) => {
-    const next = getLikeMutationVersion(articleId) + 1;
-    likeMutationVersions.set(articleId, next);
+  const bumpLikeMutationVersion = (postId: number) => {
+    const next = getLikeMutationVersion(postId) + 1;
+    likeMutationVersions.set(postId, next);
     return next;
   };
 
-  const getRepostMutationVersion = (articleId: number) =>
-    repostMutationVersions.get(articleId) ?? 0;
+  const getRepostMutationVersion = (postId: number) =>
+    repostMutationVersions.get(postId) ?? 0;
 
-  const bumpRepostMutationVersion = (articleId: number) => {
-    const next = getRepostMutationVersion(articleId) + 1;
-    repostMutationVersions.set(articleId, next);
+  const bumpRepostMutationVersion = (postId: number) => {
+    const next = getRepostMutationVersion(postId) + 1;
+    repostMutationVersions.set(postId, next);
     return next;
   };
 
-  const forEachHomePost = (articleId: number, callback: (post: FeedPost) => void) => {
-    if (feedStore.isArticleDeleted(articleId)) {
+  const forEachHomePost = (postId: number, callback: (post: FeedPost) => void) => {
+    if (feedStore.isPostDeleted(postId)) {
       return;
     }
     feedStore.recentlyPublishedPosts.forEach((post) => {
-      if (post.id === articleId) callback(post);
+      if (post.id === postId) callback(post);
     });
     following.items.forEach((post) => {
-      if (post.id === articleId) callback(post);
+      if (post.id === postId) callback(post);
     });
     forYou.items.forEach(({ post }) => {
-      if (post.id === articleId) callback(post);
+      if (post.id === postId) callback(post);
     });
   };
 
-  const findPost = (articleId: number): FeedPost | undefined => {
+  const findPost = (postId: number): FeedPost | undefined => {
     let found: FeedPost | undefined;
-    forEachHomePost(articleId, (post) => {
+    forEachHomePost(postId, (post) => {
       found ||= post;
     });
     return found;
@@ -237,20 +235,20 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   ) => {
     if (
       expectedVersion !== undefined
-      && getLikeMutationVersion(update.articleId) !== expectedVersion
+      && getLikeMutationVersion(update.postId) !== expectedVersion
     ) {
       return false;
     }
     let applied = false;
-    forEachHomePost(update.articleId, (post) => {
+    forEachHomePost(update.postId, (post) => {
       applied = applyFeedLikeStateUpdate(post, update) || applied;
     });
     return applied;
   };
 
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
-    bumpLikeMutationVersion(update.articleId);
-    likePendingArticleIds.delete(update.articleId);
+    bumpLikeMutationVersion(update.postId);
+    likePendingPostIds.delete(update.postId);
     return applyLikeStateUpdateLocal(update);
   };
 
@@ -260,29 +258,29 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   ) => {
     if (
       expectedVersion !== undefined
-      && getRepostMutationVersion(update.articleId) !== expectedVersion
+      && getRepostMutationVersion(update.postId) !== expectedVersion
     ) {
       return false;
     }
     let applied = false;
-    forEachHomePost(update.articleId, (post) => {
+    forEachHomePost(update.postId, (post) => {
       applied = applyFeedRepostStateUpdate(post, update) || applied;
     });
     return applied;
   };
 
   const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
-    bumpRepostMutationVersion(update.articleId);
-    repostPendingArticleIds.delete(update.articleId);
+    bumpRepostMutationVersion(update.postId);
+    repostPendingPostIds.delete(update.postId);
     return applyRepostStateUpdateLocal(update);
   };
 
-  const applyCommentCountUpdateLocal = (update: ArticleCommentCountUpdate) => {
-    const commentCount = normalizeCommentCount(update.commentCount);
-    if (commentCount === null) return false;
+  const applyReplyCountUpdateLocal = (update: PostReplyCountUpdate) => {
+    const replyCount = normalizeReplyCount(update.replyCount);
+    if (replyCount === null) return false;
     let applied = false;
-    forEachHomePost(update.articleId, (post) => {
-      post.commentCount = commentCount;
+    forEachHomePost(update.postId, (post) => {
+      post.replyCount = replyCount;
       applied = true;
     });
     return applied;
@@ -333,16 +331,16 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     return applied;
   };
 
-  const markUnavailableLocal = (articleIds: number[], versions: Map<number, number>) => {
-    articleIds.forEach((articleId) => {
-      const capturedVersion = versions.get(articleId);
+  const markUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+    postIds.forEach((postId) => {
+      const capturedVersion = versions.get(postId);
       if (
         capturedVersion === undefined
-        || getLikeMutationVersion(articleId) !== capturedVersion
+        || getLikeMutationVersion(postId) !== capturedVersion
       ) {
         return;
       }
-      forEachHomePost(articleId, (post) => {
+      forEachHomePost(postId, (post) => {
         if (post.likeStatus === 'unknown') {
           setFeedPostLikeUnavailable(post);
         }
@@ -351,47 +349,47 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const hydrateLikeStates = async (
-    articleIds: number[],
+    postIds: number[],
     isCurrent: () => boolean,
   ) => {
-    const uniqueIDs = Array.from(new Set(articleIds));
+    const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
 
     const versions = new Map(uniqueIDs.map((id) => [id, getLikeMutationVersion(id)]));
     try {
-      const response = await getArticleLikeStates(uniqueIDs);
+      const response = await getPostLikeStates(uniqueIDs);
       if (!isCurrent()) return;
 
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = versions.get(item.article_id);
+        const capturedVersion = versions.get(item.post_id);
         if (
           capturedVersion === undefined
-          || getLikeMutationVersion(item.article_id) !== capturedVersion
-          || !findPost(item.article_id)
+          || getLikeMutationVersion(item.post_id) !== capturedVersion
+          || !findPost(item.post_id)
         ) {
           return;
         }
-        readyIDs.add(item.article_id);
+        readyIDs.add(item.post_id);
         applyLikeStateUpdate({
-          articleId: item.article_id,
+          postId: item.post_id,
           likes: item.likes,
           liked: item.liked,
           status: 'ready',
         }, capturedVersion);
       });
-      response.unavailable_article_ids.forEach((articleId) => {
-        const capturedVersion = versions.get(articleId);
+      response.unavailable_post_ids.forEach((postId) => {
+        const capturedVersion = versions.get(postId);
         if (
-          readyIDs.has(articleId)
+          readyIDs.has(postId)
           || capturedVersion === undefined
-          || getLikeMutationVersion(articleId) !== capturedVersion
-          || !findPost(articleId)
+          || getLikeMutationVersion(postId) !== capturedVersion
+          || !findPost(postId)
         ) {
           return;
         }
         applyLikeStateUpdate({
-          articleId,
+          postId,
           likes: 0,
           liked: false,
           status: 'unavailable',
@@ -404,16 +402,16 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
-  const markRepostUnavailableLocal = (articleIds: number[], versions: Map<number, number>) => {
-    articleIds.forEach((articleId) => {
-      const capturedVersion = versions.get(articleId);
+  const markRepostUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+    postIds.forEach((postId) => {
+      const capturedVersion = versions.get(postId);
       if (
         capturedVersion === undefined
-        || getRepostMutationVersion(articleId) !== capturedVersion
+        || getRepostMutationVersion(postId) !== capturedVersion
       ) {
         return;
       }
-      forEachHomePost(articleId, (post) => {
+      forEachHomePost(postId, (post) => {
         if (post.repostStatus === 'unknown') {
           setFeedPostRepostUnavailable(post);
         }
@@ -422,47 +420,47 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const hydrateRepostStates = async (
-    articleIds: number[],
+    postIds: number[],
     isCurrent: () => boolean,
   ) => {
-    const uniqueIDs = Array.from(new Set(articleIds));
+    const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
 
     const versions = new Map(uniqueIDs.map((id) => [id, getRepostMutationVersion(id)]));
     try {
-      const response = await getArticleRepostStates(uniqueIDs);
+      const response = await getPostRepostStates(uniqueIDs);
       if (!isCurrent()) return;
 
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = versions.get(item.article_id);
+        const capturedVersion = versions.get(item.post_id);
         if (
           capturedVersion === undefined
-          || getRepostMutationVersion(item.article_id) !== capturedVersion
-          || !findPost(item.article_id)
+          || getRepostMutationVersion(item.post_id) !== capturedVersion
+          || !findPost(item.post_id)
         ) {
           return;
         }
-        readyIDs.add(item.article_id);
+        readyIDs.add(item.post_id);
         applyRepostStateUpdate({
-          articleId: item.article_id,
+          postId: item.post_id,
           reposts: item.reposts,
           reposted: item.reposted,
           status: 'ready',
         }, capturedVersion);
       });
-      response.unavailable_article_ids.forEach((articleId) => {
-        const capturedVersion = versions.get(articleId);
+      response.unavailable_post_ids.forEach((postId) => {
+        const capturedVersion = versions.get(postId);
         if (
-          readyIDs.has(articleId)
+          readyIDs.has(postId)
           || capturedVersion === undefined
-          || getRepostMutationVersion(articleId) !== capturedVersion
-          || !findPost(articleId)
+          || getRepostMutationVersion(postId) !== capturedVersion
+          || !findPost(postId)
         ) {
           return;
         }
         applyRepostStateUpdate({
-          articleId,
+          postId,
           reposts: 0,
           reposted: false,
           status: 'unavailable',
@@ -475,15 +473,18 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
-  const appendFollowingArticles = (activities: FollowingTimelineItem[]) => {
+  const appendFollowingPosts = (activities: FollowingTimelineItem[]) => {
     const newPosts = activities
-      .filter((article) => {
-        const articleID = article.article.ID;
-        if (followingLoadedArticleIds.has(articleID)) return false;
-        followingLoadedArticleIds.add(articleID);
-        return !feedStore.isArticleDeleted(articleID);
+      .filter((activity) => {
+        const postID = activity.post.id;
+        if (followingLoadedPostIds.has(postID)) return false;
+        followingLoadedPostIds.add(postID);
+        return !feedStore.isPostDeleted(postID);
       })
-      .map(followingTimelineItemToFeedPost);
+      .map((activity) => postToFeedPost(
+        activity.post,
+        activity.activity_type === 'repost' ? { repostActor: activity.actor } : {},
+      ));
     if (newPosts.length > 0) {
       following.items = [...following.items, ...newPosts];
     }
@@ -541,11 +542,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.error = false;
 
     try {
-      const articles = await getArticleRecommendations(50);
+      const recommendations = await getPostRecommendations(50);
       if (!currentForYouRequest(version, generation, capturedViewerID)) return;
-      forYou.items = articles
-        .filter((article) => !feedStore.isArticleDeleted(article.id))
-        .map((article) => ({ article, post: recommendationToFeedPost(article) }));
+      forYou.items = recommendations
+        .filter((recommendation) => !feedStore.isPostDeleted(recommendation.post.id))
+        .map((recommendation) => ({
+          recommendation,
+          post: postToFeedPost(recommendation.post),
+        }));
       forYou.loaded = true;
       const capturedLikeGeneration = likeGeneration;
       void hydrateLikeStates(
@@ -594,7 +598,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     try {
       const response = await getFollowingTimeline({ limit: 20 });
       if (!currentFollowingRequest(version, generation, capturedViewerID)) return;
-      const newPosts = appendFollowingArticles(response.items);
+      const newPosts = appendFollowingPosts(response.items);
       following.nextCursor = response.next_cursor;
       following.loaded = true;
       following.stale = false;
@@ -655,7 +659,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         !currentFollowingPage(requestVersion, generation, pagingVersion, capturedViewerID)
         || following.nextCursor !== requestedCursor
       ) return;
-      const newPosts = appendFollowingArticles(response.items);
+      const newPosts = appendFollowingPosts(response.items);
       following.nextCursor = response.next_cursor;
       const capturedLikeGeneration = likeGeneration;
       void hydrateLikeStates(
@@ -710,13 +714,16 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       const previousPostsByID = new Map(following.items.map(post => [post.id, post]));
       const freshPosts: FeedPost[] = [];
       response.items.forEach((activity) => {
-        const article = activity.article;
+        const post = activity.post;
         if (
-          freshIDs.has(article.ID)
-          || feedStore.isArticleDeleted(article.ID)
+          freshIDs.has(post.id)
+          || feedStore.isPostDeleted(post.id)
         ) return;
-        freshIDs.add(article.ID);
-        const freshPost = followingTimelineItemToFeedPost(activity);
+        freshIDs.add(post.id);
+        const freshPost = postToFeedPost(
+          post,
+          activity.activity_type === 'repost' ? { repostActor: activity.actor } : {},
+        );
         const previousPost = previousPostsByID.get(freshPost.id);
         freshPosts.push(previousPost && previousPost.repostStatus !== 'unknown'
           ? {
@@ -729,8 +736,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       });
 
       following.items = freshPosts;
-      followingLoadedArticleIds.clear();
-      freshPosts.forEach(post => followingLoadedArticleIds.add(post.id));
+      followingLoadedPostIds.clear();
+      freshPosts.forEach(post => followingLoadedPostIds.add(post.id));
       following.nextCursor = response.next_cursor;
       following.loaded = true;
       following.stale = false;
@@ -761,21 +768,21 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
-  const toggleLike = async (articleId: number) => {
-    const post = findPost(articleId);
-    if (!post || post.likeStatus !== 'ready' || likePendingArticleIds.has(articleId)) {
+  const toggleLike = async (postId: number) => {
+    const post = findPost(postId);
+    if (!post || post.likeStatus !== 'ready' || likePendingPostIds.has(postId)) {
       return;
     }
 
     const previousLiked = post.liked;
     const previousLikes = post.likeCount;
-    const mutationVersion = bumpLikeMutationVersion(articleId);
+    const mutationVersion = bumpLikeMutationVersion(postId);
     const capturedLikeGeneration = likeGeneration;
     const capturedAuthGeneration = authGeneration;
     const capturedViewerID = viewerID.value;
-    likePendingArticleIds.add(articleId);
+    likePendingPostIds.add(postId);
     applyLikeStateUpdate({
-      articleId,
+      postId,
       likes: previousLiked ? Math.max(0, previousLikes - 1) : previousLikes + 1,
       liked: !previousLiked,
       status: 'ready',
@@ -785,58 +792,58 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       isAuthenticatedForViewer(capturedViewerID)
       && authGeneration === capturedAuthGeneration
       && likeGeneration === capturedLikeGeneration
-      && getLikeMutationVersion(articleId) === mutationVersion
-      && likePendingArticleIds.has(articleId);
+      && getLikeMutationVersion(postId) === mutationVersion
+      && likePendingPostIds.has(postId);
 
     try {
       const result = previousLiked
-        ? await unlikeArticle(articleId)
-        : await likeArticle(articleId);
+        ? await unlikePost(postId)
+        : await likePost(postId);
       if (!isCurrent()) return;
-      const settledVersion = bumpLikeMutationVersion(articleId);
+      const settledVersion = bumpLikeMutationVersion(postId);
       applyLikeStateUpdate({
-        articleId,
+        postId,
         likes: result.likes,
         liked: result.liked,
         status: 'ready',
       }, settledVersion);
-      likePendingArticleIds.delete(articleId);
+      likePendingPostIds.delete(postId);
     } catch (error) {
       if (!isCurrent()) return;
-      const settledVersion = bumpLikeMutationVersion(articleId);
+      const settledVersion = bumpLikeMutationVersion(postId);
       applyLikeStateUpdate({
-        articleId,
+        postId,
         likes: previousLikes,
         liked: previousLiked,
         status: 'ready',
       }, settledVersion);
       if (getErrorStatus(error) === 503) {
         applyLikeStateUpdate({
-          articleId,
+          postId,
           likes: previousLikes,
           liked: previousLiked,
           status: 'unavailable',
         }, settledVersion);
       }
-      likePendingArticleIds.delete(articleId);
+      likePendingPostIds.delete(postId);
     }
   };
 
-  const toggleRepost = async (articleId: number) => {
-    const post = findPost(articleId);
-    if (!post || post.repostStatus !== 'ready' || repostPendingArticleIds.has(articleId)) {
+  const toggleRepost = async (postId: number) => {
+    const post = findPost(postId);
+    if (!post || post.repostStatus !== 'ready' || repostPendingPostIds.has(postId)) {
       return false;
     }
 
     const previousReposted = post.reposted;
     const previousReposts = post.repostCount;
-    const mutationVersion = bumpRepostMutationVersion(articleId);
+    const mutationVersion = bumpRepostMutationVersion(postId);
     const capturedRepostGeneration = repostGeneration;
     const capturedAuthGeneration = authGeneration;
     const capturedViewerID = viewerID.value;
-    repostPendingArticleIds.add(articleId);
+    repostPendingPostIds.add(postId);
     applyRepostStateUpdate({
-      articleId,
+      postId,
       reposts: previousReposted ? Math.max(0, previousReposts - 1) : previousReposts + 1,
       reposted: !previousReposted,
       status: 'ready',
@@ -846,105 +853,105 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       isAuthenticatedForViewer(capturedViewerID)
       && authGeneration === capturedAuthGeneration
       && repostGeneration === capturedRepostGeneration
-      && getRepostMutationVersion(articleId) === mutationVersion
-      && repostPendingArticleIds.has(articleId);
+      && getRepostMutationVersion(postId) === mutationVersion
+      && repostPendingPostIds.has(postId);
 
     try {
       const result = previousReposted
-        ? await undoRepostArticle(articleId)
-        : await repostArticle(articleId);
+        ? await undoRepostPost(postId)
+        : await repostPost(postId);
       if (!isCurrent()) return false;
-      const settledVersion = bumpRepostMutationVersion(articleId);
+      const settledVersion = bumpRepostMutationVersion(postId);
       applyRepostStateUpdate({
-        articleId,
+        postId,
         reposts: result.reposts,
         reposted: result.reposted,
         status: 'ready',
       }, settledVersion);
-      repostPendingArticleIds.delete(articleId);
+      repostPendingPostIds.delete(postId);
       return true;
     } catch {
       if (!isCurrent()) return false;
-      const settledVersion = bumpRepostMutationVersion(articleId);
+      const settledVersion = bumpRepostMutationVersion(postId);
       applyRepostStateUpdate({
-        articleId,
+        postId,
         reposts: previousReposts,
         reposted: previousReposted,
         status: 'ready',
       }, settledVersion);
-      repostPendingArticleIds.delete(articleId);
+      repostPendingPostIds.delete(postId);
       return false;
     }
   };
 
-  const removeArticleLocal = (articleId: number) => {
-    following.items = following.items.filter((post) => post.id !== articleId);
-    forYou.items = forYou.items.filter((item) => item.post.id !== articleId);
-    followingLoadedArticleIds.add(articleId);
-    likePendingArticleIds.delete(articleId);
-    likeMutationVersions.delete(articleId);
-    repostPendingArticleIds.delete(articleId);
-    repostMutationVersions.delete(articleId);
-    pendingDeleteArticleIds.delete(articleId);
-    deleteErrors.delete(articleId);
+  const removePostLocal = (postId: number) => {
+    following.items = following.items.filter((post) => post.id !== postId);
+    forYou.items = forYou.items.filter((item) => item.post.id !== postId);
+    followingLoadedPostIds.add(postId);
+    likePendingPostIds.delete(postId);
+    likeMutationVersions.delete(postId);
+    repostPendingPostIds.delete(postId);
+    repostMutationVersions.delete(postId);
+    pendingDeletePostIds.delete(postId);
+    deleteErrors.delete(postId);
   };
 
-  const dismissRecommendation = (articleId: number) => {
+  const dismissRecommendation = (postId: number) => {
     const before = forYou.items.length;
-    forYou.items = forYou.items.filter((item) => item.article.id !== articleId);
+    forYou.items = forYou.items.filter((item) => item.recommendation.post.id !== postId);
     return forYou.items.length !== before;
   };
 
-  const removeArticle = (articleId: number, ownerUserID?: number) => {
+  const removePost = (postId: number, ownerUserID?: number) => {
     if (ownerUserID !== undefined) {
-      if (!feedStore.markArticleDeleted(articleId, ownerUserID)) return false;
+      if (!feedStore.markPostDeleted(postId, ownerUserID)) return false;
     }
-    removeArticleLocal(articleId);
+    removePostLocal(postId);
     if (ownerUserID !== undefined) {
-      syncHomeArticleRemoval(articleId);
+      syncHomePostRemoval(postId);
     }
     return true;
   };
 
-  const deletePost = async (articleId: number) => {
+  const deletePost = async (postId: number) => {
     const ownerUserID = viewerID.value;
-    const post = findPost(articleId);
+    const post = findPost(postId);
     if (
       ownerUserID === null
       || !authStore.isAuthenticated
       || !post
       || post.author.id !== ownerUserID
-      || pendingDeleteArticleIds.has(articleId)
+      || pendingDeletePostIds.has(postId)
     ) return false;
 
     const capturedAuthGeneration = authGeneration;
     const capturedViewerID = ownerUserID;
-    pendingDeleteArticleIds.add(articleId);
-    deleteErrors.delete(articleId);
+    pendingDeletePostIds.add(postId);
+    deleteErrors.delete(postId);
     const isCurrent = () =>
       authStore.isAuthenticated
       && viewerID.value === capturedViewerID
       && authGeneration === capturedAuthGeneration
-      && pendingDeleteArticleIds.has(articleId);
+      && pendingDeletePostIds.has(postId);
 
     try {
-      await deleteArticle(articleId);
+      await deletePostRequest(postId);
       if (!isCurrent()) return false;
-      return removeArticle(articleId, ownerUserID);
+      return removePost(postId, ownerUserID);
     } catch (error) {
       if (!isCurrent()) return false;
       if (getErrorStatus(error) === 404) {
-        return removeArticle(articleId, ownerUserID);
+        return removePost(postId, ownerUserID);
       }
       deleteErrors.set(
-        articleId,
+        postId,
         getErrorStatus(error) === 403
           ? 'You can only delete your own posts.'
           : getErrorStatus(error) === 401
             ? 'Please log in again to delete this post.'
             : 'Could not delete post. Please try again.',
       );
-      pendingDeleteArticleIds.delete(articleId);
+      pendingDeletePostIds.delete(postId);
       return false;
     }
   };
@@ -993,9 +1000,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
-    applyCommentCountUpdateLocal,
+    applyReplyCountUpdateLocal,
     reconcileFollowStateLocal,
-    removeArticleLocal,
+    removePostLocal,
     replaceAuthorIdentityLocal,
   });
 
@@ -1047,9 +1054,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou,
     following,
     scrollY,
-    likePendingArticleIds,
-    repostPendingArticleIds,
-    pendingDeleteArticleIds,
+    likePendingPostIds,
+    repostPendingPostIds,
+    pendingDeletePostIds,
     deleteErrors,
     setViewer,
     setActiveTab,
@@ -1067,11 +1074,11 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
-    applyCommentCountUpdateLocal,
+    applyReplyCountUpdateLocal,
     reconcileFollowStateLocal,
     dismissRecommendation,
-    removeArticle,
-    removeArticleLocal,
+    removePost,
+    removePostLocal,
     deletePost,
     replaceAuthorIdentity,
     replaceAuthorIdentityLocal,

@@ -25,7 +25,7 @@ func TestRecommendationTraceMigrationIntegration(t *testing.T) {
 	}
 	if err := db.AutoMigrate(
 		&models.User{},
-		&models.Article{},
+		&models.Post{},
 		&models.RecommendationRequest{},
 		&models.RecommendationResultTrace{},
 	); err != nil {
@@ -120,28 +120,28 @@ WHERE table_schema = current_schema()
 SELECT indexname, indexdef
 FROM pg_indexes
 WHERE schemaname = current_schema()
-  AND tablename = 'articles'
+  AND tablename = 'posts'
   AND indexname IN (?, ?)
-`, "idx_articles_recommendation_popular", "idx_articles_recommendation_trending").Rows()
+`, "idx_posts_recommendation_popular", "idx_posts_recommendation_trending").Rows()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer indexRows.Close()
-	articleIndexes := map[string]string{}
+	postIndexes := map[string]string{}
 	for indexRows.Next() {
 		var name, definition string
 		if err := indexRows.Scan(&name, &definition); err != nil {
 			t.Fatal(err)
 		}
-		articleIndexes[name] = strings.ToLower(strings.Join(strings.Fields(definition), ""))
+		postIndexes[name] = strings.ToLower(strings.Join(strings.Fields(definition), ""))
 	}
 	if err := indexRows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := articleIndexes["idx_articles_recommendation_popular"]; exists {
+	if _, exists := postIndexes["idx_posts_recommendation_popular"]; exists {
 		t.Fatal("legacy popular retrieval index still exists")
 	}
-	trendingIndex, exists := articleIndexes["idx_articles_recommendation_trending"]
+	trendingIndex, exists := postIndexes["idx_posts_recommendation_trending"]
 	if !exists || !strings.Contains(trendingIndex, "published_at") || !strings.Contains(trendingIndex, "like_count>0") || !strings.Contains(trendingIndex, "comment_count>0") {
 		t.Fatalf("trending index=%q", trendingIndex)
 	}
@@ -150,7 +150,7 @@ WHERE schemaname = current_schema()
 	if err := db.Exec("DROP INDEX IF EXISTS " + indexName).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec("CREATE UNIQUE INDEX " + indexName + " ON recommendation_result_traces (article_id)").Error; err != nil {
+	if err := db.Exec("CREATE UNIQUE INDEX " + indexName + " ON recommendation_result_traces (post_id)").Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := applyRecommendationTraceConstraints(db); err != nil {
@@ -179,8 +179,8 @@ WHERE schemaname = current_schema()
 	}
 	indexDefinition := indexByName[indexName]
 	if !strings.Contains(indexDefinition, "unique") ||
-		!strings.Contains(indexDefinition, "(request_id,article_id)") ||
-		strings.Contains(indexDefinition, "(article_id)") {
+		!strings.Contains(indexDefinition, "(request_id,post_id)") ||
+		strings.Contains(indexDefinition, "(post_id)") {
 		t.Fatalf("index definition=%q", indexDefinition)
 	}
 
@@ -191,24 +191,16 @@ WHERE schemaname = current_schema()
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	articleX := models.Article{
-		AuthorID:         user.ID,
-		Title:            "trace migration x",
-		Content:          "body",
-		Preview:          "body",
-		PublicationState: "published",
+	postX := models.Post{
+		AuthorID: user.ID, Content: "trace migration x", Visibility: "public",
 	}
-	articleY := models.Article{
-		AuthorID:         user.ID,
-		Title:            "trace migration y",
-		Content:          "body",
-		Preview:          "body",
-		PublicationState: "published",
+	postY := models.Post{
+		AuthorID: user.ID, Content: "trace migration y", Visibility: "public",
 	}
-	if err := db.Create(&articleX).Error; err != nil {
+	if err := db.Create(&postX).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&articleY).Error; err != nil {
+	if err := db.Create(&postY).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -226,10 +218,10 @@ WHERE schemaname = current_schema()
 	requestB.RequestID = uuid.NewString()
 	t.Cleanup(func() {
 		requestIDs := []string{requestA.RequestID, requestB.RequestID}
-		articleIDs := []uint{articleX.ID, articleY.ID}
+		postIDs := []uint{postX.ID, postY.ID}
 		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationResultTrace{})
 		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationRequest{})
-		db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 	if err := db.Create(&[]models.RecommendationRequest{requestA, requestB}).Error; err != nil {
@@ -237,31 +229,31 @@ WHERE schemaname = current_schema()
 	}
 
 	now := time.Now().UTC()
-	traceAArticleX := models.RecommendationResultTrace{
+	traceAPostX := models.RecommendationResultTrace{
 		RequestID: requestA.RequestID,
 		Position:  1,
-		ArticleID: articleX.ID,
+		PostID:    postX.ID,
 		AuthorID:  user.ID,
 		CreatedAt: now,
 		ExpiresAt: now.Add(time.Hour),
 	}
-	traceBArticleX := traceAArticleX
-	traceBArticleX.RequestID = requestB.RequestID
-	if err := db.Create(&traceAArticleX).Error; err != nil {
+	traceBPostX := traceAPostX
+	traceBPostX.RequestID = requestB.RequestID
+	if err := db.Create(&traceAPostX).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&traceBArticleX).Error; err != nil {
+	if err := db.Create(&traceBPostX).Error; err != nil {
 		t.Fatalf("database rejected same article in another request: %v", err)
 	}
 
-	duplicateArticle := traceAArticleX
+	duplicateArticle := traceAPostX
 	duplicateArticle.Position = 2
 	if err := db.Create(&duplicateArticle).Error; err == nil {
 		t.Fatal("database accepted duplicate article in one request")
 	}
 
-	duplicatePosition := traceAArticleX
-	duplicatePosition.ArticleID = articleY.ID
+	duplicatePosition := traceAPostX
+	duplicatePosition.PostID = postY.ID
 	if err := db.Create(&duplicatePosition).Error; err == nil {
 		t.Fatal("database accepted duplicate request position")
 	}

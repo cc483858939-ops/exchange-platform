@@ -1,60 +1,60 @@
 import apiClient from '../axios';
 import { normalizeResourceID } from './resourceId';
 
-export interface ArticleRepostState {
+export interface PostRepostState {
   reposts: number;
   reposted: boolean;
 }
 
-export interface ArticleBatchRepostStateItem {
-  article_id: number;
+export interface PostBatchRepostStateItem {
+  post_id: number;
   reposts: number;
   reposted: boolean;
 }
 
-export interface ArticleBatchRepostStatesResponse {
-  items: ArticleBatchRepostStateItem[];
-  unavailable_article_ids: number[];
+export interface PostBatchRepostStatesResponse {
+  items: PostBatchRepostStateItem[];
+  unavailable_post_ids: number[];
 }
 
 const batchRepostStateLimit = 100;
 
-export async function getArticleRepostState(articleId: number | string): Promise<ArticleRepostState> {
-  const id = normalizeResourceID(articleId, 'article');
-  const response = await apiClient.get<ArticleRepostState>(`/articles/${id}/repost`);
+export async function getPostRepostState(postID: number | string): Promise<PostRepostState> {
+  const id = normalizeResourceID(postID, 'post');
+  const response = await apiClient.get<PostRepostState>(`/posts/${id}/repost`);
   return response.data;
 }
 
-export async function repostArticle(articleId: number | string): Promise<ArticleRepostState> {
-  const id = normalizeResourceID(articleId, 'article');
-  const response = await apiClient.put<ArticleRepostState>(`/articles/${id}/repost`);
+export async function repostPost(postID: number | string): Promise<PostRepostState> {
+  const id = normalizeResourceID(postID, 'post');
+  const response = await apiClient.put<PostRepostState>(`/posts/${id}/repost`);
   return response.data;
 }
 
-export async function undoRepostArticle(articleId: number | string): Promise<ArticleRepostState> {
-  const id = normalizeResourceID(articleId, 'article');
-  const response = await apiClient.delete<ArticleRepostState>(`/articles/${id}/repost`);
+export async function undoRepostPost(postID: number | string): Promise<PostRepostState> {
+  const id = normalizeResourceID(postID, 'post');
+  const response = await apiClient.delete<PostRepostState>(`/posts/${id}/repost`);
   return response.data;
 }
 
-export async function getArticleRepostStates(articleIds: number[]): Promise<ArticleBatchRepostStatesResponse> {
-  const uniqueIds = Array.from(new Set(articleIds));
+export async function getPostRepostStates(postIDs: number[]): Promise<PostBatchRepostStatesResponse> {
+  const uniqueIds = Array.from(new Set(postIDs));
   if (uniqueIds.length === 0) {
-    return { items: [], unavailable_article_ids: [] };
+    return { items: [], unavailable_post_ids: [] };
   }
 
-  const result: ArticleBatchRepostStatesResponse = {
+  const result: PostBatchRepostStatesResponse = {
     items: [],
-    unavailable_article_ids: [],
+    unavailable_post_ids: [],
   };
   for (let offset = 0; offset < uniqueIds.length; offset += batchRepostStateLimit) {
     const chunk = uniqueIds.slice(offset, offset + batchRepostStateLimit);
-    const response = await apiClient.post<ArticleBatchRepostStatesResponse>(
-      '/articles/repost-states',
-      { article_ids: chunk },
+    const response = await apiClient.post<PostBatchRepostStatesResponse>(
+      '/posts/repost-states',
+      { post_ids: chunk },
     );
     result.items.push(...(response.data.items ?? []));
-    result.unavailable_article_ids.push(...(response.data.unavailable_article_ids ?? []));
+    result.unavailable_post_ids.push(...(response.data.unavailable_post_ids ?? []));
   }
   return result;
 }

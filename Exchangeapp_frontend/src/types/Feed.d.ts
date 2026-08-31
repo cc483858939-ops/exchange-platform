@@ -1,4 +1,5 @@
 import type { PublicAuthor } from './User';
+import type { Post, PostArticle, PostReference } from './Post';
 
 export type FeedTab = 'for-you' | 'following';
 
@@ -12,13 +13,17 @@ export interface FeedRepostContext {
 
 export interface FeedPost {
   id: number;
+  content?: Post['content'];
+  article?: PostArticle | null;
+  quotePost?: PostReference | null;
+  replyToPost?: PostReference | null;
   author: PublicAuthor;
   title: string;
   excerpt: string;
   coverImageUrl: string;
   createdAt: string;
   likeCount: number;
-  commentCount: number;
+  replyCount: number;
   viewCount: number;
   liked: boolean;
   likeStatus: FeedLikeStatus;
@@ -29,14 +34,14 @@ export interface FeedPost {
 }
 
 export interface FeedLikeStateUpdate {
-  articleId: number;
+  postId: number;
   likes: number;
   liked: boolean;
   status: FeedLikeStatus;
 }
 
 export interface FeedRepostStateUpdate {
-  articleId: number;
+  postId: number;
   reposts: number;
   reposted: boolean;
   status: FeedRepostStatus;

@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func openArticleEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
+func openPostEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -28,40 +28,40 @@ func openArticleEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ArticleEmbedding{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostEmbedding{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
 }
 
-func TestArticleEmbeddingGORMStoreIntegration(t *testing.T) {
-	db := openArticleEmbeddingIntegrationDatabase(t)
+func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
+	db := openPostEmbeddingIntegrationDatabase(t)
 
 	user := models.User{Username: "embedding-owner-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	article := models.Article{AuthorID: user.ID, Title: "Title", Content: "Body", PublicationState: "published"}
+	article := models.Post{AuthorID: user.ID, Content: "Body", Visibility: "public"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleEmbedding{})
-		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Article{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostEmbedding{})
+		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 
-	store := gormArticleEmbeddingStore{db: db}
-	loadedArticle, err := store.GetArticle(context.Background(), article.ID)
-	if err != nil || loadedArticle.ID != article.ID {
-		t.Fatalf("article=%#v err=%v", loadedArticle, err)
+	store := gormPostEmbeddingStore{db: db}
+	loadedPost, err := store.GetPost(context.Background(), article.ID)
+	if err != nil || loadedPost.ID != article.ID {
+		t.Fatalf("post=%#v err=%v", loadedPost, err)
 	}
 	if _, err := store.GetEmbedding(context.Background(), article.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("missing embedding err=%v", err)
 	}
 
-	first := models.ArticleEmbedding{
-		ArticleID: article.ID, Version: "v1", Model: "test-model",
+	first := models.PostEmbedding{
+		PostID: article.ID, Version: "v1", Model: "test-model",
 		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 2}),
 		ContentHash: "hash-v1", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
@@ -84,7 +84,7 @@ func TestArticleEmbeddingGORMStoreIntegration(t *testing.T) {
 		t.Fatalf("embedding=%#v", persisted)
 	}
 	var count int64
-	if err := db.Model(&models.ArticleEmbedding{}).Where("article_id = ?", article.ID).Count(&count).Error; err != nil {
+	if err := db.Model(&models.PostEmbedding{}).Where("post_id = ?", article.ID).Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {

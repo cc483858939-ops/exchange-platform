@@ -57,7 +57,7 @@ export function createPerfPosts(
       coverImageUrl: hasCover ? coverDataURI : '',
       createdAt: new Date(baseTimestamp + index * 60_000).toISOString(),
       likeCount: (position * 7) % 97,
-      commentCount: (position * 5) % 31,
+      replyCount: (position * 5) % 31,
       viewCount: position * 113,
       liked: position % 7 === 0,
       likeStatus: 'ready',

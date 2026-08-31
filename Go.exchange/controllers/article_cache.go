@@ -12,12 +12,12 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// articleCacheTTL 定义文章缓存的有效期
-const articleCacheTTL = 10 * time.Minute
+// postCacheTTL defines the lifetime of the viewer-independent Post detail cache.
+const postCacheTTL = 10 * time.Minute
 
 var (
-	// articleCacheGroup 用于防击穿的 Singleflight 分组
-	articleCacheGroup singleflight.Group
+	// postCacheGroup 用于防击穿的 Singleflight 分组
+	postCacheGroup singleflight.Group
 )
 
 // cacheGetter 定义从缓存获取数据的函数签名
@@ -26,24 +26,27 @@ type cacheGetter func(key string) (string, error)
 // cacheSetter 定义将数据写入缓存的函数签名
 type cacheSetter func(key string, payload []byte, expiration time.Duration) error
 
-// articleDetailCacheKey 生成文章详情的 Redis Key
-func articleDetailCacheKey(id string) string {
-	return "article:detail:v4:" + id
+// postDetailCacheKey returns the canonical Post detail key.
+func postDetailCacheKey(id string) string {
+	return "post:detail:v1:" + id
 }
 
-// InvalidateArticleDetailCacheByID 主动删除指定文章的详情缓存。
-func InvalidateArticleDetailCacheByID(id uint) error {
+// InvalidatePostDetailCacheByID 主动删除指定文章的详情缓存。
+func InvalidatePostDetailCacheByID(id uint) error {
 	if global.RedisDB == nil {
 		return nil
 	}
-	return global.RedisDB.Del(articleDetailCacheKey(strconv.FormatUint(uint64(id), 10))).Err()
+	return global.RedisDB.Del(postDetailCacheKey(strconv.FormatUint(uint64(id), 10))).Err()
 }
 
 // loadJSONCache 默认使用全局 Redis 的缓存包装函数
 func loadJSONCache[T any](key string, loader func() (T, error)) (T, error) {
+	if global.RedisDB == nil {
+		return loader()
+	}
 	return loadJSONCacheWithStore(
 		key,
-		articleCacheTTL,
+		postCacheTTL,
 		func(key string) (string, error) {
 			return global.RedisDB.Get(key).Result()
 		},
@@ -76,7 +79,7 @@ func loadJSONCacheWithStore[T any](
 	}
 
 	// 2. 缓存未命中，进入 Singleflight 控制
-	value, err, _ := articleCacheGroup.Do(key, func() (interface{}, error) {
+	value, err, _ := postCacheGroup.Do(key, func() (interface{}, error) {
 		// 2.1 二次检查：
 		// 当并发请求被 Do 阻塞再被唤醒时，之前的请求可能已经把缓存填上了，
 		// 所以在这里再查一次 Redis，如果命中了直接返回，避免再次打库。

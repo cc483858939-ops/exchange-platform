@@ -17,7 +17,7 @@ func buildRecommendationResultTraces(request models.RecommendationRequest, selec
 			selectionMode = string(recommendationResultSelectionRanked)
 		}
 		result = append(result, models.RecommendationResultTrace{
-			RequestID: request.RequestID, Position: index + 1, ArticleID: item.Article.ID, AuthorID: item.Article.AuthorID,
+			RequestID: request.RequestID, Position: index + 1, PostID: item.Post.ID, AuthorID: item.Post.AuthorID,
 			FromSemantic: item.Candidate.FromSemantic, FromFollowing: item.Candidate.FromFollowing,
 			FromRecent: item.Candidate.FromRecent, FromTrending: item.Candidate.FromTrending,
 			IsInNetwork: item.IsInNetwork, IsNovelAuthor: item.IsNovelAuthor,

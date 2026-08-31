@@ -1,5 +1,3 @@
-import type { PublicAuthor } from './User';
-
 export interface RecommendationTracking {
   request_id: string;
   position: number;
@@ -11,15 +9,10 @@ export interface RecommendationTracking {
   expires_at: string;
 }
 
-export interface RecommendedArticle {
-  author: PublicAuthor;
-  id: number;
-  title: string;
-  content: string;
-  preview: string;  cover_image_url: string;  like_count: number;
-  comment_count: number;
-  view_count: number;
-  created_at: string;
+import type { Post } from './Post';
+
+export interface RecommendedPost {
+  post: Post;
   score: number;
   tracking?: RecommendationTracking;
 }

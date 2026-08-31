@@ -35,7 +35,7 @@ func TestLikeBehaviorEnvelopeCarriesProjectionVersion(t *testing.T) {
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if event.ID != "like-event:1-0" || event.Type != EventTypeArticleUnliked || payload.LikeVersion != 11 {
+	if event.ID != "like-event:1-0" || event.Type != EventTypePostUnliked || payload.LikeVersion != 11 {
 		t.Fatalf("event=%+v payload=%+v", event, payload)
 	}
 }

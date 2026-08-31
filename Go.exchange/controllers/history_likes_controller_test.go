@@ -42,12 +42,12 @@ func TestGetMyLikedHistoryCanonicalResponseAndLimits(t *testing.T) {
 		return models.User{}, nil
 	}
 	var limits []int
-	loadLikedHistoryPage = func(id uint, limit int, cursor *likedHistoryCursor) (articlePageResponse, error) {
+	loadLikedHistoryPage = func(id uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
 		if id != viewerID || cursor != nil {
 			t.Fatalf("loader args id=%d limit=%d cursor=%v", id, limit, cursor)
 		}
 		limits = append(limits, limit)
-		return articlePageResponse{Items: []articleResponse{}}, nil
+		return postPageResponse{Items: []postResponse{}}, nil
 	}
 
 	ctx, recorder := newLikedHistoryTestContext("/api/me/history/likes", viewerID)
@@ -75,9 +75,9 @@ func TestGetMyLikedHistoryRejectsInvalidLimitAndCursor(t *testing.T) {
 		loadLikedHistoryPage = originalLoader
 	})
 	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, nil }
-	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (articlePageResponse, error) {
+	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (postPageResponse, error) {
 		t.Fatal("liked history loader should not be called")
-		return articlePageResponse{}, nil
+		return postPageResponse{}, nil
 	}
 
 	for _, raw := range []string{"0", "-1", "not-a-number"} {
@@ -88,7 +88,7 @@ func TestGetMyLikedHistoryRejectsInvalidLimitAndCursor(t *testing.T) {
 		}
 	}
 
-	zeroTime, err := json.Marshal(likedHistoryCursor{Version: likedHistoryCursorVersion, ArticleID: 1})
+	zeroTime, err := json.Marshal(likedHistoryCursor{Version: likedHistoryCursorVersion, PostID: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,9 +122,9 @@ func TestGetMyLikedHistoryAuthenticationAndLoaderErrors(t *testing.T) {
 		loadActiveProfileViewer = originalActive
 		loadLikedHistoryPage = originalLoader
 	})
-	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (articlePageResponse, error) {
+	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (postPageResponse, error) {
 		t.Fatal("liked history loader should not be called")
-		return articlePageResponse{}, nil
+		return postPageResponse{}, nil
 	}
 
 	loadActiveProfileViewer = func(uint) (models.User, error) {
@@ -153,8 +153,8 @@ func TestGetMyLikedHistoryAuthenticationAndLoaderErrors(t *testing.T) {
 	}
 
 	loadActiveProfileViewer = func(id uint) (models.User, error) { return models.User{Model: gorm.Model{ID: id}}, nil }
-	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (articlePageResponse, error) {
-		return articlePageResponse{}, errors.New("query failed")
+	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (postPageResponse, error) {
+		return postPageResponse{}, errors.New("query failed")
 	}
 	ctx, recorder = newLikedHistoryTestContext("/api/me/history/likes", viewerID)
 	GetMyLikedHistory(ctx)
@@ -167,7 +167,7 @@ func TestLikedHistoryCursorRoundTripAndValidation(t *testing.T) {
 	want := likedHistoryCursor{
 		Version:        likedHistoryCursorVersion,
 		StateChangedAt: time.Date(2026, 8, 10, 14, 0, 0, 123456000, time.UTC),
-		ArticleID:      42,
+		PostID:      42,
 	}
 	raw, err := encodeLikedHistoryCursor(want)
 	if err != nil {
@@ -177,7 +177,7 @@ func TestLikedHistoryCursorRoundTripAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.StateChangedAt.Equal(want.StateChangedAt) || got.ArticleID != want.ArticleID || got.Version != want.Version {
+	if !got.StateChangedAt.Equal(want.StateChangedAt) || got.PostID != want.PostID || got.Version != want.Version {
 		t.Fatalf("got=%#v want=%#v", got, want)
 	}
 	if _, err := encodeLikedHistoryCursor(likedHistoryCursor{}); err == nil {
@@ -197,19 +197,19 @@ func TestGetMyLikedHistoryPassesDedicatedCursorToLoader(t *testing.T) {
 	want := likedHistoryCursor{
 		Version:        likedHistoryCursorVersion,
 		StateChangedAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC),
-		ArticleID:      42,
+		PostID:      42,
 	}
 	raw, err := encodeLikedHistoryCursor(want)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var received *likedHistoryCursor
-	loadLikedHistoryPage = func(id uint, limit int, cursor *likedHistoryCursor) (articlePageResponse, error) {
+	loadLikedHistoryPage = func(id uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
 		if id != viewerID || limit != 20 {
 			t.Fatalf("loader args id=%d limit=%d", id, limit)
 		}
 		received = cursor
-		return articlePageResponse{Items: []articleResponse{}}, nil
+		return postPageResponse{Items: []postResponse{}}, nil
 	}
 
 	ctx, recorder := newLikedHistoryTestContext("/api/me/history/likes?cursor="+raw, viewerID)
@@ -217,7 +217,7 @@ func TestGetMyLikedHistoryPassesDedicatedCursorToLoader(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if received == nil || received.Version != want.Version || received.ArticleID != want.ArticleID || !received.StateChangedAt.Equal(want.StateChangedAt) {
+	if received == nil || received.Version != want.Version || received.PostID != want.PostID || !received.StateChangedAt.Equal(want.StateChangedAt) {
 		t.Fatalf("received cursor=%v", received)
 	}
 }

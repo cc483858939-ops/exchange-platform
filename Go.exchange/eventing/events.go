@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	EventTypeArticleViewed             = "article.viewed"
-	EventTypeArticleLiked              = "article.liked"
-	EventTypeArticleUnliked            = "article.unliked"
-	EventTypeArticleEmbeddingRequested = "article.embedding.requested"
-	EventTypeArticleReactionApplied    = "article.reaction.applied"
-	EventTypeCommentCreated            = "comment.created"
-	EventTypeUserFollowCreated         = "user_follow.created"
+	EventTypePostViewed             = "post.viewed"
+	EventTypePostLiked              = "post.liked"
+	EventTypePostUnliked            = "post.unliked"
+	EventTypePostEmbeddingRequested = "post.embedding.requested"
+	EventTypePostReactionApplied    = "post.reaction.applied"
+	EventTypeReplyCreated           = "post.reply.created"
+	EventTypeUserFollowCreated      = "user_follow.created"
 
 	EventTypeRecommendationImpression    = "recommendation.impression"
 	EventTypeRecommendationClick         = "recommendation.click"
@@ -29,7 +29,7 @@ const (
 	EventTypeRecommendationFeedDwell     = "recommendation.feed_dwell"
 	EventTypeRecommendationNotInterested = "recommendation.not_interested"
 
-	RecommendationBehaviorSchemaVersion              = 2
+	RecommendationBehaviorSchemaVersion              = 3
 	RecommendationSelectionModeRanked                = "ranked"
 	RecommendationSelectionModeExploration           = "exploration"
 	RecommendationExplorationReasonRecent            = "recent"
@@ -49,31 +49,32 @@ type Envelope struct {
 
 type UserBehaviorPayload struct {
 	UserID      uint   `json:"user_id"`
-	ArticleID   uint   `json:"article_id"`
+	PostID      uint   `json:"post_id"`
 	Action      string `json:"action"`
 	Source      string `json:"source"`
 	LikeVersion int64  `json:"like_version,omitempty"`
 }
 
-type ArticleEmbeddingRequestedPayload struct {
-	ArticleID uint `json:"article_id"`
+type PostEmbeddingRequestedPayload struct {
+	PostID uint `json:"post_id"`
 }
 
-type ArticleReactionAppliedPayload struct {
+type PostReactionAppliedPayload struct {
 	ActorID         uint      `json:"actor_id"`
-	ArticleID       uint      `json:"article_id"`
-	ArticleAuthorID uint      `json:"article_author_id"`
+	PostID          uint      `json:"post_id"`
+	PostAuthorID    uint      `json:"post_author_id"`
 	Liked           bool      `json:"liked"`
 	ReactionVersion int64     `json:"reaction_version"`
 	StateChangedAt  time.Time `json:"state_changed_at"`
 }
 
-type CommentCreatedPayload struct {
-	CommentID       uint      `json:"comment_id"`
-	ArticleID       uint      `json:"article_id"`
-	ActorID         uint      `json:"actor_id"`
-	ArticleAuthorID uint      `json:"article_author_id"`
-	CreatedAt       time.Time `json:"created_at"`
+type ReplyCreatedPayload struct {
+	ReplyPostID    uint      `json:"reply_post_id"`
+	ParentPostID   uint      `json:"parent_post_id"`
+	ConversationID uint      `json:"conversation_id"`
+	ActorID        uint      `json:"actor_id"`
+	ParentAuthorID uint      `json:"parent_author_id"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type UserFollowCreatedPayload struct {
@@ -85,7 +86,7 @@ type UserFollowCreatedPayload struct {
 
 type RecommendationBehaviorPayload struct {
 	UserID    uint   `json:"user_id"`
-	ArticleID uint   `json:"article_id"`
+	PostID    uint   `json:"post_id"`
 	RequestID string `json:"request_id"`
 
 	Scene    string `json:"scene"`
@@ -176,7 +177,7 @@ func NewRecommendationBehaviorEnvelope(eventID, eventType string, occurredAt tim
 	if occurredAt.IsZero() {
 		return Envelope{}, errors.New("recommendation occurred_at is required")
 	}
-	if payload.UserID == 0 || payload.ArticleID == 0 || strings.TrimSpace(payload.RequestID) == "" ||
+	if payload.UserID == 0 || payload.PostID == 0 || strings.TrimSpace(payload.RequestID) == "" ||
 		strings.TrimSpace(payload.Scene) == "" || payload.Position <= 0 ||
 		strings.TrimSpace(payload.RankerVersion) == "" || strings.TrimSpace(payload.RankerConfigHash) == "" ||
 		strings.TrimSpace(payload.StrategyID) == "" || payload.ReceivedAt.IsZero() {
@@ -200,26 +201,30 @@ func NewRecommendationBehaviorEnvelope(eventID, eventType string, occurredAt tim
 	}, nil
 }
 
-func NewArticleViewedEnvelope(eventID string, userID, articleID uint, occurredAt time.Time, source string) (Envelope, error) {
+func NewPostViewedEnvelope(eventID string, userID, postID uint, occurredAt time.Time, source string) (Envelope, error) {
 	eventID = strings.TrimSpace(eventID)
 	if _, err := uuid.Parse(eventID); err != nil {
-		return Envelope{}, errors.New("article view event id must be a UUID")
+		return Envelope{}, errors.New("post view event id must be a UUID")
 	}
-	if userID == 0 || articleID == 0 {
-		return Envelope{}, errors.New("article view requires user and article")
+	if userID == 0 || postID == 0 {
+		return Envelope{}, errors.New("post view requires user and post")
 	}
 	if occurredAt.IsZero() {
-		return Envelope{}, errors.New("article view occurred_at is required")
+		return Envelope{}, errors.New("post view occurred_at is required")
+	}
+	source = strings.TrimSpace(source)
+	if source != "feed" && source != "post_detail" {
+		return Envelope{}, errors.New("post view source is invalid")
 	}
 	body, err := json.Marshal(UserBehaviorPayload{
-		UserID: userID, ArticleID: articleID, Action: "view", Source: strings.TrimSpace(source),
+		UserID: userID, PostID: postID, Action: "view", Source: strings.TrimSpace(source),
 	})
 	if err != nil {
-		return Envelope{}, fmt.Errorf("marshal article view payload: %w", err)
+		return Envelope{}, fmt.Errorf("marshal post view payload: %w", err)
 	}
 	return Envelope{
 		ID:            eventID,
-		Type:          EventTypeArticleViewed,
+		Type:          EventTypePostViewed,
 		SchemaVersion: 1,
 		AggregateType: "user",
 		AggregateID:   strconv.FormatUint(uint64(userID), 10),
@@ -228,27 +233,27 @@ func NewArticleViewedEnvelope(eventID string, userID, articleID uint, occurredAt
 	}, nil
 }
 
-func NewArticleEmbeddingRequestedEnvelope(eventID string, articleID uint, occurredAt time.Time) (Envelope, error) {
+func NewPostEmbeddingRequestedEnvelope(eventID string, postID uint, occurredAt time.Time) (Envelope, error) {
 	eventID = strings.TrimSpace(eventID)
 	if _, err := uuid.Parse(eventID); err != nil {
-		return Envelope{}, errors.New("article embedding event id must be a UUID")
+		return Envelope{}, errors.New("post embedding event id must be a UUID")
 	}
-	if articleID == 0 {
-		return Envelope{}, errors.New("article embedding requires an article")
+	if postID == 0 {
+		return Envelope{}, errors.New("post embedding requires a post")
 	}
 	if occurredAt.IsZero() {
-		return Envelope{}, errors.New("article embedding occurred_at is required")
+		return Envelope{}, errors.New("post embedding occurred_at is required")
 	}
-	body, err := json.Marshal(ArticleEmbeddingRequestedPayload{ArticleID: articleID})
+	body, err := json.Marshal(PostEmbeddingRequestedPayload{PostID: postID})
 	if err != nil {
-		return Envelope{}, fmt.Errorf("marshal article embedding payload: %w", err)
+		return Envelope{}, fmt.Errorf("marshal post embedding payload: %w", err)
 	}
 	return Envelope{
 		ID:            eventID,
-		Type:          EventTypeArticleEmbeddingRequested,
+		Type:          EventTypePostEmbeddingRequested,
 		SchemaVersion: 1,
-		AggregateType: "article",
-		AggregateID:   strconv.FormatUint(uint64(articleID), 10),
+		AggregateType: "post",
+		AggregateID:   strconv.FormatUint(uint64(postID), 10),
 		OccurredAt:    occurredAt.UTC(),
 		Payload:       body,
 	}, nil
@@ -308,27 +313,27 @@ func validateOutboxEnvelope(event Envelope) error {
 	return nil
 }
 
-func NewArticleReactionAppliedEnvelope(eventID string, payload ArticleReactionAppliedPayload) (Envelope, error) {
-	if payload.ActorID == 0 || payload.ArticleID == 0 || payload.ArticleAuthorID == 0 || payload.ReactionVersion <= 0 || payload.StateChangedAt.IsZero() {
-		return Envelope{}, errors.New("article reaction activity payload is missing required fields")
+func NewPostReactionAppliedEnvelope(eventID string, payload PostReactionAppliedPayload) (Envelope, error) {
+	if payload.ActorID == 0 || payload.PostID == 0 || payload.PostAuthorID == 0 || payload.ReactionVersion <= 0 || payload.StateChangedAt.IsZero() {
+		return Envelope{}, errors.New("post reaction activity payload is missing required fields")
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return Envelope{}, fmt.Errorf("marshal article reaction activity payload: %w", err)
+		return Envelope{}, fmt.Errorf("marshal post reaction activity payload: %w", err)
 	}
-	return newActivityEnvelope(eventID, EventTypeArticleReactionApplied, "article_reaction",
-		fmt.Sprintf("%d:%d", payload.ActorID, payload.ArticleID), payload.StateChangedAt, body)
+	return newActivityEnvelope(eventID, EventTypePostReactionApplied, "post_reaction",
+		fmt.Sprintf("%d:%d", payload.ActorID, payload.PostID), payload.StateChangedAt, body)
 }
 
-func NewCommentCreatedEnvelope(eventID string, payload CommentCreatedPayload) (Envelope, error) {
-	if payload.CommentID == 0 || payload.ArticleID == 0 || payload.ActorID == 0 || payload.ArticleAuthorID == 0 || payload.CreatedAt.IsZero() {
-		return Envelope{}, errors.New("comment activity payload is missing required fields")
+func NewReplyCreatedEnvelope(eventID string, payload ReplyCreatedPayload) (Envelope, error) {
+	if payload.ReplyPostID == 0 || payload.ParentPostID == 0 || payload.ConversationID == 0 || payload.ActorID == 0 || payload.ParentAuthorID == 0 || payload.CreatedAt.IsZero() {
+		return Envelope{}, errors.New("reply activity payload is missing required fields")
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return Envelope{}, fmt.Errorf("marshal comment activity payload: %w", err)
+		return Envelope{}, fmt.Errorf("marshal reply activity payload: %w", err)
 	}
-	return newActivityEnvelope(eventID, EventTypeCommentCreated, "comment", strconv.FormatUint(uint64(payload.CommentID), 10), payload.CreatedAt, body)
+	return newActivityEnvelope(eventID, EventTypeReplyCreated, "post", strconv.FormatUint(uint64(payload.ReplyPostID), 10), payload.CreatedAt, body)
 }
 
 func NewUserFollowCreatedEnvelope(eventID string, payload UserFollowCreatedPayload) (Envelope, error) {
@@ -355,11 +360,11 @@ func newActivityEnvelope(eventID, eventType, aggregateType, aggregateID string, 
 func EventTypeForBehaviorAction(action string) string {
 	switch strings.TrimSpace(action) {
 	case "like":
-		return EventTypeArticleLiked
+		return EventTypePostLiked
 	case "unlike":
-		return EventTypeArticleUnliked
+		return EventTypePostUnliked
 	default:
-		return EventTypeArticleViewed
+		return EventTypePostViewed
 	}
 }
 
@@ -376,9 +381,9 @@ func DecodeEnvelope(raw []byte) (Envelope, error) {
 
 func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, error) {
 	switch eventType {
-	case EventTypeArticleViewed, EventTypeArticleLiked, EventTypeArticleUnliked:
+	case EventTypePostViewed, EventTypePostLiked, EventTypePostUnliked:
 		return strings.TrimSpace(kafkaConfig.UserBehaviorTopic), nil
-	case EventTypeArticleLikeSnapshot:
+	case EventTypePostLikeSnapshot:
 		return strings.TrimSpace(kafkaConfig.LikeSnapshotTopic), nil
 	case EventTypeRecommendationImpression,
 		EventTypeRecommendationClick,
@@ -386,9 +391,9 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 		EventTypeRecommendationFeedDwell,
 		EventTypeRecommendationNotInterested:
 		return strings.TrimSpace(kafkaConfig.RecommendationEventsTopic), nil
-	case EventTypeArticleEmbeddingRequested:
-		return strings.TrimSpace(kafkaConfig.ArticleEmbeddingTopic), nil
-	case EventTypeArticleReactionApplied, EventTypeCommentCreated, EventTypeUserFollowCreated:
+	case EventTypePostEmbeddingRequested:
+		return strings.TrimSpace(kafkaConfig.PostEmbeddingTopic), nil
+	case EventTypePostReactionApplied, EventTypeReplyCreated, EventTypeUserFollowCreated:
 		return strings.TrimSpace(kafkaConfig.ActivityEventsTopic), nil
 	default:
 		return "", fmt.Errorf("unsupported event type %q", eventType)
@@ -397,12 +402,12 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 
 func KeyForEvent(event Envelope) string {
 	switch event.Type {
-	case EventTypeArticleLiked, EventTypeArticleUnliked:
+	case EventTypePostLiked, EventTypePostUnliked:
 		var payload UserBehaviorPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 && payload.ArticleID > 0 {
-			return fmt.Sprintf("%d:%d", payload.UserID, payload.ArticleID)
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 && payload.PostID > 0 {
+			return fmt.Sprintf("%d:%d", payload.UserID, payload.PostID)
 		}
-	case EventTypeArticleViewed:
+	case EventTypePostViewed:
 		var payload UserBehaviorPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 {
 			return strconv.FormatUint(uint64(payload.UserID), 10)
@@ -416,20 +421,20 @@ func KeyForEvent(event Envelope) string {
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.UserID > 0 {
 			return strconv.FormatUint(uint64(payload.UserID), 10)
 		}
-	case EventTypeArticleEmbeddingRequested:
-		var payload ArticleEmbeddingRequestedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ArticleID > 0 {
-			return strconv.FormatUint(uint64(payload.ArticleID), 10)
+	case EventTypePostEmbeddingRequested:
+		var payload PostEmbeddingRequestedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.PostID > 0 {
+			return strconv.FormatUint(uint64(payload.PostID), 10)
 		}
-	case EventTypeArticleReactionApplied:
-		var payload ArticleReactionAppliedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ActorID > 0 && payload.ArticleID > 0 {
-			return fmt.Sprintf("%d:%d", payload.ActorID, payload.ArticleID)
+	case EventTypePostReactionApplied:
+		var payload PostReactionAppliedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ActorID > 0 && payload.PostID > 0 {
+			return fmt.Sprintf("%d:%d", payload.ActorID, payload.PostID)
 		}
-	case EventTypeCommentCreated:
-		var payload CommentCreatedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ArticleID > 0 {
-			return strconv.FormatUint(uint64(payload.ArticleID), 10)
+	case EventTypeReplyCreated:
+		var payload ReplyCreatedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ConversationID > 0 {
+			return strconv.FormatUint(uint64(payload.ConversationID), 10)
 		}
 	case EventTypeUserFollowCreated:
 		var payload UserFollowCreatedPayload

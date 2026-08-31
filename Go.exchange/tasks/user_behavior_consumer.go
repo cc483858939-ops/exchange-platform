@@ -42,7 +42,7 @@ type userBehaviorEventRecord struct {
 
 type userBehaviorPair struct {
 	UserID    uint
-	ArticleID uint
+	PostID uint
 }
 
 type userBehaviorViewAggregate struct {
@@ -192,10 +192,10 @@ func decodeUserBehaviorEvent(raw []byte) (userBehaviorEventRecord, error) {
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return userBehaviorEventRecord{}, fmt.Errorf("decode user behavior payload: %w", err)
 	}
-	if payload.UserID == 0 || payload.ArticleID == 0 {
-		return userBehaviorEventRecord{}, errors.New("user behavior payload requires user_id and article_id")
+	if payload.UserID == 0 || payload.PostID == 0 {
+		return userBehaviorEventRecord{}, errors.New("user behavior payload requires user_id and post_id")
 	}
-	if (event.Type == eventing.EventTypeArticleLiked || event.Type == eventing.EventTypeArticleUnliked) &&
+	if (event.Type == eventing.EventTypePostLiked || event.Type == eventing.EventTypePostUnliked) &&
 		payload.LikeVersion <= 0 {
 		return userBehaviorEventRecord{}, errors.New("like behavior payload requires positive like_version")
 	}
@@ -203,9 +203,9 @@ func decodeUserBehaviorEvent(raw []byte) (userBehaviorEventRecord, error) {
 }
 
 func isUserBehaviorEvent(eventType string) bool {
-	return eventType == eventing.EventTypeArticleViewed ||
-		eventType == eventing.EventTypeArticleLiked ||
-		eventType == eventing.EventTypeArticleUnliked
+	return eventType == eventing.EventTypePostViewed ||
+		eventType == eventing.EventTypePostLiked ||
+		eventType == eventing.EventTypePostUnliked
 }
 
 // applyUserBehaviorEvent remains a single-event seam for existing operational and
@@ -243,17 +243,17 @@ func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
 		}
 
 		viewAggregates := aggregateUserBehaviorViews(records, firstDelivery)
-		if err := bulkUpsertArticleViewBehavior(tx, viewAggregates); err != nil {
+		if err := bulkUpsertPostViewBehavior(tx, viewAggregates); err != nil {
 			return err
 		}
 
-		viewCountDeltas := aggregateArticleViewCountDeltas(records, firstDelivery)
-		if err := incrementArticleViewCounts(tx, viewCountDeltas); err != nil {
+		viewCountDeltas := aggregatePostViewCountDeltas(records, firstDelivery)
+		if err := incrementPostViewCounts(tx, viewCountDeltas); err != nil {
 			return err
 		}
 
 		reactions := collapseUserBehaviorReactions(records, firstDelivery)
-		applied, err := bulkUpsertArticleReactionsReturningApplied(tx, reactions)
+		applied, err := bulkUpsertPostReactionsReturningApplied(tx, reactions)
 		if err != nil {
 			return err
 		}
@@ -267,11 +267,11 @@ func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
 func userBehaviorProfileInvalidationUsers(records []userBehaviorEventRecord, firstDelivery map[string]struct{}) []uint {
 	seen := make(map[uint]struct{})
 	for _, record := range records {
-		if _, ok := firstDelivery[record.Envelope.ID]; !ok || record.Payload.UserID == 0 || record.Payload.ArticleID == 0 {
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok || record.Payload.UserID == 0 || record.Payload.PostID == 0 {
 			continue
 		}
 		switch record.Envelope.Type {
-		case eventing.EventTypeArticleViewed, eventing.EventTypeArticleLiked, eventing.EventTypeArticleUnliked:
+		case eventing.EventTypePostViewed, eventing.EventTypePostLiked, eventing.EventTypePostUnliked:
 			seen[record.Payload.UserID] = struct{}{}
 		}
 	}
@@ -283,49 +283,49 @@ func userBehaviorProfileInvalidationUsers(records []userBehaviorEventRecord, fir
 	return users
 }
 
-var incrementArticleViewCounts = bulkIncrementArticleViewCounts
+var incrementPostViewCounts = bulkIncrementPostViewCounts
 
-func aggregateArticleViewCountDeltas(
+func aggregatePostViewCountDeltas(
 	records []userBehaviorEventRecord,
 	firstDelivery map[string]struct{},
 ) map[uint]int64 {
 	deltas := make(map[uint]int64)
 	for _, record := range records {
-		if record.Envelope.Type != eventing.EventTypeArticleViewed {
+		if record.Envelope.Type != eventing.EventTypePostViewed {
 			continue
 		}
-		if _, ok := firstDelivery[record.Envelope.ID]; !ok || record.Payload.ArticleID == 0 {
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok || record.Payload.PostID == 0 {
 			continue
 		}
-		deltas[record.Payload.ArticleID]++
+		deltas[record.Payload.PostID]++
 	}
 	return deltas
 }
 
-func bulkIncrementArticleViewCounts(tx *gorm.DB, deltas map[uint]int64) error {
+func bulkIncrementPostViewCounts(tx *gorm.DB, deltas map[uint]int64) error {
 	if len(deltas) == 0 {
 		return nil
 	}
 
-	articleIDs := make([]uint, 0, len(deltas))
-	for articleID := range deltas {
-		articleIDs = append(articleIDs, articleID)
+	postIDs := make([]uint, 0, len(deltas))
+	for postID := range deltas {
+		postIDs = append(postIDs, postID)
 	}
-	sort.Slice(articleIDs, func(i, j int) bool {
-		return articleIDs[i] < articleIDs[j]
+	sort.Slice(postIDs, func(i, j int) bool {
+		return postIDs[i] < postIDs[j]
 	})
 
 	var cases strings.Builder
 	cases.WriteString("CASE id")
-	args := make([]interface{}, 0, len(articleIDs)*2)
-	for _, articleID := range articleIDs {
+	args := make([]interface{}, 0, len(postIDs)*2)
+	for _, postID := range postIDs {
 		cases.WriteString(" WHEN ? THEN ?")
-		args = append(args, articleID, deltas[articleID])
+		args = append(args, postID, deltas[postID])
 	}
 	cases.WriteString(" ELSE 0 END")
 
-	return tx.Model(&models.Article{}).
-		Where("id IN ?", articleIDs).
+	return tx.Model(&models.Post{}).
+		Where("id IN ?", postIDs).
 		UpdateColumn("view_count", gorm.Expr("view_count + ("+cases.String()+")", args...)).
 		Error
 }
@@ -336,13 +336,13 @@ func aggregateUserBehaviorViews(
 ) []userBehaviorViewAggregate {
 	byPair := make(map[userBehaviorPair]userBehaviorViewAggregate)
 	for _, record := range records {
-		if record.Envelope.Type != eventing.EventTypeArticleViewed {
+		if record.Envelope.Type != eventing.EventTypePostViewed {
 			continue
 		}
 		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
 			continue
 		}
-		key := userBehaviorPair{UserID: record.Payload.UserID, ArticleID: record.Payload.ArticleID}
+		key := userBehaviorPair{UserID: record.Payload.UserID, PostID: record.Payload.PostID}
 		current := byPair[key]
 		current.Key = key
 		current.Count++
@@ -361,7 +361,7 @@ func aggregateUserBehaviorViews(
 		if keys[i].UserID != keys[j].UserID {
 			return keys[i].UserID < keys[j].UserID
 		}
-		return keys[i].ArticleID < keys[j].ArticleID
+		return keys[i].PostID < keys[j].PostID
 	})
 	result := make([]userBehaviorViewAggregate, 0, len(keys))
 	for _, key := range keys {
@@ -377,17 +377,17 @@ func userBehaviorOccurredAt(event eventing.Envelope) time.Time {
 	return event.OccurredAt.UTC()
 }
 
-func bulkUpsertArticleViewBehavior(tx *gorm.DB, aggregates []userBehaviorViewAggregate) error {
+func bulkUpsertPostViewBehavior(tx *gorm.DB, aggregates []userBehaviorViewAggregate) error {
 	if len(aggregates) == 0 {
 		return nil
 	}
 	updatedAt := time.Now().UTC()
-	rows := make([]models.ArticleBehavior, 0, len(aggregates))
+	rows := make([]models.PostBehavior, 0, len(aggregates))
 	for _, aggregate := range aggregates {
-		rows = append(rows, models.ArticleBehavior{
+		rows = append(rows, models.PostBehavior{
 			Model:      gorm.Model{CreatedAt: updatedAt, UpdatedAt: updatedAt},
 			UserID:     aggregate.Key.UserID,
-			ArticleID:  aggregate.Key.ArticleID,
+			PostID:  aggregate.Key.PostID,
 			Action:     "view",
 			Count:      aggregate.Count,
 			LastSeenAt: aggregate.LastSeenAt,
@@ -395,10 +395,10 @@ func bulkUpsertArticleViewBehavior(tx *gorm.DB, aggregates []userBehaviorViewAgg
 		})
 	}
 	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}, {Name: "action"}},
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "post_id"}, {Name: "action"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"count":        gorm.Expr("article_behaviors.count + EXCLUDED.count"),
-			"last_seen_at": gorm.Expr("GREATEST(article_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
+			"count":        gorm.Expr("post_behaviors.count + EXCLUDED.count"),
+			"last_seen_at": gorm.Expr("GREATEST(post_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
 			"active":       true,
 			"updated_at":   gorm.Expr("EXCLUDED.updated_at"),
 		}),
@@ -411,19 +411,19 @@ func collapseUserBehaviorReactions(
 ) []userBehaviorReactionCandidate {
 	byPair := make(map[userBehaviorPair]userBehaviorReactionCandidate)
 	for _, record := range records {
-		if record.Envelope.Type != eventing.EventTypeArticleLiked &&
-			record.Envelope.Type != eventing.EventTypeArticleUnliked {
+		if record.Envelope.Type != eventing.EventTypePostLiked &&
+			record.Envelope.Type != eventing.EventTypePostUnliked {
 			continue
 		}
 		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
 			continue
 		}
-		key := userBehaviorPair{UserID: record.Payload.UserID, ArticleID: record.Payload.ArticleID}
+		key := userBehaviorPair{UserID: record.Payload.UserID, PostID: record.Payload.PostID}
 		candidate := userBehaviorReactionCandidate{
 			Key:      key,
 			Envelope: record.Envelope,
 			Payload:  record.Payload,
-			Liked:    record.Envelope.Type == eventing.EventTypeArticleLiked,
+			Liked:    record.Envelope.Type == eventing.EventTypePostLiked,
 		}
 		current, exists := byPair[key]
 		if !exists || candidate.Payload.LikeVersion > current.Payload.LikeVersion {
@@ -432,8 +432,8 @@ func collapseUserBehaviorReactions(
 		}
 		if candidate.Payload.LikeVersion == current.Payload.LikeVersion && candidate.Liked != current.Liked {
 			log.Printf(
-				"[BehaviorProjection] conflicting equal like_version user=%d article=%d version=%d; keeping earliest Kafka event",
-				key.UserID, key.ArticleID, candidate.Payload.LikeVersion,
+				"[BehaviorProjection] conflicting equal like_version user=%d post=%d version=%d; keeping earliest Kafka event",
+				key.UserID, key.PostID, candidate.Payload.LikeVersion,
 			)
 		}
 	}
@@ -446,7 +446,7 @@ func collapseUserBehaviorReactions(
 		if keys[i].UserID != keys[j].UserID {
 			return keys[i].UserID < keys[j].UserID
 		}
-		return keys[i].ArticleID < keys[j].ArticleID
+		return keys[i].PostID < keys[j].PostID
 	})
 	result := make([]userBehaviorReactionCandidate, 0, len(keys))
 	for _, key := range keys {
@@ -455,35 +455,35 @@ func collapseUserBehaviorReactions(
 	return result
 }
 
-func applyArticleReactionProjection(tx *gorm.DB, eventType string, payload eventing.UserBehaviorPayload, occurredAt time.Time) error {
-	if eventType != eventing.EventTypeArticleLiked && eventType != eventing.EventTypeArticleUnliked {
+func applyPostReactionProjection(tx *gorm.DB, eventType string, payload eventing.UserBehaviorPayload, occurredAt time.Time) error {
+	if eventType != eventing.EventTypePostLiked && eventType != eventing.EventTypePostUnliked {
 		return nil
 	}
 	if payload.LikeVersion <= 0 {
 		return nil
 	}
 	candidate := userBehaviorReactionCandidate{
-		Key:      userBehaviorPair{UserID: payload.UserID, ArticleID: payload.ArticleID},
+		Key:      userBehaviorPair{UserID: payload.UserID, PostID: payload.PostID},
 		Envelope: eventing.Envelope{Type: eventType, OccurredAt: occurredAt},
 		Payload:  payload,
-		Liked:    eventType == eventing.EventTypeArticleLiked,
+		Liked:    eventType == eventing.EventTypePostLiked,
 	}
-	return bulkUpsertArticleReactions(tx, []userBehaviorReactionCandidate{candidate})
+	return bulkUpsertPostReactions(tx, []userBehaviorReactionCandidate{candidate})
 }
 
-type appliedArticleReaction struct {
+type appliedPostReaction struct {
 	UserID         uint      `gorm:"column:user_id"`
-	ArticleID      uint      `gorm:"column:article_id"`
+	PostID      uint      `gorm:"column:post_id"`
 	Version        int64     `gorm:"column:reaction_version"`
 	Liked          bool      `gorm:"column:liked"`
 	StateChangedAt time.Time `gorm:"column:state_changed_at"`
 }
 
-// bulkUpsertArticleReactionsReturningApplied is the authoritative version
+// bulkUpsertPostReactionsReturningApplied is the authoritative version
 // gate. PostgreSQL returns only inserts and updates whose incoming version was
 // newer than the stored version, which prevents stale deliveries from
 // generating activity or notifications.
-func bulkUpsertArticleReactionsReturningApplied(tx *gorm.DB, candidates []userBehaviorReactionCandidate) ([]appliedArticleReaction, error) {
+func bulkUpsertPostReactionsReturningApplied(tx *gorm.DB, candidates []userBehaviorReactionCandidate) ([]appliedPostReaction, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -494,30 +494,30 @@ func bulkUpsertArticleReactionsReturningApplied(tx *gorm.DB, candidates []userBe
 		base := index*7 + 1
 		values = append(values, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d)", base, base+1, base+2, base+3, base+4, base+5, base+6))
 		args = append(args,
-			candidate.Key.UserID, candidate.Key.ArticleID, models.ArticleReactionLike,
+			candidate.Key.UserID, candidate.Key.PostID, models.PostReactionLike,
 			candidate.Liked, candidate.Payload.LikeVersion, updatedAt, userBehaviorOccurredAt(candidate.Envelope),
 		)
 	}
 	query := `
-INSERT INTO article_reaction
-  (user_id, article_id, reaction, liked, reaction_version, updated_at, state_changed_at)
+INSERT INTO post_reaction
+  (user_id, post_id, reaction, liked, reaction_version, updated_at, state_changed_at)
 VALUES ` + strings.Join(values, ",") + `
-ON CONFLICT (user_id, article_id) DO UPDATE SET
+ON CONFLICT (user_id, post_id) DO UPDATE SET
   reaction = EXCLUDED.reaction,
   liked = EXCLUDED.liked,
   reaction_version = EXCLUDED.reaction_version,
   state_changed_at = EXCLUDED.state_changed_at,
   updated_at = EXCLUDED.updated_at
-WHERE article_reaction.reaction_version < EXCLUDED.reaction_version
-RETURNING user_id, article_id, reaction_version, liked, state_changed_at`
-	var applied []appliedArticleReaction
+WHERE post_reaction.reaction_version < EXCLUDED.reaction_version
+RETURNING user_id, post_id, reaction_version, liked, state_changed_at`
+	var applied []appliedPostReaction
 	if err := tx.Raw(query, args...).Scan(&applied).Error; err != nil {
 		return nil, err
 	}
 	return applied, nil
 }
 
-func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedArticleReaction) error {
+func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedPostReaction) error {
 	if len(applied) == 0 {
 		return nil
 	}
@@ -527,20 +527,20 @@ func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedArticleReacti
 	if strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) == "" {
 		return errors.New("Kafka activity events topic is not configured")
 	}
-	articleIDs := make([]uint, 0, len(applied))
+	postIDs := make([]uint, 0, len(applied))
 	seen := make(map[uint]struct{}, len(applied))
 	for _, reaction := range applied {
-		if _, exists := seen[reaction.ArticleID]; !exists {
-			seen[reaction.ArticleID] = struct{}{}
-			articleIDs = append(articleIDs, reaction.ArticleID)
+		if _, exists := seen[reaction.PostID]; !exists {
+			seen[reaction.PostID] = struct{}{}
+			postIDs = append(postIDs, reaction.PostID)
 		}
 	}
-	type articleAuthorRow struct {
+	type postAuthorRow struct {
 		ID       uint `gorm:"column:id"`
 		AuthorID uint `gorm:"column:author_id"`
 	}
-	var rows []articleAuthorRow
-	if err := tx.Table("articles").Select("id, author_id").Where("id IN ?", articleIDs).Find(&rows).Error; err != nil {
+	var rows []postAuthorRow
+	if err := tx.Table("posts").Select("id, author_id").Where("id IN ?", postIDs).Find(&rows).Error; err != nil {
 		return err
 	}
 	authors := make(map[uint]uint, len(rows))
@@ -548,12 +548,12 @@ func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedArticleReacti
 		authors[row.ID] = row.AuthorID
 	}
 	for _, reaction := range applied {
-		authorID := authors[reaction.ArticleID]
+		authorID := authors[reaction.PostID]
 		if authorID == 0 {
-			return fmt.Errorf("article %d author is missing for reaction activity", reaction.ArticleID)
+			return fmt.Errorf("post %d author is missing for reaction activity", reaction.PostID)
 		}
-		envelope, err := eventing.NewArticleReactionAppliedEnvelope(uuid.NewString(), eventing.ArticleReactionAppliedPayload{
-			ActorID: reaction.UserID, ArticleID: reaction.ArticleID, ArticleAuthorID: authorID,
+		envelope, err := eventing.NewPostReactionAppliedEnvelope(uuid.NewString(), eventing.PostReactionAppliedPayload{
+			ActorID: reaction.UserID, PostID: reaction.PostID, PostAuthorID: authorID,
 			Liked: reaction.Liked, ReactionVersion: reaction.Version, StateChangedAt: reaction.StateChangedAt,
 		})
 		if err != nil {
@@ -570,17 +570,17 @@ func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedArticleReacti
 	return nil
 }
 
-func bulkUpsertArticleReactions(tx *gorm.DB, candidates []userBehaviorReactionCandidate) error {
+func bulkUpsertPostReactions(tx *gorm.DB, candidates []userBehaviorReactionCandidate) error {
 	if len(candidates) == 0 {
 		return nil
 	}
 	updatedAt := time.Now().UTC()
-	rows := make([]models.ArticleReaction, 0, len(candidates))
+	rows := make([]models.PostReaction, 0, len(candidates))
 	for _, candidate := range candidates {
-		rows = append(rows, models.ArticleReaction{
+		rows = append(rows, models.PostReaction{
 			UserID:         candidate.Key.UserID,
-			ArticleID:      candidate.Key.ArticleID,
-			Reaction:       models.ArticleReactionLike,
+			PostID:      candidate.Key.PostID,
+			Reaction:       models.PostReactionLike,
 			Liked:          candidate.Liked,
 			Version:        candidate.Payload.LikeVersion,
 			UpdatedAt:      updatedAt,
@@ -588,7 +588,7 @@ func bulkUpsertArticleReactions(tx *gorm.DB, candidates []userBehaviorReactionCa
 		})
 	}
 	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}},
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "post_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"reaction":         gorm.Expr("EXCLUDED.reaction"),
 			"liked":            gorm.Expr("EXCLUDED.liked"),
@@ -597,7 +597,7 @@ func bulkUpsertArticleReactions(tx *gorm.DB, candidates []userBehaviorReactionCa
 			"updated_at":       gorm.Expr("EXCLUDED.updated_at"),
 		}),
 		Where: clause.Where{Exprs: []clause.Expression{
-			clause.Expr{SQL: "article_reaction.reaction_version < EXCLUDED.reaction_version"},
+			clause.Expr{SQL: "post_reaction.reaction_version < EXCLUDED.reaction_version"},
 		}},
 	}).Create(&rows).Error
 }

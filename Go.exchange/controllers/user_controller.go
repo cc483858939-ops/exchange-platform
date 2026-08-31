@@ -22,10 +22,10 @@ import (
 )
 
 const (
-	defaultUserArticleLimit = 20
-	maxUserArticleLimit     = 50
-	maxProfileDisplayRunes  = 50
-	maxProfileBioRunes      = 160
+	defaultUserPostLimit   = 20
+	maxUserPostLimit       = 50
+	maxProfileDisplayRunes = 50
+	maxProfileBioRunes     = 160
 )
 
 const (
@@ -391,13 +391,13 @@ func SearchUsers(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, page)
 }
 
-func GetUserArticles(ctx *gin.Context) {
+func GetUserPosts(ctx *gin.Context) {
 	id, err := parsePublicUserID(ctx.Param("id"))
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	limit, cursor, err := parseArticlePageQuery(ctx)
+	limit, cursor, err := parsePostPageQuery(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -413,30 +413,30 @@ func GetUserArticles(ctx *gin.Context) {
 
 	now := time.Now().UTC()
 	query := global.Db.
-		Model(&models.Article{}).
-		Select(publicArticleSelectColumns).
-		Where("articles.author_id = ?", id).
-		Scopes(func(tx *gorm.DB) *gorm.DB { return publicArticleScope(tx, now) })
+		Model(&models.Post{}).
+		Where("posts.author_id = ? AND posts.reply_to_post_id IS NULL", id).
+		Joins("LEFT JOIN post_articles AS pa_profile ON pa_profile.post_id = posts.id").
+		Scopes(func(tx *gorm.DB) *gorm.DB { return publicPostScope(tx, now) })
 	if cursor != nil {
 		query = query.Where(
-			"(articles.published_at < ?) OR (articles.published_at = ? AND articles.id < ?)",
+			"("+effectivePublishedAtSQL("posts", "pa_profile")+" < ?) OR ("+effectivePublishedAtSQL("posts", "pa_profile")+" = ? AND posts.id < ?)",
 			cursor.PublishedAt,
 			cursor.PublishedAt,
 			cursor.ID,
 		)
 	}
-	articles, err := loadArticleResponses(query.Order("articles.published_at DESC, articles.id DESC").Limit(limit + 1))
+	posts, err := loadPostResponses(query.Order(effectivePublishedAtSQL("posts", "pa_profile") + " DESC, posts.id DESC").Limit(limit + 1))
 	if err != nil {
 		writeUserAPIError(ctx, err)
 		return
 	}
-	page, err := buildArticlePageResponse(articles, limit)
+	page, err := buildPostPageResponse(posts, limit)
 	if err != nil {
 		writeUserAPIError(ctx, err)
 		return
 	}
 	if page.Items == nil {
-		page.Items = make([]articleResponse, 0)
+		page.Items = make([]postResponse, 0)
 	}
 	ctx.JSON(http.StatusOK, page)
 }

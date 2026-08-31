@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -32,7 +31,7 @@ type followingTimelineItem struct {
 	ActivityAt   time.Time             `json:"activity_at"`
 	SourceID     uint                  `json:"source_id"`
 	Actor        publicAuthorResponse  `json:"actor"`
-	Article      articleResponse       `json:"article"`
+	Post         postResponse          `json:"post"`
 }
 
 type followingTimelinePageResponse struct {
@@ -50,7 +49,7 @@ type followingActivityQueryRow struct {
 	ActivityType string    `gorm:"column:activity_type"`
 	ActivityAt   time.Time `gorm:"column:activity_at"`
 	SourceID     uint      `gorm:"column:source_id"`
-	ArticleID    uint      `gorm:"column:article_id"`
+	PostID       uint      `gorm:"column:post_id"`
 	ActorID      uint      `gorm:"column:actor_id"`
 	ActivityRank int       `gorm:"column:activity_rank"`
 }
@@ -76,7 +75,7 @@ func GetFollowingTimeline(ctx *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		} else {
-			writeArticleTimelineStoreError(ctx)
+			writePostTimelineStoreError(ctx)
 		}
 		return
 	}
@@ -89,7 +88,7 @@ func GetFollowingTimeline(ctx *gin.Context) {
 
 	response, err := loadFollowingTimelinePage(viewerID, limit, cursor)
 	if err != nil {
-		writeArticleTimelineStoreError(ctx)
+		writePostTimelineStoreError(ctx)
 		return
 	}
 	if response.Items == nil {
@@ -173,71 +172,63 @@ func loadFollowingTimelinePageFromDB(viewerID uint, limit int, cursor *following
 WITH activities AS (
     SELECT
         'post'::text AS activity_type,
-        articles.published_at AS activity_at,
-        articles.id AS source_id,
-        articles.id AS article_id,
-        articles.author_id AS actor_id,
+        ` + effectivePublishedAtSQL("posts", "pa_direct") + ` AS activity_at,
+        posts.id AS source_id,
+        posts.id AS post_id,
+        posts.author_id AS actor_id,
         1::int AS activity_rank
-    FROM articles
+    FROM posts
+    LEFT JOIN post_articles AS pa_direct
+      ON pa_direct.post_id = posts.id
     JOIN user_follows AS direct_follow
-      ON direct_follow.following_id = articles.author_id
+      ON direct_follow.following_id = posts.author_id
      AND direct_follow.follower_id = ?
-    JOIN users AS direct_author
-      ON direct_author.id = articles.author_id
-     AND direct_author.deleted_at IS NULL
-    WHERE articles.deleted_at IS NULL
-      AND articles.publication_state = ?
-      AND articles.published_at IS NOT NULL
-      AND articles.published_at <= ?
-      AND (articles.expired_at IS NULL OR articles.expired_at > ?)
+    WHERE posts.reply_to_post_id IS NULL
+      AND ` + publicPostEligibilitySQL("posts", "pa_direct") + `
 
     UNION ALL
 
     SELECT
         'repost'::text AS activity_type,
-        article_reposts.created_at AS activity_at,
-        article_reposts.id AS source_id,
-        articles.id AS article_id,
-        article_reposts.user_id AS actor_id,
+        post_reposts.created_at AS activity_at,
+        post_reposts.id AS source_id,
+        posts.id AS post_id,
+        post_reposts.user_id AS actor_id,
         2::int AS activity_rank
-    FROM article_reposts
+    FROM post_reposts
     JOIN user_follows AS repost_follow
-      ON repost_follow.following_id = article_reposts.user_id
+      ON repost_follow.following_id = post_reposts.user_id
      AND repost_follow.follower_id = ?
     JOIN users AS reposter
-      ON reposter.id = article_reposts.user_id
+      ON reposter.id = post_reposts.user_id
      AND reposter.deleted_at IS NULL
-    JOIN articles
-      ON articles.id = article_reposts.article_id
+    JOIN posts
+      ON posts.id = post_reposts.post_id
+    LEFT JOIN post_articles AS pa_repost
+      ON pa_repost.post_id = posts.id
     JOIN users AS canonical_author
-      ON canonical_author.id = articles.author_id
+      ON canonical_author.id = posts.author_id
      AND canonical_author.deleted_at IS NULL
-    WHERE articles.deleted_at IS NULL
-      AND articles.publication_state = ?
-      AND articles.published_at IS NOT NULL
-      AND articles.published_at <= ?
-      AND (articles.expired_at IS NULL OR articles.expired_at > ?)
+    WHERE ` + publicPostEligibilitySQL("posts", "pa_repost") + `
 ), latest AS (
-    SELECT DISTINCT ON (article_id)
+    SELECT DISTINCT ON (post_id)
         activity_type,
         activity_at,
         source_id,
-        article_id,
+        post_id,
         actor_id,
         activity_rank
     FROM activities
-    ORDER BY article_id, activity_at DESC, activity_rank DESC, source_id DESC
+    ORDER BY post_id, activity_at DESC, activity_rank DESC, source_id DESC
 )
-SELECT activity_type, activity_at, source_id, article_id, actor_id, activity_rank
+SELECT activity_type, activity_at, source_id, post_id, actor_id, activity_rank
 FROM latest
 `
 	args := []interface{}{
 		viewerID,
-		consts.ArticlePublicationStatePublished,
 		now,
 		now,
 		viewerID,
-		consts.ArticlePublicationStatePublished,
 		now,
 		now,
 	}
@@ -263,14 +254,14 @@ LIMIT ?
 		return followingTimelinePageResponse{}, err
 	}
 
-	articleIDs := make([]uint, 0, len(rows))
+	postIDs := make([]uint, 0, len(rows))
 	actorIDs := make([]uint, 0, len(rows))
-	seenArticleIDs := make(map[uint]struct{}, len(rows))
+	seenPostIDs := make(map[uint]struct{}, len(rows))
 	seenActorIDs := make(map[uint]struct{}, len(rows))
 	for _, row := range rows {
-		if _, exists := seenArticleIDs[row.ArticleID]; !exists {
-			seenArticleIDs[row.ArticleID] = struct{}{}
-			articleIDs = append(articleIDs, row.ArticleID)
+		if _, exists := seenPostIDs[row.PostID]; !exists {
+			seenPostIDs[row.PostID] = struct{}{}
+			postIDs = append(postIDs, row.PostID)
 		}
 		if _, exists := seenActorIDs[row.ActorID]; !exists {
 			seenActorIDs[row.ActorID] = struct{}{}
@@ -278,31 +269,31 @@ LIMIT ?
 		}
 	}
 
-	articlesByID := make(map[uint]articleResponse, len(articleIDs))
-	if len(articleIDs) > 0 {
-		articleResponses, err := loadArticleResponses(publicArticleScope(
-			global.Db.Model(&models.Article{}).
-				Select(publicArticleSelectColumns).
-				Where("articles.id IN ?", articleIDs),
+	postsByID := make(map[uint]postResponse, len(postIDs))
+	if len(postIDs) > 0 {
+		postResponses, err := loadPostResponses(publicPostScope(
+			global.Db.Model(&models.Post{}).
+				Select(publicPostSelectColumns).
+				Where("posts.id IN ?", postIDs),
 			now,
 		))
 		if err != nil {
 			return followingTimelinePageResponse{}, err
 		}
-		for _, article := range articleResponses {
-			articlesByID[article.ID] = article
+		for _, post := range postResponses {
+			postsByID[post.ID] = post
 		}
 	}
 	actorsByID, err := loadPublicAuthorsByIDs(actorIDs)
 	if err != nil {
 		return followingTimelinePageResponse{}, err
 	}
-	return buildFollowingTimelinePageResponse(rows, articlesByID, actorsByID, limit)
+	return buildFollowingTimelinePageResponse(rows, postsByID, actorsByID, limit)
 }
 
 func buildFollowingTimelinePageResponse(
 	rows []followingActivityQueryRow,
-	articlesByID map[uint]articleResponse,
+	postsByID map[uint]postResponse,
 	actorsByID map[uint]publicAuthorResponse,
 	limit int,
 ) (followingTimelinePageResponse, error) {
@@ -320,9 +311,9 @@ func buildFollowingTimelinePageResponse(
 		if followingActivityRank(row.ActivityType) == 0 || row.ActivityAt.IsZero() || row.SourceID == 0 {
 			return followingTimelinePageResponse{}, errors.New("invalid following activity")
 		}
-		article, ok := articlesByID[row.ArticleID]
+		post, ok := postsByID[row.PostID]
 		if !ok {
-			return followingTimelinePageResponse{}, errors.New("following article could not be found")
+			return followingTimelinePageResponse{}, errors.New("following post could not be found")
 		}
 		actor, ok := actorsByID[row.ActorID]
 		if !ok {
@@ -333,7 +324,7 @@ func buildFollowingTimelinePageResponse(
 			ActivityAt:   row.ActivityAt,
 			SourceID:     row.SourceID,
 			Actor:        actor,
-			Article:      article,
+			Post:         post,
 		})
 	}
 

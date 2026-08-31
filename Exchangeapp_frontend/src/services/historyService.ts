@@ -1,5 +1,5 @@
 import apiClient from '../axios';
-import type { Article } from '../types/Article';
+import type { Post } from '../types/Post';
 
 export type LikedHistoryQuery = {
   limit?: number;
@@ -7,7 +7,7 @@ export type LikedHistoryQuery = {
 };
 
 export type LikedHistoryResponse = {
-  items: Article[];
+  items: Post[];
   next_cursor: string | null;
 };
 

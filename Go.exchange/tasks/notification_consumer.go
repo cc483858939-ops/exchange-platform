@@ -54,6 +54,36 @@ type notificationActivityRecord struct {
 	Candidate *models.Notification
 }
 
+type notificationPostRow struct {
+	AuthorID      uint
+	ReplyToPostID *uint
+}
+
+func notificationPublicPostScope(query *gorm.DB, now time.Time) *gorm.DB {
+	return query.Where(`
+posts.deleted_at IS NULL
+AND posts.visibility = 'public'
+AND EXISTS (
+    SELECT 1 FROM users AS post_author
+    WHERE post_author.id = posts.author_id
+      AND post_author.deleted_at IS NULL
+)
+AND (
+    NOT EXISTS (
+        SELECT 1 FROM post_articles AS pa_any
+        WHERE pa_any.post_id = posts.id
+    )
+    OR EXISTS (
+        SELECT 1 FROM post_articles AS pa_valid
+        WHERE pa_valid.post_id = posts.id
+          AND pa_valid.publication_state = 'published'
+          AND pa_valid.published_at IS NOT NULL
+          AND pa_valid.published_at <= ?
+          AND (pa_valid.expired_at IS NULL OR pa_valid.expired_at > ?)
+    )
+)`, now.UTC(), now.UTC())
+}
+
 func notificationConsumerConfigured() bool {
 	return config.AppConfig != nil &&
 		strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) != "" &&
@@ -200,45 +230,44 @@ func decodeNotificationActivity(message kafka.Message) (notificationActivityReco
 	}
 	record := notificationActivityRecord{Message: message, Envelope: envelope}
 	switch envelope.Type {
-	case eventing.EventTypeArticleReactionApplied:
-		if envelope.SchemaVersion != 1 || envelope.AggregateType != "article_reaction" {
-			return notificationActivityRecord{}, errors.New("unsupported article reaction activity schema")
+	case eventing.EventTypePostReactionApplied:
+		if envelope.SchemaVersion != 1 || envelope.AggregateType != "post_reaction" {
+			return notificationActivityRecord{}, errors.New("unsupported post reaction activity schema")
 		}
-		var payload eventing.ArticleReactionAppliedPayload
+		var payload eventing.PostReactionAppliedPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return notificationActivityRecord{}, fmt.Errorf("decode article reaction activity payload: %w", err)
+			return notificationActivityRecord{}, fmt.Errorf("decode post reaction activity payload: %w", err)
 		}
-		if payload.ActorID == 0 || payload.ArticleID == 0 || payload.ArticleAuthorID == 0 || payload.ReactionVersion <= 0 || payload.StateChangedAt.IsZero() || !payload.StateChangedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != fmt.Sprintf("%d:%d", payload.ActorID, payload.ArticleID) {
-			return notificationActivityRecord{}, errors.New("invalid article reaction activity payload")
+		if payload.ActorID == 0 || payload.PostID == 0 || payload.PostAuthorID == 0 || payload.ReactionVersion <= 0 || payload.StateChangedAt.IsZero() || !payload.StateChangedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != fmt.Sprintf("%d:%d", payload.ActorID, payload.PostID) {
+			return notificationActivityRecord{}, errors.New("invalid post reaction activity payload")
 		}
-		if !payload.Liked || payload.ActorID == payload.ArticleAuthorID {
+		if !payload.Liked || payload.ActorID == payload.PostAuthorID {
 			return record, nil
 		}
-		articleID := payload.ArticleID
+		postID := payload.PostID
 		record.Candidate = &models.Notification{
-			RecipientID: payload.ArticleAuthorID, ActorID: payload.ActorID, Type: models.NotificationTypePostLiked,
-			ArticleID: &articleID, DedupeKey: fmt.Sprintf("post_like:%d:%d", payload.ActorID, payload.ArticleID),
+			RecipientID: payload.PostAuthorID, ActorID: payload.ActorID, Type: models.NotificationTypePostLiked,
+			PostID: &postID, DedupeKey: fmt.Sprintf("post_like:%d:%d", payload.ActorID, payload.PostID),
 			SourceVersion: payload.ReactionVersion, ActivityAt: payload.StateChangedAt,
 		}
-	case eventing.EventTypeCommentCreated:
-		if envelope.SchemaVersion != 1 || envelope.AggregateType != "comment" {
-			return notificationActivityRecord{}, errors.New("unsupported comment activity schema")
+	case eventing.EventTypeReplyCreated:
+		if envelope.SchemaVersion != 1 || envelope.AggregateType != "post" {
+			return notificationActivityRecord{}, errors.New("unsupported reply activity schema")
 		}
-		var payload eventing.CommentCreatedPayload
+		var payload eventing.ReplyCreatedPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return notificationActivityRecord{}, fmt.Errorf("decode comment activity payload: %w", err)
+			return notificationActivityRecord{}, fmt.Errorf("decode reply activity payload: %w", err)
 		}
-		if payload.CommentID == 0 || payload.ArticleID == 0 || payload.ActorID == 0 || payload.ArticleAuthorID == 0 || payload.CreatedAt.IsZero() || !payload.CreatedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != strconv.FormatUint(uint64(payload.CommentID), 10) {
-			return notificationActivityRecord{}, errors.New("invalid comment activity payload")
+		if payload.ReplyPostID == 0 || payload.ParentPostID == 0 || payload.ConversationID == 0 || payload.ActorID == 0 || payload.ParentAuthorID == 0 || payload.CreatedAt.IsZero() || !payload.CreatedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != strconv.FormatUint(uint64(payload.ReplyPostID), 10) {
+			return notificationActivityRecord{}, errors.New("invalid reply activity payload")
 		}
-		if payload.ActorID == payload.ArticleAuthorID {
+		if payload.ActorID == payload.ParentAuthorID {
 			return record, nil
 		}
-		articleID, commentID := payload.ArticleID, payload.CommentID
 		record.Candidate = &models.Notification{
-			RecipientID: payload.ArticleAuthorID, ActorID: payload.ActorID, Type: models.NotificationTypePostReplied,
-			ArticleID: &articleID, CommentID: &commentID, DedupeKey: fmt.Sprintf("post_reply:%d", payload.CommentID),
-			ActivityAt: payload.CreatedAt,
+			RecipientID: payload.ParentAuthorID, ActorID: payload.ActorID, Type: models.NotificationTypePostReplied,
+			PostID:    func() *uint { value := payload.ReplyPostID; return &value }(),
+			DedupeKey: fmt.Sprintf("post_reply:%d", payload.ReplyPostID), ActivityAt: payload.CreatedAt,
 		}
 	case eventing.EventTypeUserFollowCreated:
 		if envelope.SchemaVersion != 1 || envelope.AggregateType != "user_follow" {
@@ -326,16 +355,12 @@ func applyNotificationRecords(records []notificationActivityRecord) error {
 func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification) ([]models.Notification, error) {
 	recipientIDs := make([]uint, 0, len(candidates))
 	actorIDs := make([]uint, 0, len(candidates))
-	articleIDs := make([]uint, 0, len(candidates))
-	commentIDs := make([]uint, 0, len(candidates))
+	postIDs := make([]uint, 0, len(candidates))
 	for _, candidate := range candidates {
 		recipientIDs = append(recipientIDs, candidate.RecipientID)
 		actorIDs = append(actorIDs, candidate.ActorID)
-		if candidate.ArticleID != nil {
-			articleIDs = append(articleIDs, *candidate.ArticleID)
-		}
-		if candidate.CommentID != nil {
-			commentIDs = append(commentIDs, *candidate.CommentID)
+		if candidate.PostID != nil {
+			postIDs = append(postIDs, *candidate.PostID)
 		}
 	}
 	activeRecipients := make(map[uint]struct{})
@@ -349,42 +374,50 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 		activeRecipients[user.ID] = struct{}{}
 	}
 
-	// Actor existence is a historical integrity check, not a current
-	// visibility check. A soft-deleted actor is still a valid source reference;
-	// the API applies the current-state actor visibility filter later.
-	physicalActors := make(map[uint]struct{})
+	activeActors := make(map[uint]struct{})
 	var actors []struct {
 		ID uint `gorm:"column:id"`
 	}
-	if err := tx.Unscoped().Model(&models.User{}).Select("id").Where("id IN ?", uniqueUintIDs(actorIDs)).Find(&actors).Error; err != nil {
+	if err := tx.Model(&models.User{}).Select("id").Where("id IN ? AND deleted_at IS NULL", uniqueUintIDs(actorIDs)).Find(&actors).Error; err != nil {
 		return nil, err
 	}
 	for _, actor := range actors {
-		physicalActors[actor.ID] = struct{}{}
+		activeActors[actor.ID] = struct{}{}
 	}
-	articles := make(map[uint]struct{})
-	var articleRows []struct {
-		ID uint `gorm:"column:id"`
+	posts := make(map[uint]notificationPostRow)
+	var postRows []struct {
+		ID            uint  `gorm:"column:id"`
+		AuthorID      uint  `gorm:"column:author_id"`
+		ReplyToPostID *uint `gorm:"column:reply_to_post_id"`
 	}
-	if len(articleIDs) > 0 {
-		if err := tx.Table("articles").Select("id").Where("id IN ?", uniqueUintIDs(articleIDs)).Find(&articleRows).Error; err != nil {
+	if len(postIDs) > 0 {
+		now := time.Now().UTC()
+		if err := notificationPublicPostScope(tx.Table("posts"), now).
+			Select("posts.id, posts.author_id, posts.reply_to_post_id").
+			Where("posts.id IN ?", uniqueUintIDs(postIDs)).Find(&postRows).Error; err != nil {
 			return nil, err
 		}
-		for _, row := range articleRows {
-			articles[row.ID] = struct{}{}
+		for _, row := range postRows {
+			posts[row.ID] = notificationPostRow{AuthorID: row.AuthorID, ReplyToPostID: row.ReplyToPostID}
 		}
 	}
-	commentArticles := make(map[uint]uint)
-	var commentRows []struct {
-		ID        uint `gorm:"column:id"`
-		ArticleID uint `gorm:"column:article_id"`
+	parentIDs := make([]uint, 0, len(postRows))
+	for _, row := range postRows {
+		if row.ReplyToPostID != nil && *row.ReplyToPostID != 0 {
+			parentIDs = append(parentIDs, *row.ReplyToPostID)
+		}
 	}
-	if len(commentIDs) > 0 {
-		if err := tx.Table("comments").Select("id, article_id").Where("id IN ?", uniqueUintIDs(commentIDs)).Find(&commentRows).Error; err != nil {
+	parentAuthors := make(map[uint]uint)
+	if len(parentIDs) > 0 {
+		var parentRows []struct {
+			ID       uint `gorm:"column:id"`
+			AuthorID uint `gorm:"column:author_id"`
+		}
+		if err := tx.Unscoped().Table("posts").Select("id, author_id").Where("id IN ?", uniqueUintIDs(parentIDs)).Find(&parentRows).Error; err != nil {
 			return nil, err
 		}
-		for _, row := range commentRows {
-			commentArticles[row.ID] = row.ArticleID
+		for _, row := range parentRows {
+			parentAuthors[row.ID] = row.AuthorID
 		}
 	}
 	filtered := make([]models.Notification, 0, len(candidates))
@@ -392,19 +425,28 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 		if _, ok := activeRecipients[candidate.RecipientID]; !ok {
 			continue
 		}
-		if _, ok := physicalActors[candidate.ActorID]; !ok {
+		if _, ok := activeActors[candidate.ActorID]; !ok {
 			continue
 		}
-		if candidate.ArticleID != nil {
-			if _, ok := articles[*candidate.ArticleID]; !ok {
+		if candidate.PostID != nil {
+			post, ok := posts[*candidate.PostID]
+			if !ok {
 				continue
 			}
-		}
-		if candidate.CommentID != nil {
-			articleID, ok := commentArticles[*candidate.CommentID]
-			if !ok || candidate.ArticleID == nil || articleID != *candidate.ArticleID {
+			switch candidate.Type {
+			case models.NotificationTypePostLiked:
+				if candidate.SourceVersion <= 0 || post.AuthorID != candidate.RecipientID {
+					continue
+				}
+			case models.NotificationTypePostReplied:
+				if candidate.SourceVersion != 0 || post.ReplyToPostID == nil || parentAuthors[*post.ReplyToPostID] != candidate.RecipientID {
+					continue
+				}
+			default:
 				continue
 			}
+		} else if candidate.Type != models.NotificationTypeUserFollowed || candidate.SourceVersion <= 0 {
+			continue
 		}
 		filtered = append(filtered, candidate)
 	}
@@ -432,8 +474,7 @@ func upsertNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 			"recipient_id":      gorm.Expr("EXCLUDED.recipient_id"),
 			"actor_id":          gorm.Expr("EXCLUDED.actor_id"),
 			"notification_type": gorm.Expr("EXCLUDED.notification_type"),
-			"article_id":        gorm.Expr("EXCLUDED.article_id"),
-			"comment_id":        gorm.Expr("EXCLUDED.comment_id"),
+			"post_id":           gorm.Expr("EXCLUDED.post_id"),
 			"source_version":    gorm.Expr("EXCLUDED.source_version"),
 			"activity_at":       gorm.Expr("EXCLUDED.activity_at"),
 			"read_at":           nil,

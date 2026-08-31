@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestFilterNotificationCandidatesKeepsHistoricalActorsAndValidatesCommentArticle(t *testing.T) {
+func TestFilterNotificationCandidatesKeepsHistoricalActorsAndValidatesReplyArticle(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -21,7 +21,7 @@ func TestFilterNotificationCandidatesKeepsHistoricalActorsAndValidatesCommentArt
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.Comment{}, &models.Notification{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.Notification{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,12 +32,13 @@ func TestFilterNotificationCandidatesKeepsHistoricalActorsAndValidatesCommentArt
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	article := models.Article{AuthorID: actor.ID, Title: "notification filter", Content: "content", Preview: "preview", PublicationState: "published", PublishedAt: &now}
-	otherArticle := models.Article{AuthorID: actor.ID, Title: "other article", Content: "content", Preview: "preview", PublicationState: "published", PublishedAt: &now}
-	if err := db.Create(&[]*models.Article{&article, &otherArticle}).Error; err != nil {
+	article := models.Post{Model: gorm.Model{CreatedAt: now, UpdatedAt: now}, AuthorID: actor.ID, Content: "notification filter", Visibility: "public"}
+	otherArticle := models.Post{Model: gorm.Model{CreatedAt: now, UpdatedAt: now}, AuthorID: actor.ID, Content: "other post", Visibility: "public"}
+	if err := db.Create(&[]*models.Post{&article, &otherArticle}).Error; err != nil {
 		t.Fatal(err)
 	}
-	comment := models.Comment{ArticleID: article.ID, UserID: actor.ID, Content: "comment"}
+	conversationID := article.ID
+	comment := models.Post{AuthorID: actor.ID, ReplyToPostID: &article.ID, ConversationID: &conversationID, Content: "reply", Visibility: "public"}
 	if err := db.Create(&comment).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -48,16 +49,16 @@ func TestFilterNotificationCandidatesKeepsHistoricalActorsAndValidatesCommentArt
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("id IN ?", []uint{comment.ID}).Delete(&models.Comment{})
-		db.Unscoped().Where("id IN ?", []uint{article.ID, otherArticle.ID}).Delete(&models.Article{})
+		db.Unscoped().Where("id IN ?", []uint{comment.ID}).Delete(&models.Post{})
+		db.Unscoped().Where("id IN ?", []uint{article.ID, otherArticle.ID}).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{recipient.ID, deletedRecipient.ID, actor.ID}).Delete(&models.User{})
 	})
 
-	validFollow := models.Notification{RecipientID: recipient.ID, ActorID: actor.ID, Type: models.NotificationTypeUserFollowed, DedupeKey: "filter:valid-follow"}
-	validReply := models.Notification{RecipientID: recipient.ID, ActorID: actor.ID, Type: models.NotificationTypePostReplied, ArticleID: &article.ID, CommentID: &comment.ID, DedupeKey: "filter:valid-reply"}
+	validFollow := models.Notification{RecipientID: recipient.ID, ActorID: actor.ID, Type: models.NotificationTypeUserFollowed, SourceVersion: 1, DedupeKey: "filter:valid-follow"}
+	validReply := models.Notification{RecipientID: recipient.ID, ActorID: actor.ID, Type: models.NotificationTypePostReplied, PostID: &comment.ID, SourceVersion: 0, DedupeKey: "filter:valid-reply"}
 	mismatchedReply := validReply
 	mismatchedReply.DedupeKey = "filter:mismatched-reply"
-	mismatchedReply.ArticleID = &otherArticle.ID
+	mismatchedReply.PostID = &otherArticle.ID
 	deletedRecipientCandidate := validFollow
 	deletedRecipientCandidate.DedupeKey = "filter:deleted-recipient"
 	deletedRecipientCandidate.RecipientID = deletedRecipient.ID

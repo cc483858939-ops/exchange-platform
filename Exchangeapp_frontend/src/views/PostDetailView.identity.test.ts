@@ -4,8 +4,8 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
-import NewsDetailView from './NewsDetailView.vue';
-import CommentComposer from '../components/comments/CommentComposer.vue';
+import PostDetailView from './PostDetailView.vue';
+import ReplyComposer from '../components/replies/ReplyComposer.vue';
 
 const mocks = vi.hoisted(() => ({
   authState: {
@@ -33,21 +33,21 @@ const mocks = vi.hoisted(() => ({
       avatar_url: string;
     } | null;
   } | null,
-  getArticleById: vi.fn(),
-  getArticleLikeState: vi.fn(),
-  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
-  getArticleComments: vi.fn(),
-  createArticleComment: vi.fn(),
-  deleteComment: vi.fn(),
+  getPostById: vi.fn(),
+  getPostLikeState: vi.fn(),
+  getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
+  getPostReplies: vi.fn(),
+  createPostReply: vi.fn(),
+  deletePostReply: vi.fn(),
   getUser: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
     recordReadEnd: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
   },
-  articleViewTelemetry: {
+  postViewTelemetry: {
     enqueue: vi.fn(),
   },
   routeLeave: vi.fn(),
@@ -58,7 +58,7 @@ const mocks = vi.hoisted(() => ({
   },
   feedStore: {
     viewerID: 7,
-    markArticleDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
   },
 }));
 
@@ -86,31 +86,31 @@ vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
 
-vi.mock('../store/articleDetailHandoff', () => ({
-  useArticleDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
+vi.mock('../store/postDetailHandoff', () => ({
+  usePostDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: vi.fn(),
-  getArticleById: mocks.getArticleById,
+vi.mock('../services/postService', () => ({
+  deletePost: vi.fn(),
+  getPostById: mocks.getPostById,
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeState: mocks.getArticleLikeState,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeState: mocks.getPostLikeState,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 vi.mock('../services/repostService', () => ({
-  getArticleRepostState: mocks.getArticleRepostState,
-  repostArticle: vi.fn(),
-  undoRepostArticle: vi.fn(),
+  getPostRepostState: mocks.getPostRepostState,
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
 }));
 
-vi.mock('../services/commentService', () => ({
-  createArticleComment: mocks.createArticleComment,
-  deleteComment: mocks.deleteComment,
-  getArticleComments: mocks.getArticleComments,
+vi.mock('../services/replyService', () => ({
+  createPostReply: mocks.createPostReply,
+  deletePostReply: mocks.deletePostReply,
+  getPostReplies: mocks.getPostReplies,
 }));
 
 vi.mock('../services/userService', () => ({
@@ -125,32 +125,41 @@ vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
 }));
 
-vi.mock('../services/articleViewTelemetry', () => ({
-  createArticleViewEventID: () => '00000000-0000-4000-8000-000000000042',
-  getArticleViewTelemetry: () => mocks.articleViewTelemetry,
+vi.mock('../services/postViewTelemetry', () => ({
+  createPostViewEventID: () => '00000000-0000-4000-8000-000000000042',
+  getPostViewTelemetry: () => mocks.postViewTelemetry,
 }));
 
-const article = {
-  ID: 42,
-  CreatedAt: '2026-08-15T00:00:00.000Z',
-  UpdatedAt: '2026-08-15T00:00:00.000Z',
-  title: 'Identity article',
-  content: 'Article body',
-  preview: 'Article body',
-  cover_image_url: '',
-  publication_state: 'published',
+const post = {
+  id: 42,
+  created_at: '2026-08-15T00:00:00.000Z',
+  updated_at: '2026-08-15T00:00:00.000Z',
   published_at: '2026-08-15T00:00:00.000Z',
-  expired_at: null,
-  like_count: 3,
-  comment_count: 0,
-  view_count: 12,
-  like_sync_version: 1,
   author: {
     id: 99,
     username: 'author',
     display_name: 'Author',
     avatar_url: '',
   },
+  content: 'Post body',
+  conversation_id: 42,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  article: {
+    title: 'Identity post',
+    preview: 'Post body',
+    cover_image_url: '',
+    publication_state: 'published',
+    published_at: '2026-08-15T00:00:00.000Z',
+    expired_at: null,
+  },
+  like_count: 3,
+  reply_count: 0,
+  view_count: 12,
+  deleted: false,
 };
 
 const identity = (overrides: Partial<NonNullable<typeof mocks.authState.currentIdentity>> = {}) => ({
@@ -161,21 +170,21 @@ const identity = (overrides: Partial<NonNullable<typeof mocks.authState.currentI
   ...overrides,
 });
 
-const mountDetail = () => mount(NewsDetailView, {
+const mountDetail = () => mount(PostDetailView, {
   attachTo: document.body,
   global: {
     plugins: [createPinia()],
     stubs: {
       AppIcon: { template: '<span />' },
       AuthorIdentity: { template: '<span />' },
-      CommentList: { template: '<div />' },
+      ReplyList: { template: '<div />' },
       LikeAction: { template: '<button type="button" />' },
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
 });
 
-describe('NewsDetailView reply composer identity', () => {
+describe('PostDetailView reply composer identity', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
@@ -184,10 +193,10 @@ describe('NewsDetailView reply composer identity', () => {
     mocks.authStore!.isAuthenticated = true;
     mocks.authStore!.token = 'Bearer test-token';
     mocks.authStore!.currentIdentity = identity();
-    mocks.getArticleById.mockResolvedValue(article);
-    mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
-    mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
-    mocks.createArticleComment.mockResolvedValue({ id: 101 });
+    mocks.getPostById.mockResolvedValue(post);
+    mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
+    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.createPostReply.mockResolvedValue({ id: 101 });
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
@@ -202,7 +211,7 @@ describe('NewsDetailView reply composer identity', () => {
     wrapper = mountDetail();
     await flushPromises();
 
-    const composer = wrapper.findComponent(CommentComposer);
+    const composer = wrapper.findComponent(ReplyComposer);
     expect(mocks.getUser).not.toHaveBeenCalled();
     expect(composer.props('author')).toEqual({
       id: 7,
@@ -210,7 +219,7 @@ describe('NewsDetailView reply composer identity', () => {
       display_name: 'Alice Smith',
       avatar_url: 'https://example.test/alice.jpg',
     });
-    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
+    expect(wrapper.get('.reply-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice.jpg');
   });
 
@@ -226,13 +235,13 @@ describe('NewsDetailView reply composer identity', () => {
     });
     await nextTick();
 
-    expect(wrapper.findComponent(CommentComposer).props('author')).toEqual({
+    expect(wrapper.findComponent(ReplyComposer).props('author')).toEqual({
       id: 8,
       username: 'bob',
       display_name: 'Bob Jones',
       avatar_url: 'https://example.test/bob.jpg',
     });
-    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
+    expect(wrapper.get('.reply-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/bob.jpg');
     expect(mocks.getUser).not.toHaveBeenCalled();
   });
@@ -241,11 +250,11 @@ describe('NewsDetailView reply composer identity', () => {
     wrapper = mountDetail();
     await flushPromises();
 
-    await wrapper.get('.comment-composer__textarea').setValue('reply without enrichment');
-    await wrapper.get('.comment-composer').trigger('submit');
+    await wrapper.get('.reply-composer__textarea').setValue('reply without enrichment');
+    await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
 
-    expect(mocks.createArticleComment).toHaveBeenCalledWith('42', 'reply without enrichment');
+    expect(mocks.createPostReply).toHaveBeenCalledWith('42', 'reply without enrichment');
     expect(mocks.getUser).not.toHaveBeenCalled();
   });
 
@@ -256,8 +265,9 @@ describe('NewsDetailView reply composer identity', () => {
     wrapper = mountDetail();
     await flushPromises();
 
-    expect(wrapper.find('.comment-composer').exists()).toBe(false);
+    expect(wrapper.find('.reply-composer').exists()).toBe(false);
     expect(mocks.getUser).not.toHaveBeenCalled();
     expect(wrapper.get('.detail-state__link').text()).toContain('Log in');
   });
 });
+

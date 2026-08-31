@@ -10,17 +10,17 @@
       </header>
 
       <div v-if="loading" class="no-data">文章加载中...</div>
-      <div v-else-if="articles && articles.length" class="article-list">
-        <el-card v-for="article in articles" :key="article.ID" class="article-card" shadow="hover">
-          <div class="article-card-content" :class="{ 'without-cover': !article.cover_image_url }">
+      <div v-else-if="posts && posts.length" class="article-list">
+        <el-card v-for="recommendation in posts" :key="recommendation.post.id" class="article-card" shadow="hover">
+          <div class="article-card-content" :class="{ 'without-cover': !recommendation.post.article?.cover_image_url }">
             <div class="article-copy">
-              <AuthorIdentity :author="article.author" :created-at="article.CreatedAt" />
-              <h2>{{ article.title }}</h2>
-              <p>{{ article.preview }}</p>
-              <el-button text @click="viewDetail(article.ID)">阅读更多</el-button>
+              <AuthorIdentity :author="recommendation.post.author" :created-at="recommendation.post.published_at" />
+              <h2>{{ recommendation.post.article?.title || 'Post' }}</h2>
+              <p>{{ recommendation.post.article?.preview || recommendation.post.content }}</p>
+              <el-button text @click="viewDetail(recommendation.post.id)">阅读更多</el-button>
             </div>
-            <figure v-if="article.cover_image_url" class="article-cover">
-              <img :src="article.cover_image_url" :alt="article.title" loading="lazy" />
+            <figure v-if="recommendation.post.article?.cover_image_url" class="article-cover">
+              <img :src="recommendation.post.article.cover_image_url" :alt="recommendation.post.article.title" loading="lazy" />
             </figure>
           </div>
         </el-card>
@@ -34,12 +34,12 @@
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import axios from '../axios';
+import { getPostRecommendations } from '../services/recommendationService';
 import { useAuthStore } from '../store/auth';
-import type { Article } from '../types/Article';
+import type { RecommendedPost } from '../types/Recommendation';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 
-const articles = ref<Article[]>([]);
+const posts = ref<RecommendedPost[]>([]);
 const loading = ref(false);
 const loadError = ref(false);
 const router = useRouter();
@@ -57,7 +57,7 @@ const emptyMessage = computed(() => {
 
 const fetchArticles = async () => {
   if (!authStore.isAuthenticated) {
-    articles.value = [];
+    posts.value = [];
     loadError.value = false;
     return;
   }
@@ -66,8 +66,7 @@ const fetchArticles = async () => {
   loadError.value = false;
 
   try {
-    const response = await axios.get<Article[]>('/articles');
-    articles.value = response.data;
+    posts.value = await getPostRecommendations(50);
   } catch (error) {
     console.error('Failed to load articles:', error);
     loadError.value = true;
@@ -81,7 +80,7 @@ const viewDetail = (id: number) => {
     ElMessage.error('请先登录后再阅读文章');
     return;
   }
-  router.push({ name: 'NewsDetail', params: { id } });
+  router.push({ name: 'PostDetail', params: { id } });
 };
 
 const publishArticle = () => {

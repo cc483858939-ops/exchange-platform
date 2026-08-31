@@ -27,54 +27,104 @@ type publicUserResponse struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-type articleResponse struct {
-	ID               uint                 `json:"ID"`
-	CreatedAt        time.Time            `json:"CreatedAt"`
-	UpdatedAt        time.Time            `json:"UpdatedAt"`
-	Title            string               `json:"title"`
-	Content          string               `json:"content"`
-	Preview          string               `json:"preview"`
-	CoverImageURL    string               `json:"cover_image_url"`
-	PublicationState string               `json:"publication_state"`
-	PublishedAt      *time.Time           `json:"published_at"`
-	ExpiredAt        *time.Time           `json:"expired_at"`
-	LikeCount        int64                `json:"like_count"`
-	CommentCount     int64                `json:"comment_count"`
-	ViewCount        int64                `json:"view_count"`
-	LikeSyncVersion  int64                `json:"like_sync_version"`
-	Author           publicAuthorResponse `json:"author"`
+type postResponse struct {
+	ID             uint                   `json:"id"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	PublishedAt    *time.Time             `json:"published_at"`
+	Author         publicAuthorResponse   `json:"author"`
+	Content        string                 `json:"content"`
+	ConversationID uint                   `json:"conversation_id"`
+	ReplyToPostID  *uint                  `json:"reply_to_post_id"`
+	QuotePostID    *uint                  `json:"quote_post_id"`
+	ReplyToPost    *postReferenceResponse `json:"reply_to_post"`
+	QuotePost      *postReferenceResponse `json:"quote_post"`
+	Visibility     string                 `json:"visibility"`
+	Article        *postArticleResponse   `json:"article"`
+	LikeCount      int64                  `json:"like_count"`
+	ReplyCount     int64                  `json:"reply_count"`
+	ViewCount      int64                  `json:"view_count"`
+	Deleted        bool                   `json:"deleted"`
+}
+
+type postArticleResponse struct {
+	Title            string     `json:"title"`
+	Preview          string     `json:"preview"`
+	CoverImageURL    string     `json:"cover_image_url"`
+	PublicationState string     `json:"publication_state"`
+	PublishedAt      *time.Time `json:"published_at"`
+	ExpiredAt        *time.Time `json:"expired_at"`
+}
+
+type postReferenceResponse struct {
+	ID          uint                 `json:"id"`
+	Author      publicAuthorResponse `json:"author,omitempty"`
+	Content     string               `json:"content,omitempty"`
+	PublishedAt *time.Time           `json:"published_at,omitempty"`
+	Article     *postArticleResponse `json:"article,omitempty"`
+	Deleted     bool                 `json:"deleted"`
 }
 
 func publicAuthorFromUser(user models.User) publicAuthorResponse {
 	return publicAuthorResponse{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, AvatarURL: user.AvatarURL}
 }
 
-func publicAuthorFromArticle(article models.Article) (publicAuthorResponse, error) {
-	if article.AuthorID == 0 || article.Author.ID == 0 || article.Author.ID != article.AuthorID {
-		return publicAuthorResponse{}, errors.New("article author is missing or invalid")
+func publicAuthorFromPost(post models.Post) (publicAuthorResponse, error) {
+	if post.AuthorID == 0 || post.Author.ID == 0 || post.Author.ID != post.AuthorID {
+		return publicAuthorResponse{}, errors.New("post author is missing or invalid")
 	}
-	return publicAuthorFromUser(article.Author), nil
+	return publicAuthorFromUser(post.Author), nil
 }
 
-func newArticleResponse(article models.Article) (articleResponse, error) {
-	author, err := publicAuthorFromArticle(article)
+func newPostResponse(post models.Post) (postResponse, error) {
+	author, err := publicAuthorFromPost(post)
 	if err != nil {
-		return articleResponse{}, err
+		return postResponse{}, err
 	}
-	return articleResponse{
-		ID: article.ID, CreatedAt: article.CreatedAt, UpdatedAt: article.UpdatedAt,
-		Title: article.Title, Content: article.Content, Preview: article.Preview,
-		CoverImageURL: article.CoverImageURL, PublicationState: article.PublicationState,
-		PublishedAt: article.PublishedAt, ExpiredAt: article.ExpiredAt,
-		LikeCount: article.LikeCount, CommentCount: article.CommentCount, ViewCount: article.ViewCount,
-		LikeSyncVersion: article.LikeSyncVersion, Author: author,
+	publishedAt := post.CreatedAt.UTC()
+	conversationID := post.ID
+	if post.ConversationID != nil && *post.ConversationID != 0 {
+		conversationID = *post.ConversationID
+	}
+	return postResponse{
+		ID: post.ID, CreatedAt: post.CreatedAt.UTC(), UpdatedAt: post.UpdatedAt.UTC(),
+		PublishedAt: &publishedAt, Author: author, Content: post.Content,
+		ConversationID: conversationID, ReplyToPostID: post.ReplyToPostID, QuotePostID: post.QuotePostID,
+		Visibility: post.Visibility, LikeCount: post.LikeCount, ReplyCount: post.ReplyCount,
+		ViewCount: post.ViewCount, Deleted: false,
 	}, nil
 }
 
-func newArticleResponses(articles []models.Article) ([]articleResponse, error) {
-	responses := make([]articleResponse, 0, len(articles))
-	for _, article := range articles {
-		response, err := newArticleResponse(article)
+func postArticleResponseFromModel(article *models.PostArticle) *postArticleResponse {
+	if article == nil {
+		return nil
+	}
+	return &postArticleResponse{
+		Title: article.Title, Preview: article.Preview, CoverImageURL: article.CoverImageURL,
+		PublicationState: article.PublicationState, PublishedAt: article.PublishedAt,
+		ExpiredAt: article.ExpiredAt,
+	}
+}
+
+func postResponseFromModel(post models.Post, article *models.PostArticle) (postResponse, error) {
+	response, err := newPostResponse(post)
+	if err != nil {
+		return postResponse{}, err
+	}
+	if article != nil {
+		response.Article = postArticleResponseFromModel(article)
+		if article.PublishedAt != nil && !article.PublishedAt.IsZero() {
+			publishedAt := article.PublishedAt.UTC()
+			response.PublishedAt = &publishedAt
+		}
+	}
+	return response, nil
+}
+
+func newPostResponses(posts []models.Post) ([]postResponse, error) {
+	responses := make([]postResponse, 0, len(posts))
+	for _, post := range posts {
+		response, err := newPostResponse(post)
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +176,7 @@ func loadPublicAuthorsByIDsFromDB(ids []uint) (map[uint]publicAuthorResponse, er
 	return authors, nil
 }
 
-func hydrateArticleResponseAuthors(responses []articleResponse) error {
+func hydratePostResponseAuthors(responses []postResponse) error {
 	if len(responses) == 0 {
 		return nil
 	}
@@ -134,7 +184,7 @@ func hydrateArticleResponseAuthors(responses []articleResponse) error {
 	seenIDs := make(map[uint]struct{}, len(responses))
 	for _, response := range responses {
 		if response.Author.ID == 0 {
-			return errors.New("article author is missing or invalid")
+			return errors.New("post author is missing or invalid")
 		}
 		if _, exists := seenIDs[response.Author.ID]; exists {
 			continue
@@ -149,7 +199,7 @@ func hydrateArticleResponseAuthors(responses []articleResponse) error {
 	for index := range responses {
 		author, ok := authors[responses[index].Author.ID]
 		if !ok {
-			return fmt.Errorf("article author %d could not be found", responses[index].Author.ID)
+			return fmt.Errorf("post author %d could not be found", responses[index].Author.ID)
 		}
 		responses[index].Author = author
 	}
@@ -167,14 +217,37 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 	return publicUserResponse{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Bio: user.Bio, AvatarURL: user.AvatarURL, CreatedAt: user.CreatedAt}, nil
 }
 
-func preloadArticleAuthor(query *gorm.DB) *gorm.DB {
+func preloadPostAuthor(query *gorm.DB) *gorm.DB {
 	return query.Preload("Author", func(tx *gorm.DB) *gorm.DB { return tx.Select("id, username, display_name, avatar_url") })
 }
 
-func loadArticleResponses(query *gorm.DB) ([]articleResponse, error) {
-	var articles []models.Article
-	if err := preloadArticleAuthor(query).Find(&articles).Error; err != nil {
+func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
+	if query == nil {
+		return nil, errors.New("database query is nil")
+	}
+	var posts []models.Post
+	if err := preloadPostAuthor(query).Find(&posts).Error; err != nil {
 		return nil, err
 	}
-	return newArticleResponses(articles)
+	// Keep extension hydration on the same transaction/connection as the Post
+	// query. This matters for read-only repeatable-read pages and for newly
+	// committed Post + PostArticle pairs.
+	articleDB := query.Session(&gorm.Session{NewDB: true})
+	articles, err := loadPostArticlesFromDB(articleDB, posts)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]postResponse, 0, len(posts))
+	referenceNow := time.Now().UTC()
+	for _, post := range posts {
+		response, err := postResponseFromModel(post, articles[post.ID])
+		if err != nil {
+			return nil, err
+		}
+		if err := hydratePostResponseReferencesFromDB(articleDB, &response, referenceNow); err != nil {
+			return nil, err
+		}
+		responses = append(responses, response)
+	}
+	return responses, nil
 }

@@ -30,7 +30,7 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 	profile := userInterestProfile{
 		AuthorAffinity:       make(map[uint]float64),
 		FollowingAuthorIDs:   make(map[uint]struct{}),
-		InteractedArticleIDs: nil,
+		InteractedPostIDs: nil,
 		ProfileStatus:        recommendationProfileStatusMiss,
 	}
 	var row models.UserRecoProfile

@@ -38,13 +38,13 @@ const mocks = vi.hoisted(() => ({
     replace: vi.fn(),
   },
   feedStore: {
-    registerPublishedArticle: vi.fn(),
+    registerPublishedPost: vi.fn(),
   },
   profileSessionStore: {
-    registerPublishedArticle: vi.fn(),
+    registerPublishedPost: vi.fn(),
   },
   getUser: vi.fn(),
-  createArticle: vi.fn(),
+  createPost: vi.fn(),
   uploadArticleCover: vi.fn(),
 }));
 
@@ -62,7 +62,6 @@ vi.mock('../store/auth', async () => {
     useAuthStore: () => mocks.authStore,
   };
 });
-
 vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
@@ -75,8 +74,8 @@ vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
 }));
 
-vi.mock('../services/articleService', () => ({
-  createArticle: mocks.createArticle,
+vi.mock('../services/postService', () => ({
+  createPost: mocks.createPost,
   uploadArticleCover: mocks.uploadArticleCover,
 }));
 
@@ -87,7 +86,6 @@ const identity = (overrides: Partial<NonNullable<typeof mocks.authState.currentI
   avatar_url: 'https://example.test/alice.jpg',
   ...overrides,
 });
-
 const publishedArticle = (authorID = 7) => ({
   id: 101,
   author: {
@@ -115,14 +113,16 @@ describe('ArticleCreateView current identity fast path', () => {
     vi.clearAllMocks();
     mocks.authStore!.isAuthenticated = true;
     mocks.authStore!.currentIdentity = identity();
-    mocks.createArticle.mockResolvedValue(publishedArticle());
+    mocks.createPost.mockResolvedValue(publishedArticle());
     mocks.uploadArticleCover.mockResolvedValue('https://example.test/cover.jpg');
-    mocks.feedStore.registerPublishedArticle.mockReturnValue(true);
+    mocks.feedStore.registerPublishedPost.mockReturnValue(true);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
     const draft = useArticleDraftStore();
     draft.clear();
     draft.setViewer(7);
+    draft.setTitle('Test headline');
+    draft.setPreview('Test summary');
   });
 
   afterEach(() => {
@@ -168,12 +168,15 @@ describe('ArticleCreateView current identity fast path', () => {
     await flushPromises();
 
     expect(mocks.getUser).not.toHaveBeenCalled();
-    expect(mocks.createArticle).toHaveBeenCalledWith({
-      title: '',
-      preview: '',
+    expect(mocks.createPost).toHaveBeenCalledWith({
       content: 'A post from the current identity',
+      article: {
+        title: 'Test headline',
+        preview: 'Test summary',
+        cover_image_url: '',
+      },
     });
-    expect(mocks.feedStore.registerPublishedArticle).toHaveBeenCalledWith(
+    expect(mocks.feedStore.registerPublishedPost).toHaveBeenCalledWith(
       publishedArticle(),
       7,
     );

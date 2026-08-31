@@ -81,9 +81,9 @@ func runLikeBehaviorRelayBatch(ctx context.Context, store *likes.Store, publishe
 			action = "like"
 		}
 		event, err := eventing.NewLikeBehaviorEnvelope(
-			fmt.Sprintf("like-state:%d:%d:%d", delivery.UserID, delivery.ArticleID, delivery.Version),
+			fmt.Sprintf("like-state:%d:%d:%d", delivery.UserID, delivery.PostID, delivery.Version),
 			delivery.UserID,
-			delivery.ArticleID,
+			delivery.PostID,
 			action,
 			delivery.Version,
 			delivery.OccurredAt,

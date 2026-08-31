@@ -9,16 +9,16 @@ import UserProfileView from './UserProfileView.vue';
 const mocks = vi.hoisted(() => ({
   route: { params: { id: '7' } },
   getUser: vi.fn(),
-  getUserArticles: vi.fn(),
+  getUserPosts: vi.fn(),
   getUserFollowState: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   updateUserProfile: vi.fn(),
   uploadProfileAvatar: vi.fn(),
-  deleteArticle: vi.fn(),
-  getArticleLikeStates: vi.fn(),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
+  deletePost: vi.fn(),
+  getPostLikeStates: vi.fn(),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
   router: {
     back: vi.fn(),
     push: vi.fn(),
@@ -34,8 +34,8 @@ const mocks = vi.hoisted(() => ({
     syncCurrentIdentityProfile: vi.fn(),
   },
   feedStore: {
-    isArticleDeleted: vi.fn(),
-    markArticleDeleted: vi.fn(),
+    isPostDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
     replaceAuthorIdentity: vi.fn(),
     applyLikeStateUpdate: vi.fn(),
   },
@@ -56,7 +56,7 @@ vi.mock('../store/feed', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
-  getUserArticles: mocks.getUserArticles,
+  getUserPosts: mocks.getUserPosts,
   getUserFollowState: mocks.getUserFollowState,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -64,14 +64,14 @@ vi.mock('../services/userService', () => ({
   uploadProfileAvatar: mocks.uploadProfileAvatar,
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: mocks.deleteArticle,
+vi.mock('../services/postService', () => ({
+  deletePost: mocks.deletePost,
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeStates: mocks.getArticleLikeStates,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeStates: mocks.getPostLikeStates,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal');
@@ -163,14 +163,14 @@ describe('UserProfileView current identity synchronization', () => {
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockResolvedValue(originalUser);
-    mocks.getUserArticles.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUserPosts.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
       following: false,
       follower_count: 0,
       following_count: 0,
     });
-    mocks.getArticleLikeStates.mockResolvedValue({ items: [], unavailable_article_ids: [] });
-    mocks.feedStore.isArticleDeleted.mockReturnValue(false);
+    mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.feedStore.isPostDeleted.mockReturnValue(false);
   });
 
   afterEach(() => {

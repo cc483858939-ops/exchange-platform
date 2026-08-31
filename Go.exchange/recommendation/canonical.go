@@ -10,24 +10,24 @@ import (
 
 const CanonicalOutcomeVersion = "multi_signal_capped_v2"
 
-type UserArticleSignal struct {
+type UserPostSignal struct {
 	SignalType string
 	OccurredAt time.Time
 }
 
-type UserArticleOutcome struct {
-	ArticleID       uint
-	PositiveSignals []UserArticleSignal
-	NegativeSignal  *UserArticleSignal
-	PassiveSignal   *UserArticleSignal
+type UserPostOutcome struct {
+	PostID       uint
+	PositiveSignals []UserPostSignal
+	NegativeSignal  *UserPostSignal
+	PassiveSignal   *UserPostSignal
 }
 
 type CanonicalizationResult struct {
-	Outcomes             []UserArticleOutcome
-	InteractedArticleIDs []uint
+	Outcomes             []UserPostOutcome
+	InteractedPostIDs []uint
 }
 
-type articleFeedbackState struct {
+type postFeedbackState struct {
 	Click         *FeedbackEvent
 	ReadEnd       *FeedbackEvent
 	NotInterested *FeedbackEvent
@@ -73,7 +73,7 @@ func normalizedFeedbackSignal(event FeedbackEvent) string {
 	}
 }
 
-func resolvePassiveOutcome(state *articleFeedbackState, view *models.ArticleBehavior) (string, time.Time) {
+func resolvePassiveOutcome(state *postFeedbackState, view *models.PostBehavior) (string, time.Time) {
 	var click, readEnd *FeedbackEvent
 	if state != nil {
 		click, readEnd = state.Click, state.ReadEnd
@@ -82,7 +82,7 @@ func resolvePassiveOutcome(state *articleFeedbackState, view *models.ArticleBeha
 		if click != nil && click.OccurredAt.After(readEnd.OccurredAt) {
 			return "click", click.OccurredAt
 		}
-		if view != nil && view.ArticleID != 0 && view.LastSeenAt.After(readEnd.OccurredAt) {
+		if view != nil && view.PostID != 0 && view.LastSeenAt.After(readEnd.OccurredAt) {
 			return "view", view.LastSeenAt
 		}
 		return normalizedFeedbackSignal(*readEnd), readEnd.OccurredAt
@@ -90,7 +90,7 @@ func resolvePassiveOutcome(state *articleFeedbackState, view *models.ArticleBeha
 	if click != nil {
 		return "click", click.OccurredAt
 	}
-	if view != nil && view.ArticleID != 0 {
+	if view != nil && view.PostID != 0 {
 		return "view", view.LastSeenAt
 	}
 	return "", time.Time{}
@@ -98,43 +98,43 @@ func resolvePassiveOutcome(state *articleFeedbackState, view *models.ArticleBeha
 
 // CanonicalizeOutcomes preserves the accepted V3 signal semantics while
 // additionally returning the complete interaction keyset. In particular, a
-// reaction-only unliked row remains an interacted article even when it has no
+// reaction-only unliked row remains an interacted post even when it has no
 // positive, passive, or negative contribution.
-func CanonicalizeOutcomes(behaviors []models.ArticleBehavior, feedback []FeedbackEvent, reactions map[uint]ReactionState) CanonicalizationResult {
-	views := make(map[uint]models.ArticleBehavior)
-	replies := make(map[uint]models.ArticleBehavior)
-	feedbackByArticle := make(map[uint]*articleFeedbackState)
-	articleIDs := make(map[uint]struct{})
+func CanonicalizeOutcomes(behaviors []models.PostBehavior, feedback []FeedbackEvent, reactions map[uint]ReactionState) CanonicalizationResult {
+	views := make(map[uint]models.PostBehavior)
+	replies := make(map[uint]models.PostBehavior)
+	feedbackByPost := make(map[uint]*postFeedbackState)
+	postIDs := make(map[uint]struct{})
 	for _, behavior := range behaviors {
-		articleID := behavior.ArticleID
-		if articleID == 0 {
+		postID := behavior.PostID
+		if postID == 0 {
 			continue
 		}
-		articleIDs[articleID] = struct{}{}
+		postIDs[postID] = struct{}{}
 		switch behavior.Action {
-		case ArticleBehaviorView:
-			current, exists := views[articleID]
+		case PostBehaviorView:
+			current, exists := views[postID]
 			if !exists || behavior.LastSeenAt.After(current.LastSeenAt) ||
 				(behavior.LastSeenAt.Equal(current.LastSeenAt) && behavior.ID > current.ID) {
-				views[articleID] = behavior
+				views[postID] = behavior
 			}
-		case ArticleBehaviorReply:
-			current, exists := replies[articleID]
+		case PostBehaviorReply:
+			current, exists := replies[postID]
 			if !exists || behavior.LastSeenAt.After(current.LastSeenAt) ||
 				(behavior.LastSeenAt.Equal(current.LastSeenAt) && behavior.ID > current.ID) {
-				replies[articleID] = behavior
+				replies[postID] = behavior
 			}
 		}
 	}
 	for _, event := range feedback {
-		if event.ArticleID == 0 {
+		if event.PostID == 0 {
 			continue
 		}
-		articleIDs[event.ArticleID] = struct{}{}
-		state := feedbackByArticle[event.ArticleID]
+		postIDs[event.PostID] = struct{}{}
+		state := feedbackByPost[event.PostID]
 		if state == nil {
-			state = &articleFeedbackState{}
-			feedbackByArticle[event.ArticleID] = state
+			state = &postFeedbackState{}
+			feedbackByPost[event.PostID] = state
 		}
 		switch event.EventType {
 		case eventing.EventTypeRecommendationClick, models.RecommendationEventTypeClick:
@@ -145,56 +145,56 @@ func CanonicalizeOutcomes(behaviors []models.ArticleBehavior, feedback []Feedbac
 			setLatestFeedback(&state.NotInterested, event)
 		}
 	}
-	for articleID := range reactions {
-		if articleID != 0 {
-			articleIDs[articleID] = struct{}{}
+	for postID := range reactions {
+		if postID != 0 {
+			postIDs[postID] = struct{}{}
 		}
 	}
 
-	ids := make([]uint, 0, len(articleIDs))
-	for articleID := range articleIDs {
-		ids = append(ids, articleID)
+	ids := make([]uint, 0, len(postIDs))
+	for postID := range postIDs {
+		ids = append(ids, postID)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
-	outcomes := make([]UserArticleOutcome, 0, len(ids))
-	for _, articleID := range ids {
-		state := feedbackByArticle[articleID]
-		reaction, hasReaction := reactions[articleID]
+	outcomes := make([]UserPostOutcome, 0, len(ids))
+	for _, postID := range ids {
+		state := feedbackByPost[postID]
+		reaction, hasReaction := reactions[postID]
 		var notInterested *FeedbackEvent
 		if state != nil {
 			notInterested = state.NotInterested
 		}
-		positive := make([]UserArticleSignal, 0, 2)
+		positive := make([]UserPostSignal, 0, 2)
 		if hasReaction && reaction.Liked && (notInterested == nil || reaction.StateChangedAt.After(notInterested.OccurredAt)) {
-			positive = append(positive, UserArticleSignal{SignalType: "like", OccurredAt: reaction.StateChangedAt})
+			positive = append(positive, UserPostSignal{SignalType: "like", OccurredAt: reaction.StateChangedAt})
 		}
-		if reply, ok := replies[articleID]; ok && (notInterested == nil || reply.LastSeenAt.After(notInterested.OccurredAt)) {
-			positive = append(positive, UserArticleSignal{SignalType: "reply", OccurredAt: reply.LastSeenAt})
+		if reply, ok := replies[postID]; ok && (notInterested == nil || reply.LastSeenAt.After(notInterested.OccurredAt)) {
+			positive = append(positive, UserPostSignal{SignalType: "reply", OccurredAt: reply.LastSeenAt})
 		}
-		passiveType, passiveAt := resolvePassiveOutcome(state, behaviorPointer(views, articleID))
-		outcome := UserArticleOutcome{ArticleID: articleID, PositiveSignals: positive}
+		passiveType, passiveAt := resolvePassiveOutcome(state, behaviorPointer(views, postID))
+		outcome := UserPostOutcome{PostID: postID, PositiveSignals: positive}
 		if passiveType != "" {
-			outcome.PassiveSignal = &UserArticleSignal{SignalType: passiveType, OccurredAt: passiveAt}
+			outcome.PassiveSignal = &UserPostSignal{SignalType: passiveType, OccurredAt: passiveAt}
 		}
 		switch {
 		case len(positive) > 0:
 			// Positive signals override negative state, preserving the current
 			// later-like/later-reply restore rule.
 		case notInterested != nil:
-			outcome.NegativeSignal = &UserArticleSignal{SignalType: "not_interested", OccurredAt: notInterested.OccurredAt}
+			outcome.NegativeSignal = &UserPostSignal{SignalType: "not_interested", OccurredAt: notInterested.OccurredAt}
 		case passiveType == "quick_bounce":
-			outcome.NegativeSignal = &UserArticleSignal{SignalType: passiveType, OccurredAt: passiveAt}
+			outcome.NegativeSignal = &UserPostSignal{SignalType: passiveType, OccurredAt: passiveAt}
 		}
 		if len(outcome.PositiveSignals) > 0 || outcome.NegativeSignal != nil || outcome.PassiveSignal != nil {
 			outcomes = append(outcomes, outcome)
 		}
 	}
-	return CanonicalizationResult{Outcomes: outcomes, InteractedArticleIDs: ids}
+	return CanonicalizationResult{Outcomes: outcomes, InteractedPostIDs: ids}
 }
 
-func behaviorPointer(values map[uint]models.ArticleBehavior, articleID uint) *models.ArticleBehavior {
-	value, ok := values[articleID]
+func behaviorPointer(values map[uint]models.PostBehavior, postID uint) *models.PostBehavior {
+	value, ok := values[postID]
 	if !ok {
 		return nil
 	}

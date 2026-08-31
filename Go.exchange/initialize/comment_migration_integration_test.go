@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestCommentMigrationIntegration(t *testing.T) {
+func TestReplyMigrationIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -36,8 +36,8 @@ func TestCommentMigrationIntegration(t *testing.T) {
 SELECT column_name, is_nullable
 FROM information_schema.columns
 WHERE table_schema = current_schema()
-  AND table_name = 'comments'
-  AND column_name IN ('article_id', 'user_id', 'content')
+  AND table_name = 'posts'
+  AND column_name IN ('post_id', 'user_id', 'content')
 `).Scan(&columns).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ WHERE table_schema = current_schema()
 	}
 	for _, column := range columns {
 		if column.Nullable != "NO" {
-			t.Fatalf("comments.%s is_nullable=%q want NO", column.Name, column.Nullable)
+			t.Fatalf("posts.%s is_nullable=%q want NO", column.Name, column.Nullable)
 		}
 	}
 
@@ -57,23 +57,23 @@ WHERE table_schema = current_schema()
 SELECT pg_get_constraintdef(c.oid) AS definition
 FROM pg_constraint c
 JOIN pg_class t ON t.oid = c.conrelid
-WHERE t.relname = 'comments'
+WHERE t.relname = 'posts'
   AND c.contype = 'f'
 `).Scan(&constraints).Error; err != nil {
 		t.Fatal(err)
 	}
-	var articleFK, userFK bool
+	var postFK, userFK bool
 	for _, constraint := range constraints {
 		definition := strings.ToLower(constraint.Definition)
-		if strings.Contains(definition, "article_id") && strings.Contains(definition, "references articles") {
-			articleFK = strings.Contains(definition, "on update cascade") && strings.Contains(definition, "on delete cascade")
+		if strings.Contains(definition, "post_id") && strings.Contains(definition, "references posts") {
+			postFK = strings.Contains(definition, "on update cascade") && strings.Contains(definition, "on delete cascade")
 		}
 		if strings.Contains(definition, "user_id") && strings.Contains(definition, "references users") {
 			userFK = strings.Contains(definition, "on update cascade") && strings.Contains(definition, "on delete restrict")
 		}
 	}
-	if !articleFK || !userFK {
-		t.Fatalf("comment foreign keys article=%t user=%t constraints=%#v", articleFK, userFK, constraints)
+	if !postFK || !userFK {
+		t.Fatalf("comment foreign keys article=%t user=%t constraints=%#v", postFK, userFK, constraints)
 	}
 
 	var indexDefinition string
@@ -81,12 +81,12 @@ WHERE t.relname = 'comments'
 SELECT indexdef
 FROM pg_indexes
 WHERE schemaname = current_schema()
-  AND tablename = 'comments'
-  AND indexname = 'idx_comments_article_created'
+  AND tablename = 'posts'
+  AND indexname = 'idx_posts_article_created'
 `).Scan(&indexDefinition).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"article_id", "created_at desc", "id desc", "deleted_at is null"} {
+	for _, expected := range []string{"post_id", "created_at desc", "id desc", "deleted_at is null"} {
 		if !strings.Contains(strings.ToLower(indexDefinition), expected) {
 			t.Fatalf("index definition=%q missing %q", indexDefinition, expected)
 		}

@@ -33,11 +33,11 @@ func TestValidEmbeddingVectorRejectsZeroAndNonFiniteVectors(t *testing.T) {
 }
 
 func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.T) {
-	original := loadRecommendationArticleEmbeddings
-	loadRecommendationArticleEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	original := loadRecommendationPostEmbeddings
+	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {0, 0}}, nil
 	}
-	t.Cleanup(func() { loadRecommendationArticleEmbeddings = original })
+	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	profile, err := buildEmbeddingInterestProfile(
@@ -54,24 +54,24 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.
 		len(profile.PositiveVector) != 0 {
 		t.Fatalf("zero positive vector contributed: %#v", profile)
 	}
-	if _, ok := profile.InteractedArticleIDs[1]; !ok {
+	if _, ok := profile.InteractedPostIDs[1]; !ok {
 		t.Fatal("zero-vector interaction must remain excluded")
 	}
 }
 
 func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.T) {
-	original := loadRecommendationArticleEmbeddings
-	loadRecommendationArticleEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	original := loadRecommendationPostEmbeddings
+	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {0, 0}}, nil
 	}
-	t.Cleanup(func() { loadRecommendationArticleEmbeddings = original })
+	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	quick := recommendationReadOutcomeQuickBounce
 	profile, err := buildEmbeddingInterestProfile(
 		nil,
 		[]recommendationFeedbackSignal{{Event: recommendationFeedbackEvent{
-			ArticleID: 1, EventID: "bounce", EventType: recommendationFeedbackEventTypeReadEnd,
+			PostID: 1, EventID: "bounce", EventType: recommendationFeedbackEventTypeReadEnd,
 			OccurredAt: now, ReadOutcome: &quick,
 		}}},
 		nil,
@@ -85,17 +85,17 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.
 		len(profile.NegativeVector) != 0 || profile.NegativeConfidence != 0 {
 		t.Fatalf("zero negative vector contributed: %#v", profile)
 	}
-	if _, ok := profile.InteractedArticleIDs[1]; !ok {
+	if _, ok := profile.InteractedPostIDs[1]; !ok {
 		t.Fatal("zero-vector interaction must remain excluded")
 	}
 }
 
 func TestBuildEmbeddingInterestProfileCountsOnlyNonZeroEmbeddings(t *testing.T) {
-	original := loadRecommendationArticleEmbeddings
-	loadRecommendationArticleEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	original := loadRecommendationPostEmbeddings
+	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {0, 0}, 2: {1, 0}}, nil
 	}
-	t.Cleanup(func() { loadRecommendationArticleEmbeddings = original })
+	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	profile, err := buildEmbeddingInterestProfile(
@@ -115,10 +115,10 @@ func TestBuildEmbeddingInterestProfileCountsOnlyNonZeroEmbeddings(t *testing.T) 
 		len(profile.PositiveVector) != 2 || profile.PositiveVector[0] != 1 || profile.PositiveVector[1] != 0 {
 		t.Fatalf("profile counts/vector=%#v", profile)
 	}
-	if _, ok := profile.InteractedArticleIDs[1]; !ok {
+	if _, ok := profile.InteractedPostIDs[1]; !ok {
 		t.Fatal("zero-vector interaction must remain excluded")
 	}
-	if _, ok := profile.InteractedArticleIDs[2]; !ok {
+	if _, ok := profile.InteractedPostIDs[2]; !ok {
 		t.Fatal("valid-vector interaction must remain excluded")
 	}
 }

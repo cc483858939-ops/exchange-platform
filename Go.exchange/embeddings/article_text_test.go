@@ -6,18 +6,18 @@ import (
 	"testing"
 )
 
-func TestBuildArticleEmbeddingTextUsesOnlyTitleAndContent(t *testing.T) {
-	if got := BuildArticleEmbeddingText(" Title ", "Body"); got != " Title \n\nBody" {
+func TestBuildPostEmbeddingTextIncludesTitlePreviewAndContent(t *testing.T) {
+	if got := BuildPostEmbeddingText(" Title ", "Preview", "Body"); got != " Title \n\nPreview\n\nBody" {
 		t.Fatalf("text=%q", got)
 	}
-	if got := BuildArticleEmbeddingText("", "Body"); got != "\n\nBody" {
+	if got := BuildPostEmbeddingText("", "", "Body"); got != "\n\n\n\nBody" {
 		t.Fatalf("empty title text=%q", got)
 	}
 }
 
-func TestArticleEmbeddingContentHashIsCanonicalSHA256(t *testing.T) {
-	sum := sha256.Sum256([]byte("title\n\nbody"))
-	if got, want := ArticleEmbeddingContentHash("title", "body"), hex.EncodeToString(sum[:]); got != want {
+func TestPostEmbeddingContentHashIsCanonicalSHA256(t *testing.T) {
+	sum := sha256.Sum256([]byte("title\n\npreview\n\nbody"))
+	if got, want := PostEmbeddingContentHash("title", "preview", "body"), hex.EncodeToString(sum[:]); got != want {
 		t.Fatalf("hash=%q want=%q", got, want)
 	}
 }

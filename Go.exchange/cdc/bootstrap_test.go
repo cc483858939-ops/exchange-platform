@@ -83,8 +83,8 @@ func TestOutboxPredicateMatchesOnlyRawDebeziumTopic(t *testing.T) {
 	}
 	for _, topic := range []string{
 		"goexchangeXcdcXpublicXoutbox_events",
-		"goexchange.cdc.public.articles",
-		"goexchange.cdc.public.comments",
+		"goexchange.cdc.public.posts",
+		"goexchange.cdc.public.posts",
 		"goexchange.activity.events.v1",
 		"__debezium-heartbeat.goexchange.cdc",
 	} {

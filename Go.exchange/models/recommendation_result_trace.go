@@ -5,9 +5,9 @@ import "time"
 // RecommendationResultTrace stores bounded, explainable serving facts without content,
 // embeddings, tokens, or raw client payloads.
 type RecommendationResultTrace struct {
-	RequestID               string    `json:"request_id" gorm:"primaryKey;type:uuid;not null;uniqueIndex:uidx_recommendation_result_trace_request_article,priority:1"`
+	RequestID               string    `json:"request_id" gorm:"primaryKey;type:uuid;not null;uniqueIndex:uidx_recommendation_result_trace_request_post,priority:1"`
 	Position                int       `json:"position" gorm:"primaryKey;not null;check:chk_recommendation_result_trace_position,position > 0"`
-	ArticleID               uint      `json:"article_id" gorm:"not null;uniqueIndex:uidx_recommendation_result_trace_request_article,priority:2;index:idx_recommendation_result_trace_article"`
+	PostID                  uint      `json:"post_id" gorm:"not null;uniqueIndex:uidx_recommendation_result_trace_request_post,priority:2;index:idx_recommendation_result_trace_post"`
 	AuthorID                uint      `json:"author_id" gorm:"not null"`
 	FromSemantic            bool      `json:"from_semantic" gorm:"not null;default:false"`
 	FromFollowing           bool      `json:"from_following" gorm:"not null;default:false"`

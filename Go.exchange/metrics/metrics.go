@@ -14,10 +14,10 @@ var (
 	registry                                     = prometheus.NewRegistry()
 	httpRequestsTotal                            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_http_requests_total", Help: "Total number of HTTP requests handled by the Gin server."}, []string{"method", "route", "status"})
 	httpRequestDuration                          = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_http_request_duration_seconds", Help: "HTTP request latency in seconds.", Buckets: prometheus.DefBuckets}, []string{"method", "route", "status"})
-	articleEmbeddingEvents                       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_events_total", Help: "Article embedding event outcomes."}, []string{"result"})
-	articleEmbeddingFailures                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_failures_total", Help: "Article embedding processing failures by stage."}, []string{"stage"})
-	articleEmbeddingPublishFailures              = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_article_embedding_publish_failures_total", Help: "Article embedding publish failures by source."}, []string{"source"})
-	articleEmbeddingProcessingDuration           = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_article_embedding_processing_duration_seconds", Help: "Article embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
+	postEmbeddingEvents                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_events_total", Help: "Post embedding event outcomes."}, []string{"result"})
+	postEmbeddingFailures                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_failures_total", Help: "Post embedding processing failures by stage."}, []string{"stage"})
+	postEmbeddingPublishFailures                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_publish_failures_total", Help: "Post embedding publish failures by source."}, []string{"source"})
+	postEmbeddingProcessingDuration              = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_processing_duration_seconds", Help: "Post embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
 	outboxCDCSlotActive                          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_active", Help: "Whether the configured PostgreSQL CDC slot is active."})
 	outboxCDCWALLagBytes                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_wal_lag_bytes", Help: "WAL lag behind the outbox CDC slot in bytes."})
 	outboxCDCSlotConfirmedLSN                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_confirmed_lsn", Help: "Confirmed flush LSN reported by the outbox CDC slot."})
@@ -65,7 +65,7 @@ var (
 
 func init() {
 	registry.MustRegister(
-		httpRequestsTotal, httpRequestDuration, articleEmbeddingEvents, articleEmbeddingFailures, articleEmbeddingPublishFailures, articleEmbeddingProcessingDuration,
+		httpRequestsTotal, httpRequestDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration,
 		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, notificationProjectionFailures, notificationProjectionDLQ, notificationProjectionLatency, likePipelineDepth,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
@@ -75,14 +75,14 @@ func init() {
 		runtimeReadiness, runtimeReadinessTransitions, runtimeReadinessLastSuccess, runtimeReadinessLastEvaluation,
 		workerPipelineHealthy, workerPipelineConsecutiveFailures, workerPipelineLastSuccess, workerPipelineBacklog, workerPipelineBacklogStalled,
 	)
-	for _, result := range []string{"generated", "up_to_date", "article_missing", "article_unavailable", "invalid_event", "provider_non_retryable"} {
-		articleEmbeddingEvents.WithLabelValues(result)
+	for _, result := range []string{"generated", "up_to_date", "post_missing", "post_unavailable", "invalid_event", "provider_non_retryable"} {
+		postEmbeddingEvents.WithLabelValues(result)
 	}
 	for _, stage := range []string{"decode", "db_read", "provider", "db_upsert", "kafka_commit"} {
-		articleEmbeddingFailures.WithLabelValues(stage)
+		postEmbeddingFailures.WithLabelValues(stage)
 	}
-	for _, source := range []string{"article_create", "requeue"} {
-		articleEmbeddingPublishFailures.WithLabelValues(source)
+	for _, source := range []string{"post_create", "requeue"} {
+		postEmbeddingPublishFailures.WithLabelValues(source)
 	}
 	for _, status := range []string{"hit", "stale", "miss", "incompatible", "error"} {
 		recommendationProfileLoad.WithLabelValues(status)
@@ -111,17 +111,17 @@ func Middleware() gin.HandlerFunc {
 }
 
 func Handler() http.Handler { return promhttp.HandlerFor(registry, promhttp.HandlerOpts{}) }
-func RecordArticleEmbeddingEvent(result string) {
-	articleEmbeddingEvents.WithLabelValues(result).Inc()
+func RecordPostEmbeddingEvent(result string) {
+	postEmbeddingEvents.WithLabelValues(result).Inc()
 }
-func RecordArticleEmbeddingFailure(stage string) {
-	articleEmbeddingFailures.WithLabelValues(stage).Inc()
+func RecordPostEmbeddingFailure(stage string) {
+	postEmbeddingFailures.WithLabelValues(stage).Inc()
 }
-func RecordArticleEmbeddingPublishFailure(source string) {
-	articleEmbeddingPublishFailures.WithLabelValues(source).Inc()
+func RecordPostEmbeddingPublishFailure(source string) {
+	postEmbeddingPublishFailures.WithLabelValues(source).Inc()
 }
-func ObserveArticleEmbeddingProcessingDuration(duration time.Duration) {
-	articleEmbeddingProcessingDuration.Observe(duration.Seconds())
+func ObservePostEmbeddingProcessingDuration(duration time.Duration) {
+	postEmbeddingProcessingDuration.Observe(duration.Seconds())
 }
 func SetOutboxCDCSlotActive(value float64)       { outboxCDCSlotActive.Set(value) }
 func SetOutboxCDCWALLagBytes(value float64)      { outboxCDCWALLagBytes.Set(value) }

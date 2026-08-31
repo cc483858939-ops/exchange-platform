@@ -3,7 +3,7 @@
     <section ref="heroRef" class="recommendation-hero">
       <div class="hero-copy">
         <p class="hero-kicker">AI 推荐流</p>
-        <h1>把你真正关心的文章排到前面</h1>
+        <h1>把你真正关心的帖子排到前面</h1>
         <p class="hero-text">
           推荐页会结合你的浏览、点赞和阅读反馈，优先展示与你近期兴趣更相关的内容。
         </p>
@@ -29,7 +29,7 @@
     <section v-if="!authStore.isAuthenticated" class="state-panel auth-panel">
       <div>
         <h2>登录后查看你的个性化推荐</h2>
-        <p>推荐系统需要读取你的浏览和点赞记录，登录后会按分数从高到低展示文章。</p>
+          <p>推荐系统需要读取你的浏览和点赞记录，登录后会按分数从高到低展示帖子。</p>
       </div>
       <button class="primary-action" type="button" @click="goLogin">去登录</button>
     </section>
@@ -57,37 +57,42 @@
         <button class="primary-action" type="button" @click="fetchRecommendations">重试</button>
       </div>
 
-      <div v-else-if="articles.length === 0" class="state-panel">
+      <div v-else-if="recommendations.length === 0" class="state-panel">
         <div>
           <h2>还没有足够的推荐信号</h2>
-          <p>先阅读或点赞几篇文章，系统会开始学习你的兴趣。</p>
+          <p>先阅读或点赞几条帖子，系统会开始学习你的兴趣。</p>
         </div>
         <button class="secondary-action" type="button" @click="goNews">去看新闻</button>
       </div>
 
       <div v-else ref="cardsRef" class="masonry-grid">
         <article
-          v-for="(article, index) in articles"
-          :key="article.id"
-          :ref="element => bindRecommendationCard(element, article)"
+          v-for="(recommendation, index) in recommendations"
+          :key="recommendation.post.id"
+          :ref="element => bindRecommendationCard(element, recommendation)"
           class="recommendation-card"
           :class="{ 'tall-card': index % 5 === 0, 'compact-card': index % 4 === 2 }"
-          @click="openArticle(article)"
+          @click="openPost(recommendation)"
         >
           <div class="image-wrap">
-            <img v-if="article.cover_image_url" :src="article.cover_image_url" :alt="article.title" loading="lazy" />
+            <img
+              v-if="recommendation.post.article?.cover_image_url"
+              :src="recommendation.post.article.cover_image_url"
+              :alt="recommendation.post.article.title"
+              loading="lazy"
+            />
             <div v-else class="cover-placeholder" aria-hidden="true"></div>
-            <span class="score-chip">{{ formatScore(article.score) }}</span>
+            <span class="score-chip">{{ formatScore(recommendation.score) }}</span>
           </div>
 
           <div class="card-content">
-            <AuthorIdentity :author="article.author" :created-at="article.created_at" />
-            <h3>{{ article.title }}</h3>
-            <p>{{ article.preview }}</p>
+            <AuthorIdentity :author="recommendation.post.author" :created-at="recommendation.post.published_at" />
+            <h3>{{ recommendation.post.article?.title || 'Post' }}</h3>
+            <p>{{ recommendation.post.article?.preview || recommendation.post.content }}</p>
             <div class="card-footer">
-              <span>{{ article.like_count }} 点赞</span>
-              <button type="button" @click.stop="markNotInterested(article)">不感兴趣</button>
-              <button type="button" @click.stop="openArticle(article)">阅读</button>
+              <span>{{ recommendation.post.like_count }} 点赞</span>
+              <button type="button" @click.stop="markNotInterested(recommendation)">不感兴趣</button>
+              <button type="button" @click.stop="openPost(recommendation)">阅读</button>
             </div>
           </div>
         </article>
@@ -102,11 +107,11 @@ import type { ComponentPublicInstance } from 'vue';
 import { useRouter } from 'vue-router';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import axios from '../axios';
+import { getPostRecommendations } from '../services/recommendationService';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { useAuthStore } from '../store/auth';
-import type { RecommendedArticle } from '../types/Recommendation';
+import type { RecommendedPost } from '../types/Recommendation';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 
 gsap.registerPlugin(ScrollTrigger);
@@ -114,7 +119,7 @@ gsap.registerPlugin(ScrollTrigger);
 const router = useRouter();
 const authStore = useAuthStore();
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
-const articles = ref<RecommendedArticle[]>([]);
+const recommendations = ref<RecommendedPost[]>([]);
 const loading = ref(false);
 const errorMessage = ref('');
 const heroRef = ref<HTMLElement | null>(null);
@@ -127,10 +132,10 @@ let cardsContext: ReturnType<typeof gsap.context> | null = null;
 const heroTopics = ['趋势', '深度', '汇率', '宏观', '科技'];
 
 const topScoreLabel = computed(() => {
-  if (!articles.value.length) {
+  if (!recommendations.value.length) {
     return '0.00';
   }
-  return formatScore(Math.max(...articles.value.map((article) => article.score)));
+  return formatScore(Math.max(...recommendations.value.map((recommendation) => recommendation.score)));
 });
 
 
@@ -145,8 +150,7 @@ const fetchRecommendations = async () => {
   void recommendationTelemetry.flush(false);
 
   try {
-    const response = await axios.get<RecommendedArticle[]>('/recommendations/articles?limit=50');
-    articles.value = response.data;
+    recommendations.value = await getPostRecommendations(50);
     await nextTick();
     animateCards();
   } catch (error) {
@@ -184,7 +188,7 @@ const animateHero = () => {
 const animateCards = () => {
   cardsContext?.revert();
   const root = cardsRef.value;
-  if (!root || !articles.value.length) {
+  if (!root || !recommendations.value.length) {
     return;
   }
 
@@ -228,22 +232,22 @@ const formatScore = (score: number) => score.toFixed(2);
 
 const bindRecommendationCard = (
   element: Element | ComponentPublicInstance | null,
-  article: RecommendedArticle,
+  recommendation: RecommendedPost,
 ) => {
   if (element instanceof HTMLElement) {
-    recommendationTelemetry.observeCard(element, article.id, article.tracking);
+    recommendationTelemetry.observeCard(element, recommendation.post.id, recommendation.tracking);
   }
 };
 
-const markNotInterested = (article: RecommendedArticle) => {
-  recommendationTelemetry.recordNotInterested(article.id, article.tracking);
-  articles.value = articles.value.filter((item) => item.id !== article.id);
+const markNotInterested = (recommendation: RecommendedPost) => {
+  recommendationTelemetry.recordNotInterested(recommendation.post.id, recommendation.tracking);
+  recommendations.value = recommendations.value.filter((item) => item.post.id !== recommendation.post.id);
 };
 
-const openArticle = (article: RecommendedArticle) => {
-  savePendingRecommendationAttribution(article.id, article.tracking);
-  recommendationTelemetry.recordClick(article.id, article.tracking);
-  router.push({ name: 'NewsDetail', params: { id: String(article.id) } });
+const openPost = (recommendation: RecommendedPost) => {
+  savePendingRecommendationAttribution(recommendation.post.id, recommendation.tracking);
+  recommendationTelemetry.recordClick(recommendation.post.id, recommendation.tracking);
+  router.push({ name: 'PostDetail', params: { id: String(recommendation.post.id) } });
 };
 
 const goLogin = () => {
@@ -251,7 +255,7 @@ const goLogin = () => {
 };
 
 const goNews = () => {
-  router.push({ name: 'News' });
+  router.push({ name: 'Home' });
 };
 
 watch(
@@ -261,7 +265,7 @@ watch(
       fetchRecommendations();
     } else {
       recommendationTelemetry.clearSession();
-      articles.value = [];
+      recommendations.value = [];
     }
   },
 );

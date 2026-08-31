@@ -44,7 +44,7 @@ type recommendationTrackingResponse struct {
 type recommendationTrackingClaims struct {
 	UserID              uint   `json:"user_id"`
 	RequestID           string `json:"request_id"`
-	ArticleID           uint   `json:"article_id"`
+	PostID              uint   `json:"post_id"`
 	Position            int    `json:"position"`
 	Scene               string `json:"scene"`
 	RankerVersion       string `json:"ranker_version"`
@@ -60,7 +60,7 @@ type recommendationTrackingClaims struct {
 	ExplorationReason      string `json:"exploration_reason"`
 }
 
-func attachRecommendationTracking(userID uint, requestID string, profile userInterestProfile, selected []selectedRecommendation, recommendations []recommendedArticleResponse, now time.Time) (int, error) {
+func attachRecommendationTracking(userID uint, requestID string, profile userInterestProfile, selected []selectedRecommendation, recommendations []recommendedPostResponse, now time.Time) (int, error) {
 	if len(recommendations) == 0 || !config.RecommendationTelemetryEnabled() {
 		return 0, nil
 	}
@@ -86,18 +86,18 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 	configHash := recommendationRankerConfigHash(normalizedRecommendationConfig())
 
 	for index := range recommendations {
-		if selected[index].Article.ID != recommendations[index].ID {
+		if selected[index].Post.ID != recommendations[index].Post.ID {
 			return 0, errors.New("recommendation tracking selection and response ids differ")
 		}
 		if err := eventing.ValidateRecommendationProvenance(selected[index].ExplorationOpportunity, string(selected[index].SelectionMode), selected[index].ExplorationReason); err != nil {
 			return 0, err
 		}
 		claims := recommendationTrackingClaims{
-			UserID: userID, RequestID: requestID, ArticleID: recommendations[index].ID,
+			UserID: userID, RequestID: requestID, PostID: recommendations[index].Post.ID,
 			Position: index + 1, Scene: recommendationScene,
 			RankerVersion: recommendationRankerVersion, RankerConfigHash: configHash,
 			StrategyID: strategyID, IssuedAtUnix: issuedAt.Unix(), ExpiresAtUnix: expiresAt.Unix(),
-			EstimatedReadTimeMS: estimateArticleReadTime(recommendations[index].Content).Milliseconds(), ReadPolicyVersion: recommendationReadPolicyVersion,
+			EstimatedReadTimeMS: estimatePostReadTime(recommendations[index].Post.Content).Milliseconds(), ReadPolicyVersion: recommendationReadPolicyVersion,
 			ExplorationOpportunity: selected[index].ExplorationOpportunity,
 			SelectionMode:          string(selected[index].SelectionMode), ExplorationReason: selected[index].ExplorationReason,
 		}
@@ -143,19 +143,19 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 	p := cfg.Candidates.Personalized
 	c := cfg.Candidates.ColdStart
 	return fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|article_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_comment_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|exploration_ratio=%g|exploration_max_slots=%d|exploration_recent_window_days=%d|exploration_novel_article_max_age_days=%d|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|materialized_profile=%s|profile_config=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
+		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|post_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_reply_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|exploration_ratio=%g|exploration_max_slots=%d|exploration_recent_window_days=%d|exploration_novel_post_max_age_days=%d|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|materialized_profile=%s|profile_config=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
 		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click,
 		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.Reply, cfg.BehaviorWeights.QuickBounce,
 		cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays,
-		cfg.PositiveSignalCoexistBonus, cfg.PositiveArticleWeightCap, cfg.SemanticWeight,
+		cfg.PositiveSignalCoexistBonus, cfg.PositivePostWeightCap, cfg.SemanticWeight,
 		cfg.NegativeSemanticWeight, cfg.NegativeConfidenceSaturationScale, cfg.SemanticRecall.RecentWindowDays, cfg.SemanticRecall.RecentRatio,
-		cfg.TrendingWeight, cfg.Trending.MaxAgeDays, cfg.Trending.HalfLifeHours, cfg.Trending.CommentFactor,
+		cfg.TrendingWeight, cfg.Trending.MaxAgeDays, cfg.Trending.HalfLifeHours, cfg.Trending.ReplyFactor,
 		cfg.AuthorAffinityWeight, cfg.AuthorAffinitySaturationScale, cfg.FollowingBonus,
 		cfg.OutOfNetworkMinRatio, cfg.ServedHardExclusionMinutes,
 		cfg.ServedSoftLookbackDays, cfg.ServedHistoryLimit, cfg.Diversity.Enabled,
 		cfg.Diversity.AuthorWindowSize, cfg.Diversity.MaxSameAuthorInWindow,
 		cfg.Diversity.SemanticDuplicateThreshold, cfg.Diversity.SemanticDuplicatePenalty,
-		cfg.Exploration.Ratio, cfg.Exploration.MaxSlots, cfg.Exploration.RecentWindowDays, cfg.Exploration.NovelArticleMaxAgeDays,
+		cfg.Exploration.Ratio, cfg.Exploration.MaxSlots, cfg.Exploration.RecentWindowDays, cfg.Exploration.NovelPostMaxAgeDays,
 		p.Semantic, p.Following, p.Recent, p.Trending, p.Merged,
 		c.Following, c.Recent, c.Trending, c.Merged, recommendationCandidateRetrievalVersion,
 		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion()),
@@ -204,7 +204,7 @@ func verifyRecommendationTrackingToken(token string, key []byte) (recommendation
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return recommendationTrackingClaims{}, errors.New("invalid tracking token payload")
 	}
-	if claims.UserID == 0 || claims.ArticleID == 0 || claims.Position <= 0 ||
+	if claims.UserID == 0 || claims.PostID == 0 || claims.Position <= 0 ||
 		claims.Scene == "" || claims.RankerVersion == "" || claims.RankerConfigHash == "" || claims.StrategyID == "" ||
 		claims.IssuedAtUnix <= 0 || claims.ExpiresAtUnix <= claims.IssuedAtUnix || claims.EstimatedReadTimeMS <= 0 || strings.TrimSpace(claims.ReadPolicyVersion) == "" {
 		return recommendationTrackingClaims{}, errors.New("incomplete tracking token claims")

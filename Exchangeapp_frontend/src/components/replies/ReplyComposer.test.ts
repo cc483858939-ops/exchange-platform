@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
-import CommentComposer from './CommentComposer.vue';
+import ReplyComposer from './ReplyComposer.vue';
 import type { PublicAuthor } from '../../types/User';
 
 const author = (overrides: Partial<PublicAuthor> = {}): PublicAuthor => ({
@@ -14,7 +14,7 @@ const author = (overrides: Partial<PublicAuthor> = {}): PublicAuthor => ({
   ...overrides,
 });
 
-describe('CommentComposer avatar and reply behavior', () => {
+describe('ReplyComposer avatar and reply behavior', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
 
   afterEach(() => {
@@ -23,53 +23,53 @@ describe('CommentComposer avatar and reply behavior', () => {
   });
 
   it('renders the real avatar when the profile provides an avatar URL', () => {
-    wrapper = mount(CommentComposer, { props: { author: author() } });
+    wrapper = mount(ReplyComposer, { props: { author: author() } });
 
-    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
+    expect(wrapper.get('.reply-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice.jpg');
   });
 
   it('uses the display-name initial when the avatar is missing', () => {
-    wrapper = mount(CommentComposer, {
+    wrapper = mount(ReplyComposer, {
       props: { author: author({ avatar_url: '', display_name: 'Universal' }) },
     });
 
-    expect(wrapper.find('.comment-composer__avatar .user-avatar__image').exists()).toBe(false);
-    expect(wrapper.get('.comment-composer__avatar .user-avatar__fallback').text()).toBe('U');
+    expect(wrapper.find('.reply-composer__avatar .user-avatar__image').exists()).toBe(false);
+    expect(wrapper.get('.reply-composer__avatar .user-avatar__fallback').text()).toBe('U');
   });
 
   it('uses the username initial when the display name is empty', () => {
-    wrapper = mount(CommentComposer, {
+    wrapper = mount(ReplyComposer, {
       props: { author: author({ avatar_url: '', display_name: '', username: '12345678' }) },
     });
 
-    expect(wrapper.find('.comment-composer__avatar .user-avatar__image').exists()).toBe(false);
-    expect(wrapper.get('.comment-composer__avatar .user-avatar__fallback').text()).toBe('1');
+    expect(wrapper.find('.reply-composer__avatar .user-avatar__image').exists()).toBe(false);
+    expect(wrapper.get('.reply-composer__avatar .user-avatar__fallback').text()).toBe('1');
   });
 
   it('replaces a broken avatar image with the initial fallback', async () => {
-    wrapper = mount(CommentComposer, { props: { author: author() } });
+    wrapper = mount(ReplyComposer, { props: { author: author() } });
 
-    await wrapper.get('.comment-composer__avatar .user-avatar__image').trigger('error');
+    await wrapper.get('.reply-composer__avatar .user-avatar__image').trigger('error');
 
-    expect(wrapper.find('.comment-composer__avatar .user-avatar__image').exists()).toBe(false);
-    expect(wrapper.get('.comment-composer__avatar .user-avatar__fallback').text()).toBe('A');
+    expect(wrapper.find('.reply-composer__avatar .user-avatar__image').exists()).toBe(false);
+    expect(wrapper.get('.reply-composer__avatar .user-avatar__fallback').text()).toBe('A');
   });
 
   it('resets the avatar failure when the avatar URL changes', async () => {
-    wrapper = mount(CommentComposer, { props: { author: author() } });
-    await wrapper.get('.comment-composer__avatar .user-avatar__image').trigger('error');
+    wrapper = mount(ReplyComposer, { props: { author: author() } });
+    await wrapper.get('.reply-composer__avatar .user-avatar__image').trigger('error');
 
     await wrapper.setProps({
       author: author({ avatar_url: 'https://example.test/alice-new.jpg' }),
     });
 
-    expect(wrapper.get('.comment-composer__avatar .user-avatar__image').attributes('src'))
+    expect(wrapper.get('.reply-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice-new.jpg');
   });
 
   it('renders the controlled model value', () => {
-    wrapper = mount(CommentComposer, {
+    wrapper = mount(ReplyComposer, {
       props: { author: author(), modelValue: 'restored draft' },
     });
 
@@ -77,7 +77,7 @@ describe('CommentComposer avatar and reply behavior', () => {
   });
 
   it('emits model updates when the user edits the textarea', async () => {
-    wrapper = mount(CommentComposer, { props: { author: author(), modelValue: '' } });
+    wrapper = mount(ReplyComposer, { props: { author: author(), modelValue: '' } });
 
     await wrapper.get('textarea').setValue('hello');
 
@@ -85,7 +85,7 @@ describe('CommentComposer avatar and reply behavior', () => {
   });
 
   it('resizes after an external multiline draft restore', async () => {
-    wrapper = mount(CommentComposer, { props: { author: author(), modelValue: '' } });
+    wrapper = mount(ReplyComposer, { props: { author: author(), modelValue: '' } });
     const textarea = wrapper.get('textarea').element as HTMLTextAreaElement;
     Object.defineProperty(textarea, 'scrollHeight', {
       configurable: true,
@@ -99,12 +99,12 @@ describe('CommentComposer avatar and reply behavior', () => {
   });
 
   it('accepts reply content and emits the trimmed value', async () => {
-    wrapper = mount(CommentComposer, {
+    wrapper = mount(ReplyComposer, {
       props: { author: author(), modelValue: '  useful reply  ' },
     });
 
     expect(wrapper.get('textarea').attributes('placeholder')).toBe('Post your reply...');
-    expect(wrapper.find('.comment-composer__hint').exists()).toBe(false);
+    expect(wrapper.find('.reply-composer__hint').exists()).toBe(false);
 
     await wrapper.get('form').trigger('submit');
 
@@ -112,17 +112,17 @@ describe('CommentComposer avatar and reply behavior', () => {
   });
 
   it('keeps the 1000-character validation while presenting a reply row', async () => {
-    wrapper = mount(CommentComposer, {
+    wrapper = mount(ReplyComposer, {
       props: { author: author(), modelValue: 'a'.repeat(1001) },
     });
 
-    expect(wrapper.get('.comment-composer__validation').text())
+    expect(wrapper.get('.reply-composer__validation').text())
       .toBe('1001/1000 characters. Please shorten your reply.');
     expect(wrapper.get('button').attributes('disabled')).toBeDefined();
   });
 
   it('keeps clear as an exposed controlled-input command', async () => {
-    wrapper = mount(CommentComposer, {
+    wrapper = mount(ReplyComposer, {
       props: { author: author(), modelValue: 'draft' },
     });
 
@@ -133,3 +133,5 @@ describe('CommentComposer avatar and reply behavior', () => {
     expect(wrapper.get('textarea').element.value).toBe('');
   });
 });
+
+

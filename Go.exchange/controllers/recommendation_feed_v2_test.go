@@ -14,11 +14,11 @@ func TestCanonicalV2PreservesLikeReplyAndNIPrecedence(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	readOutcome := recommendationReadOutcomeQualified
 	outcomes := canonicalizeRecommendationOutcomes(
-		[]articleBehaviorSignal{
-			{Behavior: models.ArticleBehavior{ArticleID: 7, Action: ArticleBehaviorActionReply, LastSeenAt: now.Add(time.Minute)}},
+		[]postBehaviorSignal{
+			{Behavior: models.PostBehavior{PostID: 7, Action: PostBehaviorActionReply, LastSeenAt: now.Add(time.Minute)}},
 		},
 		[]recommendationFeedbackSignal{
-			{Event: recommendationFeedbackEvent{ArticleID: 7, EventID: "read", EventType: recommendationFeedbackEventTypeReadEnd, OccurredAt: now, ReadOutcome: &readOutcome}},
+			{Event: recommendationFeedbackEvent{PostID: 7, EventID: "read", EventType: recommendationFeedbackEventTypeReadEnd, OccurredAt: now, ReadOutcome: &readOutcome}},
 		},
 		map[uint]recommendationReactionState{7: {Liked: true, StateChangedAt: now.Add(2 * time.Minute)}},
 	)
@@ -30,10 +30,10 @@ func TestCanonicalV2PreservesLikeReplyAndNIPrecedence(t *testing.T) {
 	}
 
 	ni := recommendationFeedbackSignal{Event: recommendationFeedbackEvent{
-		ArticleID: 7, EventID: "ni", EventType: recommendationFeedbackEventTypeNotInterested, OccurredAt: now.Add(3 * time.Minute),
+		PostID: 7, EventID: "ni", EventType: recommendationFeedbackEventTypeNotInterested, OccurredAt: now.Add(3 * time.Minute),
 	}}
 	outcomes = canonicalizeRecommendationOutcomes(
-		[]articleBehaviorSignal{{Behavior: models.ArticleBehavior{ArticleID: 7, Action: ArticleBehaviorActionReply, LastSeenAt: now.Add(2 * time.Minute)}}},
+		[]postBehaviorSignal{{Behavior: models.PostBehavior{PostID: 7, Action: PostBehaviorActionReply, LastSeenAt: now.Add(2 * time.Minute)}}},
 		[]recommendationFeedbackSignal{ni},
 		map[uint]recommendationReactionState{7: {Liked: true, StateChangedAt: now.Add(3 * time.Minute)}},
 	)
@@ -42,7 +42,7 @@ func TestCanonicalV2PreservesLikeReplyAndNIPrecedence(t *testing.T) {
 	}
 
 	outcomes = canonicalizeRecommendationOutcomes(
-		[]articleBehaviorSignal{{Behavior: models.ArticleBehavior{ArticleID: 7, Action: ArticleBehaviorActionReply, LastSeenAt: now.Add(4 * time.Minute)}}},
+		[]postBehaviorSignal{{Behavior: models.PostBehavior{PostID: 7, Action: PostBehaviorActionReply, LastSeenAt: now.Add(4 * time.Minute)}}},
 		[]recommendationFeedbackSignal{ni},
 		nil,
 	)
@@ -51,23 +51,23 @@ func TestCanonicalV2PreservesLikeReplyAndNIPrecedence(t *testing.T) {
 	}
 }
 
-func TestRecommendationProfileCapsPositiveArticleAndSeparatesNegativeVector(t *testing.T) {
-	original := loadRecommendationArticleEmbeddings
-	loadRecommendationArticleEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+func TestRecommendationProfileCapsPositivePostAndSeparatesNegativeVector(t *testing.T) {
+	original := loadRecommendationPostEmbeddings
+	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
 	}
-	t.Cleanup(func() { loadRecommendationArticleEmbeddings = original })
+	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	cfg := normalizedRecommendationConfig()
 	quick := recommendationReadOutcomeQuickBounce
 	profile, err := buildEmbeddingInterestProfile(
-		[]articleBehaviorSignal{
-			{Behavior: models.ArticleBehavior{Model: gorm.Model{ID: 1}, ArticleID: 1, Action: ArticleBehaviorActionReply, LastSeenAt: now}},
-			{Behavior: models.ArticleBehavior{Model: gorm.Model{ID: 2}, ArticleID: 2, Action: ArticleBehaviorActionView, LastSeenAt: now}},
+		[]postBehaviorSignal{
+			{Behavior: models.PostBehavior{Model: gorm.Model{ID: 1}, PostID: 1, Action: PostBehaviorActionReply, LastSeenAt: now}},
+			{Behavior: models.PostBehavior{Model: gorm.Model{ID: 2}, PostID: 2, Action: PostBehaviorActionView, LastSeenAt: now}},
 		},
 		[]recommendationFeedbackSignal{
-			{Event: recommendationFeedbackEvent{ArticleID: 2, EventID: "bounce", EventType: recommendationFeedbackEventTypeReadEnd, OccurredAt: now, ReadOutcome: &quick}},
+			{Event: recommendationFeedbackEvent{PostID: 2, EventID: "bounce", EventType: recommendationFeedbackEventTypeReadEnd, OccurredAt: now, ReadOutcome: &quick}},
 		},
 		map[uint]recommendationReactionState{1: {Liked: true, StateChangedAt: now}},
 		now, cfg,
@@ -75,8 +75,8 @@ func TestRecommendationProfileCapsPositiveArticleAndSeparatesNegativeVector(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.PositiveContributions[1] != cfg.PositiveArticleWeightCap {
-		t.Fatalf("like+reply contribution=%v want cap=%v", profile.PositiveContributions[1], cfg.PositiveArticleWeightCap)
+	if profile.PositiveContributions[1] != cfg.PositivePostWeightCap {
+		t.Fatalf("like+reply contribution=%v want cap=%v", profile.PositiveContributions[1], cfg.PositivePostWeightCap)
 	}
 	if profile.PositiveSignalCount != 1 || profile.NegativeSignalCount != 1 {
 		t.Fatalf("profile counts=%#v", profile)
@@ -113,11 +113,11 @@ func TestRecommendationRankerPenalizesNegativeSimilarityWithConfidence(t *testin
 	cfg := normalizedRecommendationConfig()
 	profile := userInterestProfile{NegativeVector: []float32{1, 0}, NegativeConfidence: 1, AuthorAffinity: map[uint]float64{}, FollowingAuthorIDs: map[uint]struct{}{}}
 	candidates := []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{ArticleID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 1}, AuthorID: 1, PublishedAt: ptrTime(now)}, Embedding: []float32{0, 1}},
-		{Candidate: embeddingCandidate{ArticleID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Article: models.Article{Model: gorm.Model{ID: 2}, AuthorID: 2, PublishedAt: ptrTime(now)}, Embedding: []float32{1, 0}},
+		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1}, AuthorID: 1}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)}, Embedding: []float32{0, 1}},
+		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 2}, AuthorID: 2}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)}, Embedding: []float32{1, 0}},
 	}
 	ranked := rankRecommendationCandidates(profile, candidates, now, cfg)
-	if len(ranked) != 2 || ranked[0].Article.ID != 1 || ranked[0].Breakdown.NegativeSemantic != 0 || ranked[1].Breakdown.NegativeSemantic < .99 {
+	if len(ranked) != 2 || ranked[0].Post.ID != 1 || ranked[0].Breakdown.NegativeSemantic != 0 || ranked[1].Breakdown.NegativeSemantic < .99 {
 		t.Fatalf("ranked=%#v", ranked)
 	}
 }
@@ -128,18 +128,18 @@ func TestRecommendationSelectionUsesFreshThenSoftWithoutDuplicate(t *testing.T) 
 	cfg.OutOfNetworkMinRatio = 0
 	cfg.Diversity.Enabled = false
 	fresh := []hydratedRecommendationCandidate{{
-		Candidate: embeddingCandidate{ArticleID: 1, FromRecent: true},
-		Article:   models.Article{Model: gorm.Model{ID: 1}, AuthorID: 1, PublishedAt: ptrTime(now)},
+		Candidate: embeddingCandidate{PostID: 1, FromRecent: true},
+		Post:      models.Post{Model: gorm.Model{ID: 1}, AuthorID: 1}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)},
 		Breakdown: recommendationScoreBreakdown{BaseScore: 2},
 	}}
 	soft := []hydratedRecommendationCandidate{{
-		Candidate: embeddingCandidate{ArticleID: 2, FromTrending: true, WasSoftServed: true, LastServedAt: now.Add(-time.Hour)},
-		Article:   models.Article{Model: gorm.Model{ID: 2}, AuthorID: 2, PublishedAt: ptrTime(now.Add(-time.Minute))},
+		Candidate: embeddingCandidate{PostID: 2, FromTrending: true, WasSoftServed: true, LastServedAt: now.Add(-time.Hour)},
+		Post:      models.Post{Model: gorm.Model{ID: 2}, AuthorID: 2}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now.Add(-time.Minute))},
 		Breakdown: recommendationScoreBreakdown{BaseScore: 1},
 	}}
 	selected := selectRecommendationCandidates(fresh, nil, 2, cfg, now, recommendationSelectionFresh)
 	selected = selectRecommendationCandidates(soft, selected, 2, cfg, now, recommendationSelectionSoft)
-	if len(selected) != 2 || selected[0].Article.ID != 1 || selected[1].Article.ID != 2 {
+	if len(selected) != 2 || selected[0].Post.ID != 1 || selected[1].Post.ID != 2 {
 		t.Fatalf("selected=%#v", selected)
 	}
 }

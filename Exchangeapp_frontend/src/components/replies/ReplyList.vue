@@ -1,29 +1,29 @@
 <template>
-  <section class="comment-list" aria-label="Replies">
-    <p v-if="comments.length === 0" class="comment-list__empty">
+  <section class="reply-list" aria-label="Replies">
+    <p v-if="replies.length === 0" class="reply-list__empty">
       No replies yet. Be the first to reply.
     </p>
 
     <template v-else>
-      <CommentItem
-        v-for="comment in comments"
-        :key="comment.id"
-        :comment="comment"
-        :can-delete="Boolean(currentIdentity && currentIdentity.id === comment.author.id)"
-        :deleting="deletingCommentId === comment.id"
+      <ReplyItem
+        v-for="reply in replies"
+        :key="reply.id"
+        :reply="reply"
+        :can-delete="Boolean(currentIdentity && currentIdentity.id === reply.author.id)"
+        :deleting="deletingReplyId === reply.id"
         @delete="emit('delete', $event)"
       />
     </template>
 
-    <div ref="sentinelRef" class="comment-list__sentinel" aria-live="polite">
-      <span v-if="loadingMore" class="comment-list__status">Loading more replies...</span>
+    <div ref="sentinelRef" class="reply-list__sentinel" aria-live="polite">
+      <span v-if="loadingMore" class="reply-list__status">Loading more replies...</span>
       <template v-else-if="loadMoreError">
-        <span class="comment-list__error">{{ loadMoreError }}</span>
-        <button class="comment-list__retry" type="button" @click="emit('retry')">Retry</button>
+        <span class="reply-list__error">{{ loadMoreError }}</span>
+        <button class="reply-list__retry" type="button" @click="emit('retry')">Retry</button>
       </template>
       <button
         v-else-if="hasNext"
-        class="comment-list__load-more"
+        class="reply-list__load-more"
         type="button"
         @click="emit('loadMore')"
       >
@@ -35,14 +35,14 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { ArticleComment } from '../../types/Comment';
+import type { Post } from '../../types/Post';
 import type { AuthIdentity } from '../../utils/authIdentity';
-import CommentItem from './CommentItem.vue';
+import ReplyItem from './ReplyItem.vue';
 
 const props = defineProps<{
-  comments: ArticleComment[];
+  replies: Post[];
   currentIdentity: AuthIdentity | null;
-  deletingCommentId: number | null;
+  deletingReplyId: number | null;
   hasNext: boolean;
   loadingMore: boolean;
   loadMoreError: string;
@@ -51,7 +51,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   loadMore: [];
   retry: [];
-  delete: [commentID: number];
+  delete: [replyID: number];
 }>();
 
 const sentinelRef = ref<HTMLElement | null>(null);
@@ -101,18 +101,18 @@ onBeforeUnmount(disconnectObserver);
 </script>
 
 <style scoped>
-.comment-list {
+.reply-list {
   min-width: 0;
 }
 
-.comment-list__empty {
+.reply-list__empty {
   margin: 0;
   padding: var(--space-8) 0;
   color: var(--color-text-secondary);
   text-align: center;
 }
 
-.comment-list__sentinel {
+.reply-list__sentinel {
   display: flex;
   min-height: 48px;
   align-items: center;
@@ -123,12 +123,12 @@ onBeforeUnmount(disconnectObserver);
   font-size: 12px;
 }
 
-.comment-list__error {
+.reply-list__error {
   color: var(--color-danger);
 }
 
-.comment-list__retry,
-.comment-list__load-more {
+.reply-list__retry,
+.reply-list__load-more {
   border: 0;
   background: transparent;
   color: var(--color-accent);
@@ -137,12 +137,13 @@ onBeforeUnmount(disconnectObserver);
   font-weight: 750;
 }
 
-.comment-list__retry:hover,
-.comment-list__load-more:hover {
+.reply-list__retry:hover,
+.reply-list__load-more:hover {
   text-decoration: underline;
 }
 
-.comment-list__status {
+.reply-list__status {
   color: var(--color-text-tertiary);
 }
 </style>
+

@@ -80,7 +80,7 @@ func recommendationProfileMaterializerRecommendationConfig() config.Recommendati
 	if config.AppConfig == nil {
 		return config.RecommendationConfig{
 			BehaviorWeights:    config.RecommendationBehaviorWeights{View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6},
-			SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositiveArticleWeightCap: 7,
+			SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 			NegativeConfidenceSaturationScale: 12, AuthorAffinitySaturationScale: 6,
 		}
 	}
@@ -116,8 +116,8 @@ func recommendationProfileMaterializerRecommendationConfig() config.Recommendati
 	if cfg.PositiveSignalCoexistBonus < 0 || (cfg.PositiveSignalCoexistBonus == 0 && !config.AppConfig.HasRecommendationSetting("positive_signal_coexist_bonus")) {
 		cfg.PositiveSignalCoexistBonus = defaults.PositiveSignalCoexistBonus
 	}
-	if cfg.PositiveArticleWeightCap <= 0 || cfg.PositiveArticleWeightCap < math.Max(cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Reply) {
-		cfg.PositiveArticleWeightCap = defaults.PositiveArticleWeightCap
+	if cfg.PositivePostWeightCap <= 0 || cfg.PositivePostWeightCap < math.Max(cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Reply) {
+		cfg.PositivePostWeightCap = defaults.PositivePostWeightCap
 	}
 	if cfg.NegativeConfidenceSaturationScale <= 0 {
 		cfg.NegativeConfidenceSaturationScale = defaults.NegativeConfidenceSaturationScale
@@ -131,7 +131,7 @@ func recommendationProfileMaterializerRecommendationConfig() config.Recommendati
 func recommendationProfileMaterializerRecommendationConfigWithoutApp() config.RecommendationConfig {
 	return config.RecommendationConfig{
 		BehaviorWeights:    config.RecommendationBehaviorWeights{View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6},
-		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositiveArticleWeightCap: 7,
+		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 		NegativeConfidenceSaturationScale: 12, AuthorAffinitySaturationScale: 6,
 	}
 }
@@ -256,14 +256,14 @@ func deleteMaterializedProfileClaim(tx *gorm.DB, userID uint, dirtyVersion int64
 	return result.RowsAffected, result.Error
 }
 
-func loadMaterializerEmbeddings(tx *gorm.DB, outcomes []recommendation.UserArticleOutcome, version string) (map[uint][]float32, error) {
+func loadMaterializerEmbeddings(tx *gorm.DB, outcomes []recommendation.UserPostOutcome, version string) (map[uint][]float32, error) {
 	ids := make([]uint, 0, len(outcomes))
 	seen := make(map[uint]struct{}, len(outcomes))
 	for _, outcome := range outcomes {
-		if outcome.ArticleID != 0 {
-			if _, exists := seen[outcome.ArticleID]; !exists {
-				seen[outcome.ArticleID] = struct{}{}
-				ids = append(ids, outcome.ArticleID)
+		if outcome.PostID != 0 {
+			if _, exists := seen[outcome.PostID]; !exists {
+				seen[outcome.PostID] = struct{}{}
+				ids = append(ids, outcome.PostID)
 			}
 		}
 	}
@@ -271,12 +271,12 @@ func loadMaterializerEmbeddings(tx *gorm.DB, outcomes []recommendation.UserArtic
 	if len(ids) == 0 {
 		return result, nil
 	}
-	var rows []models.ArticleEmbedding
-	if err := tx.Select("article_id, embedding").Where("article_id IN ? AND version = ?", ids, version).Find(&rows).Error; err != nil {
+	var rows []models.PostEmbedding
+	if err := tx.Select("post_id, embedding").Where("post_id IN ? AND version = ?", ids, version).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
-		result[row.ArticleID] = append([]float32(nil), row.Embedding.Slice()...)
+		result[row.PostID] = append([]float32(nil), row.Embedding.Slice()...)
 	}
 	return result, nil
 }
@@ -287,28 +287,28 @@ type materializedAuthorAffinity struct {
 }
 
 func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64) ([]materializedAuthorAffinity, error) {
-	articleIDs := make([]uint, 0, len(contributions))
-	for articleID := range contributions {
-		if articleID != 0 {
-			articleIDs = append(articleIDs, articleID)
+	postIDs := make([]uint, 0, len(contributions))
+	for postID := range contributions {
+		if postID != 0 {
+			postIDs = append(postIDs, postID)
 		}
 	}
-	sort.Slice(articleIDs, func(i, j int) bool { return articleIDs[i] < articleIDs[j] })
-	if len(articleIDs) == 0 {
+	sort.Slice(postIDs, func(i, j int) bool { return postIDs[i] < postIDs[j] })
+	if len(postIDs) == 0 {
 		return nil, nil
 	}
-	type articleAuthorRow struct {
-		ArticleID uint
+	type postAuthorRow struct {
+		PostID uint
 		AuthorID  uint
 	}
-	var rows []articleAuthorRow
-	if err := tx.Table("articles").Select("id AS article_id, author_id").Where("id IN ?", articleIDs).Find(&rows).Error; err != nil {
+	var rows []postAuthorRow
+	if err := tx.Table("posts").Select("id AS post_id, author_id").Where("id IN ?", postIDs).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	raw := make(map[uint]float64)
 	for _, row := range rows {
 		if row.AuthorID != 0 {
-			raw[row.AuthorID] += contributions[row.ArticleID]
+			raw[row.AuthorID] += contributions[row.PostID]
 		}
 	}
 	result := make([]materializedAuthorAffinity, 0, len(raw))
@@ -322,23 +322,23 @@ func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64)
 }
 
 func replaceMaterializedCanonicalState(tx *gorm.DB, userID uint, canonical recommendation.CanonicalizationResult, rebuiltAt time.Time) error {
-	if err := tx.Where("user_id = ?", userID).Delete(&models.UserArticleRecoState{}).Error; err != nil {
+	if err := tx.Where("user_id = ?", userID).Delete(&models.UserPostRecoState{}).Error; err != nil {
 		return err
 	}
-	if len(canonical.InteractedArticleIDs) == 0 {
+	if len(canonical.InteractedPostIDs) == 0 {
 		return nil
 	}
-	outcomes := make(map[uint]recommendation.UserArticleOutcome, len(canonical.Outcomes))
+	outcomes := make(map[uint]recommendation.UserPostOutcome, len(canonical.Outcomes))
 	for _, outcome := range canonical.Outcomes {
-		outcomes[outcome.ArticleID] = outcome
+		outcomes[outcome.PostID] = outcome
 	}
-	rows := make([]models.UserArticleRecoState, 0, len(canonical.InteractedArticleIDs))
-	for _, articleID := range canonical.InteractedArticleIDs {
-		row := models.UserArticleRecoState{
-			UserID: userID, ArticleID: articleID, Interacted: true,
+	rows := make([]models.UserPostRecoState, 0, len(canonical.InteractedPostIDs))
+	for _, postID := range canonical.InteractedPostIDs {
+		row := models.UserPostRecoState{
+			UserID: userID, PostID: postID, Interacted: true,
 			CanonicalVersion: recommendation.CanonicalOutcomeVersion, RebuiltAt: rebuiltAt,
 		}
-		if outcome, ok := outcomes[articleID]; ok {
+		if outcome, ok := outcomes[postID]; ok {
 			for _, signal := range outcome.PositiveSignals {
 				switch signal.SignalType {
 				case "like":

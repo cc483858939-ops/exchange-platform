@@ -1,6 +1,5 @@
-import type { Article } from '../types/Article';
-import type { RecommendedArticle } from '../types/Recommendation';
-import type { FollowingTimelineItem } from '../services/articleService';
+import type { Post } from '../types/Post';
+import type { PublicAuthor } from '../types/User';
 import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 
 const safeLikeCount = (likes: number, fallback = 0) =>
@@ -14,50 +13,32 @@ const safeRepostCount = (reposts: number, fallback = 0) => {
   return count;
 };
 
-export function articleToFeedPost(article: Article): FeedPost {
+export function postToFeedPost(
+  post: Post,
+  context: { repostActor?: PublicAuthor } = {},
+): FeedPost {
+  const article = post.article;
   return {
-    id: article.ID,
-    author: article.author,
-    title: article.title,
-    excerpt: article.content,
-    coverImageUrl: article.cover_image_url || '',
-    createdAt: article.CreatedAt,
-    likeCount: article.like_count ?? 0,
-    commentCount: article.comment_count ?? 0,
-    viewCount: Math.max(0, article.view_count),
+    id: post.id,
+    content: post.content,
+    article,
+    quotePost: post.quote_post,
+    replyToPost: post.reply_to_post,
+    author: post.author,
+    title: article?.title ?? '',
+    excerpt: article?.preview ?? post.content,
+    coverImageUrl: article?.cover_image_url || '',
+    createdAt: post.published_at,
+    likeCount: post.like_count ?? 0,
+    replyCount: post.reply_count ?? 0,
+    viewCount: Math.max(0, post.view_count),
     liked: false,
     likeStatus: 'unknown',
     repostCount: 0,
     reposted: false,
     repostStatus: 'unknown',
+    ...(context.repostActor ? { repostContext: { actor: context.repostActor } } : {}),
   };
-}
-
-export function recommendationToFeedPost(article: RecommendedArticle): FeedPost {
-  return {
-    id: article.id,
-    author: article.author,
-    title: article.title,
-    excerpt: article.content,
-    coverImageUrl: article.cover_image_url || '',
-    createdAt: article.created_at,
-    likeCount: article.like_count ?? 0,
-    commentCount: article.comment_count ?? 0,
-    viewCount: Math.max(0, article.view_count),
-    liked: false,
-    likeStatus: 'unknown',
-    repostCount: 0,
-    reposted: false,
-    repostStatus: 'unknown',
-  };
-}
-
-export function followingTimelineItemToFeedPost(item: FollowingTimelineItem): FeedPost {
-  const post = articleToFeedPost(item.article);
-  if (item.activity_type === 'repost') {
-    post.repostContext = { actor: item.actor };
-  }
-  return post;
 }
 
 export function setFeedPostLikeReady(post: FeedPost, likes: number, liked: boolean): FeedPost {
@@ -73,7 +54,7 @@ export function setFeedPostLikeUnavailable(post: FeedPost): FeedPost {
 }
 
 export function applyFeedLikeStateUpdate(post: FeedPost, update: FeedLikeStateUpdate): boolean {
-  if (post.id !== update.articleId) {
+  if (post.id !== update.postId) {
     return false;
   }
 
@@ -100,7 +81,7 @@ export function setFeedPostRepostUnavailable(post: FeedPost): FeedPost {
 }
 
 export function applyFeedRepostStateUpdate(post: FeedPost, update: FeedRepostStateUpdate): boolean {
-  if (post.id !== update.articleId) {
+  if (post.id !== update.postId) {
     return false;
   }
 

@@ -14,7 +14,7 @@ import (
 )
 
 type likedHistoryMembershipRow struct {
-	ArticleID      uint      `gorm:"column:article_id"`
+	PostID         uint      `gorm:"column:post_id"`
 	StateChangedAt time.Time `gorm:"column:state_changed_at"`
 }
 
@@ -34,48 +34,47 @@ func GetMyLikedHistory(ctx *gin.Context) {
 
 	response, err := loadLikedHistoryPage(viewerID, limit, cursor)
 	if err != nil {
-		writeArticleTimelineStoreError(ctx)
+		writePostTimelineStoreError(ctx)
 		return
 	}
 	if response.Items == nil {
-		response.Items = make([]articleResponse, 0)
+		response.Items = make([]postResponse, 0)
 	}
 	ctx.JSON(http.StatusOK, response)
 }
 
-func loadLikedHistoryPageFromDB(viewerID uint, limit int, cursor *likedHistoryCursor) (articlePageResponse, error) {
+func loadLikedHistoryPageFromDB(viewerID uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
 	if global.Db == nil {
-		return articlePageResponse{}, errors.New("database is not initialized")
+		return postPageResponse{}, errors.New("database is not initialized")
 	}
 	if viewerID == 0 || limit <= 0 {
-		return articlePageResponse{}, errors.New("invalid liked history query")
+		return postPageResponse{}, errors.New("invalid liked history query")
 	}
 
-	var response articlePageResponse
+	var response postPageResponse
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").Error; err != nil {
 			return err
 		}
 
 		now := time.Now().UTC()
-		membershipQuery := tx.Table("article_reaction AS ar").
-			Select("ar.article_id, ar.state_changed_at").
-			Joins("JOIN articles ON articles.id = ar.article_id").
-			Joins("JOIN users AS article_author ON article_author.id = articles.author_id AND article_author.deleted_at IS NULL").
-			Where("ar.user_id = ? AND ar.liked = ?", viewerID, true).
-			Scopes(func(query *gorm.DB) *gorm.DB { return publicArticleScope(query, now) })
+		membershipQuery := tx.Table("post_reaction AS reaction").
+			Select("reaction.post_id, reaction.state_changed_at").
+			Joins("JOIN posts ON posts.id = reaction.post_id").
+			Where("reaction.user_id = ? AND reaction.liked = ?", viewerID, true).
+			Scopes(func(query *gorm.DB) *gorm.DB { return publicPostScope(query, now) })
 		if cursor != nil {
 			membershipQuery = membershipQuery.Where(
-				"(ar.state_changed_at < ?) OR (ar.state_changed_at = ? AND ar.article_id > ?)",
+				"(reaction.state_changed_at < ?) OR (reaction.state_changed_at = ? AND reaction.post_id > ?)",
 				cursor.StateChangedAt,
 				cursor.StateChangedAt,
-				cursor.ArticleID,
+				cursor.PostID,
 			)
 		}
 
 		var membershipRows []likedHistoryMembershipRow
 		if err := membershipQuery.
-			Order("ar.state_changed_at DESC, ar.article_id ASC").
+			Order("reaction.state_changed_at DESC, reaction.post_id ASC").
 			Limit(limit + 1).
 			Scan(&membershipRows).Error; err != nil {
 			return err
@@ -86,39 +85,39 @@ func loadLikedHistoryPageFromDB(viewerID uint, limit int, cursor *likedHistoryCu
 			membershipRows = membershipRows[:limit]
 		}
 		if len(membershipRows) == 0 {
-			response = articlePageResponse{Items: make([]articleResponse, 0)}
+			response = postPageResponse{Items: make([]postResponse, 0)}
 			return nil
 		}
 
-		articleIDs := make([]uint, 0, len(membershipRows))
+		postIDs := make([]uint, 0, len(membershipRows))
 		for _, row := range membershipRows {
-			articleIDs = append(articleIDs, row.ArticleID)
+			postIDs = append(postIDs, row.PostID)
 		}
 
-		articles, err := loadArticleResponses(
-			tx.Model(&models.Article{}).
-				Select(publicArticleSelectColumns).
-				Where("articles.id IN ?", articleIDs).
-				Scopes(func(query *gorm.DB) *gorm.DB { return publicArticleScope(query, now) }),
+		posts, err := loadPostResponses(
+			tx.Model(&models.Post{}).
+				Select(publicPostSelectColumns).
+				Where("posts.id IN ?", postIDs).
+				Scopes(func(query *gorm.DB) *gorm.DB { return publicPostScope(query, now) }),
 		)
 		if err != nil {
 			return err
 		}
 
-		articlesByID := make(map[uint]articleResponse, len(articles))
-		for _, article := range articles {
-			articlesByID[article.ID] = article
+		postsByID := make(map[uint]postResponse, len(posts))
+		for _, post := range posts {
+			postsByID[post.ID] = post
 		}
-		items := make([]articleResponse, 0, len(membershipRows))
+		items := make([]postResponse, 0, len(membershipRows))
 		for _, row := range membershipRows {
-			article, ok := articlesByID[row.ArticleID]
+			post, ok := postsByID[row.PostID]
 			if !ok {
-				return fmt.Errorf("liked history article %d could not be loaded", row.ArticleID)
+				return fmt.Errorf("liked history post %d could not be loaded", row.PostID)
 			}
-			items = append(items, article)
+			items = append(items, post)
 		}
 
-		response = articlePageResponse{Items: items}
+		response = postPageResponse{Items: items}
 		if !hasMore {
 			return nil
 		}
@@ -126,7 +125,7 @@ func loadLikedHistoryPageFromDB(viewerID uint, limit int, cursor *likedHistoryCu
 		nextCursor, err := encodeLikedHistoryCursor(likedHistoryCursor{
 			Version:        likedHistoryCursorVersion,
 			StateChangedAt: membershipRows[len(membershipRows)-1].StateChangedAt,
-			ArticleID:      membershipRows[len(membershipRows)-1].ArticleID,
+			PostID:         membershipRows[len(membershipRows)-1].PostID,
 		})
 		if err != nil {
 			return err
@@ -135,7 +134,7 @@ func loadLikedHistoryPageFromDB(viewerID uint, limit int, cursor *likedHistoryCu
 		return nil
 	})
 	if err != nil {
-		return articlePageResponse{}, err
+		return postPageResponse{}, err
 	}
 	return response, nil
 }

@@ -50,7 +50,7 @@ func TestGetFollowingTimelineReturnsActivityResponse(t *testing.T) {
 				ActivityAt:   time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC),
 				SourceID:     202,
 				Actor:        publicAuthorResponse{ID: 11, Username: "alice"},
-				Article:      articleResponse{ID: 101, Content: "Canonical following body", Author: publicAuthorResponse{ID: 9, Username: "bob"}},
+				Post:         postResponse{ID: 101, Content: "Canonical following body", Author: publicAuthorResponse{ID: 9, Username: "bob"}},
 			}},
 			NextCursor: &nextCursor,
 		}, nil
@@ -65,7 +65,7 @@ func TestGetFollowingTimelineReturnsActivityResponse(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Items) != 1 || response.Items[0].Article.ID != 101 || response.Items[0].ActivityType != followingActivityRepost || response.Items[0].Article.Content != "Canonical following body" || response.Items[0].Article.Author.Username != "bob" || response.Items[0].Actor.Username != "alice" {
+	if len(response.Items) != 1 || response.Items[0].Post.ID != 101 || response.Items[0].ActivityType != followingActivityRepost || response.Items[0].Post.Content != "Canonical following body" || response.Items[0].Post.Author.Username != "bob" || response.Items[0].Actor.Username != "alice" {
 		t.Fatalf("response=%#v", response)
 	}
 	if response.NextCursor == nil || *response.NextCursor != nextCursor {
@@ -239,11 +239,11 @@ func TestBuildFollowingTimelineResponseUsesLastReturnedItemForCursor(t *testing.
 	firstTime := time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)
 	secondTime := firstTime.Add(-time.Minute)
 	rows := []followingActivityQueryRow{
-		{ActivityType: "post", ActivityAt: firstTime, SourceID: 10, ArticleID: 10, ActorID: 1, ActivityRank: 1},
-		{ActivityType: "repost", ActivityAt: secondTime, SourceID: 9, ArticleID: 9, ActorID: 2, ActivityRank: 2},
-		{ActivityType: "post", ActivityAt: secondTime, SourceID: 8, ArticleID: 8, ActorID: 3, ActivityRank: 1},
+		{ActivityType: "post", ActivityAt: firstTime, SourceID: 10, PostID: 10, ActorID: 1, ActivityRank: 1},
+		{ActivityType: "repost", ActivityAt: secondTime, SourceID: 9, PostID: 9, ActorID: 2, ActivityRank: 2},
+		{ActivityType: "post", ActivityAt: secondTime, SourceID: 8, PostID: 8, ActorID: 3, ActivityRank: 1},
 	}
-	articles := map[uint]articleResponse{
+	posts := map[uint]postResponse{
 		10: {ID: 10},
 		9:  {ID: 9},
 		8:  {ID: 8},
@@ -253,11 +253,11 @@ func TestBuildFollowingTimelineResponseUsesLastReturnedItemForCursor(t *testing.
 		2: {ID: 2},
 		3: {ID: 3},
 	}
-	response, err := buildFollowingTimelinePageResponse(rows, articles, actors, 2)
+	response, err := buildFollowingTimelinePageResponse(rows, posts, actors, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Items) != 2 || response.Items[0].Article.ID != 10 || response.Items[1].Article.ID != 9 || response.NextCursor == nil {
+	if len(response.Items) != 2 || response.Items[0].Post.ID != 10 || response.Items[1].Post.ID != 9 || response.NextCursor == nil {
 		t.Fatalf("response=%#v", response)
 	}
 	cursor, err := decodeFollowingCursor(*response.NextCursor)
@@ -268,7 +268,7 @@ func TestBuildFollowingTimelineResponseUsesLastReturnedItemForCursor(t *testing.
 		t.Fatalf("cursor=%#v", cursor)
 	}
 
-	empty, err := buildFollowingTimelinePageResponse(nil, articles, actors, 2)
+	empty, err := buildFollowingTimelinePageResponse(nil, posts, actors, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

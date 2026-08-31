@@ -15,7 +15,7 @@ const PerfPlaceholder = defineComponent({
 const perfRouter = createRouter({
   history: createMemoryHistory(),
   routes: [
-    { name: 'NewsDetail', path: '/articles/:id', component: PerfPlaceholder },
+    { name: 'PostDetail', path: '/posts/:id', component: PerfPlaceholder },
     { name: 'UserProfile', path: '/users/:id', component: PerfPlaceholder },
   ],
 });
@@ -29,7 +29,7 @@ const app = isScenario
 app.use(createPinia());
 app.use(perfRouter);
 
-void perfRouter.push({ name: 'NewsDetail', params: { id: '1' } }).then(async () => {
+void perfRouter.push({ name: 'PostDetail', params: { id: '1' } }).then(async () => {
   await perfRouter.isReady();
   app.mount('#app');
 });

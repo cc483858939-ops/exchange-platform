@@ -11,7 +11,7 @@ import (
 )
 
 type reconciliationTestScanner struct {
-	pages [][]requeueArticle
+	pages [][]requeuePost
 	err   error
 	calls []struct {
 		lastID   uint
@@ -19,7 +19,7 @@ type reconciliationTestScanner struct {
 	}
 }
 
-func (s *reconciliationTestScanner) ListPage(_ context.Context, lastID uint, pageSize int) ([]requeueArticle, error) {
+func (s *reconciliationTestScanner) ListPage(_ context.Context, lastID uint, pageSize int) ([]requeuePost, error) {
 	s.calls = append(s.calls, struct {
 		lastID   uint
 		pageSize int
@@ -50,10 +50,10 @@ func (p *reconciliationTestPublisher) PublishBatch(_ context.Context, events []e
 	return nil
 }
 
-func reconciliationArticle(id uint, title, content string, version, hash *string) requeueArticle {
-	return requeueArticle{
+func reconciliationPost(id uint, title, content string, version, hash *string) requeuePost {
+	return requeuePost{
 		ID: id, Title: title, Content: content,
-		EmbeddingArticleID: func() *uint {
+		EmbeddingPostID: func() *uint {
 			if version == nil && hash == nil {
 				return nil
 			}
@@ -66,17 +66,17 @@ func reconciliationArticle(id uint, title, content string, version, hash *string
 
 func stringPointer(value string) *string { return &value }
 
-func TestReconcileArticleEmbeddingsClassifiesAndPublishesOnlyStaleRows(t *testing.T) {
-	currentHash := embeddings.ArticleEmbeddingContentHash("current", "body")
-	scanner := &reconciliationTestScanner{pages: [][]requeueArticle{{
-		reconciliationArticle(1, "missing", "body", nil, nil),
-		reconciliationArticle(2, "current", "body", stringPointer("v1"), stringPointer(currentHash)),
-		reconciliationArticle(3, "both stale", "body", stringPointer("old"), stringPointer("old-hash")),
-		reconciliationArticle(4, "content stale", "body", stringPointer("v1"), stringPointer("old-hash")),
+func TestReconcilePostEmbeddingsClassifiesAndPublishesOnlyStaleRows(t *testing.T) {
+	currentHash := embeddings.PostEmbeddingContentHash("current", "", "body")
+	scanner := &reconciliationTestScanner{pages: [][]requeuePost{{
+		reconciliationPost(1, "missing", "body", nil, nil),
+		reconciliationPost(2, "current", "body", stringPointer("v1"), stringPointer(currentHash)),
+		reconciliationPost(3, "both stale", "body", stringPointer("old"), stringPointer("old-hash")),
+		reconciliationPost(4, "content stale", "body", stringPointer("v1"), stringPointer("old-hash")),
 	}, nil}}
 	publisher := &reconciliationTestPublisher{}
 
-	stats, err := reconcileArticleEmbeddings(context.Background(), scanner, publisher, "v1", time.Now().UTC())
+	stats, err := reconcilePostEmbeddings(context.Background(), scanner, publisher, "v1", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,17 +88,17 @@ func TestReconcileArticleEmbeddingsClassifiesAndPublishesOnlyStaleRows(t *testin
 	}
 }
 
-func TestReconcileArticleEmbeddingsPaginationAdvancesWithoutDuplicates(t *testing.T) {
-	first := make([]requeueArticle, 500)
+func TestReconcilePostEmbeddingsPaginationAdvancesWithoutDuplicates(t *testing.T) {
+	first := make([]requeuePost, 500)
 	for index := range first {
 		id := uint(index + 1)
-		first[index] = reconciliationArticle(id, "title", "body", nil, nil)
+		first[index] = reconciliationPost(id, "title", "body", nil, nil)
 	}
-	second := []requeueArticle{reconciliationArticle(501, "title", "body", nil, nil)}
-	scanner := &reconciliationTestScanner{pages: [][]requeueArticle{first, second, nil}}
+	second := []requeuePost{reconciliationPost(501, "title", "body", nil, nil)}
+	scanner := &reconciliationTestScanner{pages: [][]requeuePost{first, second, nil}}
 	publisher := &reconciliationTestPublisher{}
 
-	stats, err := reconcileArticleEmbeddings(context.Background(), scanner, publisher, "v1", time.Now().UTC())
+	stats, err := reconcilePostEmbeddings(context.Background(), scanner, publisher, "v1", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,24 +109,24 @@ func TestReconcileArticleEmbeddingsPaginationAdvancesWithoutDuplicates(t *testin
 		t.Fatalf("calls=%+v", scanner.calls)
 	}
 	for _, call := range scanner.calls {
-		if call.pageSize != requeueArticleEmbeddingPageSize {
+		if call.pageSize != requeuePostEmbeddingPageSize {
 			t.Fatalf("page size=%d", call.pageSize)
 		}
 	}
 	seen := make(map[string]struct{}, len(publisher.events))
 	for _, event := range publisher.events {
 		if _, exists := seen[event.AggregateID]; exists {
-			t.Fatalf("duplicate article id=%s", event.AggregateID)
+			t.Fatalf("duplicate post id=%s", event.AggregateID)
 		}
 		seen[event.AggregateID] = struct{}{}
 	}
 }
 
-func TestReconcileArticleEmbeddingsPublishAndScannerFailures(t *testing.T) {
+func TestReconcilePostEmbeddingsPublishAndScannerFailures(t *testing.T) {
 	t.Run("publish", func(t *testing.T) {
 		publisherErr := errors.New("broker down")
-		scanner := &reconciliationTestScanner{pages: [][]requeueArticle{{reconciliationArticle(1, "title", "body", nil, nil)}}}
-		_, err := reconcileArticleEmbeddings(context.Background(), scanner, &reconciliationTestPublisher{err: publisherErr}, "v1", time.Now().UTC())
+		scanner := &reconciliationTestScanner{pages: [][]requeuePost{{reconciliationPost(1, "title", "body", nil, nil)}}}
+		_, err := reconcilePostEmbeddings(context.Background(), scanner, &reconciliationTestPublisher{err: publisherErr}, "v1", time.Now().UTC())
 		if !errors.Is(err, publisherErr) {
 			t.Fatalf("err=%v", err)
 		}
@@ -134,14 +134,14 @@ func TestReconcileArticleEmbeddingsPublishAndScannerFailures(t *testing.T) {
 	t.Run("scan", func(t *testing.T) {
 		scannerErr := errors.New("scan failed")
 		scanner := &reconciliationTestScanner{err: scannerErr}
-		_, err := reconcileArticleEmbeddings(context.Background(), scanner, &reconciliationTestPublisher{}, "v1", time.Now().UTC())
+		_, err := reconcilePostEmbeddings(context.Background(), scanner, &reconciliationTestPublisher{}, "v1", time.Now().UTC())
 		if !errors.Is(err, scannerErr) {
 			t.Fatalf("err=%v", err)
 		}
 	})
 	t.Run("empty", func(t *testing.T) {
-		scanner := &reconciliationTestScanner{pages: [][]requeueArticle{nil}}
-		stats, err := reconcileArticleEmbeddings(context.Background(), scanner, nil, "v1", time.Now().UTC())
+		scanner := &reconciliationTestScanner{pages: [][]requeuePost{nil}}
+		stats, err := reconcilePostEmbeddings(context.Background(), scanner, nil, "v1", time.Now().UTC())
 		if err != nil || stats != (requeueStats{}) {
 			t.Fatalf("stats=%+v err=%v", stats, err)
 		}

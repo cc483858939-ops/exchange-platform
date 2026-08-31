@@ -6,8 +6,8 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import HistoryView from './HistoryView.vue';
 import { useHistorySessionStore } from '../store/historySession';
-import type { Article } from '../types/Article';
-import { articleToFeedPost } from '../utils/feedPost';
+import type { Post } from '../types/Post';
+import { postToFeedPost } from '../utils/feedPost';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
@@ -16,8 +16,8 @@ const mocks = vi.hoisted(() => ({
     push: vi.fn(),
   },
   getLikedHistory: vi.fn(),
-  getArticleLikeStates: vi.fn(),
-  unlikeArticle: vi.fn(),
+  getPostLikeStates: vi.fn(),
+  unlikePost: vi.fn(),
   externalLike: vi.fn(),
   historySync: null as any,
 }));
@@ -31,13 +31,13 @@ vi.mock('../services/historyService', () => ({
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeStates: mocks.getArticleLikeStates,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeStates: mocks.getPostLikeStates,
+  unlikePost: mocks.unlikePost,
 }));
 
 vi.mock('../store/sessionSync', () => ({
   registerHistorySessionSync: vi.fn((sync: any) => { mocks.historySync = sync; }),
-  syncExternalArticleLikeState: vi.fn((update: any) => {
+  syncExternalPostLikeState: vi.fn((update: any) => {
     mocks.externalLike(update);
     mocks.historySync?.applyExternalLikeStateLocal(update);
   }),
@@ -47,29 +47,37 @@ vi.mock('vue-router', () => ({
   useRouter: () => mocks.router,
 }));
 
-const article = (id: number, title = `Post ${id}`): Article => ({
-  ID: id,
-  CreatedAt: '2026-08-17T00:00:00.000Z',
-  UpdatedAt: '2026-08-17T00:00:00.000Z',
-  title,
-  content: `Body ${id}`,
-  preview: `Preview ${id}`,
-  cover_image_url: '',
-  publication_state: 'published',
+const post = (id: number, title = `Post ${id}`): Post => ({
+  id,
+  created_at: '2026-08-17T00:00:00.000Z',
+  updated_at: '2026-08-17T00:00:00.000Z',
   published_at: '2026-08-17T00:00:00.000Z',
-  expired_at: null,
-  like_count: 3,
-  comment_count: 1,
-  view_count: 8,
-  like_sync_version: 1,
   author: {
     id: 9,
     username: 'author',
     display_name: 'Author',
     avatar_url: '',
   },
+  content: `Body ${id}`,
+  conversation_id: id,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  article: {
+    title,
+    preview: `Preview ${id}`,
+    cover_image_url: '',
+    publication_state: 'published',
+    published_at: '2026-08-17T00:00:00.000Z',
+    expired_at: null,
+  },
+  like_count: 3,
+  reply_count: 1,
+  view_count: 8,
+  deleted: false,
 });
-
 const setAuth = (id: number | null) => {
   mocks.authStore = reactive({
     isAuthenticated: id !== null,
@@ -127,8 +135,8 @@ describe('HistoryView', () => {
     mocks.historySync = null;
     setAuth(null);
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
-    mocks.getArticleLikeStates.mockResolvedValue({ items: [], unavailable_article_ids: [] });
-    mocks.unlikeArticle.mockResolvedValue({ likes: 0, liked: false });
+    mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.unlikePost.mockResolvedValue({ likes: 0, liked: false });
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     setWindowScrollY(0);
   });
@@ -145,12 +153,12 @@ describe('HistoryView', () => {
     expect(wrapper.text()).toContain('Log in to view your history.');
     expect(wrapper.find('.router-link-stub').text()).toBe('Log in');
     expect(mocks.getLikedHistory).not.toHaveBeenCalled();
-    expect(mocks.getArticleLikeStates).not.toHaveBeenCalled();
+    expect(mocks.getPostLikeStates).not.toHaveBeenCalled();
   });
 
   it('loads the current viewer once, maps articles, and opts PostCard out of feed telemetry', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(42)], next_cursor: null });
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(42)], next_cursor: null });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -161,16 +169,16 @@ describe('HistoryView', () => {
     expect(card.attributes('data-status')).toBe('unknown');
     expect(card.attributes('data-liked')).toBe('false');
     expect(card.attributes('data-track-view')).toBe('false');
-    expect(mocks.getArticleLikeStates).toHaveBeenCalledWith([42]);
+    expect(mocks.getPostLikeStates).toHaveBeenCalledWith([42]);
   });
 
   it('preserves a pending history request when the same viewer refreshes their access token', async () => {
     setAuth(7);
-    const pendingPage = deferred<{ items: Article[]; next_cursor: string | null }>();
+    const pendingPage = deferred<{ items: Post[]; next_cursor: string | null }>();
     mocks.getLikedHistory.mockImplementationOnce(() => pendingPage.promise);
-    mocks.getArticleLikeStates.mockResolvedValue({
-      items: [{ article_id: 1, likes: 4, liked: true }],
-      unavailable_article_ids: [],
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 1, likes: 4, liked: true }],
+      unavailable_post_ids: [],
     });
     const wrapper = mountHistory();
 
@@ -180,7 +188,7 @@ describe('HistoryView', () => {
     await flushPromises();
     expect(mocks.getLikedHistory).toHaveBeenCalledTimes(1);
 
-    pendingPage.resolve({ items: [article(1)], next_cursor: 'cursor-1' });
+    pendingPage.resolve({ items: [post(1)], next_cursor: 'cursor-1' });
     await flushPromises();
 
     expect(wrapper.find('[data-id="1"]').attributes('data-status')).toBe('ready');
@@ -191,10 +199,10 @@ describe('HistoryView', () => {
 
   it('hydrates one page in a batch and keeps unavailable cards visible', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1), article(2)], next_cursor: null });
-    mocks.getArticleLikeStates.mockResolvedValue({
-      items: [{ article_id: 1, likes: 11, liked: true }],
-      unavailable_article_ids: [2],
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1), post(2)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 1, likes: 11, liked: true }],
+      unavailable_post_ids: [2],
     });
     const wrapper = mountHistory();
     await flushPromises();
@@ -204,16 +212,16 @@ describe('HistoryView', () => {
     expect(first.attributes('data-status')).toBe('ready');
     expect(first.attributes('data-liked')).toBe('true');
     expect(second.attributes('data-status')).toBe('unavailable');
-    expect(mocks.getArticleLikeStates).toHaveBeenCalledTimes(1);
-    expect(mocks.getArticleLikeStates).toHaveBeenCalledWith([1, 2]);
+    expect(mocks.getPostLikeStates).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostLikeStates).toHaveBeenCalledWith([1, 2]);
   });
 
   it('suppresses a card immediately when Redis hydration says it is no longer liked', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1)], next_cursor: 'next-page' });
-    mocks.getArticleLikeStates.mockResolvedValue({
-      items: [{ article_id: 1, likes: 0, liked: false }],
-      unavailable_article_ids: [],
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1)], next_cursor: 'next-page' });
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 1, likes: 0, liked: false }],
+      unavailable_post_ids: [],
     });
     const wrapper = mountHistory();
     await flushPromises();
@@ -225,8 +233,8 @@ describe('HistoryView', () => {
 
   it('marks all cards unavailable when batch hydration fails', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1)], next_cursor: null });
-    mocks.getArticleLikeStates.mockRejectedValue(new Error('Redis unavailable'));
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockRejectedValue(new Error('Redis unavailable'));
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -238,7 +246,7 @@ describe('HistoryView', () => {
     setAuth(7);
     mocks.getLikedHistory
       .mockRejectedValueOnce(new Error('history unavailable'))
-      .mockResolvedValueOnce({ items: [article(3)], next_cursor: null });
+      .mockResolvedValueOnce({ items: [post(3)], next_cursor: null });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -250,11 +258,11 @@ describe('HistoryView', () => {
     expect(wrapper.find('[data-id="3"]').exists()).toBe(true);
   });
 
-  it('paginates in backend order and deduplicates article IDs', async () => {
+  it('paginates in backend order and deduplicates post IDs', async () => {
     setAuth(7);
     mocks.getLikedHistory
-      .mockResolvedValueOnce({ items: [article(1), article(2)], next_cursor: 'cursor-1' })
-      .mockResolvedValueOnce({ items: [article(2), article(3)], next_cursor: null });
+      .mockResolvedValueOnce({ items: [post(1), post(2)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [post(2), post(3)], next_cursor: null });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -267,12 +275,12 @@ describe('HistoryView', () => {
 
   it('optimistically removes an unlike and keeps it suppressed after success', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1)], next_cursor: null });
-    mocks.getArticleLikeStates.mockResolvedValue({
-      items: [{ article_id: 1, likes: 4, liked: true }],
-      unavailable_article_ids: [],
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 1, likes: 4, liked: true }],
+      unavailable_post_ids: [],
     });
-    mocks.unlikeArticle.mockResolvedValue({ likes: 3, liked: false });
+    mocks.unlikePost.mockResolvedValue({ likes: 3, liked: false });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -281,7 +289,7 @@ describe('HistoryView', () => {
     await flushPromises();
     expect(wrapper.find('.history-post').exists()).toBe(false);
     expect(mocks.externalLike).toHaveBeenCalledWith({
-      articleId: 1,
+      postId: 1,
       likes: 3,
       liked: false,
       status: 'ready',
@@ -290,15 +298,15 @@ describe('HistoryView', () => {
 
   it('rolls an unlike failure back near its original index', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1), article(2)], next_cursor: null });
-    mocks.getArticleLikeStates.mockResolvedValue({
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1), post(2)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValue({
       items: [
-        { article_id: 1, likes: 4, liked: true },
-        { article_id: 2, likes: 2, liked: true },
+        { post_id: 1, likes: 4, liked: true },
+        { post_id: 2, likes: 2, liked: true },
       ],
-      unavailable_article_ids: [],
+      unavailable_post_ids: [],
     });
-    mocks.unlikeArticle.mockRejectedValue(new Error('write failed'));
+    mocks.unlikePost.mockRejectedValue(new Error('write failed'));
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -313,12 +321,12 @@ describe('HistoryView', () => {
 
   it('rolls back a 503 unlike as unavailable', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1)], next_cursor: null });
-    mocks.getArticleLikeStates.mockResolvedValue({
-      items: [{ article_id: 1, likes: 4, liked: true }],
-      unavailable_article_ids: [],
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 1, likes: 4, liked: true }],
+      unavailable_post_ids: [],
     });
-    mocks.unlikeArticle.mockRejectedValue({ response: { status: 503 } });
+    mocks.unlikePost.mockRejectedValue({ response: { status: 503 } });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -330,12 +338,12 @@ describe('HistoryView', () => {
 
   it('restores an unexpected liked=true unlike response using the response count', async () => {
     setAuth(7);
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1)], next_cursor: null });
-    mocks.getArticleLikeStates.mockResolvedValue({
-      items: [{ article_id: 1, likes: 4, liked: true }],
-      unavailable_article_ids: [],
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 1, likes: 4, liked: true }],
+      unavailable_post_ids: [],
     });
-    mocks.unlikeArticle.mockResolvedValue({ likes: 8, liked: true });
+    mocks.unlikePost.mockResolvedValue({ likes: 8, liked: true });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -344,7 +352,7 @@ describe('HistoryView', () => {
     expect(wrapper.find('[data-id="1"]').attributes('data-status')).toBe('ready');
     expect(wrapper.find('[data-id="1"]').attributes('data-liked')).toBe('true');
     expect(mocks.externalLike).toHaveBeenCalledWith({
-      articleId: 1,
+      postId: 1,
       likes: 8,
       liked: true,
       status: 'ready',
@@ -353,8 +361,8 @@ describe('HistoryView', () => {
 
   it('ignores a pending page response after a viewer switch and starts the new request first', async () => {
     setAuth(1);
-    const firstPage = deferred<{ items: Article[]; next_cursor: string | null }>();
-    const secondPage = deferred<{ items: Article[]; next_cursor: string | null }>();
+    const firstPage = deferred<{ items: Post[]; next_cursor: string | null }>();
+    const secondPage = deferred<{ items: Post[]; next_cursor: string | null }>();
     mocks.getLikedHistory
       .mockImplementationOnce(() => firstPage.promise)
       .mockImplementationOnce(() => secondPage.promise);
@@ -369,13 +377,13 @@ describe('HistoryView', () => {
     await flushPromises();
     expect(mocks.getLikedHistory).toHaveBeenCalledTimes(2);
 
-    secondPage.resolve({ items: [article(2)], next_cursor: null });
+    secondPage.resolve({ items: [post(2)], next_cursor: null });
     await flushPromises();
 
     expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
     expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
 
-    firstPage.resolve({ items: [article(1)], next_cursor: null });
+    firstPage.resolve({ items: [post(1)], next_cursor: null });
     await flushPromises();
 
     expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
@@ -385,19 +393,19 @@ describe('HistoryView', () => {
   it('ignores a pending hydration response after a viewer switch', async () => {
     setAuth(1);
     const firstHydration = deferred<{
-      items: Array<{ article_id: number; likes: number; liked: boolean }>;
-      unavailable_article_ids: number[];
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
     }>();
-    const secondPage = deferred<{ items: Article[]; next_cursor: string | null }>();
+    const secondPage = deferred<{ items: Post[]; next_cursor: string | null }>();
     mocks.getLikedHistory
-      .mockResolvedValueOnce({ items: [article(1)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [post(1)], next_cursor: null })
       .mockImplementationOnce(() => secondPage.promise);
-    mocks.getArticleLikeStates.mockImplementationOnce(() => firstHydration.promise);
+    mocks.getPostLikeStates.mockImplementationOnce(() => firstHydration.promise);
     const wrapper = mountHistory();
 
     await flushPromises();
-    expect(mocks.getArticleLikeStates).toHaveBeenCalledTimes(1);
-    expect(mocks.getArticleLikeStates).toHaveBeenCalledWith([1]);
+    expect(mocks.getPostLikeStates).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostLikeStates).toHaveBeenCalledWith([1]);
 
     const authStore = mocks.authStore;
     Object.assign(authStore, {
@@ -407,13 +415,13 @@ describe('HistoryView', () => {
     await flushPromises();
     expect(mocks.getLikedHistory).toHaveBeenCalledTimes(2);
 
-    secondPage.resolve({ items: [article(2)], next_cursor: null });
+    secondPage.resolve({ items: [post(2)], next_cursor: null });
     await flushPromises();
     expect(wrapper.find('[data-id="2"]').exists()).toBe(true);
 
     firstHydration.resolve({
-      items: [{ article_id: 1, likes: 99, liked: true }],
-      unavailable_article_ids: [],
+      items: [{ post_id: 1, likes: 99, liked: true }],
+      unavailable_post_ids: [],
     });
     await flushPromises();
 
@@ -424,12 +432,12 @@ describe('HistoryView', () => {
   it('ignores a pending unlike response after logout', async () => {
     setAuth(1);
     const unlike = deferred<{ likes: number; liked: boolean }>();
-    mocks.getLikedHistory.mockResolvedValue({ items: [article(1)], next_cursor: null });
-    mocks.getArticleLikeStates.mockResolvedValue({
-      items: [{ article_id: 1, likes: 4, liked: true }],
-      unavailable_article_ids: [],
+    mocks.getLikedHistory.mockResolvedValue({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 1, likes: 4, liked: true }],
+      unavailable_post_ids: [],
     });
-    mocks.unlikeArticle.mockImplementationOnce(() => unlike.promise);
+    mocks.unlikePost.mockImplementationOnce(() => unlike.promise);
     const wrapper = mountHistory();
 
     await flushPromises();
@@ -438,7 +446,7 @@ describe('HistoryView', () => {
     expect(wrapper.find('[data-id="1"]').attributes('data-liked')).toBe('true');
 
     await wrapper.get('[data-id="1"] .history-post__like').trigger('click');
-    expect(mocks.unlikeArticle).toHaveBeenCalledTimes(1);
+    expect(mocks.unlikePost).toHaveBeenCalledTimes(1);
     expect(wrapper.find('.history-post').exists()).toBe(false);
 
     const authStore = mocks.authStore;
@@ -460,8 +468,8 @@ describe('HistoryView', () => {
   it('loads a fresh page after logout and logging back in as the same viewer', async () => {
     setAuth(7);
     mocks.getLikedHistory
-      .mockResolvedValueOnce({ items: [article(1)], next_cursor: null })
-      .mockResolvedValueOnce({ items: [article(2)], next_cursor: null });
+      .mockResolvedValueOnce({ items: [post(1)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [post(2)], next_cursor: null });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -493,7 +501,7 @@ describe('HistoryView', () => {
   it('restores cached History scroll once and ignores later session mutations', async () => {
     setAuth(7);
     const historySession = useHistorySessionStore();
-    historySession.items = [articleToFeedPost(article(1))];
+    historySession.items = [postToFeedPost(post(1))];
     historySession.loaded = true;
     historySession.initialLoading = false;
     historySession.scrollY = 640;
@@ -505,15 +513,15 @@ describe('HistoryView', () => {
     expect(scrollTo).toHaveBeenCalledTimes(1);
     expect(scrollTo).toHaveBeenCalledWith({ top: 640, behavior: 'auto' });
 
-    historySession.items = [...historySession.items, articleToFeedPost(article(2))];
+    historySession.items = [...historySession.items, postToFeedPost(post(2))];
     historySession.nextCursor = 'cursor-2';
     historySession.loadingMore = true;
     historySession.loadingMore = false;
     historySession.revalidating = true;
     historySession.revalidating = false;
-    historySession.applyCommentCountUpdateLocal({ articleId: 1, commentCount: 12 });
+    historySession.applyReplyCountUpdateLocal({ postId: 1, replyCount: 12 });
     historySession.applyExternalLikeStateLocal({
-      articleId: 1,
+      postId: 1,
       likes: 8,
       liked: true,
       status: 'ready',
@@ -528,7 +536,7 @@ describe('HistoryView', () => {
   it('saves History scroll on unmount and restores it once on the next mount', async () => {
     setAuth(7);
     const historySession = useHistorySessionStore();
-    historySession.items = [articleToFeedPost(article(1))];
+    historySession.items = [postToFeedPost(post(1))];
     historySession.loaded = true;
     historySession.initialLoading = false;
     historySession.scrollY = 640;

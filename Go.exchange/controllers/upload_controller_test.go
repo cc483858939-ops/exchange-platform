@@ -18,12 +18,12 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestUploadArticleCoverStoresImageAndReturnsURL(t *testing.T) {
+func TestUploadPostCoverStoresImageAndReturnsURL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	originalPutArticleCoverObject := putArticleCoverObject
+	originalPutPostCoverObject := putPostCoverObject
 	defer func() {
-		putArticleCoverObject = originalPutArticleCoverObject
+		putPostCoverObject = originalPutPostCoverObject
 	}()
 
 	pngPayload := append([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, []byte("payload")...)
@@ -31,7 +31,7 @@ func TestUploadArticleCoverStoresImageAndReturnsURL(t *testing.T) {
 	var gotContentType string
 	var gotObjectSize int64
 	var gotPayload []byte
-	putArticleCoverObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
+	putPostCoverObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
 		var err error
 		gotObjectKey = objectKey
 		gotContentType = contentType
@@ -46,12 +46,12 @@ func TestUploadArticleCoverStoresImageAndReturnsURL(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/article-cover", body)
 	ctx.Request.Header.Set("Content-Type", contentType)
 
-	UploadArticleCover(ctx)
+	UploadPostCover(ctx)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("unexpected status: got %d want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	if !strings.HasPrefix(gotObjectKey, articleCoverObjectPrefix) || !strings.HasSuffix(gotObjectKey, ".png") {
+	if !strings.HasPrefix(gotObjectKey, postCoverObjectPrefix) || !strings.HasSuffix(gotObjectKey, ".png") {
 		t.Fatalf("unexpected object key: %s", gotObjectKey)
 	}
 	if gotContentType != "image/png" {
@@ -64,16 +64,16 @@ func TestUploadArticleCoverStoresImageAndReturnsURL(t *testing.T) {
 		t.Fatal("uploaded payload was not preserved")
 	}
 
-	var response articleCoverUploadResponse
+	var response postCoverUploadResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !strings.HasPrefix(response.CoverImageURL, "/api/files/"+articleCoverObjectPrefix) {
+	if !strings.HasPrefix(response.CoverImageURL, "/api/files/"+postCoverObjectPrefix) {
 		t.Fatalf("unexpected cover url: %s", response.CoverImageURL)
 	}
 }
 
-func TestUploadArticleCoverRejectsUnsupportedFile(t *testing.T) {
+func TestUploadPostCoverRejectsUnsupportedFile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body, contentType := multipartImageRequestBody(t, "cover.txt", []byte("not an image"))
@@ -82,7 +82,7 @@ func TestUploadArticleCoverRejectsUnsupportedFile(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/article-cover", body)
 	ctx.Request.Header.Set("Content-Type", contentType)
 
-	UploadArticleCover(ctx)
+	UploadPostCover(ctx)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status: got %d want %d", recorder.Code, http.StatusBadRequest)
@@ -109,10 +109,10 @@ func multipartImageRequestBody(t *testing.T, filename string, payload []byte) (*
 func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalLoader := loadActiveProfileViewer
-	originalPut := putArticleCoverObject
+	originalPut := putPostCoverObject
 	t.Cleanup(func() {
 		loadActiveProfileViewer = originalLoader
-		putArticleCoverObject = originalPut
+		putPostCoverObject = originalPut
 	})
 	loadActiveProfileViewer = func(uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
@@ -135,7 +135,7 @@ func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
 			var gotKey, gotMime string
 			var gotSize int64
 			var gotPayload []byte
-			putArticleCoverObject = func(_ context.Context, key string, reader io.Reader, size int64, mime string) error {
+			putPostCoverObject = func(_ context.Context, key string, reader io.Reader, size int64, mime string) error {
 				gotKey = key
 				gotMime = mime
 				gotSize = size
@@ -175,15 +175,15 @@ func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
 func TestUploadProfileAvatarRejectsInvalidInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalLoader := loadActiveProfileViewer
-	originalPut := putArticleCoverObject
+	originalPut := putPostCoverObject
 	t.Cleanup(func() {
 		loadActiveProfileViewer = originalLoader
-		putArticleCoverObject = originalPut
+		putPostCoverObject = originalPut
 	})
 	loadActiveProfileViewer = func(uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
-	putArticleCoverObject = func(context.Context, string, io.Reader, int64, string) error {
+	putPostCoverObject = func(context.Context, string, io.Reader, int64, string) error {
 		t.Fatal("storage should not be called for invalid input")
 		return nil
 	}

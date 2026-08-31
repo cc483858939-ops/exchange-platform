@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/consts"
 	"Go.exchange/embeddings"
 	"Go.exchange/eventing"
 	"Go.exchange/models"
@@ -18,7 +17,7 @@ import (
 	"gorm.io/gorm"
 )
 
-type articleEmbeddingTestReader struct {
+type postEmbeddingTestReader struct {
 	messages    []kafka.Message
 	index       int
 	commitCalls int
@@ -27,7 +26,7 @@ type articleEmbeddingTestReader struct {
 	stopErr     error
 }
 
-func (r *articleEmbeddingTestReader) FetchMessage(context.Context) (kafka.Message, error) {
+func (r *postEmbeddingTestReader) FetchMessage(context.Context) (kafka.Message, error) {
 	if r.index >= len(r.messages) {
 		if r.stopErr != nil {
 			return kafka.Message{}, r.stopErr
@@ -39,43 +38,51 @@ func (r *articleEmbeddingTestReader) FetchMessage(context.Context) (kafka.Messag
 	return message, nil
 }
 
-func (r *articleEmbeddingTestReader) CommitMessages(_ context.Context, messages ...kafka.Message) error {
+func (r *postEmbeddingTestReader) CommitMessages(_ context.Context, messages ...kafka.Message) error {
 	r.commitCalls++
 	r.committed = append(r.committed, messages...)
 	return r.commitErr
 }
 
-func (*articleEmbeddingTestReader) Close() error { return nil }
+func (*postEmbeddingTestReader) Close() error { return nil }
 
-type articleEmbeddingTestEmbedder struct {
+type postEmbeddingTestEmbedder struct {
 	calls int
 	err   error
 }
 
-type articleEmbeddingTestStore struct {
-	article      models.Article
-	articleErr   error
-	embedding    models.ArticleEmbedding
+type postEmbeddingTestStore struct {
+	post         models.Post
+	postArticle  *models.PostArticle
+	postErr      error
+	embedding    models.PostEmbedding
 	embeddingErr error
 	upsertErr    error
-	upserted     []models.ArticleEmbedding
+	upserted     []models.PostEmbedding
 }
 
-func (s *articleEmbeddingTestStore) GetArticle(context.Context, uint) (models.Article, error) {
-	return s.article, s.articleErr
+func (s *postEmbeddingTestStore) GetPost(context.Context, uint) (models.Post, error) {
+	return s.post, s.postErr
 }
 
-func (s *articleEmbeddingTestStore) GetEmbedding(context.Context, uint) (models.ArticleEmbedding, error) {
+func (s *postEmbeddingTestStore) GetPostArticle(context.Context, uint) (models.PostArticle, error) {
+	if s.postArticle == nil {
+		return models.PostArticle{}, gorm.ErrRecordNotFound
+	}
+	return *s.postArticle, nil
+}
+
+func (s *postEmbeddingTestStore) GetEmbedding(context.Context, uint) (models.PostEmbedding, error) {
 	if len(s.upserted) > 0 {
 		return s.upserted[len(s.upserted)-1], nil
 	}
 	if s.embeddingErr != nil {
-		return models.ArticleEmbedding{}, s.embeddingErr
+		return models.PostEmbedding{}, s.embeddingErr
 	}
 	return s.embedding, nil
 }
 
-func (s *articleEmbeddingTestStore) UpsertEmbedding(_ context.Context, embedding models.ArticleEmbedding) error {
+func (s *postEmbeddingTestStore) UpsertEmbedding(_ context.Context, embedding models.PostEmbedding) error {
 	if s.upsertErr != nil {
 		return s.upsertErr
 	}
@@ -83,18 +90,16 @@ func (s *articleEmbeddingTestStore) UpsertEmbedding(_ context.Context, embedding
 	return nil
 }
 
-func newArticleEmbeddingTestStore() *articleEmbeddingTestStore {
+func newPostEmbeddingTestStore() *postEmbeddingTestStore {
 	now := time.Now().UTC()
-	return &articleEmbeddingTestStore{
-		article: models.Article{
-			Model: gorm.Model{ID: 42}, Title: "Title", Content: "Body",
-			PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now,
-		},
+	return &postEmbeddingTestStore{
+		post:         models.Post{Model: gorm.Model{ID: 42}, Content: "Body", Visibility: "public"},
+		postArticle:  &models.PostArticle{PostID: 42, Title: "Title", Preview: "Preview", PublicationState: "published", PublishedAt: &now},
 		embeddingErr: gorm.ErrRecordNotFound,
 	}
 }
 
-func (e *articleEmbeddingTestEmbedder) Embed(context.Context, []string) (embeddings.EmbedResult, error) {
+func (e *postEmbeddingTestEmbedder) Embed(context.Context, []string) (embeddings.EmbedResult, error) {
 	e.calls++
 	if e.err != nil {
 		return embeddings.EmbedResult{}, e.err
@@ -102,9 +107,9 @@ func (e *articleEmbeddingTestEmbedder) Embed(context.Context, []string) (embeddi
 	return embeddings.EmbedResult{Vectors: [][]float32{{1, 2}}, Model: "test-model"}, nil
 }
 
-func articleEmbeddingTestMessage(t *testing.T, articleID uint) kafka.Message {
+func postEmbeddingTestMessage(t *testing.T, postID uint) kafka.Message {
 	t.Helper()
-	event, err := eventing.NewArticleEmbeddingRequestedEnvelope(uuid.NewString(), articleID, time.Now().UTC())
+	event, err := eventing.NewPostEmbeddingRequestedEnvelope(uuid.NewString(), postID, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,15 +120,15 @@ func articleEmbeddingTestMessage(t *testing.T, articleID uint) kafka.Message {
 	return kafka.Message{Value: value}
 }
 
-func TestConsumeArticleEmbeddingMessagesCommitsPoisonMessages(t *testing.T) {
-	reader := &articleEmbeddingTestReader{
+func TestConsumePostEmbeddingMessagesCommitsPoisonMessages(t *testing.T) {
+	reader := &postEmbeddingTestReader{
 		messages: []kafka.Message{
 			{Value: []byte("{")},
-			{Value: []byte("{\"id\":\"" + uuid.NewString() + "\",\"type\":\"article.embedding.requested\",\"payload\":{\"article_id\":0}}")},
+			{Value: []byte("{\"id\":\"" + uuid.NewString() + "\",\"type\":\"post.embedding.requested\",\"payload\":{\"post_id\":0}}")},
 		},
 		stopErr: errors.New("done"),
 	}
-	if err := consumeArticleEmbeddingMessages(context.Background(), reader, &articleEmbeddingTestEmbedder{}, newArticleEmbeddingTestStore(), "v1"); !errors.Is(err, reader.stopErr) {
+	if err := consumePostEmbeddingMessages(context.Background(), reader, &postEmbeddingTestEmbedder{}, newPostEmbeddingTestStore(), "v1"); !errors.Is(err, reader.stopErr) {
 		t.Fatalf("err=%v", err)
 	}
 	if reader.commitCalls != len(reader.messages) {
@@ -131,46 +136,46 @@ func TestConsumeArticleEmbeddingMessagesCommitsPoisonMessages(t *testing.T) {
 	}
 }
 
-func TestConsumeArticleEmbeddingMessagesDoesNotCommitWhenProcessingFails(t *testing.T) {
-	reader := &articleEmbeddingTestReader{messages: []kafka.Message{articleEmbeddingTestMessage(t, 42)}, stopErr: errors.New("should not fetch again")}
-	store := newArticleEmbeddingTestStore()
-	store.articleErr = errors.New("article read failed")
-	err := consumeArticleEmbeddingMessages(context.Background(), reader, &articleEmbeddingTestEmbedder{}, store, "v1")
+func TestConsumePostEmbeddingMessagesDoesNotCommitWhenProcessingFails(t *testing.T) {
+	reader := &postEmbeddingTestReader{messages: []kafka.Message{postEmbeddingTestMessage(t, 42)}, stopErr: errors.New("should not fetch again")}
+	store := newPostEmbeddingTestStore()
+	store.postErr = errors.New("article read failed")
+	err := consumePostEmbeddingMessages(context.Background(), reader, &postEmbeddingTestEmbedder{}, store, "v1")
 	if err == nil || reader.commitCalls != 0 {
 		t.Fatalf("err=%v commits=%d", err, reader.commitCalls)
 	}
 }
 
-func TestDecodeArticleEmbeddingRequestRejectsWrongTypeAndMalformedPayload(t *testing.T) {
-	wrongType := eventing.Envelope{ID: uuid.NewString(), Type: eventing.EventTypeArticleViewed, Payload: []byte("{\"article_id\":1}")}
+func TestDecodePostEmbeddingRequestRejectsWrongTypeAndMalformedPayload(t *testing.T) {
+	wrongType := eventing.Envelope{ID: uuid.NewString(), Type: eventing.EventTypePostViewed, Payload: []byte("{\"post_id\":1}")}
 	wrongTypeRaw, _ := json.Marshal(wrongType)
-	for _, raw := range [][]byte{[]byte("not-json"), wrongTypeRaw, []byte("{\"id\":\"" + uuid.NewString() + "\",\"type\":\"article.embedding.requested\",\"payload\":\"bad\"}")} {
-		if _, err := decodeArticleEmbeddingRequest(raw); err == nil {
+	for _, raw := range [][]byte{[]byte("not-json"), wrongTypeRaw, []byte("{\"id\":\"" + uuid.NewString() + "\",\"type\":\"post.embedding.requested\",\"payload\":\"bad\"}")} {
+		if _, err := decodePostEmbeddingRequest(raw); err == nil {
 			t.Fatalf("raw=%s expected decode error", raw)
 		}
 	}
 }
 
-func TestDecodeArticleEmbeddingRequestStrictContract(t *testing.T) {
+func TestDecodePostEmbeddingRequestStrictContract(t *testing.T) {
 	now := time.Now().UTC()
 	base := eventing.Envelope{
-		ID: uuid.NewString(), Type: eventing.EventTypeArticleEmbeddingRequested,
-		SchemaVersion: 1, AggregateType: "article", AggregateID: "42",
-		OccurredAt: now, Payload: []byte("{\"article_id\":42}"),
+		ID: uuid.NewString(), Type: eventing.EventTypePostEmbeddingRequested,
+		SchemaVersion: 1, AggregateType: "post", AggregateID: "42",
+		OccurredAt: now, Payload: []byte("{\"post_id\":42}"),
 	}
 	tests := []struct {
 		name string
 		edit func(*eventing.Envelope)
 	}{
 		{name: "invalid uuid", edit: func(event *eventing.Envelope) { event.ID = "bad" }},
-		{name: "wrong type", edit: func(event *eventing.Envelope) { event.Type = eventing.EventTypeArticleViewed }},
+		{name: "wrong type", edit: func(event *eventing.Envelope) { event.Type = eventing.EventTypePostViewed }},
 		{name: "unsupported schema", edit: func(event *eventing.Envelope) { event.SchemaVersion = 2 }},
 		{name: "wrong aggregate type", edit: func(event *eventing.Envelope) { event.AggregateType = "user" }},
 		{name: "missing occurred at", edit: func(event *eventing.Envelope) { event.OccurredAt = time.Time{} }},
 		{name: "aggregate mismatch", edit: func(event *eventing.Envelope) { event.AggregateID = "41" }},
 		{name: "zero article", edit: func(event *eventing.Envelope) {
 			event.AggregateID = "0"
-			event.Payload = []byte("{\"article_id\":0}")
+			event.Payload = []byte("{\"post_id\":0}")
 		}},
 		{name: "malformed payload", edit: func(event *eventing.Envelope) { event.Payload = []byte("\"bad\"") }},
 	}
@@ -182,28 +187,28 @@ func TestDecodeArticleEmbeddingRequestStrictContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := decodeArticleEmbeddingRequest(raw); err == nil {
+			if _, err := decodePostEmbeddingRequest(raw); err == nil {
 				t.Fatal("expected strict contract error")
 			}
 		})
 	}
 }
 
-func consumeArticleEmbeddingTestMessage(t *testing.T, store articleEmbeddingStore, embedder embeddings.Embedder, commitErr error) (*articleEmbeddingTestReader, error) {
+func consumePostEmbeddingTestMessage(t *testing.T, store postEmbeddingStore, embedder embeddings.Embedder, commitErr error) (*postEmbeddingTestReader, error) {
 	t.Helper()
 	stopErr := errors.New("test reader stopped")
-	reader := &articleEmbeddingTestReader{
-		messages:  []kafka.Message{articleEmbeddingTestMessage(t, 42)},
+	reader := &postEmbeddingTestReader{
+		messages:  []kafka.Message{postEmbeddingTestMessage(t, 42)},
 		commitErr: commitErr,
 		stopErr:   stopErr,
 	}
-	return reader, consumeArticleEmbeddingMessages(context.Background(), reader, embedder, store, "v1")
+	return reader, consumePostEmbeddingMessages(context.Background(), reader, embedder, store, "v1")
 }
 
-func TestArticleEmbeddingConsumerGeneratesMissingProjection(t *testing.T) {
-	store := newArticleEmbeddingTestStore()
-	embedder := &articleEmbeddingTestEmbedder{}
-	reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+func TestPostEmbeddingConsumerGeneratesMissingProjection(t *testing.T) {
+	store := newPostEmbeddingTestStore()
+	embedder := &postEmbeddingTestEmbedder{}
+	reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 	if err == nil || reader.commitCalls != 1 {
 		t.Fatalf("err=%v commits=%d", err, reader.commitCalls)
 	}
@@ -211,41 +216,41 @@ func TestArticleEmbeddingConsumerGeneratesMissingProjection(t *testing.T) {
 		t.Fatalf("provider_calls=%d upserts=%d", embedder.calls, len(store.upserted))
 	}
 	got := store.upserted[0]
-	if got.ArticleID != 42 || got.Version != "v1" || got.Model != "test-model" || got.Dimensions != 2 ||
-		got.ContentHash != embeddings.ArticleEmbeddingContentHash("Title", "Body") {
+	if got.PostID != 42 || got.Version != "v1" || got.Model != "test-model" || got.Dimensions != 2 ||
+		got.ContentHash != embeddings.PostEmbeddingContentHash("Title", "Preview", "Body") {
 		t.Fatalf("embedding=%#v", got)
 	}
 }
 
-func TestArticleEmbeddingConsumerSkipsCurrentProjection(t *testing.T) {
-	store := newArticleEmbeddingTestStore()
+func TestPostEmbeddingConsumerSkipsCurrentProjection(t *testing.T) {
+	store := newPostEmbeddingTestStore()
 	store.embeddingErr = nil
-	store.embedding = models.ArticleEmbedding{
-		ArticleID: 42, Version: "v1", ContentHash: embeddings.ArticleEmbeddingContentHash("Title", "Body"),
+	store.embedding = models.PostEmbedding{
+		PostID: 42, Version: "v1", ContentHash: embeddings.PostEmbeddingContentHash("Title", "Preview", "Body"),
 	}
-	embedder := &articleEmbeddingTestEmbedder{}
-	reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+	embedder := &postEmbeddingTestEmbedder{}
+	reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 	if err == nil || reader.commitCalls != 1 || embedder.calls != 0 || len(store.upserted) != 0 {
 		t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 	}
 }
 
-func TestArticleEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T) {
+func TestPostEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T) {
 	tests := []struct {
 		name    string
 		version string
 		hash    string
 	}{
-		{name: "stale version", version: "old", hash: embeddings.ArticleEmbeddingContentHash("Title", "Body")},
+		{name: "stale version", version: "old", hash: embeddings.PostEmbeddingContentHash("Title", "Preview", "Body")},
 		{name: "stale content", version: "v1", hash: "old-hash"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := newArticleEmbeddingTestStore()
+			store := newPostEmbeddingTestStore()
 			store.embeddingErr = nil
-			store.embedding = models.ArticleEmbedding{ArticleID: 42, Version: test.version, ContentHash: test.hash}
-			embedder := &articleEmbeddingTestEmbedder{}
-			reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+			store.embedding = models.PostEmbedding{PostID: 42, Version: test.version, ContentHash: test.hash}
+			embedder := &postEmbeddingTestEmbedder{}
+			reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 			if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || len(store.upserted) != 1 {
 				t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 			}
@@ -253,28 +258,28 @@ func TestArticleEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T)
 	}
 }
 
-func TestArticleEmbeddingConsumerCommitsMissingAndUnavailableArticles(t *testing.T) {
+func TestPostEmbeddingConsumerCommitsMissingAndUnavailableArticles(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
-		store := newArticleEmbeddingTestStore()
-		store.articleErr = gorm.ErrRecordNotFound
-		embedder := &articleEmbeddingTestEmbedder{}
-		reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+		store := newPostEmbeddingTestStore()
+		store.postErr = gorm.ErrRecordNotFound
+		embedder := &postEmbeddingTestEmbedder{}
+		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 		if err == nil || reader.commitCalls != 1 || embedder.calls != 0 || len(store.upserted) != 0 {
 			t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 		}
 	})
-	t.Run("unpublished", func(t *testing.T) {
-		store := newArticleEmbeddingTestStore()
-		store.article.PublicationState = "draft"
-		embedder := &articleEmbeddingTestEmbedder{}
-		reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
-		if err == nil || reader.commitCalls != 1 || embedder.calls != 0 || len(store.upserted) != 0 {
+	t.Run("draft article metadata is still embedded", func(t *testing.T) {
+		store := newPostEmbeddingTestStore()
+		store.postArticle.PublicationState = "draft"
+		embedder := &postEmbeddingTestEmbedder{}
+		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
+		if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || len(store.upserted) != 1 {
 			t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 		}
 	})
 }
 
-func TestArticleEmbeddingConsumerProviderRetryFailuresDoNotCommit(t *testing.T) {
+func TestPostEmbeddingConsumerProviderRetryFailuresDoNotCommit(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -288,9 +293,9 @@ func TestArticleEmbeddingConsumerProviderRetryFailuresDoNotCommit(t *testing.T) 
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := newArticleEmbeddingTestStore()
-			embedder := &articleEmbeddingTestEmbedder{err: test.err}
-			reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+			store := newPostEmbeddingTestStore()
+			embedder := &postEmbeddingTestEmbedder{err: test.err}
+			reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 			if err == nil || reader.commitCalls != 0 || embedder.calls != 1 || len(store.upserted) != 0 {
 				t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 			}
@@ -298,12 +303,12 @@ func TestArticleEmbeddingConsumerProviderRetryFailuresDoNotCommit(t *testing.T) 
 	}
 }
 
-func TestArticleEmbeddingConsumerTerminalProviderErrorsCommit(t *testing.T) {
+func TestPostEmbeddingConsumerTerminalProviderErrorsCommit(t *testing.T) {
 	for _, status := range []int{400, 413, 422} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
-			store := newArticleEmbeddingTestStore()
-			embedder := &articleEmbeddingTestEmbedder{err: &embeddings.ProviderHTTPError{StatusCode: status}}
-			reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+			store := newPostEmbeddingTestStore()
+			embedder := &postEmbeddingTestEmbedder{err: &embeddings.ProviderHTTPError{StatusCode: status}}
+			reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 			if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || len(store.upserted) != 0 {
 				t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 			}
@@ -311,46 +316,46 @@ func TestArticleEmbeddingConsumerTerminalProviderErrorsCommit(t *testing.T) {
 	}
 }
 
-func TestArticleEmbeddingConsumerDBReadAndUpsertFailuresDoNotCommit(t *testing.T) {
+func TestPostEmbeddingConsumerDBReadAndUpsertFailuresDoNotCommit(t *testing.T) {
 	t.Run("article read", func(t *testing.T) {
-		store := newArticleEmbeddingTestStore()
-		store.articleErr = errors.New("article read failed")
-		embedder := &articleEmbeddingTestEmbedder{}
-		reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+		store := newPostEmbeddingTestStore()
+		store.postErr = errors.New("article read failed")
+		embedder := &postEmbeddingTestEmbedder{}
+		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 		if err == nil || reader.commitCalls != 0 || embedder.calls != 0 {
 			t.Fatalf("err=%v commits=%d provider=%d", err, reader.commitCalls, embedder.calls)
 		}
 	})
 	t.Run("projection read", func(t *testing.T) {
-		store := newArticleEmbeddingTestStore()
+		store := newPostEmbeddingTestStore()
 		store.embeddingErr = errors.New("projection read failed")
-		embedder := &articleEmbeddingTestEmbedder{}
-		reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+		embedder := &postEmbeddingTestEmbedder{}
+		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 		if err == nil || reader.commitCalls != 0 || embedder.calls != 0 {
 			t.Fatalf("err=%v commits=%d provider=%d", err, reader.commitCalls, embedder.calls)
 		}
 	})
 	t.Run("upsert", func(t *testing.T) {
-		store := newArticleEmbeddingTestStore()
+		store := newPostEmbeddingTestStore()
 		store.upsertErr = errors.New("upsert failed")
-		embedder := &articleEmbeddingTestEmbedder{}
-		reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+		embedder := &postEmbeddingTestEmbedder{}
+		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 		if err == nil || reader.commitCalls != 0 || embedder.calls != 1 {
 			t.Fatalf("err=%v commits=%d provider=%d", err, reader.commitCalls, embedder.calls)
 		}
 	})
 }
 
-func TestArticleEmbeddingConsumerCommitFailureRedeliverySkipsProvider(t *testing.T) {
-	store := newArticleEmbeddingTestStore()
-	embedder := &articleEmbeddingTestEmbedder{}
+func TestPostEmbeddingConsumerCommitFailureRedeliverySkipsProvider(t *testing.T) {
+	store := newPostEmbeddingTestStore()
+	embedder := &postEmbeddingTestEmbedder{}
 	commitErr := errors.New("commit failed")
-	reader, err := consumeArticleEmbeddingTestMessage(t, store, embedder, commitErr)
+	reader, err := consumePostEmbeddingTestMessage(t, store, embedder, commitErr)
 	if !errors.Is(err, commitErr) || reader.commitCalls != 1 || embedder.calls != 1 || len(store.upserted) != 1 {
 		t.Fatalf("first err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 	}
 
-	reader, err = consumeArticleEmbeddingTestMessage(t, store, embedder, nil)
+	reader, err = consumePostEmbeddingTestMessage(t, store, embedder, nil)
 	if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || len(store.upserted) != 1 {
 		t.Fatalf("redelivery err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 	}

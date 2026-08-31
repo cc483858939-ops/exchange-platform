@@ -17,10 +17,10 @@ type InterestProfile struct {
 	PersonalizedSignalCount       int
 	PositiveContributions         map[uint]float64
 	PositiveAffinityContributions map[uint]float64
-	InteractedArticleIDs          []uint
+	InteractedPostIDs          []uint
 }
 
-type EmbeddingLoader func(articleIDs []uint, version string) (map[uint][]float32, error)
+type EmbeddingLoader func(postIDs []uint, version string) (map[uint][]float32, error)
 
 // BuildInterestProfile is the single production implementation of the
 // current embedding profile math. It intentionally receives canonical input
@@ -30,8 +30,8 @@ func BuildInterestProfile(canonical CanonicalizationResult, now time.Time, cfg c
 	if load == nil {
 		return InterestProfile{}, errors.New("embedding loader is nil")
 	}
-	if cfg.PositiveArticleWeightCap <= 0 {
-		cfg.PositiveArticleWeightCap = 7
+	if cfg.PositivePostWeightCap <= 0 {
+		cfg.PositivePostWeightCap = 7
 	}
 	if cfg.NegativeConfidenceSaturationScale <= 0 {
 		cfg.NegativeConfidenceSaturationScale = 12
@@ -42,32 +42,32 @@ func BuildInterestProfile(canonical CanonicalizationResult, now time.Time, cfg c
 	profile := InterestProfile{
 		PositiveContributions:         make(map[uint]float64),
 		PositiveAffinityContributions: make(map[uint]float64),
-		InteractedArticleIDs:          append([]uint(nil), canonical.InteractedArticleIDs...),
+		InteractedPostIDs:          append([]uint(nil), canonical.InteractedPostIDs...),
 	}
 	ids := make([]uint, 0, len(canonical.Outcomes))
 	for _, outcome := range canonical.Outcomes {
-		ids = append(ids, outcome.ArticleID)
+		ids = append(ids, outcome.PostID)
 	}
-	embeddingsByArticle, err := load(ids, embeddingVersion)
+	embeddingsByPost, err := load(ids, embeddingVersion)
 	if err != nil {
 		return profile, err
 	}
 	for _, outcome := range canonical.Outcomes {
-		positiveStrength := PositiveArticleStrength(outcome, now, cfg)
+		positiveStrength := PositivePostStrength(outcome, now, cfg)
 		if positiveStrength > 0 {
-			profile.PositiveContributions[outcome.ArticleID] = positiveStrength
+			profile.PositiveContributions[outcome.PostID] = positiveStrength
 			if affinityStrength := AuthorAffinityContribution(outcome, now, cfg); affinityStrength > 0 {
-				profile.PositiveAffinityContributions[outcome.ArticleID] = affinityStrength
+				profile.PositiveAffinityContributions[outcome.PostID] = affinityStrength
 			}
 		}
-		vector := embeddingsByArticle[outcome.ArticleID]
+		vector := embeddingsByPost[outcome.PostID]
 		if !ValidEmbeddingVector(vector) {
 			continue
 		}
 		if positiveStrength > 0 && AddEmbeddingContribution(&profile.PositiveVector, vector, positiveStrength) {
 			profile.PositiveSignalCount++
 		}
-		negativeStrength := NegativeArticleStrength(outcome, now, cfg)
+		negativeStrength := NegativePostStrength(outcome, now, cfg)
 		if negativeStrength > 0 && AddEmbeddingContribution(&profile.NegativeVector, vector, negativeStrength) {
 			profile.NegativeEvidence += negativeStrength
 			profile.NegativeSignalCount++
@@ -95,7 +95,7 @@ func AddEmbeddingContribution(target *[]float32, vector []float32, strength floa
 	return true
 }
 
-func PositiveArticleStrength(outcome UserArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
+func PositivePostStrength(outcome UserPostOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
 	if len(outcome.PositiveSignals) > 0 {
 		decayed := make([]float64, len(outcome.PositiveSignals))
 		primaryIndex, primary := 0, 0.0
@@ -111,7 +111,7 @@ func PositiveArticleStrength(outcome UserArticleOutcome, now time.Time, cfg conf
 				coexist += cfg.PositiveSignalCoexistBonus * SignalDecay(now, outcome.PositiveSignals[index].OccurredAt, cfg.SignalHalfLifeDays)
 			}
 		}
-		return math.Min(cfg.PositiveArticleWeightCap, primary+coexist)
+		return math.Min(cfg.PositivePostWeightCap, primary+coexist)
 	}
 	if outcome.PassiveSignal == nil {
 		return 0
@@ -122,9 +122,9 @@ func PositiveArticleStrength(outcome UserArticleOutcome, now time.Time, cfg conf
 	return math.Max(0, EmbeddingSignalWeight(cfg, outcome.PassiveSignal.SignalType)*SignalDecay(now, outcome.PassiveSignal.OccurredAt, cfg.SignalHalfLifeDays))
 }
 
-func AuthorAffinityContribution(outcome UserArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
+func AuthorAffinityContribution(outcome UserPostOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
 	if len(outcome.PositiveSignals) > 0 {
-		return PositiveArticleStrength(outcome, now, cfg)
+		return PositivePostStrength(outcome, now, cfg)
 	}
 	if outcome.PassiveSignal == nil {
 		return 0
@@ -135,7 +135,7 @@ func AuthorAffinityContribution(outcome UserArticleOutcome, now time.Time, cfg c
 	return math.Max(0, EmbeddingSignalWeight(cfg, outcome.PassiveSignal.SignalType)*SignalDecay(now, outcome.PassiveSignal.OccurredAt, cfg.SignalHalfLifeDays))
 }
 
-func NegativeArticleStrength(outcome UserArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
+func NegativePostStrength(outcome UserPostOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
 	if outcome.NegativeSignal == nil {
 		return 0
 	}

@@ -1,64 +1,64 @@
 <template>
-  <article class="comment-item">
-    <div class="comment-item__header">
-      <AuthorIdentity :author="comment.author" :created-at="comment.created_at" />
-      <div class="comment-item__tools">
+  <article class="reply-item">
+    <div class="reply-item__header">
+      <AuthorIdentity :author="reply.author" :created-at="reply.created_at" />
+      <div class="reply-item__tools">
         <button
           v-if="canDelete"
-          class="comment-item__delete"
+          class="reply-item__delete"
           type="button"
           :disabled="deleting"
           aria-label="Delete reply"
           title="Delete reply"
-          @click.stop="emit('delete', comment.id)"
+          @click.stop="emit('delete', reply.id)"
         >
           <AppIcon name="trash" :size="16" />
         </button>
       </div>
     </div>
-    <p class="comment-item__content">{{ comment.content }}</p>
-    <span v-if="deleting" class="comment-item__status">Deleting...</span>
+    <p class="reply-item__content">{{ reply.content }}</p>
+    <span v-if="deleting" class="reply-item__status">Deleting...</span>
   </article>
 </template>
 
 <script setup lang="ts">
-import type { ArticleComment } from '../../types/Comment';
+import type { Post } from '../../types/Post';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
 const props = defineProps<{
-  comment: ArticleComment;
+  reply: Post;
   canDelete: boolean;
   deleting: boolean;
 }>();
 
 const emit = defineEmits<{
-  delete: [commentID: number];
+  delete: [replyID: number];
 }>();
 </script>
 
 <style scoped>
-.comment-item {
+.reply-item {
   position: relative;
   padding: var(--space-4) 0;
   border-bottom: 1px solid var(--color-border);
 }
 
-.comment-item__header {
+.reply-item__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }
 
-.comment-item__tools {
+.reply-item__tools {
   display: inline-flex;
   align-items: center;
   margin-left: auto;
 }
 
 
-.comment-item__delete {
+.reply-item__delete {
   display: grid;
   width: 30px;
   height: 30px;
@@ -70,23 +70,23 @@ const emit = defineEmits<{
   cursor: pointer;
 }
 
-.comment-item__delete:hover:not(:disabled),
-.comment-item__delete:focus-visible {
+.reply-item__delete:hover:not(:disabled),
+.reply-item__delete:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-danger);
 }
 
-.comment-item__delete:disabled {
+.reply-item__delete:disabled {
   cursor: wait;
   opacity: 0.45;
 }
 
-.comment-item__delete .app-icon {
+.reply-item__delete .app-icon {
   width: 16px;
   height: 16px;
 }
 
-.comment-item__content {
+.reply-item__content {
   margin: var(--space-3) 0 0 39px;
   color: var(--color-text);
   line-height: 1.6;
@@ -94,7 +94,7 @@ const emit = defineEmits<{
   overflow-wrap: anywhere;
 }
 
-.comment-item__status {
+.reply-item__status {
   display: block;
   margin: var(--space-2) 0 0 39px;
   color: var(--color-text-tertiary);
@@ -102,8 +102,9 @@ const emit = defineEmits<{
 }
 
 @media (max-width: 420px) {
-  .comment-item__header {
+  .reply-item__header {
     align-items: flex-start;
   }
 }
 </style>
+

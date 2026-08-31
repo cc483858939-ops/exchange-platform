@@ -14,8 +14,8 @@ import (
 
 func validKafkaTopicConfig() config.KafkaConfig {
 	return config.KafkaConfig{
-		Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", ArticleEmbeddingTopic: "embedding", ActivityEventsTopic: "activity", NotificationDLQTopic: "notification-dlq",
-		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, ArticleEmbeddingPartitions: 6, ActivityEventsPartitions: 12, NotificationDLQPartitions: 3,
+		Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", PostEmbeddingTopic: "embedding", ActivityEventsTopic: "activity", NotificationDLQTopic: "notification-dlq",
+		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, PostEmbeddingPartitions: 6, ActivityEventsPartitions: 12, NotificationDLQPartitions: 3,
 	}
 }
 

@@ -2,9 +2,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ArticleViewTelemetryClient,
-  resetArticleViewTelemetryForTests,
-} from './articleViewTelemetry';
+  PostViewTelemetryClient,
+  resetPostViewTelemetryForTests,
+} from './postViewTelemetry';
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -19,9 +19,9 @@ vi.mock('../axios', () => ({
 const event = (index = 1, owner = 7) => ({
   owner_user_id: owner,
   event_id: '00000000-0000-4000-8000-' + String(index).padStart(12, '0'),
-  article_id: index,
+  post_id: index,
   occurred_at: '2026-08-16T00:00:' + String(index % 60).padStart(2, '0') + '.000Z',
-  source: 'article_detail' as const,
+  source: 'post_detail' as const,
 });
 
 const successResponse = (events: Array<{ event_id: string }>) => ({
@@ -38,8 +38,8 @@ const settle = async () => {
   await Promise.resolve();
 };
 
-describe('ArticleViewTelemetryClient', () => {
-  let client: ArticleViewTelemetryClient;
+describe('PostViewTelemetryClient', () => {
+  let client: PostViewTelemetryClient;
   let currentUserID: number | null = 7;
 
   beforeEach(() => {
@@ -48,13 +48,13 @@ describe('ArticleViewTelemetryClient', () => {
     vi.clearAllTimers();
     vi.resetAllMocks();
     sessionStorage.clear();
-    client = new ArticleViewTelemetryClient(() => currentUserID);
+    client = new PostViewTelemetryClient(() => currentUserID);
     client.start();
   });
 
   afterEach(() => {
     client.stop();
-    resetArticleViewTelemetryForTests();
+    resetPostViewTelemetryForTests();
     sessionStorage.clear();
     vi.clearAllTimers();
     vi.useRealTimers();
@@ -64,48 +64,48 @@ describe('ArticleViewTelemetryClient', () => {
     const first = event(1);
     mocks.post.mockRejectedValue(new Error('offline'));
 
-    expect(client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at)).toBe(true);
+    expect(client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at)).toBe(true);
     await settle();
 
-    expect(client.enqueue(0, event(2).event_id, 'article_detail')).toBe(false);
-    expect(client.enqueue(42, '', 'article_detail')).toBe(false);
+    expect(client.enqueue(0, event(2).event_id, 'post_detail')).toBe(false);
+    expect(client.enqueue(42, '', 'post_detail')).toBe(false);
     currentUserID = null;
-    expect(client.enqueue(42, event(3).event_id, 'article_detail')).toBe(false);
+    expect(client.enqueue(42, event(3).event_id, 'post_detail')).toBe(false);
     currentUserID = 7;
-    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toHaveLength(1);
+    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toHaveLength(1);
   });
 
   it('deduplicates compatible event IDs and rejects conflicting identities', async () => {
     const first = event(1);
     mocks.post.mockRejectedValue(new Error('offline'));
 
-    expect(client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at)).toBe(true);
+    expect(client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at)).toBe(true);
     await settle();
-    const saved = JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]');
+    const saved = JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]');
 
-    expect(client.enqueue(first.article_id, first.event_id, 'article_detail', '2026-08-17T00:00:00.000Z')).toBe(true);
-    expect(client.enqueue(first.article_id + 1, first.event_id, 'article_detail')).toBe(false);
-    expect(client.enqueue(first.article_id, first.event_id, 'feed')).toBe(false);
+    expect(client.enqueue(first.post_id, first.event_id, 'post_detail', '2026-08-17T00:00:00.000Z')).toBe(true);
+    expect(client.enqueue(first.post_id + 1, first.event_id, 'post_detail')).toBe(false);
+    expect(client.enqueue(first.post_id, first.event_id, 'feed')).toBe(false);
     currentUserID = 8;
-    expect(client.enqueue(first.article_id, first.event_id, 'article_detail')).toBe(false);
+    expect(client.enqueue(first.post_id, first.event_id, 'post_detail')).toBe(false);
 
-    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual(saved);
+    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual(saved);
   });
 
   it('retains network failures and schedules the first retry', async () => {
     mocks.post.mockRejectedValueOnce(new Error('offline'));
 
-    client.enqueue(42, event(1).event_id, 'article_detail', event(1).occurred_at);
+    client.enqueue(42, event(1).event_id, 'post_detail', event(1).occurred_at);
     await settle();
 
     expect(mocks.post).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toHaveLength(1);
+    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toHaveLength(1);
   });
 
   it('preserves event identity and occurred_at on retry', async () => {
     const first = event(1);
     mocks.post.mockRejectedValueOnce(new Error('offline'));
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     mocks.post.mockResolvedValueOnce(successResponse([first]));
@@ -116,9 +116,9 @@ describe('ArticleViewTelemetryClient', () => {
     expect(mocks.post.mock.calls[1][1]).toEqual({
       events: [{
         event_id: first.event_id,
-        article_id: first.article_id,
+        post_id: first.post_id,
         occurred_at: first.occurred_at,
-        source: 'article_detail',
+        source: 'post_detail',
       }],
     });
   });
@@ -126,7 +126,7 @@ describe('ArticleViewTelemetryClient', () => {
   it('follows 1s, 2s, 5s, 10s, 30s, then 60s retry delays', async () => {
     const first = event(1);
     mocks.post.mockRejectedValueOnce(new Error('offline'));
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     const delays = [1000, 2000, 5000, 10000, 30000, 60000];
@@ -145,18 +145,18 @@ describe('ArticleViewTelemetryClient', () => {
   it('resets retry state and removes the queue entry after success', async () => {
     const first = event(1);
     mocks.post.mockRejectedValueOnce(new Error('offline'));
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     mocks.post.mockResolvedValueOnce(successResponse([first]));
     await vi.advanceTimersByTimeAsync(1000);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
 
     const second = event(2);
     mocks.post.mockRejectedValueOnce(new Error('offline'));
-    client.enqueue(second.article_id, second.event_id, 'article_detail', second.occurred_at);
+    client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
     await settle();
     await vi.advanceTimersByTimeAsync(999);
     expect(mocks.post).toHaveBeenCalledTimes(3);
@@ -167,7 +167,7 @@ describe('ArticleViewTelemetryClient', () => {
     mocks.post.mockRejectedValueOnce({
       response: { status: 429, headers: { 'retry-after': '60' } },
     });
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     await vi.advanceTimersByTimeAsync(59999);
@@ -180,7 +180,7 @@ describe('ArticleViewTelemetryClient', () => {
   it('uses normal retry for 503 and drops permanent 4xx batches', async () => {
     const first = event(1);
     mocks.post.mockRejectedValueOnce({ response: { status: 503 } });
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     const second = event(2);
@@ -188,10 +188,10 @@ describe('ArticleViewTelemetryClient', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await settle();
     mocks.post.mockRejectedValueOnce({ response: { status: 400 } });
-    client.enqueue(second.article_id, second.event_id, 'article_detail', second.occurred_at);
+    client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
   });
 
   it('removes 422 result IDs without retrying rejected events', async () => {
@@ -206,10 +206,10 @@ describe('ArticleViewTelemetryClient', () => {
         },
       },
     });
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
   });
 
   it('drops a 422 batch with no usable results', async () => {
@@ -217,25 +217,25 @@ describe('ArticleViewTelemetryClient', () => {
     mocks.post.mockRejectedValueOnce({
       response: { status: 422, data: { accepted: 0, rejected: 0, results: [] } },
     });
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
   });
 
   it('drops permanent 4xx responses without retrying forever', async () => {
     for (const status of [400, 401, 403, 404, 413, 499]) {
       const item = event(status);
       mocks.post.mockRejectedValueOnce({ response: { status } });
-      client.enqueue(item.article_id, item.event_id, 'article_detail', item.occurred_at);
+      client.enqueue(item.post_id, item.event_id, 'post_detail', item.occurred_at);
       await settle();
-      expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual([]);
+      expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
     }
   });
   it('cancels a retry timer and flushes immediately when online', async () => {
     const first = event(1);
     mocks.post.mockRejectedValueOnce(new Error('offline'));
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     mocks.post.mockResolvedValueOnce(successResponse([first]));
@@ -252,7 +252,7 @@ describe('ArticleViewTelemetryClient', () => {
       resolveRequest = resolve;
     }));
 
-    client.enqueue(first.article_id, first.event_id, 'article_detail', first.occurred_at);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
     void client.flush();
     void client.flush();
@@ -265,8 +265,8 @@ describe('ArticleViewTelemetryClient', () => {
 
   it('splits more than 50 current-user events without mixing owners', async () => {
     const pending = Array.from({ length: 51 }, (_, index) => event(index + 1));
-    sessionStorage.setItem('article_view_telemetry_queue_v2', JSON.stringify(pending));
-    const restored = new ArticleViewTelemetryClient(() => currentUserID);
+    sessionStorage.setItem('post_view_telemetry_queue_v1', JSON.stringify(pending));
+    const restored = new PostViewTelemetryClient(() => currentUserID);
     mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
       successResponse(body.events));
     restored.start();
@@ -281,16 +281,16 @@ describe('ArticleViewTelemetryClient', () => {
   });
   it('never sends a queued event under another authenticated user', async () => {
     const queued = event(1, 7);
-    sessionStorage.setItem('article_view_telemetry_queue_v2', JSON.stringify([queued]));
+    sessionStorage.setItem('post_view_telemetry_queue_v1', JSON.stringify([queued]));
     currentUserID = 8;
-    const otherClient = new ArticleViewTelemetryClient(() => currentUserID);
+    const otherClient = new PostViewTelemetryClient(() => currentUserID);
     otherClient.start();
     await settle();
     expect(mocks.post).not.toHaveBeenCalled();
 
     otherClient.stop();
     currentUserID = 7;
-    const matchingClient = new ArticleViewTelemetryClient(() => currentUserID);
+    const matchingClient = new PostViewTelemetryClient(() => currentUserID);
     mocks.post.mockResolvedValueOnce(successResponse([queued]));
     matchingClient.start();
     await settle();
@@ -298,9 +298,9 @@ describe('ArticleViewTelemetryClient', () => {
     expect(mocks.post).toHaveBeenCalledTimes(1);
     expect(mocks.post.mock.calls[0][1].events[0]).toEqual({
       event_id: queued.event_id,
-      article_id: queued.article_id,
+      post_id: queued.post_id,
       occurred_at: queued.occurred_at,
-      source: 'article_detail',
+      source: 'post_detail',
     });
     expect(mocks.post.mock.calls[0][1].events[0]).not.toHaveProperty('owner_user_id');
     matchingClient.stop();
@@ -311,12 +311,12 @@ describe('ArticleViewTelemetryClient', () => {
       { bad: true },
       ...Array.from({ length: 205 }, (_, index) => event(index + 1)),
     ];
-    sessionStorage.setItem('article_view_telemetry_queue_v2', JSON.stringify(persisted));
-    const restored = new ArticleViewTelemetryClient(() => null);
+    sessionStorage.setItem('post_view_telemetry_queue_v1', JSON.stringify(persisted));
+    const restored = new PostViewTelemetryClient(() => null);
     restored.start();
     await settle();
 
-    const saved = JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]');
+    const saved = JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]');
     expect(saved).toHaveLength(200);
     expect(saved.filter((item: { owner_user_id?: number }) => item.owner_user_id === 7)).toHaveLength(200);
     restored.stop();
@@ -346,7 +346,7 @@ describe('ArticleViewTelemetryClient', () => {
       value: FakeIntersectionObserver,
     });
 
-    const feedClient = new ArticleViewTelemetryClient(() => currentUserID);
+    const feedClient = new PostViewTelemetryClient(() => currentUserID);
     mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
       successResponse(body.events));
     feedClient.start();
@@ -364,7 +364,7 @@ describe('ArticleViewTelemetryClient', () => {
 
     expect(mocks.post).toHaveBeenCalledTimes(1);
     expect(mocks.post.mock.calls[0][1].events[0]).toMatchObject({
-      article_id: 42,
+      post_id: 42,
       source: 'feed',
     });
 
@@ -410,7 +410,7 @@ describe('ArticleViewTelemetryClient', () => {
     });
     const visibility = vi.spyOn(document, 'visibilityState', 'get');
     visibility.mockReturnValue('visible');
-    const feedClient = new ArticleViewTelemetryClient(() => currentUserID);
+    const feedClient = new PostViewTelemetryClient(() => currentUserID);
     mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
       successResponse(body.events));
     feedClient.start();
@@ -471,11 +471,11 @@ describe('ArticleViewTelemetryClient', () => {
     });
     const visibility = vi.spyOn(document, 'visibilityState', 'get');
     visibility.mockReturnValue('visible');
-    let feedClient: ArticleViewTelemetryClient | null = null;
+    let feedClient: PostViewTelemetryClient | null = null;
 
     try {
       currentUserID = null;
-      feedClient = new ArticleViewTelemetryClient(() => currentUserID);
+      feedClient = new PostViewTelemetryClient(() => currentUserID);
       mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
         successResponse(body.events));
       feedClient.start();
@@ -486,7 +486,7 @@ describe('ArticleViewTelemetryClient', () => {
       await settle();
 
       expect(mocks.post).not.toHaveBeenCalled();
-      expect(JSON.parse(sessionStorage.getItem('article_view_telemetry_queue_v2') || '[]')).toEqual([]);
+      expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
 
       currentUserID = 7;
       observers[0].emit(card, 0.49);
@@ -496,7 +496,7 @@ describe('ArticleViewTelemetryClient', () => {
 
       expect(mocks.post).toHaveBeenCalledTimes(1);
       expect(mocks.post.mock.calls[0][1].events[0]).toMatchObject({
-        article_id: 47,
+        post_id: 47,
         source: 'feed',
       });
     } finally {
@@ -516,7 +516,7 @@ describe('ArticleViewTelemetryClient', () => {
   });
 
   it('fails closed for unavailable observers, unauthenticated users, and unobserved cards', async () => {
-    const unavailable = new ArticleViewTelemetryClient(() => currentUserID);
+    const unavailable = new PostViewTelemetryClient(() => currentUserID);
     const card = document.createElement('article');
     unavailable.start();
     unavailable.observeFeedCard(card, 44);
@@ -546,14 +546,14 @@ describe('ArticleViewTelemetryClient', () => {
       value: FakeIntersectionObserver,
     });
     currentUserID = null;
-    const unauthenticated = new ArticleViewTelemetryClient(() => currentUserID);
+    const unauthenticated = new PostViewTelemetryClient(() => currentUserID);
     unauthenticated.start();
     const observerCard = document.createElement('article');
     unauthenticated.observeFeedCard(observerCard, 45);
     unauthenticated.stop();
 
     currentUserID = 7;
-    const unobserved = new ArticleViewTelemetryClient(() => currentUserID);
+    const unobserved = new PostViewTelemetryClient(() => currentUserID);
     unobserved.start();
     const removedCard = document.createElement('article');
     unobserved.observeFeedCard(removedCard, 46);
@@ -574,3 +574,4 @@ describe('ArticleViewTelemetryClient', () => {
   });
 
 });
+

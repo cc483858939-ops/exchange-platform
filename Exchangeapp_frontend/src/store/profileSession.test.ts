@@ -13,23 +13,23 @@ const mocks = vi.hoisted(() => ({
   feedStore: null as {
     viewerID: number | null;
     recentlyPublishedPosts: FeedPost[];
-    isArticleDeleted: ReturnType<typeof vi.fn>;
-    markArticleDeleted: ReturnType<typeof vi.fn>;
+    isPostDeleted: ReturnType<typeof vi.fn>;
+    markPostDeleted: ReturnType<typeof vi.fn>;
     replaceAuthorIdentity: ReturnType<typeof vi.fn>;
     applyLikeStateUpdate: ReturnType<typeof vi.fn>;
   } | null,
   getUser: vi.fn(),
-  getUserArticles: vi.fn(),
+  getUserPosts: vi.fn(),
   getUserFollowState: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
-  getArticleLikeStates: vi.fn(),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
-  getArticleRepostStates: vi.fn(),
-  repostArticle: vi.fn(),
-  undoRepostArticle: vi.fn(),
-  deleteArticle: vi.fn(),
+  getPostLikeStates: vi.fn(),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
+  getPostRepostStates: vi.fn(),
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
+  deletePost: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({
@@ -42,26 +42,26 @@ vi.mock('./feed', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
-  getUserArticles: mocks.getUserArticles,
+  getUserPosts: mocks.getUserPosts,
   getUserFollowState: mocks.getUserFollowState,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: mocks.deleteArticle,
+vi.mock('../services/postService', () => ({
+  deletePost: mocks.deletePost,
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeStates: mocks.getArticleLikeStates,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeStates: mocks.getPostLikeStates,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 vi.mock('../services/repostService', () => ({
-  getArticleRepostStates: mocks.getArticleRepostStates,
-  repostArticle: mocks.repostArticle,
-  undoRepostArticle: mocks.undoRepostArticle,
+  getPostRepostStates: mocks.getPostRepostStates,
+  repostPost: mocks.repostPost,
+  undoRepostPost: mocks.undoRepostPost,
 }));
 
 import { useProfileSessionStore } from './profileSession';
@@ -72,7 +72,6 @@ const author = (id = 7) => ({
   display_name: `User ${id}`,
   avatar_url: '',
 });
-
 const profile = (id: number) => ({
   ...author(id),
   bio: '',
@@ -86,22 +85,31 @@ const followState = (id: number, following: boolean) => ({
   following_count: 0,
 });
 
-const article = (id: number, authorID = 7) => ({
-  ID: id,
-  CreatedAt: '2026-08-24T00:00:00.000Z',
-  UpdatedAt: '2026-08-24T00:00:00.000Z',
-  title: `Post ${id}`,
-  content: `Body ${id}`,
-  preview: `Preview ${id}`,
-  cover_image_url: '',
-  publication_state: 'published',
+const post = (id: number, authorID = 7) => ({
+  id,
+  created_at: '2026-08-24T00:00:00.000Z',
+  updated_at: '2026-08-24T00:00:00.000Z',
   published_at: '2026-08-24T00:00:00.000Z',
-  expired_at: null,
-  like_count: 0,
-  comment_count: 0,
-  view_count: 0,
-  like_sync_version: 0,
   author: author(authorID),
+  content: `Body ${id}`,
+  conversation_id: id,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public' as const,
+  article: {
+    title: `Post ${id}`,
+    preview: `Preview ${id}`,
+    cover_image_url: '',
+    publication_state: 'published' as const,
+    published_at: '2026-08-24T00:00:00.000Z',
+    expired_at: null,
+  },
+  like_count: 0,
+  reply_count: 0,
+  view_count: 0,
+  deleted: false as const,
 });
 
 const settle = async () => {
@@ -116,33 +124,33 @@ describe('profile session store', () => {
     mocks.feedStore = reactive({
       viewerID: 7,
       recentlyPublishedPosts: [],
-      isArticleDeleted: vi.fn().mockReturnValue(false),
-      markArticleDeleted: vi.fn().mockReturnValue(true),
+      isPostDeleted: vi.fn().mockReturnValue(false),
+      markPostDeleted: vi.fn().mockReturnValue(true),
       replaceAuthorIdentity: vi.fn(),
       applyLikeStateUpdate: vi.fn(),
       applyRepostStateUpdate: vi.fn(),
     });
     mocks.getUser.mockReset().mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
-    mocks.getUserArticles.mockReset().mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUserPosts.mockReset().mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockReset().mockResolvedValue({
       user_id: 7,
       following: false,
       follower_count: 0,
       following_count: 0,
     });
-    mocks.getArticleLikeStates.mockReset().mockResolvedValue({ items: [], unavailable_article_ids: [] });
-    mocks.getArticleRepostStates.mockReset().mockResolvedValue({ items: [], unavailable_article_ids: [] });
+    mocks.getPostLikeStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.getPostRepostStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.followUser.mockReset();
     mocks.unfollowUser.mockReset();
-    mocks.likeArticle.mockReset();
-    mocks.unlikeArticle.mockReset();
-    mocks.repostArticle.mockReset();
-    mocks.undoRepostArticle.mockReset();
-    mocks.deleteArticle.mockReset().mockResolvedValue(undefined);
+    mocks.likePost.mockReset();
+    mocks.unlikePost.mockReset();
+    mocks.repostPost.mockReset();
+    mocks.undoRepostPost.mockReset();
+    mocks.deletePost.mockReset().mockResolvedValue(undefined);
   });
 
-  it('reuses profile, initial articles, and follow data on clean re-entry', async () => {
-    mocks.getUserArticles.mockResolvedValue({ items: [article(1)], next_cursor: null });
+  it('reuses profile, initial posts, and follow data on clean re-entry', async () => {
+    mocks.getUserPosts.mockResolvedValue({ items: [post(1)], next_cursor: null });
     const store = useProfileSessionStore();
 
     await store.loadProfile(7);
@@ -151,9 +159,9 @@ describe('profile session store', () => {
     await settle();
 
     expect(mocks.getUser).toHaveBeenCalledTimes(1);
-    expect(mocks.getUserArticles).toHaveBeenCalledTimes(1);
+    expect(mocks.getUserPosts).toHaveBeenCalledTimes(1);
     expect(mocks.getUserFollowState).toHaveBeenCalledTimes(1);
-    expect(store.getSession(7)?.articles).toHaveLength(1);
+    expect(store.getSession(7)?.posts).toHaveLength(1);
   });
 
   it('keeps up to eight sessions, prioritizes the own profile, and reuses 7 after 7 to 8 to 7', () => {
@@ -188,84 +196,84 @@ describe('profile session store', () => {
   });
 
   it('preserves cursor pagination and deduplicates article IDs in one session', async () => {
-    mocks.getUserArticles
-      .mockResolvedValueOnce({ items: [article(1)], next_cursor: 'cursor-1' })
-      .mockResolvedValueOnce({ items: [article(1), article(2)], next_cursor: null });
+    mocks.getUserPosts
+      .mockResolvedValueOnce({ items: [post(1)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [post(1), post(2)], next_cursor: null });
     const store = useProfileSessionStore();
 
     await store.loadProfile(7);
     await settle();
-    await store.loadMoreArticles(7);
+    await store.loadMorePosts(7);
     await settle();
 
     const session = store.getSession(7)!;
-    expect(mocks.getUserArticles).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
-    expect(session.articles.map(post => post.id)).toEqual([1, 2]);
+    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(session.posts.map(post => post.id)).toEqual([1, 2]);
     expect(session.nextCursor).toBeNull();
     expect(session.hasMore).toBe(false);
   });
 
   it('keeps an unrelated pending initial article request valid when another article is removed', async () => {
-    let resolveArticles!: (value: {
-      items: ReturnType<typeof article>[];
+    let resolvePosts!: (value: {
+      items: ReturnType<typeof post>[];
       next_cursor: string | null;
     }) => void;
     const pending = new Promise<{
-      items: ReturnType<typeof article>[];
+      items: ReturnType<typeof post>[];
       next_cursor: string | null;
     }>((resolve) => {
-      resolveArticles = resolve;
+      resolvePosts = resolve;
     });
-    mocks.getUserArticles.mockReturnValue(pending);
-    mocks.feedStore!.isArticleDeleted.mockImplementation((articleID: number) => articleID === 42);
+    mocks.getUserPosts.mockReturnValue(pending);
+    mocks.feedStore!.isPostDeleted.mockImplementation((postID: number) => postID === 42);
     const store = useProfileSessionStore();
 
-    const request = store.loadArticles(8);
+    const request = store.loadPosts(8);
     const session = store.getSession(8)!;
-    const requestVersion = session.articleRequestVersion;
-    expect(session.articlesInitialLoading).toBe(true);
+    const requestVersion = session.postRequestVersion;
+    expect(session.postsInitialLoading).toBe(true);
 
-    expect(store.removeArticleEverywhere(42, 7)).toBe(true);
-    expect(session.articleRequestVersion).toBe(requestVersion);
+    expect(store.removePostEverywhere(42, 7)).toBe(true);
+    expect(session.postRequestVersion).toBe(requestVersion);
 
-    resolveArticles({ items: [article(42, 8), article(43, 8)], next_cursor: null });
+    resolvePosts({ items: [post(42, 8), post(43, 8)], next_cursor: null });
     await request;
 
-    expect(session.articlesInitialLoading).toBe(false);
-    expect(session.articles.map((post) => post.id)).toEqual([43]);
+    expect(session.postsInitialLoading).toBe(false);
+    expect(session.posts.map((post) => post.id)).toEqual([43]);
   });
 
   it('does not strand an unrelated pending load-more request after article removal', async () => {
-    let resolveArticles!: (value: {
-      items: ReturnType<typeof article>[];
+    let resolvePosts!: (value: {
+      items: ReturnType<typeof post>[];
       next_cursor: string | null;
     }) => void;
     const pending = new Promise<{
-      items: ReturnType<typeof article>[];
+      items: ReturnType<typeof post>[];
       next_cursor: string | null;
     }>((resolve) => {
-      resolveArticles = resolve;
+      resolvePosts = resolve;
     });
-    mocks.getUserArticles.mockReturnValue(pending);
-    mocks.feedStore!.isArticleDeleted.mockImplementation((articleID: number) => articleID === 42);
+    mocks.getUserPosts.mockReturnValue(pending);
+    mocks.feedStore!.isPostDeleted.mockImplementation((postID: number) => postID === 42);
     const store = useProfileSessionStore();
     const session = store.ensureSession(8)!;
-    session.articlesLoaded = true;
+    session.postsLoaded = true;
     session.hasMore = true;
     session.nextCursor = 'cursor-1';
 
-    const request = store.loadMoreArticles(8);
-    const requestVersion = session.articleRequestVersion;
-    expect(session.articlesLoadingMore).toBe(true);
+    const request = store.loadMorePosts(8);
+    const requestVersion = session.postRequestVersion;
+    expect(session.postsLoadingMore).toBe(true);
 
-    expect(store.removeArticleEverywhere(42, 7)).toBe(true);
-    expect(session.articleRequestVersion).toBe(requestVersion);
+    expect(store.removePostEverywhere(42, 7)).toBe(true);
+    expect(session.postRequestVersion).toBe(requestVersion);
 
-    resolveArticles({ items: [article(42, 8), article(43, 8)], next_cursor: null });
+    resolvePosts({ items: [post(42, 8), post(43, 8)], next_cursor: null });
     await request;
 
-    expect(session.articlesLoadingMore).toBe(false);
-    expect(session.articles.map((post) => post.id)).toEqual([43]);
+    expect(session.postsLoadingMore).toBe(false);
+    expect(session.posts.map((post) => post.id)).toEqual([43]);
     expect(session.hasMore).toBe(false);
     expect(session.nextCursor).toBeNull();
   });
@@ -275,10 +283,10 @@ describe('profile session store', () => {
     const pendingLike = new Promise<{ likes: number; liked: boolean }>((resolve) => {
       resolveLike = resolve;
     });
-    mocks.likeArticle.mockReturnValue(pendingLike);
+    mocks.likePost.mockReturnValue(pendingLike);
     const store = useProfileSessionStore();
     const session = store.ensureSession(7)!;
-    session.articles = [{
+    session.posts = [{
       id: 4,
       author: author(7),
       title: 'Post 4',
@@ -286,7 +294,7 @@ describe('profile session store', () => {
       coverImageUrl: '',
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 2,
-      commentCount: 0,
+      replyCount: 0,
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
@@ -296,28 +304,28 @@ describe('profile session store', () => {
     }];
 
     const localMutation = store.toggleLike(4, 7);
-    expect(store.likePendingArticleIds.has(4)).toBe(true);
+    expect(store.likePendingPostIds.has(4)).toBe(true);
 
     store.applyExternalLikeStateLocal({
-      articleId: 4,
+      postId: 4,
       likes: 8,
       liked: true,
       status: 'ready',
     });
-    expect(store.likePendingArticleIds.has(4)).toBe(false);
-    expect(session.articles[0].likeCount).toBe(8);
-    expect(session.articles[0].liked).toBe(true);
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+    expect(session.posts[0].likeCount).toBe(8);
+    expect(session.posts[0].liked).toBe(true);
 
     resolveLike({ likes: 3, liked: true });
     await localMutation;
-    expect(session.articles[0].likeCount).toBe(8);
+    expect(session.posts[0].likeCount).toBe(8);
   });
 
   it('batch-hydrates Profile Repost state without changing authored membership', async () => {
-    mocks.getUserArticles.mockResolvedValue({ items: [article(4)], next_cursor: null });
-    mocks.getArticleRepostStates.mockResolvedValue({
-      items: [{ article_id: 4, reposts: 6, reposted: true }],
-      unavailable_article_ids: [],
+    mocks.getUserPosts.mockResolvedValue({ items: [post(4)], next_cursor: null });
+    mocks.getPostRepostStates.mockResolvedValue({
+      items: [{ post_id: 4, reposts: 6, reposted: true }],
+      unavailable_post_ids: [],
     });
     const store = useProfileSessionStore();
 
@@ -325,9 +333,9 @@ describe('profile session store', () => {
     await settle();
 
     const session = store.getSession(7)!;
-    expect(mocks.getArticleRepostStates).toHaveBeenCalledWith([4]);
-    expect(session.articles).toHaveLength(1);
-    expect(session.articles[0]).toMatchObject({
+    expect(mocks.getPostRepostStates).toHaveBeenCalledWith([4]);
+    expect(session.posts).toHaveLength(1);
+    expect(session.posts[0]).toMatchObject({
       id: 4,
       repostCount: 6,
       reposted: true,
@@ -346,7 +354,7 @@ describe('profile session store', () => {
       coverImageUrl: '',
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
-      commentCount: 0,
+      replyCount: 0,
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
@@ -354,8 +362,8 @@ describe('profile session store', () => {
       reposted: false,
       repostStatus: 'ready',
     };
-    session.articles = [post];
-    mocks.repostArticle.mockRejectedValue(new Error('offline'));
+    session.posts = [post];
+    mocks.repostPost.mockRejectedValue(new Error('offline'));
 
     const request = store.toggleRepost(4, 7);
     expect(post.reposted).toBe(true);
@@ -363,13 +371,13 @@ describe('profile session store', () => {
     expect(await request).toBe(false);
     expect(post.reposted).toBe(false);
     expect(post.repostCount).toBe(8);
-    expect(store.repostPendingArticleIds.has(4)).toBe(false);
+    expect(store.repostPendingPostIds.has(4)).toBe(false);
   });
 
   it('applies an external Detail Repost update without changing Profile membership', () => {
     const store = useProfileSessionStore();
     const session = store.ensureSession(7)!;
-    session.articles = [{
+    session.posts = [{
       id: 4,
       author: author(7),
       title: 'Post 4',
@@ -377,7 +385,7 @@ describe('profile session store', () => {
       coverImageUrl: '',
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
-      commentCount: 0,
+      replyCount: 0,
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
@@ -387,14 +395,14 @@ describe('profile session store', () => {
     }];
 
     expect(store.applyExternalRepostStateLocal({
-      articleId: 4,
+      postId: 4,
       reposts: 9,
       reposted: true,
       status: 'ready',
     })).toBe(true);
-    expect(session.articles).toHaveLength(1);
-    expect(session.articles[0].repostCount).toBe(9);
-    expect(session.articles[0].reposted).toBe(true);
+    expect(session.posts).toHaveLength(1);
+    expect(session.posts[0].repostCount).toBe(9);
+    expect(session.posts[0].reposted).toBe(true);
   });
 
   it('external follow state invalidates an older Profile follow request', async () => {
@@ -427,9 +435,9 @@ describe('profile session store', () => {
       applyExternalLikeStateLocal: vi.fn().mockReturnValue(false),
       applyRepostStateUpdateLocal: vi.fn().mockReturnValue(false),
       applyExternalRepostStateLocal: vi.fn().mockReturnValue(false),
-      applyCommentCountUpdateLocal: vi.fn().mockReturnValue(false),
+      applyReplyCountUpdateLocal: vi.fn().mockReturnValue(false),
       reconcileFollowStateLocal,
-      removeArticleLocal: vi.fn(),
+      removePostLocal: vi.fn(),
       replaceAuthorIdentityLocal: vi.fn(),
     });
     mocks.followUser.mockResolvedValue(followState(8, true));
@@ -442,7 +450,7 @@ describe('profile session store', () => {
     expect(reconcileFollowStateLocal).toHaveBeenCalledWith(followState(8, true));
   });
 
-  it('updates comment counts in every cached matching Profile article', () => {
+  it('updates reply counts in every cached matching Profile article', () => {
     const store = useProfileSessionStore();
     const first = store.ensureSession(7)!;
     const second = store.ensureSession(8)!;
@@ -454,7 +462,7 @@ describe('profile session store', () => {
       coverImageUrl: '',
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
-      commentCount: 1,
+      replyCount: 1,
       viewCount: 0,
       liked: false,
       likeStatus: 'ready' as const,
@@ -462,19 +470,19 @@ describe('profile session store', () => {
       reposted: false,
       repostStatus: 'ready' as const,
     };
-    first.articles = [{ ...post }];
-    second.articles = [{ ...post }];
+    first.posts = [{ ...post }];
+    second.posts = [{ ...post }];
 
-    expect(store.applyCommentCountUpdateEverywhereLocal({ articleId: 4, commentCount: 6 })).toBe(true);
-    expect(first.articles[0].commentCount).toBe(6);
-    expect(second.articles[0].commentCount).toBe(6);
+    expect(store.applyReplyCountUpdateEverywhereLocal({ postId: 4, replyCount: 6 })).toBe(true);
+    expect(first.posts[0].replyCount).toBe(6);
+    expect(second.posts[0].replyCount).toBe(6);
   });
 
   it('synchronizes likes, deletes, identity edits, and newly published own posts across profile sessions', () => {
     const store = useProfileSessionStore();
     const first = store.ensureSession(7)!;
     const second = store.ensureSession(8)!;
-    first.articles = [{
+    first.posts = [{
       id: 4,
       author: author(7),
       title: 'A',
@@ -482,7 +490,7 @@ describe('profile session store', () => {
       coverImageUrl: '',
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 1,
-      commentCount: 0,
+      replyCount: 0,
       viewCount: 0,
       liked: false,
       likeStatus: 'ready',
@@ -490,21 +498,21 @@ describe('profile session store', () => {
       reposted: false,
       repostStatus: 'ready',
     }];
-    second.articles = [{ ...first.articles[0] }];
-    store.applyLikeStateUpdateEverywhere({ articleId: 4, likes: 2, liked: true, status: 'ready' });
-    expect(first.articles[0].liked).toBe(true);
-    expect(second.articles[0].likeCount).toBe(2);
+    second.posts = [{ ...first.posts[0] }];
+    store.applyLikeStateUpdateEverywhere({ postId: 4, likes: 2, liked: true, status: 'ready' });
+    expect(first.posts[0].liked).toBe(true);
+    expect(second.posts[0].likeCount).toBe(2);
 
     store.replaceAuthorIdentityEverywhere({ ...author(7), display_name: 'Renamed' });
-    expect(first.articles[0].author.display_name).toBe('Renamed');
+    expect(first.posts[0].author.display_name).toBe('Renamed');
     expect(mocks.feedStore!.replaceAuthorIdentity).toHaveBeenCalled();
 
-    store.removeArticleEverywhere(4, 7);
-    expect(first.articles).toHaveLength(0);
-    expect(second.articles).toHaveLength(0);
-    expect(mocks.feedStore!.markArticleDeleted).toHaveBeenCalledWith(4, 7);
+    store.removePostEverywhere(4, 7);
+    expect(first.posts).toHaveLength(0);
+    expect(second.posts).toHaveLength(0);
+    expect(mocks.feedStore!.markPostDeleted).toHaveBeenCalledWith(4, 7);
 
-    store.registerPublishedArticle(article(9, 7), 7);
-    expect(store.getSession(7)?.articles[0].id).toBe(9);
+    store.registerPublishedPost(post(9, 7), 7);
+    expect(store.getSession(7)?.posts[0].id).toBe(9);
   });
 });

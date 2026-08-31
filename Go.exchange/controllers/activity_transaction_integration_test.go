@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -16,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestActivityOutboxFailureRollsBackCommentAndFollowIntegration(t *testing.T) {
+func TestActivityOutboxFailureRollsBackReplyAndFollowIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -25,7 +24,7 @@ func TestActivityOutboxFailureRollsBackCommentAndFollowIntegration(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}, &models.Comment{}, &models.ArticleBehavior{}, &models.UserRecoProfileDirty{}, &models.OutboxEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.Post{}, &models.PostBehavior{}, &models.UserRecoProfileDirty{}, &models.OutboxEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
@@ -44,15 +43,15 @@ func TestActivityOutboxFailureRollsBackCommentAndFollowIntegration(t *testing.T)
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	article := models.Article{AuthorID: author.ID, Title: "activity rollback", Preview: "activity rollback", PublicationState: consts.ArticlePublicationStatePublished, PublishedAt: &now}
+	article := models.Post{Model: gorm.Model{CreatedAt: now, UpdatedAt: now}, AuthorID: author.ID, Content: "activity rollback", Visibility: "public"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_ = db.Exec("DROP TRIGGER IF EXISTS trg_test_outbox_failure ON outbox_events").Error
 		_ = db.Exec("DROP FUNCTION IF EXISTS reject_test_outbox_insert()").Error
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.Comment{})
-		db.Unscoped().Where("article_id = ? OR user_id IN ?", article.ID, []uint{commenter.ID, follower.ID, followed.ID}).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
+		db.Unscoped().Where("post_id = ? OR user_id IN ?", article.ID, []uint{commenter.ID, follower.ID, followed.ID}).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("user_id IN ?", []uint{commenter.ID, follower.ID, followed.ID}).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", []uint{follower.ID, followed.ID}, []uint{follower.ID, followed.ID}).Delete(&models.UserFollow{})
 		db.Unscoped().Delete(&article)
@@ -71,22 +70,22 @@ $$`).Error; err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := createCommentWithCount(article.ID, commenter.ID, "should rollback"); err == nil {
+	if _, err := createReplyWithCount(article.ID, commenter.ID, "should rollback"); err == nil {
 		t.Fatal("comment unexpectedly succeeded with failing Outbox insert")
 	}
-	var commentCount int64
-	if err := db.Model(&models.Comment{}).Where("article_id = ?", article.ID).Count(&commentCount).Error; err != nil {
+	var replyCount int64
+	if err := db.Model(&models.Post{}).Where("reply_to_post_id = ?", article.ID).Count(&replyCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if commentCount != 0 {
-		t.Fatalf("comment rows=%d want=0", commentCount)
+	if replyCount != 0 {
+		t.Fatalf("comment rows=%d want=0", replyCount)
 	}
-	var storedArticle models.Article
+	var storedArticle models.Post
 	if err := db.First(&storedArticle, article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if storedArticle.CommentCount != 0 {
-		t.Fatalf("comment_count=%d want=0", storedArticle.CommentCount)
+	if storedArticle.ReplyCount != 0 {
+		t.Fatalf("comment_count=%d want=0", storedArticle.ReplyCount)
 	}
 
 	if _, err := followAndLoadStateFromDB(follower.ID, followed.ID); err == nil {

@@ -16,7 +16,7 @@ type Store struct{ client *redis.Client }
 
 func NewStore(client *redis.Client) *Store { return &Store{client: client} }
 
-func (s *Store) Mutate(ctx context.Context, userID, articleID uint, liked bool) (MutationResult, error) {
+func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (MutationResult, error) {
 	if s == nil || s.client == nil {
 		return MutationResult{}, errors.New("redis is not initialized")
 	}
@@ -25,10 +25,10 @@ func (s *Store) Mutate(ctx context.Context, userID, articleID uint, liked bool) 
 		desired = "1"
 	}
 	keys := []string{
-		ReadyKey(articleID), CountKey(articleID), UsersKey(articleID), VersionKey(articleID),
+		ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID),
 		DirtyKey, BehaviorDirtyKey, BehaviorStateKey,
 	}
-	value, err := mutateScript.Run(s.client, keys, articleID, userID, desired, time.Now().UTC().Format(time.RFC3339Nano)).Result()
+	value, err := mutateScript.Run(s.client, keys, postID, userID, desired, time.Now().UTC().Format(time.RFC3339Nano)).Result()
 	if err != nil {
 		if strings.Contains(err.Error(), "LIKE_NOT_READY") {
 			return MutationResult{}, ErrNotReady
@@ -42,17 +42,17 @@ func (s *Store) Mutate(ctx context.Context, userID, articleID uint, liked bool) 
 	return MutationResult{Count: asInt64(items[0]), Liked: asInt64(items[1]) == 1, Changed: asInt64(items[2]) == 1, Version: asInt64(items[3])}, nil
 }
 
-func (s *Store) Get(ctx context.Context, userID, articleID uint) (State, error) {
+func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
 	if s == nil || s.client == nil {
 		return State{}, errors.New("redis is not initialized")
 	}
 	pipe := s.client.Pipeline()
-	ready := pipe.Get(ReadyKey(articleID))
-	count := pipe.Get(CountKey(articleID))
-	version := pipe.Get(VersionKey(articleID))
+	ready := pipe.Get(ReadyKey(postID))
+	count := pipe.Get(CountKey(postID))
+	version := pipe.Get(VersionKey(postID))
 	var member *redis.BoolCmd
 	if userID > 0 {
-		member = pipe.SIsMember(UsersKey(articleID), strconv.FormatUint(uint64(userID), 10))
+		member = pipe.SIsMember(UsersKey(postID), strconv.FormatUint(uint64(userID), 10))
 	}
 	_, err := pipe.ExecContext(ctx)
 	if err != nil && err != redis.Nil {
@@ -68,31 +68,31 @@ func (s *Store) Get(ctx context.Context, userID, articleID uint) (State, error) 
 	return state, nil
 }
 
-func (s *Store) GetMany(ctx context.Context, userID uint, articleIDs []uint) (map[uint]State, []uint, error) {
+func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[uint]State, []uint, error) {
 	if s == nil || s.client == nil {
 		return nil, nil, errors.New("redis is not initialized")
 	}
-	states := make(map[uint]State, len(articleIDs))
+	states := make(map[uint]State, len(postIDs))
 	unavailable := make([]uint, 0)
-	if len(articleIDs) == 0 {
+	if len(postIDs) == 0 {
 		return states, unavailable, nil
 	}
 
 	type commands struct {
-		articleID uint
+		postID uint
 		ready     *redis.StringCmd
 		count     *redis.StringCmd
 		member    *redis.BoolCmd
 	}
 	pipe := s.client.Pipeline()
-	batch := make([]commands, 0, len(articleIDs))
+	batch := make([]commands, 0, len(postIDs))
 	user := strconv.FormatUint(uint64(userID), 10)
-	for _, articleID := range articleIDs {
+	for _, postID := range postIDs {
 		batch = append(batch, commands{
-			articleID: articleID,
-			ready:     pipe.Get(ReadyKey(articleID)),
-			count:     pipe.Get(CountKey(articleID)),
-			member:    pipe.SIsMember(UsersKey(articleID), user),
+			postID: postID,
+			ready:     pipe.Get(ReadyKey(postID)),
+			count:     pipe.Get(CountKey(postID)),
+			member:    pipe.SIsMember(UsersKey(postID), user),
 		})
 	}
 	_, err := pipe.ExecContext(ctx)
@@ -107,28 +107,28 @@ func (s *Store) GetMany(ctx context.Context, userID uint, articleIDs []uint) (ma
 			}
 		}
 		if command.ready.Val() != "1" {
-			unavailable = append(unavailable, command.articleID)
+			unavailable = append(unavailable, command.postID)
 			continue
 		}
-		states[command.articleID] = State{
+		states[command.postID] = State{
 			Count: parseInt64(command.count.Val()),
 			Liked: command.member.Val(),
 		}
 	}
 	return states, unavailable, nil
 }
-func (s *Store) Initialize(ctx context.Context, articleID uint, count, version int64, userIDs []uint) (bool, error) {
+func (s *Store) Initialize(ctx context.Context, postID uint, count, version int64, userIDs []uint) (bool, error) {
 	if s == nil || s.client == nil {
 		return false, errors.New("redis is not initialized")
 	}
-	if articleID == 0 || count < 0 || version < 0 {
-		return false, errors.New("invalid article like baseline")
+	if postID == 0 || count < 0 || version < 0 {
+		return false, errors.New("invalid post like baseline")
 	}
 	args := []interface{}{count, version}
 	for _, id := range userIDs {
 		args = append(args, id)
 	}
-	value, err := initializeScript.Run(s.client, []string{ReadyKey(articleID), CountKey(articleID), UsersKey(articleID), VersionKey(articleID)}, args...).Int64()
+	value, err := initializeScript.Run(s.client, []string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID)}, args...).Int64()
 	return value == 1, err
 }
 
@@ -148,28 +148,28 @@ func (s *Store) ClaimDirty(ctx context.Context, batch int, lease time.Duration) 
 	}
 	claims := make([]SnapshotClaim, 0, len(items)/2)
 	for i := 0; i+1 < len(items); i += 2 {
-		claims = append(claims, SnapshotClaim{ArticleID: uint(asInt64(items[i])), ClaimID: asString(items[i+1])})
+		claims = append(claims, SnapshotClaim{PostID: uint(asInt64(items[i])), ClaimID: asString(items[i+1])})
 	}
 	return claims, nil
 }
 
-func (s *Store) LoadSnapshot(ctx context.Context, articleID uint) (Snapshot, error) {
-	values, err := s.client.MGet(CountKey(articleID), VersionKey(articleID), ReadyKey(articleID)).Result()
+func (s *Store) LoadSnapshot(ctx context.Context, postID uint) (Snapshot, error) {
+	values, err := s.client.MGet(CountKey(postID), VersionKey(postID), ReadyKey(postID)).Result()
 	if err != nil {
 		return Snapshot{}, err
 	}
 	if len(values) != 3 || asString(values[2]) != "1" {
 		return Snapshot{}, ErrNotReady
 	}
-	return Snapshot{ArticleID: articleID, Count: asInt64(values[0]), Version: asInt64(values[1])}, nil
+	return Snapshot{PostID: postID, Count: asInt64(values[0]), Version: asInt64(values[1])}, nil
 }
 
 func (s *Store) AckClaim(ctx context.Context, claim SnapshotClaim) (bool, error) {
-	v, err := ackClaimScript.Run(s.client, []string{ProcessingKey, ClaimsKey}, claim.ArticleID, claim.ClaimID).Int64()
+	v, err := ackClaimScript.Run(s.client, []string{ProcessingKey, ClaimsKey}, claim.PostID, claim.ClaimID).Int64()
 	return v == 1, err
 }
 func (s *Store) RequeueClaim(ctx context.Context, claim SnapshotClaim) (bool, error) {
-	v, err := requeueClaimScript.Run(s.client, []string{DirtyKey, ProcessingKey, ClaimsKey}, claim.ArticleID, claim.ClaimID).Int64()
+	v, err := requeueClaimScript.Run(s.client, []string{DirtyKey, ProcessingKey, ClaimsKey}, claim.PostID, claim.ClaimID).Int64()
 	return v == 1, err
 }
 func (s *Store) ReapExpired(ctx context.Context, batch int) (int64, error) {

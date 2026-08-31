@@ -1,5 +1,5 @@
 package consts
 
 const (
-	ArticlePublicationStatePublished = "published"
+	PostPublicationStatePublished = "published"
 )

@@ -60,7 +60,7 @@ func (s *Store) LoadBehaviorDeliveries(ctx context.Context, claims []BehaviorCla
 		if i >= len(values) || values[i] == nil {
 			return nil, fmt.Errorf("behavior state missing for %q", claim.Pair)
 		}
-		userID, articleID, err := parseBehaviorPair(claim.Pair)
+		userID, postID, err := parseBehaviorPair(claim.Pair)
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +69,7 @@ func (s *Store) LoadBehaviorDeliveries(ctx context.Context, claims []BehaviorCla
 			return nil, fmt.Errorf("behavior state %q: %w", claim.Pair, err)
 		}
 		deliveries = append(deliveries, BehaviorDelivery{
-			Claim: claim, UserID: userID, ArticleID: articleID,
+			Claim: claim, UserID: userID, PostID: postID,
 			Liked: liked, Version: version, OccurredAt: occurredAt,
 		})
 	}
@@ -148,11 +148,11 @@ func parseBehaviorPair(pair string) (uint, uint, error) {
 	if err != nil || userID == 0 {
 		return 0, 0, fmt.Errorf("invalid behavior user id in %q", pair)
 	}
-	articleID, err := strconv.ParseUint(parts[1], 10, 64)
-	if err != nil || articleID == 0 {
-		return 0, 0, fmt.Errorf("invalid behavior article id in %q", pair)
+	postID, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil || postID == 0 {
+		return 0, 0, fmt.Errorf("invalid behavior post id in %q", pair)
 	}
-	return uint(userID), uint(articleID), nil
+	return uint(userID), uint(postID), nil
 }
 
 func parseBehaviorState(value string) (bool, int64, time.Time, error) {

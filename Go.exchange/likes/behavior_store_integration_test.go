@@ -24,12 +24,12 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 
 	store := NewStore(client)
 	ctx := context.Background()
-	articleID := uint(time.Now().UnixNano() & 0x3fffffff)
-	userID := articleID + 1
-	pair := BehaviorPair(userID, articleID)
+	postID := uint(time.Now().UnixNano() & 0x3fffffff)
+	userID := postID + 1
+	pair := BehaviorPair(userID, postID)
 	cleanup := func() {
-		client.Del(ReadyKey(articleID), CountKey(articleID), UsersKey(articleID), VersionKey(articleID))
-		client.SRem(DirtyKey, articleID)
+		client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+		client.SRem(DirtyKey, postID)
 		client.SRem(BehaviorDirtyKey, pair)
 		client.HDel(BehaviorStateKey, pair)
 		client.ZRem(BehaviorProcessingKey, pair)
@@ -38,12 +38,12 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	created, err := store.Initialize(ctx, articleID, 0, 0, nil)
+	created, err := store.Initialize(ctx, postID, 0, 0, nil)
 	if err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
 	for version := 1; version <= 100; version++ {
-		result, err := store.Mutate(ctx, userID, articleID, version%2 == 1)
+		result, err := store.Mutate(ctx, userID, postID, version%2 == 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,7 +94,7 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	latest, err := store.Mutate(ctx, userID, articleID, true)
+	latest, err := store.Mutate(ctx, userID, postID, true)
 	if err != nil {
 		t.Fatal(err)
 	}

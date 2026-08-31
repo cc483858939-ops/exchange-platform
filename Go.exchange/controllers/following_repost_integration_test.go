@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -23,10 +22,10 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}, &models.ArticleRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_article_reposts_user_article ON article_reposts (user_id, article_id)").Error; err != nil {
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_reposts_user_post ON post_reposts (user_id, post_id)").Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,10 +46,10 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 	viewer, directAuthor, alice, bob, charlie := users[0], users[1], users[2], users[3], users[4]
 	userIDs := []uint{viewer.ID, directAuthor.ID, alice.ID, bob.ID, charlie.ID}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id IN (SELECT id FROM articles WHERE author_id IN ?)", userIDs).Delete(&models.ArticleRepost{})
-		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.ArticleRepost{})
+		db.Unscoped().Where("post_id IN (SELECT id FROM posts WHERE author_id IN ?)", userIDs).Delete(&models.PostRepost{})
+		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.PostRepost{})
 		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
-		db.Unscoped().Where("author_id IN ?", userIDs).Delete(&models.Article{})
+		db.Unscoped().Where("author_id IN ?", userIDs).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
 	})
 	if err := db.Create([]models.UserFollow{
@@ -62,23 +61,18 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 	}
 
 	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
-	createArticle := func(authorID uint, title string, publishedAt time.Time) models.Article {
-		article := models.Article{
-			AuthorID:         authorID,
-			Title:            title,
-			Content:          title + " body",
-			Preview:          title + " preview",
-			PublicationState: consts.ArticlePublicationStatePublished,
-			PublishedAt:      &publishedAt,
-			Model:            gorm.Model{CreatedAt: publishedAt},
+	createArticle := func(authorID uint, title string, publishedAt time.Time) models.Post {
+		article := models.Post{
+			AuthorID: authorID, Content: title + " body", Visibility: "public",
+			Model: gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt},
 		}
 		if err := db.Create(&article).Error; err != nil {
 			t.Fatal(err)
 		}
 		return article
 	}
-	createRepost := func(userID, articleID uint, createdAt time.Time) models.ArticleRepost {
-		repost := models.ArticleRepost{UserID: userID, ArticleID: articleID, CreatedAt: createdAt}
+	createRepost := func(userID, postID uint, createdAt time.Time) models.PostRepost {
+		repost := models.PostRepost{UserID: userID, PostID: postID, CreatedAt: createdAt}
 		if err := db.Create(&repost).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -94,8 +88,8 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 	tieTime := base.Add(7 * time.Minute)
 	tieArticle := createArticle(directAuthor.ID, "Tie repost", tieTime)
 	tieRepost := createRepost(alice.ID, tieArticle.ID, tieTime)
-	tieArticleA := createArticle(directAuthor.ID, "Tie A", tieTime)
-	tieArticleB := createArticle(directAuthor.ID, "Tie B", tieTime)
+	tiePostA := createArticle(directAuthor.ID, "Tie A", tieTime)
+	tiePostB := createArticle(directAuthor.ID, "Tie B", tieTime)
 	deletedArticle := createArticle(bob.ID, "Deleted canonical", base.Add(8*time.Minute))
 	createRepost(charlie.ID, deletedArticle.ID, base.Add(9*time.Minute))
 	if err := db.Delete(&deletedArticle).Error; err != nil {
@@ -107,7 +101,7 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 		t.Fatalf("status=%d body=%s", status, body)
 	}
 	bobItem := findFollowingTimelineItem(page.Items, bobArticle.ID)
-	if bobItem == nil || bobItem.ActivityType != followingActivityRepost || bobItem.Actor.ID != charlie.ID || bobItem.Article.Author.ID != bob.ID {
+	if bobItem == nil || bobItem.ActivityType != followingActivityRepost || bobItem.Actor.ID != charlie.ID || bobItem.Post.Author.ID != bob.ID {
 		t.Fatalf("latest repost item=%#v", bobItem)
 	}
 	tieItem := findFollowingTimelineItem(page.Items, tieArticle.ID)
@@ -122,14 +116,14 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 	if status != 200 || len(pageOne.Items) != 2 || pageOne.NextCursor == nil {
 		t.Fatalf("page one status=%d body=%s response=%#v", status, body, pageOne)
 	}
-	allIDs := followingTimelineArticleIDs(pageOne.Items)
+	allIDs := followingTimelinePostIDs(pageOne.Items)
 	cursor := *pageOne.NextCursor
 	for pageNumber := 2; pageNumber <= 10 && cursor != ""; pageNumber++ {
 		next, nextStatus, nextBody := requestFollowingTimeline(t, viewer.ID, "limit=2&cursor="+cursor)
 		if nextStatus != 200 {
 			t.Fatalf("page %d status=%d body=%s", pageNumber, nextStatus, nextBody)
 		}
-		allIDs = append(allIDs, followingTimelineArticleIDs(next.Items)...)
+		allIDs = append(allIDs, followingTimelinePostIDs(next.Items)...)
 		if next.NextCursor == nil {
 			cursor = ""
 		} else {
@@ -143,13 +137,13 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 		}
 		seen[id] = struct{}{}
 	}
-	for _, id := range []uint{directArticle.ID, bobArticle.ID, directAndReposted.ID, tieArticle.ID, tieArticleA.ID, tieArticleB.ID} {
+	for _, id := range []uint{directArticle.ID, bobArticle.ID, directAndReposted.ID, tieArticle.ID, tiePostA.ID, tiePostB.ID} {
 		if _, exists := seen[id]; !exists {
 			t.Fatalf("article %d missing from mixed pagination: %v", id, allIDs)
 		}
 	}
 
-	if err := db.Where("id = ?", charlieBobRepost.ID).Delete(&models.ArticleRepost{}).Error; err != nil {
+	if err := db.Where("id = ?", charlieBobRepost.ID).Delete(&models.PostRepost{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	page, status, body = requestFollowingTimeline(t, viewer.ID, "limit=50")
@@ -161,7 +155,7 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 		t.Fatalf("undo newest did not reveal previous repost=%#v", bobItem)
 	}
 
-	if err := db.Where("id = ?", aliceDirectRepost.ID).Delete(&models.ArticleRepost{}).Error; err != nil {
+	if err := db.Where("id = ?", aliceDirectRepost.ID).Delete(&models.PostRepost{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	page, status, body = requestFollowingTimeline(t, viewer.ID, "limit=50")
@@ -181,10 +175,10 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 		t.Fatalf("unfollow status=%d body=%s", status, body)
 	}
 	if findFollowingTimelineItem(page.Items, bobArticle.ID) != nil {
-		t.Fatalf("bobArticle remained after Alice unfollow: %v", followingTimelineArticleIDs(page.Items))
+		t.Fatalf("bobArticle remained after Alice unfollow: %v", followingTimelinePostIDs(page.Items))
 	}
 	tieItem = findFollowingTimelineItem(page.Items, tieArticle.ID)
-	if tieItem == nil || tieItem.ActivityType != followingActivityPost || tieItem.Actor.ID != directAuthor.ID || tieItem.SourceID != tieArticle.ID || tieItem.Article.ID != tieArticle.ID || tieItem.Article.Author.ID != directAuthor.ID {
+	if tieItem == nil || tieItem.ActivityType != followingActivityPost || tieItem.Actor.ID != directAuthor.ID || tieItem.SourceID != tieArticle.ID || tieItem.Post.ID != tieArticle.ID || tieItem.Post.Author.ID != directAuthor.ID {
 		t.Fatalf("tieArticle did not fall back to direct post after Alice unfollow: %#v", tieItem)
 	}
 	for _, item := range page.Items {

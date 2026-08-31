@@ -47,8 +47,8 @@
           :key="post.id"
           :post="post"
           :track-view="false"
-          :like-pending="likePendingArticleIDs.has(post.id)"
-          :repost-pending="repostPendingArticleIDs.has(post.id)"
+          :like-pending="likePendingPostIDs.has(post.id)"
+          :repost-pending="repostPendingPostIDs.has(post.id)"
           @toggle-like="handleLikeToggle"
           @toggle-repost="handleRepostToggle"
         />
@@ -104,8 +104,8 @@ const {
   stale,
   revalidating,
   scrollY,
-  pendingUnlikeArticleIDs: likePendingArticleIDs,
-  repostPendingArticleIDs,
+  pendingUnlikePostIDs: likePendingPostIDs,
+  repostPendingPostIDs,
   mutationErrors,
 } = storeToRefs(historySession);
 const historyIntersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
@@ -178,8 +178,8 @@ const restoreScrollOnce = async () => {
 const retryInitial = () => { historySession.retryInitial(); };
 const retryLoadMore = () => { historySession.retryLoadMore(); };
 const loadMore = () => { void historySession.loadMore(); };
-const handleLikeToggle = (articleID: number) => { void historySession.toggleUnlike(articleID); };
-const handleRepostToggle = (articleID: number) => { void historySession.toggleRepost(articleID); };
+const handleLikeToggle = (postID: number) => { void historySession.toggleUnlike(postID); };
+const handleRepostToggle = (postID: number) => { void historySession.toggleRepost(postID); };
 
 const goBack = () => {
   const historyState = window.history.state as { back?: string | null } | null;

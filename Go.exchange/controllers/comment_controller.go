@@ -18,23 +18,23 @@ import (
 )
 
 const (
-	commentRequestMaxBytes = 16 * 1024
-	defaultCommentLimit    = 20
-	maxCommentLimit        = 50
-	maxCommentContentRunes = 1000
+	replyRequestMaxBytes = 16 * 1024
+	defaultReplyLimit    = 20
+	maxReplyLimit        = 50
+	maxReplyContentRunes = 1000
 )
 
-type createCommentRequest struct {
+type createReplyRequest struct {
 	Content string `json:"content" binding:"required"`
 }
 
-type commentCursor struct {
+type replyCursor struct {
 	CreatedAt time.Time `json:"created_at"`
 	ID        uint      `json:"id"`
 }
 
-func CreateArticleComment(ctx *gin.Context) {
-	articleID, ok := articleIDFromContext(ctx)
+func CreatePostReply(ctx *gin.Context) {
+	postID, ok := postIDFromContext(ctx)
 	if !ok {
 		return
 	}
@@ -48,19 +48,19 @@ func CreateArticleComment(ctx *gin.Context) {
 		return
 	}
 
-	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, commentRequestMaxBytes)
-	var req createCommentRequest
+	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, replyRequestMaxBytes)
+	var req createReplyRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "comment request body is too large"})
+			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "reply request body is too large"})
 			return
 		}
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid request data"})
 		return
 	}
 
-	content, err := normalizeCommentContent(req.Content)
+	content, err := normalizeReplyContent(req.Content)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -76,24 +76,24 @@ func CreateArticleComment(ctx *gin.Context) {
 		return
 	}
 
-	comment, err := createCommentWithCount(articleID, userID, content)
+	reply, err := createReplyWithCount(postID, userID, content)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeCommentArticleLookupError(ctx, err)
+			writeReplyPostLookupError(ctx, err)
 			return
 		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	invalidateCommentArticleCaches(articleID)
-	comment.Author = models.User{
+	invalidateReplyPostCaches(postID)
+	reply.Author = models.User{
 		Model:       gorm.Model{ID: author.ID},
 		Username:    author.Username,
 		DisplayName: author.DisplayName,
 		AvatarURL:   author.AvatarURL,
 	}
 
-	response, err := newCommentResponse(comment)
+	response, err := newReplyResponse(reply)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -101,17 +101,17 @@ func CreateArticleComment(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, response)
 }
 
-func GetArticleComments(ctx *gin.Context) {
-	articleID, ok := articleIDFromContext(ctx)
+func GetPostReplies(ctx *gin.Context) {
+	postID, ok := postIDFromContext(ctx)
 	if !ok {
 		return
 	}
-	limit, err := parseCommentLimit(ctx)
+	limit, err := parseReplyLimit(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	cursor, err := parseCommentCursor(ctx)
+	cursor, err := parseReplyCursor(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -121,16 +121,16 @@ func GetArticleComments(ctx *gin.Context) {
 		return
 	}
 
-	var article models.Article
+	var post models.Post
 	if err := global.Db.
 		Select("id").
-		Scopes(func(tx *gorm.DB) *gorm.DB { return publicArticleScope(tx, time.Now().UTC()) }).
-		First(&article, articleID).Error; err != nil {
-		writeCommentArticleLookupError(ctx, err)
+		Scopes(func(tx *gorm.DB) *gorm.DB { return publicPostScope(tx, time.Now().UTC()) }).
+		First(&post, postID).Error; err != nil {
+		writeReplyPostLookupError(ctx, err)
 		return
 	}
 
-	query := global.Db.Where("article_id = ?", articleID)
+	query := publicPostScope(global.Db.Model(&models.Post{}), time.Now().UTC()).Where("posts.reply_to_post_id = ?", postID)
 	if cursor != nil {
 		query = query.Where(
 			"(created_at < ?) OR (created_at = ? AND id < ?)",
@@ -140,25 +140,25 @@ func GetArticleComments(ctx *gin.Context) {
 		)
 	}
 
-	comments := make([]models.Comment, 0, limit+1)
+	posts := make([]models.Post, 0, limit+1)
 	if err := query.
 		Preload("Author", func(tx *gorm.DB) *gorm.DB {
 			return tx.Select("id, username, display_name, avatar_url")
 		}).
 		Order("created_at DESC, id DESC").
 		Limit(limit + 1).
-		Find(&comments).Error; err != nil {
+		Find(&posts).Error; err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	hasMore := len(comments) > limit
+	hasMore := len(posts) > limit
 	if hasMore {
-		comments = comments[:limit]
+		posts = posts[:limit]
 	}
-	items := make([]commentResponse, 0, len(comments))
-	for _, comment := range comments {
-		response, err := newCommentResponse(comment)
+	items := make([]replyResponse, 0, len(posts))
+	for _, reply := range posts {
+		response, err := newReplyResponse(reply)
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -168,19 +168,19 @@ func GetArticleComments(ctx *gin.Context) {
 
 	var nextCursor *string
 	if hasMore {
-		last := comments[len(comments)-1]
-		encoded, err := encodeCommentCursor(commentCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+		last := posts[len(posts)-1]
+		encoded, err := encodeReplyCursor(replyCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		nextCursor = &encoded
 	}
-	ctx.JSON(http.StatusOK, commentListResponse{Items: items, NextCursor: nextCursor})
+	ctx.JSON(http.StatusOK, replyListResponse{Items: items, NextCursor: nextCursor})
 }
 
-func DeleteComment(ctx *gin.Context) {
-	commentID, ok := commentIDFromContext(ctx)
+func DeletePostReply(ctx *gin.Context) {
+	replyID, ok := replyIDFromContext(ctx)
 	if !ok {
 		return
 	}
@@ -189,45 +189,47 @@ func DeleteComment(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	comment, err := deleteCommentWithCount(commentID, userID)
+	reply, err := deleteReplyWithCount(replyID, userID)
 	if err != nil {
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "comment not found"})
-		case errors.Is(err, errCommentForbidden):
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		case errors.Is(err, errReplyForbidden):
 			ctx.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		default:
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}
 		return
 	}
-	invalidateCommentArticleCaches(comment.ArticleID)
+	if reply.ReplyToPostID != nil {
+		invalidateReplyPostCaches(*reply.ReplyToPostID)
+	}
 	ctx.Status(http.StatusNoContent)
 	ctx.Writer.WriteHeaderNow()
 }
 
-func commentIDFromContext(ctx *gin.Context) (uint, bool) {
+func replyIDFromContext(ctx *gin.Context) (uint, bool) {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid comment id"})
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid post id"})
 		return 0, false
 	}
 	return uint(id), true
 }
 
-func normalizeCommentContent(raw string) (string, error) {
+func normalizeReplyContent(raw string) (string, error) {
 	content := strings.TrimSpace(raw)
 	if content == "" {
-		return "", errors.New("comment content is required")
+		return "", errors.New("post content is required")
 	}
-	if utf8.RuneCountInString(content) > maxCommentContentRunes {
-		return "", errors.New("comment content must not exceed 1000 characters")
+	if utf8.RuneCountInString(content) > maxReplyContentRunes {
+		return "", errors.New("post content must not exceed 1000 characters")
 	}
 	return content, nil
 }
 
-func parseCommentLimit(ctx *gin.Context) (int, error) {
-	limit := defaultCommentLimit
+func parseReplyLimit(ctx *gin.Context) (int, error) {
+	limit := defaultReplyLimit
 	if raw, exists := ctx.GetQuery("limit"); exists {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
@@ -235,25 +237,25 @@ func parseCommentLimit(ctx *gin.Context) (int, error) {
 		}
 		limit = parsed
 	}
-	if limit > maxCommentLimit {
-		limit = maxCommentLimit
+	if limit > maxReplyLimit {
+		limit = maxReplyLimit
 	}
 	return limit, nil
 }
 
-func parseCommentCursor(ctx *gin.Context) (*commentCursor, error) {
+func parseReplyCursor(ctx *gin.Context) (*replyCursor, error) {
 	raw, exists := ctx.GetQuery("cursor")
 	if !exists {
 		return nil, nil
 	}
-	cursor, err := decodeCommentCursor(raw)
+	cursor, err := decodeReplyCursor(raw)
 	if err != nil {
 		return nil, err
 	}
 	return &cursor, nil
 }
 
-func encodeCommentCursor(cursor commentCursor) (string, error) {
+func encodeReplyCursor(cursor replyCursor) (string, error) {
 	if cursor.CreatedAt.IsZero() || cursor.ID == 0 {
 		return "", errors.New("invalid cursor")
 	}
@@ -264,24 +266,24 @@ func encodeCommentCursor(cursor commentCursor) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
-func decodeCommentCursor(raw string) (commentCursor, error) {
+func decodeReplyCursor(raw string) (replyCursor, error) {
 	if strings.TrimSpace(raw) == "" {
-		return commentCursor{}, errors.New("invalid cursor")
+		return replyCursor{}, errors.New("invalid cursor")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return commentCursor{}, errors.New("invalid cursor")
+		return replyCursor{}, errors.New("invalid cursor")
 	}
-	var cursor commentCursor
+	var cursor replyCursor
 	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.CreatedAt.IsZero() || cursor.ID == 0 {
-		return commentCursor{}, errors.New("invalid cursor")
+		return replyCursor{}, errors.New("invalid cursor")
 	}
 	return cursor, nil
 }
 
-func writeCommentArticleLookupError(ctx *gin.Context, err error) {
+func writeReplyPostLookupError(ctx *gin.Context, err error) {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "article not found"})
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return
 	}
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

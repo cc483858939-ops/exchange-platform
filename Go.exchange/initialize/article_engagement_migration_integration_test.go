@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestArticleEngagementMigrationIntegration(t *testing.T) {
+func TestPostEngagementMigrationIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -41,26 +41,26 @@ func TestArticleEngagementMigrationIntegration(t *testing.T) {
 SELECT is_nullable, COALESCE(column_default, '') AS column_default
 FROM information_schema.columns
 WHERE table_schema = current_schema()
-  AND table_name = 'articles'
-  AND column_name = 'comment_count'
+  AND table_name = 'posts'
+  AND column_name = 'reply_count'
 `).Scan(&column).Error; err != nil {
 		t.Fatal(err)
 	}
 	if column.Nullable != "NO" || !strings.Contains(column.Default, "0") {
-		t.Fatalf("articles.comment_count nullable=%q default=%q", column.Nullable, column.Default)
+		t.Fatalf("posts.reply_count nullable=%q default=%q", column.Nullable, column.Default)
 	}
 	var viewColumn struct {
 		Nullable string `gorm:"column:is_nullable"`
 		Default  string `gorm:"column:column_default"`
 	}
-	if err := db.Raw("SELECT is_nullable, COALESCE(column_default, '') AS column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'articles' AND column_name = 'view_count'").Scan(&viewColumn).Error; err != nil {
+	if err := db.Raw("SELECT is_nullable, COALESCE(column_default, '') AS column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'posts' AND column_name = 'view_count'").Scan(&viewColumn).Error; err != nil {
 		t.Fatal(err)
 	}
 	if viewColumn.Nullable != "NO" || !strings.Contains(viewColumn.Default, "0") {
-		t.Fatalf("articles.view_count nullable=%q default=%q", viewColumn.Nullable, viewColumn.Default)
+		t.Fatalf("posts.view_count nullable=%q default=%q", viewColumn.Nullable, viewColumn.Default)
 	}
-	if !db.Migrator().HasTable(&models.ArticleRepost{}) {
-		t.Fatal("article_reposts table does not exist")
+	if !db.Migrator().HasTable(&models.PostRepost{}) {
+		t.Fatal("post_reposts table does not exist")
 	}
 	var repostIndexes []struct {
 		Name string `gorm:"column:indexname"`
@@ -69,11 +69,11 @@ WHERE table_schema = current_schema()
 SELECT indexname
 FROM pg_indexes
 WHERE schemaname = current_schema()
-  AND tablename = 'article_reposts'
+  AND tablename = 'post_reposts'
   AND indexname IN (
-    'uidx_article_reposts_user_article',
-    'idx_article_reposts_user_created',
-    'idx_article_reposts_article'
+    'uidx_post_reposts_user_post',
+    'idx_post_reposts_user_created',
+    'idx_post_reposts_post'
   )
 `).Scan(&repostIndexes).Error; err != nil {
 		t.Fatal(err)
@@ -86,13 +86,13 @@ WHERE schemaname = current_schema()
 	if err := db.Raw(`
 SELECT pg_get_constraintdef(oid)
 FROM pg_constraint
-WHERE conrelid = 'articles'::regclass
-  AND conname = 'chk_articles_comment_count_nonnegative'
+WHERE conrelid = 'posts'::regclass
+  AND conname = 'chk_posts_reply_count_nonnegative'
 `).Scan(&definition).Error; err != nil {
 		t.Fatal(err)
 	}
 	normalizedDefinition := strings.ToLower(definition)
-	if !strings.Contains(normalizedDefinition, "comment_count") ||
+	if !strings.Contains(normalizedDefinition, "reply_count") ||
 		!strings.Contains(normalizedDefinition, ">=") ||
 		!strings.Contains(normalizedDefinition, "0") {
 		t.Fatalf("comment count check definition=%q", definition)
@@ -102,27 +102,27 @@ WHERE conrelid = 'articles'::regclass
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	article := models.Article{AuthorID: user.ID, Title: "engagement migration", Preview: "engagement migration"}
+	article := models.Post{AuthorID: user.ID, Content: "engagement migration", Visibility: "public"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleRepost{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostRepost{})
 		db.Unscoped().Delete(&article)
 		db.Unscoped().Delete(&user)
 	})
 
-	repost := models.ArticleRepost{UserID: user.ID, ArticleID: article.ID}
+	repost := models.PostRepost{UserID: user.ID, PostID: article.ID}
 	if err := db.Create(&repost).Error; err != nil {
 		t.Fatal(err)
 	}
-	duplicateRepost := models.ArticleRepost{UserID: user.ID, ArticleID: article.ID}
+	duplicateRepost := models.PostRepost{UserID: user.ID, PostID: article.ID}
 	if err := db.Create(&duplicateRepost).Error; err == nil {
 		t.Fatal("database accepted duplicate article repost relation")
 	}
 
-	if err := db.Model(&article).Update("comment_count", -1).Error; err == nil {
-		t.Fatal("database accepted a negative article comment_count")
+	if err := db.Model(&article).Update("reply_count", -1).Error; err == nil {
+		t.Fatal("database accepted a negative post reply_count")
 	}
 	if err := db.Model(&article).Update("view_count", -1).Error; err == nil {
 		t.Fatal("database accepted a negative article view_count")

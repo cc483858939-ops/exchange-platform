@@ -3,18 +3,18 @@ package likes
 import "fmt"
 
 const (
-	DirtyKey      = "article:likes:dirty"
-	ProcessingKey = "article:likes:processing"
-	ClaimsKey     = "article:likes:claims"
+	DirtyKey      = "post:likes:dirty"
+	ProcessingKey = "post:likes:processing"
+	ClaimsKey     = "post:likes:claims"
 
-	BehaviorDirtyKey      = "article:likes:behavior:dirty"
-	BehaviorStateKey      = "article:likes:behavior:state"
-	BehaviorProcessingKey = "article:likes:behavior:processing"
-	BehaviorClaimsKey     = "article:likes:behavior:claims"
+	BehaviorDirtyKey      = "post:likes:behavior:dirty"
+	BehaviorStateKey      = "post:likes:behavior:state"
+	BehaviorProcessingKey = "post:likes:behavior:processing"
+	BehaviorClaimsKey     = "post:likes:behavior:claims"
 )
 
-func ReadyKey(articleID uint) string             { return fmt.Sprintf("article:like:%d:ready", articleID) }
-func CountKey(articleID uint) string             { return fmt.Sprintf("article:like:%d:count", articleID) }
-func UsersKey(articleID uint) string             { return fmt.Sprintf("article:like:%d:users", articleID) }
-func VersionKey(articleID uint) string           { return fmt.Sprintf("article:like:%d:version", articleID) }
-func BehaviorPair(userID, articleID uint) string { return fmt.Sprintf("%d:%d", userID, articleID) }
+func ReadyKey(postID uint) string             { return fmt.Sprintf("post:like:%d:ready", postID) }
+func CountKey(postID uint) string             { return fmt.Sprintf("post:like:%d:count", postID) }
+func UsersKey(postID uint) string             { return fmt.Sprintf("post:like:%d:users", postID) }
+func VersionKey(postID uint) string           { return fmt.Sprintf("post:like:%d:version", postID) }
+func BehaviorPair(userID, postID uint) string { return fmt.Sprintf("%d:%d", userID, postID) }

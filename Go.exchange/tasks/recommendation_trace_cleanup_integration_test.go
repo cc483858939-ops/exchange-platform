@@ -27,7 +27,7 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	}
 	if err := db.AutoMigrate(
 		&models.User{},
-		&models.Article{},
+		&models.Post{},
 		&models.RecommendationRequest{},
 		&models.RecommendationResultTrace{},
 	); err != nil {
@@ -68,12 +68,8 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	article := models.Article{
-		AuthorID:         user.ID,
-		Title:            "trace cleanup",
-		Content:          "body",
-		Preview:          "body",
-		PublicationState: "published",
+	article := models.Post{
+		AuthorID: user.ID, Content: "trace cleanup body", Visibility: "public",
 	}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
@@ -99,7 +95,7 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationResultTrace{})
 		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationRequest{})
-		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Article{})
+		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 	if err := db.Create(&[]models.RecommendationRequest{requestA, requestB, requestC}).Error; err != nil {
@@ -109,7 +105,7 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	traceA := models.RecommendationResultTrace{
 		RequestID: requestA.RequestID,
 		Position:  1,
-		ArticleID: article.ID,
+		PostID:    article.ID,
 		AuthorID:  user.ID,
 		CreatedAt: now.AddDate(0, 0, -100),
 		ExpiresAt: now.AddDate(0, 0, 20),

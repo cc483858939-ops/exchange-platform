@@ -15,14 +15,14 @@
             variant="post"
           />
           <button
-            v-if="detailPresentation.kind === 'article' && canDeleteArticle"
+            v-if="detailPresentation.kind === 'post' && canDeletePost"
             class="post-detail__delete"
             type="button"
             aria-label="Delete post"
             title="Delete post"
             :disabled="deletePending"
             :aria-busy="deletePending"
-            @click="handleDeleteArticle"
+            @click="handleDeletePost"
           >
             <AppIcon name="trash" :size="18" />
           </button>
@@ -33,11 +33,30 @@
         </p>
 
         <div
-          ref="articleBodyRef"
+          ref="postBodyRef"
           class="post-detail__body"
           :class="{ 'post-detail__body--loading': detailPresentation.kind === 'warm' }"
           :aria-busy="detailPresentation.kind === 'warm' ? 'true' : undefined"
         >{{ detailPresentation.body }}</div>
+
+        <aside
+          v-if="detailReference"
+          class="post-detail__reference"
+          aria-label="Referenced post"
+        >
+          <span class="post-detail__reference-label">{{ detailReferenceLabel }}</span>
+          <template v-if="detailReference.deleted">
+            <p class="post-detail__reference-tombstone">Post unavailable</p>
+          </template>
+          <template v-else>
+            <AuthorIdentity
+              v-if="detailReferenceAuthor"
+              :author="detailReferenceAuthor"
+              variant="compact"
+            />
+            <p class="post-detail__reference-content">{{ detailReferenceContent }}</p>
+          </template>
+        </aside>
 
         <figure v-if="detailPresentation.coverUrl" class="post-detail__cover">
           <img
@@ -67,7 +86,7 @@
         </div>
 
         <div class="post-detail__engagement" aria-label="Post engagement">
-          <template v-if="detailPresentation.kind === 'article'">
+          <template v-if="detailPresentation.kind === 'post'">
             <button
               class="post-detail__metric post-detail__reply"
               type="button"
@@ -75,11 +94,11 @@
               @click="focusReplyComposer"
             >
               <AppIcon name="reply" :size="18" />
-              <span>{{ commentCount }}</span>
+              <span>{{ replyCount }}</span>
             </button>
 
             <RepostAction
-              :key="articleId"
+              :key="postId"
               :reposted="reposted"
               :count="repostCount"
               :disabled="!authStore.isAuthenticated || repostStateUnavailable"
@@ -90,7 +109,7 @@
               @toggle="toggleRepost"
             />
             <LikeAction
-              :key="articleId"
+              :key="postId"
               :liked="liked"
               :count="likeCount"
               :disabled="!authStore.isAuthenticated"
@@ -104,11 +123,11 @@
           <template v-else>
             <span
               class="post-detail__metric post-detail__reply"
-              :aria-label="presentationCommentLabel"
-              :title="presentationCommentLabel"
+              :aria-label="presentationReplyLabel"
+              :title="presentationReplyLabel"
             >
               <AppIcon name="reply" :size="18" />
-              <span>{{ detailPresentation.commentCount }}</span>
+              <span>{{ detailPresentation.replyCount }}</span>
             </span>
             <span
               class="post-detail__metric post-detail__repost"
@@ -130,17 +149,17 @@
         </div>
 
         <p
-          v-if="detailPresentation.kind === 'article' && likeError"
+          v-if="detailPresentation.kind === 'post' && likeError"
           class="detail-inline-error"
           role="status"
         >{{ likeError }}</p>
         <p
-          v-if="detailPresentation.kind === 'article' && repostError"
+          v-if="detailPresentation.kind === 'post' && repostError"
           class="detail-inline-error"
           role="status"
         >{{ repostError }}</p>
         <p
-          v-if="detailPresentation.kind === 'article' && deleteError"
+          v-if="detailPresentation.kind === 'post' && deleteError"
           class="detail-inline-error"
           role="alert"
         >{{ deleteError }}</p>
@@ -157,57 +176,57 @@
       </article>
 
       <section
-        v-if="detailPresentation.kind === 'article'"
+        v-if="detailPresentation.kind === 'post'"
         class="post-conversation"
         aria-label="Conversation"
       >
-        <CommentComposer
-          :key="articleId"
+        <ReplyComposer
+          :key="postId"
           ref="composerRef"
           :author="replyComposerAuthor"
           v-model="replyDraftContent"
-          :submitting="commentSubmitting"
-          @submit="handleCreateComment"
+          :submitting="replySubmitting"
+          @submit="handleCreateReply"
         />
 
-        <p v-if="commentError" class="comment-error" role="alert">{{ commentError }}</p>
+        <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
 
-        <div v-if="commentsInitialLoading" class="comments-state" aria-live="polite">
+        <div v-if="repliesInitialLoading" class="replies-state" aria-live="polite">
           Loading replies...
         </div>
-        <div v-else-if="commentsError" class="comments-state comments-state--error" role="alert">
+        <div v-else-if="repliesError" class="replies-state replies-state--error" role="alert">
           <p>Replies could not be loaded.</p>
-          <span>{{ commentsError }}</span>
-          <button type="button" @click="retryInitialComments">Retry</button>
+          <span>{{ repliesError }}</span>
+          <button type="button" @click="retryInitialReplies">Retry</button>
         </div>
-        <CommentList
+        <ReplyList
           v-else
-          :key="articleId"
-          :comments="comments"
+          :key="postId"
+          :replies="replies"
           :current-identity="currentIdentity"
-          :deleting-comment-id="deletingCommentId"
+          :deleting-reply-id="deletingReplyId"
           :has-next="Boolean(nextCursor)"
-          :loading-more="commentsLoadingMore"
-          :load-more-error="commentsLoadMoreError"
-          @load-more="loadMoreComments"
-          @retry="retryLoadMoreComments"
-          @delete="deleteOwnComment"
+          :loading-more="repliesLoadingMore"
+          :load-more-error="repliesLoadMoreError"
+          @load-more="loadMoreReplies"
+          @retry="retryLoadMoreReplies"
+          @delete="deleteOwnReply"
         />
       </section>
     </template>
 
-    <section v-else-if="articleLoading" class="detail-loading" role="status" aria-live="polite">
+    <section v-else-if="postLoading" class="detail-loading" role="status" aria-live="polite">
       <span class="detail-loading__spinner" aria-hidden="true"></span>
       <span class="sr-only">Loading post</span>
     </section>
 
     <section v-else class="detail-state detail-state--error">
-      <h2>{{ articleFailureTitle }}</h2>
-      <p>{{ articleFailureMessage }}</p>
+      <h2>{{ postFailureTitle }}</h2>
+      <p>{{ postFailureMessage }}</p>
       <RouterLink v-if="!authStore.isAuthenticated" class="detail-state__link" :to="{ name: 'Login' }">
         Log in
       </RouterLink>
-      <button v-else type="button" @click="retryArticle">Try again</button>
+      <button v-else type="button" @click="retryPost">Try again</button>
     </section>
   </main>
 </template>
@@ -219,28 +238,27 @@ import AuthorIdentity from '../components/AuthorIdentity.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
 import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
-import CommentComposer from '../components/comments/CommentComposer.vue';
-import CommentList from '../components/comments/CommentList.vue';
-import { createArticleComment, deleteComment, getArticleComments } from '../services/commentService';
-import { deleteArticle, getArticleById } from '../services/articleService';
-import { getArticleLikeState, likeArticle, unlikeArticle } from '../services/likeService';
-import { getArticleRepostState, repostArticle, undoRepostArticle } from '../services/repostService';
+import ReplyComposer from '../components/replies/ReplyComposer.vue';
+import ReplyList from '../components/replies/ReplyList.vue';
+import { createPostReply, deletePostReply, getPostReplies } from '../services/replyService';
+import { deletePost, getPostById } from '../services/postService';
+import { getPostLikeState, likePost, unlikePost } from '../services/likeService';
+import { getPostRepostState, repostPost, undoRepostPost } from '../services/repostService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
-import { createArticleViewEventID, getArticleViewTelemetry } from '../services/articleViewTelemetry';
+import { createPostViewEventID, getPostViewTelemetry } from '../services/postViewTelemetry';
 import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
 import { useAuthStore } from '../store/auth';
-import { useArticleDetailHandoffStore } from '../store/articleDetailHandoff';
+import { usePostDetailHandoffStore } from '../store/postDetailHandoff';
 import { useFeedStore } from '../store/feed';
 import { useReplyDraftStore } from '../store/replyDraft';
 import {
-  syncExternalArticleLikeState,
-  syncExternalArticleRepostState,
-  syncExternalArticleRemoval,
-  syncExternalCommentCount,
+  syncExternalPostLikeState,
+  syncExternalPostRepostState,
+  syncExternalPostRemoval,
+  syncExternalReplyCount,
 } from '../store/sessionSync';
-import type { Article } from '../types/Article';
-import type { ArticleComment } from '../types/Comment';
+import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
 import type { RecommendationTracking } from '../types/Recommendation';
 import type { PublicAuthor } from '../types/User';
@@ -250,21 +268,21 @@ import { formatPostDetailTimestamp } from '../utils/time';
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const articleDetailHandoff = useArticleDetailHandoffStore();
+const postDetailHandoff = usePostDetailHandoffStore();
 const feedStore = useFeedStore();
 const replyDraftStore = useReplyDraftStore();
 const currentIdentity = computed(() => authStore.currentIdentity);
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
-const articleId = computed(() => String(route.params.id ?? '').trim());
-const article = ref<Article | null>(null);
-const articleLoading = ref(false);
-const articleError = ref('');
+const postId = computed(() => String(route.params.id ?? '').trim());
+const post = ref<Post | null>(null);
+const postLoading = ref(false);
+const postError = ref('');
 const handoffPost = ref<FeedPost | null>(null);
 const failedCoverUrl = ref('');
 const deletePending = ref(false);
 const deleteError = ref('');
-const articleBodyRef = ref<HTMLElement | null>(null);
+const postBodyRef = ref<HTMLElement | null>(null);
 
 const liked = ref(false);
 const likeCount = ref(0);
@@ -278,17 +296,17 @@ const repostSubmitting = ref(false);
 const repostError = ref('');
 const repostStateUnavailable = ref(false);
 
-const comments = ref<ArticleComment[]>([]);
+const replies = ref<Post[]>([]);
 const nextCursor = ref<string | null>(null);
-const commentsInitialLoading = ref(false);
-const commentsLoadingMore = ref(false);
-const commentsError = ref('');
-const commentsLoadMoreError = ref('');
-const commentSubmitting = ref(false);
-const commentError = ref('');
-const deletingCommentId = ref<number | null>(null);
-const composerRef = ref<InstanceType<typeof CommentComposer> | null>(null);
-const commentCount = ref(0);
+const repliesInitialLoading = ref(false);
+const repliesLoadingMore = ref(false);
+const repliesError = ref('');
+const repliesLoadMoreError = ref('');
+const replySubmitting = ref(false);
+const replyError = ref('');
+const deletingReplyId = ref<number | null>(null);
+const composerRef = ref<InstanceType<typeof ReplyComposer> | null>(null);
+const replyCount = ref(0);
 const viewCount = ref(0);
 
 let detailRequestVersion = 0;
@@ -297,12 +315,12 @@ let likeRequestVersion = 0;
 let likeMutationVersion = 0;
 let repostRequestVersion = 0;
 let repostMutationVersion = 0;
-let commentsRequestVersion = 0;
+let repliesRequestVersion = 0;
 let replyIntentTask: Promise<void> | null = null;
 let replyIntentRetryRequested = false;
 
 let tracking: RecommendationTracking | null = null;
-let trackedArticleID = '';
+let trackedPostID = '';
 let readEndSent = false;
 let readTracker: ArticleReadTracker | null = null;
 let readResizeObserver: ResizeObserver | null = null;
@@ -311,13 +329,13 @@ const clampCount = (value: unknown) => {
   return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
 };
 
-const isValidArticleID = (value: string) => {
+const isValidPostID = (value: string) => {
   const parsed = Number(value);
   return /^\d+$/.test(value) && Number.isSafeInteger(parsed) && parsed > 0;
 };
 
 type DetailPresentation = {
-  kind: 'warm' | 'article';
+  kind: 'warm' | 'post';
   author: PublicAuthor;
   title: string;
   body: string;
@@ -326,28 +344,29 @@ type DetailPresentation = {
   likeCount: number;
   repostCount: number;
   reposted: boolean;
-  commentCount: number;
+  replyCount: number;
   viewCount: number;
 };
 
 const detailPresentation = computed<DetailPresentation | null>(() => {
-  if (article.value) {
+  if (post.value) {
+    const article = post.value.article;
     return {
-      kind: 'article',
-      author: article.value.author,
-      title: article.value.title,
-      body: article.value.content,
-      createdAt: article.value.CreatedAt,
-      coverUrl: article.value.cover_image_url || '',
+      kind: 'post',
+      author: post.value.author,
+      title: article?.title ?? '',
+      body: post.value.content,
+      createdAt: post.value.published_at || post.value.created_at,
+      coverUrl: article?.cover_image_url || '',
       likeCount: likeCount.value,
       repostCount: repostCount.value,
       reposted: reposted.value,
-      commentCount: commentCount.value,
+      replyCount: replyCount.value,
       viewCount: viewCount.value,
     };
   }
 
-  if (articleLoading.value && handoffPost.value) {
+  if (postLoading.value && handoffPost.value) {
     return {
       kind: 'warm',
       author: handoffPost.value.author,
@@ -358,7 +377,7 @@ const detailPresentation = computed<DetailPresentation | null>(() => {
       likeCount: handoffPost.value.likeCount,
       repostCount: handoffPost.value.repostCount,
       reposted: handoffPost.value.reposted,
-      commentCount: handoffPost.value.commentCount,
+      replyCount: handoffPost.value.replyCount,
       viewCount: handoffPost.value.viewCount,
     };
   }
@@ -366,13 +385,35 @@ const detailPresentation = computed<DetailPresentation | null>(() => {
   return null;
 });
 
+const detailReference = computed(() => (
+  post.value?.quote_post ?? post.value?.reply_to_post ?? null
+));
+
+const detailReferenceLabel = computed(() => (
+  post.value?.quote_post ? 'Quoted post' : 'Replying to'
+));
+
+const detailReferenceContent = computed(() => {
+  const reference = detailReference.value;
+  if (!reference || reference.deleted) {
+    return '';
+  }
+  return reference.article?.title?.trim()
+    || reference.content?.trim()
+    || 'Post';
+});
+const detailReferenceAuthor = computed(() => {
+  const reference = detailReference.value;
+  return reference && !reference.deleted ? reference.author : null;
+});
+
 const presentationLikeLabel = computed(() => {
   const count = detailPresentation.value?.likeCount ?? 0;
   return String(count) + (count === 1 ? ' like' : ' likes');
 });
 
-const presentationCommentLabel = computed(() => {
-  const count = detailPresentation.value?.commentCount ?? 0;
+const presentationReplyLabel = computed(() => {
+  const count = detailPresentation.value?.replyCount ?? 0;
   return String(count) + (count === 1 ? ' reply' : ' replies');
 });
 
@@ -381,18 +422,18 @@ const presentationRepostLabel = computed(() => {
   return String(count) + (count === 1 ? ' repost' : ' reposts');
 });
 
-const articleFailureTitle = computed(() => {
+const postFailureTitle = computed(() => {
   if (!authStore.isAuthenticated) {
     return 'Log in to view this post';
   }
   return 'Post unavailable';
 });
 
-const articleFailureMessage = computed(() => {
+const postFailureMessage = computed(() => {
   if (!authStore.isAuthenticated) {
     return 'Sign in to open this post and join the conversation.';
   }
-  return articleError.value || 'The post could not be loaded.';
+  return postError.value || 'The post could not be loaded.';
 });
 
 const currentViewerID = computed(() => {
@@ -416,19 +457,19 @@ const replyComposerAuthor = computed<PublicAuthor | null>(() => {
 });
 
 const replyDraftContent = computed({
-  get: () => replyDraftStore.getDraft(Number(articleId.value)),
-  set: value => replyDraftStore.setDraft(Number(articleId.value), value),
+  get: () => replyDraftStore.getDraft(Number(postId.value)),
+  set: value => replyDraftStore.setDraft(Number(postId.value), value),
 });
 
 const focusReplyComposer = async () => {
-  if (!article.value || !authStore.isAuthenticated) {
+  if (!post.value || !authStore.isAuthenticated) {
     return;
   }
 
   await composerRef.value?.focus();
 };
 
-const articleViewTelemetry = getArticleViewTelemetry();
+const postViewTelemetry = getPostViewTelemetry();
 
 const detailPostTimestamp = computed(() => (
   formatPostDetailTimestamp(detailPresentation.value?.createdAt)
@@ -440,7 +481,7 @@ const postViewsLabel = computed(() => (
   formatAccessibleEngagementCount(detailPresentation.value?.viewCount ?? 0, 'views')
 ));
 const detailReplyLabel = computed(() => {
-  const count = commentCount.value;
+  const count = replyCount.value;
   return 'Reply to post, ' + count + (count === 1 ? ' reply' : ' replies');
 });
 const detailLikeLabel = computed(() => {
@@ -457,20 +498,20 @@ const detailRepostLabel = computed(() => {
     ? 'Undo repost, ' + count
     : 'Repost post, ' + count;
 });
-const canDeleteArticle = computed(() => Boolean(
-  article.value
+const canDeletePost = computed(() => Boolean(
+  post.value
   && authStore.isAuthenticated
   && currentViewerID.value !== null
-  && article.value.author.id === currentViewerID.value,
+  && post.value.author.id === currentViewerID.value,
 ));
 
-const mergeComments = (items: ArticleComment[]) => {
+const mergeReplies = (items: Post[]) => {
   const seen = new Set<number>();
-  return items.filter(comment => {
-    if (seen.has(comment.id)) {
+  return items.filter(reply => {
+    if (seen.has(reply.id)) {
       return false;
     }
-    seen.add(comment.id);
+    seen.add(reply.id);
     return true;
   });
 };
@@ -481,7 +522,7 @@ const disconnectReadGeometryObserver = () => {
 };
 
 const getCurrentArticleReadGeometry = () => {
-  const element = articleBodyRef.value;
+  const element = postBodyRef.value;
   if (!element) {
     return null;
   }
@@ -508,7 +549,7 @@ const handleReadScroll = () => {
 };
 
 const finishRead = (exitType: string) => {
-  if (!tracking || readEndSent || !trackedArticleID || !readTracker) {
+  if (!tracking || readEndSent || !trackedPostID || !readTracker) {
     return false;
   }
 
@@ -518,7 +559,7 @@ const finishRead = (exitType: string) => {
   }
 
   readEndSent = true;
-  return recommendationTelemetry.recordReadEnd(Number(trackedArticleID), tracking, payload);
+  return recommendationTelemetry.recordReadEnd(Number(trackedPostID), tracking, payload);
 };
 
 const handleVisibilityChange = () => {
@@ -539,18 +580,22 @@ const startRead = (id: string, detailVersion: number) => {
   disconnectReadGeometryObserver();
   readTracker = null;
   tracking = null;
-  trackedArticleID = id;
+  trackedPostID = id;
   readEndSent = false;
 
   if (
     detailVersion !== detailRequestVersion
-    || articleId.value !== id
-    || article.value?.ID !== Number(id)
+    || postId.value !== id
+    || post.value?.id !== Number(id)
   ) {
     return;
   }
 
-  const element = articleBodyRef.value;
+  if (!post.value?.article) {
+    return;
+  }
+
+  const element = postBodyRef.value;
   if (!element) {
     return;
   }
@@ -594,25 +639,25 @@ const resetRepostState = () => {
   repostStateUnavailable.value = false;
 };
 
-const resetCommentsState = () => {
-  commentsRequestVersion += 1;
-  comments.value = [];
+const resetRepliesState = () => {
+  repliesRequestVersion += 1;
+  replies.value = [];
   nextCursor.value = null;
-  commentsInitialLoading.value = false;
-  commentsLoadingMore.value = false;
-  commentsError.value = '';
-  commentsLoadMoreError.value = '';
-  commentSubmitting.value = false;
-  commentError.value = '';
-  deletingCommentId.value = null;
-  commentCount.value = 0;
+  repliesInitialLoading.value = false;
+  repliesLoadingMore.value = false;
+  repliesError.value = '';
+  repliesLoadMoreError.value = '';
+  replySubmitting.value = false;
+  replyError.value = '';
+  deletingReplyId.value = null;
+  replyCount.value = 0;
 };
 
-const resetArticleState = () => {
+const resetPostState = () => {
   deleteRequestVersion += 1;
-  article.value = null;
-  articleLoading.value = false;
-  articleError.value = '';
+  post.value = null;
+  postLoading.value = false;
+  postError.value = '';
   failedCoverUrl.value = '';
   viewCount.value = 0;
   deletePending.value = false;
@@ -622,13 +667,13 @@ const resetArticleState = () => {
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
-const handleDeleteArticle = async () => {
-  const currentArticle = article.value;
+const handleDeletePost = async () => {
+  const currentPost = post.value;
   const viewerID = currentViewerID.value;
   if (
-    !currentArticle
+    !currentPost
     || viewerID === null
-    || !canDeleteArticle.value
+    || !canDeletePost.value
     || deletePending.value
   ) {
     return;
@@ -639,7 +684,7 @@ const handleDeleteArticle = async () => {
 
   const detailVersion = detailRequestVersion;
   const requestVersion = ++deleteRequestVersion;
-  const articleID = currentArticle.ID;
+  const postID = currentPost.id;
   deletePending.value = true;
   deleteError.value = '';
 
@@ -649,14 +694,14 @@ const handleDeleteArticle = async () => {
     && authStore.isAuthenticated
     && currentViewerID.value === viewerID
     && feedStore.viewerID === viewerID
-    && article.value?.ID === articleID;
+    && post.value?.id === postID;
 
   const finishTerminalDelete = () => {
-    if (!isCurrentDelete() || !feedStore.markArticleDeleted(articleID, viewerID)) {
+    if (!isCurrentDelete() || !feedStore.markPostDeleted(postID, viewerID)) {
       return false;
     }
-    syncExternalArticleRemoval(articleID);
-    replyDraftStore.clearDraft(articleID);
+    syncExternalPostRemoval(postID);
+    replyDraftStore.clearDraft(postID);
     finishRead('route_leave');
     void recommendationTelemetry.flush(false);
     deletePending.value = false;
@@ -669,7 +714,7 @@ const handleDeleteArticle = async () => {
   };
 
   try {
-    await deleteArticle(articleID);
+    await deletePost(postID);
     finishTerminalDelete();
   } catch (error) {
     if (!isCurrentDelete()) {
@@ -705,7 +750,7 @@ const loadLikeState = async (id: string, detailVersion: number) => {
   likeError.value = '';
 
   try {
-    const response = await getArticleLikeState(id);
+    const response = await getPostLikeState(id);
     if (
       detailVersion !== detailRequestVersion ||
       requestVersion !== likeRequestVersion ||
@@ -739,7 +784,7 @@ const loadRepostState = async (id: string, detailVersion: number) => {
   repostStateUnavailable.value = false;
 
   try {
-    const response = await getArticleRepostState(id);
+    const response = await getPostRepostState(id);
     if (
       detailVersion !== detailRequestVersion
       || requestVersion !== repostRequestVersion
@@ -773,7 +818,7 @@ const loadRepostState = async (id: string, detailVersion: number) => {
 
 const toggleLike = async () => {
   if (
-    !article.value ||
+    !post.value ||
     !authStore.isAuthenticated ||
     likeStateLoading.value ||
     likeSubmitting.value
@@ -782,7 +827,7 @@ const toggleLike = async () => {
   }
 
   const detailVersion = detailRequestVersion;
-  const id = articleId.value;
+  const id = postId.value;
   const mutationVersion = ++likeMutationVersion;
   const previousLiked = liked.value;
   const previousCount = likeCount.value;
@@ -793,15 +838,15 @@ const toggleLike = async () => {
   likeCount.value = Math.max(0, previousCount + (liked.value ? 1 : -1));
 
   try {
-    const response = previousLiked ? await unlikeArticle(id) : await likeArticle(id);
+    const response = previousLiked ? await unlikePost(id) : await likePost(id);
     if (detailVersion !== detailRequestVersion || mutationVersion !== likeMutationVersion) {
       return;
     }
 
     liked.value = response.liked;
     likeCount.value = clampCount(response.likes);
-    syncExternalArticleLikeState({
-      articleId: Number(id),
+    syncExternalPostLikeState({
+      postId: Number(id),
       likes: likeCount.value,
       liked: response.liked,
       status: 'ready',
@@ -821,7 +866,7 @@ const toggleLike = async () => {
 
 const toggleRepost = async () => {
   if (
-    !article.value
+    !post.value
     || !authStore.isAuthenticated
     || repostStateLoading.value
     || repostSubmitting.value
@@ -831,7 +876,7 @@ const toggleRepost = async () => {
   }
 
   const detailVersion = detailRequestVersion;
-  const id = articleId.value;
+  const id = postId.value;
   const mutationVersion = ++repostMutationVersion;
   const previousReposted = reposted.value;
   const previousCount = repostCount.value;
@@ -843,15 +888,15 @@ const toggleRepost = async () => {
   repostCount.value = Math.max(0, previousCount + (reposted.value ? 1 : -1));
 
   try {
-    const response = previousReposted ? await undoRepostArticle(id) : await repostArticle(id);
+    const response = previousReposted ? await undoRepostPost(id) : await repostPost(id);
     if (detailVersion !== detailRequestVersion || mutationVersion !== repostMutationVersion) {
       return;
     }
 
     reposted.value = response.reposted;
     repostCount.value = clampCount(response.reposts);
-    syncExternalArticleRepostState({
-      articleId: Number(id),
+    syncExternalPostRepostState({
+      postId: Number(id),
       reposts: repostCount.value,
       reposted: response.reposted,
       status: 'ready',
@@ -870,156 +915,156 @@ const toggleRepost = async () => {
   }
 };
 
-const loadInitialComments = async (id: string, detailVersion: number) => {
-  const requestVersion = ++commentsRequestVersion;
-  commentsInitialLoading.value = true;
-  commentsLoadingMore.value = false;
-  commentsError.value = '';
-  commentsLoadMoreError.value = '';
-  comments.value = [];
+const loadInitialReplies = async (id: string, detailVersion: number) => {
+  const requestVersion = ++repliesRequestVersion;
+  repliesInitialLoading.value = true;
+  repliesLoadingMore.value = false;
+  repliesError.value = '';
+  repliesLoadMoreError.value = '';
+  replies.value = [];
   nextCursor.value = null;
 
   try {
-    const page = await getArticleComments(id, { limit: 20 });
-    if (detailVersion !== detailRequestVersion || requestVersion !== commentsRequestVersion) {
+    const page = await getPostReplies(id, { limit: 20 });
+    if (detailVersion !== detailRequestVersion || requestVersion !== repliesRequestVersion) {
       return;
     }
 
-    comments.value = mergeComments(comments.value.concat(page.items));
+    replies.value = mergeReplies(replies.value.concat(page.items));
     nextCursor.value = page.next_cursor || null;
   } catch {
-    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
-      commentsError.value = 'The replies could not be loaded.';
+    if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
+      repliesError.value = 'The replies could not be loaded.';
     }
   } finally {
-    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
-      commentsInitialLoading.value = false;
+    if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
+      repliesInitialLoading.value = false;
     }
   }
 };
 
-const loadMoreComments = async () => {
+const loadMoreReplies = async () => {
   if (
     !nextCursor.value ||
-    commentsInitialLoading.value ||
-    commentsLoadingMore.value ||
-    !article.value
+    repliesInitialLoading.value ||
+    repliesLoadingMore.value ||
+    !post.value
   ) {
     return;
   }
 
-  const id = articleId.value;
+  const id = postId.value;
   const detailVersion = detailRequestVersion;
-  const requestVersion = ++commentsRequestVersion;
+  const requestVersion = ++repliesRequestVersion;
   const cursor = nextCursor.value;
-  commentsLoadingMore.value = true;
-  commentsLoadMoreError.value = '';
+  repliesLoadingMore.value = true;
+  repliesLoadMoreError.value = '';
 
   try {
-    const page = await getArticleComments(id, { limit: 20, cursor });
-    if (detailVersion !== detailRequestVersion || requestVersion !== commentsRequestVersion) {
+    const page = await getPostReplies(id, { limit: 20, cursor });
+    if (detailVersion !== detailRequestVersion || requestVersion !== repliesRequestVersion) {
       return;
     }
 
-    comments.value = mergeComments(comments.value.concat(page.items));
+    replies.value = mergeReplies(replies.value.concat(page.items));
     nextCursor.value = page.next_cursor || null;
   } catch {
-    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
-      commentsLoadMoreError.value = 'Could not load more replies.';
+    if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
+      repliesLoadMoreError.value = 'Could not load more replies.';
     }
   } finally {
-    if (detailVersion === detailRequestVersion && requestVersion === commentsRequestVersion) {
-      commentsLoadingMore.value = false;
+    if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
+      repliesLoadingMore.value = false;
     }
   }
 };
 
-const retryInitialComments = () => {
-  if (article.value) {
-    void loadInitialComments(articleId.value, detailRequestVersion);
+const retryInitialReplies = () => {
+  if (post.value) {
+    void loadInitialReplies(postId.value, detailRequestVersion);
   }
 };
 
-const retryLoadMoreComments = () => {
-  void loadMoreComments();
+const retryLoadMoreReplies = () => {
+  void loadMoreReplies();
 };
 
-const handleCreateComment = async (content: string) => {
-  if (!article.value || !authStore.isAuthenticated || commentSubmitting.value) {
+const handleCreateReply = async (content: string) => {
+  if (!post.value || !authStore.isAuthenticated || replySubmitting.value) {
     return;
   }
 
-  const id = articleId.value;
-  const numericArticleID = Number(id);
+  const id = postId.value;
+  const numericPostID = Number(id);
   const submittingViewerID = currentViewerID.value;
-  const submittedDraftSnapshot = replyDraftStore.getDraft(numericArticleID);
+  const submittedDraftSnapshot = replyDraftStore.getDraft(numericPostID);
   const detailVersion = detailRequestVersion;
-  commentSubmitting.value = true;
-  commentError.value = '';
+  replySubmitting.value = true;
+  replyError.value = '';
 
   try {
-    const created = await createArticleComment(id, content);
+    const created = await createPostReply(id, content);
     if (
       replyDraftStore.viewerID === submittingViewerID
-      && replyDraftStore.getDraft(numericArticleID) === submittedDraftSnapshot
+      && replyDraftStore.getDraft(numericPostID) === submittedDraftSnapshot
     ) {
-      replyDraftStore.clearDraft(numericArticleID);
+      replyDraftStore.clearDraft(numericPostID);
     }
 
-    if (detailVersion !== detailRequestVersion || articleId.value !== id) {
+    if (detailVersion !== detailRequestVersion || postId.value !== id) {
       return;
     }
 
-    comments.value = mergeComments([created].concat(comments.value));
-    commentsError.value = '';
-    commentCount.value = clampCount(commentCount.value + 1);
-    syncExternalCommentCount({
-      articleId: Number(id),
-      commentCount: commentCount.value,
+    replies.value = mergeReplies([created].concat(replies.value));
+    repliesError.value = '';
+    replyCount.value = clampCount(replyCount.value + 1);
+    syncExternalReplyCount({
+      postId: Number(id),
+      replyCount: replyCount.value,
     });
   } catch {
     if (detailVersion === detailRequestVersion) {
-      commentError.value = 'Reply failed. Please try again.';
+      replyError.value = 'Reply failed. Please try again.';
     }
   } finally {
     if (detailVersion === detailRequestVersion) {
-      commentSubmitting.value = false;
+      replySubmitting.value = false;
     }
   }
 };
 
-const deleteOwnComment = async (commentID: number) => {
+const deleteOwnReply = async (replyID: number) => {
   if (
     !authStore.isAuthenticated ||
-    deletingCommentId.value !== null ||
-    !comments.value.some(comment => comment.id === commentID)
+    deletingReplyId.value !== null ||
+    !replies.value.some(reply => reply.id === replyID)
   ) {
     return;
   }
 
   const detailVersion = detailRequestVersion;
-  deletingCommentId.value = commentID;
-  commentError.value = '';
+  deletingReplyId.value = replyID;
+  replyError.value = '';
 
   try {
-    await deleteComment(commentID);
+    await deletePostReply(replyID);
     if (detailVersion !== detailRequestVersion) {
       return;
     }
 
-    comments.value = comments.value.filter(comment => comment.id !== commentID);
-    commentCount.value = Math.max(0, commentCount.value - 1);
-    syncExternalCommentCount({
-      articleId: Number(articleId.value),
-      commentCount: commentCount.value,
+    replies.value = replies.value.filter(reply => reply.id !== replyID);
+    replyCount.value = Math.max(0, replyCount.value - 1);
+    syncExternalReplyCount({
+      postId: Number(postId.value),
+      replyCount: replyCount.value,
     });
   } catch {
     if (detailVersion === detailRequestVersion) {
-      commentError.value = 'Reply could not be deleted. Please try again.';
+      replyError.value = 'Reply could not be deleted. Please try again.';
     }
   } finally {
-    if (detailVersion === detailRequestVersion && deletingCommentId.value === commentID) {
-      deletingCommentId.value = null;
+    if (detailVersion === detailRequestVersion && deletingReplyId.value === replyID) {
+      deletingReplyId.value = null;
     }
   }
 };
@@ -1031,20 +1076,20 @@ const consumeReplyIntent = async () => {
   }
 
   const task = (async () => {
-    if (route.query.reply !== '1' || !authStore.isAuthenticated || !article.value) {
+    if (route.query.reply !== '1' || !authStore.isAuthenticated || !post.value) {
       return;
     }
 
     const detailVersion = detailRequestVersion;
-    const id = articleId.value;
+    const id = postId.value;
     await nextTick();
 
     const isCurrentIntent = () =>
       route.query.reply === '1'
       && authStore.isAuthenticated
       && detailVersion === detailRequestVersion
-      && id === articleId.value
-      && Boolean(article.value);
+      && id === postId.value
+      && Boolean(post.value);
 
     if (!isCurrentIntent()) {
       return;
@@ -1064,7 +1109,7 @@ const consumeReplyIntent = async () => {
 
     try {
       await router.replace({
-        name: 'NewsDetail',
+        name: 'PostDetail',
         params: route.params,
         query,
         hash: route.hash,
@@ -1093,57 +1138,57 @@ const consumeReplyIntent = async () => {
 
 const loadDetail = async (id: string, isAuthenticated: boolean) => {
   const detailVersion = ++detailRequestVersion;
-  finishRead('navigate_to_article');
+  finishRead('navigate_to_post');
   void recommendationTelemetry.flush(false);
-  resetArticleState();
+  resetPostState();
   resetLikeState();
   resetRepostState();
-  resetCommentsState();
+  resetRepliesState();
   handoffPost.value = null;
 
   if (!isAuthenticated) {
     return;
   }
 
-  if (!isValidArticleID(id)) {
-    articleError.value = 'This post URL is not valid.';
+  if (!isValidPostID(id)) {
+    postError.value = 'This post URL is not valid.';
     return;
   }
 
-  handoffPost.value = articleDetailHandoff.consume(Number(id));
-  articleLoading.value = true;
+  handoffPost.value = postDetailHandoff.consume(Number(id));
+  postLoading.value = true;
 
   try {
-    const loadedArticle = await getArticleById(id);
+    const loadedPost = await getPostById(id);
     if (detailVersion !== detailRequestVersion) {
       return;
     }
-    if (loadedArticle.ID !== Number(id)) {
-      throw new Error('article response id mismatch');
+    if (loadedPost.id !== Number(id)) {
+      throw new Error('post response id mismatch');
     }
 
     handoffPost.value = null;
-    article.value = loadedArticle;
-    likeCount.value = clampCount(loadedArticle.like_count);
-    commentCount.value = clampCount(loadedArticle.comment_count);
-    viewCount.value = clampCount(loadedArticle.view_count);
-    articleLoading.value = false;
+    post.value = loadedPost;
+    likeCount.value = clampCount(loadedPost.like_count);
+    replyCount.value = clampCount(loadedPost.reply_count);
+    viewCount.value = clampCount(loadedPost.view_count);
+    postLoading.value = false;
     await nextTick();
     if (
       detailVersion !== detailRequestVersion
-      || articleId.value !== id
-      || article.value?.ID !== Number(id)
+      || postId.value !== id
+      || post.value?.id !== Number(id)
     ) {
       return;
     }
 
-    articleViewTelemetry.enqueue(Number(id), createArticleViewEventID(), 'article_detail');
-    if (articleBodyRef.value) {
+    postViewTelemetry.enqueue(Number(id), createPostViewEventID(), 'post_detail');
+    if (postBodyRef.value && loadedPost.article) {
       startRead(id, detailVersion);
     }
     void loadLikeState(id, detailVersion);
     void loadRepostState(id, detailVersion);
-    void loadInitialComments(id, detailVersion);
+    void loadInitialReplies(id, detailVersion);
   } catch (error) {
     if (detailVersion === detailRequestVersion) {
       handoffPost.value = null;
@@ -1151,19 +1196,19 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       if (status === 404) {
         replyDraftStore.clearDraft(Number(id));
       }
-      articleError.value = status === 404
+      postError.value = status === 404
         ? 'This post does not exist.'
         : 'The post could not be loaded.';
     }
   } finally {
     if (detailVersion === detailRequestVersion) {
-      articleLoading.value = false;
+      postLoading.value = false;
     }
   }
 };
 
-const retryArticle = () => {
-  void loadDetail(articleId.value, authStore.isAuthenticated);
+const retryPost = () => {
+  void loadDetail(postId.value, authStore.isAuthenticated);
 };
 
 const goBack = () => {
@@ -1184,7 +1229,7 @@ const handleCoverError = () => {
 };
 
 watch(
-  [articleId, () => authStore.isAuthenticated],
+  [postId, () => authStore.isAuthenticated],
   ([id, isAuthenticated]) => {
     void loadDetail(id, isAuthenticated);
   },
@@ -1209,7 +1254,7 @@ watch(
 );
 
 watch(
-  [() => route.query.reply, article, () => authStore.isAuthenticated, commentSubmitting],
+  [() => route.query.reply, post, () => authStore.isAuthenticated, replySubmitting],
   () => {
     if (route.query.reply === '1') {
       void consumeReplyIntent();
@@ -1368,6 +1413,41 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
+.post-detail__reference {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 100%;
+  margin-top: var(--space-4);
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--color-surface-subtle);
+}
+
+.post-detail__reference-label {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.post-detail__reference-content,
+.post-detail__reference-tombstone {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.post-detail__reference-tombstone {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
 .post-detail__body--loading {
   color: var(--color-text-secondary);
 }
@@ -1457,7 +1537,7 @@ onBeforeUnmount(() => {
 }
 
 .detail-inline-error,
-.comment-error {
+.reply-error {
   margin: var(--space-3) 0 0;
   color: var(--color-danger);
   font-size: 12px;
@@ -1473,30 +1553,30 @@ onBeforeUnmount(() => {
   text-decoration: underline;
 }
 
-.comments-state {
+.replies-state {
   padding: var(--space-8) 0;
   color: var(--color-text-secondary);
   text-align: center;
 }
 
-.comments-state--error {
+.replies-state--error {
   display: grid;
   justify-items: center;
   gap: var(--space-2);
 }
 
-.comments-state p {
+.replies-state p {
   margin: 0;
   color: var(--color-text);
   font-weight: 700;
 }
 
-.comments-state span {
+.replies-state span {
   color: var(--color-text-secondary);
   font-size: 13px;
 }
 
-.comments-state button,
+.replies-state button,
 .detail-state button {
   min-height: 34px;
   border: 0;

@@ -160,8 +160,8 @@ const openNotification = (item: Notification) => {
   void notificationStore.markNotificationRead(item.id).catch(() => undefined);
   if (item.type === 'user_followed') {
     void router.push({ name: 'UserProfile', params: { id: String(item.actor.id) } });
-  } else if (item.article_id !== null) {
-    void router.push({ name: 'NewsDetail', params: { id: String(item.article_id) } });
+  } else if (item.post_id !== null) {
+    void router.push({ name: 'PostDetail', params: { id: String(item.post_id) } });
   }
 };
 

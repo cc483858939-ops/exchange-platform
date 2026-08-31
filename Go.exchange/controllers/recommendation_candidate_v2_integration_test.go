@@ -28,9 +28,10 @@ func openRecommendationCandidateIntegrationDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&models.User{},
-		&models.Article{},
-		&models.ArticleBehavior{},
-		&models.ArticleReaction{},
+		&models.Post{},
+		&models.PostArticle{},
+		&models.PostBehavior{},
+		&models.PostReaction{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -57,24 +58,23 @@ func newRecommendationCandidateIntegrationUser(t *testing.T, db *gorm.DB, label 
 	return user
 }
 
-func newRecommendationCandidateIntegrationArticle(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time) models.Article {
+func newRecommendationCandidateIntegrationArticle(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time) models.Post {
 	t.Helper()
-	article := models.Article{
-		AuthorID:         author.ID,
-		Title:            title,
-		Content:          "body",
-		Preview:          "body",
-		PublicationState: consts.ArticlePublicationStatePublished,
-		PublishedAt:      &publishedAt,
+	article := models.Post{
+		Model:    gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt},
+		AuthorID: author.ID, Content: "body", Visibility: "public",
 	}
 	if err := db.Create(&article).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: "body", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &publishedAt}).Error; err != nil {
 		t.Fatal(err)
 	}
 	return article
 }
 
-func cleanupRecommendationCandidateIntegrationData(db *gorm.DB, articleIDs, userIDs []uint) {
-	db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+func cleanupRecommendationCandidateIntegrationData(db *gorm.DB, postIDs, userIDs []uint) {
+	db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
 }
 
@@ -87,10 +87,10 @@ func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	badArticle := newRecommendationCandidateIntegrationArticle(t, db, deletedAuthor, "bad", now)
 	goodArticle := newRecommendationCandidateIntegrationArticle(t, db, validAuthor, "good", now.Add(-time.Minute))
-	articleIDs := []uint{badArticle.ID, goodArticle.ID}
+	postIDs := []uint{badArticle.ID, goodArticle.ID}
 	userIDs := []uint{viewer.ID, validAuthor.ID, deletedAuthor.ID}
 	t.Cleanup(func() {
-		cleanupRecommendationCandidateIntegrationData(db, articleIDs, userIDs)
+		cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs)
 	})
 
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
@@ -100,11 +100,11 @@ func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing
 	candidates, err := loadRecommendationSourceCandidates(
 		viewer.ID,
 		userInterestProfile{},
-		map[uint]servedArticle{},
+		map[uint]servedPost{},
 		now,
 		defaultRecommendationConfig(),
 		false,
-		"articles.published_at DESC, articles.id DESC",
+		"posts.published_at DESC, posts.id DESC",
 		1,
 		"recent",
 	)
@@ -114,10 +114,10 @@ func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing
 	if len(candidates) != 1 {
 		t.Fatalf("candidate count=%d, want 1", len(candidates))
 	}
-	if candidates[0].ArticleID != goodArticle.ID {
-		t.Fatalf("candidate article ID=%d, want valid article %d", candidates[0].ArticleID, goodArticle.ID)
+	if candidates[0].PostID != goodArticle.ID {
+		t.Fatalf("candidate article ID=%d, want valid article %d", candidates[0].PostID, goodArticle.ID)
 	}
-	if candidates[0].ArticleID == badArticle.ID {
+	if candidates[0].PostID == badArticle.ID {
 		t.Fatal("deleted-author article was returned")
 	}
 }
@@ -129,30 +129,30 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	validArticle := newRecommendationCandidateIntegrationArticle(t, db, validAuthor, "valid", now)
 	badArticle := newRecommendationCandidateIntegrationArticle(t, db, deletedAuthor, "bad", now)
-	articleIDs := []uint{validArticle.ID, badArticle.ID}
+	postIDs := []uint{validArticle.ID, badArticle.ID}
 	userIDs := []uint{validAuthor.ID, deletedAuthor.ID}
 	t.Cleanup(func() {
-		cleanupRecommendationCandidateIntegrationData(db, articleIDs, userIDs)
+		cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs)
 	})
 
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
 		t.Fatal(err)
 	}
 
-	originalLoader := loadRecommendationArticleEmbeddings
-	var embeddingArticleIDs []uint
-	loadRecommendationArticleEmbeddings = func(articleIDs []uint, _ string) (map[uint][]float32, error) {
-		embeddingArticleIDs = append([]uint(nil), articleIDs...)
+	originalLoader := loadRecommendationPostEmbeddings
+	var embeddingPostIDs []uint
+	loadRecommendationPostEmbeddings = func(postIDs []uint, _ string) (map[uint][]float32, error) {
+		embeddingPostIDs = append([]uint(nil), postIDs...)
 		return map[uint][]float32{}, nil
 	}
 	t.Cleanup(func() {
-		loadRecommendationArticleEmbeddings = originalLoader
+		loadRecommendationPostEmbeddings = originalLoader
 	})
 
 	hydrated, err := hydrateRecommendationCandidates(
 		[]embeddingCandidate{
-			{ArticleID: validArticle.ID, FromRecent: true},
-			{ArticleID: badArticle.ID, FromTrending: true},
+			{PostID: validArticle.ID, FromRecent: true},
+			{PostID: badArticle.ID, FromTrending: true},
 		},
 		now,
 	)
@@ -162,14 +162,14 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 	if len(hydrated) != 1 {
 		t.Fatalf("hydrated count=%d, want 1", len(hydrated))
 	}
-	if hydrated[0].Article.ID != validArticle.ID {
-		t.Fatalf("hydrated article ID=%d, want %d", hydrated[0].Article.ID, validArticle.ID)
+	if hydrated[0].Post.ID != validArticle.ID {
+		t.Fatalf("hydrated article ID=%d, want %d", hydrated[0].Post.ID, validArticle.ID)
 	}
-	if hydrated[0].Article.Author.ID != validAuthor.ID || hydrated[0].Article.Author.ID != hydrated[0].Article.AuthorID {
-		t.Fatalf("hydrated author=%#v author_id=%d", hydrated[0].Article.Author, hydrated[0].Article.AuthorID)
+	if hydrated[0].Post.Author.ID != validAuthor.ID || hydrated[0].Post.Author.ID != hydrated[0].Post.AuthorID {
+		t.Fatalf("hydrated author=%#v author_id=%d", hydrated[0].Post.Author, hydrated[0].Post.AuthorID)
 	}
-	if len(embeddingArticleIDs) != 1 || embeddingArticleIDs[0] != validArticle.ID {
-		t.Fatalf("embedding article IDs=%v, want [%d]", embeddingArticleIDs, validArticle.ID)
+	if len(embeddingPostIDs) != 1 || embeddingPostIDs[0] != validArticle.ID {
+		t.Fatalf("embedding article IDs=%v, want [%d]", embeddingPostIDs, validArticle.ID)
 	}
 }
 
@@ -178,28 +178,28 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 	deletedAuthor := newRecommendationCandidateIntegrationUser(t, db, "deleted-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	badArticle := newRecommendationCandidateIntegrationArticle(t, db, deletedAuthor, "bad", now)
-	articleIDs := []uint{badArticle.ID}
+	postIDs := []uint{badArticle.ID}
 	userIDs := []uint{deletedAuthor.ID}
 	t.Cleanup(func() {
-		cleanupRecommendationCandidateIntegrationData(db, articleIDs, userIDs)
+		cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs)
 	})
 
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
 		t.Fatal(err)
 	}
 
-	originalLoader := loadRecommendationArticleEmbeddings
+	originalLoader := loadRecommendationPostEmbeddings
 	called := false
-	loadRecommendationArticleEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
 		called = true
 		return nil, nil
 	}
 	t.Cleanup(func() {
-		loadRecommendationArticleEmbeddings = originalLoader
+		loadRecommendationPostEmbeddings = originalLoader
 	})
 
 	hydrated, err := hydrateRecommendationCandidates(
-		[]embeddingCandidate{{ArticleID: badArticle.ID}},
+		[]embeddingCandidate{{PostID: badArticle.ID}},
 		now,
 	)
 	if err != nil {
@@ -218,26 +218,26 @@ func TestRecommendationHydrationPropagatesEmbeddingErrorIntegration(t *testing.T
 	validAuthor := newRecommendationCandidateIntegrationUser(t, db, "valid-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	validArticle := newRecommendationCandidateIntegrationArticle(t, db, validAuthor, "valid", now)
-	articleIDs := []uint{validArticle.ID}
+	postIDs := []uint{validArticle.ID}
 	userIDs := []uint{validAuthor.ID}
 	t.Cleanup(func() {
-		cleanupRecommendationCandidateIntegrationData(db, articleIDs, userIDs)
+		cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs)
 	})
 
 	sentinel := errors.New("embedding load failure")
-	originalLoader := loadRecommendationArticleEmbeddings
-	loadRecommendationArticleEmbeddings = func(articleIDs []uint, _ string) (map[uint][]float32, error) {
-		if len(articleIDs) != 1 || articleIDs[0] != validArticle.ID {
-			t.Fatalf("embedding article IDs=%v, want [%d]", articleIDs, validArticle.ID)
+	originalLoader := loadRecommendationPostEmbeddings
+	loadRecommendationPostEmbeddings = func(postIDs []uint, _ string) (map[uint][]float32, error) {
+		if len(postIDs) != 1 || postIDs[0] != validArticle.ID {
+			t.Fatalf("embedding article IDs=%v, want [%d]", postIDs, validArticle.ID)
 		}
 		return nil, sentinel
 	}
 	t.Cleanup(func() {
-		loadRecommendationArticleEmbeddings = originalLoader
+		loadRecommendationPostEmbeddings = originalLoader
 	})
 
 	_, err := hydrateRecommendationCandidates(
-		[]embeddingCandidate{{ArticleID: validArticle.ID}},
+		[]embeddingCandidate{{PostID: validArticle.ID}},
 		now,
 	)
 	if !errors.Is(err, sentinel) {

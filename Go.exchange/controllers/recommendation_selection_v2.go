@@ -31,7 +31,8 @@ const (
 
 type selectedRecommendation struct {
 	Candidate              embeddingCandidate
-	Article                models.Article
+	Post                   models.Post
+	PostArticle            *models.PostArticle
 	Embedding              []float32
 	Breakdown              recommendationScoreBreakdown
 	IsInNetwork            bool
@@ -161,7 +162,7 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 	result := append([]selectedRecommendation(nil), initial...)
 	selectedIDs := make(map[uint]struct{}, len(result))
 	for _, item := range result {
-		selectedIDs[item.Article.ID] = struct{}{}
+		selectedIDs[item.Post.ID] = struct{}{}
 	}
 	outPositions := make(map[int]struct{})
 	for _, position := range balancedPositions(limit, int(math.Round(float64(limit)*cfg.OutOfNetworkMinRatio))) {
@@ -179,7 +180,7 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 		onlyFresh := mode == recommendationSelectionFresh
 		onlySoft := mode == recommendationSelectionSoft
 		available := func(item hydratedRecommendationCandidate) bool {
-			if _, exists := selectedIDs[item.Article.ID]; exists {
+			if _, exists := selectedIDs[item.Post.ID]; exists {
 				return false
 			}
 			if onlyFresh && item.Candidate.WasSoftServed {
@@ -204,7 +205,7 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 		}
 		if opportunity {
 			_, strict, strictOK := chooseStrictExplorationCandidate(candidates, result, available, outPositions, position, cfg, now)
-			if strictOK && (!normalOK || strict.Article.ID != normal.Article.ID) {
+			if strictOK && (!normalOK || strict.Post.ID != normal.Post.ID) {
 				chosen = strict
 				ok = true
 				selectionOpportunity = true
@@ -218,10 +219,10 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 		if !ok {
 			break
 		}
-		selectedIDs[chosen.Article.ID] = struct{}{}
+		selectedIDs[chosen.Post.ID] = struct{}{}
 		chosen.Breakdown.FinalScore = chosen.Breakdown.BaseScore - chosen.Breakdown.DiversityPenalty
 		result = append(result, selectedRecommendation{
-			Candidate: chosen.Candidate, Article: chosen.Article, Embedding: chosen.Embedding,
+			Candidate: chosen.Candidate, Post: chosen.Post, PostArticle: chosen.PostArticle, Embedding: chosen.Embedding,
 			Breakdown: chosen.Breakdown, IsInNetwork: chosen.IsInNetwork, IsNovelAuthor: chosen.IsNovelAuthor,
 			ExplorationOpportunity: selectionOpportunity, SelectionMode: selectionMode,
 			ExplorationReason: selectionReason, ExplorationSemantic: selectionSemantic,
@@ -319,7 +320,7 @@ func recommendationAuthorWindowAllows(candidate hydratedRecommendationCandidate,
 	}
 	count := 0
 	for index := start; index < len(selected); index++ {
-		if selected[index].Article.AuthorID == candidate.Article.AuthorID {
+		if selected[index].Post.AuthorID == candidate.Post.AuthorID {
 			count++
 		}
 	}
@@ -349,8 +350,8 @@ func recommendationIsSemanticDuplicate(candidate hydratedRecommendationCandidate
 	return comparable && maxSimilarity >= cfg.Diversity.SemanticDuplicateThreshold
 }
 
-func recommendationArticleAgeDays(article models.Article, now time.Time) float64 {
-	ageDays := now.Sub(recommendationArticleTime(article)).Hours() / 24
+func recommendationPostAgeDays(post models.Post, now time.Time) float64 {
+	ageDays := now.Sub(recommendationPostTime(post)).Hours() / 24
 	if ageDays < 0 {
 		return 0
 	}
@@ -358,8 +359,12 @@ func recommendationArticleAgeDays(article models.Article, now time.Time) float64
 }
 
 func recommendationExplorationReason(candidate hydratedRecommendationCandidate, now time.Time, cfg config.RecommendationConfig) string {
-	recent := candidate.Candidate.FromRecent && recommendationArticleAgeDays(candidate.Article, now) <= float64(cfg.Exploration.RecentWindowDays)
-	novel := candidate.IsNovelAuthor && recommendationArticleAgeDays(candidate.Article, now) <= float64(cfg.Exploration.NovelArticleMaxAgeDays)
+	ageDays := now.Sub(recommendationPostTimeWithArticle(candidate.Post, candidate.PostArticle)).Hours() / 24
+	if ageDays < 0 {
+		ageDays = 0
+	}
+	recent := candidate.Candidate.FromRecent && ageDays <= float64(cfg.Exploration.RecentWindowDays)
+	novel := candidate.IsNovelAuthor && ageDays <= float64(cfg.Exploration.NovelPostMaxAgeDays)
 	if recent && novel {
 		return recommendationExplorationReasonRecentNovelAuthor
 	}
@@ -399,12 +404,12 @@ func recommendationStrictExplorationBefore(left, right hydratedRecommendationCan
 	if leftScore != rightScore {
 		return leftScore > rightScore
 	}
-	leftTime := recommendationArticleTime(left.Article)
-	rightTime := recommendationArticleTime(right.Article)
+	leftTime := recommendationPostTimeWithArticle(left.Post, left.PostArticle)
+	rightTime := recommendationPostTimeWithArticle(right.Post, right.PostArticle)
 	if !leftTime.Equal(rightTime) {
 		return leftTime.After(rightTime)
 	}
-	return left.Article.ID > right.Article.ID
+	return left.Post.ID > right.Post.ID
 }
 
 func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, mode recommendationSelectionMode) bool {
@@ -425,22 +430,24 @@ func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, 
 	if left.Breakdown.BaseScore != right.Breakdown.BaseScore {
 		return left.Breakdown.BaseScore > right.Breakdown.BaseScore
 	}
-	leftTime := recommendationArticleTime(left.Article)
-	rightTime := recommendationArticleTime(right.Article)
+	leftTime := recommendationPostTimeWithArticle(left.Post, left.PostArticle)
+	rightTime := recommendationPostTimeWithArticle(right.Post, right.PostArticle)
 	if !leftTime.Equal(rightTime) {
 		return leftTime.After(rightTime)
 	}
-	return left.Article.ID > right.Article.ID
+	return left.Post.ID > right.Post.ID
 }
 
-func selectedRecommendationResponses(selected []selectedRecommendation) []recommendedArticleResponse {
-	result := make([]recommendedArticleResponse, 0, len(selected))
+func selectedRecommendationResponses(selected []selectedRecommendation) []recommendedPostResponse {
+	result := make([]recommendedPostResponse, 0, len(selected))
 	for _, item := range selected {
-		result = append(result, recommendedArticleResponse{
-			ID: item.Article.ID, Title: item.Article.Title, Content: item.Article.Content, Preview: item.Article.Preview,
-			CoverImageURL: item.Article.CoverImageURL, LikeCount: item.Article.LikeCount, CommentCount: item.Article.CommentCount,
-			ViewCount: item.Article.ViewCount, CreatedAt: item.Article.CreatedAt, Author: publicAuthorFromUser(item.Article.Author),
-			Score: item.Breakdown.FinalScore,
+		post, err := postResponseFromModel(item.Post, item.PostArticle)
+		if err != nil {
+			continue
+		}
+		_ = hydratePostResponseReferences(&post, time.Now().UTC())
+		result = append(result, recommendedPostResponse{
+			Post: post, Score: item.Breakdown.FinalScore,
 		})
 	}
 	return result

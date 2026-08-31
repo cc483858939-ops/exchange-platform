@@ -28,21 +28,21 @@ func TestActivityEnvelopesUseCanonicalIdentityAndKeys(t *testing.T) {
 		{
 			name: "reaction",
 			makeEnvelope: func(id string) (Envelope, error) {
-				return NewArticleReactionAppliedEnvelope(id, ArticleReactionAppliedPayload{
-					ActorID: 7, ArticleID: 42, ArticleAuthorID: 9, Liked: true,
+				return NewPostReactionAppliedEnvelope(id, PostReactionAppliedPayload{
+					ActorID: 7, PostID: 42, PostAuthorID: 9, Liked: true,
 					ReactionVersion: 3, StateChangedAt: now,
 				})
 			},
-			aggregateType: "article_reaction", aggregateID: "7:42", key: "7:42",
+			aggregateType: "post_reaction", aggregateID: "7:42", key: "7:42",
 		},
 		{
-			name: "comment",
+			name: "reply",
 			makeEnvelope: func(id string) (Envelope, error) {
-				return NewCommentCreatedEnvelope(id, CommentCreatedPayload{
-					CommentID: 11, ArticleID: 42, ActorID: 7, ArticleAuthorID: 9, CreatedAt: now,
+				return NewReplyCreatedEnvelope(id, ReplyCreatedPayload{
+					ReplyPostID: 11, ParentPostID: 42, ConversationID: 42, ActorID: 7, ParentAuthorID: 9, CreatedAt: now,
 				})
 			},
-			aggregateType: "comment", aggregateID: "11", key: "42",
+			aggregateType: "post", aggregateID: "11", key: "42",
 		},
 		{
 			name: "follow",
@@ -87,8 +87,8 @@ func TestActivityEnvelopesUseCanonicalIdentityAndKeys(t *testing.T) {
 }
 
 func TestNewOutboxEventRejectsMissingActivityTopic(t *testing.T) {
-	envelope, err := NewCommentCreatedEnvelope(uuid.NewString(), CommentCreatedPayload{
-		CommentID: 1, ArticleID: 2, ActorID: 3, ArticleAuthorID: 4, CreatedAt: time.Now().UTC(),
+	envelope, err := NewReplyCreatedEnvelope(uuid.NewString(), ReplyCreatedPayload{
+		ReplyPostID: 1, ParentPostID: 2, ConversationID: 2, ActorID: 3, ParentAuthorID: 4, CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -14,7 +14,7 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 	cfg := normalizedRecommendationConfig()
 	if cfg.BehaviorWeights.Reply != 5 || cfg.FollowingBonus != 0.5 ||
 		cfg.OutOfNetworkMinRatio != 0.30 || cfg.Exploration.Ratio != 0.10 || cfg.Exploration.MaxSlots != 3 ||
-		cfg.Exploration.RecentWindowDays != 7 || cfg.Exploration.NovelArticleMaxAgeDays != 30 ||
+		cfg.Exploration.RecentWindowDays != 7 || cfg.Exploration.NovelPostMaxAgeDays != 30 ||
 		!cfg.Diversity.Enabled || cfg.Diversity.SemanticDuplicatePenalty != 1 {
 		t.Fatalf("normalized config=%#v", cfg)
 	}
@@ -25,12 +25,12 @@ func TestNormalizedRecommendationConfigProgrammaticOverridesRemainSupported(t *t
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
 		FollowingBonus:       0.25,
 		OutOfNetworkMinRatio: 0.40,
-		Exploration:          config.RecommendationExplorationConfig{Ratio: 0.20, MaxSlots: 5, RecentWindowDays: 4, NovelArticleMaxAgeDays: 12},
+		Exploration:          config.RecommendationExplorationConfig{Ratio: 0.20, MaxSlots: 5, RecentWindowDays: 4, NovelPostMaxAgeDays: 12},
 	}}
 	t.Cleanup(func() { config.AppConfig = original })
 
 	cfg := normalizedRecommendationConfig()
-	if cfg.FollowingBonus != 0.25 || cfg.OutOfNetworkMinRatio != 0.40 || cfg.Exploration.Ratio != 0.20 || cfg.Exploration.MaxSlots != 5 || cfg.Exploration.RecentWindowDays != 4 || cfg.Exploration.NovelArticleMaxAgeDays != 12 {
+	if cfg.FollowingBonus != 0.25 || cfg.OutOfNetworkMinRatio != 0.40 || cfg.Exploration.Ratio != 0.20 || cfg.Exploration.MaxSlots != 5 || cfg.Exploration.RecentWindowDays != 4 || cfg.Exploration.NovelPostMaxAgeDays != 12 {
 		t.Fatalf("normalized config=%#v", cfg)
 	}
 }
@@ -53,7 +53,7 @@ func TestNormalizedRecommendationConfigExplicitZeroOverrides(t *testing.T) {
 		{name: "semantic_weight", path: "semantic_weight", set: func(cfg *config.RecommendationConfig) { cfg.SemanticWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticWeight }},
 		{name: "negative_semantic_weight", path: "negative_semantic_weight", set: func(cfg *config.RecommendationConfig) { cfg.NegativeSemanticWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.NegativeSemanticWeight }},
 		{name: "trending_weight", path: "trending_weight", set: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.TrendingWeight }},
-		{name: "trending.comment_factor", path: "trending.comment_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.CommentFactor = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.CommentFactor }},
+		{name: "trending.reply_factor", path: "trending.reply_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.ReplyFactor = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.ReplyFactor }},
 		{name: "author_affinity_weight", path: "author_affinity_weight", set: func(cfg *config.RecommendationConfig) { cfg.AuthorAffinityWeight = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.AuthorAffinityWeight }},
 		{name: "following_bonus", path: "following_bonus", set: func(cfg *config.RecommendationConfig) { cfg.FollowingBonus = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.FollowingBonus }},
 		{name: "diversity.semantic_duplicate_threshold", path: "diversity.semantic_duplicate_threshold", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicateThreshold = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicateThreshold }},
@@ -90,7 +90,7 @@ func TestNormalizedRecommendationConfigTrendingAndSemanticRecallValidation(t *te
 		{name: "recent ratio one", path: "semantic_recall.recent_ratio", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticRecall.RecentRatio }, want: 0.80},
 		{name: "max age zero", path: "trending.max_age_days", set: func(cfg *config.RecommendationConfig) { cfg.Trending.MaxAgeDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Trending.MaxAgeDays) }, want: 7},
 		{name: "half life zero", path: "trending.half_life_hours", set: func(cfg *config.RecommendationConfig) { cfg.Trending.HalfLifeHours = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.HalfLifeHours }, want: 24},
-		{name: "comment factor negative", path: "trending.comment_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.CommentFactor = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.CommentFactor }, want: 0.5},
+		{name: "reply factor negative", path: "trending.reply_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.ReplyFactor = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.ReplyFactor }, want: 0.5},
 		{name: "trending weight negative", path: "trending_weight", set: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.TrendingWeight }, want: 0.5},
 	}
 
@@ -153,7 +153,7 @@ func TestNormalizedRecommendationConfigInvalidValuesRemainInvalid(t *testing.T) 
 		{name: "exploration ratio above cap", path: "exploration.ratio", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.Ratio = 0.3 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Exploration.Ratio }, want: 0.10},
 		{name: "exploration max slots nonpositive", path: "", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.MaxSlots = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Exploration.MaxSlots) }, want: 3},
 		{name: "exploration recent window nonpositive", path: "", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.RecentWindowDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Exploration.RecentWindowDays) }, want: 7},
-		{name: "exploration novel age nonpositive", path: "", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.NovelArticleMaxAgeDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Exploration.NovelArticleMaxAgeDays) }, want: 30},
+		{name: "exploration novel age nonpositive", path: "", set: func(cfg *config.RecommendationConfig) { cfg.Exploration.NovelPostMaxAgeDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Exploration.NovelPostMaxAgeDays) }, want: 30},
 		{name: "semantic threshold above one", path: "diversity.semantic_duplicate_threshold", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicateThreshold = 2 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicateThreshold }, want: 0.92},
 		{name: "semantic penalty negative", path: "diversity.semantic_duplicate_penalty", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicatePenalty = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicatePenalty }, want: 1},
 	}
@@ -179,7 +179,7 @@ func TestNormalizedRecommendationConfigExplicitZeroDoesNotRelaxPositiveOnlyField
 	original := config.AppConfig
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
 		SignalHalfLifeDays:                0,
-		PositiveArticleWeightCap:          0,
+		PositivePostWeightCap:          0,
 		NegativeConfidenceSaturationScale: 0,
 		ServedHistoryLimit:                0,
 		Diversity:                         config.RecommendationDiversityConfig{AuthorWindowSize: 0},
@@ -188,7 +188,7 @@ func TestNormalizedRecommendationConfigExplicitZeroDoesNotRelaxPositiveOnlyField
 	t.Cleanup(func() { config.AppConfig = original })
 
 	cfg := normalizedRecommendationConfig()
-	if cfg.SignalHalfLifeDays != 14 || cfg.PositiveArticleWeightCap != 7 ||
+	if cfg.SignalHalfLifeDays != 14 || cfg.PositivePostWeightCap != 7 ||
 		cfg.NegativeConfidenceSaturationScale != 12 || cfg.ServedHistoryLimit != 1000 ||
 		cfg.Diversity.AuthorWindowSize != 8 || cfg.Trace.CleanupBatchSize != 5000 {
 		t.Fatalf("positive-only fields changed by explicit zero: %#v", cfg)

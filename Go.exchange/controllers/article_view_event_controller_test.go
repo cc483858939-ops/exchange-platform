@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func articleViewTestContext(t *testing.T, request articleViewEventBatchRequest) (*gin.Context, *httptest.ResponseRecorder) {
+func postViewTestContext(t *testing.T, request postViewEventBatchRequest) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -25,30 +25,30 @@ func articleViewTestContext(t *testing.T, request articleViewEventBatchRequest) 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/article-view-events", bytes.NewReader(body))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/post-view-events", bytes.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	return ctx, recorder
 }
 
-func allowArticleViewTestEvents(t *testing.T, allow func(uint, int) (bool, error)) {
+func allowPostViewTestEvents(t *testing.T, allow func(uint, int) (bool, error)) {
 	t.Helper()
-	original := allowArticleViewEvents
-	t.Cleanup(func() { allowArticleViewEvents = original })
-	allowArticleViewEvents = allow
+	original := allowPostViewEvents
+	t.Cleanup(func() { allowPostViewEvents = original })
+	allowPostViewEvents = allow
 }
 
-func validArticleViewInput(now time.Time) articleViewEventInput {
-	return articleViewEventInput{
-		EventID: uuid.NewString(), ArticleID: 42, OccurredAt: now.Format(time.RFC3339Nano), Source: "article_detail",
+func validPostViewInput(now time.Time) postViewEventInput {
+	return postViewEventInput{
+		EventID: uuid.NewString(), PostID: 42, OccurredAt: now.Format(time.RFC3339Nano), Source: "post_detail",
 	}
 }
 
-func TestArticleViewEventsHandlerPublishesClientIDWithoutDB(t *testing.T) {
+func TestPostViewEventsHandlerPublishesClientIDWithoutDB(t *testing.T) {
 	now := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
-	originalNow := articleViewTelemetryNow
-	t.Cleanup(func() { articleViewTelemetryNow = originalNow })
-	articleViewTelemetryNow = func() time.Time { return now }
-	allowArticleViewTestEvents(t, func(_ uint, eventCount int) (bool, error) {
+	originalNow := postViewTelemetryNow
+	t.Cleanup(func() { postViewTelemetryNow = originalNow })
+	postViewTelemetryNow = func() time.Time { return now }
+	allowPostViewTestEvents(t, func(_ uint, eventCount int) (bool, error) {
 		if eventCount != 1 {
 			t.Fatalf("eventCount=%d want=1", eventCount)
 		}
@@ -57,14 +57,14 @@ func TestArticleViewEventsHandlerPublishesClientIDWithoutDB(t *testing.T) {
 
 	id := uuid.NewString()
 	publisher := &recommendationTestPublisher{}
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{{
-		EventID: id, ArticleID: 42, OccurredAt: now.Format(time.RFC3339Nano), Source: "article_detail",
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{{
+		EventID: id, PostID: 42, OccurredAt: now.Format(time.RFC3339Nano), Source: "post_detail",
 	}}})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusAccepted || publisher.calls != 1 || len(publisher.events) != 1 {
 		t.Fatalf("status=%d calls=%d events=%#v body=%s", recorder.Code, publisher.calls, publisher.events, recorder.Body.String())
 	}
-	if publisher.events[0].ID != id || publisher.events[0].Type != eventing.EventTypeArticleViewed ||
+	if publisher.events[0].ID != id || publisher.events[0].Type != eventing.EventTypePostViewed ||
 		eventing.KeyForEvent(publisher.events[0]) != "7" {
 		t.Fatalf("published event=%#v", publisher.events[0])
 	}
@@ -72,19 +72,19 @@ func TestArticleViewEventsHandlerPublishesClientIDWithoutDB(t *testing.T) {
 	if err := json.Unmarshal(publisher.events[0].Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Source != "article_detail" {
+	if payload.Source != "post_detail" {
 		t.Fatalf("published source=%q", payload.Source)
 	}
 }
 
-func TestArticleViewEventsHandlerPublishesFeedSource(t *testing.T) {
+func TestPostViewEventsHandlerPublishesFeedSource(t *testing.T) {
 	now := time.Now().UTC()
-	allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
+	allowPostViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
 	publisher := &recommendationTestPublisher{}
-	input := validArticleViewInput(now)
+	input := validPostViewInput(now)
 	input.Source = "feed"
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{input}})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{input}})
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusAccepted || len(publisher.events) != 1 {
 		t.Fatalf("status=%d events=%d body=%s", recorder.Code, len(publisher.events), recorder.Body.String())
 	}
@@ -97,20 +97,20 @@ func TestArticleViewEventsHandlerPublishesFeedSource(t *testing.T) {
 	}
 }
 
-func TestArticleViewEventsHandlerRejectsMissingAndUnknownSource(t *testing.T) {
+func TestPostViewEventsHandlerRejectsMissingAndUnknownSource(t *testing.T) {
 	for _, source := range []string{"", "unknown"} {
 		t.Run(source, func(t *testing.T) {
 			now := time.Now().UTC()
-			allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
-			input := validArticleViewInput(now)
+			allowPostViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
+			input := validPostViewInput(now)
 			input.Source = source
 			publisher := &recommendationTestPublisher{}
-			ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{input}})
-			NewArticleViewEventsHandler(publisher)(ctx)
+			ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{input}})
+			NewPostViewEventsHandler(publisher)(ctx)
 			if recorder.Code != http.StatusUnprocessableEntity || publisher.calls != 0 {
 				t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 			}
-			var response articleViewEventBatchResponse
+			var response postViewEventBatchResponse
 			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
@@ -121,21 +121,21 @@ func TestArticleViewEventsHandlerRejectsMissingAndUnknownSource(t *testing.T) {
 	}
 }
 
-func TestArticleViewEventsHandlerLimiterReceivesEventCount(t *testing.T) {
+func TestPostViewEventsHandlerLimiterReceivesEventCount(t *testing.T) {
 	now := time.Now().UTC()
 	var gotUserID, gotEventCount uint
-	allowArticleViewTestEvents(t, func(userID uint, eventCount int) (bool, error) {
+	allowPostViewTestEvents(t, func(userID uint, eventCount int) (bool, error) {
 		gotUserID = userID
 		gotEventCount = uint(eventCount)
 		return true, nil
 	})
-	events := make([]articleViewEventInput, 50)
+	events := make([]postViewEventInput, 50)
 	for index := range events {
-		events[index] = validArticleViewInput(now)
+		events[index] = validPostViewInput(now)
 	}
 	publisher := &recommendationTestPublisher{}
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: events})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: events})
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusAccepted || publisher.calls != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}
@@ -147,59 +147,59 @@ func TestArticleViewEventsHandlerLimiterReceivesEventCount(t *testing.T) {
 	}
 }
 
-func TestArticleViewEventsHandlerReturns429WithoutKafkaWhenOverLimit(t *testing.T) {
-	allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return false, nil })
+func TestPostViewEventsHandlerReturns429WithoutKafkaWhenOverLimit(t *testing.T) {
+	allowPostViewTestEvents(t, func(_ uint, _ int) (bool, error) { return false, nil })
 	publisher := &recommendationTestPublisher{}
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{validArticleViewInput(time.Now().UTC())}})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{validPostViewInput(time.Now().UTC())}})
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") != "60" || publisher.calls != 0 {
 		t.Fatalf("status=%d retry-after=%q calls=%d body=%s", recorder.Code, recorder.Header().Get("Retry-After"), publisher.calls, recorder.Body.String())
 	}
 }
 
-func TestArticleViewEventsHandlerReturns503WithoutKafkaWhenLimiterFails(t *testing.T) {
-	allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return false, errors.New("redis unavailable") })
+func TestPostViewEventsHandlerReturns503WithoutKafkaWhenLimiterFails(t *testing.T) {
+	allowPostViewTestEvents(t, func(_ uint, _ int) (bool, error) { return false, errors.New("redis unavailable") })
 	publisher := &recommendationTestPublisher{}
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{validArticleViewInput(time.Now().UTC())}})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{validPostViewInput(time.Now().UTC())}})
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusServiceUnavailable || publisher.calls != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}
 }
 
-func TestArticleViewEventsHandlerRateLimitsBeforeIndividualValidation(t *testing.T) {
+func TestPostViewEventsHandlerRateLimitsBeforeIndividualValidation(t *testing.T) {
 	var gotEventCount int
-	allowArticleViewTestEvents(t, func(_ uint, eventCount int) (bool, error) {
+	allowPostViewTestEvents(t, func(_ uint, eventCount int) (bool, error) {
 		gotEventCount = eventCount
 		return true, nil
 	})
 	publisher := &recommendationTestPublisher{}
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{{
-		EventID: "bad", ArticleID: 0, OccurredAt: "not-a-time",
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{{
+		EventID: "bad", PostID: 0, OccurredAt: "not-a-time",
 	}}})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusUnprocessableEntity || gotEventCount != 1 || publisher.calls != 0 {
 		t.Fatalf("status=%d eventCount=%d calls=%d body=%s", recorder.Code, gotEventCount, publisher.calls, recorder.Body.String())
 	}
 }
 
-func TestArticleViewEventsHandlerReturns503OnKafkaError(t *testing.T) {
+func TestPostViewEventsHandlerReturns503OnKafkaError(t *testing.T) {
 	now := time.Now().UTC()
-	allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
+	allowPostViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
 	publisher := &recommendationTestPublisher{err: errors.New("broker down")}
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{validArticleViewInput(now)}})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{validPostViewInput(now)}})
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusServiceUnavailable || publisher.calls != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}
 }
 
-func TestArticleViewEventsHandlerUsesInjectedPublisherWhenGlobalDBNil(t *testing.T) {
+func TestPostViewEventsHandlerUsesInjectedPublisherWhenGlobalDBNil(t *testing.T) {
 	now := time.Now().UTC()
-	allowArticleViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
+	allowPostViewTestEvents(t, func(_ uint, _ int) (bool, error) { return true, nil })
 	publisher := &recommendationTestPublisher{}
-	ctx, recorder := articleViewTestContext(t, articleViewEventBatchRequest{Events: []articleViewEventInput{validArticleViewInput(now)}})
-	NewArticleViewEventsHandler(publisher)(ctx)
+	ctx, recorder := postViewTestContext(t, postViewEventBatchRequest{Events: []postViewEventInput{validPostViewInput(now)}})
+	NewPostViewEventsHandler(publisher)(ctx)
 	if recorder.Code != http.StatusAccepted || publisher.calls != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}

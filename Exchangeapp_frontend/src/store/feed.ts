@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { useAuthStore } from './auth';
-import type { Article } from '../types/Article';
+import type { Post } from '../types/Post';
 import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
-import { applyFeedLikeStateUpdate, applyFeedRepostStateUpdate, articleToFeedPost } from '../utils/feedPost';
+import { applyFeedLikeStateUpdate, applyFeedRepostStateUpdate, postToFeedPost } from '../utils/feedPost';
 
 const maxRecentlyPublishedPosts = 5;
 
@@ -19,14 +19,14 @@ export const useFeedStore = defineStore('feed', () => {
   const authStore = useAuthStore();
   const viewerID = ref<number | null>(null);
   const recentlyPublishedPosts = ref<FeedPost[]>([]);
-  const deletedArticleIDs = ref<Set<number>>(new Set());
+  const deletedPostIDs = ref<Set<number>>(new Set());
 
   const clearRecentlyPublishedPosts = () => {
     recentlyPublishedPosts.value = [];
   };
 
-  const clearDeletedArticleIDs = () => {
-    deletedArticleIDs.value = new Set();
+  const clearDeletedPostIDs = () => {
+    deletedPostIDs.value = new Set();
   };
 
   const setViewer = (nextViewerID: number | null) => {
@@ -37,57 +37,57 @@ export const useFeedStore = defineStore('feed', () => {
 
     viewerID.value = normalizedViewerID;
     clearRecentlyPublishedPosts();
-    clearDeletedArticleIDs();
+    clearDeletedPostIDs();
   };
 
-  const registerPublishedArticle = (
-    article: Article,
+  const registerPublishedPost = (
+    post: Post,
     publisherUserID: number,
   ): boolean => {
     const normalizedPublisherID = normalizeViewerID(publisherUserID);
     if (
       normalizedPublisherID === null
-      || article?.ID <= 0
-      || !article?.author
-      || article.author.id !== normalizedPublisherID
+      || post?.id <= 0
+      || !post?.author
+      || post.author.id !== normalizedPublisherID
       || viewerID.value !== normalizedPublisherID
-      || deletedArticleIDs.value.has(article.ID)
+      || deletedPostIDs.value.has(post.id)
     ) {
       return false;
     }
 
-    const post = articleToFeedPost(article);
+    const feedPost = postToFeedPost(post);
     recentlyPublishedPosts.value = [
-      post,
-      ...recentlyPublishedPosts.value.filter((item) => item.id !== post.id),
+      feedPost,
+      ...recentlyPublishedPosts.value.filter((item) => item.id !== feedPost.id),
     ].slice(0, maxRecentlyPublishedPosts);
     return true;
   };
 
-  const markArticleDeleted = (articleId: number, ownerUserID: number): boolean => {
-    const normalizedArticleID = normalizeViewerID(articleId);
+  const markPostDeleted = (postID: number, ownerUserID: number): boolean => {
+    const normalizedPostID = normalizeViewerID(postID);
     const normalizedOwnerID = normalizeViewerID(ownerUserID);
     if (
-      normalizedArticleID === null
+      normalizedPostID === null
       || normalizedOwnerID === null
       || viewerID.value !== normalizedOwnerID
     ) {
       return false;
     }
 
-    deletedArticleIDs.value = new Set([
-      ...deletedArticleIDs.value,
-      normalizedArticleID,
+    deletedPostIDs.value = new Set([
+      ...deletedPostIDs.value,
+      normalizedPostID,
     ]);
     recentlyPublishedPosts.value = recentlyPublishedPosts.value.filter(
-      (post) => post.id !== normalizedArticleID,
+      (post) => post.id !== normalizedPostID,
     );
     return true;
   };
 
-  const isArticleDeleted = (articleId: number): boolean => {
-    const normalizedArticleID = normalizeViewerID(articleId);
-    return normalizedArticleID !== null && deletedArticleIDs.value.has(normalizedArticleID);
+  const isPostDeleted = (postID: number): boolean => {
+    const normalizedPostID = normalizeViewerID(postID);
+    return normalizedPostID !== null && deletedPostIDs.value.has(normalizedPostID);
   };
 
   const replaceAuthorIdentity = (author: PublicAuthor) => {
@@ -131,12 +131,12 @@ export const useFeedStore = defineStore('feed', () => {
   return {
     viewerID,
     recentlyPublishedPosts,
-    deletedArticleIDs,
+    deletedPostIDs,
     maxRecentlyPublishedPosts,
     setViewer,
-    registerPublishedArticle,
-    markArticleDeleted,
-    isArticleDeleted,
+    registerPublishedPost,
+    markPostDeleted,
+    isPostDeleted,
     replaceAuthorIdentity,
     applyLikeStateUpdate,
     applyRepostStateUpdate,

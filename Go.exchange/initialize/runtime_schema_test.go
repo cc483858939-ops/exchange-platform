@@ -112,6 +112,65 @@ func TestValidateResolvedSchemaRelationKindsAndCanaryErrors(t *testing.T) {
 	}
 }
 
+func TestValidateLegacySchemaMetadataRejectsLegacyContent(t *testing.T) {
+	tests := []struct {
+		name       string
+		tableRows  []schemaMetadataRow
+		columnRows []schemaMetadataRow
+		wantErr    string
+	}{
+		{name: "clean schema"},
+		{
+			name:      "legacy content table",
+			tableRows: []schemaMetadataRow{{TableName: "articles", TableSchema: "public", RelationKind: "r"}},
+			wantErr:   "schema_legacy_content_present",
+		},
+		{
+			name:       "legacy notification column",
+			columnRows: []schemaMetadataRow{{TableName: "notifications", TableSchema: "public", RelationKind: "r", ColumnName: "article_id"}},
+			wantErr:    "schema_legacy_content_present",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateLegacySchemaMetadata(test.tableRows, test.columnRows)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected clean legacy schema check, got %v", err)
+				}
+				return
+			}
+			if got := SchemaReasonCode(err); got != test.wantErr {
+				t.Fatalf("expected schema reason %q, got %q (err=%v)", test.wantErr, got, err)
+			}
+		})
+	}
+}
+
+func TestValidateSchemaObjectsRequiresEveryPostContractObject(t *testing.T) {
+	canaries := []schemaObjectCanary{{
+		Table:       "posts",
+		Constraints: []string{"fk_posts_author", "chk_posts_visibility_public"},
+		Indexes:     []string{"idx_posts_author_created"},
+	}}
+	completeConstraints := []schemaObjectMetadataRow{
+		{TableName: "posts", ObjectName: "fk_posts_author"},
+		{TableName: "posts", ObjectName: "chk_posts_visibility_public"},
+	}
+	completeIndexes := []schemaObjectMetadataRow{{TableName: "posts", ObjectName: "idx_posts_author_created"}}
+
+	if err := validateSchemaObjects(canaries, completeConstraints, completeIndexes); err != nil {
+		t.Fatalf("expected complete Post schema object check to pass: %v", err)
+	}
+	if got := SchemaReasonCode(validateSchemaObjects(canaries, completeConstraints[:1], completeIndexes)); got != "schema_constraint_missing" {
+		t.Fatalf("expected missing constraint reason, got %q", got)
+	}
+	if got := SchemaReasonCode(validateSchemaObjects(canaries, completeConstraints, nil)); got != "schema_index_missing" {
+		t.Fatalf("expected missing index reason, got %q", got)
+	}
+}
+
 func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	db, err := gorm.Open(postgres.Open("host=127.0.0.1 user=unused dbname=unused sslmode=disable"), &gorm.Config{
 		DryRun:               true,
@@ -131,7 +190,7 @@ func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	apiTables := canaryTableSet(api)
 	workerTables := canaryTableSet(worker)
 	for _, required := range []string{
-		"users", "article_embeddings", "article_behaviors", "user_article_reco_states",
+		"users", "post_embeddings", "post_behaviors", "user_post_reco_states",
 		"user_reco_profiles", "user_author_affinities", "user_reco_profile_dirty", "exchange_rates", "runtime_schema_state",
 	} {
 		if !apiTables[required] {

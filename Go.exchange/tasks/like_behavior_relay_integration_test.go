@@ -56,12 +56,12 @@ func TestLikeBehaviorRelayBatchesAndAcksAfterPublishIntegration(t *testing.T) {
 	defer func() { global.RedisDB = originalRedis }()
 	ctx := context.Background()
 	store := likes.NewStore(client)
-	articleID := uint(time.Now().UnixNano() & 0x3fffffff)
-	userID := articleID + 1
-	pair := likes.BehaviorPair(userID, articleID)
+	postID := uint(time.Now().UnixNano() & 0x3fffffff)
+	userID := postID + 1
+	pair := likes.BehaviorPair(userID, postID)
 	cleanup := func() {
-		client.Del(likes.ReadyKey(articleID), likes.CountKey(articleID), likes.UsersKey(articleID), likes.VersionKey(articleID))
-		client.SRem(likes.DirtyKey, articleID)
+		client.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
+		client.SRem(likes.DirtyKey, postID)
 		client.SRem(likes.BehaviorDirtyKey, pair)
 		client.HDel(likes.BehaviorStateKey, pair)
 		client.ZRem(likes.BehaviorProcessingKey, pair)
@@ -69,10 +69,10 @@ func TestLikeBehaviorRelayBatchesAndAcksAfterPublishIntegration(t *testing.T) {
 	}
 	cleanup()
 	defer cleanup()
-	if created, err := store.Initialize(ctx, articleID, 0, 0, nil); err != nil || !created {
+	if created, err := store.Initialize(ctx, postID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
-	if _, err := store.Mutate(ctx, userID, articleID, true); err != nil {
+	if _, err := store.Mutate(ctx, userID, postID, true); err != nil {
 		t.Fatal(err)
 	}
 	failed := &relayTestPublisher{fail: true}
@@ -89,7 +89,7 @@ func TestLikeBehaviorRelayBatchesAndAcksAfterPublishIntegration(t *testing.T) {
 	if success.batchCalls != 1 || len(success.events) != 1 {
 		t.Fatalf("batchCalls=%d events=%d", success.batchCalls, len(success.events))
 	}
-	wantID := "like-state:" + strconv.FormatUint(uint64(userID), 10) + ":" + strconv.FormatUint(uint64(articleID), 10) + ":1"
+	wantID := "like-state:" + strconv.FormatUint(uint64(userID), 10) + ":" + strconv.FormatUint(uint64(postID), 10) + ":1"
 	if success.events[0].ID != wantID {
 		t.Fatalf("event=%+v want=%s", success.events[0], wantID)
 	}

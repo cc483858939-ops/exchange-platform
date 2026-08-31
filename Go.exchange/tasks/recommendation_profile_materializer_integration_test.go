@@ -62,40 +62,41 @@ func newRecommendationProfileIntegrationUser(t *testing.T, db *gorm.DB, label st
 	return user
 }
 
-func newRecommendationProfileIntegrationArticle(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Article {
+func newRecommendationProfileIntegrationArticle(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Post {
 	t.Helper()
-	article := models.Article{
-		AuthorID:         authorID,
-		Title:            title,
-		Content:          title + " body",
-		Preview:          title + " preview",
-		PublicationState: "published",
-		PublishedAt:      &publishedAt,
+	article := models.Post{
+		Model: gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt}, AuthorID: authorID,
+		Content: title + " body", Visibility: "public",
 	}
 	if err := db.Create(&article).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.PostArticle{
+		PostID: article.ID, Title: title, Preview: title + " preview", PublicationState: "published", PublishedAt: &publishedAt,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	return article
 }
 
-func cleanupRecommendationProfileIntegrationData(db *gorm.DB, articleIDs, userIDs []uint) {
+func cleanupRecommendationProfileIntegrationData(db *gorm.DB, postIDs, userIDs []uint) {
 	if db == nil {
 		return
 	}
-	if len(articleIDs) > 0 {
-		db.Unscoped().Where("article_id IN ?", articleIDs).Delete(&models.ArticleEmbedding{})
-		db.Unscoped().Where("article_id IN ?", articleIDs).Delete(&models.UserArticleRecoState{})
-		db.Unscoped().Where("article_id IN ?", articleIDs).Delete(&models.ArticleBehavior{})
-		db.Unscoped().Where("article_id IN ?", articleIDs).Delete(&models.ArticleReaction{})
-		db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+	if len(postIDs) > 0 {
+		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostEmbedding{})
+		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.UserPostRecoState{})
+		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
+		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	}
 	if len(userIDs) > 0 {
 		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserRecoProfile{})
-		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserArticleRecoState{})
+		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserPostRecoState{})
 		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserAuthorAffinity{})
-		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.ArticleBehavior{})
-		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.ArticleReaction{})
+		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.PostReaction{})
 		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
 	}
 }
@@ -111,9 +112,9 @@ func recommendationProfileIntegrationSettings() config.RecommendationProfileMate
 	}.Normalized()
 }
 
-func newRecommendationProfileIntegrationEmbedding(articleID uint, version string, values []float32, hash string, now time.Time) models.ArticleEmbedding {
-	return models.ArticleEmbedding{
-		ArticleID:   articleID,
+func newRecommendationProfileIntegrationEmbedding(postID uint, version string, values []float32, hash string, now time.Time) models.PostEmbedding {
+	return models.PostEmbedding{
+		PostID:      postID,
 		Version:     version,
 		Model:       "p1a-follow-up-test-model",
 		Dimensions:  len(values),
@@ -131,24 +132,24 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 	author := newRecommendationProfileIntegrationUser(t, db, "materializer-author")
 	positiveArticle := newRecommendationProfileIntegrationArticle(t, db, author.ID, "positive", now.Add(-2*time.Hour))
 	negativeArticle := newRecommendationProfileIntegrationArticle(t, db, author.ID, "negative", now.Add(-time.Hour))
-	articleIDs := []uint{positiveArticle.ID, negativeArticle.ID}
+	postIDs := []uint{positiveArticle.ID, negativeArticle.ID}
 	userIDs := []uint{user.ID, author.ID}
-	t.Cleanup(func() { cleanupRecommendationProfileIntegrationData(db, articleIDs, userIDs) })
+	t.Cleanup(func() { cleanupRecommendationProfileIntegrationData(db, postIDs, userIDs) })
 
-	if err := db.Create(&models.ArticleReaction{
-		UserID: user.ID, ArticleID: positiveArticle.ID, Reaction: models.ArticleReactionLike, Liked: true,
+	if err := db.Create(&models.PostReaction{
+		UserID: user.ID, PostID: positiveArticle.ID, Reaction: models.PostReactionLike, Liked: true,
 		Version: 1, StateChangedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&models.ArticleBehavior{
-		UserID: user.ID, ArticleID: negativeArticle.ID, Action: eventing.RecommendationBehaviorActionReadQuickBounce,
+	if err := db.Create(&models.PostBehavior{
+		UserID: user.ID, PostID: negativeArticle.ID, Action: eventing.RecommendationBehaviorActionReadQuickBounce,
 		Count: 1, LastSeenAt: now.Add(-30 * time.Minute), Active: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	version := config.ActiveEmbeddingVersion()
-	for _, embedding := range []models.ArticleEmbedding{
+	for _, embedding := range []models.PostEmbedding{
 		newRecommendationProfileIntegrationEmbedding(positiveArticle.ID, version, []float32{1, 0}, "positive", now),
 		newRecommendationProfileIntegrationEmbedding(negativeArticle.ID, version, []float32{0, 1}, "negative", now),
 	} {
@@ -189,11 +190,11 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 		t.Fatalf("profile signal values=%+v", profile)
 	}
 
-	var states []models.UserArticleRecoState
-	if err := db.Where("user_id = ?", user.ID).Order("article_id ASC").Find(&states).Error; err != nil {
+	var states []models.UserPostRecoState
+	if err := db.Where("user_id = ?", user.ID).Order("post_id ASC").Find(&states).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 2 || states[0].ArticleID != positiveArticle.ID || states[1].ArticleID != negativeArticle.ID {
+	if len(states) != 2 || states[0].PostID != positiveArticle.ID || states[1].PostID != negativeArticle.ID {
 		t.Fatalf("canonical states=%+v", states)
 	}
 	if states[1].NegativeSignal != "quick_bounce" {
@@ -309,7 +310,7 @@ func TestRecommendationProfileQueueSemanticsIntegration(t *testing.T) {
 	}
 }
 
-func newArticleEmbeddingFanoutFixture(t *testing.T, db *gorm.DB, label string) (models.User, models.Article) {
+func newPostEmbeddingFanoutFixture(t *testing.T, db *gorm.DB, label string) (models.User, models.Post) {
 	t.Helper()
 	user := newRecommendationProfileIntegrationUser(t, db, "embedding-"+label+"-user")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
@@ -318,23 +319,23 @@ func newArticleEmbeddingFanoutFixture(t *testing.T, db *gorm.DB, label string) (
 	return user, article
 }
 
-func TestArticleEmbeddingUpdateInvalidatesAffectedProfileIntegration(t *testing.T) {
+func TestPostEmbeddingUpdateInvalidatesAffectedProfileIntegration(t *testing.T) {
 	db := openRecommendationProfileMaterializerIntegrationDB(t)
-	user, article := newArticleEmbeddingFanoutFixture(t, db, "success")
+	user, article := newPostEmbeddingFanoutFixture(t, db, "success")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	if err := db.Create(&models.ArticleBehavior{
-		UserID: user.ID, ArticleID: article.ID, Action: recommendation.ArticleBehaviorView,
+	if err := db.Create(&models.PostBehavior{
+		UserID: user.ID, PostID: article.ID, Action: recommendation.PostBehaviorView,
 		Count: 1, LastSeenAt: now, Active: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	store := gormArticleEmbeddingStore{db: db}
+	store := gormPostEmbeddingStore{db: db}
 	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ActiveEmbeddingVersion(), []float32{1, 0}, "success", now)
 	if err := store.UpsertEmbeddingAndInvalidateProfiles(context.Background(), embedding, now); err != nil {
 		t.Fatal(err)
 	}
-	var persisted models.ArticleEmbedding
-	if err := db.First(&persisted, "article_id = ?", article.ID).Error; err != nil {
+	var persisted models.PostEmbedding
+	if err := db.First(&persisted, "post_id = ?", article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if persisted.ContentHash != "success" {
@@ -346,24 +347,24 @@ func TestArticleEmbeddingUpdateInvalidatesAffectedProfileIntegration(t *testing.
 	}
 }
 
-func TestArticleEmbeddingFanoutWorksBeforeCanonicalStateIntegration(t *testing.T) {
+func TestPostEmbeddingFanoutWorksBeforeCanonicalStateIntegration(t *testing.T) {
 	db := openRecommendationProfileMaterializerIntegrationDB(t)
-	user, article := newArticleEmbeddingFanoutFixture(t, db, "before-canonical")
+	user, article := newPostEmbeddingFanoutFixture(t, db, "before-canonical")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	if err := db.Create(&models.ArticleBehavior{
-		UserID: user.ID, ArticleID: article.ID, Action: recommendation.ArticleBehaviorView,
+	if err := db.Create(&models.PostBehavior{
+		UserID: user.ID, PostID: article.ID, Action: recommendation.PostBehaviorView,
 		Count: 1, LastSeenAt: now, Active: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	var stateCount int64
-	if err := db.Model(&models.UserArticleRecoState{}).Where("user_id = ?", user.ID).Count(&stateCount).Error; err != nil {
+	if err := db.Model(&models.UserPostRecoState{}).Where("user_id = ?", user.ID).Count(&stateCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if stateCount != 0 {
 		t.Fatalf("canonical state unexpectedly exists before fan-out: %d", stateCount)
 	}
-	store := gormArticleEmbeddingStore{db: db}
+	store := gormPostEmbeddingStore{db: db}
 	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ActiveEmbeddingVersion(), []float32{1, 0}, "before-canonical", now)
 	if err := store.UpsertEmbeddingAndInvalidateProfiles(context.Background(), embedding, now); err != nil {
 		t.Fatal(err)
@@ -374,17 +375,17 @@ func TestArticleEmbeddingFanoutWorksBeforeCanonicalStateIntegration(t *testing.T
 	}
 }
 
-func TestArticleEmbeddingFanoutIncludesReactionOnlyUserIntegration(t *testing.T) {
+func TestPostEmbeddingFanoutIncludesReactionOnlyUserIntegration(t *testing.T) {
 	db := openRecommendationProfileMaterializerIntegrationDB(t)
-	user, article := newArticleEmbeddingFanoutFixture(t, db, "reaction-only")
+	user, article := newPostEmbeddingFanoutFixture(t, db, "reaction-only")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	if err := db.Create(&models.ArticleReaction{
-		UserID: user.ID, ArticleID: article.ID, Reaction: models.ArticleReactionLike, Liked: false,
+	if err := db.Create(&models.PostReaction{
+		UserID: user.ID, PostID: article.ID, Reaction: models.PostReactionLike, Liked: false,
 		Version: 1, StateChangedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	store := gormArticleEmbeddingStore{db: db}
+	store := gormPostEmbeddingStore{db: db}
 	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ActiveEmbeddingVersion(), []float32{1, 0}, "reaction-only", now)
 	if err := store.UpsertEmbeddingAndInvalidateProfiles(context.Background(), embedding, now); err != nil {
 		t.Fatal(err)
@@ -395,23 +396,23 @@ func TestArticleEmbeddingFanoutIncludesReactionOnlyUserIntegration(t *testing.T)
 	}
 }
 
-func TestArticleEmbeddingFanoutDeduplicatesBehaviorAndReactionUserIntegration(t *testing.T) {
+func TestPostEmbeddingFanoutDeduplicatesBehaviorAndReactionUserIntegration(t *testing.T) {
 	db := openRecommendationProfileMaterializerIntegrationDB(t)
-	user, article := newArticleEmbeddingFanoutFixture(t, db, "duplicate-user")
+	user, article := newPostEmbeddingFanoutFixture(t, db, "duplicate-user")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	if err := db.Create(&models.ArticleBehavior{
-		UserID: user.ID, ArticleID: article.ID, Action: recommendation.ArticleBehaviorView,
+	if err := db.Create(&models.PostBehavior{
+		UserID: user.ID, PostID: article.ID, Action: recommendation.PostBehaviorView,
 		Count: 1, LastSeenAt: now, Active: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&models.ArticleReaction{
-		UserID: user.ID, ArticleID: article.ID, Reaction: models.ArticleReactionLike, Liked: true,
+	if err := db.Create(&models.PostReaction{
+		UserID: user.ID, PostID: article.ID, Reaction: models.PostReactionLike, Liked: true,
 		Version: 1, StateChangedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	store := gormArticleEmbeddingStore{db: db}
+	store := gormPostEmbeddingStore{db: db}
 	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ActiveEmbeddingVersion(), []float32{1, 0}, "duplicate-user", now)
 	if err := store.UpsertEmbeddingAndInvalidateProfiles(context.Background(), embedding, now); err != nil {
 		t.Fatal(err)
@@ -425,17 +426,17 @@ func TestArticleEmbeddingFanoutDeduplicatesBehaviorAndReactionUserIntegration(t 
 	}
 }
 
-func TestArticleEmbeddingUpdateRollsBackWhenProfileInvalidationFailsIntegration(t *testing.T) {
+func TestPostEmbeddingUpdateRollsBackWhenProfileInvalidationFailsIntegration(t *testing.T) {
 	db := openRecommendationProfileMaterializerIntegrationDB(t)
-	user, article := newArticleEmbeddingFanoutFixture(t, db, "rollback")
+	user, article := newPostEmbeddingFanoutFixture(t, db, "rollback")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	if err := db.Create(&models.ArticleBehavior{
-		UserID: user.ID, ArticleID: article.ID, Action: recommendation.ArticleBehaviorView,
+	if err := db.Create(&models.PostBehavior{
+		UserID: user.ID, PostID: article.ID, Action: recommendation.PostBehaviorView,
 		Count: 1, LastSeenAt: now, Active: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	store := gormArticleEmbeddingStore{db: db}
+	store := gormPostEmbeddingStore{db: db}
 	old := newRecommendationProfileIntegrationEmbedding(article.ID, "old-version", []float32{1, 0}, "old", now)
 	if err := store.UpsertEmbedding(context.Background(), old); err != nil {
 		t.Fatal(err)
@@ -457,8 +458,8 @@ func TestArticleEmbeddingUpdateRollsBackWhenProfileInvalidationFailsIntegration(
 		t.Fatal(err)
 	}
 
-	var persisted models.ArticleEmbedding
-	if err := db.First(&persisted, "article_id = ?", article.ID).Error; err != nil {
+	var persisted models.PostEmbedding
+	if err := db.First(&persisted, "post_id = ?", article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if persisted.Version != old.Version || persisted.ContentHash != old.ContentHash || persisted.Embedding.Slice()[0] != 1 {
@@ -473,25 +474,25 @@ func TestArticleEmbeddingUpdateRollsBackWhenProfileInvalidationFailsIntegration(
 	}
 }
 
-type unchangedArticleEmbeddingProvider struct{}
+type unchangedPostEmbeddingProvider struct{}
 
-func (unchangedArticleEmbeddingProvider) Embed(context.Context, []string) (embeddings.EmbedResult, error) {
+func (unchangedPostEmbeddingProvider) Embed(context.Context, []string) (embeddings.EmbedResult, error) {
 	return embeddings.EmbedResult{Vectors: [][]float32{{1, 0}}, Model: "unchanged-provider"}, nil
 }
 
-func TestArticleEmbeddingUpToDateDoesNotInvalidateProfileIntegration(t *testing.T) {
+func TestPostEmbeddingUpToDateDoesNotInvalidateProfileIntegration(t *testing.T) {
 	db := openRecommendationProfileMaterializerIntegrationDB(t)
-	user, article := newArticleEmbeddingFanoutFixture(t, db, "up-to-date")
+	user, article := newPostEmbeddingFanoutFixture(t, db, "up-to-date")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	version := config.ActiveEmbeddingVersion()
-	hash := embeddings.ArticleEmbeddingContentHash(article.Title, article.Content)
-	if err := db.Create(&models.ArticleEmbedding{
-		ArticleID: article.ID, Version: version, Model: "existing-model", Dimensions: 2,
+	hash := embeddings.PostEmbeddingContentHash("up-to-date", "up-to-date preview", article.Content)
+	if err := db.Create(&models.PostEmbedding{
+		PostID: article.ID, Version: version, Model: "existing-model", Dimensions: 2,
 		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: hash, CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	event, err := eventing.NewArticleEmbeddingRequestedEnvelope(uuid.NewString(), article.ID, now)
+	event, err := eventing.NewPostEmbeddingRequestedEnvelope(uuid.NewString(), article.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,8 +500,8 @@ func TestArticleEmbeddingUpToDateDoesNotInvalidateProfileIntegration(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := gormArticleEmbeddingStore{db: db}
-	if err := processArticleEmbeddingMessage(context.Background(), kafka.Message{Value: raw}, unchangedArticleEmbeddingProvider{}, store, version); err != nil {
+	store := gormPostEmbeddingStore{db: db}
+	if err := processPostEmbeddingMessage(context.Background(), kafka.Message{Value: raw}, unchangedPostEmbeddingProvider{}, store, version); err != nil {
 		t.Fatal(err)
 	}
 	var dirtyCount int64

@@ -66,10 +66,10 @@
           v-for="post in feedStore.recentlyPublishedPosts"
           :key="'recent-' + post.id"
           :post="post"
-          :like-pending="likePendingArticleIds.has(post.id)"
-          :repost-pending="repostPendingArticleIds.has(post.id)"
+          :like-pending="likePendingPostIds.has(post.id)"
+          :repost-pending="repostPendingPostIds.has(post.id)"
           :show-delete="canDeletePost(post)"
-          :delete-pending="pendingDeleteArticleIds.has(post.id)"
+          :delete-pending="pendingDeletePostIds.has(post.id)"
           :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
           @toggle-repost="handleRepostToggle"
@@ -96,19 +96,19 @@
 
         <div
           v-for="item in visibleForYouItems"
-          :key="item.article.id"
+          :key="item.recommendation.post.id"
           class="recommendation-card-wrapper"
           :ref="element => bindRecommendationCard(element, item)"
         >
           <PostCard
             :post="item.post"
-            :like-pending="likePendingArticleIds.has(item.post.id)"
-            :repost-pending="repostPendingArticleIds.has(item.post.id)"
+            :like-pending="likePendingPostIds.has(item.post.id)"
+            :repost-pending="repostPendingPostIds.has(item.post.id)"
             :show-not-interested="true"
             :show-delete="canDeletePost(item.post)"
-            :delete-pending="pendingDeleteArticleIds.has(item.post.id)"
+            :delete-pending="pendingDeletePostIds.has(item.post.id)"
             :delete-error="deleteErrors.get(item.post.id) || ''"
-            @article-click="handleRecommendationClick(item.article)"
+            @post-click="handleRecommendationClick(item.recommendation)"
             @toggle-like="handleLikeToggle"
             @toggle-repost="handleRepostToggle"
             @not-interested="handleNotInterested"
@@ -122,10 +122,10 @@
           v-for="post in followingFeed.items"
           :key="post.id"
           :post="post"
-          :like-pending="likePendingArticleIds.has(post.id)"
-          :repost-pending="repostPendingArticleIds.has(post.id)"
+          :like-pending="likePendingPostIds.has(post.id)"
+          :repost-pending="repostPendingPostIds.has(post.id)"
           :show-delete="canDeletePost(post)"
-          :delete-pending="pendingDeleteArticleIds.has(post.id)"
+          :delete-pending="pendingDeletePostIds.has(post.id)"
           :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
           @toggle-repost="handleRepostToggle"
@@ -184,7 +184,7 @@ import { getRecommendationTelemetry } from '../services/recommendationTelemetry'
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import { useHomeTimelineStore } from '../store/homeTimeline';
-import type { RecommendedArticle } from '../types/Recommendation';
+import type { RecommendedPost } from '../types/Recommendation';
 import type { FeedPost, FeedTab } from '../types/Feed';
 
 const route = useRoute();
@@ -202,9 +202,9 @@ let followingObserver: IntersectionObserver | null = null;
 
 const forYouFeed = homeTimeline.forYou;
 const followingFeed = homeTimeline.following;
-const likePendingArticleIds = homeTimeline.likePendingArticleIds;
-const repostPendingArticleIds = homeTimeline.repostPendingArticleIds;
-const pendingDeleteArticleIds = homeTimeline.pendingDeleteArticleIds;
+const likePendingPostIds = homeTimeline.likePendingPostIds;
+const repostPendingPostIds = homeTimeline.repostPendingPostIds;
+const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
@@ -225,7 +225,7 @@ const recentlyPublishedIDs = computed(
 );
 const visibleForYouItems = computed(() => forYouFeed.items.filter((item) =>
   !recentlyPublishedIDs.value.has(item.post.id)
-  && !feedStore.isArticleDeleted(item.post.id)
+  && !feedStore.isPostDeleted(item.post.id)
 ));
 
 const currentViewerID = () => {
@@ -318,9 +318,9 @@ const bindCurrentRecommendationCards = async () => {
     return;
   }
   visibleForYouItems.value.forEach((item) => {
-    const element = recommendationCardElements.get(item.article.id);
+    const element = recommendationCardElements.get(item.recommendation.post.id);
     if (element) {
-      recommendationTelemetry.observeFeedCard(element, item.article.id, item.article.tracking);
+      recommendationTelemetry.observeFeedCard(element, item.recommendation.post.id, item.recommendation.tracking);
     }
   });
 };
@@ -371,59 +371,59 @@ const retryActiveFeed = () => {
 
 const bindRecommendationCard = (
   element: Element | ComponentPublicInstance | null,
-  item: { article: RecommendedArticle },
+  item: { recommendation: RecommendedPost },
 ) => {
   if (element instanceof HTMLElement) {
-    recommendationCardElements.set(item.article.id, element);
-    recommendationTelemetry.observeFeedCard(element, item.article.id, item.article.tracking);
+    recommendationCardElements.set(item.recommendation.post.id, element);
+    recommendationTelemetry.observeFeedCard(element, item.recommendation.post.id, item.recommendation.tracking);
     return;
   }
 
-  recommendationCardElements.delete(item.article.id);
-  recommendationTelemetry.detachFeedCard(item.article.id, item.article.tracking);
+  recommendationCardElements.delete(item.recommendation.post.id);
+  recommendationTelemetry.detachFeedCard(item.recommendation.post.id, item.recommendation.tracking);
   queueMicrotask(() => {
-    if (recommendationCardElements.has(item.article.id)) {
+    if (recommendationCardElements.has(item.recommendation.post.id)) {
       return;
     }
     const stillRendered = visibleForYouItems.value.some(
-      visibleItem => visibleItem.article.id === item.article.id,
+      visibleItem => visibleItem.recommendation.post.id === item.recommendation.post.id,
     );
     if (!stillRendered) {
-      recommendationTelemetry.unobserveFeedCard(item.article.id, item.article.tracking);
+      recommendationTelemetry.unobserveFeedCard(item.recommendation.post.id, item.recommendation.tracking);
     }
   });
 };
 
-const handleRecommendationClick = (article: RecommendedArticle) => {
-  savePendingRecommendationAttribution(article.id, article.tracking);
-  recommendationTelemetry.recordClick(article.id, article.tracking);
+const handleRecommendationClick = (recommendation: RecommendedPost) => {
+  savePendingRecommendationAttribution(recommendation.post.id, recommendation.tracking);
+  recommendationTelemetry.recordClick(recommendation.post.id, recommendation.tracking);
 };
 
-const handleLikeToggle = (articleId: number) => {
-  void homeTimeline.toggleLike(articleId);
+const handleLikeToggle = (postId: number) => {
+  void homeTimeline.toggleLike(postId);
 };
 
-const handleRepostToggle = (articleId: number) => {
-  void homeTimeline.toggleRepost(articleId);
+const handleRepostToggle = (postId: number) => {
+  void homeTimeline.toggleRepost(postId);
 };
 
-const handleDeletePost = async (articleId: number) => {
-  const item = forYouFeed.items.find((candidate) => candidate.article.id === articleId);
+const handleDeletePost = async (postId: number) => {
+  const item = forYouFeed.items.find((candidate) => candidate.recommendation.post.id === postId);
   if (item) {
-    recommendationTelemetry.unobserveFeedCard(item.article.id, item.article.tracking);
+    recommendationTelemetry.unobserveFeedCard(item.recommendation.post.id, item.recommendation.tracking);
   }
-  await homeTimeline.deletePost(articleId);
+  await homeTimeline.deletePost(postId);
 };
 
-const handleNotInterested = (articleId: number) => {
-  const item = forYouFeed.items.find((candidate) => candidate.article.id === articleId);
+const handleNotInterested = (postId: number) => {
+  const item = forYouFeed.items.find((candidate) => candidate.recommendation.post.id === postId);
   if (!item) {
     return;
   }
-  recommendationTelemetry.recordNotInterested(item.article.id, item.article.tracking);
-  recommendationTelemetry.unobserveFeedCard(item.article.id, item.article.tracking);
-  homeTimeline.dismissRecommendation(articleId);
-  recommendationCardElements.delete(articleId);
+  recommendationTelemetry.recordNotInterested(item.recommendation.post.id, item.recommendation.tracking);
+  recommendationTelemetry.unobserveFeedCard(item.recommendation.post.id, item.recommendation.tracking);
+  homeTimeline.dismissRecommendation(postId);
+  recommendationCardElements.delete(postId);
 };
 
 watch(() => route.query.tab, normalizeRouteTab, { immediate: true });
@@ -462,7 +462,7 @@ watch(
 );
 
 watch(
-  () => forYouFeed.items.map((item) => item.article.id).join(','),
+  () => forYouFeed.items.map((item) => item.recommendation.post.id).join(','),
   () => {
     void bindCurrentRecommendationCards();
   },

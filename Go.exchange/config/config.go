@@ -24,20 +24,20 @@ type KafkaConfig struct {
 	UserBehaviorTopic              string   `mapstructure:"user_behavior_topic"`
 	LikeSnapshotTopic              string   `mapstructure:"like_snapshot_topic"`
 	RecommendationEventsTopic      string   `mapstructure:"recommendation_events_topic"`
-	ArticleEmbeddingTopic          string   `mapstructure:"article_embedding_topic"`
+	PostEmbeddingTopic          string   `mapstructure:"post_embedding_topic"`
 	ActivityEventsTopic            string   `mapstructure:"activity_events_topic"`
 	NotificationDLQTopic           string   `mapstructure:"notification_dlq_topic"`
 	TopicReplicationFactor         int      `mapstructure:"topic_replication_factor"`
 	UserBehaviorPartitions         int      `mapstructure:"user_behavior_partitions"`
 	LikeSnapshotPartitions         int      `mapstructure:"like_snapshot_partitions"`
 	RecommendationEventsPartitions int      `mapstructure:"recommendation_events_partitions"`
-	ArticleEmbeddingPartitions     int      `mapstructure:"article_embedding_partitions"`
+	PostEmbeddingPartitions     int      `mapstructure:"post_embedding_partitions"`
 	ActivityEventsPartitions       int      `mapstructure:"activity_events_partitions"`
 	NotificationDLQPartitions      int      `mapstructure:"notification_dlq_partitions"`
 	UserBehaviorGroupID            string   `mapstructure:"user_behavior_group_id"`
 	LikeSnapshotGroupID            string   `mapstructure:"like_snapshot_group_id"`
 	RecommendationMetricsGroupID   string   `mapstructure:"recommendation_metrics_group_id"`
-	ArticleEmbeddingGroupID        string   `mapstructure:"article_embedding_group_id"`
+	PostEmbeddingGroupID        string   `mapstructure:"post_embedding_group_id"`
 	NotificationGroupID            string   `mapstructure:"notification_group_id"`
 }
 
@@ -67,14 +67,14 @@ type RecommendationSemanticRecallConfig struct {
 type RecommendationTrendingConfig struct {
 	MaxAgeDays    int     `mapstructure:"max_age_days"`
 	HalfLifeHours float64 `mapstructure:"half_life_hours"`
-	CommentFactor float64 `mapstructure:"comment_factor"`
+	ReplyFactor float64 `mapstructure:"reply_factor"`
 }
 
 type RecommendationExplorationConfig struct {
 	Ratio                  float64 `mapstructure:"ratio"`
 	MaxSlots               int     `mapstructure:"max_slots"`
 	RecentWindowDays       int     `mapstructure:"recent_window_days"`
-	NovelArticleMaxAgeDays int     `mapstructure:"novel_article_max_age_days"`
+	NovelPostMaxAgeDays int     `mapstructure:"novel_post_max_age_days"`
 }
 
 type RecommendationTraceConfig struct {
@@ -148,7 +148,7 @@ type RecommendationConfig struct {
 	SignalHalfLifeDays                float64                                    `mapstructure:"signal_half_life_days"`
 	FeedbackLookbackDays              int                                        `mapstructure:"feedback_lookback_days"`
 	PositiveSignalCoexistBonus        float64                                    `mapstructure:"positive_signal_coexist_bonus"`
-	PositiveArticleWeightCap          float64                                    `mapstructure:"positive_article_weight_cap"`
+	PositivePostWeightCap          float64                                    `mapstructure:"positive_post_weight_cap"`
 	SemanticWeight                    float64                                    `mapstructure:"semantic_weight"`
 	NegativeSemanticWeight            float64                                    `mapstructure:"negative_semantic_weight"`
 	NegativeConfidenceSaturationScale float64                                    `mapstructure:"negative_confidence_saturation_scale"`
@@ -212,7 +212,7 @@ var recommendationPresenceKeys = []string{
 	"semantic_recall.recent_ratio",
 	"trending.max_age_days",
 	"trending.half_life_hours",
-	"trending.comment_factor",
+	"trending.reply_factor",
 	"exploration.ratio",
 
 	"positive_signal_coexist_bonus",

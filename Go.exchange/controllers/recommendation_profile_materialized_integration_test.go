@@ -57,34 +57,33 @@ func newRecommendationProfileControllerIntegrationUser(t *testing.T, db *gorm.DB
 	t.Cleanup(func() {
 		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserRecoProfile{})
-		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserArticleRecoState{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserPostRecoState{})
 		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserAuthorAffinity{})
-		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.ArticleBehavior{})
-		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.ArticleReaction{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.PostReaction{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 	return user
 }
 
-func newRecommendationProfileControllerIntegrationArticle(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Article {
+func newRecommendationProfileControllerIntegrationArticle(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Post {
 	t.Helper()
-	article := models.Article{
-		AuthorID:         authorID,
-		Title:            title,
-		Content:          title + " body",
-		Preview:          title + " preview",
-		PublicationState: "published",
-		PublishedAt:      &publishedAt,
+	article := models.Post{
+		Model: gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt}, AuthorID: authorID,
+		Content: title + " body", Visibility: "public",
 	}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: title + " preview", PublicationState: "published", PublishedAt: &publishedAt}).Error; err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleEmbedding{})
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.UserArticleRecoState{})
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleBehavior{})
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleReaction{})
-		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Article{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostEmbedding{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.UserPostRecoState{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
+		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 	})
 	return article
 }
@@ -199,14 +198,14 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	interacted := newRecommendationProfileControllerIntegrationArticle(t, db, author.ID, "interacted", now)
 	eligible := newRecommendationProfileControllerIntegrationArticle(t, db, author.ID, "eligible", now.Add(-time.Minute))
-	if err := db.Create(&models.UserArticleRecoState{
-		UserID: viewer.ID, ArticleID: interacted.ID, Interacted: true,
+	if err := db.Create(&models.UserPostRecoState{
+		UserID: viewer.ID, PostID: interacted.ID, Interacted: true,
 		CanonicalVersion: recommendation.CanonicalOutcomeVersion, RebuiltAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	var stateCount int64
-	if err := db.Model(&models.UserArticleRecoState{}).Where("user_id = ? AND article_id = ?", viewer.ID, interacted.ID).Count(&stateCount).Error; err != nil {
+	if err := db.Model(&models.UserPostRecoState{}).Where("user_id = ? AND post_id = ?", viewer.ID, interacted.ID).Count(&stateCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if stateCount != 1 {
@@ -215,13 +214,13 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 
 	profile := userInterestProfile{MaterializedInteractionsReady: true}
 	candidates, err := loadRecommendationSourceCandidates(
-		viewer.ID, profile, map[uint]servedArticle{}, now, normalizedRecommendationConfig(), false,
-		"articles.published_at DESC, articles.id DESC", 10, "recent",
+		viewer.ID, profile, map[uint]servedPost{}, now, normalizedRecommendationConfig(), false,
+		"posts.published_at DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 1 || candidates[0].ArticleID != eligible.ID {
+	if len(candidates) != 1 || candidates[0].PostID != eligible.ID {
 		t.Fatalf("candidates=%+v want only eligible article=%d", candidates, eligible.ID)
 	}
 }
@@ -232,14 +231,14 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 	author := newRecommendationProfileControllerIntegrationUser(t, db, "ni-author")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	article := newRecommendationProfileControllerIntegrationArticle(t, db, author.ID, "not-interested", now)
-	if err := db.Create(&models.ArticleBehavior{
-		UserID: viewer.ID, ArticleID: article.ID, Action: eventing.RecommendationBehaviorActionNotInterested,
+	if err := db.Create(&models.PostBehavior{
+		UserID: viewer.ID, PostID: article.ID, Action: eventing.RecommendationBehaviorActionNotInterested,
 		Count: 1, LastSeenAt: now.Add(-time.Minute), Active: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	var stateCount int64
-	if err := db.Model(&models.UserArticleRecoState{}).Where("user_id = ? AND article_id = ?", viewer.ID, article.ID).Count(&stateCount).Error; err != nil {
+	if err := db.Model(&models.UserPostRecoState{}).Where("user_id = ? AND post_id = ?", viewer.ID, article.ID).Count(&stateCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if stateCount != 0 {
@@ -247,8 +246,8 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 	}
 
 	candidates, err := loadRecommendationSourceCandidates(
-		viewer.ID, userInterestProfile{MaterializedInteractionsReady: true}, map[uint]servedArticle{}, now,
-		normalizedRecommendationConfig(), false, "articles.published_at DESC, articles.id DESC", 10, "recent",
+		viewer.ID, userInterestProfile{MaterializedInteractionsReady: true}, map[uint]servedPost{}, now,
+		normalizedRecommendationConfig(), false, "posts.published_at DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
 		t.Fatal(err)

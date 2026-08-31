@@ -41,14 +41,14 @@ var claimScript = redis.NewScript(`
 local ids = redis.call('SMEMBERS', KEYS[1])
 local result = {}
 local limit = tonumber(ARGV[1])
-for _, article_id in ipairs(ids) do
+for _, post_id in ipairs(ids) do
   if #result >= limit * 2 then break end
-  if redis.call('HEXISTS', KEYS[3], article_id) == 0 then
-    local claim_id = ARGV[3] .. ':' .. article_id
-    redis.call('SREM', KEYS[1], article_id)
-    redis.call('HSET', KEYS[3], article_id, claim_id)
-    redis.call('ZADD', KEYS[2], ARGV[2], article_id)
-    table.insert(result, article_id)
+  if redis.call('HEXISTS', KEYS[3], post_id) == 0 then
+    local claim_id = ARGV[3] .. ':' .. post_id
+    redis.call('SREM', KEYS[1], post_id)
+    redis.call('HSET', KEYS[3], post_id, claim_id)
+    redis.call('ZADD', KEYS[2], ARGV[2], post_id)
+    table.insert(result, post_id)
     table.insert(result, claim_id)
   end
 end
@@ -73,15 +73,15 @@ return 1
 var reapExpiredScript = redis.NewScript(`
 local ids = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
 local count = 0
-for _, article_id in ipairs(ids) do
-  local claim_id = redis.call('HGET', KEYS[3], article_id)
+for _, post_id in ipairs(ids) do
+  local claim_id = redis.call('HGET', KEYS[3], post_id)
   if claim_id then
-    redis.call('HDEL', KEYS[3], article_id)
-    redis.call('ZREM', KEYS[2], article_id)
-    redis.call('SADD', KEYS[1], article_id)
+    redis.call('HDEL', KEYS[3], post_id)
+    redis.call('ZREM', KEYS[2], post_id)
+    redis.call('SADD', KEYS[1], post_id)
     count = count + 1
   else
-    redis.call('ZREM', KEYS[2], article_id)
+    redis.call('ZREM', KEYS[2], post_id)
   end
 end
 return count

@@ -4,8 +4,8 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
-import NewsDetailView from './NewsDetailView.vue';
-import type { Article } from '../types/Article';
+import PostDetailView from './PostDetailView.vue';
+import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
 import { formatCompactEngagementCount } from '../utils/engagementCount';
 
@@ -20,25 +20,25 @@ const mocks = vi.hoisted(() => ({
   authStore: null as any,
   feedStore: {
     viewerID: 7,
-    markArticleDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
   },
   handoffStore: null as any,
   consumeHandoff: vi.fn(),
-  getArticleById: vi.fn(),
-  getArticleLikeState: vi.fn(),
-  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
-  getArticleComments: vi.fn(),
-  createArticleComment: vi.fn(),
-  deleteComment: vi.fn(),
-  deleteArticle: vi.fn(),
+  getPostById: vi.fn(),
+  getPostLikeState: vi.fn(),
+  getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
+  getPostReplies: vi.fn(),
+  createPostReply: vi.fn(),
+  deletePostReply: vi.fn(),
+  deletePost: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
     recordReadEnd: vi.fn(),
     flush: vi.fn(),
   },
-  articleViewTelemetry: {
+  postViewTelemetry: {
     enqueue: vi.fn(),
   },
   composerFocus: vi.fn(),
@@ -60,31 +60,31 @@ vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
 
-vi.mock('../store/articleDetailHandoff', () => ({
-  useArticleDetailHandoffStore: () => mocks.handoffStore,
+vi.mock('../store/postDetailHandoff', () => ({
+  usePostDetailHandoffStore: () => mocks.handoffStore,
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: mocks.deleteArticle,
-  getArticleById: mocks.getArticleById,
+vi.mock('../services/postService', () => ({
+  deletePost: mocks.deletePost,
+  getPostById: mocks.getPostById,
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeState: mocks.getArticleLikeState,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeState: mocks.getPostLikeState,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 vi.mock('../services/repostService', () => ({
-  getArticleRepostState: mocks.getArticleRepostState,
-  repostArticle: vi.fn(),
-  undoRepostArticle: vi.fn(),
+  getPostRepostState: mocks.getPostRepostState,
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
 }));
 
-vi.mock('../services/commentService', () => ({
-  createArticleComment: mocks.createArticleComment,
-  deleteComment: mocks.deleteComment,
-  getArticleComments: mocks.getArticleComments,
+vi.mock('../services/replyService', () => ({
+  createPostReply: mocks.createPostReply,
+  deletePostReply: mocks.deletePostReply,
+  getPostReplies: mocks.getPostReplies,
 }));
 
 vi.mock('../services/recommendationAttribution', () => ({
@@ -95,39 +95,48 @@ vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
 }));
 
-vi.mock('../services/articleViewTelemetry', () => ({
-  createArticleViewEventID: () => '00000000-0000-4000-8000-000000000042',
-  getArticleViewTelemetry: () => mocks.articleViewTelemetry,
+vi.mock('../services/postViewTelemetry', () => ({
+  createPostViewEventID: () => '00000000-0000-4000-8000-000000000042',
+  getPostViewTelemetry: () => mocks.postViewTelemetry,
 }));
 
 vi.mock('../store/sessionSync', () => ({
-  syncExternalArticleLikeState: vi.fn(),
-  syncExternalArticleRepostState: vi.fn(),
-  syncExternalArticleRemoval: vi.fn(),
-  syncExternalCommentCount: vi.fn(),
+  syncExternalPostLikeState: vi.fn(),
+  syncExternalPostRepostState: vi.fn(),
+  syncExternalPostRemoval: vi.fn(),
+  syncExternalReplyCount: vi.fn(),
 }));
 
-const article = (overrides: Partial<Article> = {}): Article => ({
-  ID: 42,
-  CreatedAt: '2026-08-27T13:42:00',
-  UpdatedAt: '2026-08-27T13:42:00',
-  title: 'A thoughtful post',
-  content: 'Full post body',
-  preview: 'Warm post preview',
-  cover_image_url: '',
-  publication_state: 'published',
+const canonicalPost = (overrides: Partial<Post> = {}): Post => ({
+  id: 42,
+  created_at: '2026-08-27T13:42:00',
+  updated_at: '2026-08-27T13:42:00',
   published_at: '2026-08-27T13:42:00',
-  expired_at: '2026-09-01T00:00:00',
-  like_count: 11,
-  comment_count: 4,
-  view_count: 1234,
-  like_sync_version: 1,
   author: {
     id: 7,
     username: 'post-author',
     display_name: 'Post Author',
     avatar_url: '/post-author.png',
   },
+  content: 'Full post body',
+  conversation_id: 42,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  article: {
+    title: 'A thoughtful post',
+    preview: 'Warm post preview',
+    cover_image_url: '',
+    publication_state: 'published',
+    published_at: '2026-08-27T13:42:00',
+    expired_at: '2026-09-01T00:00:00',
+  },
+  like_count: 11,
+  reply_count: 4,
+  view_count: 1234,
+  deleted: false,
   ...overrides,
 });
 
@@ -144,7 +153,7 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   coverImageUrl: '',
   createdAt: '2026-08-27T13:42:00',
   likeCount: 10,
-  commentCount: 3,
+  replyCount: 3,
   viewCount: 300,
   liked: false,
   likeStatus: 'ready',
@@ -164,7 +173,7 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
-const mountDetail = () => mount(NewsDetailView, {
+const mountDetail = () => mount(PostDetailView, {
   attachTo: document.body,
   global: {
     plugins: [createPinia()],
@@ -182,20 +191,20 @@ const mountDetail = () => mount(NewsDetailView, {
         emits: ['toggle'],
         template: '<button class="test-like-action" type="button">{{ count }}</button>',
       },
-      CommentComposer: {
+      ReplyComposer: {
         methods: {
           focus: mocks.composerFocus,
           clear: vi.fn(),
         },
         template: '<div class="test-composer" />',
       },
-      CommentList: { template: '<div class="test-comment-list" />' },
+      ReplyList: { template: '<div class="test-comment-list" />' },
       RouterLink: { template: '<a class="test-link"><slot /></a>' },
     },
   },
 });
 
-describe('NewsDetailView post-first surface', () => {
+describe('PostDetailView post-first surface', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
@@ -217,9 +226,9 @@ describe('NewsDetailView post-first surface', () => {
     });
     mocks.handoffStore = { consume: mocks.consumeHandoff };
     mocks.consumeHandoff.mockReturnValue(null);
-    mocks.getArticleById.mockResolvedValue(article());
-    mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 11 });
-    mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getPostById.mockResolvedValue(canonicalPost());
+    mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 11 });
+    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.composerFocus.mockResolvedValue(true);
     mocks.telemetry.flush.mockResolvedValue(undefined);
@@ -257,9 +266,9 @@ describe('NewsDetailView post-first surface', () => {
   });
 
   it('keeps Reply non-interactive while warm and replaces cached views on success', async () => {
-    const request = deferred<Article>();
+    const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post());
-    mocks.getArticleById.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockReturnValueOnce(request.promise);
 
     wrapper = mountDetail();
     await flushPromises();
@@ -269,10 +278,10 @@ describe('NewsDetailView post-first surface', () => {
     expect(wrapper.find('.post-detail__like').exists()).toBe(true);
     expect(wrapper.find('.post-conversation').exists()).toBe(false);
     expect(wrapper.find('.test-composer').exists()).toBe(false);
-    expect(mocks.getArticleLikeState).not.toHaveBeenCalled();
-    expect(mocks.getArticleComments).not.toHaveBeenCalled();
+    expect(mocks.getPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.getPostReplies).not.toHaveBeenCalled();
 
-    request.resolve(article({ view_count: 321 }));
+    request.resolve(canonicalPost({ view_count: 321 }));
     await flushPromises();
 
     expect(wrapper.find('.post-detail__views').text()).toBe('321 Views');
@@ -300,11 +309,11 @@ describe('NewsDetailView post-first surface', () => {
     expect(wrapper.find('.detail-state--error').text()).toContain('Post unavailable');
     expect(wrapper.find('.detail-state--error').text()).toContain('This post URL is not valid.');
     expect(wrapper.text()).not.toContain('Article');
-    expect(mocks.getArticleById).not.toHaveBeenCalled();
+    expect(mocks.getPostById).not.toHaveBeenCalled();
   });
 
   it('uses Post vocabulary for a missing post and generic load failures', async () => {
-    mocks.getArticleById.mockRejectedValueOnce({ response: { status: 404 } });
+    mocks.getPostById.mockRejectedValueOnce({ response: { status: 404 } });
 
     wrapper = mountDetail();
     await flushPromises();
@@ -315,7 +324,7 @@ describe('NewsDetailView post-first surface', () => {
 
     wrapper.unmount();
     wrapper = null;
-    mocks.getArticleById.mockRejectedValueOnce(new Error('offline'));
+    mocks.getPostById.mockRejectedValueOnce(new Error('offline'));
     wrapper = mountDetail();
     await flushPromises();
 
@@ -335,6 +344,7 @@ describe('NewsDetailView post-first surface', () => {
     expect(wrapper.find('.post-detail').exists()).toBe(false);
     expect(wrapper.find('.test-composer').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('Log in to join the conversation.');
-    expect(mocks.getArticleById).not.toHaveBeenCalled();
+    expect(mocks.getPostById).not.toHaveBeenCalled();
   });
 });
+

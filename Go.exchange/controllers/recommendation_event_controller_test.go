@@ -30,10 +30,10 @@ func (p *recommendationTestPublisher) PublishBatch(_ context.Context, events []e
 	return p.err
 }
 
-func signTestRecommendationToken(t *testing.T, userID, articleID uint, now time.Time, estimated int64, policy string) string {
+func signTestRecommendationToken(t *testing.T, userID, postID uint, now time.Time, estimated int64, policy string) string {
 	t.Helper()
 	token, err := signRecommendationTrackingClaims(recommendationTrackingClaims{
-		UserID: userID, RequestID: uuid.NewString(), ArticleID: articleID, Position: 1,
+		UserID: userID, RequestID: uuid.NewString(), PostID: postID, Position: 1,
 		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
@@ -177,7 +177,7 @@ func TestValidateRecommendationTelemetryEventCopiesSignedExplorationProvenance(t
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	key := []byte("0123456789abcdef0123456789abcdef")
 	claims := recommendationTrackingClaims{
-		UserID: 7, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
+		UserID: 7, RequestID: uuid.NewString(), PostID: 11, Position: 1,
 		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
@@ -203,7 +203,7 @@ func TestValidateRecommendationTelemetryEventCopiesSignedRankedOpportunity(t *te
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	key := []byte("0123456789abcdef0123456789abcdef")
 	claims := recommendationTrackingClaims{
-		UserID: 7, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
+		UserID: 7, RequestID: uuid.NewString(), PostID: 11, Position: 1,
 		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
@@ -242,7 +242,7 @@ func TestRecommendationEventsHandlerUsesSignedProvenanceAgainstClientFields(t *t
 	recommendationTelemetryNow = func() time.Time { return now }
 	global.Db = nil
 	claims := recommendationTrackingClaims{
-		UserID: 7, RequestID: uuid.NewString(), ArticleID: 11, Position: 1,
+		UserID: 7, RequestID: uuid.NewString(), PostID: 11, Position: 1,
 		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),

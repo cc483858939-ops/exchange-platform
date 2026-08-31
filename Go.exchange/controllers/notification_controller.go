@@ -36,13 +36,13 @@ type notificationActorResponse struct {
 }
 
 type notificationResponse struct {
-	ID         uint                      `json:"id"`
-	Type       string                    `json:"type"`
-	Actor      notificationActorResponse `json:"actor"`
-	ArticleID  *uint                     `json:"article_id"`
-	CommentID  *uint                     `json:"comment_id"`
-	ActivityAt time.Time                 `json:"activity_at"`
-	Read       bool                      `json:"read"`
+	ID             uint                      `json:"id"`
+	Type           string                    `json:"type"`
+	Actor          notificationActorResponse `json:"actor"`
+	PostID         *uint                     `json:"post_id"`
+	ConversationID *uint                     `json:"conversation_id"`
+	ActivityAt     time.Time                 `json:"activity_at"`
+	Read           bool                      `json:"read"`
 }
 
 type notificationPageResponse struct {
@@ -51,16 +51,16 @@ type notificationPageResponse struct {
 }
 
 type notificationQueryRow struct {
-	ID          uint       `gorm:"column:id"`
-	Type        string     `gorm:"column:notification_type"`
-	ActorID     uint       `gorm:"column:actor_id"`
-	Username    string     `gorm:"column:username"`
-	DisplayName string     `gorm:"column:display_name"`
-	AvatarURL   string     `gorm:"column:avatar_url"`
-	ArticleID   *uint      `gorm:"column:article_id"`
-	CommentID   *uint      `gorm:"column:comment_id"`
-	ActivityAt  time.Time  `gorm:"column:activity_at"`
-	ReadAt      *time.Time `gorm:"column:read_at"`
+	ID             uint       `gorm:"column:id"`
+	Type           string     `gorm:"column:notification_type"`
+	ActorID        uint       `gorm:"column:actor_id"`
+	Username       string     `gorm:"column:username"`
+	DisplayName    string     `gorm:"column:display_name"`
+	AvatarURL      string     `gorm:"column:avatar_url"`
+	PostID         *uint      `gorm:"column:post_id"`
+	ConversationID *uint      `gorm:"column:conversation_id"`
+	ActivityAt     time.Time  `gorm:"column:activity_at"`
+	ReadAt         *time.Time `gorm:"column:read_at"`
 }
 
 // visibleNotificationsForViewer is the single visibility query shared by the
@@ -69,21 +69,23 @@ func visibleNotificationsForViewer(db *gorm.DB, viewerID uint, now time.Time) *g
 	if db == nil {
 		return nil
 	}
-	visibleArticles := publicArticleScope(db.Table("articles"), now).Select("articles.id")
+	visiblePosts := publicPostScope(db.Table("posts"), now).Select("posts.id")
 	return db.Table("notifications AS n").
 		Select(`n.id, n.notification_type, n.actor_id, actor.username, actor.display_name, actor.avatar_url,
-                n.article_id, n.comment_id, n.activity_at, n.read_at`).
+				n.post_id, CASE WHEN n.post_id IS NULL THEN NULL ELSE COALESCE(notification_post.conversation_id, notification_post.id) END AS conversation_id,
+				n.activity_at, n.read_at`).
+		Joins("JOIN users AS recipient ON recipient.id = n.recipient_id AND recipient.deleted_at IS NULL").
 		Joins("JOIN users AS actor ON actor.id = n.actor_id AND actor.deleted_at IS NULL").
-		Joins("LEFT JOIN (?) AS visible_article ON visible_article.id = n.article_id", visibleArticles).
-		Joins("LEFT JOIN comments AS visible_comment ON visible_comment.id = n.comment_id AND visible_comment.deleted_at IS NULL AND visible_comment.article_id = n.article_id").
+		Joins("LEFT JOIN (?) AS visible_post ON visible_post.id = n.post_id", visiblePosts).
+		Joins("LEFT JOIN posts AS notification_post ON notification_post.id = n.post_id AND visible_post.id IS NOT NULL").
 		Where("n.recipient_id = ?", viewerID).
 		Where(`
 (
-  n.notification_type = ? AND n.article_id IS NULL AND n.comment_id IS NULL
+	  n.notification_type = ? AND n.post_id IS NULL AND n.source_version > 0
 ) OR (
-  n.notification_type = ? AND visible_article.id IS NOT NULL AND n.comment_id IS NULL
+	  n.notification_type = ? AND n.post_id IS NOT NULL AND n.source_version > 0 AND visible_post.id IS NOT NULL
 ) OR (
-  n.notification_type = ? AND visible_article.id IS NOT NULL AND visible_comment.id IS NOT NULL
+	  n.notification_type = ? AND n.post_id IS NOT NULL AND n.source_version = 0 AND visible_post.id IS NOT NULL
 )`, models.NotificationTypeUserFollowed, models.NotificationTypePostLiked, models.NotificationTypePostReplied)
 }
 
@@ -158,8 +160,8 @@ func GetMyNotifications(ctx *gin.Context) {
 	for _, row := range rows {
 		response.Items = append(response.Items, notificationResponse{
 			ID: row.ID, Type: row.Type,
-			Actor:     notificationActorResponse{ID: row.ActorID, Username: row.Username, DisplayName: row.DisplayName, AvatarURL: row.AvatarURL},
-			ArticleID: row.ArticleID, CommentID: row.CommentID, ActivityAt: row.ActivityAt, Read: row.ReadAt != nil,
+			Actor:  notificationActorResponse{ID: row.ActorID, Username: row.Username, DisplayName: row.DisplayName, AvatarURL: row.AvatarURL},
+			PostID: row.PostID, ConversationID: row.ConversationID, ActivityAt: row.ActivityAt, Read: row.ReadAt != nil,
 		})
 	}
 	if hasMore && len(rows) > 0 {

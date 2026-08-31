@@ -2,9 +2,9 @@ package controllers
 
 import "Go.exchange/models"
 
-func ensureArticleAuthors(articles []models.Article) error {
-	for _, article := range articles {
-		if _, err := publicAuthorFromArticle(article); err != nil {
+func ensurePostAuthors(posts []models.Post) error {
+	for _, post := range posts {
+		if _, err := publicAuthorFromPost(post); err != nil {
 			return err
 		}
 	}

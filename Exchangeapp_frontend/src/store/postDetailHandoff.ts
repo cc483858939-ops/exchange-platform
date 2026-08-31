@@ -5,7 +5,7 @@ import { useAuthStore } from './auth';
 
 const maxHandoffAgeMs = 30_000;
 
-export type ArticleDetailHandoff = {
+export type PostDetailHandoff = {
   post: FeedPost;
   viewerID: number | null;
   capturedAt: number;
@@ -19,9 +19,9 @@ const clonePost = (post: FeedPost): FeedPost => ({
     : undefined,
 });
 
-export const useArticleDetailHandoffStore = defineStore('articleDetailHandoff', () => {
+export const usePostDetailHandoffStore = defineStore('postDetailHandoff', () => {
   const authStore = useAuthStore();
-  const pending = ref<ArticleDetailHandoff | null>(null);
+  const pending = ref<PostDetailHandoff | null>(null);
 
   const remember = (post: FeedPost) => {
     pending.value = {
@@ -31,7 +31,7 @@ export const useArticleDetailHandoffStore = defineStore('articleDetailHandoff', 
     };
   };
 
-  const consume = (articleID: number) => {
+  const consume = (postID: number) => {
     const handoff = pending.value;
     pending.value = null;
     if (!handoff) {
@@ -44,7 +44,7 @@ export const useArticleDetailHandoffStore = defineStore('articleDetailHandoff', 
       !authStore.isAuthenticated
       || viewerID === null
       || handoff.viewerID !== viewerID
-      || handoff.post.id !== articleID
+      || handoff.post.id !== postID
       || age < 0
       || age > maxHandoffAgeMs
     ) {
@@ -65,3 +65,5 @@ export const useArticleDetailHandoffStore = defineStore('articleDetailHandoff', 
     clear,
   };
 });
+
+

@@ -17,10 +17,10 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 			View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6,
 		},
 		SemanticRecall:     config.RecommendationSemanticRecallConfig{RecentWindowDays: 30, RecentRatio: 0.80},
-		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 7, HalfLifeHours: 24, CommentFactor: 0.5},
-		Exploration:        config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelArticleMaxAgeDays: 30},
+		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 7, HalfLifeHours: 24, ReplyFactor: 0.5},
+		Exploration:        config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30},
 		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90,
-		PositiveSignalCoexistBonus: 1, PositiveArticleWeightCap: 7,
+		PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 		SemanticWeight: 4, NegativeSemanticWeight: 1.5, NegativeConfidenceSaturationScale: 12,
 		TrendingWeight:       0.5,
 		AuthorAffinityWeight: 1, AuthorAffinitySaturationScale: 6, FollowingBonus: 0.5,
@@ -82,8 +82,8 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.PositiveSignalCoexistBonus >= 0 && recommendationSettingProvided("positive_signal_coexist_bonus", set.PositiveSignalCoexistBonus != 0) {
 		cfg.PositiveSignalCoexistBonus = set.PositiveSignalCoexistBonus
 	}
-	if set.PositiveArticleWeightCap > 0 {
-		cfg.PositiveArticleWeightCap = set.PositiveArticleWeightCap
+	if set.PositivePostWeightCap > 0 {
+		cfg.PositivePostWeightCap = set.PositivePostWeightCap
 	}
 	if set.SemanticWeight >= 0 && recommendationSettingProvided("semantic_weight", set.SemanticWeight != 0) {
 		cfg.SemanticWeight = set.SemanticWeight
@@ -97,8 +97,8 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if recommendationSettingProvided("trending_weight", set.TrendingWeight != 0) {
 		cfg.TrendingWeight = set.TrendingWeight
 	}
-	if recommendationSettingProvided("trending.comment_factor", set.Trending.CommentFactor != 0) {
-		cfg.Trending.CommentFactor = set.Trending.CommentFactor
+	if recommendationSettingProvided("trending.reply_factor", set.Trending.ReplyFactor != 0) {
+		cfg.Trending.ReplyFactor = set.Trending.ReplyFactor
 	}
 	if set.SemanticRecall.RecentWindowDays > 0 {
 		cfg.SemanticRecall.RecentWindowDays = set.SemanticRecall.RecentWindowDays
@@ -121,8 +121,8 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Exploration.RecentWindowDays > 0 {
 		cfg.Exploration.RecentWindowDays = set.Exploration.RecentWindowDays
 	}
-	if set.Exploration.NovelArticleMaxAgeDays > 0 {
-		cfg.Exploration.NovelArticleMaxAgeDays = set.Exploration.NovelArticleMaxAgeDays
+	if set.Exploration.NovelPostMaxAgeDays > 0 {
+		cfg.Exploration.NovelPostMaxAgeDays = set.Exploration.NovelPostMaxAgeDays
 	}
 	if set.AuthorAffinityWeight >= 0 && recommendationSettingProvided("author_affinity_weight", set.AuthorAffinityWeight != 0) {
 		cfg.AuthorAffinityWeight = set.AuthorAffinityWeight
@@ -182,8 +182,8 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if cfg.PositiveSignalCoexistBonus < 0 {
 		cfg.PositiveSignalCoexistBonus = 1
 	}
-	if cfg.PositiveArticleWeightCap <= 0 || cfg.PositiveArticleWeightCap < math.Max(cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Reply) {
-		cfg.PositiveArticleWeightCap = 7
+	if cfg.PositivePostWeightCap <= 0 || cfg.PositivePostWeightCap < math.Max(cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Reply) {
+		cfg.PositivePostWeightCap = 7
 	}
 	if cfg.NegativeSemanticWeight < 0 {
 		cfg.NegativeSemanticWeight = 1.5
@@ -212,8 +212,8 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if cfg.Exploration.RecentWindowDays <= 0 {
 		cfg.Exploration.RecentWindowDays = 7
 	}
-	if cfg.Exploration.NovelArticleMaxAgeDays <= 0 {
-		cfg.Exploration.NovelArticleMaxAgeDays = 30
+	if cfg.Exploration.NovelPostMaxAgeDays <= 0 {
+		cfg.Exploration.NovelPostMaxAgeDays = 30
 	}
 	if cfg.ServedHardExclusionMinutes <= 0 {
 		cfg.ServedHardExclusionMinutes = 30
@@ -263,8 +263,8 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if cfg.Trending.HalfLifeHours <= 0 {
 		cfg.Trending.HalfLifeHours = 24
 	}
-	if cfg.Trending.CommentFactor < 0 {
-		cfg.Trending.CommentFactor = 0.5
+	if cfg.Trending.ReplyFactor < 0 {
+		cfg.Trending.ReplyFactor = 0.5
 	}
 	if cfg.TrendingWeight < 0 {
 		cfg.TrendingWeight = 0.5
@@ -298,7 +298,7 @@ type userInterestProfile struct {
 	PositiveVector                []float32
 	NegativeVector                []float32
 	NegativeConfidence            float64
-	InteractedArticleIDs          map[uint]struct{}
+	InteractedPostIDs          map[uint]struct{}
 	PositiveSignalCount           int
 	NegativeSignalCount           int
 	PersonalizedSignalCount       int
@@ -313,52 +313,52 @@ type userInterestProfile struct {
 	MaterializedInteractionsReady bool
 }
 
-var loadRecommendationArticleEmbeddings = func(articleIDs []uint, version string) (map[uint][]float32, error) {
+var loadRecommendationPostEmbeddings = func(postIDs []uint, version string) (map[uint][]float32, error) {
 	result := make(map[uint][]float32)
-	if len(articleIDs) == 0 {
+	if len(postIDs) == 0 {
 		return result, nil
 	}
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	var rows []models.ArticleEmbedding
-	if err := global.Db.Select("article_id, embedding").Where("article_id IN ? AND version = ?", articleIDs, version).Find(&rows).Error; err != nil {
+	var rows []models.PostEmbedding
+	if err := global.Db.Select("post_id, embedding").Where("post_id IN ? AND version = ?", postIDs, version).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
-		result[row.ArticleID] = append([]float32(nil), row.Embedding.Slice()...)
+		result[row.PostID] = append([]float32(nil), row.Embedding.Slice()...)
 	}
 	return result, nil
 }
 
-func buildEmbeddingInterestProfile(behaviors []articleBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
+func buildEmbeddingInterestProfile(behaviors []postBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
 	profile := userInterestProfile{
-		InteractedArticleIDs: make(map[uint]struct{}), PositiveContributions: make(map[uint]float64), PositiveAffinityContributions: make(map[uint]float64),
+		InteractedPostIDs: make(map[uint]struct{}), PositiveContributions: make(map[uint]float64), PositiveAffinityContributions: make(map[uint]float64),
 	}
-	behaviorRows := make([]models.ArticleBehavior, 0, len(behaviors))
+	behaviorRows := make([]models.PostBehavior, 0, len(behaviors))
 	for _, item := range behaviors {
 		behaviorRows = append(behaviorRows, item.Behavior)
 	}
 	feedbackRows := make([]recommendation.FeedbackEvent, 0, len(feedback))
 	for _, item := range feedback {
 		feedbackRows = append(feedbackRows, recommendation.FeedbackEvent{
-			EventID: item.Event.EventID, ArticleID: item.Event.ArticleID, EventType: item.Event.EventType,
+			EventID: item.Event.EventID, PostID: item.Event.PostID, EventType: item.Event.EventType,
 			OccurredAt: item.Event.OccurredAt, ReceivedAt: item.Event.ReceivedAt, ReadOutcome: item.Event.ReadOutcome,
 		})
 	}
 	reactionRows := make(map[uint]recommendation.ReactionState, len(reactions))
-	for articleID, reaction := range reactions {
-		reactionRows[articleID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
+	for postID, reaction := range reactions {
+		reactionRows[postID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
 	}
 	canonical := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
 	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, config.ActiveEmbeddingVersion(), func(ids []uint, version string) (map[uint][]float32, error) {
-		return loadRecommendationArticleEmbeddings(ids, version)
+		return loadRecommendationPostEmbeddings(ids, version)
 	})
 	if err != nil {
 		return profile, err
 	}
-	for _, articleID := range built.InteractedArticleIDs {
-		profile.InteractedArticleIDs[articleID] = struct{}{}
+	for _, postID := range built.InteractedPostIDs {
+		profile.InteractedPostIDs[postID] = struct{}{}
 	}
 	profile.PositiveVector = built.PositiveVector
 	profile.NegativeVector = built.NegativeVector
@@ -377,15 +377,15 @@ func addEmbeddingContribution(target *[]float32, vector []float32, strength floa
 	return recommendation.AddEmbeddingContribution(target, vector, strength)
 }
 
-func recommendationPositiveArticleStrength(outcome userArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
-	return recommendation.PositiveArticleStrength(sharedUserArticleOutcome(outcome), now, cfg)
+func recommendationPositivePostStrength(outcome userPostOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
+	return recommendation.PositivePostStrength(sharedUserPostOutcome(outcome), now, cfg)
 }
 
-func recommendationAuthorAffinityContribution(outcome userArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
-	return recommendation.AuthorAffinityContribution(sharedUserArticleOutcome(outcome), now, cfg)
+func recommendationAuthorAffinityContribution(outcome userPostOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
+	return recommendation.AuthorAffinityContribution(sharedUserPostOutcome(outcome), now, cfg)
 }
-func recommendationNegativeArticleStrength(outcome userArticleOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
-	return recommendation.NegativeArticleStrength(sharedUserArticleOutcome(outcome), now, cfg)
+func recommendationNegativePostStrength(outcome userPostOutcome, now time.Time, cfg config.RecommendationConfig) float64 {
+	return recommendation.NegativePostStrength(sharedUserPostOutcome(outcome), now, cfg)
 }
 
 func validEmbeddingVector(vector []float32) bool {
@@ -408,16 +408,16 @@ func cosineSimilarity(left, right []float32) float64 {
 	return recommendation.CosineSimilarity(left, right)
 }
 
-func sharedUserArticleOutcome(outcome userArticleOutcome) recommendation.UserArticleOutcome {
-	converted := recommendation.UserArticleOutcome{ArticleID: outcome.ArticleID}
+func sharedUserPostOutcome(outcome userPostOutcome) recommendation.UserPostOutcome {
+	converted := recommendation.UserPostOutcome{PostID: outcome.PostID}
 	for _, signal := range outcome.PositiveSignals {
-		converted.PositiveSignals = append(converted.PositiveSignals, recommendation.UserArticleSignal{SignalType: signal.SignalType, OccurredAt: signal.OccurredAt})
+		converted.PositiveSignals = append(converted.PositiveSignals, recommendation.UserPostSignal{SignalType: signal.SignalType, OccurredAt: signal.OccurredAt})
 	}
 	if outcome.NegativeSignal != nil {
-		converted.NegativeSignal = &recommendation.UserArticleSignal{SignalType: outcome.NegativeSignal.SignalType, OccurredAt: outcome.NegativeSignal.OccurredAt}
+		converted.NegativeSignal = &recommendation.UserPostSignal{SignalType: outcome.NegativeSignal.SignalType, OccurredAt: outcome.NegativeSignal.OccurredAt}
 	}
 	if outcome.PassiveSignal != nil {
-		converted.PassiveSignal = &recommendation.UserArticleSignal{SignalType: outcome.PassiveSignal.SignalType, OccurredAt: outcome.PassiveSignal.OccurredAt}
+		converted.PassiveSignal = &recommendation.UserPostSignal{SignalType: outcome.PassiveSignal.SignalType, OccurredAt: outcome.PassiveSignal.OccurredAt}
 	}
 	return converted
 }

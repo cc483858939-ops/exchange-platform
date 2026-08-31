@@ -39,7 +39,7 @@ func RequiredKafkaTopics(cfg config.KafkaConfig) ([]TopicSpec, error) {
 		{Name: cfg.UserBehaviorTopic, Partitions: cfg.UserBehaviorPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.LikeSnapshotTopic, Partitions: cfg.LikeSnapshotPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.RecommendationEventsTopic, Partitions: cfg.RecommendationEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
-		{Name: cfg.ArticleEmbeddingTopic, Partitions: cfg.ArticleEmbeddingPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: cfg.PostEmbeddingTopic, Partitions: cfg.PostEmbeddingPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.ActivityEventsTopic, Partitions: cfg.ActivityEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.NotificationDLQTopic, Partitions: cfg.NotificationDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 	}

@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func createArticleIntegrationAuthor(t *testing.T, db *gorm.DB) models.User {
+func createPostIntegrationAuthor(t *testing.T, db *gorm.DB) models.User {
 	t.Helper()
 	user := models.User{Username: "article-author-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&user).Error; err != nil {

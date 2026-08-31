@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import type { FeedPost } from '../types/Feed';
-import { useArticleDetailHandoffStore } from './articleDetailHandoff';
+import { usePostDetailHandoffStore } from './postDetailHandoff';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
@@ -27,7 +27,7 @@ const basePost = (): FeedPost => ({
   coverImageUrl: '/cover-a.png',
   createdAt: '2026-08-26T00:00:00.000Z',
   likeCount: 10,
-  commentCount: 2,
+  replyCount: 2,
   viewCount: 300,
   liked: true,
   likeStatus: 'ready',
@@ -46,10 +46,10 @@ const setAuth = (id: number | null) => {
 const createStore = (id = 7) => {
   setAuth(id);
   setActivePinia(createPinia());
-  return useArticleDetailHandoffStore();
+  return usePostDetailHandoffStore();
 };
 
-describe('articleDetailHandoff store', () => {
+describe('postDetailHandoff store', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-26T12:00:00.000Z'));
@@ -91,7 +91,7 @@ describe('articleDetailHandoff store', () => {
     expect(store.pending).toBeNull();
   });
 
-  it('clears a handoff when the article ID is wrong', () => {
+  it('clears a handoff when the post ID is wrong', () => {
     const store = createStore();
     store.remember(basePost());
 
@@ -127,3 +127,5 @@ describe('articleDetailHandoff store', () => {
     expect(store.consume(42)).toBeNull();
   });
 });
+
+

@@ -29,10 +29,10 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 	}
 	if err := db.AutoMigrate(
 		&models.User{},
-		&models.Article{},
+		&models.Post{},
 		&models.ConsumerInbox{},
-		&models.ArticleBehavior{},
-		&models.ArticleReaction{},
+		&models.PostBehavior{},
+		&models.PostReaction{},
 		&models.UserRecoProfileDirty{},
 	); err != nil {
 		t.Fatal(err)
@@ -46,13 +46,13 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 	global.Db = db
 
 	var userOneID, userTwoID uint
-	articleIDs := make([]uint, 0, 11)
+	postIDs := make([]uint, 0, 11)
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.UserRecoProfileDirty{})
-		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.ArticleBehavior{})
-		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.ArticleReaction{})
-		db.Unscoped().Where("id IN ?", articleIDs).Delete(&models.Article{})
+		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.PostReaction{})
+		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{userOneID, userTwoID}).Delete(&models.User{})
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
@@ -74,33 +74,30 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		t.Fatal(err)
 	}
 	userTwoID = userTwo.ID
-	for index := 0; index < cap(articleIDs); index++ {
-		article := models.Article{
-			AuthorID: userOneID,
-			Title:    "user behavior fixture",
-			Content:  "user behavior fixture",
-			Preview:  "user behavior fixture",
+	for index := 0; index < cap(postIDs); index++ {
+		article := models.Post{
+			AuthorID: userOneID, Content: "user behavior fixture", Visibility: "public",
 		}
 		if err := db.Create(&article).Error; err != nil {
 			t.Fatal(err)
 		}
-		articleIDs = append(articleIDs, article.ID)
+		postIDs = append(postIDs, article.ID)
 	}
-	articleID := func(index int) uint { return articleIDs[index] }
+	postID := func(index int) uint { return postIDs[index] }
 
 	base := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	viewMessages := make([]kafka.Message, 0, 8)
 	viewMessages = append(viewMessages,
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-1", userOneID, articleID(0), base.Add(2*time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-2", userOneID, articleID(0), base)),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-3", userOneID, articleID(0), base.Add(time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-4", userOneID, articleID(1), base.Add(time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-5", userOneID, articleID(1), base.Add(3*time.Minute))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-6", userOneID, articleID(2), base)),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-1", userOneID, postID(0), base.Add(2*time.Minute))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-2", userOneID, postID(0), base)),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-3", userOneID, postID(0), base.Add(time.Minute))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-4", userOneID, postID(1), base.Add(time.Minute))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-5", userOneID, postID(1), base.Add(3*time.Minute))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-6", userOneID, postID(2), base)),
 		kafka.Message{Value: []byte("{malformed")},
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-7", userOneID, articleID(2), base.Add(time.Minute))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-7", userOneID, postID(2), base.Add(time.Minute))),
 	)
-	duplicate := userBehaviorMessage(t, mustArticleViewedEvent(t, "view-8", userOneID, articleID(3), base))
+	duplicate := userBehaviorMessage(t, mustPostViewedEvent(t, "view-8", userOneID, postID(3), base))
 	viewMessages = append(viewMessages, duplicate, duplicate)
 
 	if err := applyUserBehaviorBatch(viewMessages); err != nil {
@@ -117,53 +114,53 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		t.Fatal(err)
 	}
 
-	assertViewBehaviorCount(t, db, userOneID, articleID(0), 3, base.Add(2*time.Minute))
-	assertViewBehaviorCount(t, db, userOneID, articleID(1), 2, base.Add(3*time.Minute))
-	assertViewBehaviorCount(t, db, userOneID, articleID(2), 2, base.Add(time.Minute))
-	assertViewBehaviorCount(t, db, userOneID, articleID(3), 1, base)
+	assertViewBehaviorCount(t, db, userOneID, postID(0), 3, base.Add(2*time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, postID(1), 2, base.Add(3*time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, postID(2), 2, base.Add(time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, postID(3), 1, base)
 
-	lateView := userBehaviorMessage(t, mustArticleViewedEvent(t, "view-9", userOneID, articleID(0), base.Add(-time.Hour)))
+	lateView := userBehaviorMessage(t, mustPostViewedEvent(t, "view-9", userOneID, postID(0), base.Add(-time.Hour)))
 	if err := applyUserBehaviorBatch([]kafka.Message{lateView}); err != nil {
 		t.Fatal(err)
 	}
-	assertViewBehaviorCount(t, db, userOneID, articleID(0), 4, base.Add(2*time.Minute))
+	assertViewBehaviorCount(t, db, userOneID, postID(0), 4, base.Add(2*time.Minute))
 
 	reactionMessages := []kafka.Message{
-		userBehaviorMessage(t, mustLikeEvent("reaction-v5", eventing.EventTypeArticleLiked, userOneID, articleID(4), 5, base)),
-		userBehaviorMessage(t, mustLikeEvent("reaction-v7", eventing.EventTypeArticleUnliked, userOneID, articleID(4), 7, base.Add(time.Minute))),
-		userBehaviorMessage(t, mustLikeEvent("reaction-v6", eventing.EventTypeArticleLiked, userOneID, articleID(4), 6, base.Add(2*time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v5", eventing.EventTypePostLiked, userOneID, postID(4), 5, base)),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v7", eventing.EventTypePostUnliked, userOneID, postID(4), 7, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v6", eventing.EventTypePostLiked, userOneID, postID(4), 6, base.Add(2*time.Minute))),
 	}
 	if err := applyUserBehaviorBatch(reactionMessages); err != nil {
 		t.Fatal(err)
 	}
-	assertReaction(t, db, userOneID, articleID(4), false, 7, base.Add(time.Minute))
+	assertReaction(t, db, userOneID, postID(4), false, 7, base.Add(time.Minute))
 
-	if err := db.Create(&models.ArticleReaction{
-		UserID: userTwoID, ArticleID: articleID(5), Reaction: models.ArticleReactionLike,
+	if err := db.Create(&models.PostReaction{
+		UserID: userTwoID, PostID: postID(5), Reaction: models.PostReactionLike,
 		Liked: true, Version: 10, UpdatedAt: base, StateChangedAt: base,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	staleReactions := []kafka.Message{
-		userBehaviorMessage(t, mustLikeEvent("reaction-v8", eventing.EventTypeArticleLiked, userTwoID, articleID(5), 8, base.Add(time.Minute))),
-		userBehaviorMessage(t, mustLikeEvent("reaction-v9", eventing.EventTypeArticleUnliked, userTwoID, articleID(5), 9, base.Add(2*time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v8", eventing.EventTypePostLiked, userTwoID, postID(5), 8, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-v9", eventing.EventTypePostUnliked, userTwoID, postID(5), 9, base.Add(2*time.Minute))),
 	}
 	if err := applyUserBehaviorBatch(staleReactions); err != nil {
 		t.Fatal(err)
 	}
-	assertReaction(t, db, userTwoID, articleID(5), true, 10, base)
+	assertReaction(t, db, userTwoID, postID(5), true, 10, base)
 
 	tieReactions := []kafka.Message{
-		userBehaviorMessage(t, mustLikeEvent("reaction-tie-like", eventing.EventTypeArticleLiked, userTwoID, articleID(6), 12, base)),
-		userBehaviorMessage(t, mustLikeEvent("reaction-tie-unlike", eventing.EventTypeArticleUnliked, userTwoID, articleID(6), 12, base.Add(time.Minute))),
+		userBehaviorMessage(t, mustLikeEvent("reaction-tie-like", eventing.EventTypePostLiked, userTwoID, postID(6), 12, base)),
+		userBehaviorMessage(t, mustLikeEvent("reaction-tie-unlike", eventing.EventTypePostUnliked, userTwoID, postID(6), 12, base.Add(time.Minute))),
 	}
 	if err := applyUserBehaviorBatch(tieReactions); err != nil {
 		t.Fatal(err)
 	}
-	assertReaction(t, db, userTwoID, articleID(6), true, 12, base)
+	assertReaction(t, db, userTwoID, postID(6), true, 12, base)
 
 	reactionMatrix := []struct {
-		articleID          uint
+		postID             uint
 		initialLiked       bool
 		initialVersion     int64
 		incomingType       string
@@ -172,24 +169,24 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		wantVersion        int64
 		wantStateChangedAt time.Time
 	}{
-		{articleID: articleID(7), initialLiked: false, initialVersion: 10, incomingType: eventing.EventTypeArticleLiked, incomingVersion: 11, wantLiked: true, wantVersion: 11, wantStateChangedAt: base.Add(time.Minute)},
-		{articleID: articleID(8), initialLiked: true, initialVersion: 10, incomingType: eventing.EventTypeArticleUnliked, incomingVersion: 11, wantLiked: false, wantVersion: 11, wantStateChangedAt: base.Add(time.Minute)},
-		{articleID: articleID(9), initialLiked: false, initialVersion: 12, incomingType: eventing.EventTypeArticleLiked, incomingVersion: 11, wantLiked: false, wantVersion: 12, wantStateChangedAt: base},
-		{articleID: articleID(10), initialLiked: true, initialVersion: 12, incomingType: eventing.EventTypeArticleUnliked, incomingVersion: 11, wantLiked: true, wantVersion: 12, wantStateChangedAt: base},
+		{postID: postID(7), initialLiked: false, initialVersion: 10, incomingType: eventing.EventTypePostLiked, incomingVersion: 11, wantLiked: true, wantVersion: 11, wantStateChangedAt: base.Add(time.Minute)},
+		{postID: postID(8), initialLiked: true, initialVersion: 10, incomingType: eventing.EventTypePostUnliked, incomingVersion: 11, wantLiked: false, wantVersion: 11, wantStateChangedAt: base.Add(time.Minute)},
+		{postID: postID(9), initialLiked: false, initialVersion: 12, incomingType: eventing.EventTypePostLiked, incomingVersion: 11, wantLiked: false, wantVersion: 12, wantStateChangedAt: base},
+		{postID: postID(10), initialLiked: true, initialVersion: 12, incomingType: eventing.EventTypePostUnliked, incomingVersion: 11, wantLiked: true, wantVersion: 12, wantStateChangedAt: base},
 	}
 	for _, test := range reactionMatrix {
-		if err := db.Create(&models.ArticleReaction{
-			UserID: userTwoID, ArticleID: test.articleID, Reaction: models.ArticleReactionLike,
+		if err := db.Create(&models.PostReaction{
+			UserID: userTwoID, PostID: test.postID, Reaction: models.PostReactionLike,
 			Liked: test.initialLiked, Version: test.initialVersion, UpdatedAt: base, StateChangedAt: base,
 		}).Error; err != nil {
 			t.Fatal(err)
 		}
 		if err := applyUserBehaviorBatch([]kafka.Message{
-			userBehaviorMessage(t, mustLikeEvent(uuid.NewString(), test.incomingType, userTwoID, test.articleID, test.incomingVersion, base.Add(time.Minute))),
+			userBehaviorMessage(t, mustLikeEvent(uuid.NewString(), test.incomingType, userTwoID, test.postID, test.incomingVersion, base.Add(time.Minute))),
 		}); err != nil {
 			t.Fatal(err)
 		}
-		assertReaction(t, db, userTwoID, test.articleID, test.wantLiked, test.wantVersion, test.wantStateChangedAt)
+		assertReaction(t, db, userTwoID, test.postID, test.wantLiked, test.wantVersion, test.wantStateChangedAt)
 	}
 }
 
@@ -202,7 +199,7 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}, &models.ArticleReaction{}, &models.UserRecoProfileDirty{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.ConsumerInbox{}, &models.PostBehavior{}, &models.PostReaction{}, &models.UserRecoProfileDirty{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,37 +218,37 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 	if err := db.Create(&viewerTwo).Error; err != nil {
 		t.Fatal(err)
 	}
-	articleOne := models.Article{AuthorID: viewerOne.ID, Title: "view one", Content: "view one", Preview: "view one"}
-	articleTwo := models.Article{AuthorID: viewerOne.ID, Title: "view two", Content: "view two", Preview: "view two"}
-	articleThree := models.Article{AuthorID: viewerOne.ID, Title: "view three", Content: "view three", Preview: "view three"}
-	if err := db.Create(&articleOne).Error; err != nil {
+	postOne := models.Post{AuthorID: viewerOne.ID, Content: "view one", Visibility: "public"}
+	postTwo := models.Post{AuthorID: viewerOne.ID, Content: "view two", Visibility: "public"}
+	postThree := models.Post{AuthorID: viewerOne.ID, Content: "view three", Visibility: "public"}
+	if err := db.Create(&postOne).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&articleTwo).Error; err != nil {
+	if err := db.Create(&postTwo).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&articleThree).Error; err != nil {
+	if err := db.Create(&postThree).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Unscoped().Where("user_id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.UserRecoProfileDirty{})
-		db.Unscoped().Where("article_id IN ?", []uint{articleOne.ID, articleTwo.ID, articleThree.ID}).Delete(&models.ArticleBehavior{})
-		db.Unscoped().Where("user_id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.ArticleReaction{})
-		db.Unscoped().Where("id IN ?", []uint{articleOne.ID, articleTwo.ID, articleThree.ID}).Delete(&models.Article{})
+		db.Unscoped().Where("post_id IN ?", []uint{postOne.ID, postTwo.ID, postThree.ID}).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("user_id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.PostReaction{})
+		db.Unscoped().Where("id IN ?", []uint{postOne.ID, postTwo.ID, postThree.ID}).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.User{})
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
 	base := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
 	firstBatch := []kafka.Message{
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-1", viewerOne.ID, articleOne.ID, base)),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-2", viewerOne.ID, articleOne.ID, base.Add(time.Second))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-3", viewerOne.ID, articleOne.ID, base.Add(2*time.Second))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-4", viewerOne.ID, articleTwo.ID, base)),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-5", viewerOne.ID, articleTwo.ID, base.Add(time.Second))),
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-count-6", viewerTwo.ID, articleOne.ID, base)),
-		userBehaviorMessage(t, mustLikeEvent("view-count-like", eventing.EventTypeArticleLiked, viewerOne.ID, articleThree.ID, 1, base)),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-count-1", viewerOne.ID, postOne.ID, base)),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-count-2", viewerOne.ID, postOne.ID, base.Add(time.Second))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-count-3", viewerOne.ID, postOne.ID, base.Add(2*time.Second))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-count-4", viewerOne.ID, postTwo.ID, base)),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-count-5", viewerOne.ID, postTwo.ID, base.Add(time.Second))),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-count-6", viewerTwo.ID, postOne.ID, base)),
+		userBehaviorMessage(t, mustLikeEvent("view-count-like", eventing.EventTypePostLiked, viewerOne.ID, postThree.ID, 1, base)),
 	}
 	if err := applyUserBehaviorBatch(firstBatch); err != nil {
 		t.Fatal(err)
@@ -260,14 +257,14 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertViewBehaviorCount(t, db, viewerOne.ID, articleOne.ID, 3, base.Add(2*time.Second))
-	assertViewBehaviorCount(t, db, viewerOne.ID, articleTwo.ID, 2, base.Add(time.Second))
-	assertViewBehaviorCount(t, db, viewerTwo.ID, articleOne.ID, 1, base)
-	assertArticleViewCount(t, db, articleOne.ID, 4)
-	assertArticleViewCount(t, db, articleTwo.ID, 2)
-	assertArticleViewCount(t, db, articleThree.ID, 0)
-	var reaction models.ArticleReaction
-	if err := db.Where("user_id = ? AND article_id = ?", viewerOne.ID, articleThree.ID).First(&reaction).Error; err != nil {
+	assertViewBehaviorCount(t, db, viewerOne.ID, postOne.ID, 3, base.Add(2*time.Second))
+	assertViewBehaviorCount(t, db, viewerOne.ID, postTwo.ID, 2, base.Add(time.Second))
+	assertViewBehaviorCount(t, db, viewerTwo.ID, postOne.ID, 1, base)
+	assertPostViewCount(t, db, postOne.ID, 4)
+	assertPostViewCount(t, db, postTwo.ID, 2)
+	assertPostViewCount(t, db, postThree.ID, 0)
+	var reaction models.PostReaction
+	if err := db.Where("user_id = ? AND post_id = ?", viewerOne.ID, postThree.ID).First(&reaction).Error; err != nil {
 		t.Fatal(err)
 	}
 }
@@ -281,20 +278,20 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleBehavior{}, &models.UserRecoProfileDirty{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.ConsumerInbox{}, &models.PostBehavior{}, &models.UserRecoProfileDirty{}); err != nil {
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig, originalIncrement := global.Db, config.AppConfig, incrementArticleViewCounts
+	originalDB, originalConfig, originalIncrement := global.Db, config.AppConfig, incrementPostViewCounts
 	groupID := "test-public-view-rollback-" + uuid.NewString()
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
 	global.Db = db
-	incrementArticleViewCounts = func(*gorm.DB, map[uint]int64) error {
+	incrementPostViewCounts = func(*gorm.DB, map[uint]int64) error {
 		return errors.New("injected view count failure")
 	}
 	t.Cleanup(func() {
-		incrementArticleViewCounts = originalIncrement
+		incrementPostViewCounts = originalIncrement
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
@@ -302,20 +299,20 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 	if err := db.Create(&author).Error; err != nil {
 		t.Fatal(err)
 	}
-	article := models.Article{AuthorID: author.ID, Title: "rollback", Content: "rollback", Preview: "rollback"}
+	article := models.Post{AuthorID: author.ID, Content: "rollback", Visibility: "public"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Unscoped().Where("user_id = ?", author.ID).Delete(&models.UserRecoProfileDirty{})
-		db.Unscoped().Where("article_id = ?", article.ID).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
 		db.Unscoped().Delete(&article)
 		db.Unscoped().Delete(&author)
 	})
 
 	err = applyUserBehaviorBatch([]kafka.Message{
-		userBehaviorMessage(t, mustArticleViewedEvent(t, "view-rollback", author.ID, article.ID, time.Now().UTC())),
+		userBehaviorMessage(t, mustPostViewedEvent(t, "view-rollback", author.ID, article.ID, time.Now().UTC())),
 	})
 	if err == nil {
 		t.Fatal("expected injected view count failure")
@@ -324,10 +321,10 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 	if err := db.Model(&models.ConsumerInbox{}).Where("consumer_name = ?", groupID).Count(&inboxCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&models.ArticleBehavior{}).Where("article_id = ?", article.ID).Count(&behaviorCount).Error; err != nil {
+	if err := db.Model(&models.PostBehavior{}).Where("post_id = ?", article.ID).Count(&behaviorCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	var reloaded models.Article
+	var reloaded models.Post
 	if err := db.First(&reloaded, article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -336,20 +333,20 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 	}
 }
 
-func assertArticleViewCount(t *testing.T, db *gorm.DB, articleID uint, want int64) {
+func assertPostViewCount(t *testing.T, db *gorm.DB, postID uint, want int64) {
 	t.Helper()
-	var article models.Article
-	if err := db.Select("view_count").First(&article, articleID).Error; err != nil {
+	var article models.Post
+	if err := db.Select("view_count").First(&article, postID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if article.ViewCount != want {
-		t.Fatalf("article %d view_count=%d want=%d", articleID, article.ViewCount, want)
+		t.Fatalf("article %d view_count=%d want=%d", postID, article.ViewCount, want)
 	}
 }
 
-func mustArticleViewedEvent(t *testing.T, id string, userID, articleID uint, occurredAt time.Time) eventing.Envelope {
+func mustPostViewedEvent(t *testing.T, id string, userID, postID uint, occurredAt time.Time) eventing.Envelope {
 	t.Helper()
-	event, err := eventing.NewArticleViewedEnvelope(uuid.NewString(), userID, articleID, occurredAt, "article_detail")
+	event, err := eventing.NewPostViewedEnvelope(uuid.NewString(), userID, postID, occurredAt, "post_detail")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,10 +354,10 @@ func mustArticleViewedEvent(t *testing.T, id string, userID, articleID uint, occ
 	return event
 }
 
-func mustLikeEvent(id, eventType string, userID, articleID uint, version int64, occurredAt time.Time) eventing.Envelope {
-	event, err := eventing.NewLikeBehaviorEnvelope(id, userID, articleID, map[string]string{
-		eventing.EventTypeArticleLiked:   "like",
-		eventing.EventTypeArticleUnliked: "unlike",
+func mustLikeEvent(id, eventType string, userID, postID uint, version int64, occurredAt time.Time) eventing.Envelope {
+	event, err := eventing.NewLikeBehaviorEnvelope(id, userID, postID, map[string]string{
+		eventing.EventTypePostLiked:   "like",
+		eventing.EventTypePostUnliked: "unlike",
 	}[eventType], version, occurredAt)
 	if err != nil {
 		panic(err)
@@ -377,10 +374,10 @@ func userBehaviorMessage(t *testing.T, event eventing.Envelope) kafka.Message {
 	return kafka.Message{Value: body}
 }
 
-func assertViewBehaviorCount(t *testing.T, db *gorm.DB, userID, articleID uint, count int64, lastSeenAt time.Time) {
+func assertViewBehaviorCount(t *testing.T, db *gorm.DB, userID, postID uint, count int64, lastSeenAt time.Time) {
 	t.Helper()
-	var behavior models.ArticleBehavior
-	if err := db.Where("user_id = ? AND article_id = ? AND action = ?", userID, articleID, "view").First(&behavior).Error; err != nil {
+	var behavior models.PostBehavior
+	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, postID, "view").First(&behavior).Error; err != nil {
 		t.Fatal(err)
 	}
 	if behavior.Count != count || !behavior.LastSeenAt.Equal(lastSeenAt) {
@@ -388,10 +385,10 @@ func assertViewBehaviorCount(t *testing.T, db *gorm.DB, userID, articleID uint, 
 	}
 }
 
-func assertReaction(t *testing.T, db *gorm.DB, userID, articleID uint, liked bool, version int64, stateChangedAt time.Time) {
+func assertReaction(t *testing.T, db *gorm.DB, userID, postID uint, liked bool, version int64, stateChangedAt time.Time) {
 	t.Helper()
-	var reaction models.ArticleReaction
-	if err := db.Where("user_id = ? AND article_id = ?", userID, articleID).First(&reaction).Error; err != nil {
+	var reaction models.PostReaction
+	if err := db.Where("user_id = ? AND post_id = ?", userID, postID).First(&reaction).Error; err != nil {
 		t.Fatal(err)
 	}
 	if reaction.Liked != liked || reaction.Version != version || !reaction.StateChangedAt.Equal(stateChangedAt) {

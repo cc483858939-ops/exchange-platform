@@ -52,7 +52,7 @@ func TestRecommendationExplorationSchemaMigrationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.RecommendationRequest{}, &models.RecommendationResultTrace{}, &models.RecommendationDailyMetric{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.RecommendationRequest{}, &models.RecommendationResultTrace{}, &models.RecommendationDailyMetric{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS freshness_component DOUBLE PRECISION NOT NULL DEFAULT 0").Error; err != nil {
@@ -92,7 +92,7 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 `).Scan(&primaryKeyColumns).Error; err != nil {
 		t.Fatal(err)
 	}
-	wantPrimaryKey := "metric_date,scene,ranker_version,ranker_config_hash,strategy_id,exploration_opportunity,selection_mode,exploration_reason,position,article_id"
+	wantPrimaryKey := "metric_date,scene,ranker_version,ranker_config_hash,strategy_id,exploration_opportunity,selection_mode,exploration_reason,position,post_id"
 	if primaryKeyColumns != wantPrimaryKey {
 		t.Fatalf("daily metric primary key=%q want=%q", primaryKeyColumns, wantPrimaryKey)
 	}
@@ -102,15 +102,15 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	articles := []models.Article{
-		{AuthorID: user.ID, Title: "exploration migration one", Content: "body", Preview: "body", PublicationState: "published"},
-		{AuthorID: user.ID, Title: "exploration migration two", Content: "body", Preview: "body", PublicationState: "published"},
-		{AuthorID: user.ID, Title: "exploration migration three", Content: "body", Preview: "body", PublicationState: "published"},
-		{AuthorID: user.ID, Title: "exploration migration semantic zero", Content: "body", Preview: "body", PublicationState: "published"},
-		{AuthorID: user.ID, Title: "exploration migration semantic one", Content: "body", Preview: "body", PublicationState: "published"},
+	posts := []models.Post{
+		{AuthorID: user.ID, Content: "exploration migration one", Visibility: "public"},
+		{AuthorID: user.ID, Content: "exploration migration two", Visibility: "public"},
+		{AuthorID: user.ID, Content: "exploration migration three", Visibility: "public"},
+		{AuthorID: user.ID, Content: "exploration migration semantic zero", Visibility: "public"},
+		{AuthorID: user.ID, Content: "exploration migration semantic one", Visibility: "public"},
 	}
-	for index := range articles {
-		if err := db.Create(&articles[index]).Error; err != nil {
+	for index := range posts {
+		if err := db.Create(&posts[index]).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -126,27 +126,27 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 		db.Unscoped().Where("request_id = ?", request.RequestID).Delete(&models.RecommendationResultTrace{})
 		db.Unscoped().Where("request_id = ?", request.RequestID).Delete(&models.RecommendationRequest{})
 		db.Unscoped().Where("strategy_id = ?", strategyID).Delete(&models.RecommendationDailyMetric{})
-		db.Unscoped().Where("author_id = ?", user.ID).Delete(&models.Article{})
+		db.Unscoped().Where("author_id = ?", user.ID).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
 
 	traceStates := []struct {
 		position    int
-		articleID   uint
+		postID      uint
 		opportunity bool
 		mode        string
 		reason      string
 		semantic    float64
 	}{
-		{1, articles[0].ID, false, "ranked", "", 0},
-		{2, articles[1].ID, true, "ranked", "", 0},
-		{3, articles[2].ID, true, "exploration", "recent", .5},
-		{4, articles[3].ID, true, "exploration", "recent", 0},
-		{5, articles[4].ID, true, "exploration", "recent", 1},
+		{1, posts[0].ID, false, "ranked", "", 0},
+		{2, posts[1].ID, true, "ranked", "", 0},
+		{3, posts[2].ID, true, "exploration", "recent", .5},
+		{4, posts[3].ID, true, "exploration", "recent", 0},
+		{5, posts[4].ID, true, "exploration", "recent", 1},
 	}
 	for _, state := range traceStates {
 		trace := models.RecommendationResultTrace{
-			RequestID: request.RequestID, Position: state.position, ArticleID: state.articleID, AuthorID: user.ID,
+			RequestID: request.RequestID, Position: state.position, PostID: state.postID, AuthorID: user.ID,
 			ExplorationOpportunity: state.opportunity, SelectionMode: state.mode, ExplorationReason: state.reason,
 			ExplorationSemantic: state.semantic, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
 		}
@@ -173,11 +173,10 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 		{"negative semantic", true, "exploration", "recent", -.1, []string{"chk_recommendation_result_trace_exploration_semantic"}},
 		{"over one semantic", true, "exploration", "recent", 1.1, []string{"chk_recommendation_result_trace_exploration_semantic"}},
 	}
-	invalidTraceArticles := make([]models.Article, len(invalidTraceStates))
+	invalidTraceArticles := make([]models.Post, len(invalidTraceStates))
 	for index := range invalidTraceArticles {
-		invalidTraceArticles[index] = models.Article{
-			AuthorID: user.ID, Title: "invalid exploration migration " + uuid.NewString(),
-			Content: "body", Preview: "body", PublicationState: "published",
+		invalidTraceArticles[index] = models.Post{
+			AuthorID: user.ID, Content: "invalid exploration migration " + uuid.NewString(), Visibility: "public",
 		}
 		if err := db.Create(&invalidTraceArticles[index]).Error; err != nil {
 			t.Fatal(err)
@@ -187,7 +186,7 @@ WHERE c.conrelid = 'recommendation_daily_metrics'::regclass AND c.contype = 'p'
 	// can only come from a provenance CHECK, not the trace uniqueness constraint.
 	for index, state := range invalidTraceStates {
 		result := db.Exec(`
-INSERT INTO recommendation_result_traces (request_id, position, article_id, author_id, exploration_opportunity, selection_mode, exploration_reason, exploration_semantic, created_at, expires_at)
+INSERT INTO recommendation_result_traces (request_id, position, post_id, author_id, exploration_opportunity, selection_mode, exploration_reason, exploration_semantic, created_at, expires_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, request.RequestID, 10+index, invalidTraceArticles[index].ID, user.ID, state.opportunity, state.mode, state.reason, state.semantic, time.Now().UTC(), time.Now().UTC().Add(time.Hour))
 		requirePostgresCheckViolation(t, state.name, result.Error, state.constraints...)
@@ -238,7 +237,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			MetricDate: metricDate, Scene: request.Scene, RankerVersion: request.RankerVersion,
 			RankerConfigHash: request.RankerConfigHash, StrategyID: strategyID,
 			ExplorationOpportunity: state.opportunity, SelectionMode: state.mode, ExplorationReason: state.reason,
-			Position: 1, ArticleID: articles[0].ID, UpdatedAt: metricDate,
+			Position: 1, PostID: posts[0].ID, UpdatedAt: metricDate,
 		}
 		if err := db.Create(&metric).Error; err != nil {
 			t.Fatalf("valid metric state %#v rejected: %v", state, err)
@@ -268,9 +267,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	for index, state := range invalidMetricStates {
 		invalidRankerConfigHash := "invalid-" + uuid.NewString()[:24]
 		result := db.Exec(`
-INSERT INTO recommendation_daily_metrics (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, article_id, updated_at)
+INSERT INTO recommendation_daily_metrics (metric_date, scene, ranker_version, ranker_config_hash, strategy_id, exploration_opportunity, selection_mode, exploration_reason, position, post_id, updated_at)
 VALUES (CURRENT_DATE, ?, 'rules_v4', ?, ?, ?, ?, ?, ?, ?, ?)
-`, request.Scene, invalidRankerConfigHash, strategyID, state.opportunity, state.mode, state.reason, 10+index, articles[0].ID, metricDate)
+`, request.Scene, invalidRankerConfigHash, strategyID, state.opportunity, state.mode, state.reason, 10+index, posts[0].ID, metricDate)
 		requirePostgresCheckViolation(t, state.name, result.Error, state.constraints...)
 	}
 }

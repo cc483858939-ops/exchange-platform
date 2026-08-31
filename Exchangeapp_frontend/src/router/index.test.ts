@@ -15,7 +15,7 @@ describe('History route', () => {
       ['Home', '/', 'app'],
       ['CurrencyExchange', '/exchange', 'app'],
       ['ArticleCreate', '/news/new', 'app'],
-      ['NewsDetail', '/news/:id', 'app'],
+      ['PostDetail', '/posts/:id', 'app'],
       ['UserProfile', '/users/:id', 'app'],
       ['UserFollowing', '/users/:id/following', 'app'],
       ['UserFollowers', '/users/:id/followers', 'app'],

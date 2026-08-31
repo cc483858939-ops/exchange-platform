@@ -1,29 +1,29 @@
 import { defineStore } from 'pinia';
 import { reactive, ref, watch } from 'vue';
 import { getLikedHistory } from '../services/historyService';
-import { getArticleLikeStates, unlikeArticle } from '../services/likeService';
+import { getPostLikeStates, unlikePost } from '../services/likeService';
 import {
-  getArticleRepostStates,
-  repostArticle,
-  undoRepostArticle,
+  getPostRepostStates,
+  repostPost,
+  undoRepostPost,
 } from '../services/repostService';
-import type { Article } from '../types/Article';
+import type { Post } from '../types/Post';
 import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
-  articleToFeedPost,
+  postToFeedPost,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import { useAuthStore } from './auth';
 import {
   registerHistorySessionSync,
-  syncExternalArticleLikeState,
-  syncExternalArticleRepostState,
+  syncExternalPostLikeState,
+  syncExternalPostRepostState,
 } from './sessionSync';
-import type { ArticleCommentCountUpdate } from './sessionSync';
+import type { PostReplyCountUpdate } from './sessionSync';
 
 const pageSize = 20;
 
@@ -64,41 +64,41 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   const pagingVersion = ref(0);
   const likeHydrationGeneration = ref(0);
   const repostHydrationGeneration = ref(0);
-  const pendingUnlikeArticleIDs = ref(new Set<number>());
-  const repostPendingArticleIDs = ref(new Set<number>());
+  const pendingUnlikePostIDs = ref(new Set<number>());
+  const repostPendingPostIDs = ref(new Set<number>());
   const mutationErrors = ref(new Map<number, string>());
 
-  const loadedArticleIDs = new Set<number>();
+  const loadedPostIDs = new Set<number>();
   const removedSnapshots = new Map<number, RemovedSnapshot>();
-  const deletedArticleIDs = new Set<number>();
+  const deletedPostIDs = new Set<number>();
   const likeMutationVersions = reactive(new Map<number, number>());
   const repostMutationVersions = reactive(new Map<number, number>());
   let freshnessVersion = 0;
   let repostGeneration = 0;
 
-  const getLikeMutationVersion = (articleID: number) =>
-    likeMutationVersions.get(articleID) ?? 0;
+  const getLikeMutationVersion = (postID: number) =>
+    likeMutationVersions.get(postID) ?? 0;
 
-  const bumpLikeMutationVersion = (articleID: number) => {
-    const version = getLikeMutationVersion(articleID) + 1;
-    likeMutationVersions.set(articleID, version);
+  const bumpLikeMutationVersion = (postID: number) => {
+    const version = getLikeMutationVersion(postID) + 1;
+    likeMutationVersions.set(postID, version);
     return version;
   };
 
-  const getRepostMutationVersion = (articleID: number) =>
-    repostMutationVersions.get(articleID) ?? 0;
+  const getRepostMutationVersion = (postID: number) =>
+    repostMutationVersions.get(postID) ?? 0;
 
-  const bumpRepostMutationVersion = (articleID: number) => {
-    const version = getRepostMutationVersion(articleID) + 1;
-    repostMutationVersions.set(articleID, version);
+  const bumpRepostMutationVersion = (postID: number) => {
+    const version = getRepostMutationVersion(postID) + 1;
+    repostMutationVersions.set(postID, version);
     return version;
   };
 
   const clearMutationState = () => {
-    pendingUnlikeArticleIDs.value.clear();
+    pendingUnlikePostIDs.value.clear();
     mutationErrors.value.clear();
     likeMutationVersions.clear();
-    repostPendingArticleIDs.value.clear();
+    repostPendingPostIDs.value.clear();
     repostMutationVersions.clear();
     repostGeneration += 1;
   };
@@ -119,9 +119,9 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     revalidating.value = false;
     revalidateError.value = '';
     scrollY.value = 0;
-    loadedArticleIDs.clear();
+    loadedPostIDs.clear();
     removedSnapshots.clear();
-    deletedArticleIDs.clear();
+    deletedPostIDs.clear();
     freshnessVersion += 1;
     clearMutationState();
   };
@@ -153,11 +153,11 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     && isCurrentViewer(capturedViewerID, capturedGeneration)
   );
 
-  const findPost = (articleID: number) =>
-    items.value.find(post => post.id === articleID);
+  const findPost = (postID: number) =>
+    items.value.find(post => post.id === postID);
 
-  const updateSnapshotLikeState = (articleID: number, update: FeedLikeStateUpdate) => {
-    const snapshot = removedSnapshots.get(articleID);
+  const updateSnapshotLikeState = (postID: number, update: FeedLikeStateUpdate) => {
+    const snapshot = removedSnapshots.get(postID);
     if (!snapshot) {
       return false;
     }
@@ -165,8 +165,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return true;
   };
 
-  const updateSnapshotRepostState = (articleID: number, update: FeedRepostStateUpdate) => {
-    const snapshot = removedSnapshots.get(articleID);
+  const updateSnapshotRepostState = (postID: number, update: FeedRepostStateUpdate) => {
+    const snapshot = removedSnapshots.get(postID);
     if (!snapshot) {
       return false;
     }
@@ -174,24 +174,24 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return true;
   };
 
-  const removePostWithSnapshot = (articleID: number) => {
-    const index = items.value.findIndex(post => post.id === articleID);
+  const removePostWithSnapshot = (postID: number) => {
+    const index = items.value.findIndex(post => post.id === postID);
     if (index < 0) {
       return false;
     }
     const post = items.value[index];
-    removedSnapshots.set(articleID, { post: { ...post }, originalIndex: index });
-    items.value = items.value.filter(candidate => candidate.id !== articleID);
+    removedSnapshots.set(postID, { post: { ...post }, originalIndex: index });
+    items.value = items.value.filter(candidate => candidate.id !== postID);
     return true;
   };
 
-  const restoreSnapshot = (articleID: number, update?: FeedLikeStateUpdate) => {
-    if (deletedArticleIDs.has(articleID)) {
-      removedSnapshots.delete(articleID);
+  const restoreSnapshot = (postID: number, update?: FeedLikeStateUpdate) => {
+    if (deletedPostIDs.has(postID)) {
+      removedSnapshots.delete(postID);
       return false;
     }
-    const snapshot = removedSnapshots.get(articleID);
-    if (!snapshot || findPost(articleID)) {
+    const snapshot = removedSnapshots.get(postID);
+    if (!snapshot || findPost(postID)) {
       return false;
     }
 
@@ -202,23 +202,23 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     const nextItems = [...items.value];
     nextItems.splice(Math.min(snapshot.originalIndex, nextItems.length), 0, post);
     items.value = nextItems;
-    loadedArticleIDs.add(articleID);
-    removedSnapshots.delete(articleID);
+    loadedPostIDs.add(postID);
+    removedSnapshots.delete(postID);
     return true;
   };
 
-  const appendHistoryArticles = (articles: Article[]) => {
+  const appendHistoryPosts = (posts: Post[]) => {
     const additions: FeedPost[] = [];
-    articles.forEach((article) => {
+    posts.forEach((post) => {
       if (
-        deletedArticleIDs.has(article.ID)
-        || loadedArticleIDs.has(article.ID)
-        || removedSnapshots.has(article.ID)
+        deletedPostIDs.has(post.id)
+        || loadedPostIDs.has(post.id)
+        || removedSnapshots.has(post.id)
       ) {
         return;
       }
-      loadedArticleIDs.add(article.ID);
-      additions.push(articleToFeedPost(article));
+      loadedPostIDs.add(post.id);
+      additions.push(postToFeedPost(post));
     });
     if (additions.length > 0) {
       items.value = [...items.value, ...additions];
@@ -232,14 +232,14 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     capturedViewerID: number,
     capturedGeneration: number,
   ) => {
-    const articleIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (articleIDs.length === 0) {
+    const postIDs = Array.from(new Set(posts.map(post => post.id)));
+    if (postIDs.length === 0) {
       return;
     }
 
     const hydrationGeneration = likeHydrationGeneration.value;
     const capturedMutationVersions = new Map(
-      articleIDs.map(articleID => [articleID, getLikeMutationVersion(articleID)]),
+      postIDs.map(postID => [postID, getLikeMutationVersion(postID)]),
     );
     const current = () => (
       isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
@@ -247,35 +247,35 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await getArticleLikeStates(articleIDs);
+      const response = await getPostLikeStates(postIDs);
       if (!current()) {
         return;
       }
 
-      const readyArticleIDs = new Set<number>();
+      const readyPostIDs = new Set<number>();
       (response.items ?? []).forEach((item) => {
-        if (deletedArticleIDs.has(item.article_id)) {
+        if (deletedPostIDs.has(item.post_id)) {
           return;
         }
-        const capturedVersion = capturedMutationVersions.get(item.article_id);
+        const capturedVersion = capturedMutationVersions.get(item.post_id);
         if (
           capturedVersion === undefined
-          || getLikeMutationVersion(item.article_id) !== capturedVersion
-          || !findPost(item.article_id)
+          || getLikeMutationVersion(item.post_id) !== capturedVersion
+          || !findPost(item.post_id)
         ) {
           return;
         }
 
         if (!item.liked) {
-          removePostWithSnapshot(item.article_id);
+          removePostWithSnapshot(item.post_id);
           return;
         }
 
-        readyArticleIDs.add(item.article_id);
-        const post = findPost(item.article_id);
+        readyPostIDs.add(item.post_id);
+        const post = findPost(item.post_id);
         if (post) {
           applyFeedLikeStateUpdate(post, {
-            articleId: item.article_id,
+            postId: item.post_id,
             likes: item.likes,
             liked: true,
             status: 'ready',
@@ -283,15 +283,15 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         }
       });
 
-      (response.unavailable_article_ids ?? []).forEach((articleID) => {
-        if (deletedArticleIDs.has(articleID) || readyArticleIDs.has(articleID)) {
+      (response.unavailable_post_ids ?? []).forEach((postID) => {
+        if (deletedPostIDs.has(postID) || readyPostIDs.has(postID)) {
           return;
         }
-        const capturedVersion = capturedMutationVersions.get(articleID);
-        const post = findPost(articleID);
+        const capturedVersion = capturedMutationVersions.get(postID);
+        const post = findPost(postID);
         if (
           capturedVersion !== undefined
-          && getLikeMutationVersion(articleID) === capturedVersion
+          && getLikeMutationVersion(postID) === capturedVersion
           && post
         ) {
           setFeedPostLikeUnavailable(post);
@@ -301,15 +301,15 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       if (!current()) {
         return;
       }
-      articleIDs.forEach((articleID) => {
-        if (deletedArticleIDs.has(articleID)) {
+      postIDs.forEach((postID) => {
+        if (deletedPostIDs.has(postID)) {
           return;
         }
-        const capturedVersion = capturedMutationVersions.get(articleID);
-        const post = findPost(articleID);
+        const capturedVersion = capturedMutationVersions.get(postID);
+        const post = findPost(postID);
         if (
           capturedVersion !== undefined
-          && getLikeMutationVersion(articleID) === capturedVersion
+          && getLikeMutationVersion(postID) === capturedVersion
           && post
         ) {
           setFeedPostLikeUnavailable(post);
@@ -338,13 +338,13 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     capturedViewerID: number,
     capturedGeneration: number,
   ) => {
-    const articleIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (articleIDs.length === 0) return;
+    const postIDs = Array.from(new Set(posts.map(post => post.id)));
+    if (postIDs.length === 0) return;
 
     const hydrationGeneration = repostHydrationGeneration.value;
     const capturedRepostGeneration = repostGeneration;
     const capturedMutationVersions = new Map(
-      articleIDs.map(articleID => [articleID, getRepostMutationVersion(articleID)]),
+      postIDs.map(postID => [postID, getRepostMutationVersion(postID)]),
     );
     const current = () => (
       isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
@@ -353,36 +353,36 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await getArticleRepostStates(articleIDs);
+      const response = await getPostRepostStates(postIDs);
       if (!current()) return;
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = capturedMutationVersions.get(item.article_id);
-        const post = findPost(item.article_id);
+        const capturedVersion = capturedMutationVersions.get(item.post_id);
+        const post = findPost(item.post_id);
         if (
           capturedVersion === undefined
-          || getRepostMutationVersion(item.article_id) !== capturedVersion
+          || getRepostMutationVersion(item.post_id) !== capturedVersion
           || !post
         ) return;
-        readyIDs.add(item.article_id);
+        readyIDs.add(item.post_id);
         applyFeedRepostStateUpdate(post, {
-          articleId: item.article_id,
+          postId: item.post_id,
           reposts: item.reposts,
           reposted: item.reposted,
           status: 'ready',
         });
       });
-      response.unavailable_article_ids.forEach((articleID) => {
-        const capturedVersion = capturedMutationVersions.get(articleID);
-        const post = findPost(articleID);
+      response.unavailable_post_ids.forEach((postID) => {
+        const capturedVersion = capturedMutationVersions.get(postID);
+        const post = findPost(postID);
         if (
-          readyIDs.has(articleID)
+          readyIDs.has(postID)
           || capturedVersion === undefined
-          || getRepostMutationVersion(articleID) !== capturedVersion
+          || getRepostMutationVersion(postID) !== capturedVersion
           || !post
         ) return;
         applyFeedRepostStateUpdate(post, {
-          articleId: articleID,
+          postId: postID,
           reposts: 0,
           reposted: false,
           status: 'unavailable',
@@ -421,7 +421,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       if (!isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)) {
         return;
       }
-      const newPosts = appendHistoryArticles(response.items ?? []);
+      const newPosts = appendHistoryPosts(response.items ?? []);
       nextCursor.value = response.next_cursor;
       loaded.value = true;
       if (capturedFreshnessVersion === freshnessVersion) {
@@ -482,7 +482,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       ) {
         return;
       }
-      const newPosts = appendHistoryArticles(response.items ?? []);
+      const newPosts = appendHistoryPosts(response.items ?? []);
       nextCursor.value = response.next_cursor;
       void hydrateLikeStates(
         newPosts,
@@ -542,16 +542,16 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       const oldByID = new Map(oldItems.map(post => [post.id, post]));
       const freshPosts: FeedPost[] = [];
       const freshIDs = new Set<number>();
-      (response.items ?? []).forEach((article) => {
-        if (freshIDs.has(article.ID)) {
+      (response.items ?? []).forEach((post) => {
+        if (freshIDs.has(post.id)) {
           return;
         }
-        freshIDs.add(article.ID);
-        if (deletedArticleIDs.has(article.ID) || removedSnapshots.has(article.ID)) {
+        freshIDs.add(post.id);
+        if (deletedPostIDs.has(post.id) || removedSnapshots.has(post.id)) {
           return;
         }
-        const freshPost = articleToFeedPost(article);
-        const oldPost = oldByID.get(article.ID);
+        const freshPost = postToFeedPost(post);
+        const oldPost = oldByID.get(post.id);
         freshPosts.push(oldPost
           ? {
             ...freshPost,
@@ -570,11 +570,11 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       });
 
       const cachedTail = oldItems.filter(post => (
-        !deletedArticleIDs.has(post.id) && !freshIDs.has(post.id)
+        !deletedPostIDs.has(post.id) && !freshIDs.has(post.id)
       ));
       items.value = [...freshPosts, ...cachedTail];
-      loadedArticleIDs.clear();
-      items.value.forEach(post => loadedArticleIDs.add(post.id));
+      loadedPostIDs.clear();
+      items.value.forEach(post => loadedPostIDs.add(post.id));
       nextCursor.value = response.next_cursor;
       loaded.value = true;
       if (capturedFreshnessVersion === freshnessVersion) {
@@ -620,8 +620,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     void loadMore();
   };
 
-  const toggleUnlike = async (articleID: number) => {
-    const index = items.value.findIndex(post => post.id === articleID);
+  const toggleUnlike = async (postID: number) => {
+    const index = items.value.findIndex(post => post.id === postID);
     const post = index >= 0 ? items.value[index] : undefined;
     const capturedViewerID = viewerID.value;
     if (
@@ -629,31 +629,31 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       || post.likeStatus !== 'ready'
       || !post.liked
       || capturedViewerID === null
-      || pendingUnlikeArticleIDs.value.has(articleID)
+      || pendingUnlikePostIDs.value.has(postID)
     ) {
       return;
     }
 
     const capturedGeneration = viewerGeneration.value;
-    const mutationVersion = bumpLikeMutationVersion(articleID);
-    removedSnapshots.set(articleID, { post: { ...post }, originalIndex: index });
-    items.value = items.value.filter(candidate => candidate.id !== articleID);
-    pendingUnlikeArticleIDs.value.add(articleID);
-    mutationErrors.value.delete(articleID);
+    const mutationVersion = bumpLikeMutationVersion(postID);
+    removedSnapshots.set(postID, { post: { ...post }, originalIndex: index });
+    items.value = items.value.filter(candidate => candidate.id !== postID);
+    pendingUnlikePostIDs.value.add(postID);
+    mutationErrors.value.delete(postID);
     const isCurrentMutation = () => (
       isCurrentViewer(capturedViewerID, capturedGeneration)
-      && getLikeMutationVersion(articleID) === mutationVersion
-      && pendingUnlikeArticleIDs.value.has(articleID)
+      && getLikeMutationVersion(postID) === mutationVersion
+      && pendingUnlikePostIDs.value.has(postID)
     );
 
     try {
-      const result = await unlikeArticle(articleID);
+      const result = await unlikePost(postID);
       if (!isCurrentMutation()) {
         return;
       }
-      const likes = normalizeCount(result.likes) ?? removedSnapshots.get(articleID)?.post.likeCount ?? 0;
-      syncExternalArticleLikeState({
-        articleId: articleID,
+      const likes = normalizeCount(result.likes) ?? removedSnapshots.get(postID)?.post.likeCount ?? 0;
+      syncExternalPostLikeState({
+        postId: postID,
         likes,
         liked: result.liked,
         status: 'ready',
@@ -662,7 +662,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       if (!isCurrentMutation()) {
         return;
       }
-      const snapshot = removedSnapshots.get(articleID);
+      const snapshot = removedSnapshots.get(postID);
       if (snapshot) {
         const restored = {
           ...snapshot.post,
@@ -671,11 +671,11 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         const nextItems = [...items.value];
         nextItems.splice(Math.min(snapshot.originalIndex, nextItems.length), 0, restored);
         items.value = nextItems;
-        removedSnapshots.delete(articleID);
+        removedSnapshots.delete(postID);
       }
-      pendingUnlikeArticleIDs.value.delete(articleID);
+      pendingUnlikePostIDs.value.delete(postID);
       mutationErrors.value.set(
-        articleID,
+        postID,
         getErrorStatus(error) === 503
           ? 'Likes are temporarily unavailable.'
           : 'Could not remove this like.',
@@ -683,25 +683,25 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     }
   };
 
-  const toggleRepost = async (articleID: number) => {
-    const post = findPost(articleID);
+  const toggleRepost = async (postID: number) => {
+    const post = findPost(postID);
     const capturedViewerID = viewerID.value;
     if (
       !post
       || post.repostStatus !== 'ready'
       || capturedViewerID === null
       || !authStore.isAuthenticated
-      || repostPendingArticleIDs.value.has(articleID)
+      || repostPendingPostIDs.value.has(postID)
     ) return false;
 
     const previousReposted = post.reposted;
     const previousReposts = post.repostCount;
-    const mutationVersion = bumpRepostMutationVersion(articleID);
+    const mutationVersion = bumpRepostMutationVersion(postID);
     const capturedGeneration = repostGeneration;
     const capturedViewerGeneration = viewerGeneration.value;
-    repostPendingArticleIDs.value.add(articleID);
+    repostPendingPostIDs.value.add(postID);
     applyFeedRepostStateUpdate(post, {
-      articleId: articleID,
+      postId: postID,
       reposts: previousReposted ? Math.max(0, previousReposts - 1) : previousReposts + 1,
       reposted: !previousReposted,
       status: 'ready',
@@ -710,59 +710,59 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     const isCurrentMutation = () => (
       isCurrentViewer(capturedViewerID, capturedViewerGeneration)
       && repostGeneration === capturedGeneration
-      && getRepostMutationVersion(articleID) === mutationVersion
-      && repostPendingArticleIDs.value.has(articleID)
+      && getRepostMutationVersion(postID) === mutationVersion
+      && repostPendingPostIDs.value.has(postID)
     );
 
     try {
       const response = previousReposted
-        ? await undoRepostArticle(articleID)
-        : await repostArticle(articleID);
+        ? await undoRepostPost(postID)
+        : await repostPost(postID);
       if (!isCurrentMutation()) return false;
-      repostMutationVersions.set(articleID, mutationVersion + 1);
-      syncExternalArticleRepostState({
-        articleId: articleID,
+      repostMutationVersions.set(postID, mutationVersion + 1);
+      syncExternalPostRepostState({
+        postId: postID,
         reposts: response.reposts,
         reposted: response.reposted,
         status: 'ready',
       });
-      repostPendingArticleIDs.value.delete(articleID);
+      repostPendingPostIDs.value.delete(postID);
       return true;
     } catch {
       if (!isCurrentMutation()) return false;
-      repostMutationVersions.set(articleID, mutationVersion + 1);
+      repostMutationVersions.set(postID, mutationVersion + 1);
       applyFeedRepostStateUpdate(post, {
-        articleId: articleID,
+        postId: postID,
         reposts: previousReposts,
         reposted: previousReposted,
         status: 'ready',
       });
-      repostPendingArticleIDs.value.delete(articleID);
+      repostPendingPostIDs.value.delete(postID);
       return false;
     }
   };
 
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
-    if (deletedArticleIDs.has(update.articleId)) {
-      removedSnapshots.delete(update.articleId);
+    if (deletedPostIDs.has(update.postId)) {
+      removedSnapshots.delete(update.postId);
       return false;
     }
-    bumpLikeMutationVersion(update.articleId);
-    pendingUnlikeArticleIDs.value.delete(update.articleId);
-    mutationErrors.value.delete(update.articleId);
+    bumpLikeMutationVersion(update.postId);
+    pendingUnlikePostIDs.value.delete(update.postId);
+    mutationErrors.value.delete(update.postId);
 
-    const post = findPost(update.articleId);
-    const snapshot = removedSnapshots.get(update.articleId);
+    const post = findPost(update.postId);
+    const snapshot = removedSnapshots.get(update.postId);
     if (update.status !== 'ready') {
       const applied = post
         ? applyFeedLikeStateUpdate(post, update)
-        : updateSnapshotLikeState(update.articleId, update);
+        : updateSnapshotLikeState(update.postId, update);
       return applied;
     }
 
     if (!update.liked) {
       if (post) {
-        removePostWithSnapshot(update.articleId);
+        removePostWithSnapshot(update.postId);
         return true;
       }
       return Boolean(snapshot);
@@ -772,7 +772,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       return applyFeedLikeStateUpdate(post, update);
     }
     if (snapshot) {
-      return restoreSnapshot(update.articleId, update);
+      return restoreSnapshot(update.postId, update);
     }
 
     stale.value = true;
@@ -784,48 +784,48 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   };
 
   const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
-    if (deletedArticleIDs.has(update.articleId)) {
+    if (deletedPostIDs.has(update.postId)) {
       return false;
     }
-    bumpRepostMutationVersion(update.articleId);
-    repostPendingArticleIDs.value.delete(update.articleId);
-    const post = findPost(update.articleId);
-    const snapshot = removedSnapshots.get(update.articleId);
+    bumpRepostMutationVersion(update.postId);
+    repostPendingPostIDs.value.delete(update.postId);
+    const post = findPost(update.postId);
+    const snapshot = removedSnapshots.get(update.postId);
     if (post) return applyFeedRepostStateUpdate(post, update);
     if (snapshot) return applyFeedRepostStateUpdate(snapshot.post, update);
     return false;
   };
 
-  const applyCommentCountUpdateLocal = (update: ArticleCommentCountUpdate) => {
-    const commentCount = normalizeCount(update.commentCount);
-    if (commentCount === null) {
+  const applyReplyCountUpdateLocal = (update: PostReplyCountUpdate) => {
+    const replyCount = normalizeCount(update.replyCount);
+    if (replyCount === null) {
       return false;
     }
     let applied = false;
-    const post = findPost(update.articleId);
+    const post = findPost(update.postId);
     if (post) {
-      post.commentCount = commentCount;
+      post.replyCount = replyCount;
       applied = true;
     }
-    const snapshot = removedSnapshots.get(update.articleId);
+    const snapshot = removedSnapshots.get(update.postId);
     if (snapshot) {
-      snapshot.post.commentCount = commentCount;
+      snapshot.post.replyCount = replyCount;
       applied = true;
     }
     return applied;
   };
 
-  const removeArticleLocal = (articleID: number) => {
-    const hadItem = Boolean(findPost(articleID) || removedSnapshots.has(articleID));
-    deletedArticleIDs.add(articleID);
-    items.value = items.value.filter(post => post.id !== articleID);
-    loadedArticleIDs.delete(articleID);
-    removedSnapshots.delete(articleID);
-    pendingUnlikeArticleIDs.value.delete(articleID);
-    repostPendingArticleIDs.value.delete(articleID);
-    mutationErrors.value.delete(articleID);
-    bumpLikeMutationVersion(articleID);
-    bumpRepostMutationVersion(articleID);
+  const removePostLocal = (postID: number) => {
+    const hadItem = Boolean(findPost(postID) || removedSnapshots.has(postID));
+    deletedPostIDs.add(postID);
+    items.value = items.value.filter(post => post.id !== postID);
+    loadedPostIDs.delete(postID);
+    removedSnapshots.delete(postID);
+    pendingUnlikePostIDs.value.delete(postID);
+    repostPendingPostIDs.value.delete(postID);
+    mutationErrors.value.delete(postID);
+    bumpLikeMutationVersion(postID);
+    bumpRepostMutationVersion(postID);
     return hadItem;
   };
 
@@ -867,8 +867,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   registerHistorySessionSync({
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
-    applyCommentCountUpdateLocal,
-    removeArticleLocal,
+    applyReplyCountUpdateLocal,
+    removePostLocal,
     replaceAuthorIdentityLocal,
   });
 
@@ -898,8 +898,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     pagingVersion,
     likeHydrationGeneration,
     repostHydrationGeneration,
-    pendingUnlikeArticleIDs,
-    repostPendingArticleIDs,
+    pendingUnlikePostIDs,
+    repostPendingPostIDs,
     likeMutationVersions,
     repostMutationVersions,
     mutationErrors,
@@ -913,8 +913,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     toggleRepost,
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
-    applyCommentCountUpdateLocal,
-    removeArticleLocal,
+    applyReplyCountUpdateLocal,
+    removePostLocal,
     replaceAuthorIdentityLocal,
     saveScroll,
   };

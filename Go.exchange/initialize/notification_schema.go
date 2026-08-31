@@ -92,18 +92,18 @@ func applyNotificationSchema(tx *gorm.DB) error {
 		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_source_version CHECK (source_version >= 0)",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_shape",
 		`ALTER TABLE notifications ADD CONSTRAINT chk_notifications_shape CHECK (
-  (notification_type = 'post_liked' AND article_id IS NOT NULL AND comment_id IS NULL AND source_version > 0) OR
-  (notification_type = 'post_replied' AND article_id IS NOT NULL AND comment_id IS NOT NULL AND source_version = 0) OR
-  (notification_type = 'user_followed' AND article_id IS NULL AND comment_id IS NULL AND source_version > 0)
+  (notification_type = 'post_liked' AND post_id IS NOT NULL AND source_version > 0) OR
+  (notification_type = 'post_replied' AND post_id IS NOT NULL AND source_version = 0) OR
+  (notification_type = 'user_followed' AND post_id IS NULL AND source_version > 0)
 )`,
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_recipient",
 		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_recipient FOREIGN KEY (recipient_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_actor",
 		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_article",
-		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_article FOREIGN KEY (article_id) REFERENCES articles(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_comment",
-		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_comment FOREIGN KEY (comment_id) REFERENCES comments(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_post",
+		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE RESTRICT",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_notifications_dedupe_key ON notifications (dedupe_key)",
 		"CREATE INDEX IF NOT EXISTS idx_notifications_recipient_activity ON notifications (recipient_id, activity_at DESC, id DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_notifications_unread_recipient_activity ON notifications (recipient_id, activity_at DESC, id DESC) WHERE read_at IS NULL",

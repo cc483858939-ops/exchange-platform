@@ -3,8 +3,8 @@ package controllers
 import "github.com/gin-gonic/gin"
 
 const (
-	ArticleBehaviorActionView  = "view"
-	ArticleBehaviorActionReply = "reply"
+	PostBehaviorActionView  = "view"
+	PostBehaviorActionReply = "reply"
 )
 
 func userIDFromContext(ctx *gin.Context) (uint, bool) {

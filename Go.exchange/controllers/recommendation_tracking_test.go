@@ -17,7 +17,7 @@ import (
 
 func testRecommendationTrackingClaims(now time.Time) recommendationTrackingClaims {
 	return recommendationTrackingClaims{
-		UserID: 7, RequestID: "550e8400-e29b-41d4-a716-446655440000", ArticleID: 11,
+		UserID: 7, RequestID: "550e8400-e29b-41d4-a716-446655440000", PostID: 11,
 		Position: 2, Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
 		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
@@ -37,13 +37,13 @@ func TestRecommendationRankerConfigHashIncludesV4ServingSettings(t *testing.T) {
 		{name: "trending weight", mutate: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight++ }},
 		{name: "trending max age", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.MaxAgeDays++ }},
 		{name: "trending half life", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.HalfLifeHours++ }},
-		{name: "trending comment factor", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.CommentFactor++ }},
+		{name: "trending reply factor", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.ReplyFactor++ }},
 		{name: "personalized trending cap", mutate: func(cfg *config.RecommendationConfig) { cfg.Candidates.Personalized.Trending++ }},
 		{name: "cold-start trending cap", mutate: func(cfg *config.RecommendationConfig) { cfg.Candidates.ColdStart.Trending++ }},
 		{name: "exploration ratio", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.Ratio = 0.20 }},
 		{name: "exploration max slots", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.MaxSlots++ }},
 		{name: "exploration recent window", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.RecentWindowDays++ }},
-		{name: "exploration novel age", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.NovelArticleMaxAgeDays++ }},
+		{name: "exploration novel age", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.NovelPostMaxAgeDays++ }},
 	}
 
 	baseHash := recommendationRankerConfigHash(base)
@@ -64,7 +64,7 @@ func TestRecommendationRankerConfigHashExplorationDoesNotChangeProfileHash(t *te
 	mutated.Exploration.Ratio = 0.20
 	mutated.Exploration.MaxSlots++
 	mutated.Exploration.RecentWindowDays++
-	mutated.Exploration.NovelArticleMaxAgeDays++
+	mutated.Exploration.NovelPostMaxAgeDays++
 	if got, want := recommendation.ProfileConfigHash(mutated, config.ActiveEmbeddingVersion()), recommendation.ProfileConfigHash(base, config.ActiveEmbeddingVersion()); got != want {
 		t.Fatalf("profile hash changed with exploration settings: got=%q want=%q", got, want)
 	}
@@ -225,7 +225,7 @@ func TestRecommendationServingVersionsRemainRev3Contract(t *testing.T) {
 	if recommendationSelectionPolicyVersion != "network_balance_exploration_v2" {
 		t.Fatalf("selection policy=%q", recommendationSelectionPolicyVersion)
 	}
-	if recommendationTrackingTokenVersion != "v3" || eventing.RecommendationBehaviorSchemaVersion != 2 {
+	if recommendationTrackingTokenVersion != "v3" || eventing.RecommendationBehaviorSchemaVersion != 3 {
 		t.Fatalf("tracking=%q behavior schema=%d", recommendationTrackingTokenVersion, eventing.RecommendationBehaviorSchemaVersion)
 	}
 	if recommendationCandidateRetrievalVersion != "social_semantic_materialized_profile_v4" || recommendation.MaterializedProfileVersion != "materialized_profile_v1" {
@@ -240,14 +240,14 @@ func TestAttachRecommendationTrackingUsesFinalPositionsAndReadClaims(t *testing.
 	t.Setenv("RECOMMENDATION_TELEMETRY_TOKEN_TTL", "24h")
 
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
-	recommendations := []recommendedArticleResponse{
-		{ID: 11, Content: "tiny"},
-		{ID: 12, Content: strings.Repeat("word ", 400)},
+	recommendations := []recommendedPostResponse{
+		{Post: postResponse{ID: 11, Content: "tiny"}},
+		{Post: postResponse{ID: 12, Content: strings.Repeat("word ", 400)}},
 	}
 	requestID := "550e8400-e29b-41d4-a716-446655440001"
 	selected := []selectedRecommendation{
-		{Article: models.Article{Model: gorm.Model{ID: 11}}, SelectionMode: recommendationResultSelectionRanked},
-		{Article: models.Article{Model: gorm.Model{ID: 12}}, ExplorationOpportunity: true, SelectionMode: recommendationResultSelectionExploration, ExplorationReason: recommendationExplorationReasonRecent, ExplorationSemantic: .8},
+		{Post: models.Post{Model: gorm.Model{ID: 11}}, SelectionMode: recommendationResultSelectionRanked},
+		{Post: models.Post{Model: gorm.Model{ID: 12}}, ExplorationOpportunity: true, SelectionMode: recommendationResultSelectionExploration, ExplorationReason: recommendationExplorationReasonRecent, ExplorationSemantic: .8},
 	}
 	trackedCount, err := attachRecommendationTracking(7, requestID, userInterestProfile{}, selected, recommendations, now)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestAttachRecommendationTrackingUsesFinalPositionsAndReadClaims(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims.ArticleID != 12 || claims.Position != 2 || claims.StrategyID != recommendationColdStartStrategyID ||
+	if claims.PostID != 12 || claims.Position != 2 || claims.StrategyID != recommendationColdStartStrategyID ||
 		!claims.ExplorationOpportunity || claims.SelectionMode != string(recommendationResultSelectionExploration) || claims.ExplorationReason != recommendationExplorationReasonRecent ||
 		claims.EstimatedReadTimeMS <= 0 || claims.ReadPolicyVersion != recommendationReadPolicyVersion {
 		t.Fatalf("unexpected V3 claims: %#v", claims)

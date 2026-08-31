@@ -16,86 +16,89 @@ import (
 )
 
 var (
-	errCommentForbidden          = errors.New("comment is not owned by authenticated user")
-	errCommentCountConsistency   = errors.New("comment count consistency error")
-	incrementArticleCommentCount = func(tx *gorm.DB, articleID uint) (int64, error) {
-		result := tx.Model(&models.Article{}).
-			Where("id = ?", articleID).
-			UpdateColumn("comment_count", gorm.Expr("comment_count + 1"))
+	errReplyForbidden        = errors.New("reply is not owned by authenticated user")
+	errReplyCountConsistency = errors.New("reply count consistency error")
+	incrementPostReplyCount  = func(tx *gorm.DB, postID uint) (int64, error) {
+		result := tx.Model(&models.Post{}).
+			Where("id = ?", postID).
+			UpdateColumn("reply_count", gorm.Expr("reply_count + 1"))
 		return result.RowsAffected, result.Error
 	}
-	decrementArticleCommentCount = func(tx *gorm.DB, articleID uint) (int64, error) {
-		result := tx.Model(&models.Article{}).
-			Where("id = ? AND comment_count > 0", articleID).
-			UpdateColumn("comment_count", gorm.Expr("comment_count - 1"))
+	decrementPostReplyCount = func(tx *gorm.DB, postID uint) (int64, error) {
+		result := tx.Model(&models.Post{}).
+			Where("id = ? AND reply_count > 0", postID).
+			UpdateColumn("reply_count", gorm.Expr("reply_count - 1"))
 		return result.RowsAffected, result.Error
 	}
-	invalidateCommentArticleDetailCache = func(articleID uint) error {
+	invalidateReplyPostDetailCache = func(postID uint) error {
 		if global.RedisDB == nil {
 			return nil
 		}
-		return InvalidateArticleDetailCacheByID(articleID)
+		return InvalidatePostDetailCacheByID(postID)
 	}
 )
 
-func upsertReplyArticleBehavior(tx *gorm.DB, userID, articleID uint, occurredAt time.Time) error {
-	if userID == 0 || articleID == 0 {
-		return errors.New("reply behavior requires user and article")
+func upsertReplyPostBehavior(tx *gorm.DB, userID, postID uint, occurredAt time.Time) error {
+	if userID == 0 || postID == 0 {
+		return errors.New("reply behavior requires user and post")
 	}
-	behavior := models.ArticleBehavior{
+	behavior := models.PostBehavior{
 		Model:  gorm.Model{CreatedAt: occurredAt, UpdatedAt: occurredAt},
-		UserID: userID, ArticleID: articleID, Action: ArticleBehaviorActionReply,
+		UserID: userID, PostID: postID, Action: PostBehaviorActionReply,
 		Count: 1, LastSeenAt: occurredAt, Active: true,
 	}
 	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}, {Name: "action"}},
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "post_id"}, {Name: "action"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"count":        gorm.Expr("article_behaviors.count + EXCLUDED.count"),
-			"last_seen_at": gorm.Expr("GREATEST(article_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
+			"count":        gorm.Expr("post_behaviors.count + EXCLUDED.count"),
+			"last_seen_at": gorm.Expr("GREATEST(post_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
 			"active":       true,
 			"updated_at":   occurredAt,
 		}),
 	}).Create(&behavior).Error
 }
 
-func createCommentWithCount(articleID, userID uint, content string) (models.Comment, error) {
+func createReplyWithCount(postID, userID uint, content string) (models.Post, error) {
 	if global.Db == nil {
-		return models.Comment{}, errors.New("database is not initialized")
+		return models.Post{}, errors.New("database is not initialized")
 	}
 
-	comment := models.Comment{ArticleID: articleID, UserID: userID, Content: content}
+	reply := models.Post{AuthorID: userID, Content: content, ReplyToPostID: &postID, Visibility: "public"}
 	occurredAt := time.Now().UTC()
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
-		var article models.Article
+		var parent models.Post
 		if err := tx.
-			Select("id, author_id").
-			Scopes(func(query *gorm.DB) *gorm.DB { return publicArticleScope(query, occurredAt) }).
-			First(&article, articleID).Error; err != nil {
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Scopes(func(query *gorm.DB) *gorm.DB { return publicPostScope(query, occurredAt) }).
+			First(&parent, postID).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&comment).Error; err != nil {
+		rootID := parent.ID
+		if parent.ConversationID != nil && *parent.ConversationID != 0 {
+			rootID = *parent.ConversationID
+		}
+		reply.ConversationID = &rootID
+		reply.CreatedAt = occurredAt
+		reply.UpdatedAt = occurredAt
+		if err := tx.Create(&reply).Error; err != nil {
 			return err
 		}
-		commentCreatedAt := comment.CreatedAt.UTC()
-		if commentCreatedAt.IsZero() {
-			commentCreatedAt = occurredAt
-		}
-		rowsAffected, err := incrementArticleCommentCount(tx, articleID)
+		rowsAffected, err := incrementPostReplyCount(tx, parent.ID)
 		if err != nil {
 			return err
 		}
 		if rowsAffected != 1 {
-			return errCommentCountConsistency
+			return errReplyCountConsistency
 		}
-		if err := upsertReplyArticleBehavior(tx, userID, articleID, commentCreatedAt); err != nil {
+		if err := upsertReplyPostBehavior(tx, userID, rootID, occurredAt); err != nil {
 			return err
 		}
-		if err := recommendation.InvalidateProfiles(tx, []uint{userID}, "reply_created", commentCreatedAt); err != nil {
+		if err := recommendation.InvalidateProfiles(tx, []uint{userID}, "reply_created", occurredAt); err != nil {
 			return err
 		}
-		activity, err := eventing.NewCommentCreatedEnvelope(uuid.NewString(), eventing.CommentCreatedPayload{
-			CommentID: comment.ID, ArticleID: article.ID, ActorID: userID,
-			ArticleAuthorID: article.AuthorID, CreatedAt: commentCreatedAt,
+		activity, err := eventing.NewReplyCreatedEnvelope(uuid.NewString(), eventing.ReplyCreatedPayload{
+			ReplyPostID: reply.ID, ParentPostID: parent.ID, ConversationID: rootID,
+			ActorID: userID, ParentAuthorID: parent.AuthorID, CreatedAt: occurredAt,
 		})
 		if err != nil {
 			return err
@@ -106,47 +109,47 @@ func createCommentWithCount(articleID, userID uint, content string) (models.Comm
 		return nil
 	})
 	if err != nil {
-		return models.Comment{}, err
+		return models.Post{}, err
 	}
-	return comment, nil
+	return reply, nil
 }
-func deleteCommentWithCount(commentID, userID uint) (models.Comment, error) {
+func deleteReplyWithCount(replyID, userID uint) (models.Post, error) {
 	if global.Db == nil {
-		return models.Comment{}, errors.New("database is not initialized")
+		return models.Post{}, errors.New("database is not initialized")
 	}
 
-	var comment models.Comment
+	var reply models.Post
 	err := global.Db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.First(&comment, commentID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&reply, replyID).Error; err != nil {
 			return err
 		}
-		if comment.UserID != userID {
-			return errCommentForbidden
+		if reply.AuthorID != userID || reply.ReplyToPostID == nil {
+			return errReplyForbidden
 		}
-		result := tx.Where("id = ? AND user_id = ?", commentID, userID).Delete(&models.Comment{})
+		result := tx.Where("id = ? AND author_id = ? AND deleted_at IS NULL", replyID, userID).Delete(&models.Post{})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return gorm.ErrRecordNotFound
 		}
-		rowsAffected, err := decrementArticleCommentCount(tx, comment.ArticleID)
+		rowsAffected, err := decrementPostReplyCount(tx, *reply.ReplyToPostID)
 		if err != nil {
 			return err
 		}
 		if rowsAffected != 1 {
-			return errCommentCountConsistency
+			return errReplyCountConsistency
 		}
 		return nil
 	})
 	if err != nil {
-		return models.Comment{}, err
+		return models.Post{}, err
 	}
-	return comment, nil
+	return reply, nil
 }
 
-func invalidateCommentArticleCaches(articleID uint) {
-	if err := invalidateCommentArticleDetailCache(articleID); err != nil {
-		log.Printf("[Comment] invalidate article detail cache for %d: %v", articleID, err)
+func invalidateReplyPostCaches(postID uint) {
+	if err := invalidateReplyPostDetailCache(postID); err != nil {
+		log.Printf("[Reply] invalidate post detail cache for %d: %v", postID, err)
 	}
 }

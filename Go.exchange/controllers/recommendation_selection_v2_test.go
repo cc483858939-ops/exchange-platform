@@ -17,14 +17,14 @@ func TestRecommendationSelectionUsesStrictFallbackBeforeAuthorRelaxation(t *test
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
 	cfg.OutOfNetworkMinRatio = 0.5
-	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}, Embedding: []float32{0, 1}}}
+	initial := []selectedRecommendation{{Post: models.Post{Model: gorm.Model{ID: 100}, AuthorID: 10}, Embedding: []float32{0, 1}}}
 	candidates := []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{ArticleID: 1}, Article: models.Article{Model: gorm.Model{ID: 1}, AuthorID: 10}, Embedding: []float32{1, 0}, Breakdown: recommendationScoreBreakdown{BaseScore: 100}, IsNovelAuthor: true},
-		{Candidate: embeddingCandidate{ArticleID: 2}, Article: models.Article{Model: gorm.Model{ID: 2}, AuthorID: 20}, Breakdown: recommendationScoreBreakdown{BaseScore: 1}, IsInNetwork: true},
+		{Candidate: embeddingCandidate{PostID: 1}, Post: models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10}, Embedding: []float32{1, 0}, Breakdown: recommendationScoreBreakdown{BaseScore: 100}, IsNovelAuthor: true},
+		{Candidate: embeddingCandidate{PostID: 2}, Post: models.Post{Model: gorm.Model{ID: 2}, AuthorID: 20}, Breakdown: recommendationScoreBreakdown{BaseScore: 1}, IsInNetwork: true},
 	}
 
 	selected := selectRecommendationCandidates(candidates, initial, 2, cfg, now, recommendationSelectionFresh)
-	if len(selected) != 2 || selected[1].Article.ID != 2 {
+	if len(selected) != 2 || selected[1].Post.ID != 2 {
 		t.Fatalf("selected=%#v, want strict any fallback article 2", selected)
 	}
 }
@@ -35,14 +35,14 @@ func TestRecommendationSelectionUsesStrictOutOfNetworkFallbackBeforeAuthorRelaxa
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
 	cfg.OutOfNetworkMinRatio = 0.5
-	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}}}
+	initial := []selectedRecommendation{{Post: models.Post{Model: gorm.Model{ID: 100}, AuthorID: 10}}}
 	candidates := []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{ArticleID: 1}, Article: models.Article{Model: gorm.Model{ID: 1}, AuthorID: 10}, Breakdown: recommendationScoreBreakdown{BaseScore: 100}, IsNovelAuthor: true},
-		{Candidate: embeddingCandidate{ArticleID: 2}, Article: models.Article{Model: gorm.Model{ID: 2}, AuthorID: 20}, Breakdown: recommendationScoreBreakdown{BaseScore: 1}},
+		{Candidate: embeddingCandidate{PostID: 1}, Post: models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10}, Breakdown: recommendationScoreBreakdown{BaseScore: 100}, IsNovelAuthor: true},
+		{Candidate: embeddingCandidate{PostID: 2}, Post: models.Post{Model: gorm.Model{ID: 2}, AuthorID: 20}, Breakdown: recommendationScoreBreakdown{BaseScore: 1}},
 	}
 
 	selected := selectRecommendationCandidates(candidates, initial, 2, cfg, now, recommendationSelectionFresh)
-	if len(selected) != 2 || selected[1].Article.ID != 2 {
+	if len(selected) != 2 || selected[1].Post.ID != 2 {
 		t.Fatalf("selected=%#v, want strict out-of-network fallback article 2", selected)
 	}
 }
@@ -54,17 +54,17 @@ func TestRecommendationSelectionRelaxesAuthorAfterStrictPoolsExhausted(t *testin
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
 	cfg.OutOfNetworkMinRatio = 0.5
-	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}, Embedding: []float32{1, 0}}}
+	initial := []selectedRecommendation{{Post: models.Post{Model: gorm.Model{ID: 100}, AuthorID: 10}, Embedding: []float32{1, 0}}}
 	candidates := []hydratedRecommendationCandidate{{
-		Candidate:     embeddingCandidate{ArticleID: 1},
-		Article:       models.Article{Model: gorm.Model{ID: 1}, AuthorID: 10},
+		Candidate:     embeddingCandidate{PostID: 1},
+		Post:          models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10},
 		Embedding:     []float32{1, 0},
 		Breakdown:     recommendationScoreBreakdown{BaseScore: 100},
 		IsNovelAuthor: true,
 	}}
 
 	selected := selectRecommendationCandidates(candidates, initial, 2, cfg, now, recommendationSelectionFresh)
-	if len(selected) != 2 || selected[1].Article.ID != 1 {
+	if len(selected) != 2 || selected[1].Post.ID != 1 {
 		t.Fatalf("selected=%#v, want relaxed article 1", selected)
 	}
 	if selected[1].Breakdown.DiversityPenalty != cfg.Diversity.SemanticDuplicatePenalty {
@@ -96,15 +96,15 @@ func TestRecommendationStrictExplorationRespectsAuthorWindow(t *testing.T) {
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 2
 	selected := []selectedRecommendation{
-		{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}},
-		{Article: models.Article{Model: gorm.Model{ID: 101}, AuthorID: 10}},
+		{Post: models.Post{Model: gorm.Model{ID: 100}, AuthorID: 10}},
+		{Post: models.Post{Model: gorm.Model{ID: 101}, AuthorID: 10}},
 	}
 	authorA := makeExplorationTestCandidate(now, 1, 100, 1, true, false)
-	authorA.Article.AuthorID = 10
+	authorA.Post.AuthorID = 10
 	authorB := makeExplorationTestCandidate(now, 2, 1, .5, true, false)
-	authorB.Article.AuthorID = 20
+	authorB.Post.AuthorID = 20
 	_, chosen, ok := chooseStrictExplorationCandidate([]hydratedRecommendationCandidate{authorA, authorB}, selected, func(hydratedRecommendationCandidate) bool { return true }, nil, 1, cfg, now)
-	if !ok || chosen.Article.ID != 2 {
+	if !ok || chosen.Post.ID != 2 {
 		t.Fatalf("strict selection=%#v ok=%v want author B article 2", chosen, ok)
 	}
 }
@@ -119,18 +119,18 @@ func TestRecommendationStrictExplorationDoesNotRelaxAuthorWindow(t *testing.T) {
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 2
 	initial := []selectedRecommendation{
-		{Article: models.Article{Model: gorm.Model{ID: 100}, AuthorID: 10}, SelectionMode: recommendationResultSelectionRanked},
-		{Article: models.Article{Model: gorm.Model{ID: 101}, AuthorID: 10}, SelectionMode: recommendationResultSelectionRanked},
+		{Post: models.Post{Model: gorm.Model{ID: 100}, AuthorID: 10}, SelectionMode: recommendationResultSelectionRanked},
+		{Post: models.Post{Model: gorm.Model{ID: 101}, AuthorID: 10}, SelectionMode: recommendationResultSelectionRanked},
 	}
 	candidates := []hydratedRecommendationCandidate{
 		func() hydratedRecommendationCandidate {
 			candidate := makeExplorationTestCandidate(now, 1, 100, 1, true, false)
-			candidate.Article.AuthorID = 10
+			candidate.Post.AuthorID = 10
 			return candidate
 		}(),
 		func() hydratedRecommendationCandidate {
 			candidate := makeExplorationTestCandidate(now, 2, 90, .9, true, false)
-			candidate.Article.AuthorID = 10
+			candidate.Post.AuthorID = 10
 			return candidate
 		}(),
 	}
@@ -141,10 +141,10 @@ func TestRecommendationStrictExplorationDoesNotRelaxAuthorWindow(t *testing.T) {
 	if len(selected) != 4 {
 		t.Fatalf("selected length=%d want=4", len(selected))
 	}
-	if selected[2].Article.ID != 1 || selected[2].SelectionMode != recommendationResultSelectionRanked || !selected[2].ExplorationOpportunity {
+	if selected[2].Post.ID != 1 || selected[2].SelectionMode != recommendationResultSelectionRanked || !selected[2].ExplorationOpportunity {
 		t.Fatalf("normal fallback at opportunity=%#v", selected[2])
 	}
-	if selected[3].Article.ID != 2 || selected[3].SelectionMode != recommendationResultSelectionRanked || selected[3].ExplorationOpportunity {
+	if selected[3].Post.ID != 2 || selected[3].SelectionMode != recommendationResultSelectionRanked || selected[3].ExplorationOpportunity {
 		t.Fatalf("post-opportunity fallback=%#v", selected[3])
 	}
 }
@@ -158,7 +158,7 @@ func TestRecommendationExplorationPrefersOutOfNetworkAtOutPreferredPosition(t *t
 	outOfNetwork := makeExplorationTestCandidate(now, 2, 1, .5, true, false)
 	outOfNetwork.IsInNetwork = false
 	_, chosen, ok := chooseStrictExplorationCandidate([]hydratedRecommendationCandidate{inNetwork, outOfNetwork}, nil, func(hydratedRecommendationCandidate) bool { return true }, map[int]struct{}{1: {}}, 1, cfg, now)
-	if !ok || chosen.Article.ID != 2 {
+	if !ok || chosen.Post.ID != 2 {
 		t.Fatalf("strict OON selection=%#v ok=%v want article 2", chosen, ok)
 	}
 }
@@ -170,7 +170,7 @@ func TestRecommendationExplorationFallsBackToAnyStrictCandidate(t *testing.T) {
 	inNetwork := makeExplorationTestCandidate(now, 1, 1, .5, true, false)
 	inNetwork.IsInNetwork = true
 	_, chosen, ok := chooseStrictExplorationCandidate([]hydratedRecommendationCandidate{inNetwork}, nil, func(hydratedRecommendationCandidate) bool { return true }, map[int]struct{}{1: {}}, 1, cfg, now)
-	if !ok || chosen.Article.ID != 1 {
+	if !ok || chosen.Post.ID != 1 {
 		t.Fatalf("any-strict fallback=%#v ok=%v want in-network article 1", chosen, ok)
 	}
 }

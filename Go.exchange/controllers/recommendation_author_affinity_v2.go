@@ -16,18 +16,18 @@ func populateRecommendationAuthorContext(userID uint, profile *userInterestProfi
 	profile.FollowingAuthorIDs = make(map[uint]struct{})
 
 	if len(profile.PositiveAffinityContributions) > 0 {
-		type articleAuthorRow struct {
-			ArticleID uint
+		type postAuthorRow struct {
+			PostID uint
 			AuthorID  uint
 		}
 		ids := profile.PositiveAffinityContributionIDs()
-		var rows []articleAuthorRow
-		if err := global.Db.Table("articles").Select("id AS article_id, author_id").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		var rows []postAuthorRow
+		if err := global.Db.Table("posts").Select("id AS post_id, author_id").Where("id IN ?", ids).Find(&rows).Error; err != nil {
 			return err
 		}
 		raw := make(map[uint]float64)
 		for _, row := range rows {
-			raw[row.AuthorID] += profile.PositiveAffinityContributions[row.ArticleID]
+			raw[row.AuthorID] += profile.PositiveAffinityContributions[row.PostID]
 		}
 		for authorID, value := range raw {
 			if cfg.AuthorAffinitySaturationScale > 0 {
@@ -49,16 +49,16 @@ func populateRecommendationAuthorContext(userID uint, profile *userInterestProfi
 
 func (profile userInterestProfile) PositiveContributionIDs() []uint {
 	ids := make([]uint, 0, len(profile.PositiveContributions))
-	for articleID := range profile.PositiveContributions {
-		ids = append(ids, articleID)
+	for postID := range profile.PositiveContributions {
+		ids = append(ids, postID)
 	}
 	return ids
 }
 
 func (profile userInterestProfile) PositiveAffinityContributionIDs() []uint {
 	ids := make([]uint, 0, len(profile.PositiveAffinityContributions))
-	for articleID := range profile.PositiveAffinityContributions {
-		ids = append(ids, articleID)
+	for postID := range profile.PositiveAffinityContributions {
+		ids = append(ids, postID)
 	}
 	return ids
 }

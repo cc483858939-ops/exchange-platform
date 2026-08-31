@@ -22,7 +22,7 @@ import (
 )
 
 var workerReady atomic.Bool
-var articleAnalysisConsumers atomic.Int32
+var postAnalysisConsumers atomic.Int32
 var userBehaviorConsumers atomic.Int32
 var recommendationMetricsConsumers atomic.Int32
 var likeSnapshotConsumers atomic.Int32
@@ -39,7 +39,7 @@ const (
 	PipelineLikeBehaviorRelay      = "like_behavior_relay"
 	PipelineLikeSnapshotRelay      = "like_snapshot_relay"
 	PipelineLikeSnapshotProjection = "like_snapshot_projection"
-	PipelineArticleEmbedding       = "article_embedding"
+	PipelinePostEmbedding          = "post_embedding"
 )
 
 const (
@@ -197,9 +197,9 @@ func RegisterWorkerPipelines() {
 		UnregisterPipeline(PipelineNotificationProjection)
 	}
 	if config.AppConfig != nil && config.AppConfig.Embedding.Enabled {
-		RegisterPipeline(PipelineArticleEmbedding, 1)
+		RegisterPipeline(PipelinePostEmbedding, 1)
 	} else {
-		UnregisterPipeline(PipelineArticleEmbedding)
+		UnregisterPipeline(PipelinePostEmbedding)
 	}
 }
 

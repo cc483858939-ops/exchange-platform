@@ -47,7 +47,7 @@ type recommendationMetricKey struct {
 	SelectionMode          string
 	ExplorationReason      string
 	Position               int
-	ArticleID              uint
+	PostID              uint
 }
 
 type recommendationMetricDelta struct {
@@ -197,7 +197,7 @@ func decodeRecommendationMetricEvent(raw []byte) (recommendationMetricEvent, err
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return recommendationMetricEvent{}, fmt.Errorf("%w: decode payload: %v", errInvalidRecommendationMetricsEvent, err)
 	}
-	if payload.UserID == 0 || payload.ArticleID == 0 || strings.TrimSpace(payload.RequestID) == "" ||
+	if payload.UserID == 0 || payload.PostID == 0 || strings.TrimSpace(payload.RequestID) == "" ||
 		strings.TrimSpace(payload.Scene) == "" || payload.Position <= 0 ||
 		strings.TrimSpace(payload.RankerVersion) == "" || strings.TrimSpace(payload.RankerConfigHash) == "" ||
 		strings.TrimSpace(payload.StrategyID) == "" || payload.ReceivedAt.IsZero() ||
@@ -285,7 +285,7 @@ func aggregateRecommendationMetrics(records []recommendationMetricEvent, firstDe
 			RankerConfigHash: record.Payload.RankerConfigHash, StrategyID: record.Payload.StrategyID,
 			ExplorationOpportunity: record.Payload.ExplorationOpportunity, SelectionMode: record.Payload.SelectionMode,
 			ExplorationReason: record.Payload.ExplorationReason,
-			Position:          record.Payload.Position, ArticleID: record.Payload.ArticleID,
+			Position:          record.Payload.Position, PostID: record.Payload.PostID,
 		}
 		delta := metricDeltaFor(record.Envelope.Type, record.Payload)
 		current := byKey[key]
@@ -332,7 +332,7 @@ func aggregateRecommendationMetrics(records []recommendationMetricEvent, firstDe
 		if left.Position != right.Position {
 			return left.Position < right.Position
 		}
-		return left.ArticleID < right.ArticleID
+		return left.PostID < right.PostID
 	})
 	result := make([]recommendationMetricAggregate, 0, len(keys))
 	for _, key := range keys {
@@ -370,7 +370,7 @@ func metricDeltaFor(eventType string, payload eventing.RecommendationBehaviorPay
 
 type recommendationBehaviorKey struct {
 	UserID    uint
-	ArticleID uint
+	PostID uint
 	Action    string
 }
 
@@ -390,7 +390,7 @@ func aggregateRecommendationBehavior(records []recommendationMetricEvent, firstD
 		if action == "" {
 			continue
 		}
-		key := recommendationBehaviorKey{UserID: record.Payload.UserID, ArticleID: record.Payload.ArticleID, Action: action}
+		key := recommendationBehaviorKey{UserID: record.Payload.UserID, PostID: record.Payload.PostID, Action: action}
 		current := byKey[key]
 		current.Key = key
 		current.Count++
@@ -408,8 +408,8 @@ func aggregateRecommendationBehavior(records []recommendationMetricEvent, firstD
 		if keys[i].UserID != keys[j].UserID {
 			return keys[i].UserID < keys[j].UserID
 		}
-		if keys[i].ArticleID != keys[j].ArticleID {
-			return keys[i].ArticleID < keys[j].ArticleID
+		if keys[i].PostID != keys[j].PostID {
+			return keys[i].PostID < keys[j].PostID
 		}
 		return keys[i].Action < keys[j].Action
 	})
@@ -448,19 +448,19 @@ func bulkUpsertRecommendationBehavior(tx *gorm.DB, aggregates []recommendationBe
 		return nil
 	}
 	updatedAt := time.Now().UTC()
-	rows := make([]models.ArticleBehavior, 0, len(aggregates))
+	rows := make([]models.PostBehavior, 0, len(aggregates))
 	for _, aggregate := range aggregates {
-		rows = append(rows, models.ArticleBehavior{
+		rows = append(rows, models.PostBehavior{
 			Model:  gorm.Model{CreatedAt: updatedAt, UpdatedAt: updatedAt},
-			UserID: aggregate.Key.UserID, ArticleID: aggregate.Key.ArticleID, Action: aggregate.Key.Action,
+			UserID: aggregate.Key.UserID, PostID: aggregate.Key.PostID, Action: aggregate.Key.Action,
 			Count: aggregate.Count, LastSeenAt: aggregate.LastSeenAt, Active: true,
 		})
 	}
 	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}, {Name: "article_id"}, {Name: "action"}},
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "post_id"}, {Name: "action"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"count":        gorm.Expr("article_behaviors.count + EXCLUDED.count"),
-			"last_seen_at": gorm.Expr("GREATEST(article_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
+			"count":        gorm.Expr("post_behaviors.count + EXCLUDED.count"),
+			"last_seen_at": gorm.Expr("GREATEST(post_behaviors.last_seen_at, EXCLUDED.last_seen_at)"),
 			"active":       true,
 			"updated_at":   gorm.Expr("EXCLUDED.updated_at"),
 		}),
@@ -478,7 +478,7 @@ func bulkUpsertRecommendationDailyMetrics(tx *gorm.DB, aggregates []recommendati
 			RankerVersion: aggregate.Key.RankerVersion, RankerConfigHash: aggregate.Key.RankerConfigHash,
 			StrategyID: aggregate.Key.StrategyID, ExplorationOpportunity: aggregate.Key.ExplorationOpportunity,
 			SelectionMode: aggregate.Key.SelectionMode, ExplorationReason: aggregate.Key.ExplorationReason,
-			Position: aggregate.Key.Position, ArticleID: aggregate.Key.ArticleID,
+			Position: aggregate.Key.Position, PostID: aggregate.Key.PostID,
 			ImpressionCount: aggregate.Delta.ImpressionCount, ClickCount: aggregate.Delta.ClickCount,
 			QualifiedReadCount: aggregate.Delta.QualifiedReadCount, QuickBounceCount: aggregate.Delta.QuickBounceCount,
 			NotInterestedCount: aggregate.Delta.NotInterestedCount, FeedDwellCount: aggregate.Delta.FeedDwellCount,
@@ -490,7 +490,7 @@ func bulkUpsertRecommendationDailyMetrics(tx *gorm.DB, aggregates []recommendati
 		Columns: []clause.Column{
 			{Name: "metric_date"}, {Name: "scene"}, {Name: "ranker_version"},
 			{Name: "ranker_config_hash"}, {Name: "strategy_id"}, {Name: "exploration_opportunity"},
-			{Name: "selection_mode"}, {Name: "exploration_reason"}, {Name: "position"}, {Name: "article_id"},
+			{Name: "selection_mode"}, {Name: "exploration_reason"}, {Name: "position"}, {Name: "post_id"},
 		},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"impression_count":     gorm.Expr("recommendation_daily_metrics.impression_count + EXCLUDED.impression_count"),

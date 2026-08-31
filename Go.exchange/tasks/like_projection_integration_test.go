@@ -24,7 +24,7 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Article{}, &models.ConsumerInbox{}, &models.ArticleReaction{}, &models.ArticleBehavior{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.ConsumerInbox{}, &models.PostReaction{}, &models.PostBehavior{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
@@ -37,45 +37,45 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	if err := db.Create(&author).Error; err != nil {
 		t.Fatal(err)
 	}
-	article := models.Article{AuthorID: author.ID, Title: "t", Content: "c", Preview: "p"}
+	article := models.Post{AuthorID: author.ID, Content: "c", Visibility: "public"}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	directReaction := models.ArticleReaction{
-		UserID: 12, ArticleID: article.ID + 1, Reaction: models.ArticleReactionLike,
+	directReaction := models.PostReaction{
+		UserID: 12, PostID: article.ID + 1, Reaction: models.PostReactionLike,
 		Liked: false, Version: 1, StateChangedAt: now,
 	}
 	if err := db.Create(&directReaction).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Where("user_id = ? AND article_id = ?", directReaction.UserID, directReaction.ArticleID).Delete(&models.ArticleReaction{})
+		db.Where("user_id = ? AND post_id = ?", directReaction.UserID, directReaction.PostID).Delete(&models.PostReaction{})
 	})
-	var reloadedDirect models.ArticleReaction
-	if err := db.First(&reloadedDirect, "user_id = ? AND article_id = ?", directReaction.UserID, directReaction.ArticleID).Error; err != nil {
+	var reloadedDirect models.PostReaction
+	if err := db.First(&reloadedDirect, "user_id = ? AND post_id = ?", directReaction.UserID, directReaction.PostID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if reloadedDirect.Liked {
 		t.Fatalf("direct Liked=false persistence returned true: %+v", reloadedDirect)
 	}
-	like := eventing.UserBehaviorPayload{UserID: 11, ArticleID: article.ID, LikeVersion: 3}
+	like := eventing.UserBehaviorPayload{UserID: 11, PostID: article.ID, LikeVersion: 3}
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyArticleReactionProjection(tx, eventing.EventTypeArticleLiked, like, now)
+		return applyPostReactionProjection(tx, eventing.EventTypePostLiked, like, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	staleUnlike := like
 	staleUnlike.LikeVersion = 2
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyArticleReactionProjection(tx, eventing.EventTypeArticleUnliked, staleUnlike, now.Add(time.Second))
+		return applyPostReactionProjection(tx, eventing.EventTypePostUnliked, staleUnlike, now.Add(time.Second))
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var reaction models.ArticleReaction
-	if err := db.First(&reaction, "user_id = ? AND article_id = ?", 11, article.ID).Error; err != nil {
+	var reaction models.PostReaction
+	if err := db.First(&reaction, "user_id = ? AND post_id = ?", 11, article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if !reaction.Liked || reaction.Version != 3 || !reaction.StateChangedAt.Equal(now) {
@@ -86,11 +86,11 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	freshUnlike.LikeVersion = 4
 	unlikeAt := now.Add(2 * time.Second)
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		return applyArticleReactionProjection(tx, eventing.EventTypeArticleUnliked, freshUnlike, unlikeAt)
+		return applyPostReactionProjection(tx, eventing.EventTypePostUnliked, freshUnlike, unlikeAt)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.First(&reaction, "user_id = ? AND article_id = ?", 11, article.ID).Error; err != nil {
+	if err := db.First(&reaction, "user_id = ? AND post_id = ?", 11, article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if reaction.Liked || reaction.Version != 4 || !reaction.StateChangedAt.Equal(unlikeAt) {
@@ -98,12 +98,12 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	}
 
 	var likeBehaviors int64
-	if err := db.Model(&models.ArticleBehavior{}).
-		Where("user_id = ? AND article_id = ? AND action = ?", 11, article.ID, "like").
+	if err := db.Model(&models.PostBehavior{}).
+		Where("user_id = ? AND post_id = ? AND action = ?", 11, article.ID, "like").
 		Count(&likeBehaviors).Error; err != nil {
 		t.Fatal(err)
 	}
 	if likeBehaviors != 0 {
-		t.Fatalf("like projection should not create ArticleBehavior rows: %d", likeBehaviors)
+		t.Fatalf("like projection should not create PostBehavior rows: %d", likeBehaviors)
 	}
 }

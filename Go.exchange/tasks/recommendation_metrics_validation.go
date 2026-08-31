@@ -57,7 +57,7 @@ func validRecommendationMetricsReadOutcome(outcome string) bool {
 
 func validRecommendationMetricsExitType(exitType string) bool {
 	switch exitType {
-	case "back_to_recommendation", "navigate_to_article", "route_leave", "page_hide", "refresh", "unknown":
+	case "back_to_recommendation", "navigate_to_post", "route_leave", "page_hide", "refresh", "unknown":
 		return true
 	default:
 		return false

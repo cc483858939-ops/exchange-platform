@@ -295,9 +295,9 @@ jobs:
           # eventing.KafkaConnectInternalTopicSpecs
           expected_topics=(
             "goexchange.user.behavior.v1"
-            "goexchange.article.like.snapshot.v1"
+            "goexchange.post.like.snapshot.v1"
             "goexchange.recommendation.events.v1"
-            "goexchange.article.embedding.v1"
+            "goexchange.post.embedding.v1"
             "goexchange.activity.events.v1"
             "goexchange.notification.projection.dlq.v1"
             "goexchange.connect.configs"

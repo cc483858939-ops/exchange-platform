@@ -1,9 +1,9 @@
 <template>
-  <form class="comment-composer" @submit.prevent="submitReply">
-    <div class="comment-composer__body">
+  <form class="reply-composer" @submit.prevent="submitReply">
+    <div class="reply-composer__body">
       <UserAvatar
         v-if="author"
-        class="comment-composer__avatar"
+        class="reply-composer__avatar"
         :avatar-url="author.avatar_url"
         :display-name="author.display_name"
         :username="author.username"
@@ -13,7 +13,7 @@
       <textarea
         ref="textareaRef"
         v-model="content"
-        class="comment-composer__textarea"
+        class="reply-composer__textarea"
         rows="1"
         :disabled="disabled || submitting"
         placeholder="Post your reply..."
@@ -22,12 +22,12 @@
       />
     </div>
 
-    <div class="comment-composer__footer">
-      <span v-if="exceedsMaxLength" class="comment-composer__validation" role="alert">
+    <div class="reply-composer__footer">
+      <span v-if="exceedsMaxLength" class="reply-composer__validation" role="alert">
         {{ contentLength }}/{{ maxContentLength }} characters. Please shorten your reply.
       </span>
       <button
-        class="comment-composer__submit"
+        class="reply-composer__submit"
         type="submit"
         :disabled="disabled || submitting || !trimmedContent || exceedsMaxLength"
       >
@@ -121,17 +121,17 @@ watch(
 </script>
 
 <style scoped>
-.comment-composer {
+.reply-composer {
   padding: var(--space-4) 0;
 }
 
-.comment-composer__body {
+.reply-composer__body {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
 }
 
-.comment-composer__avatar {
+.reply-composer__avatar {
   display: grid;
   width: 30px;
   height: 30px;
@@ -146,13 +146,13 @@ watch(
   font-weight: 800;
 }
 
-.comment-composer__avatar img {
+.reply-composer__avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.comment-composer__textarea {
+.reply-composer__textarea {
   width: 100%;
   min-height: 32px;
   max-height: 180px;
@@ -165,15 +165,15 @@ watch(
   line-height: 1.55;
 }
 
-.comment-composer__textarea::placeholder {
+.reply-composer__textarea::placeholder {
   color: var(--color-text-tertiary);
 }
 
-.comment-composer__textarea:focus {
+.reply-composer__textarea:focus {
   border-bottom: 1px solid var(--color-accent);
 }
 
-.comment-composer__footer {
+.reply-composer__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -182,15 +182,15 @@ watch(
   padding-left: 42px;
 }
 
-.comment-composer__validation {
+.reply-composer__validation {
   font-size: 12px;
 }
 
-.comment-composer__validation {
+.reply-composer__validation {
   color: var(--color-danger);
 }
 
-.comment-composer__submit {
+.reply-composer__submit {
   min-height: 34px;
   border: 0;
   border-radius: var(--radius-pill);
@@ -203,18 +203,20 @@ watch(
   transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
-.comment-composer__submit:hover:not(:disabled) {
+.reply-composer__submit:hover:not(:disabled) {
   background: var(--color-accent-hover);
 }
 
-.comment-composer__submit:disabled {
+.reply-composer__submit:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
 @media (max-width: 420px) {
-  .comment-composer__footer {
+  .reply-composer__footer {
     padding-left: 0;
   }
 }
 </style>
+
+

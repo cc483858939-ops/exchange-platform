@@ -3,40 +3,40 @@ import { reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import { useFeedStore } from './feed';
 import {
-  deleteArticle,
-} from '../services/articleService';
+  deletePost as deletePostRequest,
+} from '../services/postService';
 import {
   followUser,
   getUser,
-  getUserArticles,
+  getUserPosts,
   getUserFollowState,
   unfollowUser,
   type UserFollowState,
 } from '../services/userService';
-import { getArticleLikeStates, likeArticle, unlikeArticle } from '../services/likeService';
+import { getPostLikeStates, likePost, unlikePost } from '../services/likeService';
 import {
-  getArticleRepostStates,
-  repostArticle,
-  undoRepostArticle,
+  getPostRepostStates,
+  repostPost,
+  undoRepostPost,
 } from '../services/repostService';
-import type { Article } from '../types/Article';
+import type { Post } from '../types/Post';
 import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import type { PublicAuthor, PublicUser } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
-  articleToFeedPost,
+  postToFeedPost,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import {
   registerProfileSessionSync,
-  syncProfileArticleRemoval,
+  syncProfilePostRemoval,
   syncProfileAuthorIdentity,
   syncProfileLikeState,
   syncProfileRepostState,
 } from './sessionSync';
-import type { ArticleCommentCountUpdate } from './sessionSync';
+import type { PostReplyCountUpdate } from './sessionSync';
 import { syncProfileFollowState } from './sessionSync';
 
 export type ProfileSessionEntry = {
@@ -45,12 +45,12 @@ export type ProfileSessionEntry = {
   profileLoading: boolean;
   profileError: string;
   profileNotFound: boolean;
-  articles: FeedPost[];
-  articlesLoaded: boolean;
-  articlesInitialLoading: boolean;
-  articlesLoadingMore: boolean;
-  articlesInitialError: string;
-  articlesLoadMoreError: string;
+  posts: FeedPost[];
+  postsLoaded: boolean;
+  postsInitialLoading: boolean;
+  postsLoadingMore: boolean;
+  postsInitialError: string;
+  postsLoadMoreError: string;
   nextCursor: string | null;
   hasMore: boolean;
   followState: UserFollowState | null;
@@ -61,9 +61,9 @@ export type ProfileSessionEntry = {
   followActionError: string;
   scrollY: number;
   lastAccessedAt: number;
-  loadedArticleIds: Set<number>;
+  loadedPostIds: Set<number>;
   profileRequestVersion: number;
-  articleRequestVersion: number;
+  postRequestVersion: number;
   followRequestVersion: number;
   followMutationVersion: number;
 };
@@ -88,7 +88,7 @@ const normalizeID = (value: unknown): number | null => {
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
-const normalizeCommentCount = (value: unknown) => {
+const normalizeReplyCount = (value: unknown) => {
   const count = Number(value);
   return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : null;
 };
@@ -99,9 +99,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const viewerID = ref<number | null>(null);
   const viewerGeneration = ref(0);
   const sessions = reactive(new Map<number, ProfileSessionEntry>());
-  const likePendingArticleIds = reactive(new Set<number>());
-  const repostPendingArticleIds = reactive(new Set<number>());
-  const pendingDeleteArticleIds = reactive(new Set<number>());
+  const likePendingPostIds = reactive(new Set<number>());
+  const repostPendingPostIds = reactive(new Set<number>());
+  const pendingDeletePostIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
   const deleteTargetProfileIDs = new Map<number, number>();
   const deleteMutationVersions = new Map<number, number>();
@@ -122,12 +122,12 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     profileLoading: false,
     profileError: '',
     profileNotFound: false,
-    articles: [],
-    articlesLoaded: false,
-    articlesInitialLoading: false,
-    articlesLoadingMore: false,
-    articlesInitialError: '',
-    articlesLoadMoreError: '',
+    posts: [],
+    postsLoaded: false,
+    postsInitialLoading: false,
+    postsLoadingMore: false,
+    postsInitialError: '',
+    postsLoadMoreError: '',
     nextCursor: null,
     hasMore: false,
     followState: null,
@@ -138,9 +138,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     followActionError: '',
     scrollY: 0,
     lastAccessedAt: nextAccessTime(),
-    loadedArticleIds: new Set<number>(),
+    loadedPostIds: new Set<number>(),
     profileRequestVersion: 0,
-    articleRequestVersion: 0,
+    postRequestVersion: 0,
     followRequestVersion: 0,
     followMutationVersion: 0,
   });
@@ -181,13 +181,13 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
   const clearLikeWork = () => {
     likeGeneration += 1;
-    likePendingArticleIds.clear();
+    likePendingPostIds.clear();
     likeMutationVersions.clear();
   };
 
   const clearRepostWork = () => {
     repostGeneration += 1;
-    repostPendingArticleIds.clear();
+    repostPendingPostIds.clear();
     repostMutationVersions.clear();
   };
 
@@ -199,7 +199,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     sessions.clear();
     clearLikeWork();
     clearRepostWork();
-    pendingDeleteArticleIds.clear();
+    pendingDeletePostIds.clear();
     deleteErrors.clear();
     deleteTargetProfileIDs.clear();
     deleteMutationVersions.clear();
@@ -234,22 +234,22 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     };
   };
 
-  const forEachProfilePost = (articleId: number, callback: (post: FeedPost) => void) => {
-    if (feedStore.isArticleDeleted(articleId)) return;
+  const forEachProfilePost = (postId: number, callback: (post: FeedPost) => void) => {
+    if (feedStore.isPostDeleted(postId)) return;
     sessions.forEach((session) => {
-      session.articles.forEach((post) => {
-        if (post.id === articleId) callback(post);
+      session.posts.forEach((post) => {
+        if (post.id === postId) callback(post);
       });
     });
   };
 
-  const findPost = (articleId: number, rawUserID?: unknown) => {
+  const findPost = (postId: number, rawUserID?: unknown) => {
     const preferred = normalizeID(rawUserID);
     const preferredSession = preferred === null ? null : sessions.get(preferred);
-    const preferredPost = preferredSession?.articles.find((post) => post.id === articleId);
-    if (preferredPost && !feedStore.isArticleDeleted(articleId)) return preferredPost;
+    const preferredPost = preferredSession?.posts.find((post) => post.id === postId);
+    if (preferredPost && !feedStore.isPostDeleted(postId)) return preferredPost;
     let found: FeedPost | undefined;
-    forEachProfilePost(articleId, (post) => {
+    forEachProfilePost(postId, (post) => {
       found ||= post;
     });
     return found;
@@ -257,7 +257,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
   const applyLikeStateUpdateLocal = (update: FeedLikeStateUpdate) => {
     let applied = false;
-    forEachProfilePost(update.articleId, (post) => {
+    forEachProfilePost(update.postId, (post) => {
       applied = applyFeedLikeStateUpdate(post, update) || applied;
     });
     return applied;
@@ -265,19 +265,19 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
     likeMutationVersions.set(
-      update.articleId,
-      (likeMutationVersions.get(update.articleId) ?? 0) + 1,
+      update.postId,
+      (likeMutationVersions.get(update.postId) ?? 0) + 1,
     );
-    likePendingArticleIds.delete(update.articleId);
+    likePendingPostIds.delete(update.postId);
     return applyLikeStateUpdateLocal(update);
   };
 
-  const getRepostMutationVersion = (articleId: number) =>
-    repostMutationVersions.get(articleId) ?? 0;
+  const getRepostMutationVersion = (postId: number) =>
+    repostMutationVersions.get(postId) ?? 0;
 
-  const bumpRepostMutationVersion = (articleId: number) => {
-    const next = getRepostMutationVersion(articleId) + 1;
-    repostMutationVersions.set(articleId, next);
+  const bumpRepostMutationVersion = (postId: number) => {
+    const next = getRepostMutationVersion(postId) + 1;
+    repostMutationVersions.set(postId, next);
     return next;
   };
 
@@ -287,31 +287,31 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   ) => {
     if (
       expectedVersion !== undefined
-      && getRepostMutationVersion(update.articleId) !== expectedVersion
+      && getRepostMutationVersion(update.postId) !== expectedVersion
     ) {
       return false;
     }
     let applied = false;
-    forEachProfilePost(update.articleId, (post) => {
+    forEachProfilePost(update.postId, (post) => {
       applied = applyFeedRepostStateUpdate(post, update) || applied;
     });
     return applied;
   };
 
   const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
-    bumpRepostMutationVersion(update.articleId);
-    repostPendingArticleIds.delete(update.articleId);
+    bumpRepostMutationVersion(update.postId);
+    repostPendingPostIds.delete(update.postId);
     return applyRepostStateUpdateLocal(update);
   };
 
-  const applyCommentCountUpdateEverywhereLocal = (update: ArticleCommentCountUpdate) => {
-    const commentCount = normalizeCommentCount(update.commentCount);
-    if (commentCount === null) return false;
+  const applyReplyCountUpdateEverywhereLocal = (update: PostReplyCountUpdate) => {
+    const replyCount = normalizeReplyCount(update.replyCount);
+    if (replyCount === null) return false;
     let applied = false;
     sessions.forEach((session) => {
-      session.articles.forEach((post) => {
-        if (post.id !== update.articleId) return;
-        post.commentCount = commentCount;
+      session.posts.forEach((post) => {
+        if (post.id !== update.postId) return;
+        post.replyCount = replyCount;
         applied = true;
       });
     });
@@ -352,30 +352,30 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return applied;
   };
 
-  const markUnavailableLocal = (articleIds: number[], versions: Map<number, number>) => {
-    articleIds.forEach((articleId) => {
-      const capturedVersion = versions.get(articleId);
+  const markUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+    postIds.forEach((postId) => {
+      const capturedVersion = versions.get(postId);
       if (
         capturedVersion === undefined
-        || (likeMutationVersions.get(articleId) ?? 0) !== capturedVersion
+        || (likeMutationVersions.get(postId) ?? 0) !== capturedVersion
       ) return;
-      forEachProfilePost(articleId, (post) => {
+      forEachProfilePost(postId, (post) => {
         if (post.likeStatus === 'unknown') setFeedPostLikeUnavailable(post);
       });
     });
   };
 
   const hydrateLikeStates = async (
-    articleIds: number[],
+    postIds: number[],
     capturedViewerGeneration: number,
     isCurrent: () => boolean,
   ) => {
-    const uniqueIDs = Array.from(new Set(articleIds));
+    const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
     const versions = new Map(uniqueIDs.map((id) => [id, likeMutationVersions.get(id) ?? 0]));
     const capturedLikeGeneration = likeGeneration;
     try {
-      const response = await getArticleLikeStates(uniqueIDs);
+      const response = await getPostLikeStates(uniqueIDs);
       if (
         !isCurrent()
         || capturedViewerGeneration !== viewerGeneration.value
@@ -383,30 +383,30 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       ) return;
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = versions.get(item.article_id);
+        const capturedVersion = versions.get(item.post_id);
         if (
           capturedVersion === undefined
-          || (likeMutationVersions.get(item.article_id) ?? 0) !== capturedVersion
-          || !findPost(item.article_id)
+          || (likeMutationVersions.get(item.post_id) ?? 0) !== capturedVersion
+          || !findPost(item.post_id)
         ) return;
-        readyIDs.add(item.article_id);
+        readyIDs.add(item.post_id);
         applyLikeStateUpdateEverywhere({
-          articleId: item.article_id,
+          postId: item.post_id,
           likes: item.likes,
           liked: item.liked,
           status: 'ready',
         });
       });
-      response.unavailable_article_ids.forEach((articleId) => {
-        const capturedVersion = versions.get(articleId);
+      response.unavailable_post_ids.forEach((postId) => {
+        const capturedVersion = versions.get(postId);
         if (
-          readyIDs.has(articleId)
+          readyIDs.has(postId)
           || capturedVersion === undefined
-          || (likeMutationVersions.get(articleId) ?? 0) !== capturedVersion
-          || !findPost(articleId)
+          || (likeMutationVersions.get(postId) ?? 0) !== capturedVersion
+          || !findPost(postId)
         ) return;
         applyLikeStateUpdateEverywhere({
-          articleId,
+          postId,
           likes: 0,
           liked: false,
           status: 'unavailable',
@@ -419,56 +419,56 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
-  const markRepostUnavailableLocal = (articleIds: number[], versions: Map<number, number>) => {
-    articleIds.forEach((articleId) => {
-      const capturedVersion = versions.get(articleId);
+  const markRepostUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+    postIds.forEach((postId) => {
+      const capturedVersion = versions.get(postId);
       if (
         capturedVersion === undefined
-        || getRepostMutationVersion(articleId) !== capturedVersion
+        || getRepostMutationVersion(postId) !== capturedVersion
       ) return;
-      forEachProfilePost(articleId, (post) => {
+      forEachProfilePost(postId, (post) => {
         if (post.repostStatus === 'unknown') setFeedPostRepostUnavailable(post);
       });
     });
   };
 
   const hydrateRepostStates = async (
-    articleIds: number[],
+    postIds: number[],
     isCurrent: () => boolean,
   ) => {
-    const uniqueIDs = Array.from(new Set(articleIds));
+    const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
     const versions = new Map(uniqueIDs.map((id) => [id, getRepostMutationVersion(id)]));
     const capturedRepostGeneration = repostGeneration;
     try {
-      const response = await getArticleRepostStates(uniqueIDs);
+      const response = await getPostRepostStates(uniqueIDs);
       if (!isCurrent() || capturedRepostGeneration !== repostGeneration) return;
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = versions.get(item.article_id);
+        const capturedVersion = versions.get(item.post_id);
         if (
           capturedVersion === undefined
-          || getRepostMutationVersion(item.article_id) !== capturedVersion
-          || !findPost(item.article_id)
+          || getRepostMutationVersion(item.post_id) !== capturedVersion
+          || !findPost(item.post_id)
         ) return;
-        readyIDs.add(item.article_id);
+        readyIDs.add(item.post_id);
         applyRepostStateUpdateEverywhere({
-          articleId: item.article_id,
+          postId: item.post_id,
           reposts: item.reposts,
           reposted: item.reposted,
           status: 'ready',
         }, capturedVersion);
       });
-      response.unavailable_article_ids.forEach((articleId) => {
-        const capturedVersion = versions.get(articleId);
+      response.unavailable_post_ids.forEach((postId) => {
+        const capturedVersion = versions.get(postId);
         if (
-          readyIDs.has(articleId)
+          readyIDs.has(postId)
           || capturedVersion === undefined
-          || getRepostMutationVersion(articleId) !== capturedVersion
-          || !findPost(articleId)
+          || getRepostMutationVersion(postId) !== capturedVersion
+          || !findPost(postId)
         ) return;
         applyRepostStateUpdateEverywhere({
-          articleId,
+          postId,
           reposts: 0,
           reposted: false,
           status: 'unavailable',
@@ -481,16 +481,16 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
-  const appendArticles = (session: ProfileSessionEntry, rawArticles: Article[]) => {
-    const newPosts = rawArticles
-      .filter((article) => {
-        if (session.loadedArticleIds.has(article.ID)) return false;
-        session.loadedArticleIds.add(article.ID);
-        return !feedStore.isArticleDeleted(article.ID);
+  const appendPosts = (session: ProfileSessionEntry, rawPosts: Post[]) => {
+    const newPosts = rawPosts
+      .filter((post) => {
+        if (session.loadedPostIds.has(post.id)) return false;
+        session.loadedPostIds.add(post.id);
+        return !feedStore.isPostDeleted(post.id);
       })
-      .map(articleToFeedPost);
+      .map(post => postToFeedPost(post));
     if (newPosts.length > 0) {
-      session.articles = [...session.articles, ...newPosts];
+      session.posts = [...session.posts, ...newPosts];
     }
     return newPosts;
   };
@@ -502,40 +502,40 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     capturedViewerID: number | null,
     capturedViewerGeneration: number,
   ) => sessions.get(userID) === session
-    && session.articleRequestVersion === version
+    && session.postRequestVersion === version
     && viewerID.value === capturedViewerID
     && viewerGeneration.value === capturedViewerGeneration;
 
-  const loadArticles = async (rawUserID: unknown, force = false) => {
+  const loadPosts = async (rawUserID: unknown, force = false) => {
     const userID = normalizeID(rawUserID);
     const session = userID === null ? null : ensureSession(userID);
-    if (!userID || !session || (session.articlesInitialLoading && !force)) return session;
-    if (session.articlesLoaded && !force) return session;
+    if (!userID || !session || (session.postsInitialLoading && !force)) return session;
+    if (session.postsLoaded && !force) return session;
 
     if (force) {
-      if (session.articlesLoadingMore) {
-        session.articleRequestVersion += 1;
+      if (session.postsLoadingMore) {
+        session.postRequestVersion += 1;
       }
-      session.articles = [];
-      session.loadedArticleIds.clear();
+      session.posts = [];
+      session.loadedPostIds.clear();
       session.nextCursor = null;
       session.hasMore = false;
-      session.articlesLoaded = false;
+      session.postsLoaded = false;
     }
 
-    const requestVersion = ++session.articleRequestVersion;
+    const requestVersion = ++session.postRequestVersion;
     const capturedViewerID = viewerID.value;
     const capturedViewerGeneration = viewerGeneration.value;
-    session.articlesInitialLoading = true;
-    session.articlesInitialError = '';
-    session.articlesLoadMoreError = '';
+    session.postsInitialLoading = true;
+    session.postsInitialError = '';
+    session.postsLoadMoreError = '';
     try {
-      const page = await getUserArticles(String(userID), { limit: pageSize });
+      const page = await getUserPosts(String(userID), { limit: pageSize });
       if (!currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) return session;
-      const newPosts = appendArticles(session, page.items);
+      const newPosts = appendPosts(session, page.items);
       session.nextCursor = page.next_cursor;
       session.hasMore = page.next_cursor !== null;
-      session.articlesLoaded = true;
+      session.postsLoaded = true;
       void hydrateLikeStates(
         newPosts.map((post) => post.id),
         capturedViewerGeneration,
@@ -547,45 +547,45 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       );
     } catch (error) {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
-        session.articlesInitialError = getErrorStatus(error) === 404
+        session.postsInitialError = getErrorStatus(error) === 404
           ? 'The user posts could not be found.'
           : "Try again to load this user's posts.";
       }
     } finally {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
-        session.articlesInitialLoading = false;
+        session.postsInitialLoading = false;
       }
     }
     return session;
   };
 
-  const loadMoreArticles = async (rawUserID: unknown) => {
+  const loadMorePosts = async (rawUserID: unknown) => {
     const userID = normalizeID(rawUserID);
     const session = userID === null ? null : ensureSession(userID);
     if (
       !userID
       || !session
-      || !session.articlesLoaded
+      || !session.postsLoaded
       || !session.hasMore
-      || session.articlesInitialLoading
-      || session.articlesLoadingMore
-      || session.articlesLoadMoreError
+      || session.postsInitialLoading
+      || session.postsLoadingMore
+      || session.postsLoadMoreError
       || session.nextCursor === null
     ) return session;
 
     const requestedCursor = session.nextCursor;
-    const requestVersion = ++session.articleRequestVersion;
+    const requestVersion = ++session.postRequestVersion;
     const capturedViewerID = viewerID.value;
     const capturedViewerGeneration = viewerGeneration.value;
-    session.articlesLoadingMore = true;
-    session.articlesLoadMoreError = '';
+    session.postsLoadingMore = true;
+    session.postsLoadMoreError = '';
     try {
-      const page = await getUserArticles(String(userID), { limit: pageSize, cursor: requestedCursor });
+      const page = await getUserPosts(String(userID), { limit: pageSize, cursor: requestedCursor });
       if (
         !currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)
         || session.nextCursor !== requestedCursor
       ) return session;
-      const newPosts = appendArticles(session, page.items);
+      const newPosts = appendPosts(session, page.items);
       session.nextCursor = page.next_cursor;
       session.hasMore = page.next_cursor !== null;
       void hydrateLikeStates(
@@ -599,23 +599,23 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       );
     } catch (error) {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
-        session.articlesLoadMoreError = getErrorStatus(error) === 404
+        session.postsLoadMoreError = getErrorStatus(error) === 404
           ? 'The user posts could not be found.'
           : 'Try again to load more posts.';
       }
     } finally {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
-        session.articlesLoadingMore = false;
+        session.postsLoadingMore = false;
       }
     }
     return session;
   };
 
-  const retryLoadMoreArticles = (rawUserID: unknown) => {
+  const retryLoadMorePosts = (rawUserID: unknown) => {
     const session = getSession(rawUserID);
     if (!session) return;
-    session.articlesLoadMoreError = '';
-    void loadMoreArticles(rawUserID);
+    session.postsLoadMoreError = '';
+    void loadMorePosts(rawUserID);
   };
 
   const loadFollowState = async (rawUserID: unknown, force = false) => {
@@ -719,87 +719,87 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
-  const toggleLike = async (articleId: number, rawUserID?: unknown) => {
-    const post = findPost(articleId, rawUserID);
-    if (!post || post.likeStatus !== 'ready' || likePendingArticleIds.has(articleId)) return false;
+  const toggleLike = async (postId: number, rawUserID?: unknown) => {
+    const post = findPost(postId, rawUserID);
+    if (!post || post.likeStatus !== 'ready' || likePendingPostIds.has(postId)) return false;
     const previousLiked = post.liked;
     const previousLikes = post.likeCount;
-    const mutationVersion = (likeMutationVersions.get(articleId) ?? 0) + 1;
-    likeMutationVersions.set(articleId, mutationVersion);
+    const mutationVersion = (likeMutationVersions.get(postId) ?? 0) + 1;
+    likeMutationVersions.set(postId, mutationVersion);
     const capturedLikeGeneration = likeGeneration;
     const capturedViewerID = viewerID.value;
     const capturedViewerGeneration = viewerGeneration.value;
-    likePendingArticleIds.add(articleId);
+    likePendingPostIds.add(postId);
     applyLikeStateUpdateEverywhere({
-      articleId,
+      postId,
       likes: previousLiked ? Math.max(0, previousLikes - 1) : previousLikes + 1,
       liked: !previousLiked,
       status: 'ready',
     });
     const isCurrent = () =>
-      likePendingArticleIds.has(articleId)
-      && (likeMutationVersions.get(articleId) ?? 0) === mutationVersion
+      likePendingPostIds.has(postId)
+      && (likeMutationVersions.get(postId) ?? 0) === mutationVersion
       && likeGeneration === capturedLikeGeneration
       && viewerID.value === capturedViewerID
       && viewerGeneration.value === capturedViewerGeneration
       && authStore.isAuthenticated;
     try {
       const result = previousLiked
-        ? await unlikeArticle(articleId)
-        : await likeArticle(articleId);
+        ? await unlikePost(postId)
+        : await likePost(postId);
       if (!isCurrent()) return false;
       const settledVersion = mutationVersion + 1;
-      likeMutationVersions.set(articleId, settledVersion);
+      likeMutationVersions.set(postId, settledVersion);
       applyLikeStateUpdateEverywhere({
-        articleId,
+        postId,
         likes: result.likes,
         liked: result.liked,
         status: 'ready',
       });
-      likePendingArticleIds.delete(articleId);
+      likePendingPostIds.delete(postId);
       return true;
     } catch (error) {
       if (!isCurrent()) return false;
       const settledVersion = mutationVersion + 1;
-      likeMutationVersions.set(articleId, settledVersion);
+      likeMutationVersions.set(postId, settledVersion);
       applyLikeStateUpdateEverywhere({
-        articleId,
+        postId,
         likes: previousLikes,
         liked: previousLiked,
         status: 'ready',
       });
       if (getErrorStatus(error) === 503) {
         applyLikeStateUpdateEverywhere({
-          articleId,
+          postId,
           likes: previousLikes,
           liked: previousLiked,
           status: 'unavailable',
         });
       }
-      likePendingArticleIds.delete(articleId);
+      likePendingPostIds.delete(postId);
       return false;
     }
   };
 
-  const toggleRepost = async (articleId: number, rawUserID?: unknown) => {
-    const post = findPost(articleId, rawUserID);
+  const toggleRepost = async (postId: number, rawUserID?: unknown) => {
+    const post = findPost(postId, rawUserID);
     const capturedViewerID = viewerID.value;
     if (
       !post
       || post.repostStatus !== 'ready'
       || capturedViewerID === null
-      || repostPendingArticleIds.has(articleId)
+      || repostPendingPostIds.has(postId)
       || !authStore.isAuthenticated
     ) return false;
 
     const previousReposted = post.reposted;
     const previousReposts = post.repostCount;
-    const mutationVersion = bumpRepostMutationVersion(articleId);
+    const mutationVersion = bumpRepostMutationVersion(postId);
     const capturedGeneration = repostGeneration;
     const capturedViewerGeneration = viewerGeneration.value;
-    repostPendingArticleIds.add(articleId);
+    repostPendingPostIds.add(postId);
     applyRepostStateUpdateEverywhere({
-      articleId,
+      postId,
       reposts: previousReposted ? Math.max(0, previousReposts - 1) : previousReposts + 1,
       reposted: !previousReposted,
       status: 'ready',
@@ -810,107 +810,107 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       && viewerID.value === capturedViewerID
       && viewerGeneration.value === capturedViewerGeneration
       && repostGeneration === capturedGeneration
-      && (repostMutationVersions.get(articleId) ?? 0) === mutationVersion
-      && repostPendingArticleIds.has(articleId)
+      && (repostMutationVersions.get(postId) ?? 0) === mutationVersion
+      && repostPendingPostIds.has(postId)
     );
 
     try {
       const response = previousReposted
-        ? await undoRepostArticle(articleId)
-        : await repostArticle(articleId);
+        ? await undoRepostPost(postId)
+        : await repostPost(postId);
       if (!isCurrent()) return false;
-      repostMutationVersions.set(articleId, mutationVersion + 1);
+      repostMutationVersions.set(postId, mutationVersion + 1);
       applyRepostStateUpdateEverywhere({
-        articleId,
+        postId,
         reposts: response.reposts,
         reposted: response.reposted,
         status: 'ready',
       }, mutationVersion + 1);
-      repostPendingArticleIds.delete(articleId);
+      repostPendingPostIds.delete(postId);
       return true;
     } catch {
       if (!isCurrent()) return false;
-      repostMutationVersions.set(articleId, mutationVersion + 1);
+      repostMutationVersions.set(postId, mutationVersion + 1);
       applyRepostStateUpdateEverywhere({
-        articleId,
+        postId,
         reposts: previousReposts,
         reposted: previousReposted,
         status: 'ready',
       }, mutationVersion + 1);
-      repostPendingArticleIds.delete(articleId);
+      repostPendingPostIds.delete(postId);
       return false;
     }
   };
 
-  const removeArticleEverywhereLocal = (articleId: number) => {
+  const removePostEverywhereLocal = (postId: number) => {
     sessions.forEach((session) => {
-      const removedFromSession = session.articles.some((post) => post.id === articleId);
-      session.articles = session.articles.filter((post) => post.id !== articleId);
-      session.loadedArticleIds.add(articleId);
-      if (removedFromSession && session.articlesLoadingMore) {
-        session.articleRequestVersion += 1;
-        session.articlesLoadingMore = false;
-        session.articlesLoadMoreError = '';
+      const removedFromSession = session.posts.some((post) => post.id === postId);
+      session.posts = session.posts.filter((post) => post.id !== postId);
+      session.loadedPostIds.add(postId);
+      if (removedFromSession && session.postsLoadingMore) {
+        session.postRequestVersion += 1;
+        session.postsLoadingMore = false;
+        session.postsLoadMoreError = '';
       }
     });
-    likePendingArticleIds.delete(articleId);
-    likeMutationVersions.delete(articleId);
-    repostPendingArticleIds.delete(articleId);
-    bumpRepostMutationVersion(articleId);
-    pendingDeleteArticleIds.delete(articleId);
-    deleteErrors.delete(articleId);
-    deleteTargetProfileIDs.delete(articleId);
-    deleteMutationVersions.delete(articleId);
+    likePendingPostIds.delete(postId);
+    likeMutationVersions.delete(postId);
+    repostPendingPostIds.delete(postId);
+    bumpRepostMutationVersion(postId);
+    pendingDeletePostIds.delete(postId);
+    deleteErrors.delete(postId);
+    deleteTargetProfileIDs.delete(postId);
+    deleteMutationVersions.delete(postId);
   };
 
-  const removeArticleEverywhere = (articleId: number, ownerUserID?: number) => {
-    if (ownerUserID !== undefined && !feedStore.markArticleDeleted(articleId, ownerUserID)) return false;
-    removeArticleEverywhereLocal(articleId);
-    if (ownerUserID !== undefined) syncProfileArticleRemoval(articleId);
+  const removePostEverywhere = (postId: number, ownerUserID?: number) => {
+    if (ownerUserID !== undefined && !feedStore.markPostDeleted(postId, ownerUserID)) return false;
+    removePostEverywhereLocal(postId);
+    if (ownerUserID !== undefined) syncProfilePostRemoval(postId);
     return true;
   };
 
-  const deletePost = async (articleId: number, rawUserID?: unknown) => {
+  const deletePost = async (postId: number, rawUserID?: unknown) => {
     const ownerUserID = viewerID.value;
     const targetUserID = normalizeID(rawUserID);
-    const post = findPost(articleId, targetUserID);
+    const post = findPost(postId, targetUserID);
     if (
       ownerUserID === null
       || !authStore.isAuthenticated
       || !post
       || post.author.id !== ownerUserID
-      || pendingDeleteArticleIds.has(articleId)
+      || pendingDeletePostIds.has(postId)
     ) return false;
 
     const capturedViewerGeneration = viewerGeneration.value;
     const capturedViewerID = ownerUserID;
-    const deleteMutationVersion = (deleteMutationVersions.get(articleId) ?? 0) + 1;
-    deleteMutationVersions.set(articleId, deleteMutationVersion);
-    if (targetUserID !== null) deleteTargetProfileIDs.set(articleId, targetUserID);
-    pendingDeleteArticleIds.add(articleId);
-    deleteErrors.delete(articleId);
+    const deleteMutationVersion = (deleteMutationVersions.get(postId) ?? 0) + 1;
+    deleteMutationVersions.set(postId, deleteMutationVersion);
+    if (targetUserID !== null) deleteTargetProfileIDs.set(postId, targetUserID);
+    pendingDeletePostIds.add(postId);
+    deleteErrors.delete(postId);
     const isCurrent = () => authStore.isAuthenticated
       && viewerID.value === capturedViewerID
       && viewerGeneration.value === capturedViewerGeneration
-      && (deleteMutationVersions.get(articleId) ?? 0) === deleteMutationVersion
-      && pendingDeleteArticleIds.has(articleId);
+      && (deleteMutationVersions.get(postId) ?? 0) === deleteMutationVersion
+      && pendingDeletePostIds.has(postId);
     try {
-      await deleteArticle(articleId);
+      await deletePostRequest(postId);
       if (!isCurrent()) return false;
-      return removeArticleEverywhere(articleId, ownerUserID);
+      return removePostEverywhere(postId, ownerUserID);
     } catch (error) {
       if (!isCurrent()) return false;
-      if (getErrorStatus(error) === 404) return removeArticleEverywhere(articleId, ownerUserID);
+      if (getErrorStatus(error) === 404) return removePostEverywhere(postId, ownerUserID);
       deleteErrors.set(
-        articleId,
+        postId,
         getErrorStatus(error) === 403
           ? 'You can only delete your own posts.'
           : getErrorStatus(error) === 401
             ? 'Please log in again to delete this post.'
             : 'Could not delete post. Please try again.',
       );
-      pendingDeleteArticleIds.delete(articleId);
-      deleteTargetProfileIDs.delete(articleId);
+      pendingDeletePostIds.delete(postId);
+      deleteTargetProfileIDs.delete(postId);
       return false;
     }
   };
@@ -918,12 +918,12 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const cancelPendingDeletesForProfile = (rawUserID: unknown) => {
     const userID = normalizeID(rawUserID);
     if (userID === null) return;
-    Array.from(deleteTargetProfileIDs.entries()).forEach(([articleId, targetID]) => {
+    Array.from(deleteTargetProfileIDs.entries()).forEach(([postId, targetID]) => {
       if (targetID !== userID) return;
-      deleteMutationVersions.set(articleId, (deleteMutationVersions.get(articleId) ?? 0) + 1);
-      deleteTargetProfileIDs.delete(articleId);
-      pendingDeleteArticleIds.delete(articleId);
-      deleteErrors.delete(articleId);
+      deleteMutationVersions.set(postId, (deleteMutationVersions.get(postId) ?? 0) + 1);
+      deleteTargetProfileIDs.delete(postId);
+      pendingDeletePostIds.delete(postId);
+      deleteErrors.delete(postId);
     });
   };
 
@@ -932,7 +932,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       if (session.user?.id === author.id) {
         session.user = { ...session.user, ...author };
       }
-      session.articles = session.articles.map((post) => {
+      session.posts = session.posts.map((post) => {
         const canonicalMatches = post.author.id === author.id;
         const actorMatches = post.repostContext?.actor.id === author.id;
         return canonicalMatches || actorMatches
@@ -974,7 +974,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     if (!userID || !session) return session;
     if (session.profileLoading && !force) return session;
     if (session.profileLoaded && !force) {
-      if (!session.articlesLoaded && !session.articlesInitialLoading) void loadArticles(userID);
+      if (!session.postsLoaded && !session.postsInitialLoading) void loadPosts(userID);
       if (viewerID.value !== null && !session.followLoaded && !session.followLoading) {
         void loadFollowState(userID);
       }
@@ -987,15 +987,15 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       session.profileLoaded = false;
       session.profileError = '';
       session.profileNotFound = false;
-      session.articles = [];
-      session.articlesLoaded = false;
-      session.articlesInitialLoading = false;
-      session.articlesLoadingMore = false;
-      session.articlesInitialError = '';
-      session.articlesLoadMoreError = '';
+      session.posts = [];
+      session.postsLoaded = false;
+      session.postsInitialLoading = false;
+      session.postsLoadingMore = false;
+      session.postsInitialError = '';
+      session.postsLoadMoreError = '';
       session.nextCursor = null;
       session.hasMore = false;
-      session.loadedArticleIds.clear();
+      session.loadedPostIds.clear();
       session.followState = null;
       session.followLoaded = false;
       session.followLoading = false;
@@ -1018,7 +1018,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       session.user = loadedUser;
       session.profileLoaded = true;
       session.profileLoading = false;
-      void loadArticles(userID);
+      void loadPosts(userID);
       if (viewerID.value !== null && authStore.isAuthenticated) void loadFollowState(userID);
     } catch (error) {
       if (!isCurrent()) return session;
@@ -1032,24 +1032,24 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return session;
   };
 
-  const registerPublishedArticle = (article: Article, publisherUserID: number) => {
+  const registerPublishedPost = (post: Post, publisherUserID: number) => {
     const publisherID = normalizeID(publisherUserID);
     if (
       publisherID === null
       || viewerID.value !== publisherID
-      || article?.ID <= 0
-      || !article.author
-      || article.author.id !== publisherID
-      || feedStore.isArticleDeleted(article.ID)
+      || post?.id <= 0
+      || !post.author
+      || post.author.id !== publisherID
+      || feedStore.isPostDeleted(post.id)
     ) return false;
     const session = ensureSession(publisherID);
     if (!session) return false;
-    const post = articleToFeedPost(article);
-    session.articles = [
-      post,
-      ...session.articles.filter((item) => item.id !== post.id),
+    const feedPost = postToFeedPost(post);
+    session.posts = [
+      feedPost,
+      ...session.posts.filter((item) => item.id !== feedPost.id),
     ];
-    session.loadedArticleIds.add(post.id);
+    session.loadedPostIds.add(feedPost.id);
     session.lastAccessedAt = nextAccessTime();
     return true;
   };
@@ -1064,9 +1064,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
-    applyCommentCountUpdateEverywhereLocal,
+    applyReplyCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
-    removeArticleEverywhereLocal,
+    removePostEverywhereLocal,
     replaceAuthorIdentityEverywhereLocal,
   });
 
@@ -1083,9 +1083,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     viewerGeneration,
     sessions,
     maxProfileSessions,
-    likePendingArticleIds,
-    repostPendingArticleIds,
-    pendingDeleteArticleIds,
+    likePendingPostIds,
+    repostPendingPostIds,
+    pendingDeletePostIds,
     deleteErrors,
     setViewer,
     getSession,
@@ -1093,9 +1093,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     captureSession,
     isCurrentSessionCapture,
     loadProfile,
-    loadArticles,
-    loadMoreArticles,
-    retryLoadMoreArticles,
+    loadPosts,
+    loadMorePosts,
+    retryLoadMorePosts,
     loadFollowState,
     toggleFollow,
     toggleLike,
@@ -1106,14 +1106,14 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
-    applyCommentCountUpdateEverywhereLocal,
+    applyReplyCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
-    removeArticleEverywhere,
-    removeArticleEverywhereLocal,
+    removePostEverywhere,
+    removePostEverywhereLocal,
     replaceAuthorIdentityEverywhere,
     replaceAuthorIdentityEverywhereLocal,
     updateUser,
-    registerPublishedArticle,
+    registerPublishedPost,
     setScrollY,
     cancelPendingDeletesForProfile,
   };

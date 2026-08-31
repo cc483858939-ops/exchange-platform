@@ -1,12 +1,12 @@
 import apiClient from '../axios';
-import type { RecommendedArticle } from '../types/Recommendation';
+import type { RecommendedPost } from '../types/Recommendation';
 
-export async function getArticleRecommendations(limit?: number): Promise<RecommendedArticle[]> {
+export async function getPostRecommendations(limit?: number): Promise<RecommendedPost[]> {
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) {
     throw new Error('Invalid recommendation limit');
   }
 
-  const response = await apiClient.get<RecommendedArticle[]>('/recommendations/articles', {
+  const response = await apiClient.get<RecommendedPost[]>('/recommendations/posts', {
     params: limit === undefined ? undefined : { limit },
   });
   return response.data;

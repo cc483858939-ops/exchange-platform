@@ -83,7 +83,7 @@
 
     <RouterLink
       class="post-card__content"
-      :to="{ name: 'NewsDetail', params: { id: String(post.id) } }"
+      :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
       @click.capture="prepareDetailNavigation"
     >
       <h2 v-if="post.title.trim()" class="post-card__title">{{ post.title }}</h2>
@@ -94,6 +94,28 @@
       >
         {{ post.excerpt }}
       </p>
+      <div
+        v-if="post.quotePost || post.replyToPost"
+        class="post-card__reference"
+        aria-label="Referenced post"
+      >
+        <span class="post-card__reference-label">
+          {{ post.quotePost ? 'Quoted post' : 'Replying to' }}
+        </span>
+        <template v-if="referencePost?.deleted">
+          <p class="post-card__reference-deleted">Post unavailable</p>
+        </template>
+        <template v-else>
+          <AuthorIdentity
+            v-if="referenceAuthor"
+            :author="referenceAuthor"
+            variant="compact"
+          />
+          <p class="post-card__reference-content">
+            {{ referenceContent }}
+          </p>
+        </template>
+      </div>
       <figure v-if="showCover" class="post-card__cover">
         <img
           :src="post.coverImageUrl"
@@ -108,7 +130,7 @@
       <RouterLink
         class="post-card__metric post-card__reply"
         :to="{
-          name: 'NewsDetail',
+          name: 'PostDetail',
           params: { id: String(post.id) },
           query: { reply: '1' },
         }"
@@ -116,7 +138,7 @@
         @click.capture="prepareDetailNavigation"
       >
         <AppIcon name="reply" :size="18" />
-        <span>{{ post.commentCount }}</span>
+        <span>{{ post.replyCount }}</span>
       </RouterLink>
       <RepostAction
         :key="post.id"
@@ -144,7 +166,7 @@
       <RouterLink
         class="post-card__metric post-card__views"
         :to="{
-          name: 'NewsDetail',
+          name: 'PostDetail',
           params: { id: String(post.id) },
         }"
         :aria-label="viewActionLabel"
@@ -166,8 +188,8 @@ import AuthorIdentity from '../AuthorIdentity.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
-import { getArticleViewTelemetry } from '../../services/articleViewTelemetry';
-import { useArticleDetailHandoffStore } from '../../store/articleDetailHandoff';
+import { getPostViewTelemetry } from '../../services/postViewTelemetry';
+import { usePostDetailHandoffStore } from '../../store/postDetailHandoff';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../../utils/engagementCount';
 
 const props = withDefaults(defineProps<{
@@ -190,16 +212,16 @@ const props = withDefaults(defineProps<{
 });
 
 const emit = defineEmits<{
-  articleClick: [post: FeedPost];
-  toggleLike: [articleId: number];
-  toggleRepost: [articleId: number];
-  notInterested: [articleId: number];
-  deletePost: [articleId: number];
+  postClick: [post: FeedPost];
+  toggleLike: [postId: number];
+  toggleRepost: [postId: number];
+  notInterested: [postId: number];
+  deletePost: [postId: number];
 }>();
 
 const router = useRouter();
-const articleViewTelemetry = getArticleViewTelemetry();
-const articleDetailHandoff = useArticleDetailHandoffStore();
+const postViewTelemetry = getPostViewTelemetry();
+const postDetailHandoff = usePostDetailHandoffStore();
 const postCardRef = ref<HTMLElement | null>(null);
 const showCover = ref(Boolean(props.post.coverImageUrl));
 const moreButtonRef = ref<HTMLButtonElement | null>(null);
@@ -214,6 +236,19 @@ const likeLoading = computed(() => props.post.likeStatus === 'unknown');
 const likeUnavailable = computed(() => props.post.likeStatus === 'unavailable');
 const repostLoading = computed(() => props.post.repostStatus === 'unknown');
 const repostUnavailable = computed(() => props.post.repostStatus === 'unavailable');
+const referencePost = computed(() => props.post.quotePost ?? props.post.replyToPost ?? null);
+const referenceAuthor = computed(() => (
+  referencePost.value && !referencePost.value.deleted
+    ? referencePost.value.author
+    : null
+));
+const referenceContent = computed(() => {
+  const reference = referencePost.value;
+  if (!reference || reference.deleted) {
+    return '';
+  }
+  return reference.article?.title || reference.content || 'Post';
+});
 
 const handleLikeActivation = () => {
   if (props.post.likeStatus !== 'ready' || props.likePending) {
@@ -252,9 +287,9 @@ const isNormalSameTabNavigation = (event: MouseEvent) => (
 
 const prepareDetailNavigation = (event: MouseEvent) => {
   if (isNormalSameTabNavigation(event)) {
-    articleDetailHandoff.remember(props.post);
+    postDetailHandoff.remember(props.post);
   }
-  emit('articleClick', props.post);
+  emit('postClick', props.post);
 };
 
 const likeLabel = computed(() => {
@@ -270,8 +305,8 @@ const likeLabel = computed(() => {
 });
 
 const replyLabel = computed(() => {
-  const countLabel = String(props.post.commentCount)
-    + (props.post.commentCount === 1 ? ' reply' : ' replies');
+  const countLabel = String(props.post.replyCount)
+    + (props.post.replyCount === 1 ? ' reply' : ' replies');
   return 'Reply to post, ' + countLabel;
 });
 
@@ -281,13 +316,13 @@ const viewActionLabel = computed(() => 'Open post, ' + viewLabel.value);
 
 const observeCurrentPost = () => {
   if (props.trackView && postCardRef.value) {
-    articleViewTelemetry.observeFeedCard(postCardRef.value, props.post.id);
+    postViewTelemetry.observeFeedCard(postCardRef.value, props.post.id);
   }
 };
 
 const unobserveCurrentPost = () => {
   if (postCardRef.value) {
-    articleViewTelemetry.unobserveFeedCard(postCardRef.value);
+    postViewTelemetry.unobserveFeedCard(postCardRef.value);
   }
 };
 
@@ -398,19 +433,19 @@ const handleMenuKeydown = (event: KeyboardEvent) => {
   }
 };
 
-const isCurrentCopyRequest = (requestVersion: number, articleId: number) =>
+const isCurrentCopyRequest = (requestVersion: number, postId: number) =>
   requestVersion === copyRequestVersion
-  && articleId === props.post.id
+  && postId === props.post.id
   && moreOpen.value;
 
 const copyLink = async () => {
   const requestVersion = ++copyRequestVersion;
-  const articleId = props.post.id;
+  const postId = props.post.id;
 
   try {
     const resolved = router.resolve({
-      name: 'NewsDetail',
-      params: { id: String(articleId) },
+      name: 'PostDetail',
+      params: { id: String(postId) },
     });
     const url = new URL(resolved.href, window.location.origin).toString();
     if (!navigator.clipboard) {
@@ -418,13 +453,13 @@ const copyLink = async () => {
     }
     await navigator.clipboard.writeText(url);
 
-    if (!isCurrentCopyRequest(requestVersion, articleId)) {
+    if (!isCurrentCopyRequest(requestVersion, postId)) {
       return;
     }
 
     copyState.value = 'success';
   } catch {
-    if (!isCurrentCopyRequest(requestVersion, articleId)) {
+    if (!isCurrentCopyRequest(requestVersion, postId)) {
       return;
     }
 
@@ -458,15 +493,15 @@ watch(
 
 watch(
   [() => props.post.id, () => props.trackView],
-  ([articleID, trackView], [previousArticleID, previousTrackView]) => {
-    if (articleID === previousArticleID && trackView === previousTrackView) {
+  ([postID, trackView], [previousPostID, previousTrackView]) => {
+    if (postID === previousPostID && trackView === previousTrackView) {
       return;
     }
     unobserveCurrentPost();
     if (trackView) {
       observeCurrentPost();
     }
-    if (articleID !== previousArticleID) {
+    if (postID !== previousPostID) {
       closeMore();
     }
   },

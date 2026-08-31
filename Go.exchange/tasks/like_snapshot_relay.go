@@ -60,32 +60,32 @@ func runLikeSnapshotRelayBatch(ctx context.Context, store *likes.Store, publishe
 	}
 	claims, err := store.ClaimDirty(ctx, config.LikeSnapshotBatchSize(), config.LikeClaimLease())
 	if err != nil {
-		log.Printf("[LikeSnapshotRelay] claim dirty articles: %v", err)
-		return fmt.Errorf("claim dirty articles: %w", err)
+		log.Printf("[LikeSnapshotRelay] claim dirty posts: %v", err)
+		return fmt.Errorf("claim dirty posts: %w", err)
 	}
 	pending := make([]pendingLikeSnapshot, 0, len(claims))
 	events := make([]eventing.Envelope, 0, len(claims))
 	var firstErr error
 	for _, claim := range claims {
-		snapshot, err := store.LoadSnapshot(ctx, claim.ArticleID)
+		snapshot, err := store.LoadSnapshot(ctx, claim.PostID)
 		if err != nil {
-			log.Printf("[LikeSnapshotRelay] load article=%d claim=%s: %v", claim.ArticleID, claim.ClaimID, err)
+			log.Printf("[LikeSnapshotRelay] load post=%d claim=%s: %v", claim.PostID, claim.ClaimID, err)
 			if _, requeueErr := store.RequeueClaim(ctx, claim); requeueErr != nil {
-				log.Printf("[LikeSnapshotRelay] requeue article=%d: %v", claim.ArticleID, requeueErr)
+				log.Printf("[LikeSnapshotRelay] requeue post=%d: %v", claim.PostID, requeueErr)
 			}
 			if firstErr == nil {
-				firstErr = fmt.Errorf("load article=%d: %w", claim.ArticleID, err)
+				firstErr = fmt.Errorf("load post=%d: %w", claim.PostID, err)
 			}
 			continue
 		}
-		envelope, err := eventing.NewLikeSnapshotEnvelope(snapshot.ArticleID, snapshot.Count, snapshot.Version)
+		envelope, err := eventing.NewLikeSnapshotEnvelope(snapshot.PostID, snapshot.Count, snapshot.Version)
 		if err != nil {
-			log.Printf("[LikeSnapshotRelay] envelope article=%d claim=%s: %v", claim.ArticleID, claim.ClaimID, err)
+			log.Printf("[LikeSnapshotRelay] envelope post=%d claim=%s: %v", claim.PostID, claim.ClaimID, err)
 			if _, requeueErr := store.RequeueClaim(ctx, claim); requeueErr != nil {
-				log.Printf("[LikeSnapshotRelay] requeue article=%d: %v", claim.ArticleID, requeueErr)
+				log.Printf("[LikeSnapshotRelay] requeue post=%d: %v", claim.PostID, requeueErr)
 			}
 			if firstErr == nil {
-				firstErr = fmt.Errorf("create article=%d envelope: %w", claim.ArticleID, err)
+				firstErr = fmt.Errorf("create post=%d envelope: %w", claim.PostID, err)
 			}
 			continue
 		}
@@ -96,7 +96,7 @@ func runLikeSnapshotRelayBatch(ctx context.Context, store *likes.Store, publishe
 		log.Printf("[LikeSnapshotRelay] publish batch: %v", err)
 		for _, item := range pending {
 			if _, requeueErr := store.RequeueClaim(ctx, item.claim); requeueErr != nil {
-				log.Printf("[LikeSnapshotRelay] requeue article=%d: %v", item.claim.ArticleID, requeueErr)
+				log.Printf("[LikeSnapshotRelay] requeue post=%d: %v", item.claim.PostID, requeueErr)
 			}
 		}
 		return fmt.Errorf("publish snapshot batch: %w", err)
@@ -104,14 +104,14 @@ func runLikeSnapshotRelayBatch(ctx context.Context, store *likes.Store, publishe
 	for _, item := range pending {
 		acked, err := store.AckClaim(ctx, item.claim)
 		if err != nil {
-			log.Printf("[LikeSnapshotRelay] ack article=%d claim=%s: %v", item.claim.ArticleID, item.claim.ClaimID, err)
+			log.Printf("[LikeSnapshotRelay] ack post=%d claim=%s: %v", item.claim.PostID, item.claim.ClaimID, err)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("ack article=%d claim=%s: %w", item.claim.ArticleID, item.claim.ClaimID, err)
+				firstErr = fmt.Errorf("ack post=%d claim=%s: %w", item.claim.PostID, item.claim.ClaimID, err)
 			}
 			continue
 		}
 		if !acked {
-			log.Printf("[LikeSnapshotRelay] stale claim ignored article=%d claim=%s", item.claim.ArticleID, item.claim.ClaimID)
+			log.Printf("[LikeSnapshotRelay] stale claim ignored post=%d claim=%s", item.claim.PostID, item.claim.ClaimID)
 		}
 	}
 	return firstErr

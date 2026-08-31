@@ -21,17 +21,17 @@ const save = (items: AttributionMap) => {
   try { sessionStorage.setItem(storageKey, JSON.stringify(items)); } catch { /* unavailable storage */ }
 };
 
-export const savePendingRecommendationAttribution = (articleID: number, tracking?: RecommendationTracking) => {
+export const savePendingRecommendationAttribution = (postID: number, tracking?: RecommendationTracking) => {
   if (!tracking?.token) return;
   const items = load();
-  items[String(articleID)] = { tracking, saved_at: Date.now() };
+  items[String(postID)] = { tracking, saved_at: Date.now() };
   save(items);
 };
 
-export const consumePendingRecommendationAttribution = (articleID: number): RecommendationTracking | null => {
+export const consumePendingRecommendationAttribution = (postID: number): RecommendationTracking | null => {
   const items = load();
-  const item = items[String(articleID)];
-  delete items[String(articleID)];
+  const item = items[String(postID)];
+  delete items[String(postID)];
   save(items);
   if (!item || Date.parse(item.tracking.expires_at) <= Date.now()) return null;
   return item.tracking;

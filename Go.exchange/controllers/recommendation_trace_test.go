@@ -13,16 +13,16 @@ func TestBuildRecommendationResultTracesPreservesThreeProvenanceStates(t *testin
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	selected := []selectedRecommendation{
 		{
-			Article:       models.Article{Model: gorm.Model{ID: 1}, AuthorID: 10},
+			Post:          models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10},
 			SelectionMode: recommendationResultSelectionRanked,
 		},
 		{
-			Article:                models.Article{Model: gorm.Model{ID: 2}, AuthorID: 20},
+			Post:                   models.Post{Model: gorm.Model{ID: 2}, AuthorID: 20},
 			ExplorationOpportunity: true,
 			SelectionMode:          recommendationResultSelectionRanked,
 		},
 		{
-			Article:                models.Article{Model: gorm.Model{ID: 3}, AuthorID: 30},
+			Post:                   models.Post{Model: gorm.Model{ID: 3}, AuthorID: 30},
 			ExplorationOpportunity: true,
 			SelectionMode:          recommendationResultSelectionExploration,
 			ExplorationReason:      recommendationExplorationReasonRecent,
@@ -44,7 +44,7 @@ func TestBuildRecommendationResultTracesPreservesThreeProvenanceStates(t *testin
 		{true, string(recommendationResultSelectionExploration), recommendationExplorationReasonRecent, .5},
 	}
 	for index, trace := range traces {
-		if trace.ArticleID != uint(index+1) || trace.Position != index+1 {
+		if trace.PostID != uint(index+1) || trace.Position != index+1 {
 			t.Fatalf("trace[%d]=%#v has wrong identity", index, trace)
 		}
 		if trace.ExplorationOpportunity != want[index].opportunity || trace.SelectionMode != want[index].mode || trace.ExplorationReason != want[index].reason || trace.ExplorationSemantic != want[index].semantic {

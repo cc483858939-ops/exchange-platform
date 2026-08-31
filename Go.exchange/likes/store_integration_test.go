@@ -22,15 +22,15 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := NewStore(client)
-	articleID := uint(time.Now().UnixNano() & 0x3fffffff)
+	postID := uint(time.Now().UnixNano() & 0x3fffffff)
 	const userID uint = 11
-	pair := BehaviorPair(userID, articleID)
+	pair := BehaviorPair(userID, postID)
 	ctx := context.Background()
 	cleanup := func() {
-		client.Del(ReadyKey(articleID), CountKey(articleID), UsersKey(articleID), VersionKey(articleID))
-		client.SRem(DirtyKey, articleID)
-		client.ZRem(ProcessingKey, articleID)
-		client.HDel(ClaimsKey, strconv.FormatUint(uint64(articleID), 10))
+		client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+		client.SRem(DirtyKey, postID)
+		client.ZRem(ProcessingKey, postID)
+		client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
 		client.SRem(BehaviorDirtyKey, pair)
 		client.HDel(BehaviorStateKey, pair)
 		client.ZRem(BehaviorProcessingKey, pair)
@@ -38,18 +38,18 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	}
 	cleanup()
 	defer cleanup()
-	created, err := store.Initialize(ctx, articleID, 0, 0, nil)
+	created, err := store.Initialize(ctx, postID, 0, 0, nil)
 	if err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
-	first, err := store.Mutate(ctx, userID, articleID, true)
+	first, err := store.Mutate(ctx, userID, postID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !first.Changed || !first.Liked || first.Count != 1 || first.Version != 1 {
 		t.Fatalf("first mutation=%+v", first)
 	}
-	duplicate, err := store.Mutate(ctx, userID, articleID, true)
+	duplicate, err := store.Mutate(ctx, userID, postID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim, ok := findClaim(claims, articleID)
+	claim, ok := findClaim(claims, postID)
 	if !ok {
 		t.Fatalf("article claim missing: %+v", claims)
 	}
@@ -71,7 +71,7 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newClaim, ok := findClaim(claims, articleID)
+	newClaim, ok := findClaim(claims, postID)
 	if !ok {
 		t.Fatalf("replacement claim missing: %+v", claims)
 	}
@@ -81,7 +81,7 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	if acked, err := store.AckClaim(ctx, newClaim); err != nil || !acked {
 		t.Fatalf("current ACK acked=%t err=%v", acked, err)
 	}
-	last, err := store.Mutate(ctx, userID, articleID, false)
+	last, err := store.Mutate(ctx, userID, postID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,37 +103,37 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	}
 	store := NewStore(client)
 	base := uint(time.Now().UnixNano() & 0x3fffffff)
-	articleIDs := []uint{base, base + 1, base + 2}
+	postIDs := []uint{base, base + 1, base + 2}
 	ctx := context.Background()
 	cleanup := func() {
-		for _, articleID := range articleIDs {
-			client.Del(ReadyKey(articleID), CountKey(articleID), UsersKey(articleID), VersionKey(articleID))
-			client.SRem(DirtyKey, articleID)
-			client.ZRem(ProcessingKey, articleID)
-			client.HDel(ClaimsKey, strconv.FormatUint(uint64(articleID), 10))
+		for _, postID := range postIDs {
+			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+			client.SRem(DirtyKey, postID)
+			client.ZRem(ProcessingKey, postID)
+			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
 		}
 	}
 	cleanup()
 	defer cleanup()
 
-	if created, err := store.Initialize(ctx, articleIDs[0], 1, 1, []uint{11}); err != nil || !created {
+	if created, err := store.Initialize(ctx, postIDs[0], 1, 1, []uint{11}); err != nil || !created {
 		t.Fatalf("article A initialize created=%t err=%v", created, err)
 	}
-	if created, err := store.Initialize(ctx, articleIDs[1], 0, 0, nil); err != nil || !created {
+	if created, err := store.Initialize(ctx, postIDs[1], 0, 0, nil); err != nil || !created {
 		t.Fatalf("article B initialize created=%t err=%v", created, err)
 	}
 
-	states, unavailable, err := store.GetMany(ctx, 11, articleIDs)
+	states, unavailable, err := store.GetMany(ctx, 11, postIDs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if states[articleIDs[0]].Count != 1 || !states[articleIDs[0]].Liked {
-		t.Fatalf("article A state=%+v", states[articleIDs[0]])
+	if states[postIDs[0]].Count != 1 || !states[postIDs[0]].Liked {
+		t.Fatalf("article A state=%+v", states[postIDs[0]])
 	}
-	if states[articleIDs[1]].Count != 0 || states[articleIDs[1]].Liked {
-		t.Fatalf("article B state=%+v", states[articleIDs[1]])
+	if states[postIDs[1]].Count != 0 || states[postIDs[1]].Liked {
+		t.Fatalf("article B state=%+v", states[postIDs[1]])
 	}
-	if !equalUintSlices(unavailable, []uint{articleIDs[2]}) {
+	if !equalUintSlices(unavailable, []uint{postIDs[2]}) {
 		t.Fatalf("unavailable=%v", unavailable)
 	}
 }
@@ -148,9 +148,9 @@ func equalUintSlices(left, right []uint) bool {
 	}
 	return true
 }
-func findClaim(claims []SnapshotClaim, articleID uint) (SnapshotClaim, bool) {
+func findClaim(claims []SnapshotClaim, postID uint) (SnapshotClaim, bool) {
 	for _, claim := range claims {
-		if claim.ArticleID == articleID {
+		if claim.PostID == postID {
 			return claim, true
 		}
 	}

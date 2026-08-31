@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func softDeleteCounterAwareComment(t *testing.T, db *gorm.DB, comment models.Comment) {
+func softDeleteCounterAwareComment(t *testing.T, db *gorm.DB, comment models.Post) {
 	t.Helper()
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		result := tx.Delete(&comment)
@@ -23,14 +23,14 @@ func softDeleteCounterAwareComment(t *testing.T, db *gorm.DB, comment models.Com
 		if result.RowsAffected != 1 {
 			return errors.New("fixture comment delete affected an unexpected number of rows")
 		}
-		result = tx.Model(&models.Article{}).
-			Where("id = ? AND comment_count > 0", comment.ArticleID).
-			UpdateColumn("comment_count", gorm.Expr("comment_count - 1"))
+		result = tx.Model(&models.Post{}).
+			Where("id = ? AND reply_count > 0", *comment.ReplyToPostID).
+			UpdateColumn("reply_count", gorm.Expr("reply_count - 1"))
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return errors.New("fixture article counter decrement affected an unexpected number of rows")
+			return errors.New("fixture post counter decrement affected an unexpected number of rows")
 		}
 		return nil
 	}); err != nil {
@@ -38,204 +38,205 @@ func softDeleteCounterAwareComment(t *testing.T, db *gorm.DB, comment models.Com
 	}
 }
 
-func commentArticleCount(t *testing.T, db *gorm.DB, articleID uint) int64 {
+func replyPostCount(t *testing.T, db *gorm.DB, postID uint) int64 {
 	t.Helper()
-	var article models.Article
-	if err := db.Select("comment_count").First(&article, articleID).Error; err != nil {
+	var post models.Post
+	if err := db.Select("reply_count").First(&post, postID).Error; err != nil {
 		t.Fatal(err)
 	}
-	return article.CommentCount
+	return post.ReplyCount
 }
 
-func TestCommentCountTransactionRollbackIntegration(t *testing.T) {
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+func TestReplyCountTransactionRollbackIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 
-	originalIncrement := incrementArticleCommentCount
-	originalDetailInvalidation := invalidateCommentArticleDetailCache
-	incrementArticleCommentCount = func(*gorm.DB, uint) (int64, error) {
+	originalIncrement := incrementPostReplyCount
+	originalDetailInvalidation := invalidateReplyPostDetailCache
+	incrementPostReplyCount = func(*gorm.DB, uint) (int64, error) {
 		return 0, errors.New("forced comment count update failure")
 	}
 	detailCalls := 0
-	invalidateCommentArticleDetailCache = func(uint) error {
+	invalidateReplyPostDetailCache = func(uint) error {
 		detailCalls++
 		return nil
 	}
 	t.Cleanup(func() {
-		incrementArticleCommentCount = originalIncrement
-		invalidateCommentArticleDetailCache = originalDetailInvalidation
+		incrementPostReplyCount = originalIncrement
+		invalidateReplyPostDetailCache = originalDetailInvalidation
 	})
 
-	ctx, recorder := newCommentIntegrationContext(
+	ctx, recorder := newReplyIntegrationContext(
 		http.MethodPost,
-		"/api/articles/"+strconvUint(fixture.Article.ID)+"/comments",
+		"/api/posts/"+strconvUint(fixture.Article.ID)+"/replies",
 		strconvUint(fixture.Article.ID),
 		`{"content":"must roll back"}`,
 		fixture.Commenter.ID,
 	)
-	CreateArticleComment(ctx)
+	CreatePostReply(ctx)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	var comments int64
-	if err := db.Model(&models.Comment{}).
-		Where("article_id = ? AND content = ?", fixture.Article.ID, "must roll back").
-		Count(&comments).Error; err != nil {
+	var posts int64
+	if err := db.Model(&models.Post{}).
+		Where("reply_to_post_id = ? AND content = ?", fixture.Article.ID, "must roll back").
+		Count(&posts).Error; err != nil {
 		t.Fatal(err)
 	}
-	if comments != 0 || commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("rollback comments=%d comment_count=%d", comments, commentArticleCount(t, db, fixture.Article.ID))
+	if posts != 0 || replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("rollback posts=%d comment_count=%d", posts, replyPostCount(t, db, fixture.Article.ID))
 	}
 	if detailCalls != 0 {
 		t.Fatalf("cache invalidated after rolled-back create: detail=%d", detailCalls)
 	}
 }
 
-func TestCommentCountUnderflowRollsBackIntegration(t *testing.T) {
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+func TestReplyCountUnderflowRollsBackIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 
-	comment := models.Comment{ArticleID: fixture.Article.ID, UserID: fixture.Commenter.ID, Content: "legacy inconsistent comment"}
+	conversationID := fixture.Article.ID
+	comment := models.Post{AuthorID: fixture.Commenter.ID, ReplyToPostID: &fixture.Article.ID, ConversationID: &conversationID, Content: "legacy inconsistent reply", Visibility: "public"}
 	if err := db.Create(&comment).Error; err != nil {
 		t.Fatal(err)
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
 		t.Fatal("fixture should begin with a zero comment count")
 	}
-	originalDetailInvalidation := invalidateCommentArticleDetailCache
+	originalDetailInvalidation := invalidateReplyPostDetailCache
 	detailCalls := 0
-	invalidateCommentArticleDetailCache = func(uint) error {
+	invalidateReplyPostDetailCache = func(uint) error {
 		detailCalls++
 		return nil
 	}
 	t.Cleanup(func() {
-		invalidateCommentArticleDetailCache = originalDetailInvalidation
+		invalidateReplyPostDetailCache = originalDetailInvalidation
 	})
 
-	ctx, recorder := newCommentIntegrationContext(
+	ctx, recorder := newReplyIntegrationContext(
 		http.MethodDelete,
-		"/api/comments/"+strconvUint(comment.ID),
+		"/api/posts/"+strconvUint(comment.ID),
 		strconvUint(comment.ID),
 		"",
 		fixture.Commenter.ID,
 	)
-	DeleteComment(ctx)
+	DeletePostReply(ctx)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	if err := db.First(&models.Comment{}, comment.ID).Error; err != nil {
+	if err := db.First(&models.Post{}, comment.ID).Error; err != nil {
 		t.Fatalf("comment should remain after transactional rollback: %v", err)
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("comment count changed despite underflow rollback: %d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("comment count changed despite underflow rollback: %d", replyPostCount(t, db, fixture.Article.ID))
 	}
 	if detailCalls != 0 {
 		t.Fatalf("cache invalidated after rolled-back delete: detail=%d", detailCalls)
 	}
 }
 
-func TestCommentCacheInvalidationIsBestEffortIntegration(t *testing.T) {
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
-	originalDetailInvalidation := invalidateCommentArticleDetailCache
-	detailCalls, detailArticleIDs := 0, make([]uint, 0, 2)
-	invalidateCommentArticleDetailCache = func(articleID uint) error {
+func TestReplyCacheInvalidationIsBestEffortIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
+	originalDetailInvalidation := invalidateReplyPostDetailCache
+	detailCalls, detailPostIDs := 0, make([]uint, 0, 2)
+	invalidateReplyPostDetailCache = func(postID uint) error {
 		detailCalls++
-		detailArticleIDs = append(detailArticleIDs, articleID)
+		detailPostIDs = append(detailPostIDs, postID)
 		return errors.New("detail cache unavailable")
 	}
 	t.Cleanup(func() {
-		invalidateCommentArticleDetailCache = originalDetailInvalidation
+		invalidateReplyPostDetailCache = originalDetailInvalidation
 	})
 
-	ctx, recorder := newCommentIntegrationContext(
+	ctx, recorder := newReplyIntegrationContext(
 		http.MethodPost,
-		"/api/articles/"+strconvUint(fixture.Article.ID)+"/comments",
+		"/api/posts/"+strconvUint(fixture.Article.ID)+"/replies",
 		strconvUint(fixture.Article.ID),
 		`{"content":"cache failures are best effort"}`,
 		fixture.Commenter.ID,
 	)
-	CreateArticleComment(ctx)
+	CreatePostReply(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 1 {
-		t.Fatalf("count after create=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 1 {
+		t.Fatalf("count after create=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 	if detailCalls != 1 {
 		t.Fatalf("create invalidation calls detail=%d", detailCalls)
 	}
 
-	var response commentResponse
+	var response replyResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	invalidateCommentArticleDetailCache = func(articleID uint) error {
+	invalidateReplyPostDetailCache = func(postID uint) error {
 		detailCalls++
-		detailArticleIDs = append(detailArticleIDs, articleID)
+		detailPostIDs = append(detailPostIDs, postID)
 		return nil
 	}
-	deleteCtx, deleteRecorder := newCommentIntegrationContext(
+	deleteCtx, deleteRecorder := newReplyIntegrationContext(
 		http.MethodDelete,
-		"/api/comments/"+strconvUint(response.ID),
+		"/api/posts/"+strconvUint(response.ID),
 		strconvUint(response.ID),
 		"",
 		fixture.Commenter.ID,
 	)
-	DeleteComment(deleteCtx)
+	DeletePostReply(deleteCtx)
 	if deleteRecorder.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("count after delete=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("count after delete=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
-	if detailCalls != 2 || len(detailArticleIDs) != 2 || detailArticleIDs[0] != fixture.Article.ID || detailArticleIDs[1] != fixture.Article.ID {
+	if detailCalls != 2 || len(detailPostIDs) != 2 || detailPostIDs[0] != fixture.Article.ID || detailPostIDs[1] != fixture.Article.ID {
 		t.Fatalf("delete invalidation calls detail=%d", detailCalls)
 	}
 }
 
-func TestCommentMutationIsRedisNilSafeIntegration(t *testing.T) {
+func TestReplyMutationIsRedisNilSafeIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db := openCommentIntegrationDatabase(t)
-	fixture := newCommentIntegrationFixture(t, db)
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
 
 	originalRedis := global.RedisDB
 	global.RedisDB = nil
 	t.Cleanup(func() { global.RedisDB = originalRedis })
 
-	ctx, recorder := newCommentIntegrationContext(
+	ctx, recorder := newReplyIntegrationContext(
 		http.MethodPost,
-		"/api/articles/"+strconvUint(fixture.Article.ID)+"/comments",
+		"/api/posts/"+strconvUint(fixture.Article.ID)+"/replies",
 		strconvUint(fixture.Article.ID),
 		`{"content":"redis nil safe"}`,
 		fixture.Commenter.ID,
 	)
-	CreateArticleComment(ctx)
+	CreatePostReply(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 1 {
-		t.Fatalf("count after create=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 1 {
+		t.Fatalf("count after create=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 
-	var created commentResponse
+	var created replyResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	deleteCtx, deleteRecorder := newCommentIntegrationContext(
+	deleteCtx, deleteRecorder := newReplyIntegrationContext(
 		http.MethodDelete,
-		"/api/comments/"+strconvUint(created.ID),
+		"/api/posts/"+strconvUint(created.ID),
 		strconvUint(created.ID),
 		"",
 		fixture.Commenter.ID,
 	)
-	DeleteComment(deleteCtx)
+	DeletePostReply(deleteCtx)
 	if deleteRecorder.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
 	}
-	if commentArticleCount(t, db, fixture.Article.ID) != 0 {
-		t.Fatalf("count after delete=%d", commentArticleCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 0 {
+		t.Fatalf("count after delete=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 }

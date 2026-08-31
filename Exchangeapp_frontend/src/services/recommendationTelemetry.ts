@@ -39,13 +39,13 @@ type RecommendationEventBatchResponse = {
 };
 
 type ObservedRecommendation = {
-  articleID: number;
+  postID: number;
   tracking: RecommendationTracking;
 };
 
 type FeedDwellState = {
   key: string;
-  articleID: number;
+  postID: number;
   tracking: RecommendationTracking;
   element: Element | null;
   accumulatedVisibleMS: number;
@@ -114,7 +114,6 @@ export function calculateViewportVisibility(element: Element): number {
 
   return clamp((visibleWidth * visibleHeight) / denominator, 0, 1);
 }
-
 export const getRecommendationTelemetry = (getAccessToken: () => string | null) => {
   if (!sharedClient) {
     sharedClient = new RecommendationTelemetryClient(getAccessToken);
@@ -210,27 +209,27 @@ export class RecommendationTelemetryClient {
     this.clearRetry();
   }
 
-  observeCard(element: HTMLElement, articleID: number, tracking?: RecommendationTracking) {
+  observeCard(element: HTMLElement, postID: number, tracking?: RecommendationTracking) {
     if (!tracking?.token) {
       return;
     }
     this.ensureObserver();
-    this.observed.set(element, { articleID, tracking });
+    this.observed.set(element, { postID, tracking });
     this.observer?.observe(element);
   }
 
-  observeFeedCard(element: HTMLElement, articleID: number, tracking?: RecommendationTracking) {
+  observeFeedCard(element: HTMLElement, postID: number, tracking?: RecommendationTracking) {
     if (!tracking?.token) {
       return;
     }
 
     this.ensureObserver();
-    const key = this.businessKey(articleID, tracking);
+    const key = this.businessKey(postID, tracking);
     let state = this.feedDwellStates.get(key);
     if (!state) {
       state = {
         key,
-        articleID,
+        postID,
         tracking,
         element,
         accumulatedVisibleMS: 0,
@@ -249,23 +248,23 @@ export class RecommendationTelemetryClient {
         this.forgetObservedElement(oldElement);
         state.intersecting = false;
       }
-      state.articleID = articleID;
+      state.postID = postID;
       state.tracking = tracking;
       state.element = element;
       state.finalized = state.finalized || this.seenFeedDwells.has(key);
     }
 
-    this.observed.set(element, { articleID, tracking });
+    this.observed.set(element, { postID, tracking });
     this.feedDwellByElement.set(element, key);
     this.observer?.observe(element);
     this.scheduleFeedDwellReconciliation();
   }
 
-  detachFeedCard(articleID: number, tracking?: RecommendationTracking) {
+  detachFeedCard(postID: number, tracking?: RecommendationTracking) {
     if (!tracking?.token) {
       return;
     }
-    const key = this.businessKey(articleID, tracking);
+    const key = this.businessKey(postID, tracking);
     const state = this.feedDwellStates.get(key);
     if (!state) {
       return;
@@ -274,19 +273,19 @@ export class RecommendationTelemetryClient {
     this.scheduleFeedDwellReconciliation();
   }
 
-  unobserveFeedCard(articleID: number, tracking?: RecommendationTracking) {
+  unobserveFeedCard(postID: number, tracking?: RecommendationTracking) {
     if (!tracking?.token) {
       return;
     }
-    this.finalizeFeedDwell(articleID, tracking);
-    this.detachFeedCard(articleID, tracking);
+    this.finalizeFeedDwell(postID, tracking);
+    this.detachFeedCard(postID, tracking);
   }
 
-  finalizeFeedDwell(articleID: number, tracking?: RecommendationTracking): boolean {
+  finalizeFeedDwell(postID: number, tracking?: RecommendationTracking): boolean {
     if (!tracking?.token) {
       return false;
     }
-    const key = this.businessKey(articleID, tracking);
+    const key = this.businessKey(postID, tracking);
     const state = this.feedDwellStates.get(key);
     if (!state || state.finalized) {
       return false;
@@ -312,12 +311,12 @@ export class RecommendationTelemetryClient {
     return true;
   }
 
-  recordClick(articleID: number, tracking?: RecommendationTracking) {
+  recordClick(postID: number, tracking?: RecommendationTracking) {
     if (!tracking?.token) {
       return;
     }
-    this.finalizeFeedDwell(articleID, tracking);
-    const key = this.businessKey(articleID, tracking);
+    this.finalizeFeedDwell(postID, tracking);
+    const key = this.businessKey(postID, tracking);
     if (this.seenClicks.has(key)) {
       return;
     }
@@ -327,22 +326,22 @@ export class RecommendationTelemetryClient {
   }
 
   recordReadEnd(
-    articleID: number,
+    postID: number,
     tracking: RecommendationTracking | undefined,
     payload: RecommendationReadEndPayload,
   ) {
     if (!tracking?.token) return false;
-    const key = this.businessKey(articleID, tracking);
+    const key = this.businessKey(postID, tracking);
     if (this.seenReadEnds.has(key)) return false;
     this.seenReadEnds.add(key);
     this.enqueue('read_end', tracking, payload);
     return true;
   }
 
-  recordNotInterested(articleID: number, tracking?: RecommendationTracking) {
+  recordNotInterested(postID: number, tracking?: RecommendationTracking) {
     if (!tracking?.token) return;
-    this.finalizeFeedDwell(articleID, tracking);
-    const key = this.businessKey(articleID, tracking);
+    this.finalizeFeedDwell(postID, tracking);
+    const key = this.businessKey(postID, tracking);
     if (this.seenNotInterested.has(key)) return;
     this.seenNotInterested.add(key);
     this.enqueue('not_interested', tracking);
@@ -467,7 +466,7 @@ export class RecommendationTelemetryClient {
       return;
     }
     const item = this.observed.get(element);
-    if (!item || this.seenImpressions.has(this.businessKey(item.articleID, item.tracking))) {
+    if (!item || this.seenImpressions.has(this.businessKey(item.postID, item.tracking))) {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -479,7 +478,7 @@ export class RecommendationTelemetryClient {
       if (!current) {
         return;
       }
-      const key = this.businessKey(current.articleID, current.tracking);
+      const key = this.businessKey(current.postID, current.tracking);
       if (this.seenImpressions.has(key)) {
         return;
       }
@@ -524,7 +523,7 @@ export class RecommendationTelemetryClient {
 
   private finalizeAllFeedDwells() {
     Array.from(this.feedDwellStates.values()).forEach(state => {
-      this.finalizeFeedDwell(state.articleID, state.tracking);
+      this.finalizeFeedDwell(state.postID, state.tracking);
     });
   }
 
@@ -737,8 +736,8 @@ export class RecommendationTelemetryClient {
     }
   }
 
-  private businessKey(articleID: number, tracking: RecommendationTracking) {
-    return tracking.request_id + ':' + articleID;
+  private businessKey(postID: number, tracking: RecommendationTracking) {
+    return tracking.request_id + ':' + postID;
   }
 
   private loadQueue(): QueuedRecommendationEvent[] {

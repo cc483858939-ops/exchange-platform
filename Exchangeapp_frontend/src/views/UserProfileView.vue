@@ -137,7 +137,7 @@
         <h2 id="profile-posts-heading" class="sr-only">Posts</h2>
 
         <div
-          v-if="articlesInitialLoading"
+          v-if="postsInitialLoading"
           class="profile-skeleton-list"
           aria-live="polite"
           aria-label="Loading posts"
@@ -153,7 +153,7 @@
         </div>
 
         <div
-          v-else-if="articlesInitialError"
+          v-else-if="postsInitialError"
           class="profile-state profile-state--inline"
           role="alert"
         >
@@ -163,19 +163,19 @@
           </button>
         </div>
 
-        <p v-else-if="articles.length === 0" class="profile-empty">
+        <p v-else-if="posts.length === 0" class="profile-empty">
           No posts yet.
         </p>
 
         <div v-else class="profile-post-list">
           <PostCard
-            v-for="post in articles"
+            v-for="post in posts"
             :key="post.id"
             :post="post"
-            :like-pending="likePendingArticleIds.has(post.id)"
-            :repost-pending="repostPendingArticleIds.has(post.id)"
+            :like-pending="likePendingPostIds.has(post.id)"
+            :repost-pending="repostPendingPostIds.has(post.id)"
             :show-delete="canDeletePost(post)"
-            :delete-pending="pendingDeleteArticleIds.has(post.id)"
+            :delete-pending="pendingDeletePostIds.has(post.id)"
             :delete-error="deleteErrors.get(post.id) || ''"
             @toggle-like="handleLikeToggle"
             @toggle-repost="handleRepostToggle"
@@ -184,14 +184,14 @@
         </div>
 
         <div
-          v-if="hasMore || articlesLoadingMore || articlesLoadMoreError"
+          v-if="hasMore || postsLoadingMore || postsLoadMoreError"
           ref="sentinelRef"
           class="profile-feed-sentinel"
           aria-live="polite"
         >
-          <span v-if="articlesLoadingMore">Loading more posts...</span>
+          <span v-if="postsLoadingMore">Loading more posts...</span>
 
-          <template v-else-if="articlesLoadMoreError">
+          <template v-else-if="postsLoadMoreError">
             <span>Could not load more posts.</span>
             <button class="profile-action" type="button" @click="retryLoadMore">
               Retry
@@ -366,11 +366,11 @@ const user = computed(() => activeSession.value?.user ?? null);
 const profileLoading = computed(() => activeSession.value?.profileLoading ?? false);
 const profileError = computed(() => invalidProfileError.value || activeSession.value?.profileError || '');
 const profileNotFound = computed(() => activeSession.value?.profileNotFound ?? false);
-const articles = computed(() => activeSession.value?.articles ?? []);
-const articlesInitialLoading = computed(() => activeSession.value?.articlesInitialLoading ?? false);
-const articlesLoadingMore = computed(() => activeSession.value?.articlesLoadingMore ?? false);
-const articlesInitialError = computed(() => activeSession.value?.articlesInitialError ?? '');
-const articlesLoadMoreError = computed(() => activeSession.value?.articlesLoadMoreError ?? '');
+const posts = computed(() => activeSession.value?.posts ?? []);
+const postsInitialLoading = computed(() => activeSession.value?.postsInitialLoading ?? false);
+const postsLoadingMore = computed(() => activeSession.value?.postsLoadingMore ?? false);
+const postsInitialError = computed(() => activeSession.value?.postsInitialError ?? '');
+const postsLoadMoreError = computed(() => activeSession.value?.postsLoadMoreError ?? '');
 const nextCursor = computed(() => activeSession.value?.nextCursor ?? null);
 const hasMore = computed(() => activeSession.value?.hasMore ?? false);
 const followState = computed<UserFollowState | null>(() => activeSession.value?.followState ?? null);
@@ -379,9 +379,9 @@ const followError = computed(() => activeSession.value?.followError ?? '');
 const followActionError = computed(() => activeSession.value?.followActionError ?? '');
 const followPending = computed(() => activeSession.value?.followPending ?? false);
 
-const likePendingArticleIds = profileStore.likePendingArticleIds;
-const repostPendingArticleIds = profileStore.repostPendingArticleIds;
-const pendingDeleteArticleIds = profileStore.pendingDeleteArticleIds;
+const likePendingPostIds = profileStore.likePendingPostIds;
+const repostPendingPostIds = profileStore.repostPendingPostIds;
+const pendingDeletePostIds = profileStore.pendingDeletePostIds;
 const deleteErrors = profileStore.deleteErrors;
 
 const sentinelRef = ref<HTMLElement | null>(null);
@@ -450,7 +450,7 @@ const restoreScrollOnce = async () => {
     !session
     || targetUserID === null
     || !session.profileLoaded
-    || (!session.articlesLoaded && session.articlesInitialLoading)
+    || (!session.postsLoaded && session.postsInitialLoading)
     || typeof window === 'undefined'
   ) return;
 
@@ -721,36 +721,36 @@ const retryProfile = () => {
 
 const retryInitialPosts = () => {
   if (numericUserID.value !== null) {
-    void profileStore.loadArticles(numericUserID.value, true);
+    void profileStore.loadPosts(numericUserID.value, true);
   }
 };
 
 const loadMorePosts = () => {
   if (numericUserID.value !== null) {
-    void profileStore.loadMoreArticles(numericUserID.value);
+    void profileStore.loadMorePosts(numericUserID.value);
   }
 };
 
 const retryLoadMore = () => {
   if (numericUserID.value !== null) {
-    profileStore.retryLoadMoreArticles(numericUserID.value);
+    profileStore.retryLoadMorePosts(numericUserID.value);
   }
 };
 
-const handleDeletePost = async (articleId: number) => {
-  const removed = await profileStore.deletePost(articleId, numericUserID.value ?? undefined);
+const handleDeletePost = async (postId: number) => {
+  const removed = await profileStore.deletePost(postId, numericUserID.value ?? undefined);
   if (removed) {
     disconnectObserver();
     await nextTick(updateObserver);
   }
 };
 
-const handleLikeToggle = (articleId: number) => {
-  void profileStore.toggleLike(articleId, numericUserID.value ?? undefined);
+const handleLikeToggle = (postId: number) => {
+  void profileStore.toggleLike(postId, numericUserID.value ?? undefined);
 };
 
-const handleRepostToggle = (articleId: number) => {
-  void profileStore.toggleRepost(articleId, numericUserID.value ?? undefined);
+const handleRepostToggle = (postId: number) => {
+  void profileStore.toggleRepost(postId, numericUserID.value ?? undefined);
 };
 
 const goHome = () => {
@@ -777,8 +777,8 @@ const updateObserver = () => {
     !intersectionObserverAvailable
     || !sentinelRef.value
     || !hasMore.value
-    || articlesLoadingMore.value
-    || articlesLoadMoreError.value
+    || postsLoadingMore.value
+    || postsLoadMoreError.value
     || !user.value
   ) {
     return;
@@ -814,9 +814,9 @@ watch(
   [
     userId,
     () => activeSession.value?.profileLoaded,
-    () => activeSession.value?.articlesLoaded,
-    () => activeSession.value?.articlesInitialLoading,
-    () => activeSession.value?.articlesInitialError,
+    () => activeSession.value?.postsLoaded,
+    () => activeSession.value?.postsInitialLoading,
+    () => activeSession.value?.postsInitialError,
   ],
   () => { void restoreScrollOnce(); },
   { flush: 'post', immediate: true },
@@ -826,11 +826,11 @@ watch(
   [
     userId,
     () => activeSession.value?.profileLoaded,
-    () => activeSession.value?.articlesLoaded,
+    () => activeSession.value?.postsLoaded,
     () => activeSession.value?.hasMore,
-    () => activeSession.value?.articlesLoadingMore,
-    () => activeSession.value?.articlesLoadMoreError,
-    () => activeSession.value?.articles.length,
+    () => activeSession.value?.postsLoadingMore,
+    () => activeSession.value?.postsLoadMoreError,
+    () => activeSession.value?.posts.length,
   ],
   () => { void nextTick(updateObserver); },
   { flush: 'post' },

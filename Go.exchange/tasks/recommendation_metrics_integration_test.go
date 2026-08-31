@@ -30,7 +30,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		&models.User{},
 		&models.ConsumerInbox{},
 		&models.RecommendationDailyMetric{},
-		&models.ArticleBehavior{},
+		&models.PostBehavior{},
 		&models.UserRecoProfileDirty{},
 	); err != nil {
 		t.Fatal(err)
@@ -54,14 +54,14 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Where("strategy_id LIKE ?", groupID+"%").Delete(&models.RecommendationDailyMetric{})
 		db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserRecoProfileDirty{})
-		db.Unscoped().Where("user_id = ?", userID).Delete(&models.ArticleBehavior{})
+		db.Unscoped().Where("user_id = ?", userID).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("id = ?", userID).Delete(&models.User{})
 		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
 	baseAt := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
-		UserID: userID, ArticleID: 11, RequestID: uuid.NewString(),
+		UserID: userID, PostID: 11, RequestID: uuid.NewString(),
 		Scene: "recommendation_page", Position: 1,
 		RankerVersion: "embedding_v1", RankerConfigHash: "0123456789ab",
 		StrategyID: groupID, ReceivedAt: baseAt, SelectionMode: eventing.RecommendationSelectionModeRanked,
@@ -146,7 +146,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 
 	var metric models.RecommendationDailyMetric
-	if err := db.Where("strategy_id = ? AND position = ? AND article_id = ?", groupID, 1, 11).First(&metric).Error; err != nil {
+	if err := db.Where("strategy_id = ? AND position = ? AND post_id = ?", groupID, 1, 11).First(&metric).Error; err != nil {
 		t.Fatal(err)
 	}
 	if metric.ImpressionCount != 100 || metric.ClickCount != 1 {
@@ -168,8 +168,8 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatalf("metric rows=%d want=5 including ranked/exploration provenance dimensions", metricRows)
 	}
 
-	var clickBehavior models.ArticleBehavior
-	if err := db.Where("user_id = ? AND article_id = ? AND action = ?", userID, 11, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
+	var clickBehavior models.PostBehavior
+	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, 11, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
 		t.Fatal(err)
 	}
 	if clickBehavior.Count != 1 {

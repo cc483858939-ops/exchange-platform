@@ -15,16 +15,16 @@ const mocks = vi.hoisted(() => ({
   remember: vi.fn(),
 }));
 
-vi.mock('../../services/articleViewTelemetry', () => ({
-  getArticleViewTelemetry: () => mocks,
+vi.mock('../../services/postViewTelemetry', () => ({
+  getPostViewTelemetry: () => mocks,
 }));
 
-vi.mock('../../store/articleDetailHandoff', () => ({
-  useArticleDetailHandoffStore: () => ({ remember: mocks.remember }),
+vi.mock('../../store/postDetailHandoff', () => ({
+  usePostDetailHandoffStore: () => ({ remember: mocks.remember }),
 }));
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ resolve: () => ({ href: '/news/42' }) }),
+  useRouter: () => ({ resolve: () => ({ href: '/posts/42' }) }),
 }));
 
 const basePost = (): FeedPost => ({
@@ -40,7 +40,7 @@ const basePost = (): FeedPost => ({
   coverImageUrl: '',
   createdAt: '2026-08-17T00:00:00.000Z',
   likeCount: 12,
-  commentCount: 3,
+  replyCount: 3,
   viewCount: 1234,
   liked: false,
   likeStatus: 'ready',
@@ -84,7 +84,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       .find(link => link.classes().includes('post-card__views'));
 
     expect(views?.props('to')).toEqual({
-      name: 'NewsDetail',
+      name: 'PostDetail',
       params: { id: '42' },
     });
     expect(views?.text()).toContain(formatCompactEngagementCount(1234));
@@ -95,14 +95,14 @@ describe('PostCard View metric and telemetry lifecycle', () => {
 
     expect(mocks.remember).toHaveBeenCalledTimes(1);
     expect(mocks.remember).toHaveBeenCalledWith(post);
-    expect(wrapper.emitted('articleClick')).toEqual([[post]]);
+    expect(wrapper.emitted('postClick')).toEqual([[post]]);
     expect(wrapper.emitted('toggleLike') ?? []).toHaveLength(0);
     expect(wrapper.emitted('notInterested') ?? []).toHaveLength(0);
     expect(wrapper.emitted('deletePost') ?? []).toHaveLength(0);
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
-  it('captures content, reply, and view navigation with one handoff and one articleClick each', async () => {
+  it('captures content, reply, and view navigation with one handoff and one postClick each', async () => {
     const post = basePost();
     const wrapper = mountPostCard(post);
     const links = wrapper.findAllComponents(RouterLinkStub);
@@ -111,7 +111,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     const views = links.find(link => link.classes().includes('post-card__views'))!;
 
     expect(reply.props('to')).toEqual({
-      name: 'NewsDetail',
+      name: 'PostDetail',
       params: { id: '42' },
       query: { reply: '1' },
     });
@@ -123,7 +123,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(mocks.remember).toHaveBeenNthCalledWith(1, post);
     expect(mocks.remember).toHaveBeenNthCalledWith(2, post);
     expect(mocks.remember).toHaveBeenNthCalledWith(3, post);
-    expect(wrapper.emitted('articleClick')).toEqual([[post], [post], [post]]);
+    expect(wrapper.emitted('postClick')).toEqual([[post], [post], [post]]);
   });
 
   it('does not remember a modified-click navigation', async () => {
@@ -134,7 +134,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     await content.trigger('click', { ctrlKey: true });
 
     expect(mocks.remember).not.toHaveBeenCalled();
-    expect(wrapper.emitted('articleClick')).toEqual([[post]]);
+    expect(wrapper.emitted('postClick')).toEqual([[post]]);
   });
 
   it('does not remember non-navigation like activation', async () => {

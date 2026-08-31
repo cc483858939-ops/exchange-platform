@@ -15,16 +15,16 @@ const mocks = vi.hoisted(() => ({
   route: { params: { id: '7' } },
   setRouteID: (_id: string) => {},
   getUser: vi.fn(),
-  getUserArticles: vi.fn(),
+  getUserPosts: vi.fn(),
   getUserFollowState: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   updateUserProfile: vi.fn(),
   uploadProfileAvatar: vi.fn(),
-  deleteArticle: vi.fn(),
-  getArticleLikeStates: vi.fn(),
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
+  deletePost: vi.fn(),
+  getPostLikeStates: vi.fn(),
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
   router: {
     back: vi.fn(),
     push: vi.fn(),
@@ -39,8 +39,8 @@ const mocks = vi.hoisted(() => ({
     },
   },
   feedStore: {
-    isArticleDeleted: vi.fn(),
-    markArticleDeleted: vi.fn(),
+    isPostDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
     replaceAuthorIdentity: vi.fn(),
     applyLikeStateUpdate: vi.fn(),
   },
@@ -57,7 +57,6 @@ vi.mock('vue-router', async () => {
     useRouter: () => mocks.router,
   };
 });
-
 vi.mock('../store/auth', () => ({
   useAuthStore: () => mocks.authStore,
 }));
@@ -68,7 +67,7 @@ vi.mock('../store/feed', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
-  getUserArticles: mocks.getUserArticles,
+  getUserPosts: mocks.getUserPosts,
   getUserFollowState: mocks.getUserFollowState,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -76,14 +75,14 @@ vi.mock('../services/userService', () => ({
   uploadProfileAvatar: mocks.uploadProfileAvatar,
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: mocks.deleteArticle,
+vi.mock('../services/postService', () => ({
+  deletePost: mocks.deletePost,
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeStates: mocks.getArticleLikeStates,
-  likeArticle: mocks.likeArticle,
-  unlikeArticle: mocks.unlikeArticle,
+  getPostLikeStates: mocks.getPostLikeStates,
+  likePost: mocks.likePost,
+  unlikePost: mocks.unlikePost,
 }));
 
 class FakeIntersectionObserver {
@@ -152,27 +151,36 @@ const profile = (id: number) => ({
   bio: '',
   created_at: '2026-08-15T00:00:00.000Z',
 });
-
-const article = (id: number, authorID: number) => ({
-  ID: id,
-  CreatedAt: '2026-08-15T00:00:00.000Z',
-  UpdatedAt: '2026-08-15T00:00:00.000Z',
-  title: `Post ${id}`,
-  content: `Body ${id}`,
-  preview: `Preview ${id}`,
-  cover_image_url: '',
-  publication_state: 'published',
+const post = (id: number, authorID: number) => ({
+  id,
+  created_at: '2026-08-15T00:00:00.000Z',
+  updated_at: '2026-08-15T00:00:00.000Z',
   published_at: '2026-08-15T00:00:00.000Z',
-  expired_at: null,
-  like_count: 0,
-  comment_count: 0,
-  like_sync_version: 0,
   author: {
     id: authorID,
     username: `user-${authorID}`,
     display_name: `User ${authorID}`,
     avatar_url: '',
   },
+  content: `Body ${id}`,
+  conversation_id: id,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public' as const,
+  article: {
+    title: `Post ${id}`,
+    preview: `Preview ${id}`,
+    cover_image_url: '',
+    publication_state: 'published' as const,
+    published_at: '2026-08-15T00:00:00.000Z',
+    expired_at: null,
+  },
+  like_count: 0,
+  reply_count: 0,
+  view_count: 0,
+  deleted: false as const,
 });
 
 const PostCardStub = {
@@ -240,22 +248,22 @@ describe('UserProfileView observer and cursor concurrency', () => {
     mocks.setRouteID('7');
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
-    mocks.getUserArticles.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUserPosts.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
       following: false,
       follower_count: 0,
       following_count: 0,
     });
-    mocks.getArticleLikeStates.mockResolvedValue({ items: [], unavailable_article_ids: [] });
-    mocks.deleteArticle.mockResolvedValue(undefined);
-    mocks.feedStore.isArticleDeleted.mockReturnValue(false);
-    mocks.feedStore.markArticleDeleted.mockReturnValue(true);
+    mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.deletePost.mockResolvedValue(undefined);
+    mocks.feedStore.isPostDeleted.mockReturnValue(false);
+    mocks.feedStore.markPostDeleted.mockReturnValue(true);
   });
 
   it('re-establishes the observer after delete and continues cursor pagination', async () => {
-    mocks.getUserArticles
-      .mockResolvedValueOnce({ items: [article(1, 7)], next_cursor: 'cursor-1' })
-      .mockResolvedValueOnce({ items: [article(2, 7)], next_cursor: null });
+    mocks.getUserPosts
+      .mockResolvedValueOnce({ items: [post(1, 7)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [post(2, 7)], next_cursor: null });
 
     const mounted = mountProfile();
     mountedViews.push(mounted);
@@ -279,7 +287,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     replacementObserver?.trigger();
     await settle();
 
-    expect(mocks.getUserArticles).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
     expect(mounted.findAll('.post-card__id').map((node) => node.text())).toEqual(['2']);
     expect(mounted.findAll('.post-card__id')).toHaveLength(1);
     expect(mounted.find('.profile-feed-sentinel').exists()).toBe(false);
@@ -287,14 +295,14 @@ describe('UserProfileView observer and cursor concurrency', () => {
   });
 
   it('invalidates a pending load-more response without losing the original cursor', async () => {
-    const pendingLoadMore = deferred<{ items: ReturnType<typeof article>[]; next_cursor: string | null }>();
+    const pendingLoadMore = deferred<{ items: ReturnType<typeof post>[]; next_cursor: string | null }>();
     let serveNewPage = false;
-    mocks.getUserArticles.mockImplementation((_id: string, options?: { cursor?: string }) => {
+    mocks.getUserPosts.mockImplementation((_id: string, options?: { cursor?: string }) => {
       if (!options?.cursor) {
-        return Promise.resolve({ items: [article(1, 7)], next_cursor: 'cursor-1' });
+        return Promise.resolve({ items: [post(1, 7)], next_cursor: 'cursor-1' });
       }
       return serveNewPage
-        ? Promise.resolve({ items: [article(2, 7)], next_cursor: null })
+        ? Promise.resolve({ items: [post(2, 7)], next_cursor: null })
         : pendingLoadMore.promise;
     });
 
@@ -308,7 +316,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     await nextTick();
     await flushPromises();
 
-    expect(mocks.getUserArticles).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
 
     await mounted.find('.post-card__delete').trigger('click');
     await settle();
@@ -316,11 +324,11 @@ describe('UserProfileView observer and cursor concurrency', () => {
     expect(mounted.findAll('.post-card')).toHaveLength(0);
     expect(activeObserver()).toBeDefined();
 
-    pendingLoadMore.resolve({ items: [article(2, 7)], next_cursor: 'cursor-2' });
+    pendingLoadMore.resolve({ items: [post(2, 7)], next_cursor: 'cursor-2' });
     await settle();
 
     expect(mounted.findAll('.post-card')).toHaveLength(0);
-    expect(mocks.getUserArticles).toHaveBeenCalledTimes(2);
+    expect(mocks.getUserPosts).toHaveBeenCalledTimes(2);
 
     serveNewPage = true;
     const replacementObserver = activeObserver();
@@ -328,7 +336,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     replacementObserver?.trigger();
     await settle();
 
-    expect(mocks.getUserArticles).toHaveBeenNthCalledWith(3, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(3, '7', { limit: 20, cursor: 'cursor-1' });
     expect(mounted.findAll('.post-card__id').map((node) => node.text())).toEqual(['2']);
     expect(mounted.findAll('.post-card__id')).toHaveLength(1);
     expect(mounted.find('.profile-feed-sentinel').exists()).toBe(false);
@@ -346,9 +354,9 @@ describe('UserProfileView observer and cursor concurrency', () => {
     const session = profileStore.ensureSession(7)!;
     session.user = profile(7);
     session.profileLoaded = true;
-    session.articlesLoaded = true;
-    session.articles = [article(1, 7) as any];
-    session.loadedArticleIds.add(1);
+    session.postsLoaded = true;
+    session.posts = [post(1, 7) as any];
+    session.loadedPostIds.add(1);
     session.hasMore = true;
     session.nextCursor = 'cursor-1';
     session.scrollY = 500;
@@ -359,9 +367,9 @@ describe('UserProfileView observer and cursor concurrency', () => {
     expect(scrollTo).toHaveBeenCalledTimes(1);
     expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'auto' });
 
-    session.articlesLoadingMore = true;
-    session.articles = [...session.articles, article(2, 7) as any];
-    session.articlesLoadingMore = false;
+    session.postsLoadingMore = true;
+    session.posts = [...session.posts, post(2, 7) as any];
+    session.postsLoadingMore = false;
     await settle();
     expect(scrollTo).toHaveBeenCalledTimes(1);
 
@@ -387,12 +395,12 @@ describe('UserProfileView observer and cursor concurrency', () => {
     const first = profileStore.ensureSession(7)!;
     first.user = profile(7);
     first.profileLoaded = true;
-    first.articlesLoaded = true;
+    first.postsLoaded = true;
     first.scrollY = 400;
     const second = profileStore.ensureSession(8)!;
     second.user = profile(8);
     second.profileLoaded = true;
-    second.articlesLoaded = true;
+    second.postsLoaded = true;
     second.scrollY = 900;
 
     const mounted = mountProfile();

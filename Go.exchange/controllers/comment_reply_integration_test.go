@@ -6,39 +6,39 @@ import (
 	"Go.exchange/models"
 )
 
-func TestCreateCommentWithCountPersistsReplyBehaviorIntegration(t *testing.T) {
-	db := openCommentIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.ArticleBehavior{}); err != nil {
+func TestCreateReplyWithCountPersistsReplyBehaviorIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	if err := db.AutoMigrate(&models.PostBehavior{}); err != nil {
 		t.Fatal(err)
 	}
-	fixture := newCommentIntegrationFixture(t, db)
+	fixture := newReplyIntegrationFixture(t, db)
 
-	first, err := createCommentWithCount(fixture.Article.ID, fixture.Commenter.ID, "first")
+	first, err := createReplyWithCount(fixture.Article.ID, fixture.Commenter.ID, "first")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := createCommentWithCount(fixture.Article.ID, fixture.Commenter.ID, "second")
+	second, err := createReplyWithCount(fixture.Article.ID, fixture.Commenter.ID, "second")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var behavior models.ArticleBehavior
-	if err := db.Where("user_id = ? AND article_id = ? AND action = ?", fixture.Commenter.ID, fixture.Article.ID, ArticleBehaviorActionReply).First(&behavior).Error; err != nil {
+	var behavior models.PostBehavior
+	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", fixture.Commenter.ID, fixture.Article.ID, PostBehaviorActionReply).First(&behavior).Error; err != nil {
 		t.Fatal(err)
 	}
 	if behavior.Count != 2 || !behavior.Active {
 		t.Fatalf("reply behavior=%#v", behavior)
 	}
-	var article models.Article
+	var article models.Post
 	if err := db.First(&article, fixture.Article.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if article.CommentCount != 2 {
-		t.Fatalf("comment count=%d", article.CommentCount)
+	if article.ReplyCount != 2 {
+		t.Fatalf("comment count=%d", article.ReplyCount)
 	}
-	if _, err := deleteCommentWithCount(first.ID, fixture.Commenter.ID); err != nil {
+	if _, err := deleteReplyWithCount(first.ID, fixture.Commenter.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := deleteCommentWithCount(second.ID, fixture.Commenter.ID); err != nil {
+	if _, err := deleteReplyWithCount(second.ID, fixture.Commenter.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.First(&behavior, behavior.ID).Error; err != nil {

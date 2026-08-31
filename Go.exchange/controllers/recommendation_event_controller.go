@@ -234,7 +234,7 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 	return validatedRecommendationEvent{
 		EventID: eventID, EventType: kafkaEventType, OccurredAt: occurredAt,
 		Payload: eventing.RecommendationBehaviorPayload{
-			UserID: userID, ArticleID: claims.ArticleID, RequestID: claims.RequestID,
+			UserID: userID, PostID: claims.PostID, RequestID: claims.RequestID,
 			Scene: claims.Scene, Position: claims.Position, RankerVersion: claims.RankerVersion,
 			RankerConfigHash: claims.RankerConfigHash, StrategyID: claims.StrategyID,
 			ExplorationOpportunity: claims.ExplorationOpportunity, SelectionMode: claims.SelectionMode,

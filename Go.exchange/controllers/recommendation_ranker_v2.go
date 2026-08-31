@@ -36,10 +36,10 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 		}
 		negativeConfidence := profile.NegativeConfidence
 		semanticRaw := positiveSemantic - cfg.NegativeSemanticWeight*negativeConfidence*negativeSemantic
-		trendingRaw := recommendationTrendingRaw(candidate.Article, now, cfg)
-		interactionAffinity := clampUnit(profile.AuthorAffinity[candidate.Article.AuthorID])
+		trendingRaw := recommendationTrendingRawWithArticle(candidate.Post, candidate.PostArticle, now, cfg)
+		interactionAffinity := clampUnit(profile.AuthorAffinity[candidate.Post.AuthorID])
 		followingBonus := 0.0
-		_, followed := profile.FollowingAuthorIDs[candidate.Article.AuthorID]
+		_, followed := profile.FollowingAuthorIDs[candidate.Post.AuthorID]
 		if followed {
 			followingBonus = cfg.FollowingBonus
 		}
@@ -83,17 +83,25 @@ func validComparableRecommendationEmbedding(left, right []float32) bool {
 	return validEmbeddingVector(left) && validEmbeddingVector(right) && len(left) == len(right)
 }
 
-func recommendationTrendingRaw(article models.Article, now time.Time, cfg config.RecommendationConfig) float64 {
-	articleTime := recommendationArticleTime(article)
-	ageHours := now.Sub(articleTime).Hours()
+func recommendationTrendingRaw(post models.Post, now time.Time, cfg config.RecommendationConfig) float64 {
+	postTime := recommendationPostTime(post)
+	return recommendationTrendingRawAt(post, postTime, now, cfg)
+}
+
+func recommendationTrendingRawWithArticle(post models.Post, article *models.PostArticle, now time.Time, cfg config.RecommendationConfig) float64 {
+	return recommendationTrendingRawAt(post, recommendationPostTimeWithArticle(post, article), now, cfg)
+}
+
+func recommendationTrendingRawAt(post models.Post, postTime, now time.Time, cfg config.RecommendationConfig) float64 {
+	ageHours := now.Sub(postTime).Hours()
 	if ageHours < 0 {
 		ageHours = 0
 	}
 	if cfg.Trending.MaxAgeDays <= 0 || ageHours > float64(cfg.Trending.MaxAgeDays)*24 || cfg.Trending.HalfLifeHours <= 0 {
 		return 0
 	}
-	engagement := math.Log1p(math.Max(0, float64(article.LikeCount))) +
-		cfg.Trending.CommentFactor*math.Log1p(math.Max(0, float64(article.CommentCount)))
+	engagement := math.Log1p(math.Max(0, float64(post.LikeCount))) +
+		cfg.Trending.ReplyFactor*math.Log1p(math.Max(0, float64(post.ReplyCount)))
 	if engagement <= 0 {
 		return 0
 	}
@@ -105,19 +113,23 @@ func recommendationCandidateBaseBefore(left, right hydratedRecommendationCandida
 	if left.Breakdown.BaseScore != right.Breakdown.BaseScore {
 		return left.Breakdown.BaseScore > right.Breakdown.BaseScore
 	}
-	leftTime := recommendationArticleTime(left.Article)
-	rightTime := recommendationArticleTime(right.Article)
+	leftTime := recommendationPostTimeWithArticle(left.Post, left.PostArticle)
+	rightTime := recommendationPostTimeWithArticle(right.Post, right.PostArticle)
 	if !leftTime.Equal(rightTime) {
 		return leftTime.After(rightTime)
 	}
-	return left.Article.ID > right.Article.ID
+	return left.Post.ID > right.Post.ID
 }
 
-func recommendationArticleTime(article models.Article) time.Time {
-	if article.PublishedAt != nil && !article.PublishedAt.IsZero() {
+func recommendationPostTime(post models.Post) time.Time {
+	return post.CreatedAt.UTC()
+}
+
+func recommendationPostTimeWithArticle(post models.Post, article *models.PostArticle) time.Time {
+	if article != nil && article.PublishedAt != nil && !article.PublishedAt.IsZero() {
 		return article.PublishedAt.UTC()
 	}
-	return article.CreatedAt.UTC()
+	return post.CreatedAt.UTC()
 }
 
 func clampUnit(value float64) float64 {

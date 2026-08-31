@@ -1,6 +1,6 @@
 # Go.exchange
 
-Go.exchange is a Go + Gin backend for article publishing, article reactions, recommendation signals, exchange-rate records, and article-cover file storage. The current local stack uses PostgreSQL, Redis, MinIO, and Docker Compose. Background work is split into a dedicated worker process, and schema changes are run through a one-shot migration job instead of API startup.
+Go.exchange is a Go + Gin backend for unified Post publishing, Post reactions, recommendation signals, exchange-rate records, and long-form cover file storage. The current local stack uses PostgreSQL, Redis, MinIO, and Docker Compose. Background work is split into a dedicated worker process, and schema changes are run through a one-shot migration job instead of API startup.
 
 ## Tech Stack
 
@@ -9,7 +9,7 @@ Go.exchange is a Go + Gin backend for article publishing, article reactions, rec
 - Cache and async state: Redis + Lua scripts
 - Object storage: MinIO
 - Authentication: JWT access tokens and Redis-backed refresh tokens
-- Background workers: like-count persistence, recommendation projection, nearline profile materialization, and Kafka-first article embedding consumption
+- Background workers: like-count persistence, recommendation projection, nearline profile materialization, and Kafka-first Post embedding consumption
 - Observability: Prometheus metrics, Grafana dashboard, health checks, pprof
 - Local orchestration: Docker Compose
 
@@ -70,9 +70,9 @@ is not claimed unless this script has been run against a real cluster.
 ## Recommendation profile materialization
 
 The For You endpoint reads `user_reco_profiles` by user primary key. View,
-reaction, feedback, reply, and actual article-embedding changes invalidate the
+reaction, feedback, reply, and actual Post-embedding changes invalidate the
 durable `user_reco_profile_dirty` queue in their source transactions. The
-worker rebuilds canonical `user_article_reco_states`, nullable pgvector
+worker rebuilds canonical `user_post_reco_states`, nullable pgvector
 interest profiles, and raw candidate-author affinity atomically. A compatible
 stale profile remains usable while recovery is queued; misses and incompatible
 profiles use cold start.
@@ -139,18 +139,19 @@ Public endpoints:
 Authenticated endpoints:
 
 - `POST /api/exchangeRates`
-- `GET /api/recommendations/articles`
+- `GET /api/recommendations/posts`
 - `POST /api/uploads/article-cover`
-- `POST /api/articles`
+- `POST /api/posts`
 - GET /api/feed/following?limit=20&cursor=...
-- GET /api/users/:id/articles?limit=20&cursor=...
-- `GET /api/articles/:id`
-- `DELETE /api/articles/:id`
-- `GET /api/articles/:id/like`
-- `PUT /api/articles/:id/like`
-- `DELETE /api/articles/:id/like`
+- GET /api/users/:id/posts?limit=20&cursor=...
+- `GET /api/posts/:id`
+- `GET /api/posts/:id/replies?limit=20&cursor=...`
+- `DELETE /api/posts/:id`
+- `GET /api/posts/:id/like`
+- `PUT /api/posts/:id/like`
+- `DELETE /api/posts/:id/like`
 
-Following and user-article endpoints return {"items":[],"next_cursor":null}; cursor values are opaque.
+Following and user-post endpoints return {"items":[],"next_cursor":null}; cursor values are opaque.
 
 ## Project Layout
 
@@ -175,8 +176,8 @@ Go.exchange/
 
 ## Design Notes
 
-- Redis is the hot path for article like counts; PostgreSQL stores the durable projection.
-- Article detail responses are cached in Redis.
-- Article analysis is queued through Redis sets and processed by worker goroutines.
-- Article cover images are stored in MinIO and served through `/api/files/*objectKey`.
+- Redis is the hot path for Post like counts; PostgreSQL stores the durable projection.
+- Post detail responses are cached in Redis.
+- Post embedding analysis is queued through Redis sets and processed by worker goroutines.
+- Long-form Post cover images are stored in MinIO and served through `/api/files/*objectKey`.
 - API and worker processes do not run `AutoMigrate`; schema changes belong to the `migrate` job.

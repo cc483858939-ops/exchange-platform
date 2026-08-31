@@ -7,9 +7,9 @@ import {
   registerHistorySessionSync,
   registerProfileSessionSync,
   registerSearchSessionSync,
-  syncExternalArticleLikeState,
-  syncExternalArticleRemoval,
-  syncExternalCommentCount,
+  syncExternalPostLikeState,
+  syncExternalPostRemoval,
+  syncExternalReplyCount,
   syncExternalFollowState,
   syncHomeAuthorIdentity,
   syncHomeLikeState,
@@ -19,7 +19,7 @@ import {
 } from './sessionSync';
 
 const likeUpdate: FeedLikeStateUpdate = {
-  articleId: 42,
+  postId: 42,
   likes: 9,
   liked: true,
   status: 'ready',
@@ -38,9 +38,9 @@ const registerSinks = () => {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyRepostStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
-    applyCommentCountUpdateLocal: vi.fn().mockReturnValue(true),
+    applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
     reconcileFollowStateLocal: vi.fn().mockReturnValue(true),
-    removeArticleLocal: vi.fn(),
+    removePostLocal: vi.fn(),
     replaceAuthorIdentityLocal: vi.fn(),
   };
   const profile = {
@@ -48,9 +48,9 @@ const registerSinks = () => {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyRepostStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
-    applyCommentCountUpdateEverywhereLocal: vi.fn().mockReturnValue(true),
+    applyReplyCountUpdateEverywhereLocal: vi.fn().mockReturnValue(true),
     applyExternalFollowStateLocal: vi.fn().mockReturnValue(true),
-    removeArticleEverywhereLocal: vi.fn(),
+    removePostEverywhereLocal: vi.fn(),
     replaceAuthorIdentityEverywhereLocal: vi.fn(),
   };
   const search = {
@@ -59,8 +59,8 @@ const registerSinks = () => {
   const history = {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
-    applyCommentCountUpdateLocal: vi.fn().mockReturnValue(true),
-    removeArticleLocal: vi.fn(),
+    applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
+    removePostLocal: vi.fn(),
     replaceAuthorIdentityLocal: vi.fn(),
   };
   const connections = {
@@ -79,7 +79,7 @@ describe('sessionSync external mutation sinks', () => {
   it('sends external likes to Home and Profile exactly once', () => {
     const { home, profile, history } = registerSinks();
 
-    syncExternalArticleLikeState(likeUpdate);
+    syncExternalPostLikeState(likeUpdate);
 
     expect(home.applyExternalLikeStateLocal).toHaveBeenCalledOnce();
     expect(home.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
@@ -92,25 +92,25 @@ describe('sessionSync external mutation sinks', () => {
   it('sends external removals to Home and Profile exactly once', () => {
     const { home, profile, history } = registerSinks();
 
-    syncExternalArticleRemoval(42);
+    syncExternalPostRemoval(42);
 
-    expect(home.removeArticleLocal).toHaveBeenCalledOnce();
-    expect(home.removeArticleLocal).toHaveBeenCalledWith(42);
-    expect(profile.removeArticleEverywhereLocal).toHaveBeenCalledOnce();
-    expect(profile.removeArticleEverywhereLocal).toHaveBeenCalledWith(42);
-    expect(history.removeArticleLocal).toHaveBeenCalledOnce();
-    expect(history.removeArticleLocal).toHaveBeenCalledWith(42);
+    expect(home.removePostLocal).toHaveBeenCalledOnce();
+    expect(home.removePostLocal).toHaveBeenCalledWith(42);
+    expect(profile.removePostEverywhereLocal).toHaveBeenCalledOnce();
+    expect(profile.removePostEverywhereLocal).toHaveBeenCalledWith(42);
+    expect(history.removePostLocal).toHaveBeenCalledOnce();
+    expect(history.removePostLocal).toHaveBeenCalledWith(42);
   });
 
   it('sends absolute comment counts to both caches', () => {
     const { home, profile, history } = registerSinks();
-    const update = { articleId: 42, commentCount: 5 };
+    const update = { postId: 42, replyCount: 5 };
 
-    syncExternalCommentCount(update);
+    syncExternalReplyCount(update);
 
-    expect(home.applyCommentCountUpdateLocal).toHaveBeenCalledWith(update);
-    expect(profile.applyCommentCountUpdateEverywhereLocal).toHaveBeenCalledWith(update);
-    expect(history.applyCommentCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(profile.applyReplyCountUpdateEverywhereLocal).toHaveBeenCalledWith(update);
+    expect(history.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
   });
 
   it('routes Profile follow success to Home and Search only', () => {

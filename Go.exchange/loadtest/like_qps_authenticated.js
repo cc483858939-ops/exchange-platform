@@ -5,13 +5,13 @@ import { Counter, Rate, Trend } from 'k6/metrics';
 const baseURL = __ENV.BASE_URL || 'http://127.0.0.1:3000';
 const virtualUsers = Number(__ENV.VUS || 10);
 const duration = __ENV.DURATION || '20s';
-const articleIDs = String(__ENV.ARTICLE_IDS || '')
+const postIDs = String(__ENV.POST_IDS || '')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
 
-if (articleIDs.length === 0) {
-  throw new Error('ARTICLE_IDS must contain one or more comma-separated article IDs');
+if (postIDs.length === 0) {
+  throw new Error('POST_IDS must contain one or more comma-separated Post IDs');
 }
 
 export const options = { vus: virtualUsers, duration, discardResponseBodies: false };
@@ -25,7 +25,7 @@ function jsonParams(accessToken) {
   return {
     // Register already returns an RFC 7235 Bearer header value.
     headers: { Authorization: accessToken, 'Content-Type': 'application/json' },
-    tags: { endpoint: 'article_like' },
+    tags: { endpoint: 'post_like' },
   };
 }
 
@@ -49,16 +49,16 @@ export function setup() {
     }
     users.push({ username, token });
   }
-  return { users, articleIDs };
+  return { users, postIDs };
 }
 
 export default function (data) {
   const user = data.users[(__VU - 1) % data.users.length];
-  const articleID = data.articleIDs[(__VU - 1) % data.articleIDs.length];
+  const postID = data.postIDs[(__VU - 1) % data.postIDs.length];
   const expectedLiked = !liked;
   const response = http.request(
     expectedLiked ? 'PUT' : 'DELETE',
-    `${baseURL}/api/articles/${articleID}/like`,
+    `${baseURL}/api/posts/${postID}/like`,
     null,
     jsonParams(user.token),
   );

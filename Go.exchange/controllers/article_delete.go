@@ -16,78 +16,90 @@ import (
 )
 
 var (
-	errArticleDeleteNotFound  = errors.New("article not found")
-	errArticleDeleteForbidden = errors.New("forbidden")
+	errPostDeleteNotFound  = errors.New("post not found")
+	errPostDeleteForbidden = errors.New("forbidden")
 
-	loadArticleDeleteViewer = loadActiveFollowingViewerFromDB
+	loadPostDeleteViewer = loadActiveFollowingViewerFromDB
 
-	deleteArticleInTransaction        = deleteArticleInTransactionFromDB
-	deleteArticleRepostsInTransaction = func(tx *gorm.DB, articleID uint) error {
-		return tx.Where("article_id = ?", articleID).Delete(&models.ArticleRepost{}).Error
+	deletePostInTransaction        = deletePostInTransactionFromDB
+	deletePostRepostsInTransaction = func(tx *gorm.DB, postID uint) error {
+		return tx.Where("post_id = ?", postID).Delete(&models.PostRepost{}).Error
 	}
 
-	invalidateArticleDeleteDetailCache = func(articleID uint) error {
+	invalidatePostDeleteDetailCache = func(postID uint) error {
 		if global.RedisDB == nil {
 			return nil
 		}
-		return InvalidateArticleDetailCacheByID(articleID)
+		return InvalidatePostDetailCacheByID(postID)
 	}
-	cleanupDeletedArticleLikeState = func(articleID uint) error {
+	cleanupDeletedPostLikeState = func(postID uint) error {
 		if global.RedisDB == nil {
 			return nil
 		}
 
 		pipeline := global.RedisDB.Pipeline()
-		pipeline.Del(likes.ReadyKey(articleID))
-		pipeline.SRem(likes.DirtyKey, articleID)
-		pipeline.ZRem(likes.ProcessingKey, articleID)
-		pipeline.HDel(likes.ClaimsKey, strconv.FormatUint(uint64(articleID), 10))
+		pipeline.Del(likes.ReadyKey(postID))
+		pipeline.SRem(likes.DirtyKey, postID)
+		pipeline.ZRem(likes.ProcessingKey, postID)
+		pipeline.HDel(likes.ClaimsKey, strconv.FormatUint(uint64(postID), 10))
 		_, err := pipeline.Exec()
 		return err
 	}
 )
 
-func parseArticleDeleteID(raw string) (uint, error) {
+func parsePostDeleteID(raw string) (uint, error) {
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil || id == 0 || uint64(uint(id)) != id {
-		return 0, errors.New("invalid article id")
+		return 0, errors.New("invalid post id")
 	}
 	return uint(id), nil
 }
 
-func deleteArticleInTransactionFromDB(articleID, viewerID uint) error {
+func deletePostInTransactionFromDB(postID, viewerID uint) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
 
 	return global.Db.Transaction(func(tx *gorm.DB) error {
-		var article models.Article
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&article, articleID).Error; err != nil {
+		var post models.Post
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, postID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errArticleDeleteNotFound
+				return errPostDeleteNotFound
 			}
 			return err
 		}
-		if article.AuthorID != viewerID {
-			return errArticleDeleteForbidden
+		if post.AuthorID != viewerID {
+			return errPostDeleteForbidden
+		}
+		if post.ReplyToPostID != nil {
+			// Serialize against concurrent replies/deletes of the direct parent.
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&models.Post{}, *post.ReplyToPostID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			result := tx.Model(&models.Post{}).
+				Where("id = ? AND reply_count > 0", *post.ReplyToPostID).
+				UpdateColumn("reply_count", gorm.Expr("reply_count - 1"))
+			if result.Error != nil {
+				return result.Error
+			}
 		}
 
-		if err := deleteArticleRepostsInTransaction(tx, articleID); err != nil {
+		if err := deletePostRepostsInTransaction(tx, postID); err != nil {
 			return err
 		}
-		if err := tx.Delete(&article).Error; err != nil {
+		if err := tx.Delete(&post).Error; err != nil {
 			return err
 		}
 		return nil
 	})
 }
 
-func writeArticleDeleteStoreError(ctx *gin.Context) {
+func writePostDeleteStoreError(ctx *gin.Context) {
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 
-func DeleteArticle(ctx *gin.Context) {
-	articleID, err := parseArticleDeleteID(ctx.Param("id"))
+func DeletePost(ctx *gin.Context) {
+	postID, err := parsePostDeleteID(ctx.Param("id"))
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -98,32 +110,32 @@ func DeleteArticle(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	if err := loadArticleDeleteViewer(viewerID); err != nil {
+	if err := loadPostDeleteViewer(viewerID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 			return
 		}
-		writeArticleDeleteStoreError(ctx)
+		writePostDeleteStoreError(ctx)
 		return
 	}
 
-	if err := deleteArticleInTransaction(articleID, viewerID); err != nil {
+	if err := deletePostInTransaction(postID, viewerID); err != nil {
 		switch {
-		case errors.Is(err, errArticleDeleteNotFound):
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "article not found"})
-		case errors.Is(err, errArticleDeleteForbidden):
+		case errors.Is(err, errPostDeleteNotFound):
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		case errors.Is(err, errPostDeleteForbidden):
 			ctx.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		default:
-			writeArticleDeleteStoreError(ctx)
+			writePostDeleteStoreError(ctx)
 		}
 		return
 	}
 
-	if err := invalidateArticleDeleteDetailCache(articleID); err != nil {
-		log.Printf("[ArticleDelete] invalidate article detail cache for %d: %v", articleID, err)
+	if err := invalidatePostDeleteDetailCache(postID); err != nil {
+		log.Printf("[PostDelete] invalidate post detail cache for %d: %v", postID, err)
 	}
-	if err := cleanupDeletedArticleLikeState(articleID); err != nil {
-		log.Printf("[ArticleDelete] clean up like state for %d: %v", articleID, err)
+	if err := cleanupDeletedPostLikeState(postID); err != nil {
+		log.Printf("[PostDelete] clean up like state for %d: %v", postID, err)
 	}
 
 	ctx.Status(http.StatusNoContent)

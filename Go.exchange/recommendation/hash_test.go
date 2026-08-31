@@ -9,7 +9,7 @@ import (
 func TestProfileConfigHashIncludesCanonicalInputsOnly(t *testing.T) {
 	base := config.RecommendationConfig{
 		BehaviorWeights:    config.RecommendationBehaviorWeights{View: .5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6},
-		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositiveArticleWeightCap: 7,
+		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 	}
 	baseHash := ProfileConfigHash(base, "embedding-v1")
 	canonical := base

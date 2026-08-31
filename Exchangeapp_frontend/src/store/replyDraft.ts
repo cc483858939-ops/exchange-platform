@@ -9,7 +9,7 @@ const normalizeViewerID = (value: number | null): number | null => (
     : null
 );
 
-const normalizeArticleID = (value: number | string): number | null => {
+const normalizePostID = (value: number | string): number | null => {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 };
@@ -33,12 +33,12 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     return true;
   };
 
-  const getDraft = (articleID: number | string): string => {
+  const getDraft = (postID: number | string): string => {
     if (viewerID.value === null) {
       return '';
     }
 
-    const normalized = normalizeArticleID(articleID);
+    const normalized = normalizePostID(postID);
     if (normalized === null) {
       return '';
     }
@@ -46,12 +46,12 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     return drafts.value[String(normalized)] ?? '';
   };
 
-  const setDraft = (articleID: number | string, content: string) => {
+  const setDraft = (postID: number | string, content: string) => {
     if (viewerID.value === null) {
       return;
     }
 
-    const normalized = normalizeArticleID(articleID);
+    const normalized = normalizePostID(postID);
     if (normalized === null) {
       return;
     }
@@ -64,12 +64,12 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     drafts.value[String(normalized)] = content;
   };
 
-  const clearDraft = (articleID: number | string) => {
+  const clearDraft = (postID: number | string) => {
     if (viewerID.value === null) {
       return;
     }
 
-    const normalized = normalizeArticleID(articleID);
+    const normalized = normalizePostID(postID);
     if (normalized === null) {
       return;
     }

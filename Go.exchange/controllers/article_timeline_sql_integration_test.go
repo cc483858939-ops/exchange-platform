@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func TestArticleTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
+func TestPostTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -24,10 +24,10 @@ func TestArticleTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Article{}, &models.ArticleRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
-	queryLogger := &articleDetailSQLLogger{Interface: logger.Default}
+	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
 	originalDB := global.Db
 	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
 	t.Cleanup(func() { global.Db = originalDB })
@@ -52,24 +52,24 @@ func TestArticleTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("following status=%d body=%s", status, body)
 	}
-	ctx, recorder := newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/articles?limit=20", strconvUint(target.ID))
-	GetUserArticles(ctx)
+	ctx, recorder := newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=20", strconvUint(target.ID))
+	GetUserPosts(ctx)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("user articles status=%d body=%s", recorder.Code, recorder.Body.String())
+		t.Fatalf("user posts status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	articleQueries := 0
+	postQueries := 0
 	for _, query := range queryLogger.snapshot() {
 		normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
-		if !strings.Contains(normalized, " from ") || !strings.Contains(normalized, "articles") || !strings.Contains(normalized, " limit 21") {
+		if !strings.Contains(normalized, " from ") || !strings.Contains(normalized, "posts") || !strings.Contains(normalized, " limit 21") {
 			continue
 		}
-		articleQueries++
+		postQueries++
 		if strings.Contains(normalized, " offset ") {
 			t.Fatalf("article timeline query used OFFSET: %s", query)
 		}
 	}
-	if articleQueries < 2 {
-		t.Fatalf("expected bounded Article queries for Following and User Articles, got %d queries=%v", articleQueries, queryLogger.snapshot())
+	if postQueries < 2 {
+		t.Fatalf("expected bounded Article queries for Following and User Articles, got %d queries=%v", postQueries, queryLogger.snapshot())
 	}
 }

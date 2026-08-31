@@ -73,12 +73,13 @@ func TestRecommendationExplorationReasonsUseRecentAndNovelAgeCutoffs(t *testing.
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	cfg := defaultRecommendationConfig()
 	cfg.Exploration.RecentWindowDays = 7
-	cfg.Exploration.NovelArticleMaxAgeDays = 30
+	cfg.Exploration.NovelPostMaxAgeDays = 30
 	makeCandidate := func(id uint, ageDays float64, recent, novel bool) hydratedRecommendationCandidate {
 		at := now.Add(-time.Duration(ageDays * float64(24*time.Hour)))
 		return hydratedRecommendationCandidate{
-			Candidate:     embeddingCandidate{ArticleID: id, FromRecent: recent},
-			Article:       models.Article{Model: gorm.Model{ID: id, CreatedAt: at}, PublishedAt: explorationTimePtr(at)},
+			Candidate:     embeddingCandidate{PostID: id, FromRecent: recent},
+			Post:          models.Post{Model: gorm.Model{ID: id, CreatedAt: at}},
+			PostArticle:   &models.PostArticle{PublishedAt: explorationTimePtr(at)},
 			IsNovelAuthor: novel,
 		}
 	}
@@ -109,20 +110,20 @@ func TestRecommendationExplorationSemanticUsesMaterializedVectorsAndSafeInputs(t
 	cfg.NegativeSemanticWeight = 1.5
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}, NegativeVector: []float32{1, 0}, NegativeConfidence: 1}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{ArticleID: 1}, Article: models.Article{Model: gorm.Model{ID: 1, CreatedAt: now}}, Embedding: []float32{1, 0}},
-		{Candidate: embeddingCandidate{ArticleID: 2}, Article: models.Article{Model: gorm.Model{ID: 2, CreatedAt: now}}, Embedding: []float32{0, 1}},
-		{Candidate: embeddingCandidate{ArticleID: 3}, Article: models.Article{Model: gorm.Model{ID: 3, CreatedAt: now}}, Embedding: []float32{1}},
+		{Candidate: embeddingCandidate{PostID: 1}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}}, Embedding: []float32{1, 0}},
+		{Candidate: embeddingCandidate{PostID: 2}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}}, Embedding: []float32{0, 1}},
+		{Candidate: embeddingCandidate{PostID: 3}, Post: models.Post{Model: gorm.Model{ID: 3, CreatedAt: now}}, Embedding: []float32{1}},
 	}, now, cfg)
 	byID := make(map[uint]float64, len(ranked))
 	for _, item := range ranked {
-		byID[item.Article.ID] = item.ExplorationSemantic
+		byID[item.Post.ID] = item.ExplorationSemantic
 	}
 	if byID[1] != 0 || byID[2] != 0 || byID[3] != 0 {
 		t.Fatalf("exploration semantic=%v, negative evidence or invalid dimensions must be safe", byID)
 	}
 	profile.NegativeVector = []float32{0, 1}
 	ranked = rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{{
-		Candidate: embeddingCandidate{ArticleID: 4}, Article: models.Article{Model: gorm.Model{ID: 4, CreatedAt: now}}, Embedding: []float32{1, 0},
+		Candidate: embeddingCandidate{PostID: 4}, Post: models.Post{Model: gorm.Model{ID: 4, CreatedAt: now}}, Embedding: []float32{1, 0},
 	}}, now, cfg)
 	if len(ranked) != 1 || math.Abs(ranked[0].ExplorationSemantic-1) > 1e-9 {
 		t.Fatalf("exploration semantic=%v want 1", ranked[0].ExplorationSemantic)
@@ -158,12 +159,12 @@ func TestRecommendationSelectionRecordsNaturalAndDisplacedExploration(t *testing
 	cfg.OutOfNetworkMinRatio = 0
 	cfg.Diversity.Enabled = false
 	candidates := []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{ArticleID: 1}, Article: models.Article{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 1}, Breakdown: recommendationScoreBreakdown{BaseScore: 10}},
-		{Candidate: embeddingCandidate{ArticleID: 2, FromRecent: true}, Article: models.Article{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 2, PublishedAt: explorationTimePtr(now)}, ExplorationSemantic: .8, Breakdown: recommendationScoreBreakdown{BaseScore: 5}},
-		{Candidate: embeddingCandidate{ArticleID: 3}, Article: models.Article{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 3}, Breakdown: recommendationScoreBreakdown{BaseScore: 9}},
+		{Candidate: embeddingCandidate{PostID: 1}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 1}, Breakdown: recommendationScoreBreakdown{BaseScore: 10}},
+		{Candidate: embeddingCandidate{PostID: 2, FromRecent: true}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 2}, PostArticle: &models.PostArticle{PublishedAt: explorationTimePtr(now)}, ExplorationSemantic: .8, Breakdown: recommendationScoreBreakdown{BaseScore: 5}},
+		{Candidate: embeddingCandidate{PostID: 3}, Post: models.Post{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 3}, Breakdown: recommendationScoreBreakdown{BaseScore: 9}},
 	}
 	displaced := selectRecommendationCandidates(candidates, nil, 3, cfg, now, recommendationSelectionFresh, "natural-and-displaced")
-	if len(displaced) != 3 || displaced[0].Article.ID != 1 || displaced[1].Article.ID != 2 {
+	if len(displaced) != 3 || displaced[0].Post.ID != 1 || displaced[1].Post.ID != 2 {
 		t.Fatalf("displaced selection=%#v", displaced)
 	}
 	if !displaced[1].ExplorationOpportunity || displaced[1].SelectionMode != recommendationResultSelectionExploration || displaced[1].ExplorationReason != recommendationExplorationReasonRecent || displaced[1].ExplorationSemantic != .8 {
@@ -202,12 +203,12 @@ func explorationTimePtr(value time.Time) *time.Time {
 func makeExplorationTestCandidate(now time.Time, id uint, baseScore, explorationSemantic float64, recent, novel bool) hydratedRecommendationCandidate {
 	at := now.Add(-time.Hour)
 	return hydratedRecommendationCandidate{
-		Candidate: embeddingCandidate{ArticleID: id, FromRecent: recent},
-		Article: models.Article{
-			Model:       gorm.Model{ID: id, CreatedAt: at},
-			AuthorID:    id,
-			PublishedAt: explorationTimePtr(at),
+		Candidate: embeddingCandidate{PostID: id, FromRecent: recent},
+		Post: models.Post{
+			Model:    gorm.Model{ID: id, CreatedAt: at},
+			AuthorID: id,
 		},
+		PostArticle:         &models.PostArticle{PublishedAt: explorationTimePtr(at)},
 		IsNovelAuthor:       novel,
 		ExplorationSemantic: explorationSemantic,
 		Breakdown:           recommendationScoreBreakdown{BaseScore: baseScore},
@@ -220,8 +221,8 @@ func TestRecommendationSoftSelectionAppendsRealCandidatesWithoutExploration(t *t
 	cfg.OutOfNetworkMinRatio = 0
 	cfg.Diversity.Enabled = false
 	initial := []selectedRecommendation{
-		{Article: models.Article{Model: gorm.Model{ID: 100}}, SelectionMode: recommendationResultSelectionRanked},
-		{Article: models.Article{Model: gorm.Model{ID: 101}}, SelectionMode: recommendationResultSelectionRanked},
+		{Post: models.Post{Model: gorm.Model{ID: 100}}, SelectionMode: recommendationResultSelectionRanked},
+		{Post: models.Post{Model: gorm.Model{ID: 101}}, SelectionMode: recommendationResultSelectionRanked},
 	}
 	softCandidates := []hydratedRecommendationCandidate{
 		makeExplorationTestCandidate(now, 1, 5, .9, true, false),
@@ -236,10 +237,10 @@ func TestRecommendationSoftSelectionAppendsRealCandidatesWithoutExploration(t *t
 	if len(selected) != 4 {
 		t.Fatalf("selected length=%d want=4", len(selected))
 	}
-	if selected[0].Article.ID != 100 || selected[1].Article.ID != 101 {
+	if selected[0].Post.ID != 100 || selected[1].Post.ID != 101 {
 		t.Fatalf("initial fresh results changed: %#v", selected)
 	}
-	if selected[2].Article.ID != 1 || selected[3].Article.ID != 2 {
+	if selected[2].Post.ID != 1 || selected[3].Post.ID != 2 {
 		t.Fatalf("soft LastServedAt ordering selected=%#v", selected)
 	}
 	for index, item := range selected[2:] {
@@ -289,11 +290,11 @@ func TestRecommendationExplorationNovelAuthorIsIndependentFromRecentRecall(t *te
 	if got := recommendationExplorationReason(candidate, now, cfg); got != recommendationExplorationReasonNovelAuthor {
 		t.Fatalf("novel-author reason=%q want=%q", got, recommendationExplorationReasonNovelAuthor)
 	}
-	candidate.Article.PublishedAt = explorationTimePtr(now.Add(-30 * 24 * time.Hour))
+	candidate.PostArticle.PublishedAt = explorationTimePtr(now.Add(-30 * 24 * time.Hour))
 	if got := recommendationExplorationReason(candidate, now, cfg); got != recommendationExplorationReasonNovelAuthor {
 		t.Fatalf("boundary novel-author reason=%q want=%q", got, recommendationExplorationReasonNovelAuthor)
 	}
-	candidate.Article.PublishedAt = explorationTimePtr(now.Add(-30*24*time.Hour - time.Nanosecond))
+	candidate.PostArticle.PublishedAt = explorationTimePtr(now.Add(-30*24*time.Hour - time.Nanosecond))
 	if got := recommendationExplorationReason(candidate, now, cfg); got != "" {
 		t.Fatalf("over-age novel-author reason=%q want empty", got)
 	}
@@ -305,14 +306,14 @@ func TestRecommendationStrictExplorationRejectsSemanticDuplicatesWhenPenaltyIsZe
 	cfg.Diversity.Enabled = true
 	cfg.Diversity.SemanticDuplicateThreshold = .8
 	cfg.Diversity.SemanticDuplicatePenalty = 0
-	selected := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}}, Embedding: []float32{1, 0}}}
+	selected := []selectedRecommendation{{Post: models.Post{Model: gorm.Model{ID: 100}}, Embedding: []float32{1, 0}}}
 	duplicate := makeExplorationTestCandidate(now, 1, 100, 1, true, false)
 	duplicate.Embedding = []float32{1, 0}
 	nonDuplicate := makeExplorationTestCandidate(now, 2, 1, .5, true, false)
 	nonDuplicate.Embedding = []float32{0, 1}
 	available := func(hydratedRecommendationCandidate) bool { return true }
 	_, chosen, ok := chooseStrictExplorationCandidate([]hydratedRecommendationCandidate{duplicate, nonDuplicate}, selected, available, nil, 1, cfg, now)
-	if !ok || chosen.Article.ID != 2 {
+	if !ok || chosen.Post.ID != 2 {
 		t.Fatalf("strict selection=%#v ok=%v want non-duplicate article 2", chosen, ok)
 	}
 	if !recommendationIsSemanticDuplicate(duplicate, selected, cfg) || recommendationDiversityPenalty(duplicate, selected, cfg) != 0 {
@@ -329,7 +330,7 @@ func TestRecommendationDuplicateOnlyExplorationFallsBackToRankedWithoutUnderfill
 	cfg.Diversity.Enabled = true
 	cfg.Diversity.SemanticDuplicateThreshold = .8
 	cfg.Diversity.SemanticDuplicatePenalty = 0
-	initial := []selectedRecommendation{{Article: models.Article{Model: gorm.Model{ID: 100}}, Embedding: []float32{1, 0}, SelectionMode: recommendationResultSelectionRanked}}
+	initial := []selectedRecommendation{{Post: models.Post{Model: gorm.Model{ID: 100}}, Embedding: []float32{1, 0}, SelectionMode: recommendationResultSelectionRanked}}
 	duplicate := makeExplorationTestCandidate(now, 1, 10, 1, true, false)
 	duplicate.Embedding = []float32{1, 0}
 	normal := makeExplorationTestCandidate(now, 2, 9, 0, false, false)
@@ -413,10 +414,10 @@ func TestRecommendationExplorationDoesNotCarryForwardNaturalOpportunity(t *testi
 	if len(selected) != limit {
 		t.Fatalf("selected length=%d want=%d: %#v", len(selected), limit, selected)
 	}
-	if selected[firstPosition-1].Article.ID != natural.Article.ID || selected[firstPosition-1].SelectionMode != recommendationResultSelectionRanked || !selected[firstPosition-1].ExplorationOpportunity {
+	if selected[firstPosition-1].Post.ID != natural.Post.ID || selected[firstPosition-1].SelectionMode != recommendationResultSelectionRanked || !selected[firstPosition-1].ExplorationOpportunity {
 		t.Fatalf("natural opportunity=%#v want ranked natural candidate", selected[firstPosition-1])
 	}
-	if selected[secondPosition-1].Article.ID != exploration.Article.ID || selected[secondPosition-1].SelectionMode != recommendationResultSelectionExploration || !selected[secondPosition-1].ExplorationOpportunity {
+	if selected[secondPosition-1].Post.ID != exploration.Post.ID || selected[secondPosition-1].SelectionMode != recommendationResultSelectionExploration || !selected[secondPosition-1].ExplorationOpportunity {
 		t.Fatalf("displaced opportunity=%#v want exploration candidate", selected[secondPosition-1])
 	}
 	opportunities, results := 0, 0

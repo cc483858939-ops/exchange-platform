@@ -4,14 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia } from 'pinia';
 import { ArticleReadTracker } from '../services/articleReadTracker';
-import NewsDetailView from './NewsDetailView.vue';
+import PostDetailView from './PostDetailView.vue';
 import { formatCompactEngagementCount } from '../utils/engagementCount';
 
 const mocks = vi.hoisted(() => ({
-  getArticleById: vi.fn(),
-  getArticleLikeState: vi.fn(),
-  getArticleRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
-  getArticleComments: vi.fn(),
+  getPostById: vi.fn(),
+  getPostLikeState: vi.fn(),
+  getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
+  getPostReplies: vi.fn(),
   getUser: vi.fn(),
   consumeAttribution: vi.fn(),
   assertBodyAtConsume: vi.fn(),
@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
     recordReadEnd: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
   },
-  articleViewTelemetry: {
+  postViewTelemetry: {
     enqueue: vi.fn(),
   },
   routeLeave: vi.fn(),
@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => ({
   },
   feedStore: {
     viewerID: 7,
-    markArticleDeleted: vi.fn(),
+    markPostDeleted: vi.fn(),
   },
 }));
 
@@ -59,17 +59,17 @@ vi.mock('../store/auth', () => ({
   useAuthStore: () => mocks.authStore,
 }));
 
-vi.mock('../store/articleDetailHandoff', () => ({
-  useArticleDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
+vi.mock('../store/postDetailHandoff', () => ({
+  usePostDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
 }));
 
 vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
 }));
 
-vi.mock('../services/articleService', () => ({
-  deleteArticle: vi.fn(),
-  getArticleById: mocks.getArticleById,
+vi.mock('../services/postService', () => ({
+  deletePost: vi.fn(),
+  getPostById: mocks.getPostById,
 }));
 
 vi.mock('../services/userService', () => ({
@@ -77,21 +77,21 @@ vi.mock('../services/userService', () => ({
 }));
 
 vi.mock('../services/likeService', () => ({
-  getArticleLikeState: mocks.getArticleLikeState,
-  likeArticle: vi.fn(),
-  unlikeArticle: vi.fn(),
+  getPostLikeState: mocks.getPostLikeState,
+  likePost: vi.fn(),
+  unlikePost: vi.fn(),
 }));
 
 vi.mock('../services/repostService', () => ({
-  getArticleRepostState: mocks.getArticleRepostState,
-  repostArticle: vi.fn(),
-  undoRepostArticle: vi.fn(),
+  getPostRepostState: mocks.getPostRepostState,
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
 }));
 
-vi.mock('../services/commentService', () => ({
-  createArticleComment: vi.fn(),
-  deleteComment: vi.fn(),
-  getArticleComments: mocks.getArticleComments,
+vi.mock('../services/replyService', () => ({
+  createPostReply: vi.fn(),
+  deletePostReply: vi.fn(),
+  getPostReplies: mocks.getPostReplies,
 }));
 
 vi.mock('../services/recommendationAttribution', () => ({
@@ -102,34 +102,42 @@ vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
 }));
 
-vi.mock('../services/articleViewTelemetry', () => ({
-  createArticleViewEventID: () => '00000000-0000-4000-8000-000000000042',
-  getArticleViewTelemetry: () => mocks.articleViewTelemetry,
+vi.mock('../services/postViewTelemetry', () => ({
+  createPostViewEventID: () => '00000000-0000-4000-8000-000000000042',
+  getPostViewTelemetry: () => mocks.postViewTelemetry,
 }));
 
-const article = {
-  ID: 42,
-  CreatedAt: '2026-08-15T00:00:00.000Z',
-  UpdatedAt: '2026-08-15T00:00:00.000Z',
-  title: 'Tracked article',
-  content: 'Article body',
-  preview: 'Article body',
-  cover_image_url: '',
-  publication_state: 'published',
+const post = {
+  id: 42,
+  created_at: '2026-08-15T00:00:00.000Z',
+  updated_at: '2026-08-15T00:00:00.000Z',
   published_at: '2026-08-15T00:00:00.000Z',
-  expired_at: null,
-  like_count: 3,
-  comment_count: 0,
-  view_count: 1234,
-  like_sync_version: 1,
   author: {
     id: 7,
     username: 'author',
     display_name: 'Author',
     avatar_url: '',
   },
+  content: 'Post body',
+  conversation_id: 42,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  article: {
+    title: 'Tracked post',
+    preview: 'Post body',
+    cover_image_url: '',
+    publication_state: 'published',
+    published_at: '2026-08-15T00:00:00.000Z',
+    expired_at: null,
+  },
+  like_count: 3,
+  reply_count: 0,
+  view_count: 1234,
+  deleted: false,
 };
-
 const tracking = {
   request_id: 'request-42',
   position: 1,
@@ -141,15 +149,15 @@ const tracking = {
   expires_at: '2099-08-15T00:00:00.000Z',
 };
 
-describe('NewsDetailView attributed read lifecycle', () => {
+describe('PostDetailView attributed read lifecycle', () => {
   let mounted: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.routeLeave.mockReset();
-    mocks.getArticleById.mockResolvedValue(article);
-    mocks.getArticleLikeState.mockResolvedValue({ liked: false, likes: 3 });
-    mocks.getArticleComments.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getPostById.mockResolvedValue(post);
+    mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
+    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUser.mockResolvedValue({
       id: 7,
       username: 'reader',
@@ -170,37 +178,37 @@ describe('NewsDetailView attributed read lifecycle', () => {
     vi.restoreAllMocks();
   });
 
-  const mountDetail = () => mount(NewsDetailView, {
+  const mountDetail = () => mount(PostDetailView, {
     attachTo: document.body,
     global: {
       plugins: [createPinia()],
       stubs: {
         AppIcon: { template: '<span />' },
         AuthorIdentity: { template: '<span />' },
-        CommentComposer: { template: '<div />' },
-        CommentList: { template: '<div />' },
+        ReplyComposer: { template: '<div />' },
+        ReplyList: { template: '<div />' },
         LikeAction: { template: '<button class="test-like-action" type="button" />' },
         RouterLink: { template: '<a><slot /></a>' },
       },
     },
   });
 
-  it('does not enqueue a View when the article request fails', async () => {
-    mocks.getArticleById.mockRejectedValueOnce(new Error('offline'));
+  it('does not enqueue a View when the post request fails', async () => {
+    mocks.getPostById.mockRejectedValueOnce(new Error('offline'));
 
     mounted = mountDetail();
     await flushPromises();
 
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
   });
 
   it('does not enqueue a View when the response ID mismatches the route', async () => {
-    mocks.getArticleById.mockResolvedValueOnce({ ...article, ID: 43 });
+    mocks.getPostById.mockResolvedValueOnce({ ...post, id: 43 });
 
     mounted = mountDetail();
     await flushPromises();
 
-    expect(mocks.articleViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
   });
 
   it('renders the server View count without optimistic increment and keeps one lifecycle event', async () => {
@@ -216,11 +224,11 @@ describe('NewsDetailView attributed read lifecycle', () => {
     expect(mounted.find('.post-detail__body').exists()).toBe(true);
     expect(mocks.assertBodyAtConsume).toHaveBeenCalledWith(expect.any(HTMLElement));
     expect(trackerStart).toHaveBeenCalledTimes(1);
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledWith(42, expect.any(String), 'article_detail');
+    expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledWith(42, expect.any(String), 'post_detail');
 
     await flushPromises();
-    expect(mocks.articleViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
     expect(viewMetric.attributes('aria-label')).toBe('1,234 views');
     expect(viewMetric.text()).toBe(`${formatCompactEngagementCount(1234)} Views`);
 
