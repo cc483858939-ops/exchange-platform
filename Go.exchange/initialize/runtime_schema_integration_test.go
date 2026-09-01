@@ -149,14 +149,14 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	})
 
 	withIntegrationSavepoint(t, tx, "floor_too_high", func() {
-		if err := updateIntegrationState(tx, primarySchema, 2, 2); err != nil {
+		if err := updateIntegrationState(tx, primarySchema, 3, 3); err != nil {
 			t.Fatalf("set incompatible schema floor: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_incompatible")
 	})
 
 	withIntegrationSavepoint(t, tx, "compatible_newer", func() {
-		if err := updateIntegrationState(tx, primarySchema, 2, 1); err != nil {
+		if err := updateIntegrationState(tx, primarySchema, 3, 2); err != nil {
 			t.Fatalf("set compatible newer schema version: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "")
@@ -259,6 +259,9 @@ func expectIntegrationSchemaCodeWithContext(t *testing.T, ctx context.Context, d
 			t.Fatalf("expected runtime schema check success, got %v", err)
 		}
 		return
+	}
+	if err == nil {
+		t.Fatalf("expected schema reason %q, got successful validation", expected)
 	}
 	if got := SchemaReasonCode(err); got != expected {
 		t.Fatalf("expected schema reason %q, got %q (err=%v)", expected, got, err)
