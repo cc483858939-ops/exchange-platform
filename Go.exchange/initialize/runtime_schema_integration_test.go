@@ -63,6 +63,16 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.AutoMigrate(&models.ExchangeRate{}); err != nil {
 		t.Fatalf("migrate fallback exchange rate table: %v", err)
 	}
+	if err := setIntegrationSearchPath(tx, primarySchema); err != nil {
+		t.Fatalf("restore primary schema migration search path: %v", err)
+	}
+	var currentSchema string
+	if err := tx.Raw("SELECT current_schema()").Scan(&currentSchema).Error; err != nil {
+		t.Fatalf("read current migration schema: %v", err)
+	}
+	if currentSchema != primarySchema {
+		t.Fatalf("unexpected migration schema: got %q want %q", currentSchema, primarySchema)
+	}
 	if err := insertIntegrationState(tx, PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor); err != nil {
 		t.Fatalf("insert runtime schema state: %v", err)
 	}
