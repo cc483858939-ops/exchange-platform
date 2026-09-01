@@ -64,6 +64,32 @@ func newReplyIntegrationFixture(t *testing.T, db *gorm.DB) replyIntegrationFixtu
 		Commenter: models.User{Username: "commenter-" + uuid.NewString(), Password: "test", DisplayName: "Old Name", AvatarURL: "old.jpg"},
 		Other:     models.User{Username: "commenter-other-" + uuid.NewString(), Password: "test"},
 	}
+	t.Cleanup(func() {
+		var childIDs []uint
+		if fixture.Article.ID != 0 {
+			db.Unscoped().Model(&models.Post{}).
+				Where("reply_to_post_id = ?", fixture.Article.ID).
+				Pluck("id", &childIDs)
+		}
+		postIDs := append(childIDs, fixture.Article.ID)
+		if len(postIDs) > 0 {
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
+		}
+		if len([]uint{fixture.Commenter.ID, fixture.Other.ID}) > 0 {
+			db.Unscoped().Where("user_id IN ?", []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.PostBehavior{})
+		}
+		if fixture.Article.ID != 0 {
+			db.Unscoped().Where("post_id = ?", fixture.Article.ID).Delete(&models.PostArticle{})
+		}
+		if len(childIDs) > 0 {
+			db.Unscoped().Where("id IN ?", childIDs).Delete(&models.Post{})
+		}
+		if fixture.Article.ID != 0 {
+			db.Unscoped().Where("id = ?", fixture.Article.ID).Delete(&models.Post{})
+		}
+		db.Unscoped().Where("id IN ?", []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.User{})
+	})
 	if err := db.Create(&fixture.Author).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -84,13 +110,6 @@ func newReplyIntegrationFixture(t *testing.T, db *gorm.DB) replyIntegrationFixtu
 	if err := db.Create(&models.PostArticle{PostID: fixture.Article.ID, Title: "comment fixture", Preview: "comment fixture", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		db.Unscoped().Where("reply_to_post_id = ?", fixture.Article.ID).Delete(&models.Post{})
-		db.Unscoped().Where("post_id = ?", fixture.Article.ID).Delete(&models.PostArticle{})
-		db.Unscoped().Where("post_id = ? OR user_id IN ?", fixture.Article.ID, []uint{fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.PostBehavior{})
-		db.Unscoped().Delete(&fixture.Article)
-		db.Unscoped().Where("id IN ?", []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.User{})
-	})
 	return fixture
 }
 
@@ -319,7 +338,7 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 
 	expiring := createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "expire then delete", time.Time{})
 	expiredAt := time.Now().Add(-time.Hour)
-	if err := db.Model(&fixture.Article).Update("expired_at", expiredAt).Error; err != nil {
+	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", fixture.Article.ID).Update("expired_at", expiredAt).Error; err != nil {
 		t.Fatal(err)
 	}
 	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(expiring.ID), strconvUint(expiring.ID), "", fixture.Commenter.ID)

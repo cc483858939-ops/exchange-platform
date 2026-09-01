@@ -75,16 +75,17 @@ func newRecommendationProfileControllerIntegrationArticle(t *testing.T, db *gorm
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: title + " preview", PublicationState: "published", PublishedAt: &publishedAt}).Error; err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() {
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostEmbedding{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.UserPostRecoState{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 	})
+	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: title + " preview", PublicationState: "published", PublishedAt: &publishedAt}).Error; err != nil {
+		t.Fatal(err)
+	}
 	return article
 }
 
@@ -215,7 +216,7 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 	profile := userInterestProfile{MaterializedInteractionsReady: true}
 	candidates, err := loadRecommendationSourceCandidates(
 		viewer.ID, profile, map[uint]servedPost{}, now, normalizedRecommendationConfig(), false,
-		"posts.published_at DESC, posts.id DESC", 10, "recent",
+		effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +248,7 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 
 	candidates, err := loadRecommendationSourceCandidates(
 		viewer.ID, userInterestProfile{MaterializedInteractionsReady: true}, map[uint]servedPost{}, now,
-		normalizedRecommendationConfig(), false, "posts.published_at DESC, posts.id DESC", 10, "recent",
+		normalizedRecommendationConfig(), false, effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
 		t.Fatal(err)

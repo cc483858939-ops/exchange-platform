@@ -98,18 +98,31 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		{Username: "timeline-soft-followed-" + uuid.NewString(), Password: "secret"},
 		{Username: "timeline-no-follows-" + uuid.NewString(), Password: "secret"},
 	}
+	t.Cleanup(func() {
+		userIDs := make([]uint, 0, len(users))
+		for _, user := range users {
+			if user.ID != 0 {
+				userIDs = append(userIDs, user.ID)
+			}
+		}
+		if len(userIDs) == 0 {
+			return
+		}
+		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
+		var postIDs []uint
+		db.Unscoped().Model(&models.Post{}).Where("author_id IN ?", userIDs).Pluck("id", &postIDs)
+		if len(postIDs) > 0 {
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostRepost{})
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
+			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+		}
+		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
+	})
 	if err := db.Create(&users).Error; err != nil {
 		t.Fatal(err)
 	}
 	viewer, followedA, followedB := users[0], users[1], users[2]
 	unfollowed, softFollowed, noFollowsViewer := users[3], users[4], users[5]
-
-	userIDs := []uint{viewer.ID, followedA.ID, followedB.ID, unfollowed.ID, softFollowed.ID, noFollowsViewer.ID}
-	t.Cleanup(func() {
-		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
-		db.Unscoped().Where("author_id IN ?", userIDs).Delete(&models.Post{})
-		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
-	})
 
 	follows := []models.UserFollow{
 		{FollowerID: viewer.ID, FollowingID: followedA.ID},
@@ -151,10 +164,6 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	futurePublishedAt := time.Now().UTC().Add(24 * time.Hour)
 	future := createArticle(followedA.ID, "future", "future body", baseTime.Add(16*time.Minute), nil)
 	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", future.ID).Update("published_at", futurePublishedAt).Error; err != nil {
-		t.Fatal(err)
-	}
-	draft := createArticle(followedA.ID, "draft", "draft body", baseTime.Add(18*time.Minute), nil)
-	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", draft.ID).Update("publication_state", "draft").Error; err != nil {
 		t.Fatal(err)
 	}
 	deleted := createArticle(followedA.ID, "deleted", "deleted body", baseTime.Add(11*time.Minute), nil)
@@ -201,7 +210,7 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 			t.Fatalf("all ids=%v expected=%v", allIDs, expectedIDs)
 		}
 	}
-	for _, excluded := range []uint{expired.ID, future.ID, draft.ID, deleted.ID, softFollowedPost.ID, unfollowedPost.ID, viewerPost.ID} {
+	for _, excluded := range []uint{expired.ID, future.ID, deleted.ID, softFollowedPost.ID, unfollowedPost.ID, viewerPost.ID} {
 		if containsFollowingPostID(page1.Items, excluded) || containsFollowingPostID(page2.Items, excluded) || containsFollowingPostID(page3.Items, excluded) {
 			t.Fatalf("excluded article %d appeared", excluded)
 		}

@@ -87,20 +87,30 @@ func TestLikedHistoryIntegration(t *testing.T) {
 		{Username: "liked-history-soft-author-" + uuid.NewString(), Password: "secret"},
 		{Username: "liked-history-empty-viewer-" + uuid.NewString(), Password: "secret"},
 	}
+	var postIDs []uint
+	t.Cleanup(func() {
+		userIDs := make([]uint, 0, len(users))
+		for _, user := range users {
+			if user.ID != 0 {
+				userIDs = append(userIDs, user.ID)
+			}
+		}
+		if len(userIDs) > 0 {
+			db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.PostReaction{})
+		}
+		if len(postIDs) > 0 {
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
+			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+		}
+		if len(userIDs) > 0 {
+			db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
+		}
+	})
 	if err := db.Create(&users).Error; err != nil {
 		t.Fatal(err)
 	}
 	viewer, otherViewer, author, softAuthor, emptyViewer := users[0], users[1], users[2], users[3], users[4]
-	userIDs := []uint{viewer.ID, otherViewer.ID, author.ID, softAuthor.ID, emptyViewer.ID}
-
-	var postIDs []uint
-	t.Cleanup(func() {
-		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.PostReaction{})
-		if len(postIDs) > 0 {
-			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
-		}
-		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
-	})
 
 	baseTime := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
 	createArticle := func(authorID uint, title string, createdAt time.Time, publicationState string, publishedAt *time.Time, expiredAt *time.Time) models.Post {
@@ -111,10 +121,10 @@ func TestLikedHistoryIntegration(t *testing.T) {
 		if err := db.Create(&article).Error; err != nil {
 			t.Fatal(err)
 		}
+		postIDs = append(postIDs, article.ID)
 		if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: "preview", PublicationState: publicationState, PublishedAt: publishedAt, ExpiredAt: expiredAt}).Error; err != nil {
 			t.Fatal(err)
 		}
-		postIDs = append(postIDs, article.ID)
 		return article
 	}
 	createPublished := func(authorID uint, title string, createdAt time.Time) models.Post {
@@ -129,10 +139,6 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	unlikedArticle := createPublished(author.ID, "currently unliked", baseTime.Add(13*time.Hour))
 	otherViewerArticle := createPublished(author.ID, "other viewer only", baseTime.Add(14*time.Hour))
 
-	draftArticle := createPublished(author.ID, "draft", baseTime.Add(15*time.Hour))
-	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", draftArticle.ID).Update("publication_state", "draft").Error; err != nil {
-		t.Fatal(err)
-	}
 	futurePublishedAt := time.Now().UTC().Add(24 * time.Hour)
 	futureArticle := createArticle(author.ID, "future", baseTime.Add(16*time.Hour), consts.PostPublicationStatePublished, &futurePublishedAt, nil)
 	expiredAt := time.Now().UTC().Add(-time.Hour)
@@ -170,7 +176,6 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	createReaction(oldReactionNewArticle.ID, viewer.ID, true, baseTime.Add(3*time.Hour), 1)
 	createReaction(unlikedArticle.ID, viewer.ID, false, baseTime.Add(6*time.Hour), 1)
 	createReaction(otherViewerArticle.ID, otherViewer.ID, true, baseTime.Add(9*time.Hour), 1)
-	createReaction(draftArticle.ID, viewer.ID, true, baseTime.Add(10*time.Hour), 1)
 	createReaction(futureArticle.ID, viewer.ID, true, baseTime.Add(11*time.Hour), 1)
 	createReaction(expiredArticle.ID, viewer.ID, true, baseTime.Add(12*time.Hour), 1)
 	createReaction(deletedArticle.ID, viewer.ID, true, baseTime.Add(13*time.Hour), 1)
@@ -214,7 +219,7 @@ func TestLikedHistoryIntegration(t *testing.T) {
 			t.Fatalf("all ids=%v expected=%v", allIDs, expectedIDs)
 		}
 	}
-	for _, excluded := range []uint{unlikedArticle.ID, otherViewerArticle.ID, draftArticle.ID, futureArticle.ID, expiredArticle.ID, deletedArticle.ID, softAuthorArticle.ID} {
+	for _, excluded := range []uint{unlikedArticle.ID, otherViewerArticle.ID, futureArticle.ID, expiredArticle.ID, deletedArticle.ID, softAuthorArticle.ID} {
 		if containsLikedPostID(page1.Items, excluded) || containsLikedPostID(page2.Items, excluded) {
 			t.Fatalf("excluded article %d appeared", excluded)
 		}

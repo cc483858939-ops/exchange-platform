@@ -117,42 +117,51 @@ WHERE table_schema = current_schema()
 		t.Fatal(err)
 	}
 	indexRows, err := db.Raw(`
-SELECT indexname, indexdef
+SELECT tablename, indexname, indexdef
 FROM pg_indexes
 WHERE schemaname = current_schema()
-  AND tablename = 'posts'
-  AND indexname IN (?, ?)
-`, "idx_posts_recommendation_popular", "idx_posts_recommendation_trending").Rows()
+  AND ((tablename = 'posts' AND indexname IN (?, ?, ?))
+    OR (tablename = 'post_articles' AND indexname = ?))
+`, "idx_posts_recommendation_popular", "idx_posts_recommendation_recent", "idx_posts_recommendation_trending", "idx_post_articles_recommendation_published").Rows()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer indexRows.Close()
-	postIndexes := map[string]string{}
+	indexDefinitions := map[string]string{}
 	for indexRows.Next() {
-		var name, definition string
-		if err := indexRows.Scan(&name, &definition); err != nil {
+		var table, name, definition string
+		if err := indexRows.Scan(&table, &name, &definition); err != nil {
 			t.Fatal(err)
 		}
-		postIndexes[name] = strings.ToLower(strings.Join(strings.Fields(definition), ""))
+		indexDefinitions[name] = strings.ToLower(strings.Join(strings.Fields(definition), ""))
 	}
 	if err := indexRows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := postIndexes["idx_posts_recommendation_popular"]; exists {
+	if _, exists := indexDefinitions["idx_posts_recommendation_popular"]; exists {
 		t.Fatal("legacy popular retrieval index still exists")
 	}
-	trendingIndex, exists := postIndexes["idx_posts_recommendation_trending"]
-	if !exists || !strings.Contains(trendingIndex, "published_at") || !strings.Contains(trendingIndex, "like_count>0") || !strings.Contains(trendingIndex, "comment_count>0") {
+	recentIndex, exists := indexDefinitions["idx_posts_recommendation_recent"]
+	if !exists || !strings.Contains(recentIndex, "created_atdesc,iddesc") ||
+		!strings.Contains(recentIndex, "deleted_atisnull") || !strings.Contains(recentIndex, "visibility") ||
+		!strings.Contains(recentIndex, "public") || !strings.Contains(recentIndex, "reply_to_post_idisnull") ||
+		strings.Contains(recentIndex, "published_at") {
+		t.Fatalf("recent index=%q", recentIndex)
+	}
+	trendingIndex, exists := indexDefinitions["idx_posts_recommendation_trending"]
+	if !exists || !strings.Contains(trendingIndex, "created_atdesc,iddesc") ||
+		!strings.Contains(trendingIndex, "deleted_atisnull") || !strings.Contains(trendingIndex, "visibility") ||
+		!strings.Contains(trendingIndex, "public") || !strings.Contains(trendingIndex, "reply_to_post_idisnull") ||
+		!strings.Contains(trendingIndex, "like_count>0") || !strings.Contains(trendingIndex, "reply_count>0") ||
+		strings.Contains(trendingIndex, "published_at") || strings.Contains(trendingIndex, "comment_count") {
 		t.Fatalf("trending index=%q", trendingIndex)
 	}
+	publishedIndex, exists := indexDefinitions["idx_post_articles_recommendation_published"]
+	if !exists || !strings.Contains(publishedIndex, "published_atdesc,post_id") ||
+		!strings.Contains(publishedIndex, "publication_state") || !strings.Contains(publishedIndex, "published_atisnotnull") {
+		t.Fatalf("published PostArticle index=%q", publishedIndex)
+	}
 
-	const indexName = "uidx_recommendation_result_trace_request_article"
-	if err := db.Exec("DROP INDEX IF EXISTS " + indexName).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec("CREATE UNIQUE INDEX " + indexName + " ON recommendation_result_traces (post_id)").Error; err != nil {
-		t.Fatal(err)
-	}
 	if err := applyRecommendationTraceConstraints(db); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +169,11 @@ WHERE schemaname = current_schema()
 		t.Fatal(err)
 	}
 
-	rows, err := db.Raw("SELECT indexname, indexdef\nFROM pg_indexes\nWHERE schemaname = current_schema()\n  AND tablename = 'recommendation_result_traces'\n  AND indexname = ?", indexName).Rows()
+	const (
+		currentIndexName = "uidx_recommendation_result_trace_request_post"
+		legacyIndexName  = "uidx_recommendation_result_trace_request_article"
+	)
+	rows, err := db.Raw("SELECT indexname, indexdef\nFROM pg_indexes\nWHERE schemaname = current_schema()\n  AND tablename = 'recommendation_result_traces'\n  AND indexname IN (?, ?)", currentIndexName, legacyIndexName).Rows()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +190,10 @@ WHERE schemaname = current_schema()
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	indexDefinition := indexByName[indexName]
+	if _, exists := indexByName[legacyIndexName]; exists {
+		t.Fatal("legacy recommendation trace index still exists")
+	}
+	indexDefinition := indexByName[currentIndexName]
 	if !strings.Contains(indexDefinition, "unique") ||
 		!strings.Contains(indexDefinition, "(request_id,post_id)") ||
 		strings.Contains(indexDefinition, "(post_id)") {
@@ -191,6 +207,18 @@ WHERE schemaname = current_schema()
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
+	postIDs := make([]uint, 0, 2)
+	requestIDs := make([]string, 0, 2)
+	t.Cleanup(func() {
+		if len(requestIDs) > 0 {
+			db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationResultTrace{})
+			db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationRequest{})
+		}
+		if len(postIDs) > 0 {
+			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+		}
+		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+	})
 	postX := models.Post{
 		AuthorID: user.ID, Content: "trace migration x", Visibility: "public",
 	}
@@ -200,9 +228,11 @@ WHERE schemaname = current_schema()
 	if err := db.Create(&postX).Error; err != nil {
 		t.Fatal(err)
 	}
+	postIDs = append(postIDs, postX.ID)
 	if err := db.Create(&postY).Error; err != nil {
 		t.Fatal(err)
 	}
+	postIDs = append(postIDs, postY.ID)
 
 	requestA := models.RecommendationRequest{
 		RequestID:        uuid.NewString(),
@@ -216,14 +246,7 @@ WHERE schemaname = current_schema()
 	}
 	requestB := requestA
 	requestB.RequestID = uuid.NewString()
-	t.Cleanup(func() {
-		requestIDs := []string{requestA.RequestID, requestB.RequestID}
-		postIDs := []uint{postX.ID, postY.ID}
-		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationResultTrace{})
-		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationRequest{})
-		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
-		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
-	})
+	requestIDs = []string{requestA.RequestID, requestB.RequestID}
 	if err := db.Create(&[]models.RecommendationRequest{requestA, requestB}).Error; err != nil {
 		t.Fatal(err)
 	}

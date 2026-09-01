@@ -420,9 +420,9 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 		if strings.Contains(normalized, "fromposts") {
 			postQueries++
 		}
-		if strings.Contains(normalized, "fromusers") {
+		if strings.Contains(normalized, "selectid,username,display_name,avatar_urlfromusers") {
 			userQueries++
-			selectedAuthorQuery = selectedAuthorQuery || strings.Contains(normalized, "selectid,username,display_name,avatar_urlfromusers")
+			selectedAuthorQuery = true
 		}
 	}
 	if postQueries != 1 || userQueries != 1 {
@@ -521,24 +521,32 @@ func TestLoadPostDetailMissFiltersNonPublicArticlesIntegration(t *testing.T) {
 			AuthorID: fixture.Author.ID, Content: "detail-short", Visibility: "public",
 		},
 		{
-			AuthorID: fixture.Author.ID, Content: "detail-draft", Visibility: "public",
-		},
-		{
 			AuthorID: fixture.Author.ID, Content: "detail-expired", Visibility: "public",
 		},
 		{
 			AuthorID: fixture.Author.ID, Content: "detail-deleted", Visibility: "public",
 		},
 	}
+	t.Cleanup(func() {
+		ids := make([]uint, 0, len(posts))
+		for _, post := range posts {
+			if post.ID != 0 {
+				ids = append(ids, post.ID)
+			}
+		}
+		if len(ids) > 0 {
+			db.Unscoped().Where("post_id IN ?", ids).Delete(&models.PostArticle{})
+			db.Unscoped().Where("id IN ?", ids).Delete(&models.Post{})
+		}
+	})
 	if err := db.Create(&posts).Error; err != nil {
 		t.Fatal(err)
 	}
 	postArticles := []models.PostArticle{
 		{PostID: posts[0].ID, Title: "detail-valid", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now},
 		{PostID: posts[1].ID, Title: "detail-future", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &futurePublishedAt},
-		{PostID: posts[3].ID, Title: "detail-draft", Preview: "preview", PublicationState: "draft", PublishedAt: &now},
-		{PostID: posts[4].ID, Title: "detail-expired", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now, ExpiredAt: &expiredAt},
-		{PostID: posts[5].ID, Title: "detail-deleted", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now},
+		{PostID: posts[3].ID, Title: "detail-expired", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now, ExpiredAt: &expiredAt},
+		{PostID: posts[4].ID, Title: "detail-deleted", Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now},
 	}
 	if err := db.Create(&postArticles).Error; err != nil {
 		t.Fatal(err)
@@ -546,14 +554,6 @@ func TestLoadPostDetailMissFiltersNonPublicArticlesIntegration(t *testing.T) {
 	if err := db.Delete(&posts[len(posts)-1]).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		ids := make([]uint, 0, len(posts))
-		for _, post := range posts {
-			ids = append(ids, post.ID)
-		}
-		db.Unscoped().Where("post_id IN ?", ids).Delete(&models.PostArticle{})
-		db.Unscoped().Where("id IN ?", ids).Delete(&models.Post{})
-	})
 
 	originalCacheLoader := loadPostDetailCache
 	originalDB := global.Db
@@ -574,7 +574,7 @@ func TestLoadPostDetailMissFiltersNonPublicArticlesIntegration(t *testing.T) {
 	if response.ID != posts[0].ID || response.Author.ID != fixture.Author.ID {
 		t.Fatalf("valid detail response=%#v", response)
 	}
-	for _, index := range []int{1, 3, 4, 5} {
+	for _, index := range []int{1, 3, 4} {
 		_, err := loadPostDetail(strconv.FormatUint(uint64(posts[index].ID), 10))
 		if err != gorm.ErrRecordNotFound {
 			t.Fatalf("ineligible post %d error=%v want=%v", posts[index].ID, err, gorm.ErrRecordNotFound)

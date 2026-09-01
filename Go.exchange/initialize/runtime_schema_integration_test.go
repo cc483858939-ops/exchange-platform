@@ -45,16 +45,13 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.Exec("CREATE SCHEMA " + quoteIntegrationIdentifier(fallbackSchema)).Error; err != nil {
 		t.Fatalf("create fallback isolated schema: %v", err)
 	}
-	if err := setIntegrationSearchPath(tx, primarySchema, fallbackSchema); err != nil {
-		t.Fatalf("set isolated schema search path: %v", err)
+	if err := setIntegrationSearchPath(tx, primarySchema); err != nil {
+		t.Fatalf("set primary schema migration search path: %v", err)
 	}
 	if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatalf("enable pgvector for isolated schema: %v", err)
 	}
 
-	if err := setIntegrationSearchPath(tx, primarySchema); err != nil {
-		t.Fatalf("set primary schema migration search path: %v", err)
-	}
 	modelsToMigrate := append([]interface{}(nil), apiSchemaModels...)
 	modelsToMigrate = append(modelsToMigrate, workerSchemaModels...)
 	if err := tx.AutoMigrate(modelsToMigrate...); err != nil {
@@ -65,9 +62,6 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	}
 	if err := tx.AutoMigrate(&models.ExchangeRate{}); err != nil {
 		t.Fatalf("migrate fallback exchange rate table: %v", err)
-	}
-	if err := setIntegrationValidationSearchPath(tx, primarySchema, fallbackSchema); err != nil {
-		t.Fatalf("restore isolated schema search path: %v", err)
 	}
 	if err := insertIntegrationState(tx, PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor); err != nil {
 		t.Fatalf("insert runtime schema state: %v", err)
@@ -92,6 +86,9 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	}
 	if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
 		t.Fatalf("apply UserPostRecoState constraints: %v", err)
+	}
+	if err := setIntegrationValidationSearchPath(tx, primarySchema, fallbackSchema); err != nil {
+		t.Fatalf("restore isolated schema validation search path: %v", err)
 	}
 
 	apiOptions := SchemaValidationOptions{RequiredVersion: RequiredSchemaVersion, EmbeddingEnabled: false}

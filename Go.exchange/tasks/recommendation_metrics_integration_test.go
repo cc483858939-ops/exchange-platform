@@ -28,6 +28,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 	if err := db.AutoMigrate(
 		&models.User{},
+		&models.Post{},
 		&models.ConsumerInbox{},
 		&models.RecommendationDailyMetric{},
 		&models.PostBehavior{},
@@ -46,22 +47,31 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatal(err)
 	}
 	userID := user.ID
+	var postID uint
+	t.Cleanup(func() {
+		db.Unscoped().Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
+		db.Unscoped().Where("strategy_id LIKE ?", groupID+"%").Delete(&models.RecommendationDailyMetric{})
+		db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserRecoProfileDirty{})
+		db.Unscoped().Where("user_id = ? OR post_id = ?", userID, postID).Delete(&models.PostBehavior{})
+		if postID != 0 {
+			db.Unscoped().Where("id = ?", postID).Delete(&models.Post{})
+		}
+		db.Unscoped().Where("id = ?", userID).Delete(&models.User{})
+	})
+	post := models.Post{AuthorID: userID, Content: "recommendation metrics post", Visibility: "public"}
+	if err := db.Create(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	postID = post.ID
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.RecommendationMetricsGroupID = groupID
 	global.Db = db
 
-	t.Cleanup(func() {
-		db.Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
-		db.Where("strategy_id LIKE ?", groupID+"%").Delete(&models.RecommendationDailyMetric{})
-		db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserRecoProfileDirty{})
-		db.Unscoped().Where("user_id = ?", userID).Delete(&models.PostBehavior{})
-		db.Unscoped().Where("id = ?", userID).Delete(&models.User{})
-		global.Db, config.AppConfig = originalDB, originalConfig
-	})
+	t.Cleanup(func() { global.Db, config.AppConfig = originalDB, originalConfig })
 
 	baseAt := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
-		UserID: userID, PostID: 11, RequestID: uuid.NewString(),
+		UserID: userID, PostID: postID, RequestID: uuid.NewString(),
 		Scene: "recommendation_page", Position: 1,
 		RankerVersion: "embedding_v1", RankerConfigHash: "0123456789ab",
 		StrategyID: groupID, ReceivedAt: baseAt, SelectionMode: eventing.RecommendationSelectionModeRanked,
@@ -146,7 +156,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 
 	var metric models.RecommendationDailyMetric
-	if err := db.Where("strategy_id = ? AND position = ? AND post_id = ?", groupID, 1, 11).First(&metric).Error; err != nil {
+	if err := db.Where("strategy_id = ? AND position = ? AND post_id = ?", groupID, 1, postID).First(&metric).Error; err != nil {
 		t.Fatal(err)
 	}
 	if metric.ImpressionCount != 100 || metric.ClickCount != 1 {
@@ -169,7 +179,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 
 	var clickBehavior models.PostBehavior
-	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, 11, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
+	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, postID, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
 		t.Fatal(err)
 	}
 	if clickBehavior.Count != 1 {

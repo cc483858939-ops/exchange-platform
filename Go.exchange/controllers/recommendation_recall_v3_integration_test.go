@@ -51,6 +51,7 @@ func cleanupRecommendationRecallV3Data(db *gorm.DB, postIDs, userIDs []uint) {
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostEmbedding{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
+		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	}
 	if len(userIDs) > 0 {
@@ -233,16 +234,16 @@ func assertUniqueRecommendationPostIDs(t *testing.T, candidates []embeddingCandi
 	}
 }
 
-func newRecommendationTrendingArticle(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, likes, posts int64) models.Post {
+func newRecommendationTrendingArticle(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, likes, replies int64) models.Post {
 	t.Helper()
 	article := newRecommendationCandidateIntegrationArticle(t, db, author, title, publishedAt)
 	if err := db.Model(&models.Post{}).Where("id = ?", article.ID).Updates(map[string]interface{}{
-		"like_count": likes, "comment_count": posts,
+		"like_count": likes, "reply_count": replies,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	article.LikeCount = likes
-	article.ReplyCount = posts
+	article.ReplyCount = replies
 	return article
 }
 
@@ -340,7 +341,7 @@ func TestRecommendationTrendingRecallPreservesEligibilityIntegration(t *testing.
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&models.Post{}).Where("id = ?", nonPublic.ID).Update("publication_state", "draft").Error; err != nil {
+	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", nonPublic.ID).Update("expired_at", now.Add(-time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
 

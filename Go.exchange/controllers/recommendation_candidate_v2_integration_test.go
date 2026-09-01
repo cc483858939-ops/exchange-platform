@@ -55,6 +55,11 @@ func newRecommendationCandidateIntegrationUser(t *testing.T, db *gorm.DB, label 
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.PostReaction{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+	})
 	return user
 }
 
@@ -67,6 +72,12 @@ func newRecommendationCandidateIntegrationArticle(t *testing.T, db *gorm.DB, aut
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostArticle{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
+	})
 	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: "body", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &publishedAt}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +85,9 @@ func newRecommendationCandidateIntegrationArticle(t *testing.T, db *gorm.DB, aut
 }
 
 func cleanupRecommendationCandidateIntegrationData(db *gorm.DB, postIDs, userIDs []uint) {
+	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
+	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
+	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 	db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
 }
@@ -104,7 +118,7 @@ func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing
 		now,
 		defaultRecommendationConfig(),
 		false,
-		"posts.published_at DESC, posts.id DESC",
+		effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC",
 		1,
 		"recent",
 	)

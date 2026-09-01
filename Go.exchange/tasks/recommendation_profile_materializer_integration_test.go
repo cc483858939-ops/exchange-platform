@@ -59,6 +59,15 @@ func newRecommendationProfileIntegrationUser(t *testing.T, db *gorm.DB, label st
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserRecoProfileDirty{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserRecoProfile{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserPostRecoState{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserAuthorAffinity{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.PostReaction{})
+		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+	})
 	return user
 }
 
@@ -71,6 +80,14 @@ func newRecommendationProfileIntegrationArticle(t *testing.T, db *gorm.DB, autho
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostEmbedding{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.UserPostRecoState{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostArticle{})
+		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
+	})
 	if err := db.Create(&models.PostArticle{
 		PostID: article.ID, Title: title, Preview: title + " preview", PublicationState: "published", PublishedAt: &publishedAt,
 	}).Error; err != nil {
@@ -88,6 +105,7 @@ func cleanupRecommendationProfileIntegrationData(db *gorm.DB, postIDs, userIDs [
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.UserPostRecoState{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
+		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	}
 	if len(userIDs) > 0 {
@@ -446,7 +464,7 @@ func TestPostEmbeddingUpdateRollsBackWhenProfileInvalidationFailsIntegration(t *
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Exec("ALTER TABLE user_reco_profile_dirty DROP CONSTRAINT IF EXISTS " + constraintName) })
-	if err := db.Exec("ALTER TABLE user_reco_profile_dirty ADD CONSTRAINT " + constraintName + " CHECK (reason <> 'article_embedding_changed')").Error; err != nil {
+	if err := db.Exec("ALTER TABLE user_reco_profile_dirty ADD CONSTRAINT " + constraintName + " CHECK (reason <> 'post_embedding_changed')").Error; err != nil {
 		t.Fatal(err)
 	}
 

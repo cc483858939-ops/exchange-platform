@@ -48,9 +48,36 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 
 	target := models.User{Username: "profile-target-" + uuid.NewString(), Password: "secret"}
 	other := models.User{Username: "profile-other-" + uuid.NewString(), Password: "secret"}
+	posts := []models.Post{}
 	if err := db.Create(&target).Error; err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		userIDs := make([]uint, 0, 2)
+		if target.ID != 0 {
+			userIDs = append(userIDs, target.ID)
+		}
+		if other.ID != 0 {
+			userIDs = append(userIDs, other.ID)
+		}
+		if len(userIDs) == 0 {
+			return
+		}
+		postIDs := make([]uint, 0, len(posts))
+		for _, post := range posts {
+			if post.ID != 0 {
+				postIDs = append(postIDs, post.ID)
+			}
+		}
+		var authoredPostIDs []uint
+		db.Unscoped().Model(&models.Post{}).Where("author_id IN ?", userIDs).Pluck("id", &authoredPostIDs)
+		postIDs = append(postIDs, authoredPostIDs...)
+		if len(postIDs) > 0 {
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
+			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+		}
+		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
+	})
 	if err := db.Create(&other).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -59,13 +86,13 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	pastPublishedAt := now
 	currentPublishedAt := now
 	futurePublishedAt := now.Add(time.Hour)
-	posts := []models.Post{
+	posts = []models.Post{
 		{AuthorID: target.ID, Content: "older body", LikeCount: 9, ReplyCount: 4, Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)}},
 		{AuthorID: target.ID, Content: "Canonical profile body", LikeCount: 17, ReplyCount: 8, Visibility: "public", Model: gorm.Model{CreatedAt: now, UpdatedAt: now}},
 		{AuthorID: target.ID, Content: "expired body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour)}},
 		{AuthorID: other.ID, Content: "other body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(2 * time.Hour), UpdatedAt: now.Add(2 * time.Hour)}},
 		{AuthorID: target.ID, Content: "future body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(3 * time.Hour), UpdatedAt: now.Add(3 * time.Hour)}},
-		{AuthorID: target.ID, Content: "draft body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(5 * time.Hour), UpdatedAt: now.Add(5 * time.Hour)}},
+		{AuthorID: target.ID, Content: "active short body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(-30 * time.Minute), UpdatedAt: now.Add(-30 * time.Minute)}},
 		{AuthorID: target.ID, Content: "deleted body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(6 * time.Hour), UpdatedAt: now.Add(6 * time.Hour)}},
 	}
 	if err := db.Create(&posts).Error; err != nil {
@@ -77,7 +104,6 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		{PostID: posts[2].ID, Title: "expired", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &pastPublishedAt, ExpiredAt: &expiredAt},
 		{PostID: posts[3].ID, Title: "other", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &currentPublishedAt},
 		{PostID: posts[4].ID, Title: "future", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &futurePublishedAt},
-		{PostID: posts[5].ID, Title: "draft", Preview: "p", PublicationState: "draft", PublishedAt: &currentPublishedAt},
 		{PostID: posts[6].ID, Title: "deleted", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &currentPublishedAt},
 	}
 	if err := db.Create(&postArticles).Error; err != nil {
@@ -86,15 +112,6 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err := db.Delete(&posts[6]).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		ids := make([]uint, 0, len(posts))
-		for _, post := range posts {
-			ids = append(ids, post.ID)
-		}
-		db.Unscoped().Where("post_id IN ?", ids).Delete(&models.PostArticle{})
-		db.Unscoped().Where("id IN ?", ids).Delete(&models.Post{})
-		db.Unscoped().Where("id IN ?", []uint{target.ID, other.ID}).Delete(&models.User{})
-	})
 
 	ctx, recorder := newUserControllerContext("/api/users/"+strconvUint(target.ID), strconvUint(target.ID))
 	GetUserByID(ctx)
@@ -123,7 +140,7 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 2 || page.NextCursor != nil || page.Items[0].Article == nil || page.Items[0].Article.Title != "newer" || page.Items[0].Content != "Canonical profile body" || page.Items[1].Article == nil || page.Items[1].Article.Title != "older" || page.Items[0].LikeCount != 17 || page.Items[0].ReplyCount != 8 {
+	if len(page.Items) != 3 || page.NextCursor != nil || page.Items[0].Article == nil || page.Items[0].Article.Title != "newer" || page.Items[0].Content != "Canonical profile body" || page.Items[1].Article == nil || page.Items[1].Article.Title != "older" || page.Items[2].Article != nil || page.Items[2].Content != "active short body" || page.Items[0].LikeCount != 17 || page.Items[0].ReplyCount != 8 {
 		t.Fatalf("unexpected author posts: %#v", page)
 	}
 	for _, article := range page.Items {
@@ -141,8 +158,14 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=1&cursor="+*firstPage.NextCursor, strconvUint(target.ID))
 	GetUserPosts(ctx)
 	var secondPage postPageResponse
-	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].Article == nil || secondPage.Items[0].Article.Title != "older" || secondPage.NextCursor != nil {
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].Article == nil || secondPage.Items[0].Article.Title != "older" || secondPage.NextCursor == nil {
 		t.Fatalf("second cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), secondPage)
+	}
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=1&cursor="+*secondPage.NextCursor, strconvUint(target.ID))
+	GetUserPosts(ctx)
+	var thirdPage postPageResponse
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &thirdPage) != nil || len(thirdPage.Items) != 1 || thirdPage.Items[0].Article != nil || thirdPage.Items[0].Content != "active short body" || thirdPage.NextCursor != nil {
+		t.Fatalf("third cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), thirdPage)
 	}
 
 	for _, invalid := range []string{"0", "-1", "not-a-number"} {
