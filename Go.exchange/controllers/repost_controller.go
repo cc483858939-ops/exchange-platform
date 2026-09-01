@@ -27,14 +27,14 @@ type postRepostStatesRequest struct {
 }
 
 type postRepostStateItem struct {
-	PostID uint  `json:"post_id"`
-	Reposts   int64 `json:"reposts"`
-	Reposted  bool  `json:"reposted"`
+	PostID   uint  `json:"post_id"`
+	Reposts  int64 `json:"reposts"`
+	Reposted bool  `json:"reposted"`
 }
 
 type postRepostStatesResponse struct {
-	Items                 []postRepostStateItem `json:"items"`
-	UnavailablePostIDs []uint                   `json:"unavailable_post_ids"`
+	Items              []postRepostStateItem `json:"items"`
+	UnavailablePostIDs []uint                `json:"unavailable_post_ids"`
 }
 
 type postRepostStatesLoadResult struct {
@@ -43,8 +43,8 @@ type postRepostStatesLoadResult struct {
 }
 
 type postRepostCountRow struct {
-	PostID uint  `gorm:"column:post_id"`
-	Reposts   int64 `gorm:"column:reposts"`
+	PostID  uint  `gorm:"column:post_id"`
+	Reposts int64 `gorm:"column:reposts"`
 }
 
 const maxPostRepostStateIDs = 100
@@ -141,7 +141,7 @@ func GetPostRepostStates(ctx *gin.Context) {
 	}
 
 	response := postRepostStatesResponse{
-		Items:                 make([]postRepostStateItem, 0, len(result.States)),
+		Items:              make([]postRepostStateItem, 0, len(result.States)),
 		UnavailablePostIDs: make([]uint, 0, len(result.Unavailable)),
 	}
 	unavailable := make(map[uint]struct{}, len(result.Unavailable))
@@ -151,9 +151,9 @@ func GetPostRepostStates(ctx *gin.Context) {
 	for _, postID := range uniqueIDs {
 		if state, available := result.States[postID]; available {
 			response.Items = append(response.Items, postRepostStateItem{
-				PostID: postID,
-				Reposts:   normalizePostRepostCount(state.Reposts),
-				Reposted:  state.Reposted,
+				PostID:   postID,
+				Reposts:  normalizePostRepostCount(state.Reposts),
+				Reposted: state.Reposted,
 			})
 			continue
 		}

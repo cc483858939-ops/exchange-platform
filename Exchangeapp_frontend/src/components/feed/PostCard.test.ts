@@ -222,6 +222,37 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.emitted('toggleRepost')).toEqual([[42]]);
   });
 
+  it('renders active, deleted, and unavailable bounded reference states', async () => {
+    const activeReference = {
+      id: 9,
+      state: 'active' as const,
+      author: {
+        id: 8,
+        username: 'referenced',
+        display_name: 'Referenced Author',
+        avatar_url: '',
+      },
+      content: 'Referenced post body',
+      published_at: '2026-08-17T00:00:00.000Z',
+      article: null,
+    };
+    const wrapper = mountPostCard({ ...basePost(), quotePost: activeReference });
+
+    expect(wrapper.find('.post-card__reference-content').text()).toBe('Referenced post body');
+    expect(wrapper.find('.post-card__reference-deleted').exists()).toBe(false);
+
+    await wrapper.setProps({
+      post: { ...basePost(), quotePost: { id: 9, state: 'deleted' } },
+    });
+    expect(wrapper.find('.post-card__reference-deleted').text()).toBe('Post deleted');
+    expect(wrapper.find('.post-card__reference-content').exists()).toBe(false);
+
+    await wrapper.setProps({
+      post: { ...basePost(), quotePost: { id: 9, state: 'unavailable' } },
+    });
+    expect(wrapper.find('.post-card__reference-deleted').text()).toBe('Post unavailable');
+  });
+
   it('maps unknown and unavailable like status without changing parent mutation logic', async () => {
     const wrapper = mountPostCard();
     const likeAction = wrapper.findComponent(LikeAction);

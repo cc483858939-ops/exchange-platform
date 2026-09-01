@@ -109,7 +109,11 @@ func GetPostRecommendations(ctx *gin.Context) {
 		freshSet = mergeCandidateSets(freshSet, softSet, recommendationCandidateCaps(profile, cfg).Merged)
 	}
 
-	recommendations := selectedRecommendationResponses(selected)
+	recommendations, err := selectedRecommendationResponses(selected)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
+		return
+	}
 	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, selected, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)

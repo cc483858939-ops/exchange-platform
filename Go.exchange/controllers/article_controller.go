@@ -46,6 +46,12 @@ var initializePostLikeState = func(postID uint) error {
 	return err
 }
 
+func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
+	if err := initializePostLikeState(postID); err != nil && global.Db != nil {
+		global.Db.Logger.Error(ctx, "failed to initialize post like state", err)
+	}
+}
+
 var persistPostGraphFn = persistPostGraph
 
 func normalizePostCoverImageURL(raw string) (string, error) {
@@ -148,9 +154,7 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 			log.Printf("[PostEmbedding] publish post %d request: %v", post.ID, publishErr)
 		}
 	}
-	if err := initializePostLikeState(post.ID); err != nil && global.Db != nil {
-		global.Db.Logger.Error(ctx, "failed to initialize post like state", err)
-	}
+	initializePostLikeStateAfterCommit(ctx, post.ID)
 
 	post.Author = models.User{
 		Model:       gorm.Model{ID: author.ID},
@@ -163,7 +167,10 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	_ = hydratePostResponseReferences(&response, now)
+	if err := hydratePostResponseReferences(&response, now); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	ctx.JSON(http.StatusCreated, response)
 }
 

@@ -386,7 +386,7 @@ resolved_relations AS (
 	if err := db.WithContext(ctx).Raw(resolvedTables+`
 SELECT resolved_relations.table_name,
        resolved_relations.table_schema,
-       constraint.conname AS object_name
+       constraints_catalog.conname AS object_name
 FROM resolved_relations
 JOIN pg_constraint AS constraints_catalog
   ON constraints_catalog.conrelid = resolved_relations.relation_oid

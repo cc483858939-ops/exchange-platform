@@ -17,7 +17,7 @@ type InterestProfile struct {
 	PersonalizedSignalCount       int
 	PositiveContributions         map[uint]float64
 	PositiveAffinityContributions map[uint]float64
-	InteractedPostIDs          []uint
+	InteractedPostIDs             []uint
 }
 
 type EmbeddingLoader func(postIDs []uint, version string) (map[uint][]float32, error)
@@ -42,7 +42,7 @@ func BuildInterestProfile(canonical CanonicalizationResult, now time.Time, cfg c
 	profile := InterestProfile{
 		PositiveContributions:         make(map[uint]float64),
 		PositiveAffinityContributions: make(map[uint]float64),
-		InteractedPostIDs:          append([]uint(nil), canonical.InteractedPostIDs...),
+		InteractedPostIDs:             append([]uint(nil), canonical.InteractedPostIDs...),
 	}
 	ids := make([]uint, 0, len(canonical.Outcomes))
 	for _, outcome := range canonical.Outcomes {

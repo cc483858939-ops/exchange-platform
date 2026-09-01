@@ -167,7 +167,7 @@ func enforcePostViewEventRateLimit(userID uint, eventCount int) (bool, error) {
 		return false, errors.New("redis is not initialized")
 	}
 	if userID == 0 || eventCount < 1 {
-	return false, errors.New("post view rate-limit input is invalid")
+		return false, errors.New("post view rate-limit input is invalid")
 	}
 	minute := time.Now().UTC().Unix() / 60
 	key := fmt.Sprintf("post:view:telemetry:rate:%d:%d", userID, minute)

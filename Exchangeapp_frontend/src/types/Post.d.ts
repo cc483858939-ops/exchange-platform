@@ -12,15 +12,15 @@ export interface PostArticle {
 export type PostReference =
   | {
       id: number;
-      deleted: true;
+      state: 'deleted' | 'unavailable';
     }
   | {
       id: number;
+      state: 'active';
       author: PublicAuthor;
       content: string;
       published_at: string;
       article: Pick<PostArticle, 'title' | 'preview' | 'cover_image_url'> | null;
-      deleted: false;
     };
 
 export interface Post {

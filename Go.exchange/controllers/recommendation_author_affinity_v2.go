@@ -17,8 +17,8 @@ func populateRecommendationAuthorContext(userID uint, profile *userInterestProfi
 
 	if len(profile.PositiveAffinityContributions) > 0 {
 		type postAuthorRow struct {
-			PostID uint
-			AuthorID  uint
+			PostID   uint
+			AuthorID uint
 		}
 		ids := profile.PositiveAffinityContributionIDs()
 		var rows []postAuthorRow

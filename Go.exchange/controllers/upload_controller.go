@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	postCoverObjectPrefix  = "article-covers/"
-	maxPostCoverImageSize  = 5 << 20
+	postCoverObjectPrefix     = "article-covers/"
+	maxPostCoverImageSize     = 5 << 20
 	profileAvatarObjectPrefix = "profile-avatars/"
 	maxProfileAvatarImageSize = 2 << 20
 )

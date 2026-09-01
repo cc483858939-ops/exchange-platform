@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/models"
+
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func newReplyUnitContext(method, target, id string, body *bytes.Reader) (*gin.Context, *httptest.ResponseRecorder) {
@@ -118,5 +121,45 @@ func TestCreatePostReplyRejectsOversizedRequestBeforeDatabaseLookup(t *testing.T
 
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCreatePostReplyInitializesLikeStateAfterCommit(t *testing.T) {
+	originalAuthor := loadPostAuthorForReply
+	originalCreate := createReplyWithCountFn
+	originalInitialize := initializePostLikeState
+	t.Cleanup(func() {
+		loadPostAuthorForReply = originalAuthor
+		createReplyWithCountFn = originalCreate
+		initializePostLikeState = originalInitialize
+	})
+
+	loadPostAuthorForReply = func(id uint) (publicAuthorResponse, error) {
+		return publicAuthorResponse{ID: id, Username: "reply-author"}, nil
+	}
+	createReplyWithCountFn = func(uint, uint, string) (models.Post, error) {
+		return models.Post{
+			Model:      gorm.Model{ID: 77, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()},
+			AuthorID:   3,
+			Content:    "reply",
+			Visibility: "public",
+		}, nil
+	}
+	var initializedPostID uint
+	initializePostLikeState = func(postID uint) error {
+		initializedPostID = postID
+		return nil
+	}
+
+	ctx, recorder := newReplyUnitContext(http.MethodPost, "/api/posts/7/replies", "7", bytes.NewReader([]byte(`{"content":"reply"}`)))
+	ctx.Set("user_id", uint(3))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	CreatePostReply(ctx)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if initializedPostID != 77 {
+		t.Fatalf("initialized post id=%d want 77", initializedPostID)
 	}
 }

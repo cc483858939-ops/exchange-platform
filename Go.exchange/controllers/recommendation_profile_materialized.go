@@ -28,10 +28,10 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 		return userInterestProfile{}, errors.New("database is not initialized")
 	}
 	profile := userInterestProfile{
-		AuthorAffinity:       make(map[uint]float64),
-		FollowingAuthorIDs:   make(map[uint]struct{}),
-		InteractedPostIDs: nil,
-		ProfileStatus:        recommendationProfileStatusMiss,
+		AuthorAffinity:     make(map[uint]float64),
+		FollowingAuthorIDs: make(map[uint]struct{}),
+		InteractedPostIDs:  nil,
+		ProfileStatus:      recommendationProfileStatusMiss,
 	}
 	var row models.UserRecoProfile
 	if err := global.Db.Where("user_id = ?", userID).First(&row).Error; err != nil {

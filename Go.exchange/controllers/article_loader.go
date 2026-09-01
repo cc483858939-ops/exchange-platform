@@ -160,39 +160,76 @@ func hydratePostResponseReferences(response *postResponse, now time.Time) error 
 }
 
 func hydratePostResponseReferencesFromDB(db *gorm.DB, response *postResponse, now time.Time) error {
-	if response == nil || db == nil {
+	if response == nil {
 		return nil
 	}
-	response.ReplyToPost = loadPostReferenceFromDB(db, response.ReplyToPostID, now)
-	response.QuotePost = loadPostReferenceFromDB(db, response.QuotePostID, now)
+	if response.ReplyToPostID != nil {
+		reference, err := loadPostReferenceFromDB(db, response.ReplyToPostID, now)
+		if err != nil {
+			return err
+		}
+		response.ReplyToPost = reference
+	} else {
+		response.ReplyToPost = nil
+	}
+	if response.QuotePostID != nil {
+		reference, err := loadPostReferenceFromDB(db, response.QuotePostID, now)
+		if err != nil {
+			return err
+		}
+		response.QuotePost = reference
+	} else {
+		response.QuotePost = nil
+	}
 	return nil
 }
 
-func loadPostReference(id *uint, now time.Time) *postReferenceResponse {
+func loadPostReference(id *uint, now time.Time) (*postReferenceResponse, error) {
 	return loadPostReferenceFromDB(global.Db, id, now)
 }
 
-func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) *postReferenceResponse {
-	if id == nil || *id == 0 || db == nil {
-		return nil
+func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferenceResponse, error) {
+	if id == nil || *id == 0 {
+		return nil, nil
 	}
+	if db == nil {
+		return nil, errors.New("database is not initialized")
+	}
+
+	var structuralPost models.Post
+	if err := db.Unscoped().Model(&models.Post{}).Where("posts.id = ?", *id).First(&structuralPost).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &postReferenceResponse{ID: *id, State: postReferenceStateUnavailable}, nil
+		}
+		return nil, err
+	}
+	if structuralPost.DeletedAt.Valid {
+		return &postReferenceResponse{ID: *id, State: postReferenceStateDeleted}, nil
+	}
+
 	var post models.Post
 	err := publicPostScope(preloadPostAuthor(db.Model(&models.Post{})).Where("posts.id = ?", *id), now).First(&post).Error
-	if err == nil {
-		articles, articleErr := loadPostArticlesFromDB(db, []models.Post{post})
-		if articleErr == nil {
-			publishedAt := post.CreatedAt.UTC()
-			if article := articles[post.ID]; article != nil && article.PublishedAt != nil {
-				publishedAt = article.PublishedAt.UTC()
-			}
-			author, authorErr := publicAuthorFromPost(post)
-			if authorErr == nil {
-				return &postReferenceResponse{
-					ID: post.ID, Author: author, Content: post.Content, PublishedAt: &publishedAt,
-					Article: postArticleResponseFromModel(articles[post.ID]), Deleted: false,
-				}
-			}
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &postReferenceResponse{ID: *id, State: postReferenceStateUnavailable}, nil
 		}
+		return nil, err
 	}
-	return &postReferenceResponse{ID: *id, Deleted: true}
+	articles, err := loadPostArticlesFromDB(db, []models.Post{post})
+	if err != nil {
+		return nil, err
+	}
+	article := articles[post.ID]
+	publishedAt := post.CreatedAt.UTC()
+	if article != nil && article.PublishedAt != nil {
+		publishedAt = article.PublishedAt.UTC()
+	}
+	author, err := publicAuthorFromPost(post)
+	if err != nil {
+		return nil, err
+	}
+	return &postReferenceResponse{
+		ID: post.ID, State: postReferenceStateActive, Author: &author, Content: post.Content,
+		PublishedAt: &publishedAt, Article: postArticleResponseFromModel(article),
+	}, nil
 }

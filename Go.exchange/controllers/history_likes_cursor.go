@@ -21,7 +21,7 @@ const (
 type likedHistoryCursor struct {
 	Version        int       `json:"v"`
 	StateChangedAt time.Time `json:"state_changed_at"`
-	PostID      uint      `json:"post_id"`
+	PostID         uint      `json:"post_id"`
 }
 
 func parseLikedHistoryPageQuery(ctx *gin.Context) (int, *likedHistoryCursor, error) {

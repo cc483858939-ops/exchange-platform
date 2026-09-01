@@ -298,8 +298,8 @@ func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64)
 		return nil, nil
 	}
 	type postAuthorRow struct {
-		PostID uint
-		AuthorID  uint
+		PostID   uint
+		AuthorID uint
 	}
 	var rows []postAuthorRow
 	if err := tx.Table("posts").Select("id AS post_id, author_id").Where("id IN ?", postIDs).Find(&rows).Error; err != nil {

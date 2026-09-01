@@ -28,6 +28,11 @@ type createReplyRequest struct {
 	Content string `json:"content" binding:"required"`
 }
 
+var (
+	loadPostAuthorForReply = loadPublicAuthorByID
+	createReplyWithCountFn = createReplyWithCount
+)
+
 type replyCursor struct {
 	CreatedAt time.Time `json:"created_at"`
 	ID        uint      `json:"id"`
@@ -66,7 +71,7 @@ func CreatePostReply(ctx *gin.Context) {
 		return
 	}
 
-	author, err := loadPublicAuthorByID(userID)
+	author, err := loadPostAuthorForReply(userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
@@ -76,7 +81,7 @@ func CreatePostReply(ctx *gin.Context) {
 		return
 	}
 
-	reply, err := createReplyWithCount(postID, userID, content)
+	reply, err := createReplyWithCountFn(postID, userID, content)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			writeReplyPostLookupError(ctx, err)
@@ -85,6 +90,7 @@ func CreatePostReply(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	initializePostLikeStateAfterCommit(ctx, reply.ID)
 	invalidateReplyPostCaches(postID)
 	reply.Author = models.User{
 		Model:       gorm.Model{ID: author.ID},

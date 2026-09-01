@@ -45,8 +45,8 @@
           aria-label="Referenced post"
         >
           <span class="post-detail__reference-label">{{ detailReferenceLabel }}</span>
-          <template v-if="detailReference.deleted">
-            <p class="post-detail__reference-tombstone">Post unavailable</p>
+          <template v-if="detailReference.state !== 'active'">
+            <p class="post-detail__reference-tombstone">{{ detailReferenceMessage }}</p>
           </template>
           <template v-else>
             <AuthorIdentity
@@ -395,7 +395,7 @@ const detailReferenceLabel = computed(() => (
 
 const detailReferenceContent = computed(() => {
   const reference = detailReference.value;
-  if (!reference || reference.deleted) {
+  if (!reference || reference.state !== 'active') {
     return '';
   }
   return reference.article?.title?.trim()
@@ -404,8 +404,11 @@ const detailReferenceContent = computed(() => {
 });
 const detailReferenceAuthor = computed(() => {
   const reference = detailReference.value;
-  return reference && !reference.deleted ? reference.author : null;
+  return reference?.state === 'active' ? reference.author : null;
 });
+const detailReferenceMessage = computed(() => (
+  detailReference.value?.state === 'deleted' ? 'Post deleted' : 'Post unavailable'
+));
 
 const presentationLikeLabel = computed(() => {
   const count = detailPresentation.value?.likeCount ?? 0;

@@ -298,7 +298,7 @@ type userInterestProfile struct {
 	PositiveVector                []float32
 	NegativeVector                []float32
 	NegativeConfidence            float64
-	InteractedPostIDs          map[uint]struct{}
+	InteractedPostIDs             map[uint]struct{}
 	PositiveSignalCount           int
 	NegativeSignalCount           int
 	PersonalizedSignalCount       int

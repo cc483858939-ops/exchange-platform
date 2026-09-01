@@ -13,7 +13,7 @@ import (
 
 type recommendationFeedbackEvent struct {
 	EventID     string
-	PostID   uint
+	PostID      uint
 	EventType   string
 	OccurredAt  time.Time
 	ReceivedAt  time.Time
@@ -35,7 +35,7 @@ type userPostSignal struct {
 }
 
 type userPostOutcome struct {
-	PostID       uint
+	PostID          uint
 	PositiveSignals []userPostSignal
 	NegativeSignal  *userPostSignal
 	PassiveSignal   *userPostSignal

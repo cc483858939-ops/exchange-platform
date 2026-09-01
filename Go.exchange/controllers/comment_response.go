@@ -19,7 +19,10 @@ func newReplyResponse(post models.Post) (replyResponse, error) {
 		return replyResponse{}, err
 	}
 	if post.ReplyToPostID != nil {
-		response.ReplyToPost = loadPostReference(post.ReplyToPostID, time.Now().UTC())
+		response.ReplyToPost, err = loadPostReference(post.ReplyToPostID, time.Now().UTC())
+		if err != nil {
+			return replyResponse{}, err
+		}
 	}
 	return response, nil
 }

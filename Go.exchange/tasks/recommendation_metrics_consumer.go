@@ -47,7 +47,7 @@ type recommendationMetricKey struct {
 	SelectionMode          string
 	ExplorationReason      string
 	Position               int
-	PostID              uint
+	PostID                 uint
 }
 
 type recommendationMetricDelta struct {
@@ -369,9 +369,9 @@ func metricDeltaFor(eventType string, payload eventing.RecommendationBehaviorPay
 }
 
 type recommendationBehaviorKey struct {
-	UserID    uint
+	UserID uint
 	PostID uint
-	Action    string
+	Action string
 }
 
 type recommendationBehaviorAggregate struct {

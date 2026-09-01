@@ -21,14 +21,14 @@ type State struct {
 }
 
 type SnapshotClaim struct {
-	PostID uint
-	ClaimID   string
+	PostID  uint
+	ClaimID string
 }
 
 type Snapshot struct {
-	PostID uint
-	Count     int64
-	Version   int64
+	PostID  uint
+	Count   int64
+	Version int64
 }
 
 type BehaviorClaim struct {
@@ -39,7 +39,7 @@ type BehaviorClaim struct {
 type BehaviorDelivery struct {
 	Claim      BehaviorClaim
 	UserID     uint
-	PostID  uint
+	PostID     uint
 	Liked      bool
 	Version    int64
 	OccurredAt time.Time

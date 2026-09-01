@@ -31,13 +31,13 @@ type postLikeStatesRequest struct {
 
 type postLikeStateItem struct {
 	PostID uint  `json:"post_id"`
-	Likes     int64 `json:"likes"`
-	Liked     bool  `json:"liked"`
+	Likes  int64 `json:"likes"`
+	Liked  bool  `json:"liked"`
 }
 
 type postLikeStatesResponse struct {
-	Items                 []postLikeStateItem `json:"items"`
-	UnavailablePostIDs []uint                 `json:"unavailable_post_ids"`
+	Items              []postLikeStateItem `json:"items"`
+	UnavailablePostIDs []uint              `json:"unavailable_post_ids"`
 }
 
 type postLikeStatesLoadResult struct {
@@ -137,15 +137,15 @@ func GetPostLikeStates(ctx *gin.Context) {
 		unavailable[postID] = struct{}{}
 	}
 	response := postLikeStatesResponse{
-		Items:                 make([]postLikeStateItem, 0, len(result.States)),
+		Items:              make([]postLikeStateItem, 0, len(result.States)),
 		UnavailablePostIDs: make([]uint, 0, len(result.Unavailable)),
 	}
 	for _, postID := range uniqueIDs {
 		if state, ready := result.States[postID]; ready {
 			response.Items = append(response.Items, postLikeStateItem{
 				PostID: postID,
-				Likes:     state.Likes,
-				Liked:     state.Liked,
+				Likes:  state.Likes,
+				Liked:  state.Liked,
 			})
 			continue
 		}

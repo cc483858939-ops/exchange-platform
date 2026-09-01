@@ -14,13 +14,13 @@ import (
 const (
 	ProfileRecentViewLimit = 200
 	ProfileReplyLimit      = 500
-	PostBehaviorView    = "view"
-	PostBehaviorReply   = "reply"
+	PostBehaviorView       = "view"
+	PostBehaviorReply      = "reply"
 )
 
 type FeedbackEvent struct {
 	EventID     string
-	PostID   uint
+	PostID      uint
 	EventType   string
 	OccurredAt  time.Time
 	ReceivedAt  time.Time

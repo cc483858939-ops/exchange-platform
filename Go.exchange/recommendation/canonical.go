@@ -16,14 +16,14 @@ type UserPostSignal struct {
 }
 
 type UserPostOutcome struct {
-	PostID       uint
+	PostID          uint
 	PositiveSignals []UserPostSignal
 	NegativeSignal  *UserPostSignal
 	PassiveSignal   *UserPostSignal
 }
 
 type CanonicalizationResult struct {
-	Outcomes             []UserPostOutcome
+	Outcomes          []UserPostOutcome
 	InteractedPostIDs []uint
 }
 

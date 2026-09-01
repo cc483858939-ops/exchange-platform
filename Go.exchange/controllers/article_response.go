@@ -56,13 +56,21 @@ type postArticleResponse struct {
 	ExpiredAt        *time.Time `json:"expired_at"`
 }
 
+type postReferenceState string
+
+const (
+	postReferenceStateActive      postReferenceState = "active"
+	postReferenceStateDeleted     postReferenceState = "deleted"
+	postReferenceStateUnavailable postReferenceState = "unavailable"
+)
+
 type postReferenceResponse struct {
-	ID          uint                 `json:"id"`
-	Author      publicAuthorResponse `json:"author,omitempty"`
-	Content     string               `json:"content,omitempty"`
-	PublishedAt *time.Time           `json:"published_at,omitempty"`
-	Article     *postArticleResponse `json:"article,omitempty"`
-	Deleted     bool                 `json:"deleted"`
+	ID          uint                  `json:"id"`
+	State       postReferenceState    `json:"state"`
+	Author      *publicAuthorResponse `json:"author,omitempty"`
+	Content     string                `json:"content,omitempty"`
+	PublishedAt *time.Time            `json:"published_at,omitempty"`
+	Article     *postArticleResponse  `json:"article,omitempty"`
 }
 
 func publicAuthorFromUser(user models.User) publicAuthorResponse {

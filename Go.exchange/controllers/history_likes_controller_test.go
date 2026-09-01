@@ -167,7 +167,7 @@ func TestLikedHistoryCursorRoundTripAndValidation(t *testing.T) {
 	want := likedHistoryCursor{
 		Version:        likedHistoryCursorVersion,
 		StateChangedAt: time.Date(2026, 8, 10, 14, 0, 0, 123456000, time.UTC),
-		PostID:      42,
+		PostID:         42,
 	}
 	raw, err := encodeLikedHistoryCursor(want)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestGetMyLikedHistoryPassesDedicatedCursorToLoader(t *testing.T) {
 	want := likedHistoryCursor{
 		Version:        likedHistoryCursorVersion,
 		StateChangedAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC),
-		PostID:      42,
+		PostID:         42,
 	}
 	raw, err := encodeLikedHistoryCursor(want)
 	if err != nil {

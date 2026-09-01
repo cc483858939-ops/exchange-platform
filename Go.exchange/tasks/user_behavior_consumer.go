@@ -41,7 +41,7 @@ type userBehaviorEventRecord struct {
 }
 
 type userBehaviorPair struct {
-	UserID    uint
+	UserID uint
 	PostID uint
 }
 
@@ -387,7 +387,7 @@ func bulkUpsertPostViewBehavior(tx *gorm.DB, aggregates []userBehaviorViewAggreg
 		rows = append(rows, models.PostBehavior{
 			Model:      gorm.Model{CreatedAt: updatedAt, UpdatedAt: updatedAt},
 			UserID:     aggregate.Key.UserID,
-			PostID:  aggregate.Key.PostID,
+			PostID:     aggregate.Key.PostID,
 			Action:     "view",
 			Count:      aggregate.Count,
 			LastSeenAt: aggregate.LastSeenAt,
@@ -473,7 +473,7 @@ func applyPostReactionProjection(tx *gorm.DB, eventType string, payload eventing
 
 type appliedPostReaction struct {
 	UserID         uint      `gorm:"column:user_id"`
-	PostID      uint      `gorm:"column:post_id"`
+	PostID         uint      `gorm:"column:post_id"`
 	Version        int64     `gorm:"column:reaction_version"`
 	Liked          bool      `gorm:"column:liked"`
 	StateChangedAt time.Time `gorm:"column:state_changed_at"`
@@ -579,7 +579,7 @@ func bulkUpsertPostReactions(tx *gorm.DB, candidates []userBehaviorReactionCandi
 	for _, candidate := range candidates {
 		rows = append(rows, models.PostReaction{
 			UserID:         candidate.Key.UserID,
-			PostID:      candidate.Key.PostID,
+			PostID:         candidate.Key.PostID,
 			Reaction:       models.PostReactionLike,
 			Liked:          candidate.Liked,
 			Version:        candidate.Payload.LikeVersion,

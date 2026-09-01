@@ -438,17 +438,19 @@ func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, 
 	return left.Post.ID > right.Post.ID
 }
 
-func selectedRecommendationResponses(selected []selectedRecommendation) []recommendedPostResponse {
+func selectedRecommendationResponses(selected []selectedRecommendation) ([]recommendedPostResponse, error) {
 	result := make([]recommendedPostResponse, 0, len(selected))
 	for _, item := range selected {
 		post, err := postResponseFromModel(item.Post, item.PostArticle)
 		if err != nil {
 			continue
 		}
-		_ = hydratePostResponseReferences(&post, time.Now().UTC())
+		if err := hydratePostResponseReferences(&post, time.Now().UTC()); err != nil {
+			return nil, err
+		}
 		result = append(result, recommendedPostResponse{
 			Post: post, Score: item.Breakdown.FinalScore,
 		})
 	}
-	return result
+	return result, nil
 }

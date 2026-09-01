@@ -80,9 +80,9 @@ func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 
 	type commands struct {
 		postID uint
-		ready     *redis.StringCmd
-		count     *redis.StringCmd
-		member    *redis.BoolCmd
+		ready  *redis.StringCmd
+		count  *redis.StringCmd
+		member *redis.BoolCmd
 	}
 	pipe := s.client.Pipeline()
 	batch := make([]commands, 0, len(postIDs))
@@ -90,9 +90,9 @@ func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 	for _, postID := range postIDs {
 		batch = append(batch, commands{
 			postID: postID,
-			ready:     pipe.Get(ReadyKey(postID)),
-			count:     pipe.Get(CountKey(postID)),
-			member:    pipe.SIsMember(UsersKey(postID), user),
+			ready:  pipe.Get(ReadyKey(postID)),
+			count:  pipe.Get(CountKey(postID)),
+			member: pipe.SIsMember(UsersKey(postID), user),
 		})
 	}
 	_, err := pipe.ExecContext(ctx)

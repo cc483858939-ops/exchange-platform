@@ -179,7 +179,7 @@ func TestNormalizedRecommendationConfigExplicitZeroDoesNotRelaxPositiveOnlyField
 	original := config.AppConfig
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
 		SignalHalfLifeDays:                0,
-		PositivePostWeightCap:          0,
+		PositivePostWeightCap:             0,
 		NegativeConfidenceSaturationScale: 0,
 		ServedHistoryLimit:                0,
 		Diversity:                         config.RecommendationDiversityConfig{AuthorWindowSize: 0},
