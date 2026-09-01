@@ -137,6 +137,101 @@ func TestStoreGetManyIntegration(t *testing.T) {
 		t.Fatalf("unavailable=%v", unavailable)
 	}
 }
+
+func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
+	addr := os.Getenv("REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("set REDIS_TEST_ADDR to run Redis integration test")
+	}
+	db, _ := strconv.Atoi(os.Getenv("REDIS_TEST_DB"))
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: db})
+	defer client.Close()
+	if err := client.Ping().Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(client)
+	target := uint(time.Now().UnixNano() & 0x3fffffff)
+	unrelated := target + 1
+	userID := uint(23)
+	targetPair := BehaviorPair(userID, target)
+	unrelatedPair := BehaviorPair(userID, unrelated)
+	ctx := context.Background()
+	cleanup := func() {
+		for _, postID := range []uint{target, unrelated} {
+			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+			client.SRem(DirtyKey, postID)
+			client.ZRem(ProcessingKey, postID)
+			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
+		}
+		for _, pair := range []string{targetPair, unrelatedPair} {
+			client.SRem(BehaviorDirtyKey, pair)
+			client.HDel(BehaviorStateKey, pair)
+			client.ZRem(BehaviorProcessingKey, pair)
+			client.HDel(BehaviorClaimsKey, pair)
+		}
+	}
+	cleanup()
+	defer cleanup()
+
+	for _, postID := range []uint{target, unrelated} {
+		if created, err := store.Initialize(ctx, postID, 4, 7, []uint{userID}); err != nil || !created {
+			t.Fatalf("initialize post=%d created=%t err=%v", postID, created, err)
+		}
+	}
+	client.SAdd(DirtyKey, target, unrelated)
+	client.ZAdd(ProcessingKey, &redis.Z{Score: 1, Member: target}, &redis.Z{Score: 2, Member: unrelated})
+	client.HSet(ClaimsKey, strconv.FormatUint(uint64(target), 10), "target-claim", strconv.FormatUint(uint64(unrelated), 10), "unrelated-claim")
+	client.SAdd(BehaviorDirtyKey, targetPair, unrelatedPair)
+	client.HSet(BehaviorStateKey, targetPair, "target-behavior", unrelatedPair, "unrelated-behavior")
+	client.ZAdd(BehaviorProcessingKey, &redis.Z{Score: 1, Member: targetPair}, &redis.Z{Score: 2, Member: unrelatedPair})
+	client.HSet(BehaviorClaimsKey, targetPair, "target-behavior-claim", unrelatedPair, "unrelated-behavior-claim")
+
+	if err := store.PurgePost(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{ReadyKey(target), CountKey(target), UsersKey(target), VersionKey(target)} {
+		if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
+			t.Fatalf("target key=%q exists=%d err=%v", key, exists, err)
+		}
+	}
+	if member, err := client.SIsMember(DirtyKey, target).Result(); err != nil || member {
+		t.Fatalf("target dirty member=%t err=%v", member, err)
+	}
+	if _, err := client.ZScore(ProcessingKey, strconv.FormatUint(uint64(target), 10)).Result(); err != redis.Nil {
+		t.Fatalf("target processing score err=%v", err)
+	}
+	if exists, err := client.HExists(ClaimsKey, strconv.FormatUint(uint64(target), 10)).Result(); err != nil || exists {
+		t.Fatalf("target claim exists=%t err=%v", exists, err)
+	}
+
+	for _, key := range []string{ReadyKey(unrelated), CountKey(unrelated), UsersKey(unrelated), VersionKey(unrelated)} {
+		if exists, err := client.Exists(key).Result(); err != nil || exists != 1 {
+			t.Fatalf("unrelated key=%q exists=%d err=%v", key, exists, err)
+		}
+	}
+	if member, err := client.SIsMember(DirtyKey, unrelated).Result(); err != nil || !member {
+		t.Fatalf("unrelated dirty member=%t err=%v", member, err)
+	}
+	if _, err := client.ZScore(ProcessingKey, strconv.FormatUint(uint64(unrelated), 10)).Result(); err != nil {
+		t.Fatalf("unrelated processing err=%v", err)
+	}
+	if exists, err := client.HExists(ClaimsKey, strconv.FormatUint(uint64(unrelated), 10)).Result(); err != nil || !exists {
+		t.Fatalf("unrelated claim exists=%t err=%v", exists, err)
+	}
+	for _, check := range []struct {
+		key   string
+		field string
+	}{
+		{BehaviorStateKey, targetPair}, {BehaviorStateKey, unrelatedPair},
+		{BehaviorClaimsKey, targetPair}, {BehaviorClaimsKey, unrelatedPair},
+	} {
+		if exists, err := client.HExists(check.key, check.field).Result(); err != nil || !exists {
+			t.Fatalf("behavior key=%q field=%q exists=%t err=%v", check.key, check.field, exists, err)
+		}
+	}
+}
+
 func equalUintSlices(left, right []uint) bool {
 	if len(left) != len(right) {
 		return false

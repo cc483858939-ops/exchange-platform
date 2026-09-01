@@ -102,9 +102,9 @@
         <span class="post-card__reference-label">
           {{ post.quotePost ? 'Quoted post' : 'Replying to' }}
         </span>
-        <template v-if="referencePost && referencePost.state !== 'active'">
+        <template v-if="referencePost?.deleted">
           <p class="post-card__reference-deleted">
-            {{ referencePost.state === 'deleted' ? 'Post deleted' : 'Post unavailable' }}
+            Post unavailable
           </p>
         </template>
         <template v-else>
@@ -240,13 +240,13 @@ const repostLoading = computed(() => props.post.repostStatus === 'unknown');
 const repostUnavailable = computed(() => props.post.repostStatus === 'unavailable');
 const referencePost = computed(() => props.post.quotePost ?? props.post.replyToPost ?? null);
 const referenceAuthor = computed(() => (
-  referencePost.value?.state === 'active'
+  referencePost.value && !referencePost.value.deleted
     ? referencePost.value.author
     : null
 ));
 const referenceContent = computed(() => {
   const reference = referencePost.value;
-  if (!reference || reference.state !== 'active') {
+  if (!reference || reference.deleted) {
     return '';
   }
   return reference.article?.title || reference.content || 'Post';

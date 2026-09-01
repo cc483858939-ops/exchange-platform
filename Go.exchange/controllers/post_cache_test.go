@@ -448,7 +448,8 @@ func TestIsPublicPostResponseAt(t *testing.T) {
 		{name: "published and current", state: consts.PostPublicationStatePublished, from: &past, want: true},
 		{name: "nil published at", state: consts.PostPublicationStatePublished, want: false},
 		{name: "unpublished", state: "draft", from: &past, want: false},
-		{name: "future", state: consts.PostPublicationStatePublished, from: &future, want: false},
+		{name: "future article", state: consts.PostPublicationStatePublished, from: &future, want: false},
+		{name: "future normal", want: true},
 		{name: "expired", state: consts.PostPublicationStatePublished, from: &past, until: &expired, want: false},
 	}
 	for _, testCase := range cases {
@@ -457,8 +458,11 @@ func TestIsPublicPostResponseAt(t *testing.T) {
 				PublishedAt: testCase.from,
 				Visibility:  "public",
 			}
-			if testCase.name != "nil published at" {
+			if testCase.name != "nil published at" && testCase.name != "future normal" {
 				response.Article = &postArticleResponse{PublicationState: testCase.state, PublishedAt: testCase.from, ExpiredAt: testCase.until}
+			}
+			if testCase.name == "future normal" {
+				response.PublishedAt = &future
 			}
 			if got := isPublicPostResponseAt(response, now); got != testCase.want {
 				t.Fatalf("public=%v want=%v response=%#v", got, testCase.want, response)

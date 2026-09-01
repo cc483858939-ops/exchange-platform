@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -18,93 +17,13 @@ import (
 )
 
 const (
-	replyRequestMaxBytes = 16 * 1024
-	defaultReplyLimit    = 20
-	maxReplyLimit        = 50
-	maxReplyContentRunes = 1000
-)
-
-type createReplyRequest struct {
-	Content string `json:"content" binding:"required"`
-}
-
-var (
-	loadPostAuthorForReply = loadPublicAuthorByID
-	createReplyWithCountFn = createReplyWithCount
+	defaultReplyLimit = 20
+	maxReplyLimit     = 50
 )
 
 type replyCursor struct {
 	CreatedAt time.Time `json:"created_at"`
 	ID        uint      `json:"id"`
-}
-
-func CreatePostReply(ctx *gin.Context) {
-	postID, ok := postIDFromContext(ctx)
-	if !ok {
-		return
-	}
-	userID, ok := userIDFromContext(ctx)
-	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
-		return
-	}
-	if ctx.Request == nil || ctx.Request.Body == nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid request data"})
-		return
-	}
-
-	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, replyRequestMaxBytes)
-	var req createReplyRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "reply request body is too large"})
-			return
-		}
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid request data"})
-		return
-	}
-
-	content, err := normalizeReplyContent(req.Content)
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	author, err := loadPostAuthorForReply(userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	reply, err := createReplyWithCountFn(postID, userID, content)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeReplyPostLookupError(ctx, err)
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	initializePostLikeStateAfterCommit(ctx, reply.ID)
-	invalidateReplyPostCaches(postID)
-	reply.Author = models.User{
-		Model:       gorm.Model{ID: author.ID},
-		Username:    author.Username,
-		DisplayName: author.DisplayName,
-		AvatarURL:   author.AvatarURL,
-	}
-
-	response, err := newReplyResponse(reply)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	ctx.JSON(http.StatusCreated, response)
 }
 
 func GetPostReplies(ctx *gin.Context) {
@@ -183,55 +102,6 @@ func GetPostReplies(ctx *gin.Context) {
 		nextCursor = &encoded
 	}
 	ctx.JSON(http.StatusOK, replyListResponse{Items: items, NextCursor: nextCursor})
-}
-
-func DeletePostReply(ctx *gin.Context) {
-	replyID, ok := replyIDFromContext(ctx)
-	if !ok {
-		return
-	}
-	userID, ok := userIDFromContext(ctx)
-	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
-		return
-	}
-	reply, err := deleteReplyWithCount(replyID, userID)
-	if err != nil {
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
-		case errors.Is(err, errReplyForbidden):
-			ctx.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-		default:
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		}
-		return
-	}
-	if reply.ReplyToPostID != nil {
-		invalidateReplyPostCaches(*reply.ReplyToPostID)
-	}
-	ctx.Status(http.StatusNoContent)
-	ctx.Writer.WriteHeaderNow()
-}
-
-func replyIDFromContext(ctx *gin.Context) (uint, bool) {
-	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid post id"})
-		return 0, false
-	}
-	return uint(id), true
-}
-
-func normalizeReplyContent(raw string) (string, error) {
-	content := strings.TrimSpace(raw)
-	if content == "" {
-		return "", errors.New("post content is required")
-	}
-	if utf8.RuneCountInString(content) > maxReplyContentRunes {
-		return "", errors.New("post content must not exceed 1000 characters")
-	}
-	return content, nil
 }
 
 func parseReplyLimit(ctx *gin.Context) (int, error) {

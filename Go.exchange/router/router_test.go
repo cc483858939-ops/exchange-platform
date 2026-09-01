@@ -46,6 +46,39 @@ func TestSetupRouterRejectsInvalidTrustedProxyConfiguration(t *testing.T) {
 	}
 }
 
+func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := make(map[string]struct{}, len(engine.Routes()))
+	for _, route := range engine.Routes() {
+		routes[route.Method+" "+route.Path] = struct{}{}
+	}
+	for _, route := range []string{
+		"POST /api/posts",
+		"DELETE /api/posts/:id",
+		"GET /api/posts/:id/replies",
+	} {
+		if _, ok := routes[route]; !ok {
+			t.Fatalf("missing canonical route %q", route)
+		}
+	}
+	for _, route := range []string{
+		"POST /api/posts/:id/replies",
+		"DELETE /api/posts/:post_id/replies/:reply_id",
+		"POST /api/articles",
+		"DELETE /api/articles/:id",
+		"POST /api/comments",
+		"DELETE /api/comments/:id",
+	} {
+		if _, ok := routes[route]; ok {
+			t.Fatalf("shadow mutation route is registered: %q", route)
+		}
+	}
+}
+
 func newClientIPTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

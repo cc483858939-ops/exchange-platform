@@ -331,10 +331,10 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.find('.detail-state--error').text()).toContain('The post could not be loaded.');
   });
 
-  it('renders active, deleted, and unavailable bounded reference states', async () => {
+  it('renders active and tombstoned bounded references', async () => {
     const activeReference = {
       id: 9,
-      state: 'active' as const,
+      deleted: false as const,
       author: {
         id: 8,
         username: 'referenced',
@@ -360,17 +360,7 @@ describe('PostDetailView post-first surface', () => {
     wrapper = null;
     mocks.getPostById.mockResolvedValueOnce(canonicalPost({
       quote_post_id: 9,
-      quote_post: { id: 9, state: 'deleted' },
-    }));
-    wrapper = mountDetail();
-    await flushPromises();
-    expect(wrapper.find('.post-detail__reference-tombstone').text()).toBe('Post deleted');
-
-    wrapper.unmount();
-    wrapper = null;
-    mocks.getPostById.mockResolvedValueOnce(canonicalPost({
-      quote_post_id: 9,
-      quote_post: { id: 9, state: 'unavailable' },
+      quote_post: { id: 9, deleted: true },
     }));
     wrapper = mountDetail();
     await flushPromises();

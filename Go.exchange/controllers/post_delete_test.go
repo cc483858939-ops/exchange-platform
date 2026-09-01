@@ -43,7 +43,9 @@ func stubPostDeleteDependencies(t *testing.T, transactionErr error) {
 	})
 
 	loadPostDeleteViewer = func(uint) error { return nil }
-	deletePostInTransaction = func(uint, uint) error { return transactionErr }
+	deletePostInTransaction = func(uint, uint) (postDeleteResult, error) {
+		return postDeleteResult{}, transactionErr
+	}
 	invalidatePostDeleteDetailCache = func(uint) error { return nil }
 	cleanupDeletedPostLikeState = func(uint) error { return nil }
 }
@@ -127,6 +129,30 @@ func TestDeletePostOwnerReturnsNoContentAndCleansUpOnce(t *testing.T) {
 	}
 	if detailCalls != 1 || likeCalls != 1 {
 		t.Fatalf("cleanup calls detail=%d likes=%d", detailCalls, likeCalls)
+	}
+}
+
+func TestDeletePostInvalidatesDeletedPostAndDirectParent(t *testing.T) {
+	viewerID := uint(7)
+	stubPostDeleteDependencies(t, nil)
+	parentID := uint(9)
+	deletePostInTransaction = func(uint, uint) (postDeleteResult, error) {
+		return postDeleteResult{ParentPostID: &parentID}, nil
+	}
+	var invalidated []uint
+	invalidatePostDeleteDetailCache = func(postID uint) error {
+		invalidated = append(invalidated, postID)
+		return nil
+	}
+
+	ctx, recorder := newPostDeleteContext("42", &viewerID)
+	DeletePost(ctx)
+	ctx.Writer.WriteHeaderNow()
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(invalidated) != 2 || invalidated[0] != 42 || invalidated[1] != parentID {
+		t.Fatalf("invalidated=%v want target then parent", invalidated)
 	}
 }
 

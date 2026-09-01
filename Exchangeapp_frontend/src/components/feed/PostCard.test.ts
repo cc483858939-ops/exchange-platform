@@ -222,10 +222,10 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.emitted('toggleRepost')).toEqual([[42]]);
   });
 
-  it('renders active, deleted, and unavailable bounded reference states', async () => {
+  it('renders active and tombstoned bounded references', async () => {
     const activeReference = {
       id: 9,
-      state: 'active' as const,
+      deleted: false as const,
       author: {
         id: 8,
         username: 'referenced',
@@ -242,15 +242,10 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.find('.post-card__reference-deleted').exists()).toBe(false);
 
     await wrapper.setProps({
-      post: { ...basePost(), quotePost: { id: 9, state: 'deleted' } },
-    });
-    expect(wrapper.find('.post-card__reference-deleted').text()).toBe('Post deleted');
-    expect(wrapper.find('.post-card__reference-content').exists()).toBe(false);
-
-    await wrapper.setProps({
-      post: { ...basePost(), quotePost: { id: 9, state: 'unavailable' } },
+      post: { ...basePost(), quotePost: { id: 9, deleted: true } },
     });
     expect(wrapper.find('.post-card__reference-deleted').text()).toBe('Post unavailable');
+    expect(wrapper.find('.post-card__reference-content').exists()).toBe(false);
   });
 
   it('maps unknown and unavailable like status without changing parent mutation logic', async () => {

@@ -60,9 +60,6 @@ func isPublicPostResponseAt(post postResponse, now time.Time) bool {
 		return false
 	}
 	now = now.UTC()
-	if post.PublishedAt.After(now) {
-		return false
-	}
 	if post.Article == nil {
 		return true
 	}
@@ -199,19 +196,19 @@ func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferen
 	var structuralPost models.Post
 	if err := db.Unscoped().Model(&models.Post{}).Where("posts.id = ?", *id).First(&structuralPost).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &postReferenceResponse{ID: *id, State: postReferenceStateUnavailable}, nil
+			return &postReferenceResponse{ID: *id, Deleted: true}, nil
 		}
 		return nil, err
 	}
 	if structuralPost.DeletedAt.Valid {
-		return &postReferenceResponse{ID: *id, State: postReferenceStateDeleted}, nil
+		return &postReferenceResponse{ID: *id, Deleted: true}, nil
 	}
 
 	var post models.Post
 	err := publicPostScope(preloadPostAuthor(db.Model(&models.Post{})).Where("posts.id = ?", *id), now).First(&post).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &postReferenceResponse{ID: *id, State: postReferenceStateUnavailable}, nil
+			return &postReferenceResponse{ID: *id, Deleted: true}, nil
 		}
 		return nil, err
 	}
@@ -229,7 +226,7 @@ func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferen
 		return nil, err
 	}
 	return &postReferenceResponse{
-		ID: post.ID, State: postReferenceStateActive, Author: &author, Content: post.Content,
-		PublishedAt: &publishedAt, Article: postArticleResponseFromModel(article),
+		ID: post.ID, Deleted: false, Author: &author, Content: post.Content,
+		PublishedAt: &publishedAt, Article: postReferenceArticleFromModel(article),
 	}, nil
 }

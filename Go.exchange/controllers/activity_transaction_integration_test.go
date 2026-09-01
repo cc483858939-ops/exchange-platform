@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestActivityOutboxFailureRollsBackReplyAndFollowIntegration(t *testing.T) {
+func TestActivityOutboxFailureRollsBackCanonicalReplyAndFollowIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -70,7 +70,12 @@ $$`).Error; err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := createReplyWithCount(article.ID, commenter.ID, "should rollback"); err == nil {
+	var reply models.Post
+	var replyArticle *models.PostArticle
+	if err := persistPostGraph(&reply, &replyArticle, commenter.ID, "should rollback", createPostRequest{
+		Content:       "should rollback",
+		ReplyToPostID: &article.ID,
+	}, now); err == nil {
 		t.Fatal("comment unexpectedly succeeded with failing Outbox insert")
 	}
 	var replyCount int64

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"Go.exchange/config"
 	"Go.exchange/consts"
@@ -37,6 +38,11 @@ type createPostRequest struct {
 	Article       *createPostArticleRequest `json:"article"`
 }
 
+const (
+	createPostRequestMaxBytes = 1 << 20 // 1 MiB JSON request envelope
+	maxReplyContentRunes      = 1000
+)
+
 var loadPostAuthorForCreate = loadPublicAuthorByID
 var initializePostLikeState = func(postID uint) error {
 	if global.RedisDB == nil {
@@ -44,6 +50,13 @@ var initializePostLikeState = func(postID uint) error {
 	}
 	_, err := likes.NewStore(global.RedisDB).Initialize(context.Background(), postID, 0, 0, nil)
 	return err
+}
+
+var invalidatePostCreateParentDetailCache = func(postID uint) error {
+	if global.RedisDB == nil {
+		return nil
+	}
+	return InvalidatePostDetailCacheByID(postID)
 }
 
 func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
@@ -81,18 +94,15 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		return
 	}
 
-	author, err := loadPostAuthorForCreate(userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, createPostRequestMaxBytes)
 
 	var req createPostRequest
-	if err := ctx.ShouldBind(&req); err != nil {
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+			return
+		}
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -100,6 +110,10 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
+		return
+	}
+	if req.ReplyToPostID != nil && utf8.RuneCountInString(content) > maxReplyContentRunes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "reply content exceeds 1000 Unicode code points"})
 		return
 	}
 	now := time.Now().UTC()
@@ -130,6 +144,16 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		}
 	}
 
+	author, err := loadPostAuthorForCreate(userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	var post models.Post
 	var article *models.PostArticle
 	err = persistPostGraphFn(&post, &article, userID, content, req, now)
@@ -155,6 +179,11 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		}
 	}
 	initializePostLikeStateAfterCommit(ctx, post.ID)
+	if post.ReplyToPostID != nil {
+		if err := invalidatePostCreateParentDetailCache(*post.ReplyToPostID); err != nil {
+			log.Printf("[PostCreate] invalidate parent post detail cache for %d: %v", *post.ReplyToPostID, err)
+		}
+	}
 
 	post.Author = models.User{
 		Model:       gorm.Model{ID: author.ID},
@@ -227,13 +256,12 @@ func persistPostGraph(post *models.Post, article **models.PostArticle, userID ui
 			*article = row
 		}
 		if post.ReplyToPostID != nil {
-			result := tx.Model(&models.Post{}).Where("id = ?", *post.ReplyToPostID).
-				UpdateColumn("reply_count", gorm.Expr("reply_count + 1"))
-			if result.Error != nil {
-				return result.Error
+			rowsAffected, err := incrementPostReplyCount(tx, *post.ReplyToPostID)
+			if err != nil {
+				return err
 			}
-			if result.RowsAffected != 1 {
-				return errors.New("reply count consistency error")
+			if rowsAffected != 1 {
+				return errPostReplyCountConsistency
 			}
 			rootID := *post.ConversationID
 			if err := upsertReplyPostBehavior(tx, userID, rootID, now); err != nil {

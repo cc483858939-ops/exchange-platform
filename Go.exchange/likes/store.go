@@ -132,6 +132,27 @@ func (s *Store) Initialize(ctx context.Context, postID uint, count, version int6
 	return value == 1, err
 }
 
+// PurgePost removes all Redis-owned Like state for a deleted Post. Relational
+// PostReaction rows and behavior-relay keys are intentionally outside this
+// cleanup contract.
+func (s *Store) PurgePost(ctx context.Context, postID uint) error {
+	if s == nil || s.client == nil {
+		return errors.New("redis is not initialized")
+	}
+	if postID == 0 {
+		return errors.New("invalid post id")
+	}
+
+	postIDString := strconv.FormatUint(uint64(postID), 10)
+	pipe := s.client.Pipeline()
+	pipe.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+	pipe.SRem(DirtyKey, postID)
+	pipe.ZRem(ProcessingKey, postID)
+	pipe.HDel(ClaimsKey, postIDString)
+	_, err := pipe.ExecContext(ctx)
+	return err
+}
+
 func (s *Store) ClaimDirty(ctx context.Context, batch int, lease time.Duration) ([]SnapshotClaim, error) {
 	if batch <= 0 {
 		batch = 100

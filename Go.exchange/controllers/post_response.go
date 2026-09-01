@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -56,21 +57,42 @@ type postArticleResponse struct {
 	ExpiredAt        *time.Time `json:"expired_at"`
 }
 
-type postReferenceState string
-
-const (
-	postReferenceStateActive      postReferenceState = "active"
-	postReferenceStateDeleted     postReferenceState = "deleted"
-	postReferenceStateUnavailable postReferenceState = "unavailable"
-)
+type postReferenceArticleResponse struct {
+	Title         string `json:"title"`
+	Preview       string `json:"preview"`
+	CoverImageURL string `json:"cover_image_url"`
+}
 
 type postReferenceResponse struct {
-	ID          uint                  `json:"id"`
-	State       postReferenceState    `json:"state"`
-	Author      *publicAuthorResponse `json:"author,omitempty"`
-	Content     string                `json:"content,omitempty"`
-	PublishedAt *time.Time            `json:"published_at,omitempty"`
-	Article     *postArticleResponse  `json:"article,omitempty"`
+	ID          uint                          `json:"id"`
+	Deleted     bool                          `json:"deleted"`
+	Author      *publicAuthorResponse         `json:"author,omitempty"`
+	Content     string                        `json:"content,omitempty"`
+	PublishedAt *time.Time                    `json:"published_at,omitempty"`
+	Article     *postReferenceArticleResponse `json:"article,omitempty"`
+}
+
+func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
+	if reference.Deleted {
+		return json.Marshal(struct {
+			ID      uint `json:"id"`
+			Deleted bool `json:"deleted"`
+		}{ID: reference.ID, Deleted: true})
+	}
+	if reference.Author == nil || reference.PublishedAt == nil {
+		return nil, errors.New("active post reference is incomplete")
+	}
+	return json.Marshal(struct {
+		ID          uint                          `json:"id"`
+		Author      publicAuthorResponse          `json:"author"`
+		Content     string                        `json:"content"`
+		PublishedAt time.Time                     `json:"published_at"`
+		Article     *postReferenceArticleResponse `json:"article"`
+		Deleted     bool                          `json:"deleted"`
+	}{
+		ID: reference.ID, Author: *reference.Author, Content: reference.Content,
+		PublishedAt: reference.PublishedAt.UTC(), Article: reference.Article, Deleted: false,
+	})
 }
 
 func publicAuthorFromUser(user models.User) publicAuthorResponse {
@@ -111,6 +133,15 @@ func postArticleResponseFromModel(article *models.PostArticle) *postArticleRespo
 		Title: article.Title, Preview: article.Preview, CoverImageURL: article.CoverImageURL,
 		PublicationState: article.PublicationState, PublishedAt: article.PublishedAt,
 		ExpiredAt: article.ExpiredAt,
+	}
+}
+
+func postReferenceArticleFromModel(article *models.PostArticle) *postReferenceArticleResponse {
+	if article == nil {
+		return nil
+	}
+	return &postReferenceArticleResponse{
+		Title: article.Title, Preview: article.Preview, CoverImageURL: article.CoverImageURL,
 	}
 }
 

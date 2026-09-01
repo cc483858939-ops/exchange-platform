@@ -12,11 +12,11 @@ export interface PostArticle {
 export type PostReference =
   | {
       id: number;
-      state: 'deleted' | 'unavailable';
+      deleted: true;
     }
   | {
       id: number;
-      state: 'active';
+      deleted: false;
       author: PublicAuthor;
       content: string;
       published_at: string;

@@ -143,6 +143,176 @@ func TestCreatePostRejectsWhitespaceOnlyContent(t *testing.T) {
 	}
 }
 
+func TestCreatePostAcceptsReplyAtUnicodeRuneLimit(t *testing.T) {
+	stubCreatePostAuthor(t)
+	stubPostCreatePersistence(t, nil, 47)
+	content := strings.Repeat("界", maxReplyContentRunes)
+	parentID := uint(7)
+	body, err := json.Marshal(createPostRequest{Content: content, ReplyToPostID: &parentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := executeCreatePostRequest(t, body, nil)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCreatePostRejectsReplyAboveUnicodeRuneLimitBeforeSideEffects(t *testing.T) {
+	stubCreatePostAuthor(t)
+	originalPersist := persistPostGraphFn
+	originalInitialize := initializePostLikeState
+	originalInvalidate := invalidatePostCreateParentDetailCache
+	originalConfig := config.AppConfig
+	persistCalls := 0
+	initializeCalls := 0
+	invalidateCalls := 0
+	persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
+		persistCalls++
+		return nil
+	}
+	initializePostLikeState = func(uint) error {
+		initializeCalls++
+		return nil
+	}
+	invalidatePostCreateParentDetailCache = func(uint) error {
+		invalidateCalls++
+		return nil
+	}
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true}}
+	publisher := &recommendationTestPublisher{}
+	t.Cleanup(func() {
+		persistPostGraphFn = originalPersist
+		initializePostLikeState = originalInitialize
+		invalidatePostCreateParentDetailCache = originalInvalidate
+		config.AppConfig = originalConfig
+	})
+
+	parentID := uint(7)
+	body, err := json.Marshal(createPostRequest{Content: strings.Repeat("界", maxReplyContentRunes+1), ReplyToPostID: &parentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := executeCreatePostRequest(t, body, publisher)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if persistCalls != 0 || publisher.calls != 0 || initializeCalls != 0 || invalidateCalls != 0 {
+		t.Fatalf("side effects persist=%d publish=%d initialize=%d invalidate=%d", persistCalls, publisher.calls, initializeCalls, invalidateCalls)
+	}
+}
+
+func TestCreatePostDoesNotApplyReplyRuneLimitToRootOrArticle(t *testing.T) {
+	tests := []struct {
+		name    string
+		request createPostRequest
+	}{
+		{
+			name:    "root",
+			request: createPostRequest{Content: strings.Repeat("界", maxReplyContentRunes+1)},
+		},
+		{
+			name: "article",
+			request: createPostRequest{
+				Content: strings.Repeat("界", maxReplyContentRunes+1),
+				Article: &createPostArticleRequest{Title: "long article", Preview: "preview"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stubCreatePostAuthor(t)
+			stubPostCreatePersistence(t, nil, 48)
+			body, err := json.Marshal(test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := executeCreatePostRequest(t, body, nil)
+			if recorder.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestCreatePostRejectsOversizedAndMalformedJSONBeforeSideEffects(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       []byte
+		wantStatus int
+	}{
+		{
+			name:       "oversized envelope",
+			body:       mustMarshalCreatePostBody(t, strings.Repeat("a", createPostRequestMaxBytes)),
+			wantStatus: http.StatusRequestEntityTooLarge,
+		},
+		{name: "malformed json", body: []byte("{"), wantStatus: http.StatusBadRequest},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stubCreatePostAuthor(t)
+			originalPersist := persistPostGraphFn
+			originalInitialize := initializePostLikeState
+			originalInvalidate := invalidatePostCreateParentDetailCache
+			originalConfig := config.AppConfig
+			persistCalls := 0
+			initializeCalls := 0
+			invalidateCalls := 0
+			persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
+				persistCalls++
+				return nil
+			}
+			initializePostLikeState = func(uint) error {
+				initializeCalls++
+				return nil
+			}
+			invalidatePostCreateParentDetailCache = func(uint) error {
+				invalidateCalls++
+				return nil
+			}
+			config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true}}
+			publisher := &recommendationTestPublisher{}
+			t.Cleanup(func() {
+				persistPostGraphFn = originalPersist
+				initializePostLikeState = originalInitialize
+				invalidatePostCreateParentDetailCache = originalInvalidate
+				config.AppConfig = originalConfig
+			})
+
+			recorder := executeCreatePostRequest(t, test.body, publisher)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status=%d body=%s want=%d", recorder.Code, recorder.Body.String(), test.wantStatus)
+			}
+			if persistCalls != 0 || publisher.calls != 0 || initializeCalls != 0 || invalidateCalls != 0 {
+				t.Fatalf("side effects persist=%d publish=%d initialize=%d invalidate=%d", persistCalls, publisher.calls, initializeCalls, invalidateCalls)
+			}
+		})
+	}
+}
+
+func executeCreatePostRequest(t *testing.T, body []byte, publisher eventing.BatchPublisher) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(7))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	NewCreatePostHandler(publisher)(ctx)
+	return recorder
+}
+
+func mustMarshalCreatePostBody(t *testing.T, content string) []byte {
+	t.Helper()
+	body, err := json.Marshal(createPostRequest{Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func TestCreatePostRejectsMissingUserContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

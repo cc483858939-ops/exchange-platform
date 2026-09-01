@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -16,8 +17,9 @@ import (
 )
 
 var (
-	errPostDeleteNotFound  = errors.New("post not found")
-	errPostDeleteForbidden = errors.New("forbidden")
+	errPostDeleteNotFound    = errors.New("post not found")
+	errPostDeleteForbidden   = errors.New("forbidden")
+	errPostDeleteConsistency = errors.New("post delete consistency error")
 
 	loadPostDeleteViewer = loadActiveFollowingViewerFromDB
 
@@ -36,16 +38,13 @@ var (
 		if global.RedisDB == nil {
 			return nil
 		}
-
-		pipeline := global.RedisDB.Pipeline()
-		pipeline.Del(likes.ReadyKey(postID))
-		pipeline.SRem(likes.DirtyKey, postID)
-		pipeline.ZRem(likes.ProcessingKey, postID)
-		pipeline.HDel(likes.ClaimsKey, strconv.FormatUint(uint64(postID), 10))
-		_, err := pipeline.Exec()
-		return err
+		return likes.NewStore(global.RedisDB).PurgePost(context.Background(), postID)
 	}
 )
+
+type postDeleteResult struct {
+	ParentPostID *uint
+}
 
 func parsePostDeleteID(raw string) (uint, error) {
 	id, err := strconv.ParseUint(raw, 10, 64)
@@ -55,12 +54,13 @@ func parsePostDeleteID(raw string) (uint, error) {
 	return uint(id), nil
 }
 
-func deletePostInTransactionFromDB(postID, viewerID uint) error {
+func deletePostInTransactionFromDB(postID, viewerID uint) (postDeleteResult, error) {
+	var deleteResult postDeleteResult
 	if global.Db == nil {
-		return errors.New("database is not initialized")
+		return deleteResult, errors.New("database is not initialized")
 	}
 
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.Transaction(func(tx *gorm.DB) error {
 		var post models.Post
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, postID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -73,25 +73,40 @@ func deletePostInTransactionFromDB(postID, viewerID uint) error {
 		}
 		if post.ReplyToPostID != nil {
 			// Serialize against concurrent replies/deletes of the direct parent.
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&models.Post{}, *post.ReplyToPostID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			var parent models.Post
+			if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).First(&parent, *post.ReplyToPostID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return errPostDeleteConsistency
+				}
 				return err
 			}
-			result := tx.Model(&models.Post{}).
-				Where("id = ? AND reply_count > 0", *post.ReplyToPostID).
-				UpdateColumn("reply_count", gorm.Expr("reply_count - 1"))
-			if result.Error != nil {
-				return result.Error
+			rowsAffected, err := decrementPostReplyCount(tx, parent.ID)
+			if err != nil {
+				return err
 			}
+			if rowsAffected != 1 {
+				return errPostDeleteConsistency
+			}
+			parentID := parent.ID
+			deleteResult.ParentPostID = &parentID
 		}
 
 		if err := deletePostRepostsInTransaction(tx, postID); err != nil {
 			return err
 		}
-		if err := tx.Delete(&post).Error; err != nil {
-			return err
+		result := tx.Delete(&post)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errPostDeleteConsistency
 		}
 		return nil
 	})
+	if err != nil {
+		return postDeleteResult{}, err
+	}
+	return deleteResult, nil
 }
 
 func writePostDeleteStoreError(ctx *gin.Context) {
@@ -119,7 +134,8 @@ func DeletePost(ctx *gin.Context) {
 		return
 	}
 
-	if err := deletePostInTransaction(postID, viewerID); err != nil {
+	deleteResult, err := deletePostInTransaction(postID, viewerID)
+	if err != nil {
 		switch {
 		case errors.Is(err, errPostDeleteNotFound):
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
@@ -134,9 +150,15 @@ func DeletePost(ctx *gin.Context) {
 	if err := invalidatePostDeleteDetailCache(postID); err != nil {
 		log.Printf("[PostDelete] invalidate post detail cache for %d: %v", postID, err)
 	}
+	if deleteResult.ParentPostID != nil {
+		if err := invalidatePostDeleteDetailCache(*deleteResult.ParentPostID); err != nil {
+			log.Printf("[PostDelete] invalidate parent post detail cache for %d: %v", *deleteResult.ParentPostID, err)
+		}
+	}
 	if err := cleanupDeletedPostLikeState(postID); err != nil {
 		log.Printf("[PostDelete] clean up like state for %d: %v", postID, err)
 	}
 
 	ctx.Status(http.StatusNoContent)
+	ctx.Writer.WriteHeaderNow()
 }

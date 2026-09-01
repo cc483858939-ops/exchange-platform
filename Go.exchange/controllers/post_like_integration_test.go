@@ -58,11 +58,11 @@ func TestPostCreationFormsAreImmediatelyLikeReadyIntegration(t *testing.T) {
 	createdIDs = append(createdIDs, genericReply.ID)
 	assertPostLikeStateIntegration(t, genericReply.ID, fixture.Other.ID, 0, false)
 
-	dedicatedReply := createDedicatedReplyForLikeIntegration(t, fixture.Commenter.ID, shortRoot.ID, "dedicated reply")
+	dedicatedReply := createCanonicalReplyForLikeIntegration(t, fixture.Commenter.ID, shortRoot.ID, "canonical reply")
 	createdIDs = append(createdIDs, dedicatedReply.ID)
 	assertPostLikeStateIntegration(t, dedicatedReply.ID, fixture.Commenter.ID, 0, false)
 
-	nestedReply := createDedicatedReplyForLikeIntegration(t, fixture.Other.ID, dedicatedReply.ID, "nested reply")
+	nestedReply := createCanonicalReplyForLikeIntegration(t, fixture.Other.ID, dedicatedReply.ID, "nested reply")
 	createdIDs = append(createdIDs, nestedReply.ID)
 	assertPostLikeStateIntegration(t, nestedReply.ID, fixture.Other.ID, 0, false)
 
@@ -146,18 +146,18 @@ func createPostForLikeIntegration(t *testing.T, userID uint, body string) postRe
 	return response
 }
 
-func createDedicatedReplyForLikeIntegration(t *testing.T, userID, parentID uint, content string) postResponse {
+func createCanonicalReplyForLikeIntegration(t *testing.T, userID, parentID uint, content string) postResponse {
 	t.Helper()
 	ctx, recorder := newReplyIntegrationContext(
 		http.MethodPost,
-		"/api/posts/"+strconvUint(parentID)+"/replies",
+		"/api/posts",
 		strconvUint(parentID),
-		fmt.Sprintf(`{"content":%q}`, content),
+		fmt.Sprintf(`{"content":%q,"reply_to_post_id":%d}`, content, parentID),
 		userID,
 	)
-	CreatePostReply(ctx)
+	createPost(ctx, nil)
 	if recorder.Code != http.StatusCreated {
-		t.Fatalf("create dedicated reply status=%d body=%s", recorder.Code, recorder.Body.String())
+		t.Fatalf("create canonical reply status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	var response postResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {

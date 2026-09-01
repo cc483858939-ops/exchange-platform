@@ -88,7 +88,9 @@ func newReplyIntegrationFixture(t *testing.T, db *gorm.DB) replyIntegrationFixtu
 		if fixture.Article.ID != 0 {
 			db.Unscoped().Where("id = ?", fixture.Article.ID).Delete(&models.Post{})
 		}
-		db.Unscoped().Where("id IN ?", []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.User{})
+		fixtureUserIDs := []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}
+		db.Unscoped().Where("user_id IN ?", fixtureUserIDs).Delete(&models.UserRecoProfileDirty{})
+		db.Unscoped().Where("id IN ?", fixtureUserIDs).Delete(&models.User{})
 	})
 	if err := db.Create(&fixture.Author).Error; err != nil {
 		t.Fatal(err)
@@ -155,7 +157,7 @@ func createReplyRecord(t *testing.T, db *gorm.DB, postID, userID uint, content s
 	return comment
 }
 
-func TestCreatePostReplyIntegration(t *testing.T) {
+func TestCreateCanonicalReplyIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
@@ -225,7 +227,7 @@ func TestCreatePostReplyIntegration(t *testing.T) {
 	}
 }
 
-func TestGetPostCommentsCursorIntegration(t *testing.T) {
+func TestGetPostRepliesCursorIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
@@ -304,7 +306,7 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 
 	owned := createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "owned", time.Time{})
 	ctx, recorder := newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Other.ID)
-	DeletePostReply(ctx)
+	DeletePost(ctx)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("other user delete status=%d", recorder.Code)
 	}
@@ -316,7 +318,7 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 	}
 
 	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
-	DeletePostReply(ctx)
+	DeletePost(ctx)
 	if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 {
 		t.Fatalf("owner delete status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
@@ -328,7 +330,7 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 		t.Fatalf("owner delete count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(owned.ID), strconvUint(owned.ID), "", fixture.Commenter.ID)
-	DeletePostReply(ctx)
+	DeletePost(ctx)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("repeat delete status=%d", recorder.Code)
 	}
@@ -342,7 +344,7 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(expiring.ID), strconvUint(expiring.ID), "", fixture.Commenter.ID)
-	DeletePostReply(ctx)
+	DeletePost(ctx)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("delete after article expiry status=%d", recorder.Code)
 	}
@@ -358,7 +360,7 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 		go func() {
 			defer waitGroup.Done()
 			deleteCtx, deleteRecorder := newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(concurrent.ID), strconvUint(concurrent.ID), "", fixture.Commenter.ID)
-			DeletePostReply(deleteCtx)
+			DeletePost(deleteCtx)
 			statuses <- deleteRecorder.Code
 		}()
 	}
@@ -383,7 +385,7 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 		t.Fatalf("concurrent delete count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 }
-func TestGetPostCommentsEmptyFeed(t *testing.T) {
+func TestGetPostRepliesEmptyFeed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
@@ -412,7 +414,7 @@ func TestGetPostCommentsEmptyFeed(t *testing.T) {
 	}
 }
 
-func TestReplyCursorStableAfterDelete(t *testing.T) {
+func TestPostReplyCursorStableAfterDelete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
@@ -468,7 +470,7 @@ func TestReplyCursorStableAfterDelete(t *testing.T) {
 	}
 }
 
-func TestReplyCursorStableAfterNewComment(t *testing.T) {
+func TestPostReplyCursorStableAfterNewReply(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
@@ -518,7 +520,7 @@ func TestReplyCursorStableAfterNewComment(t *testing.T) {
 		}
 	}
 }
-func TestReplyAuthorUsesCurrentUserIdentityIntegration(t *testing.T) {
+func TestCanonicalReplyUsesCurrentUserIdentityIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
