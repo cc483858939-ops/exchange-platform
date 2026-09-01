@@ -3,9 +3,12 @@ package likes
 import "fmt"
 
 const (
-	DirtyKey      = "post:likes:dirty"
-	ProcessingKey = "post:likes:processing"
-	ClaimsKey     = "post:likes:claims"
+	DirtyKey               = "post:likes:dirty"
+	ProcessingKey          = "post:likes:processing"
+	ClaimsKey              = "post:likes:claims"
+	RegistryKey            = "post:likes:registry"
+	ExpiryCandidatesKey    = "post:likes:expiry:candidates"
+	RecoverableVersionsKey = "post:likes:recoverable:versions"
 
 	BehaviorDirtyKey      = "post:likes:behavior:dirty"
 	BehaviorStateKey      = "post:likes:behavior:state"

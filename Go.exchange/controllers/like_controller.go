@@ -47,9 +47,9 @@ type postLikeStatesLoadResult struct {
 
 const maxPostLikeStateIDs = 100
 
-var setPostLikedState = setPostLikedStateWithRedis
-var loadPostLikeState = loadPostLikeStateFromRedis
-var loadPostLikeStates = loadPostLikeStatesFromRedis
+var setPostLikedState = setPostLikedStateWithRecovery
+var loadPostLikeState = loadPostLikeStateWithRecovery
+var loadPostLikeStates = loadPostLikeStatesWithRecovery
 var invalidatePostLikeDetailCache = func(postID uint) error {
 	if global.RedisDB == nil {
 		return nil
@@ -159,7 +159,7 @@ func GetPostLikeStates(ctx *gin.Context) {
 }
 func postIDFromContext(ctx *gin.Context) (uint, bool) {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
-	if err != nil || id == 0 {
+	if err != nil || id == 0 || uint64(uint(id)) != id {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post id"})
 		return 0, false
 	}
@@ -167,8 +167,20 @@ func postIDFromContext(ctx *gin.Context) (uint, bool) {
 }
 
 func writePostLikeError(ctx *gin.Context, err error) {
+	if errors.Is(err, likes.ErrPostLikeUnavailable) {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		return
+	}
 	if errors.Is(err, likes.ErrNotReady) {
 		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post like state is not ready"})
+		return
+	}
+	if errors.Is(err, likes.ErrLikeProjectionNotReady) {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post like projection is not ready"})
+		return
+	}
+	if errors.Is(err, likes.ErrLikeRecoveryUnsafe) || errors.Is(err, likes.ErrLikeRecoveryFenceLost) {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post like state cannot be safely recovered"})
 		return
 	}
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

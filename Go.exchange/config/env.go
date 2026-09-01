@@ -210,6 +210,30 @@ func LikeBehaviorProjectionConsumers() int {
 	return consumers
 }
 
+func LikeStateExpiryEnabled() bool {
+	return envBool("LIKE_STATE_EXPIRY_ENABLED", false)
+}
+
+func LikeStateIdleBeforeExpiry() time.Duration {
+	return envDuration("LIKE_STATE_IDLE_BEFORE_EXPIRY", time.Hour)
+}
+
+func LikeStateTTL() time.Duration {
+	return envDuration("LIKE_STATE_TTL", 24*time.Hour)
+}
+
+func LikeStateMaintenanceInterval() time.Duration {
+	return envDuration("LIKE_STATE_MAINTENANCE_INTERVAL", time.Minute)
+}
+
+func LikeStateMaintenanceBatchSize() int {
+	batch := envInt("LIKE_STATE_MAINTENANCE_BATCH_SIZE", 100)
+	if batch < 1 {
+		return 1
+	}
+	return batch
+}
+
 func NotificationProjectionConsumers() int {
 	consumers := envInt("NOTIFICATION_PROJECTION_CONSUMERS", 1)
 	if consumers < 1 {

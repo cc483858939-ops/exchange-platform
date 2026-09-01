@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -160,5 +161,46 @@ func TestRecommendationProfileMaterializationDefaultsAllNonPositiveValues(t *tes
 	}).Normalized()
 	if configured.DebounceSeconds != want.DebounceSeconds || configured.PollIntervalSeconds != want.PollIntervalSeconds || configured.BatchSize != 12 || configured.RebuildIntervalHours != 3 || configured.StaleScanIntervalSeconds != want.StaleScanIntervalSeconds || configured.StaleEnqueueBatchSize != 7 {
 		t.Fatalf("partial defaults=%+v", configured)
+	}
+}
+
+func TestLikeStateEnvironmentDefaultsAndOverrides(t *testing.T) {
+	for _, key := range []string{
+		"LIKE_STATE_EXPIRY_ENABLED",
+		"LIKE_STATE_IDLE_BEFORE_EXPIRY",
+		"LIKE_STATE_TTL",
+		"LIKE_STATE_MAINTENANCE_INTERVAL",
+		"LIKE_STATE_MAINTENANCE_BATCH_SIZE",
+	} {
+		t.Setenv(key, "")
+	}
+	if LikeStateExpiryEnabled() {
+		t.Fatal("expiry must default to disabled")
+	}
+	if got := LikeStateIdleBeforeExpiry(); got != time.Hour {
+		t.Fatalf("idle threshold=%s", got)
+	}
+	if got := LikeStateTTL(); got != 24*time.Hour {
+		t.Fatalf("TTL=%s", got)
+	}
+	if got := LikeStateMaintenanceInterval(); got != time.Minute {
+		t.Fatalf("maintenance interval=%s", got)
+	}
+	if got := LikeStateMaintenanceBatchSize(); got != 100 {
+		t.Fatalf("maintenance batch=%d", got)
+	}
+
+	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "true")
+	t.Setenv("LIKE_STATE_IDLE_BEFORE_EXPIRY", "2h")
+	t.Setenv("LIKE_STATE_TTL", "90m")
+	t.Setenv("LIKE_STATE_MAINTENANCE_INTERVAL", "15s")
+	t.Setenv("LIKE_STATE_MAINTENANCE_BATCH_SIZE", "25")
+	if !LikeStateExpiryEnabled() || LikeStateIdleBeforeExpiry() != 2*time.Hour || LikeStateTTL() != 90*time.Minute || LikeStateMaintenanceInterval() != 15*time.Second || LikeStateMaintenanceBatchSize() != 25 {
+		t.Fatalf("unexpected like state config enabled=%t idle=%s ttl=%s interval=%s batch=%d", LikeStateExpiryEnabled(), LikeStateIdleBeforeExpiry(), LikeStateTTL(), LikeStateMaintenanceInterval(), LikeStateMaintenanceBatchSize())
+	}
+
+	t.Setenv("LIKE_STATE_MAINTENANCE_BATCH_SIZE", "0")
+	if got := LikeStateMaintenanceBatchSize(); got != 1 {
+		t.Fatalf("non-positive batch=%d want=1", got)
 	}
 }

@@ -39,6 +39,7 @@ const (
 	PipelineLikeBehaviorRelay      = "like_behavior_relay"
 	PipelineLikeSnapshotRelay      = "like_snapshot_relay"
 	PipelineLikeSnapshotProjection = "like_snapshot_projection"
+	PipelineLikeStateMaintenance   = "like_state_maintenance"
 	PipelinePostEmbedding          = "post_embedding"
 )
 
@@ -191,6 +192,7 @@ func RegisterWorkerPipelines() {
 	RegisterPipeline(PipelineLikeBehaviorRelay, 1)
 	RegisterPipeline(PipelineLikeSnapshotRelay, 1)
 	RegisterPipeline(PipelineLikeSnapshotProjection, 1)
+	RegisterPipeline(PipelineLikeStateMaintenance, 1)
 	if notificationConsumerConfigured() {
 		RegisterPipeline(PipelineNotificationProjection, config.NotificationProjectionConsumers())
 	} else {
