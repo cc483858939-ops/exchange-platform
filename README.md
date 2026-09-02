@@ -9,7 +9,7 @@ NexusFeed 是一个面向内容场景的全栈个性化推荐平台，采用 Go 
 当前推荐实现以行为信号、Post embedding 和可配置的确定性规则为基础，核心组合为：
 
 ```text
-multi-source recall + multi-signal ranking + embedding-based semantic personalization
+multi-source recall + Equal Reciprocal Rank Fusion + source-independent semantic personalization + rule-based multi-signal ranking + diversity/exploration
 ```
 
 ## 核心能力
@@ -17,36 +17,38 @@ multi-source recall + multi-signal ranking + embedding-based semantic personaliz
 ### 个性化推荐
 
 - **For You Feed**：面向当前用户生成个性化 Post 推荐结果。
-- **Multi-source recall**：从 Recent Semantic、Evergreen Semantic、Following、Recent、Trending 五类来源召回候选，并进行合并与去重。
+- **Multi-source recall**：使用四类 RRF 融合来源：Semantic、Following、Recent、Trending。Semantic 来源内部采用 recent quota、evergreen quota 和 semantic backfill；融合结果的最大 `SourceCount` 为 4。
 - **正负兴趣信号**：分别构建用户正向兴趣向量与负向兴趣向量；点赞、回复、点击和阅读结果等行为可参与兴趣建模。
-- **Embedding 语义个性化**：使用用户兴趣向量与 Post embedding 的 similarity 计算语义相关性，支持正向与负向语义信号。
-- **Multi-signal ranking**：综合 semantic similarity、interaction affinity、follow bonus、freshness、time-decayed trending 等信号，并使用确定性的 Post ID 作为最终 tie-breaker。
+- **Embedding 语义个性化**：使用用户兴趣向量与 Post embedding 的 similarity 计算语义相关性；当 embedding 可比较时，正向 semantic relevance 与召回来源无关，同时支持负向语义信号。
+- **Multi-signal ranking**：综合 positive/negative semantic relevance、interaction/author affinity、following bonus、time-decayed trending 等信号，并使用确定性的 Post ID 作为最终 tie-breaker。
+- **Recency 与选择策略**：Recency 通过 Recent recall、Trending time decay、publication-time tie-breaking 以及 selection/exploration serving policy 表达，而不是独立的 freshness `BaseScore` 组件。
 - **过滤与历史控制**：过滤自身文章、已交互内容、负向兴趣内容和不符合公开范围的内容，并结合已推荐历史进行 fresh/soft-served 控制。
 - **多样性选择**：通过作者窗口、作者多样性、网络内外平衡和 embedding 内容相似度惩罚，降低推荐结果重复。
 - **推荐元数据与追踪**：每次推荐请求生成 request metadata；结果可持久化 `RecommendationResultTrace`，推荐卡片可携带绑定请求、Post、位置和 ranker 上下文的 tracking token。
 
-推荐链路的详细实现契约见 [Recommendation Feed V3](Go.exchange/docs/recommendation-feed-v3.md)。
+推荐链路的当前实现说明见本 README 与后端 [Go.exchange README](Go.exchange/README.md)。
 
 ## 推荐系统架构
 
 ```mermaid
 flowchart TD
-    A[User Behavior] --> B[Interest Signals]
-    B --> C[Candidate Recall]
-    C --> C1[Semantic]
-    C --> C2[Following]
-    C --> C3[Recent]
-    C --> C4[Trending]
-    C1 --> D[Multi-Signal Ranking]
+    A[User Behavior] --> B[Interest / Materialized Profile]
+    B --> C1[Semantic]
+    B --> C2[Following]
+    B --> C3[Recent]
+    B --> C4[Trending]
+    C1 --> D[Equal Reciprocal Rank Fusion]
     C2 --> D
     C3 --> D
     C4 --> D
-    D --> E[Filtering and Diversity]
-    E --> F[For You Feed]
-    F --> G[Recommendation Telemetry]
+    D --> E[Candidate Hydration]
+    E --> F[Rule-based Multi-signal Ranking]
+    F --> G[Diversity / Network Balance / Exploration]
+    G --> H[For You Feed]
+    H --> I[Recommendation Telemetry]
 ```
 
-一次 For You 请求会加载用户已有的行为与反馈信号，生成兴趣 profile，召回并合并候选 Post，再通过多信号排序和多样性选择生成结果。
+一次 For You 请求会加载用户已有的行为与反馈信号，生成或读取 materialized profile，执行四源召回并通过 Equal RRF 将候选纳入有界 candidate pool，再进行 hydration、rule-based ranking，最后经过 diversity/network/exploration selection 生成结果。
 
 ## 推荐反馈闭环
 
@@ -72,7 +74,7 @@ flowchart LR
 
 推荐请求会生成 UUID request ID；signed tracking token 将用户、文章、请求、位置、策略/ranker、token 生命周期以及阅读策略上下文绑定在一起。客户端提交交互事件后，服务端校验 token 与事件字段，再将有效事件作为 Kafka envelope 异步发布。
 
-Telemetry consumer 会校验单条行为、通过 ConsumerInbox 去重，并批量更新推荐指标和紧凑的 PostBehavior projection。协议与阅读/Feed dwell 测量边界见 [Recommendation Telemetry V2](Go.exchange/docs/recommendation-telemetry-v2.md)。
+Telemetry consumer 会校验单条行为、通过 ConsumerInbox 去重，并批量更新推荐指标和紧凑的 PostBehavior projection；当前实现也据此界定 telemetry 校验、去重、行为 projection 与阅读/Feed dwell 测量边界。
 
 ## 内容与用户系统
 
@@ -359,7 +361,4 @@ npm install
 npm run dev
 ```
 
-推荐系统的详细设计和 telemetry 边界：
-
-- [Go.exchange/docs/recommendation-feed-v3.md](Go.exchange/docs/recommendation-feed-v3.md)
-- [Go.exchange/docs/recommendation-telemetry-v2.md](Go.exchange/docs/recommendation-telemetry-v2.md)
+推荐系统的当前实现说明见本 README 与 [Go.exchange README](Go.exchange/README.md)。

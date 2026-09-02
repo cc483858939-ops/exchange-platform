@@ -52,6 +52,10 @@ func fuseRecommendationCandidates(limit int, rankConstant int, lists ...recommen
 			if !exists {
 				// Fusion metadata is calculated from the supplied recall lists,
 				// rather than trusting metadata from a previous candidate pool.
+				candidate.FromSemantic = false
+				candidate.FromFollowing = false
+				candidate.FromRecent = false
+				candidate.FromTrending = false
 				candidate.SemanticRank = 0
 				candidate.FollowingRank = 0
 				candidate.RecentRank = 0
@@ -64,10 +68,6 @@ func fuseRecommendationCandidates(limit int, rankConstant int, lists ...recommen
 			}
 
 			current := &fused[candidateIndex]
-			current.FromSemantic = current.FromSemantic || candidate.FromSemantic
-			current.FromFollowing = current.FromFollowing || candidate.FromFollowing
-			current.FromRecent = current.FromRecent || candidate.FromRecent
-			current.FromTrending = current.FromTrending || candidate.FromTrending
 
 			if recommendationRecordRecallSource(current, list.Source, index+1, candidate.PositiveSemanticSimilarity) {
 				current.FusionScore += 1.0 / (float64(rankConstant) + float64(index+1))

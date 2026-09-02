@@ -122,6 +122,104 @@ func TestRecommendationRRFFusionDeduplicatesWithinSource(t *testing.T) {
 	if want := 1.0 / 61; math.Abs(candidate.FusionScore-want) > 1e-12 {
 		t.Fatalf("duplicate candidate score=%v want one contribution=%v", candidate.FusionScore, want)
 	}
+	second, ok := recommendationFusionCandidateByID(got, 2)
+	if !ok {
+		t.Fatalf("fused candidates=%#v, missing candidate after duplicate", got)
+	}
+	if second.SourceCount != 1 || second.SemanticRank != 3 {
+		t.Fatalf("candidate after duplicate metadata=%#v", second)
+	}
+	if want := 1.0 / 63; math.Abs(second.FusionScore-want) > 1e-12 {
+		t.Fatalf("candidate after duplicate score=%v want=%v", second.FusionScore, want)
+	}
+}
+
+func TestRecommendationRRFFusionRebuildsProvenanceFromRecallLists(t *testing.T) {
+	got := fuseRecommendationCandidates(1, 60, recommendationRecallList{
+		Source: recommendationRecallSourceFollowing,
+		Candidates: []embeddingCandidate{{
+			PostID:        1,
+			FromSemantic:  true,
+			FromFollowing: true,
+			FromRecent:    true,
+			FromTrending:  true,
+			SemanticRank:  2,
+			FollowingRank: 9,
+			RecentRank:    3,
+			TrendingRank:  4,
+			FusionScore:   999,
+			SourceCount:   4,
+		}},
+	})
+	if len(got) != 1 {
+		t.Fatalf("fused candidates=%#v, want one candidate", got)
+	}
+
+	candidate := got[0]
+	if candidate.FromSemantic || !candidate.FromFollowing || candidate.FromRecent || candidate.FromTrending {
+		t.Fatalf("inherited source flags were not discarded: %#v", candidate)
+	}
+	if candidate.SemanticRank != 0 || candidate.FollowingRank != 1 || candidate.RecentRank != 0 || candidate.TrendingRank != 0 {
+		t.Fatalf("inherited source ranks were not discarded: %#v", candidate)
+	}
+	if candidate.SourceCount != 1 {
+		t.Fatalf("source count=%d want 1", candidate.SourceCount)
+	}
+	if want := 1.0 / 61; math.Abs(candidate.FusionScore-want) > 1e-12 {
+		t.Fatalf("fusion score=%v want=%v", candidate.FusionScore, want)
+	}
+}
+
+func TestRecommendationRRFFusionMaintainsProvenanceInvariants(t *testing.T) {
+	got := fuseRecommendationCandidates(
+		10,
+		60,
+		recommendationRecallList{
+			Source:     recommendationRecallSourceSemantic,
+			Candidates: []embeddingCandidate{{PostID: 1}, {PostID: 2}},
+		},
+		recommendationRecallList{
+			Source:     recommendationRecallSourceFollowing,
+			Candidates: []embeddingCandidate{{PostID: 2}, {PostID: 3}},
+		},
+		recommendationRecallList{
+			Source:     recommendationRecallSourceRecent,
+			Candidates: []embeddingCandidate{{PostID: 3}, {PostID: 4}},
+		},
+		recommendationRecallList{
+			Source:     recommendationRecallSourceTrending,
+			Candidates: []embeddingCandidate{{PostID: 4}, {PostID: 1}},
+		},
+	)
+	if len(got) != 4 {
+		t.Fatalf("fused candidates=%#v, want four candidates", got)
+	}
+
+	for _, candidate := range got {
+		expectedSourceCount := 0
+		if candidate.SemanticRank > 0 {
+			expectedSourceCount++
+		}
+		if candidate.FollowingRank > 0 {
+			expectedSourceCount++
+		}
+		if candidate.RecentRank > 0 {
+			expectedSourceCount++
+		}
+		if candidate.TrendingRank > 0 {
+			expectedSourceCount++
+		}
+
+		if candidate.FromSemantic != (candidate.SemanticRank > 0) ||
+			candidate.FromFollowing != (candidate.FollowingRank > 0) ||
+			candidate.FromRecent != (candidate.RecentRank > 0) ||
+			candidate.FromTrending != (candidate.TrendingRank > 0) {
+			t.Errorf("post %d provenance flags do not match ranks: %#v", candidate.PostID, candidate)
+		}
+		if candidate.SourceCount != expectedSourceCount {
+			t.Errorf("post %d source count=%d want=%d: %#v", candidate.PostID, candidate.SourceCount, expectedSourceCount, candidate)
+		}
+	}
 }
 
 func TestRecommendationRRFFusionPreservesSemanticSimilarity(t *testing.T) {

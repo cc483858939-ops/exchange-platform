@@ -77,9 +77,8 @@ interest profiles, and raw candidate-author affinity atomically. A compatible
 stale profile remains usable while recovery is queued; misses and incompatible
 profiles use cold start.
 
-The existing materialized-profile implementation details are documented in
-`docs/recommendation-feed-v4.md`; telemetry request profile fields are covered
-by `docs/recommendation-telemetry-v2.md`.
+The sections below describe the current materialized-profile and
+recommendation-serving behavior implemented by this backend.
 
 ## Recommendation serving pipeline
 
