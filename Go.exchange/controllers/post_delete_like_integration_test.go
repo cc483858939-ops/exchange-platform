@@ -46,7 +46,11 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 			redisClient.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
 			redisClient.SRem(likes.DirtyKey, postID)
 			redisClient.ZRem(likes.ProcessingKey, postID)
-			redisClient.HDel(likes.ClaimsKey, strconv.FormatUint(uint64(postID), 10))
+			postIDString := strconv.FormatUint(uint64(postID), 10)
+			redisClient.HDel(likes.ClaimsKey, postIDString)
+			redisClient.SRem(likes.RegistryKey, postID)
+			redisClient.ZRem(likes.ExpiryCandidatesKey, postIDString)
+			redisClient.HDel(likes.RecoverableVersionsKey, postIDString)
 		}
 		for _, pair := range []string{pairTarget, pairUnrelated} {
 			redisClient.SRem(likes.BehaviorDirtyKey, pair)
@@ -62,7 +66,7 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 
 	store := likes.NewStore(redisClient)
 	for _, postID := range postIDs {
-		if created, err := store.Initialize(t.Context(), postID, 3, 4, []uint{other.ID}); err != nil || !created {
+		if created, err := store.Initialize(t.Context(), postID, 1, 4, []uint{other.ID}); err != nil || !created {
 			t.Fatalf("initialize post=%d created=%t err=%v", postID, created, err)
 		}
 	}
@@ -123,6 +127,16 @@ func assertTargetLikeKeysPurged(t *testing.T, client *redis.Client, postID uint)
 	if exists, err := client.HExists(likes.ClaimsKey, strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || exists {
 		t.Fatalf("target claim exists=%t err=%v", exists, err)
 	}
+	postIDString := strconv.FormatUint(uint64(postID), 10)
+	if registered, err := client.SIsMember(likes.RegistryKey, postID).Result(); err != nil || registered {
+		t.Fatalf("target registry=%t err=%v", registered, err)
+	}
+	if _, err := client.ZScore(likes.ExpiryCandidatesKey, postIDString).Result(); err != redis.Nil {
+		t.Fatalf("target expiry candidate err=%v", err)
+	}
+	if marker, err := client.HExists(likes.RecoverableVersionsKey, postIDString).Result(); err != nil || marker {
+		t.Fatalf("target recoverable marker=%t err=%v", marker, err)
+	}
 }
 
 func assertUnrelatedLikeKeysRemain(t *testing.T, client *redis.Client, postID uint) {
@@ -140,5 +154,15 @@ func assertUnrelatedLikeKeysRemain(t *testing.T, client *redis.Client, postID ui
 	}
 	if exists, err := client.HExists(likes.ClaimsKey, strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || !exists {
 		t.Fatalf("unrelated claim exists=%t err=%v", exists, err)
+	}
+	postIDString := strconv.FormatUint(uint64(postID), 10)
+	if registered, err := client.SIsMember(likes.RegistryKey, postID).Result(); err != nil || !registered {
+		t.Fatalf("unrelated registry=%t err=%v", registered, err)
+	}
+	if _, err := client.ZScore(likes.ExpiryCandidatesKey, postIDString).Result(); err != nil {
+		t.Fatalf("unrelated expiry candidate err=%v", err)
+	}
+	if marker, err := client.HExists(likes.RecoverableVersionsKey, postIDString).Result(); err != nil || marker {
+		t.Fatalf("unrelated recoverable marker=%t err=%v", marker, err)
 	}
 }

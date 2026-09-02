@@ -295,6 +295,15 @@ func assertPurgedPostLikeStateForIdentityE2E(t *testing.T, client *redis.Client,
 			t.Fatalf("purged key=%q exists=%d err=%v", key, exists, err)
 		}
 	}
+	if registered, err := client.SIsMember(likes.RegistryKey, postID).Result(); err != nil || registered {
+		t.Fatalf("purged registry=%t err=%v", registered, err)
+	}
+	if _, err := client.ZScore(likes.ExpiryCandidatesKey, strconvUint(postID)).Result(); err != redis.Nil {
+		t.Fatalf("purged expiry candidate err=%v", err)
+	}
+	if marker, err := client.HExists(likes.RecoverableVersionsKey, strconvUint(postID)).Result(); err != nil || marker {
+		t.Fatalf("purged recoverable marker=%t err=%v", marker, err)
+	}
 	if dirty, err := client.SIsMember(likes.DirtyKey, postID).Result(); err != nil || dirty {
 		t.Fatalf("purged dirty=%t err=%v", dirty, err)
 	}

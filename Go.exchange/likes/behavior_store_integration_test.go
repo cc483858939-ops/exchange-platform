@@ -30,6 +30,11 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 	cleanup := func() {
 		client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
 		client.SRem(DirtyKey, postID)
+		client.ZRem(ProcessingKey, postID)
+		client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
+		client.SRem(RegistryKey, postID)
+		client.ZRem(ExpiryCandidatesKey, postID)
+		client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
 		client.SRem(BehaviorDirtyKey, pair)
 		client.HDel(BehaviorStateKey, pair)
 		client.ZRem(BehaviorProcessingKey, pair)

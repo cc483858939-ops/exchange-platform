@@ -244,6 +244,14 @@ func logPostLikeRecoveryOutcome(postID uint, err error) {
 	log.Printf("[LikeRecovery] like_state_rehydrate_%s post=%d", reason, postID)
 }
 
+func isPostLikeBatchUnavailableError(err error) bool {
+	return errors.Is(err, likes.ErrPostLikeUnavailable) ||
+		errors.Is(err, likes.ErrLikeProjectionNotReady) ||
+		errors.Is(err, likes.ErrLikeRecoveryUnsafe) ||
+		errors.Is(err, likes.ErrLikeRecoveryFenceLost) ||
+		errors.Is(err, likes.ErrNotReady)
+}
+
 func setPostLikedStateWithRecovery(userID, postID uint, liked bool) (postLikeMutationResult, error) {
 	result, err := setPostLikedStateWithRedis(userID, postID, liked)
 	if !errors.Is(err, likes.ErrNotReady) {
@@ -302,7 +310,7 @@ func loadPostLikeStatesWithRecovery(userID uint, postIDs []uint) (postLikeStates
 		}
 		recoverErr := recoverPostLikeStateFromBatchBaseline(context.Background(), store, postID, isRegistered, markerPtr, baseline)
 		if recoverErr != nil {
-			if errors.Is(recoverErr, likes.ErrLikeRecoveryUnsafe) || errors.Is(recoverErr, likes.ErrLikeRecoveryFenceLost) || errors.Is(recoverErr, likes.ErrNotReady) {
+			if isPostLikeBatchUnavailableError(recoverErr) {
 				unavailable[postID] = struct{}{}
 				logPostLikeRecoveryOutcome(postID, recoverErr)
 				continue

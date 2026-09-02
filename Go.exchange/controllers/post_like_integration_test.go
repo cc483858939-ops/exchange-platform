@@ -117,8 +117,12 @@ func cleanupPostLikeIntegrationState(client *redis.Client, postIDs, userIDs []ui
 	for _, postID := range postIDs {
 		client.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
 		client.SRem(likes.DirtyKey, postID)
-		client.SRem(likes.ProcessingKey, postID)
-		client.HDel(likes.ClaimsKey, strconv.FormatUint(uint64(postID), 10))
+		postIDString := strconv.FormatUint(uint64(postID), 10)
+		client.ZRem(likes.ProcessingKey, postIDString)
+		client.HDel(likes.ClaimsKey, postIDString)
+		client.SRem(likes.RegistryKey, postID)
+		client.ZRem(likes.ExpiryCandidatesKey, postIDString)
+		client.HDel(likes.RecoverableVersionsKey, postIDString)
 		for _, userID := range userIDs {
 			pair := likes.BehaviorPair(userID, postID)
 			client.SRem(likes.BehaviorDirtyKey, pair)

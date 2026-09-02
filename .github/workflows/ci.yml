@@ -219,7 +219,10 @@ jobs:
           for required_test in \
             TestCanonicalPostDeletePGRedisIdentityE2E \
             TestCanonicalPostLikeRedisToPostgresProjectionIntegration \
-            TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration
+            TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration \
+            TestPostLikeHotPathDoesNotLoadPostgres \
+            TestPostLikeSafeExpiryRecoveryIntegration \
+            TestPostLikeDeletePurgeFailureReconcilesIntegration
           do
             if ! grep -Fq -- "--- PASS: ${required_test}" "$RUNNER_TEMP/go-integration.log"; then
               echo "Required integration test did not pass: ${required_test}"

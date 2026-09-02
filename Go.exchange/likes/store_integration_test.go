@@ -31,6 +31,9 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 		client.SRem(DirtyKey, postID)
 		client.ZRem(ProcessingKey, postID)
 		client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
+		client.SRem(RegistryKey, postID)
+		client.ZRem(ExpiryCandidatesKey, postID)
+		client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
 		client.SRem(BehaviorDirtyKey, pair)
 		client.HDel(BehaviorStateKey, pair)
 		client.ZRem(BehaviorProcessingKey, pair)
@@ -111,6 +114,9 @@ func TestStoreGetManyIntegration(t *testing.T) {
 			client.SRem(DirtyKey, postID)
 			client.ZRem(ProcessingKey, postID)
 			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
+			client.SRem(RegistryKey, postID)
+			client.ZRem(ExpiryCandidatesKey, postID)
+			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
 		}
 	}
 	cleanup()
@@ -163,6 +169,9 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 			client.SRem(DirtyKey, postID)
 			client.ZRem(ProcessingKey, postID)
 			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
+			client.SRem(RegistryKey, postID)
+			client.ZRem(ExpiryCandidatesKey, postID)
+			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
 		}
 		for _, pair := range []string{targetPair, unrelatedPair} {
 			client.SRem(BehaviorDirtyKey, pair)
@@ -175,7 +184,7 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 	defer cleanup()
 
 	for _, postID := range []uint{target, unrelated} {
-		if created, err := store.Initialize(ctx, postID, 4, 7, []uint{userID}); err != nil || !created {
+		if created, err := store.Initialize(ctx, postID, 1, 7, []uint{userID}); err != nil || !created {
 			t.Fatalf("initialize post=%d created=%t err=%v", postID, created, err)
 		}
 	}

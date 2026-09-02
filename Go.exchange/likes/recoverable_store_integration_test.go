@@ -44,6 +44,14 @@ func cleanupRecoverableStorePost(client *redis.Client, postID uint) {
 	client.HDel(ClaimsKey, postIDString)
 }
 
+func cleanupRecoverableStoreBehaviorPair(client *redis.Client, userID, postID uint) {
+	pair := BehaviorPair(userID, postID)
+	client.SRem(BehaviorDirtyKey, pair)
+	client.HDel(BehaviorStateKey, pair)
+	client.ZRem(BehaviorProcessingKey, pair)
+	client.HDel(BehaviorClaimsKey, pair)
+}
+
 func TestStoreIncompleteStateIsNotReadyIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()
@@ -130,6 +138,10 @@ func TestStoreManagedZeroLossCannotBootstrapIntegration(t *testing.T) {
 
 func TestStoreMarkerRecoveryAndMutationFenceIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
+	t.Cleanup(func() {
+		cleanupRecoverableStoreBehaviorPair(client, 11, postID)
+		cleanupRecoverableStoreBehaviorPair(client, 12, postID)
+	})
 	ctx := context.Background()
 	if created, err := store.Initialize(ctx, postID, 1, 10, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
@@ -162,6 +174,12 @@ func TestStoreMarkerRecoveryAndMutationFenceIntegration(t *testing.T) {
 
 func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
+	armFirstPostID := postID + 1
+	mutateFirstPostID := postID + 2
+	t.Cleanup(func() {
+		cleanupRecoverableStoreBehaviorPair(client, 11, armFirstPostID)
+		cleanupRecoverableStoreBehaviorPair(client, 11, mutateFirstPostID)
+	})
 	ctx := context.Background()
 	if created, err := store.Initialize(ctx, postID, 1, 10, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
@@ -184,7 +202,6 @@ func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 		t.Fatalf("purged recovery created=%t err=%v", created, err)
 	}
 
-	armFirstPostID := postID + 1
 	cleanupRecoverableStorePost(client, armFirstPostID)
 	t.Cleanup(func() { cleanupRecoverableStorePost(client, armFirstPostID) })
 	if created, err := store.Initialize(ctx, armFirstPostID, 0, 0, nil); err != nil || !created {
@@ -200,7 +217,6 @@ func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 		t.Fatalf("arm-first Ready ttl=%s err=%v", ttl, err)
 	}
 
-	mutateFirstPostID := postID + 2
 	cleanupRecoverableStorePost(client, mutateFirstPostID)
 	t.Cleanup(func() { cleanupRecoverableStorePost(client, mutateFirstPostID) })
 	if created, err := store.Initialize(ctx, mutateFirstPostID, 0, 0, nil); err != nil || !created {

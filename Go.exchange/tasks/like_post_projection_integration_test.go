@@ -75,6 +75,9 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 			redisClient.SRem(likes.DirtyKey, post.ID)
 			redisClient.ZRem(likes.ProcessingKey, postIDString)
 			redisClient.HDel(likes.ClaimsKey, postIDString)
+			redisClient.SRem(likes.RegistryKey, post.ID)
+			redisClient.ZRem(likes.ExpiryCandidatesKey, postIDString)
+			redisClient.HDel(likes.RecoverableVersionsKey, postIDString)
 			if actor.ID != 0 {
 				pair := likes.BehaviorPair(actor.ID, post.ID)
 				redisClient.SRem(likes.BehaviorDirtyKey, pair)
