@@ -50,6 +50,8 @@ func RunMigrations() error {
 			&models.UserRecoProfileDirty{},
 			&models.ExchangeRate{},
 			&models.RuntimeSchemaState{},
+			&models.DevDataMirrorAccount{},
+			&models.DevDataMirrorPost{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
@@ -102,6 +104,9 @@ func RunMigrations() error {
 		if err := applyNotificationSchema(tx); err != nil {
 			return err
 		}
+		if err := applyDevDataMirrorConstraints(tx); err != nil {
+			return err
+		}
 		if err := tx.Exec(`
 UPDATE post_reaction
 SET liked = (reaction = 1)
@@ -114,6 +119,42 @@ WHERE reaction_version = 0
 		}
 		return nil
 	})
+}
+
+// applyDevDataMirrorConstraints is deliberately kept out of the runtime
+// schema canaries. DevData is an operator/showcase dependency and must not
+// make the API or worker readiness contract stricter.
+func applyDevDataMirrorConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_accounts_registry_key",
+		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT ucon_devdata_mirror_accounts_registry_key UNIQUE (registry_key)",
+		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_accounts_platform_source_user",
+		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT ucon_devdata_mirror_accounts_platform_source_user UNIQUE (platform, source_user_id)",
+		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_accounts_local_user",
+		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT ucon_devdata_mirror_accounts_local_user UNIQUE (local_user_id)",
+		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS fk_devdata_mirror_accounts_local_user",
+		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT fk_devdata_mirror_accounts_local_user FOREIGN KEY (local_user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+		"CREATE INDEX IF NOT EXISTS idx_devdata_mirror_accounts_enabled ON devdata_mirror_accounts (enabled, registry_key)",
+		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_posts_platform_source_post",
+		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT ucon_devdata_mirror_posts_platform_source_post UNIQUE (platform, source_post_id)",
+		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_posts_local_post",
+		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT ucon_devdata_mirror_posts_local_post UNIQUE (local_post_id)",
+		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS fk_devdata_mirror_posts_account",
+		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT fk_devdata_mirror_posts_account FOREIGN KEY (mirror_account_id) REFERENCES devdata_mirror_accounts(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS fk_devdata_mirror_posts_post",
+		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT fk_devdata_mirror_posts_post FOREIGN KEY (local_post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS chk_devdata_mirror_posts_state",
+		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT chk_devdata_mirror_posts_state CHECK (state IN ('active', 'tombstone'))",
+		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS chk_devdata_mirror_posts_source_metrics",
+		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT chk_devdata_mirror_posts_source_metrics CHECK (source_like_count >= 0 AND source_reply_count >= 0 AND source_repost_count >= 0 AND source_quote_count >= 0)",
+		"CREATE INDEX IF NOT EXISTS idx_devdata_mirror_posts_account_state ON devdata_mirror_posts (mirror_account_id, state, source_created_at DESC, id DESC)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply DevData mirror constraints: %w", err)
+		}
+	}
+	return nil
 }
 
 // applyLegacyPostEmbeddingJobCleanup removes the obsolete one-off work table.

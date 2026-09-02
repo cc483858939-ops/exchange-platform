@@ -31,12 +31,20 @@ func postDetailCacheKey(id string) string {
 	return "post:detail:v1:" + id
 }
 
-// InvalidatePostDetailCacheByID 主动删除指定文章的详情缓存。
-func InvalidatePostDetailCacheByID(id uint) error {
-	if global.RedisDB == nil {
+// InvalidatePostDetailCacheByIDWithRedis deletes the canonical viewer-
+// independent Post detail cache key using an explicitly supplied Redis
+// client. DevData uses this helper so it does not need to mutate the API's
+// global Redis client just to perform post-commit maintenance.
+func InvalidatePostDetailCacheByIDWithRedis(client *redis.Client, id uint) error {
+	if client == nil {
 		return nil
 	}
-	return global.RedisDB.Del(postDetailCacheKey(strconv.FormatUint(uint64(id), 10))).Err()
+	return client.Del(postDetailCacheKey(strconv.FormatUint(uint64(id), 10))).Err()
+}
+
+// InvalidatePostDetailCacheByID 主动删除指定文章的详情缓存。
+func InvalidatePostDetailCacheByID(id uint) error {
+	return InvalidatePostDetailCacheByIDWithRedis(global.RedisDB, id)
 }
 
 // loadJSONCache 默认使用全局 Redis 的缓存包装函数
