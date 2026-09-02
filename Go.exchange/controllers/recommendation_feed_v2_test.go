@@ -60,6 +60,7 @@ func TestRecommendationProfileCapsPositivePostAndSeparatesNegativeVector(t *test
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	cfg := normalizedRecommendationConfig()
+	cfg.PositivePostWeightCap = cfg.BehaviorWeights.Reply
 	quick := recommendationReadOutcomeQuickBounce
 	profile, err := buildEmbeddingInterestProfile(
 		[]postBehaviorSignal{

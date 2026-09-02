@@ -44,22 +44,22 @@ outbox:
 
 recommendation:
   behavior_weights:
-    view: 0.5
-    like: 6
-    click: 1.5
-    qualified_read: 3
+    view: 0.25
+    like: 4
+    click: 1
+    qualified_read: 2.5
     reply: 5
-    quick_bounce: -3
-    not_interested: -6
+    quick_bounce: -2
+    not_interested: -8
   semantic_recall:
-    recent_window_days: 30
-    recent_ratio: 0.80
+    recent_window_days: 7
+    recent_ratio: 0.85
   fusion:
     rank_constant: 60
   trending:
-    max_age_days: 7
-    half_life_hours: 24
-    reply_factor: 0.5
+    max_age_days: 3
+    half_life_hours: 12
+    reply_factor: 1.5
   exploration:
     ratio: 0.10
     max_slots: 3

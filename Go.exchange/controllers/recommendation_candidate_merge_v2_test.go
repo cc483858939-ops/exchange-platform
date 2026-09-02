@@ -81,6 +81,7 @@ func TestRecommendationSemanticQuotaUsesReservedRecentAndEvergreenCapacity(t *te
 		{cap: 1, ratio: 0.8, wantRecent: 1, wantEvergreen: 0},
 		{cap: 4, ratio: 0.75, wantRecent: 3, wantEvergreen: 1},
 		{cap: 200, ratio: 0.8, wantRecent: 160, wantEvergreen: 40},
+		{cap: 200, ratio: 0.85, wantRecent: 170, wantEvergreen: 30},
 		{cap: 2, ratio: 0.01, wantRecent: 1, wantEvergreen: 1},
 		{cap: 2, ratio: 0.99, wantRecent: 1, wantEvergreen: 1},
 	}

@@ -79,7 +79,7 @@ func recommendationProfileMaterializerSettings() config.RecommendationProfileMat
 func recommendationProfileMaterializerRecommendationConfig() config.RecommendationConfig {
 	if config.AppConfig == nil {
 		return config.RecommendationConfig{
-			BehaviorWeights:    config.RecommendationBehaviorWeights{View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6},
+			BehaviorWeights:    config.RecommendationBehaviorWeights{View: 0.25, Like: 4, Click: 1, QualifiedRead: 2.5, Reply: 5, QuickBounce: -2, NotInterested: -8},
 			SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 			NegativeConfidenceSaturationScale: 12, AuthorAffinitySaturationScale: 6,
 		}
@@ -130,7 +130,7 @@ func recommendationProfileMaterializerRecommendationConfig() config.Recommendati
 
 func recommendationProfileMaterializerRecommendationConfigWithoutApp() config.RecommendationConfig {
 	return config.RecommendationConfig{
-		BehaviorWeights:    config.RecommendationBehaviorWeights{View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6},
+		BehaviorWeights:    config.RecommendationBehaviorWeights{View: 0.25, Like: 4, Click: 1, QualifiedRead: 2.5, Reply: 5, QuickBounce: -2, NotInterested: -8},
 		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90, PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 		NegativeConfidenceSaturationScale: 12, AuthorAffinitySaturationScale: 6,
 	}
