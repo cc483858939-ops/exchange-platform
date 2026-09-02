@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/likes"
@@ -33,7 +34,9 @@ func TestPostCreationFormsAreImmediatelyLikeReadyIntegration(t *testing.T) {
 	createdIDs := make([]uint, 0, 6)
 	userIDs := []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}
 	t.Cleanup(func() {
-		cleanupPostLikeIntegrationState(redisClient, createdIDs, userIDs)
+		if err := cleanupPostLikeIntegrationState(redisClient, createdIDs, userIDs); err != nil {
+			t.Errorf("cleanup post-like Redis integration state: %v", err)
+		}
 		db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostReaction{})
 		db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostArticle{})
 		db.Unscoped().Where("post_id IN ? OR user_id IN ?", createdIDs, userIDs).Delete(&models.PostBehavior{})
@@ -113,23 +116,113 @@ func openPostLikeIntegrationRedis(t *testing.T) *redis.Client {
 	return client
 }
 
-func cleanupPostLikeIntegrationState(client *redis.Client, postIDs, userIDs []uint) {
+func cleanupPostLikeIntegrationState(client *redis.Client, postIDs, userIDs []uint) error {
+	if client == nil {
+		return nil
+	}
+	if len(postIDs) == 0 {
+		return nil
+	}
+	pipe := client.Pipeline()
 	for _, postID := range postIDs {
-		client.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
-		client.SRem(likes.DirtyKey, postID)
-		postIDString := strconv.FormatUint(uint64(postID), 10)
-		client.ZRem(likes.ProcessingKey, postIDString)
-		client.HDel(likes.ClaimsKey, postIDString)
-		client.SRem(likes.RegistryKey, postID)
-		client.ZRem(likes.ExpiryCandidatesKey, postIDString)
-		client.HDel(likes.RecoverableVersionsKey, postIDString)
-		for _, userID := range userIDs {
-			pair := likes.BehaviorPair(userID, postID)
-			client.SRem(likes.BehaviorDirtyKey, pair)
-			client.HDel(likes.BehaviorStateKey, pair)
-			client.ZRem(likes.BehaviorProcessingKey, pair)
-			client.HDel(likes.BehaviorClaimsKey, pair)
+		if postID == 0 {
+			continue
 		}
+		postIDString := strconv.FormatUint(uint64(postID), 10)
+		pipe.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
+		pipe.SRem(likes.DirtyKey, postID)
+		pipe.ZRem(likes.ProcessingKey, postIDString)
+		pipe.HDel(likes.ClaimsKey, postIDString)
+		pipe.SRem(likes.RegistryKey, postID)
+		pipe.ZRem(likes.ExpiryCandidatesKey, postIDString)
+		pipe.HDel(likes.RecoverableVersionsKey, postIDString)
+		for _, userID := range userIDs {
+			if userID == 0 {
+				continue
+			}
+			pair := likes.BehaviorPair(userID, postID)
+			pipe.SRem(likes.BehaviorDirtyKey, pair)
+			pipe.HDel(likes.BehaviorStateKey, pair)
+			pipe.ZRem(likes.BehaviorProcessingKey, pair)
+			pipe.HDel(likes.BehaviorClaimsKey, pair)
+		}
+	}
+	_, err := pipe.Exec()
+	return err
+}
+
+func TestCleanupPostLikeIntegrationStateRemovesOwnedRedisMetadata(t *testing.T) {
+	if os.Getenv("REDIS_TEST_ADDR") == "" {
+		t.Skip("set REDIS_TEST_ADDR to run Redis integration test")
+	}
+
+	client := openPostLikeIntegrationRedis(t)
+	postID := uint(time.Now().UnixNano() & 0x3fffffff)
+	userID := postID + 1
+	postIDString := strconv.FormatUint(uint64(postID), 10)
+	pair := likes.BehaviorPair(userID, postID)
+	t.Cleanup(func() {
+		if err := cleanupPostLikeIntegrationState(client, []uint{postID}, []uint{userID}); err != nil {
+			t.Errorf("backup cleanup post-like Redis integration state: %v", err)
+		}
+	})
+
+	pipe := client.Pipeline()
+	pipe.Set(likes.ReadyKey(postID), "1", 0)
+	pipe.Set(likes.CountKey(postID), "1", 0)
+	pipe.SAdd(likes.UsersKey(postID), userID)
+	pipe.Set(likes.VersionKey(postID), "1", 0)
+	pipe.SAdd(likes.DirtyKey, postID)
+	pipe.ZAdd(likes.ProcessingKey, &redis.Z{Score: 1, Member: postIDString})
+	pipe.HSet(likes.ClaimsKey, postIDString, "claim")
+	pipe.SAdd(likes.RegistryKey, postID)
+	pipe.ZAdd(likes.ExpiryCandidatesKey, &redis.Z{Score: 1, Member: postIDString})
+	pipe.HSet(likes.RecoverableVersionsKey, postIDString, "1")
+	pipe.SAdd(likes.BehaviorDirtyKey, pair)
+	pipe.HSet(likes.BehaviorStateKey, pair, "state")
+	pipe.ZAdd(likes.BehaviorProcessingKey, &redis.Z{Score: 1, Member: pair})
+	pipe.HSet(likes.BehaviorClaimsKey, pair, "claim")
+	if _, err := pipe.Exec(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cleanupPostLikeIntegrationState(client, []uint{postID}, []uint{userID}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
+		if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
+			t.Fatalf("owned key=%q exists=%d err=%v", key, exists, err)
+		}
+	}
+	if dirty, err := client.SIsMember(likes.DirtyKey, postID).Result(); err != nil || dirty {
+		t.Fatalf("dirty membership=%t err=%v", dirty, err)
+	}
+	if _, err := client.ZScore(likes.ProcessingKey, postIDString).Result(); err != redis.Nil {
+		t.Fatalf("processing membership err=%v", err)
+	}
+	if exists, err := client.HExists(likes.ClaimsKey, postIDString).Result(); err != nil || exists {
+		t.Fatalf("claims membership=%t err=%v", exists, err)
+	}
+	if registered, err := client.SIsMember(likes.RegistryKey, postID).Result(); err != nil || registered {
+		t.Fatalf("registry membership=%t err=%v", registered, err)
+	}
+	if _, err := client.ZScore(likes.ExpiryCandidatesKey, postIDString).Result(); err != redis.Nil {
+		t.Fatalf("expiry candidate membership err=%v", err)
+	}
+	if exists, err := client.HExists(likes.RecoverableVersionsKey, postIDString).Result(); err != nil || exists {
+		t.Fatalf("recoverable marker membership=%t err=%v", exists, err)
+	}
+	if dirty, err := client.SIsMember(likes.BehaviorDirtyKey, pair).Result(); err != nil || dirty {
+		t.Fatalf("behavior dirty membership=%t err=%v", dirty, err)
+	}
+	if exists, err := client.HExists(likes.BehaviorStateKey, pair).Result(); err != nil || exists {
+		t.Fatalf("behavior state membership=%t err=%v", exists, err)
+	}
+	if _, err := client.ZScore(likes.BehaviorProcessingKey, pair).Result(); err != redis.Nil {
+		t.Fatalf("behavior processing membership err=%v", err)
+	}
+	if exists, err := client.HExists(likes.BehaviorClaimsKey, pair).Result(); err != nil || exists {
+		t.Fatalf("behavior claims membership=%t err=%v", exists, err)
 	}
 }
 

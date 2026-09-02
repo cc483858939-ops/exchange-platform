@@ -25,9 +25,13 @@ func TestPostLikeHotPathDoesNotLoadPostgres(t *testing.T) {
 	redisClient := openPostLikeIntegrationRedis(t)
 	postID := uint(time.Now().UnixNano() & 0x3fffffff)
 	userID := postID + 1
-	cleanupPostLikeIntegrationState(redisClient, []uint{postID}, []uint{userID})
+	if err := cleanupPostLikeIntegrationState(redisClient, []uint{postID}, []uint{userID}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		cleanupPostLikeIntegrationState(redisClient, []uint{postID}, []uint{userID})
+		if err := cleanupPostLikeIntegrationState(redisClient, []uint{postID}, []uint{userID}); err != nil {
+			t.Errorf("cleanup post-like Redis integration state: %v", err)
+		}
 	})
 
 	originalBaselineLoader := loadPostLikeBaselineFromDB
@@ -99,7 +103,9 @@ func TestPostLikeStatesProjectionNotReadyIsPerIDUnavailable(t *testing.T) {
 	postIDs := make([]uint, 0, 3)
 	userIDs := []uint{viewer.ID}
 	t.Cleanup(func() {
-		cleanupPostLikeIntegrationState(redisClient, postIDs, userIDs)
+		if err := cleanupPostLikeIntegrationState(redisClient, postIDs, userIDs); err != nil {
+			t.Errorf("cleanup post-like Redis integration state: %v", err)
+		}
 		if len(postIDs) > 0 {
 			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
 			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})

@@ -94,36 +94,27 @@ func openLikeStateClosureIntegration(t *testing.T) *likeStateClosureIntegration 
 		UserBehaviorTopic:   "goexchange.user.behavior.v1",
 	}}
 	t.Cleanup(func() {
-		cleanupLikeStateClosureIntegration(env)
+		if err := cleanupLikeStateClosureIntegration(env); err != nil {
+			t.Errorf("cleanup Like state closure integration: %v", err)
+		}
 		global.Db, global.RedisDB, config.AppConfig = originalDB, originalRedis, originalConfig
-		redisClient.Close()
+		if err := redisClient.Close(); err != nil {
+			t.Errorf("close Redis integration client: %v", err)
+		}
 	})
 	return env
 }
 
-func cleanupLikeStateClosureIntegration(env *likeStateClosureIntegration) {
+func cleanupLikeStateClosureIntegration(env *likeStateClosureIntegration) error {
 	if env == nil {
-		return
+		return nil
 	}
-	for _, postID := range env.posts {
-		postIDString := strconv.FormatUint(uint64(postID), 10)
-		env.redis.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
-		env.redis.SRem(likes.DirtyKey, postID)
-		env.redis.ZRem(likes.ProcessingKey, postIDString)
-		env.redis.HDel(likes.ClaimsKey, postIDString)
-		env.redis.SRem(likes.RegistryKey, postID)
-		env.redis.ZRem(likes.ExpiryCandidatesKey, postIDString)
-		env.redis.HDel(likes.RecoverableVersionsKey, postIDString)
-		for _, userID := range env.users {
-			pair := likes.BehaviorPair(userID, postID)
-			env.redis.SRem(likes.BehaviorDirtyKey, pair)
-			env.redis.HDel(likes.BehaviorStateKey, pair)
-			env.redis.ZRem(likes.BehaviorProcessingKey, pair)
-			env.redis.HDel(likes.BehaviorClaimsKey, pair)
-		}
+	var cleanupErr error
+	if env.redis != nil {
+		cleanupErr = cleanupLikeRelayIntegrationState(env.redis, env.posts, env.users)
 	}
 	if env.db == nil {
-		return
+		return cleanupErr
 	}
 	if len(env.posts) > 0 {
 		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostReaction{})
@@ -148,6 +139,7 @@ func cleanupLikeStateClosureIntegration(env *likeStateClosureIntegration) {
 	if len(aggregates) > 0 {
 		env.db.Unscoped().Where("aggregate_id IN ?", aggregates).Delete(&models.OutboxEvent{})
 	}
+	return cleanupErr
 }
 
 func invokeLikeStateClosureHandler(t *testing.T, method, path string, postID, userID uint, handler gin.HandlerFunc) *httptest.ResponseRecorder {
@@ -294,7 +286,9 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	}
 
 	// Simulate expiry without touching the retained Registry or recovery marker.
-	env.redis.Del(likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.UsersKey(env.post.ID), likes.VersionKey(env.post.ID))
+	if err := env.redis.Del(likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.UsersKey(env.post.ID), likes.VersionKey(env.post.ID)).Err(); err != nil {
+		t.Fatal(err)
+	}
 	if registered, err := env.redis.SIsMember(likes.RegistryKey, env.post.ID).Result(); err != nil || !registered {
 		t.Fatalf("registry after state deletion=%t err=%v", registered, err)
 	}

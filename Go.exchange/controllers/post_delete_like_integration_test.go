@@ -42,21 +42,8 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 	pairTarget := likes.BehaviorPair(other.ID, target.ID)
 	pairUnrelated := likes.BehaviorPair(other.ID, unrelated.ID)
 	cleanup := func() {
-		for _, postID := range postIDs {
-			redisClient.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
-			redisClient.SRem(likes.DirtyKey, postID)
-			redisClient.ZRem(likes.ProcessingKey, postID)
-			postIDString := strconv.FormatUint(uint64(postID), 10)
-			redisClient.HDel(likes.ClaimsKey, postIDString)
-			redisClient.SRem(likes.RegistryKey, postID)
-			redisClient.ZRem(likes.ExpiryCandidatesKey, postIDString)
-			redisClient.HDel(likes.RecoverableVersionsKey, postIDString)
-		}
-		for _, pair := range []string{pairTarget, pairUnrelated} {
-			redisClient.SRem(likes.BehaviorDirtyKey, pair)
-			redisClient.HDel(likes.BehaviorStateKey, pair)
-			redisClient.ZRem(likes.BehaviorProcessingKey, pair)
-			redisClient.HDel(likes.BehaviorClaimsKey, pair)
+		if err := cleanupPostLikeIntegrationState(redisClient, postIDs, []uint{other.ID}); err != nil {
+			t.Errorf("cleanup post-like Redis integration state: %v", err)
 		}
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})

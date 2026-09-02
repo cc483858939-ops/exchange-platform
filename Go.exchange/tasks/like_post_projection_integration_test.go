@@ -50,6 +50,15 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 		redisClient.Close()
 		t.Fatal(err)
 	}
+	if err := resetLikeRelayIntegrationQueues(redisClient); err != nil {
+		redisClient.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := redisClient.Close(); err != nil {
+			t.Errorf("close Redis integration client: %v", err)
+		}
+	})
 
 	originalDB, originalRedis, originalConfig := global.Db, global.RedisDB, config.AppConfig
 	snapshotGroup := "like-snapshot-projection-" + uuid.NewString()
@@ -69,21 +78,16 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 	global.RedisDB = redisClient
 
 	t.Cleanup(func() {
+		if err := resetLikeRelayIntegrationQueues(redisClient); err != nil {
+			t.Errorf("reset Like relay integration queues: %v", err)
+		}
+	})
+	t.Cleanup(func() {
 		if post.ID != 0 {
-			postIDString := strconv.FormatUint(uint64(post.ID), 10)
-			redisClient.Del(likes.ReadyKey(post.ID), likes.CountKey(post.ID), likes.UsersKey(post.ID), likes.VersionKey(post.ID))
-			redisClient.SRem(likes.DirtyKey, post.ID)
-			redisClient.ZRem(likes.ProcessingKey, postIDString)
-			redisClient.HDel(likes.ClaimsKey, postIDString)
-			redisClient.SRem(likes.RegistryKey, post.ID)
-			redisClient.ZRem(likes.ExpiryCandidatesKey, postIDString)
-			redisClient.HDel(likes.RecoverableVersionsKey, postIDString)
+			if err := cleanupLikeRelayIntegrationState(redisClient, []uint{post.ID}, []uint{actor.ID}); err != nil {
+				t.Errorf("cleanup Like projection Redis state: %v", err)
+			}
 			if actor.ID != 0 {
-				pair := likes.BehaviorPair(actor.ID, post.ID)
-				redisClient.SRem(likes.BehaviorDirtyKey, pair)
-				redisClient.HDel(likes.BehaviorStateKey, pair)
-				redisClient.ZRem(likes.BehaviorProcessingKey, pair)
-				redisClient.HDel(likes.BehaviorClaimsKey, pair)
 				db.Unscoped().Where("post_id = ? AND user_id = ?", post.ID, actor.ID).Delete(&models.PostReaction{})
 				db.Unscoped().Where("post_id = ? AND user_id = ?", post.ID, actor.ID).Delete(&models.PostBehavior{})
 			}
@@ -105,7 +109,6 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 			db.Unscoped().Where("id IN ?", dirtyUserIDs).Delete(&models.User{})
 		}
 		global.Db, global.RedisDB, config.AppConfig = originalDB, originalRedis, originalConfig
-		redisClient.Close()
 	})
 
 	actor = models.User{Username: "like-projection-actor-" + uuid.NewString(), Password: "test"}

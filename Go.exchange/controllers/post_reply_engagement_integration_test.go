@@ -305,7 +305,9 @@ func TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration(t *test
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		cleanupPostLikeIntegrationState(redisClient, []uint{created.ID}, []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID})
+		if err := cleanupPostLikeIntegrationState(redisClient, []uint{created.ID}, []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}); err != nil {
+			t.Errorf("cleanup post-like Redis integration state: %v", err)
+		}
 	})
 
 	reloaded, err := loadPostDetail(strconvUint(fixture.Article.ID))

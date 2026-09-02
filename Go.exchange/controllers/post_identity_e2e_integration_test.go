@@ -37,7 +37,9 @@ func TestCanonicalPostDeletePGRedisIdentityE2E(t *testing.T) {
 	createdIDs := make([]uint, 0, 4)
 	userIDs := []uint{alice.ID, bob.ID}
 	t.Cleanup(func() {
-		cleanupPostLikeIntegrationState(redisClient, createdIDs, userIDs)
+		if err := cleanupPostLikeIntegrationState(redisClient, createdIDs, userIDs); err != nil {
+			t.Errorf("cleanup post-like Redis integration state: %v", err)
+		}
 		if len(createdIDs) > 0 {
 			stringIDs := make([]string, 0, len(createdIDs))
 			for _, postID := range createdIDs {

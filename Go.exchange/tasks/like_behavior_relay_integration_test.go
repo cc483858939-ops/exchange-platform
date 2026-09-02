@@ -47,38 +47,40 @@ func TestLikeBehaviorRelayBatchesAndAcksAfterPublishIntegration(t *testing.T) {
 	}
 	db, _ := strconv.Atoi(os.Getenv("REDIS_TEST_DB"))
 	client := redis.NewClient(&redis.Options{Addr: addr, DB: db})
-	defer client.Close()
 	if err := client.Ping().Err(); err != nil {
+		client.Close()
 		t.Fatal(err)
 	}
+	if err := resetLikeRelayIntegrationQueues(client); err != nil {
+		client.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close Redis integration client: %v", err)
+		}
+	})
 	originalRedis := global.RedisDB
 	global.RedisDB = client
-	defer func() { global.RedisDB = originalRedis }()
+	t.Cleanup(func() { global.RedisDB = originalRedis })
 	ctx := context.Background()
 	store := likes.NewStore(client)
 	postID := uint(time.Now().UnixNano() & 0x3fffffff)
 	userID := postID + 1
 	pair := likes.BehaviorPair(userID, postID)
-	clearBehaviorQueues := func() {
-		client.Del(likes.BehaviorDirtyKey, likes.BehaviorStateKey, likes.BehaviorProcessingKey, likes.BehaviorClaimsKey)
+	t.Cleanup(func() {
+		if err := resetLikeRelayIntegrationQueues(client); err != nil {
+			t.Errorf("reset Like relay integration queues: %v", err)
+		}
+	})
+	t.Cleanup(func() {
+		if err := cleanupLikeRelayIntegrationState(client, []uint{postID}, []uint{userID}); err != nil {
+			t.Errorf("cleanup Like relay integration state: %v", err)
+		}
+	})
+	if err := cleanupLikeRelayIntegrationState(client, []uint{postID}, []uint{userID}); err != nil {
+		t.Fatal(err)
 	}
-	clearBehaviorQueues()
-	t.Cleanup(clearBehaviorQueues)
-	cleanup := func() {
-		client.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID))
-		client.SRem(likes.DirtyKey, postID)
-		client.ZRem(likes.ProcessingKey, postID)
-		client.HDel(likes.ClaimsKey, strconv.FormatUint(uint64(postID), 10))
-		client.SRem(likes.RegistryKey, postID)
-		client.ZRem(likes.ExpiryCandidatesKey, postID)
-		client.HDel(likes.RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
-		client.SRem(likes.BehaviorDirtyKey, pair)
-		client.HDel(likes.BehaviorStateKey, pair)
-		client.ZRem(likes.BehaviorProcessingKey, pair)
-		client.HDel(likes.BehaviorClaimsKey, pair)
-	}
-	cleanup()
-	t.Cleanup(cleanup)
 	if created, err := store.Initialize(ctx, postID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
