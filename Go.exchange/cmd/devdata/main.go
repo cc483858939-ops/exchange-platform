@@ -28,7 +28,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: go run ./cmd/devdata <preflight|fetch|refresh|rebuild|verify> [flags]")
+		return errors.New("usage: go run ./cmd/devdata <preflight|fetch|refresh|rebuild|verify|verify-avatars> [flags]")
 	}
 	baseDir, err := os.Getwd()
 	if err != nil {
@@ -94,7 +94,43 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		writeFetchReport(stdout, report, options.snapshotPath(baseDir))
-		return syncAndVerify(stdout, stderr, registry, snapshot)
+		db, err := initDatabase()
+		if err != nil {
+			return err
+		}
+		redisClient := bestEffortRedis(stderr)
+		if redisClient != nil {
+			defer redisClient.Close()
+		}
+		var avatarStore devdata.AvatarObjectStore
+		storageClient, storageErr := config.NewStorageClient()
+		if storageErr != nil {
+			fmt.Fprintln(stderr, "WARN: avatar storage unavailable; avatar localization will be skipped")
+		} else {
+			avatarStore, err = devdata.NewMinioAvatarObjectStore(storageClient)
+			if err != nil {
+				fmt.Fprintln(stderr, "WARN: avatar storage adapter unavailable; avatar localization will be skipped")
+			}
+		}
+		var avatarFetcher devdata.AvatarFetcher
+		if avatarStore != nil {
+			avatarFetcher = devdata.NewAvatarDownloader()
+		}
+		resolutions, avatarReport, err := devdata.PrepareAvatarMirrors(context.Background(), registry, snapshot, avatarFetcher, avatarStore)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Avatars: attempted=%d uploaded=%d reused=%d failed=%d\n", avatarReport.Attempted, avatarReport.Uploaded, avatarReport.Reused, avatarReport.Failed)
+		if err := syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
+			AvatarResolutions:                    resolutions,
+			PreserveExistingAvatarWhenUnresolved: true,
+		}); err != nil {
+			return err
+		}
+		if avatarReport.Failed > 0 {
+			return fmt.Errorf("avatar localization failed for %d enabled accounts", avatarReport.Failed)
+		}
+		return nil
 	case "rebuild":
 		options, err := parseCommandFlags("rebuild", args[1:], stderr, true)
 		if err != nil {
@@ -108,7 +144,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return syncAndVerify(stdout, stderr, registry, snapshot)
+		return syncAndVerify(stdout, stderr, registry, snapshot, devdata.SyncOptions{PreserveExistingAvatarWhenUnresolved: true})
 	case "verify":
 		options, err := parseCommandFlags("verify", args[1:], stderr, false)
 		if err != nil {
@@ -128,6 +164,36 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		_, err = io.WriteString(stdout, devdata.FormatCoreVerification(verification))
 		return err
+	case "verify-avatars":
+		options, err := parseCommandFlags("verify-avatars", args[1:], stderr, false)
+		if err != nil {
+			return err
+		}
+		registry, err := loadCuratedRegistry(options.registryPath(baseDir))
+		if err != nil {
+			return err
+		}
+		db, err := initDatabase()
+		if err != nil {
+			return err
+		}
+		storageClient, storageErr := config.NewStorageClient()
+		var avatarStore devdata.AvatarObjectStore
+		if storageErr == nil {
+			avatarStore, err = devdata.NewMinioAvatarObjectStore(storageClient)
+			if err != nil {
+				storageErr = errors.New("avatar storage adapter is unavailable")
+			}
+		}
+		verification, verifyErr := devdata.VerifyAvatars(context.Background(), db, registry, avatarStore)
+		fmt.Fprintf(stdout, "Avatar verification: enabled=%d local_urls=%d objects_present=%d invalid=%d\n", verification.Enabled, verification.LocalURLs, verification.ObjectsPresent, verification.Invalid)
+		if verifyErr != nil {
+			return verifyErr
+		}
+		if storageErr != nil {
+			return errors.New("avatar storage is unavailable")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown devdata command %q", args[0])
 	}
@@ -219,7 +285,7 @@ func bestEffortRedis(stderr io.Writer) *redis.Client {
 	return client
 }
 
-func syncAndVerify(stdout, stderr io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot) error {
+func syncAndVerify(stdout, stderr io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, options devdata.SyncOptions) error {
 	db, err := initDatabase()
 	if err != nil {
 		return err
@@ -228,7 +294,11 @@ func syncAndVerify(stdout, stderr io.Writer, registry devdata.SourceRegistry, sn
 	if redisClient != nil {
 		defer redisClient.Close()
 	}
-	result, err := devdata.SyncSnapshot(context.Background(), db, registry, snapshot, redisClient, time.Now().UTC())
+	return syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, options)
+}
+
+func syncAndVerifyWithDB(stdout io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, db *gorm.DB, redisClient *redis.Client, options devdata.SyncOptions) error {
+	result, err := devdata.SyncSnapshotWithOptions(context.Background(), db, registry, snapshot, redisClient, time.Now().UTC(), options)
 	if err != nil {
 		return err
 	}

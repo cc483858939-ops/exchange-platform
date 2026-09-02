@@ -260,3 +260,20 @@ func TestUploadProfileAvatarRequiresActiveViewer(t *testing.T) {
 		})
 	}
 }
+
+func TestFileObjectKeyAllowlistAcceptsNestedDevDataAvatarAndRejectsUnsafeKeys(t *testing.T) {
+	valid := "profile-avatars/devdata/mkbhd/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg"
+	if !isAllowedObjectKey(valid) {
+		t.Fatalf("valid nested DevData avatar key was rejected")
+	}
+	for _, objectKey := range []string{
+		"profile-avatars/devdata/mkbhd/../avatar.jpg",
+		"profile-avatars/devdata/mkbhd/avatar\r\n.jpg",
+		"article-covers/../avatar.jpg",
+		"private/devdata/mkbhd/avatar.jpg",
+	} {
+		if isAllowedObjectKey(objectKey) {
+			t.Fatalf("unsafe object key was accepted: %q", objectKey)
+		}
+	}
+}

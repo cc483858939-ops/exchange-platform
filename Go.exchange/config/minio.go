@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -11,29 +12,47 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-func initStorage() {
+var storageBucketExists = func(ctx context.Context, client *minio.Client, bucket string) (bool, error) {
+	return client.BucketExists(ctx, bucket)
+}
+
+var storageMakeBucket = func(ctx context.Context, client *minio.Client, bucket string) error {
+	return client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
+}
+
+// NewStorageClient creates a MinIO client and makes sure the configured bucket
+// exists. It returns errors to callers that can degrade gracefully, such as
+// operator tooling; production startup continues to use initStorage below.
+func NewStorageClient() (*minio.Client, error) {
 	client, err := minio.New(StorageEndpoint(), &minio.Options{
 		Creds:  credentials.NewStaticV4(StorageAccessKey(), StorageSecretKey(), ""),
 		Secure: StorageUseSSL(),
 	})
 	if err != nil {
-		log.Fatalf("Failed to initialize MinIO client, got error:%v", err)
+		return nil, fmt.Errorf("initialize MinIO client: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	bucket := StorageBucket()
-	exists, err := client.BucketExists(ctx, bucket)
+	exists, err := storageBucketExists(ctx, client, bucket)
 	if err != nil {
-		log.Fatalf("Failed to check MinIO bucket, got error:%v", err)
+		return nil, fmt.Errorf("check MinIO bucket: %w", err)
 	}
 	if !exists {
-		if err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil && !isBucketAlreadyExistsError(err) {
-			log.Fatalf("Failed to create MinIO bucket, got error:%v", err)
+		if err := storageMakeBucket(ctx, client, bucket); err != nil && !isBucketAlreadyExistsError(err) {
+			return nil, fmt.Errorf("create MinIO bucket: %w", err)
 		}
 	}
+	return client, nil
+}
 
+func initStorage() {
+	client, err := NewStorageClient()
+	if err != nil {
+		log.Fatalf("Failed to initialize MinIO storage, got error:%v", err)
+	}
 	global.MinioClient = client
 }
 

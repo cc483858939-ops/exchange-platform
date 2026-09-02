@@ -41,6 +41,13 @@ type SyncResult struct {
 	PurgedPostIDs       []uint
 }
 
+// SyncOptions controls optional source-avatar localization while leaving the
+// desired-state Post sync and its maintenance behavior unchanged.
+type SyncOptions struct {
+	AvatarResolutions                    map[string]AvatarResolution
+	PreserveExistingAvatarWhenUnresolved bool
+}
+
 type syncMaintenance struct {
 	affected      map[uint]struct{}
 	newPosts      map[uint]struct{}
@@ -88,6 +95,12 @@ func (m *syncMaintenance) addReactivation(postID uint, state likes.FullState) {
 // state. The relational mutation is one transaction; Redis/cache maintenance
 // runs only after that transaction commits and is intentionally best effort.
 func SyncSnapshot(ctx context.Context, db *gorm.DB, registry SourceRegistry, snapshot Snapshot, redisClient *redis.Client, syncAt time.Time) (SyncResult, error) {
+	return SyncSnapshotWithOptions(ctx, db, registry, snapshot, redisClient, syncAt, SyncOptions{})
+}
+
+// SyncSnapshotWithOptions applies a complete, already validated snapshot as
+// desired state and optionally uses successful local avatar resolutions.
+func SyncSnapshotWithOptions(ctx context.Context, db *gorm.DB, registry SourceRegistry, snapshot Snapshot, redisClient *redis.Client, syncAt time.Time, options SyncOptions) (SyncResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -108,7 +121,7 @@ func SyncSnapshot(ctx context.Context, db *gorm.DB, registry SourceRegistry, sna
 	var profileChanges map[uint]bool
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
-		profileChanges, err = syncAccounts(tx, registry, snapshot, syncAt)
+		profileChanges, err = syncAccounts(tx, registry, snapshot, syncAt, options)
 		if err != nil {
 			return err
 		}
@@ -127,7 +140,7 @@ func SyncSnapshot(ctx context.Context, db *gorm.DB, registry SourceRegistry, sna
 	return result, nil
 }
 
-func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncAt time.Time) (map[uint]bool, error) {
+func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncAt time.Time, options SyncOptions) (map[uint]bool, error) {
 	var existing []models.DevDataMirrorAccount
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Find(&existing).Error; err != nil {
 		return nil, fmt.Errorf("load DevData mirror accounts: %w", err)
@@ -168,19 +181,25 @@ func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncA
 			if user.Username != MirrorUsername(account.Key) {
 				return nil, fmt.Errorf("%w: local user %d username is %q, want %q", ErrMirrorMappingInconsistent, user.ID, user.Username, MirrorUsername(account.Key))
 			}
-			profileChanged, err := updateMirrorUser(tx, &user, source)
+			profileChanged, err := updateMirrorUser(tx, &user, source, options)
 			if err != nil {
 				return nil, err
 			}
 			profileChanges[stored.ID] = profileChanged
-			if err := tx.Model(&models.DevDataMirrorAccount{}).Where("id = ?", stored.ID).Updates(map[string]interface{}{
-				"platform":        stored.Platform,
-				"source_handle":   source.Handle,
-				"category":        source.Category,
-				"enabled":         true,
-				"last_fetched_at": sourceFetchedAt(snapshot),
-				"updated_at":      syncAt,
-			}).Error; err != nil {
+			accountUpdates := map[string]interface{}{
+				"platform":          stored.Platform,
+				"source_handle":     source.Handle,
+				"category":          source.Category,
+				"enabled":           true,
+				"source_avatar_url": source.ProfileImageURL,
+				"last_fetched_at":   sourceFetchedAt(snapshot),
+				"updated_at":        syncAt,
+			}
+			if resolution, ok := avatarResolutionForSync(source, options); ok {
+				accountUpdates["avatar_object_key"] = resolution.ObjectKey
+				accountUpdates["avatar_content_hash"] = resolution.ContentHash
+			}
+			if err := tx.Model(&models.DevDataMirrorAccount{}).Where("id = ?", stored.ID).Updates(accountUpdates).Error; err != nil {
 				return nil, fmt.Errorf("update DevData mirror account %q: %w", account.Key, err)
 			}
 			continue
@@ -199,28 +218,34 @@ func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncA
 		if err != nil {
 			return nil, fmt.Errorf("generate mirror password: %w", err)
 		}
+		avatarURL := sourceAvatarURLForSync(nil, source, options)
 		user := models.User{
 			Username:    username,
 			Password:    passwordHash,
 			DisplayName: truncateRunes(strings.TrimSpace(source.Name), 50),
 			Bio:         truncateRunes(strings.TrimSpace(source.Description), 160),
-			AvatarURL:   truncateRunes(strings.TrimSpace(source.ProfileImageURL), 512),
+			AvatarURL:   avatarURL,
 		}
 		if err := tx.Create(&user).Error; err != nil {
 			return nil, fmt.Errorf("create mirror user %q: %w", username, err)
 		}
 		fetchedAt := sourceFetchedAt(snapshot)
 		accountRow := models.DevDataMirrorAccount{
-			RegistryKey:   account.Key,
-			Platform:      account.Platform,
-			SourceUserID:  source.SourceUserID,
-			SourceHandle:  source.Handle,
-			LocalUserID:   user.ID,
-			Category:      source.Category,
-			Enabled:       true,
-			LastFetchedAt: &fetchedAt,
-			CreatedAt:     syncAt,
-			UpdatedAt:     syncAt,
+			RegistryKey:     account.Key,
+			Platform:        account.Platform,
+			SourceUserID:    source.SourceUserID,
+			SourceHandle:    source.Handle,
+			LocalUserID:     user.ID,
+			Category:        source.Category,
+			Enabled:         true,
+			SourceAvatarURL: source.ProfileImageURL,
+			LastFetchedAt:   &fetchedAt,
+			CreatedAt:       syncAt,
+			UpdatedAt:       syncAt,
+		}
+		if resolution, ok := avatarResolutionForSync(source, options); ok {
+			accountRow.AvatarObjectKey = resolution.ObjectKey
+			accountRow.AvatarContentHash = resolution.ContentHash
 		}
 		if err := tx.Create(&accountRow).Error; err != nil {
 			return nil, fmt.Errorf("create DevData mirror account %q: %w", account.Key, err)
@@ -243,13 +268,13 @@ func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncA
 
 func sourceFetchedAt(snapshot Snapshot) time.Time { return snapshot.FetchedAt.UTC() }
 
-func updateMirrorUser(tx *gorm.DB, user *models.User, source SnapshotAccount) (bool, error) {
+func updateMirrorUser(tx *gorm.DB, user *models.User, source SnapshotAccount, options SyncOptions) (bool, error) {
 	if user == nil {
 		return false, nil
 	}
 	nextDisplayName := truncateRunes(strings.TrimSpace(source.Name), 50)
 	nextBio := truncateRunes(strings.TrimSpace(source.Description), 160)
-	nextAvatarURL := truncateRunes(strings.TrimSpace(source.ProfileImageURL), 512)
+	nextAvatarURL := sourceAvatarURLForSync(user, source, options)
 	changed := user.DisplayName != nextDisplayName || user.Bio != nextBio || user.AvatarURL != nextAvatarURL
 	if !changed {
 		return false, nil
@@ -265,6 +290,27 @@ func updateMirrorUser(tx *gorm.DB, user *models.User, source SnapshotAccount) (b
 	user.Bio = nextBio
 	user.AvatarURL = nextAvatarURL
 	return true, nil
+}
+
+func avatarResolutionForSync(source SnapshotAccount, options SyncOptions) (AvatarResolution, bool) {
+	if options.AvatarResolutions == nil {
+		return AvatarResolution{}, false
+	}
+	resolution, exists := options.AvatarResolutions[source.RegistryKey]
+	if !exists || !avatarResolutionUsable(source, resolution) {
+		return AvatarResolution{}, false
+	}
+	return resolution, true
+}
+
+func sourceAvatarURLForSync(existing *models.User, source SnapshotAccount, options SyncOptions) string {
+	if resolution, ok := avatarResolutionForSync(source, options); ok {
+		return truncateRunes(resolution.LocalURL, 512)
+	}
+	if existing != nil && options.PreserveExistingAvatarWhenUnresolved {
+		return existing.AvatarURL
+	}
+	return truncateRunes(strings.TrimSpace(source.ProfileImageURL), 512)
 }
 
 func newMirrorPasswordHash() (string, error) {
