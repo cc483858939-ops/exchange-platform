@@ -14,11 +14,11 @@ import (
 func defaultRecommendationConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
 		BehaviorWeights: config.RecommendationBehaviorWeights{
-			View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6,
+			View: 0.25, Like: 4, Click: 1, QualifiedRead: 2.5, Reply: 5, QuickBounce: -2, NotInterested: -8,
 		},
-		SemanticRecall:     config.RecommendationSemanticRecallConfig{RecentWindowDays: 30, RecentRatio: 0.80},
+		SemanticRecall:     config.RecommendationSemanticRecallConfig{RecentWindowDays: 7, RecentRatio: 0.85},
 		Fusion:             config.RecommendationFusionConfig{RankConstant: 60},
-		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 7, HalfLifeHours: 24, ReplyFactor: 0.5},
+		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 3, HalfLifeHours: 12, ReplyFactor: 1.5},
 		Exploration:        config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30},
 		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90,
 		PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
@@ -256,22 +256,22 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 		cfg.Trace.CleanupBatchSize = 5000
 	}
 	if cfg.SemanticRecall.RecentWindowDays <= 0 {
-		cfg.SemanticRecall.RecentWindowDays = 30
+		cfg.SemanticRecall.RecentWindowDays = 7
 	}
 	if cfg.SemanticRecall.RecentRatio <= 0 || cfg.SemanticRecall.RecentRatio >= 1 {
-		cfg.SemanticRecall.RecentRatio = 0.80
+		cfg.SemanticRecall.RecentRatio = 0.85
 	}
 	if cfg.Fusion.RankConstant <= 0 {
 		cfg.Fusion.RankConstant = 60
 	}
 	if cfg.Trending.MaxAgeDays <= 0 {
-		cfg.Trending.MaxAgeDays = 7
+		cfg.Trending.MaxAgeDays = 3
 	}
 	if cfg.Trending.HalfLifeHours <= 0 {
-		cfg.Trending.HalfLifeHours = 24
+		cfg.Trending.HalfLifeHours = 12
 	}
 	if cfg.Trending.ReplyFactor < 0 {
-		cfg.Trending.ReplyFactor = 0.5
+		cfg.Trending.ReplyFactor = 1.5
 	}
 	if cfg.TrendingWeight < 0 {
 		cfg.TrendingWeight = 0.5

@@ -13,7 +13,13 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 	t.Cleanup(func() { config.AppConfig = original })
 
 	cfg := normalizedRecommendationConfig()
-	if cfg.BehaviorWeights.Reply != 5 || cfg.FollowingBonus != 0.5 ||
+	if cfg.BehaviorWeights.View != 0.25 || cfg.BehaviorWeights.Like != 4 ||
+		cfg.BehaviorWeights.Click != 1 || cfg.BehaviorWeights.QualifiedRead != 2.5 ||
+		cfg.BehaviorWeights.Reply != 5 || cfg.BehaviorWeights.QuickBounce != -2 ||
+		cfg.BehaviorWeights.NotInterested != -8 ||
+		cfg.SemanticRecall.RecentWindowDays != 7 || cfg.SemanticRecall.RecentRatio != 0.85 ||
+		cfg.Trending.MaxAgeDays != 3 || cfg.Trending.HalfLifeHours != 12 || cfg.Trending.ReplyFactor != 1.5 ||
+		cfg.FollowingBonus != 0.5 ||
 		cfg.OutOfNetworkMinRatio != 0.30 || cfg.Exploration.Ratio != 0.10 || cfg.Exploration.MaxSlots != 3 ||
 		cfg.Exploration.RecentWindowDays != 7 || cfg.Exploration.NovelPostMaxAgeDays != 30 ||
 		!cfg.Diversity.Enabled || cfg.Diversity.SemanticDuplicatePenalty != 1 {
@@ -124,12 +130,12 @@ func TestNormalizedRecommendationConfigTrendingAndSemanticRecallValidation(t *te
 		get  func(config.RecommendationConfig) float64
 		want float64
 	}{
-		{name: "recent window zero", path: "semantic_recall.recent_window_days", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentWindowDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.SemanticRecall.RecentWindowDays) }, want: 30},
-		{name: "recent ratio zero", path: "semantic_recall.recent_ratio", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticRecall.RecentRatio }, want: 0.80},
-		{name: "recent ratio one", path: "semantic_recall.recent_ratio", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticRecall.RecentRatio }, want: 0.80},
-		{name: "max age zero", path: "trending.max_age_days", set: func(cfg *config.RecommendationConfig) { cfg.Trending.MaxAgeDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Trending.MaxAgeDays) }, want: 7},
-		{name: "half life zero", path: "trending.half_life_hours", set: func(cfg *config.RecommendationConfig) { cfg.Trending.HalfLifeHours = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.HalfLifeHours }, want: 24},
-		{name: "reply factor negative", path: "trending.reply_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.ReplyFactor = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.ReplyFactor }, want: 0.5},
+		{name: "recent window zero", path: "semantic_recall.recent_window_days", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentWindowDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.SemanticRecall.RecentWindowDays) }, want: 7},
+		{name: "recent ratio zero", path: "semantic_recall.recent_ratio", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticRecall.RecentRatio }, want: 0.85},
+		{name: "recent ratio one", path: "semantic_recall.recent_ratio", set: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.SemanticRecall.RecentRatio }, want: 0.85},
+		{name: "max age zero", path: "trending.max_age_days", set: func(cfg *config.RecommendationConfig) { cfg.Trending.MaxAgeDays = 0 }, get: func(cfg config.RecommendationConfig) float64 { return float64(cfg.Trending.MaxAgeDays) }, want: 3},
+		{name: "half life zero", path: "trending.half_life_hours", set: func(cfg *config.RecommendationConfig) { cfg.Trending.HalfLifeHours = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.HalfLifeHours }, want: 12},
+		{name: "reply factor negative", path: "trending.reply_factor", set: func(cfg *config.RecommendationConfig) { cfg.Trending.ReplyFactor = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Trending.ReplyFactor }, want: 1.5},
 		{name: "trending weight negative", path: "trending_weight", set: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.TrendingWeight }, want: 0.5},
 	}
 
