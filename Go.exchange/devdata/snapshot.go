@@ -192,7 +192,7 @@ func ValidateSnapshot(snapshot Snapshot, registry SourceRegistry) error {
 		if !exists || !configured.Enabled {
 			return fmt.Errorf("snapshot contains unknown or disabled registry key %q", account.RegistryKey)
 		}
-		if !isNumericSourceID(account.SourceUserID) {
+		if !isValidSourceUserID(account.SourceUserID) {
 			return fmt.Errorf("snapshot account %q has invalid source user ID", account.RegistryKey)
 		}
 		if !xHandlePattern.MatchString(strings.TrimSpace(account.Handle)) || strings.TrimSpace(account.Name) == "" {

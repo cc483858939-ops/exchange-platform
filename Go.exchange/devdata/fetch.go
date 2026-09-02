@@ -17,9 +17,29 @@ type PreflightResult struct {
 	Error         string
 }
 
+// SnapshotSourceClient is the small source contract needed by the existing
+// preflight and snapshot pipeline. Both the official X API client and the
+// RSSHub adapter implement it, so validation and desired-state sync remain
+// source-agnostic.
+type SnapshotSourceClient interface {
+	LookupUsers(ctx context.Context, handles []string) (map[string]XUser, error)
+	GetUserPosts(ctx context.Context, sourceUserID, paginationToken string, maxResults int) (XTimelinePage, error)
+}
+
+type sourceRequestCounter interface {
+	RequestCount() int
+}
+
+func sourceRequestCount(client SnapshotSourceClient) int {
+	if counter, ok := client.(sourceRequestCounter); ok && counter.RequestCount() > 0 {
+		return counter.RequestCount()
+	}
+	return 1
+}
+
 var ErrPreflightFailed = errors.New("X source preflight failed")
 
-func PreflightSources(ctx context.Context, client *XClient, registry SourceRegistry) ([]PreflightResult, error) {
+func PreflightSources(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry) ([]PreflightResult, error) {
 	if err := ValidateRegistry(registry); err != nil {
 		return nil, err
 	}
@@ -46,7 +66,7 @@ func PreflightSources(ctx context.Context, client *XClient, registry SourceRegis
 			continue
 		}
 		result.SourceUserID = strings.TrimSpace(user.ID)
-		if result.SourceUserID == "" || !isNumericSourceID(result.SourceUserID) {
+		if result.SourceUserID == "" || !isValidSourceUserID(result.SourceUserID) {
 			result.ProfileStatus = "invalid_source_user_id"
 			result.Error = "source user ID is missing or invalid"
 			failed = true
@@ -88,7 +108,7 @@ func PreflightSources(ctx context.Context, client *XClient, registry SourceRegis
 	return results, nil
 }
 
-func FetchSnapshot(ctx context.Context, client *XClient, registry SourceRegistry, fetchedAt time.Time) (Snapshot, FetchReport, error) {
+func FetchSnapshot(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry, fetchedAt time.Time) (Snapshot, FetchReport, error) {
 	if err := ValidateRegistry(registry); err != nil {
 		return Snapshot{}, FetchReport{}, err
 	}
@@ -104,7 +124,7 @@ func FetchSnapshot(ctx context.Context, client *XClient, registry SourceRegistry
 		handles = append(handles, account.Handle)
 	}
 	users, err := client.LookupUsers(ctx, handles)
-	report := FetchReport{APIRequests: 1, PerAccount: make([]FetchAccountReport, 0, len(accounts))}
+	report := FetchReport{APIRequests: sourceRequestCount(client), PerAccount: make([]FetchAccountReport, 0, len(accounts))}
 	if err != nil {
 		return Snapshot{}, report, fmt.Errorf("lookup X source accounts: %w", err)
 	}
@@ -120,7 +140,7 @@ func FetchSnapshot(ctx context.Context, client *XClient, registry SourceRegistry
 		if user.Protected == nil || *user.Protected {
 			return Snapshot{}, report, fmt.Errorf("source account %q is protected or missing protected status", account.Key)
 		}
-		if strings.TrimSpace(user.ID) == "" || !isNumericSourceID(user.ID) {
+		if strings.TrimSpace(user.ID) == "" || !isValidSourceUserID(user.ID) {
 			return Snapshot{}, report, fmt.Errorf("source account %q has invalid source user ID", account.Key)
 		}
 		if strings.TrimSpace(user.Name) == "" || strings.TrimSpace(user.Username) == "" {
@@ -147,7 +167,11 @@ func FetchSnapshot(ctx context.Context, client *XClient, registry SourceRegistry
 		for accountReport.SourcePostsScanned < DefaultMaxScanned && len(selected) < account.MaxPosts {
 			page, pageErr := client.GetUserPosts(ctx, user.ID, nextToken, 100)
 			accountReport.APIRequests++
-			report.APIRequests++
+			if _, counted := client.(sourceRequestCounter); counted {
+				report.APIRequests = sourceRequestCount(client)
+			} else {
+				report.APIRequests++
+			}
 			if pageErr != nil {
 				return Snapshot{}, report, fmt.Errorf("fetch source Posts for %q: %w", account.Key, pageErr)
 			}

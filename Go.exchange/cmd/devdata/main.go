@@ -44,7 +44,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		client, err := newLiveClient()
+		client, err := newLiveSource(options.source)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		client, err := newLiveClient()
+		client, err := newLiveSource(options.source)
 		if err != nil {
 			return err
 		}
@@ -82,7 +82,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		client, err := newLiveClient()
+		client, err := newLiveSource(options.source)
 		if err != nil {
 			return err
 		}
@@ -159,7 +159,7 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	options := commandOptions{source: "x", profile: "core"}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.StringVar(&options.source, "source", options.source, "source platform")
+	flags.StringVar(&options.source, "source", options.source, "source adapter (x or rsshub)")
 	flags.StringVar(&options.profile, "profile", options.profile, "DevData profile")
 	flags.BoolVar(&options.allowDestructive, "allow-destructive", false, "allow desired-state retirement/deletion")
 	flags.StringVar(&options.registry, "registry", "", "source registry path (operator/test override)")
@@ -167,8 +167,9 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	if err := flags.Parse(args); err != nil {
 		return commandOptions{}, err
 	}
-	if strings.ToLower(strings.TrimSpace(options.source)) != "x" {
-		return commandOptions{}, errors.New("only --source=x is supported")
+	options.source = strings.ToLower(strings.TrimSpace(options.source))
+	if options.source != "x" && options.source != "rsshub" {
+		return commandOptions{}, errors.New("--source must be x or rsshub")
 	}
 	if strings.ToLower(strings.TrimSpace(options.profile)) != "core" {
 		return commandOptions{}, errors.New("only --profile=core is supported")
@@ -187,11 +188,18 @@ func loadCuratedRegistry(path string) (devdata.SourceRegistry, error) {
 	return devdata.LoadCuratedRegistry(absolute)
 }
 
-func newLiveClient() (*devdata.XClient, error) {
-	if strings.TrimSpace(os.Getenv("X_BEARER_TOKEN")) == "" {
-		return nil, errors.New("LIVE_X_ACTIVATION_BLOCKED: X_BEARER_TOKEN unavailable")
+func newLiveSource(source string) (devdata.SnapshotSourceClient, error) {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "rsshub":
+		return devdata.NewRSSHubClientFromEnv()
+	case "x":
+		if strings.TrimSpace(os.Getenv("X_BEARER_TOKEN")) == "" {
+			return nil, errors.New("LIVE_X_ACTIVATION_BLOCKED: X_BEARER_TOKEN unavailable")
+		}
+		return devdata.NewXClientFromEnv()
+	default:
+		return nil, errors.New("unsupported source adapter")
 	}
-	return devdata.NewXClientFromEnv()
 }
 
 func initDatabase() (*gorm.DB, error) {

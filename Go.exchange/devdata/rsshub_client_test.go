@@ -1,0 +1,162 @@
+package devdata
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+const rssHubTestFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>MKBHD</title>
+    <description><![CDATA[Technology &amp; hardware feed]]></description>
+    <link>https://twitter.com/MKBHD</link>
+    <image><url>https://cdn.example.test/mkbhd.png</url></image>
+    <item>
+      <title><![CDATA[This is a valid RSSHub source post]]></title>
+      <description><![CDATA[<p>This is a valid RSSHub source post</p>]]></description>
+      <guid isPermaLink="false">https://twitter.com/MKBHD/status/1001</guid>
+      <link>https://x.com/MKBHD/status/1001</link>
+      <pubDate>Tue, 01 Sep 2026 10:56:56 GMT</pubDate>
+      <author>MKBHD</author>
+    </item>
+    <item>
+      <title>tiny</title>
+      <guid isPermaLink="false">https://twitter.com/MKBHD/status/1002</guid>
+      <link>https://x.com/MKBHD/status/1002</link>
+      <pubDate>Tue, 01 Sep 2026 10:55:56 GMT</pubDate>
+      <author>MKBHD</author>
+    </item>
+    <item>
+      <title><![CDATA[Another valid RSSHub source post with enough standalone text]]></title>
+      <description><![CDATA[<p>Another valid RSSHub source post with enough standalone text</p><img src="https://cdn.example.test/post.png" />]]></description>
+      <guid isPermaLink="false">https://twitter.com/MKBHD/status/1003</guid>
+      <link>https://x.com/MKBHD/status/1003</link>
+      <pubDate>Tue, 01 Sep 2026 10:54:56 GMT</pubDate>
+      <author>MKBHD</author>
+      <media:content url="https://cdn.example.test/post.png" type="image/png" />
+    </item>
+  </channel>
+</rss>`
+
+func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		if request.URL.Path != "/twitter/user/MKBHD" {
+			t.Fatalf("path=%q", request.URL.Path)
+		}
+		if authorization := request.Header.Get("Authorization"); authorization != "" {
+			t.Fatalf("RSSHub request unexpectedly carried authorization: %q", authorization)
+		}
+		writer.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(writer, rssHubTestFeed)
+	}))
+	defer server.Close()
+
+	client, err := NewRSSHubClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, err := client.LookupUsers(context.Background(), []string{"MKBHD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, ok := users["mkbhd"]
+	if !ok {
+		t.Fatalf("users=%#v", users)
+	}
+	if user.ID != "rsshub:mkbhd" || user.Username != "MKBHD" || user.Name != "MKBHD" {
+		t.Fatalf("user=%#v", user)
+	}
+	if user.Description != "Technology & hardware feed" || user.ProfileImageURL != "https://cdn.example.test/mkbhd.png" {
+		t.Fatalf("profile=%#v", user)
+	}
+	if user.Protected == nil || *user.Protected {
+		t.Fatalf("protected=%v", user.Protected)
+	}
+
+	page, err := client.GetUserPosts(context.Background(), user.ID, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 1 || client.RequestCount() != 1 {
+		t.Fatalf("requestCount=%d clientCount=%d", requestCount, client.RequestCount())
+	}
+	if len(page.Posts) != 3 || page.ResultCount != 3 || page.NextToken != "" {
+		t.Fatalf("page=%#v", page)
+	}
+	if page.Posts[0].ID != "1001" || page.Posts[0].Text != "This is a valid RSSHub source post" {
+		t.Fatalf("first post=%#v", page.Posts[0])
+	}
+	if !page.Posts[2].CreatedAt.Equal(time.Date(2026, 9, 1, 10, 54, 56, 0, time.UTC)) || len(page.Posts[2].Attachments.MediaKeys) != 1 {
+		t.Fatalf("third post=%#v", page.Posts[2])
+	}
+}
+
+func TestRSSHubFeedUsesExistingFetchFiltersAndSnapshotValidation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(writer, rssHubTestFeed)
+	}))
+	defer server.Close()
+
+	registry := SourceRegistry{
+		Version:         SourceRegistryVersion,
+		DefaultMaxPosts: 2,
+		Accounts: []SourceAccount{{
+			Key: "MKBHD", Platform: "x", Handle: "MKBHD", Category: "test", MaxPosts: 2, Enabled: true,
+		}},
+	}
+	client, err := NewRSSHubClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, report, err := FetchSnapshot(context.Background(), client, registry, time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.APIRequests != 1 || report.SourcePostsScanned != 3 || report.EligibleSelected != 2 {
+		t.Fatalf("report=%#v", report)
+	}
+	if len(snapshot.Posts) != 2 || snapshot.Accounts[0].SourceUserID != "rsshub:mkbhd" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if snapshot.Posts[0].SourcePostID != "1001" || snapshot.Posts[0].SourceURL != "https://x.com/MKBHD/status/1001" {
+		t.Fatalf("posts=%#v", snapshot.Posts)
+	}
+	if snapshot.Posts[1].SourcePostID != "1003" || !snapshot.Posts[1].HasMedia {
+		t.Fatalf("posts=%#v", snapshot.Posts)
+	}
+	if err := ValidateSnapshot(snapshot, registry); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRSSHubSourceIdentityValidation(t *testing.T) {
+	for _, value := range []string{"123", "rsshub:thsottiaux", "RSSHUB:MKBHD"} {
+		if !isValidSourceUserID(value) {
+			t.Fatalf("source ID %q should be valid", value)
+		}
+	}
+	for _, value := range []string{"", "rsshub:bad-handle", "rsshub:too/many", strings.Repeat("1", 20)} {
+		if isValidSourceUserID(value) {
+			t.Fatalf("source ID %q should be invalid", value)
+		}
+	}
+}
+
+func TestRSSHubClientRejectsPagination(t *testing.T) {
+	client, err := NewRSSHubClient("http://127.0.0.1:1200", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetUserPosts(context.Background(), "rsshub:mkbhd", "next", 100); err == nil || !strings.Contains(err.Error(), "does not support pagination") {
+		t.Fatalf("error=%v", err)
+	}
+}
