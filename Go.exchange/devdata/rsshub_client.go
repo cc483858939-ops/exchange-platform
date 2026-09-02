@@ -21,7 +21,7 @@ const (
 	defaultRSSHubRequestTimeout = 20 * time.Second
 	maxRSSHubResponseBytes      = 16 << 20
 	rssHubSourceUserPrefix      = "rsshub:"
-	rssHubUserRouteSuffix       = "/exclude_rts_replies"
+	rssHubUserRouteParams       = "/count=60&includeReplies=false&includeRts=false&strict=true"
 )
 
 var (
@@ -190,7 +190,7 @@ func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefres
 		ctx = context.Background()
 	}
 	endpoint := *c.baseURL
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/twitter/user/" + url.PathEscape(handle) + rssHubUserRouteSuffix
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/twitter/user/" + url.PathEscape(handle) + rssHubUserRouteParams
 	endpoint.RawQuery = ""
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -211,6 +211,9 @@ func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefres
 	decoder := xml.NewDecoder(io.LimitReader(response.Body, maxRSSHubResponseBytes))
 	if err := decoder.Decode(&document); err != nil {
 		return rssHubFeed{}, fmt.Errorf("decode RSSHub response: %w", err)
+	}
+	if len(document.Channel.Items) == 0 {
+		return rssHubFeed{}, errors.New("RSSHub feed returned no items")
 	}
 	feed, err := parseRSSHubFeed(handle, document)
 	if err != nil {

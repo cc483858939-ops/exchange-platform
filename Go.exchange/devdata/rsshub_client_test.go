@@ -73,7 +73,7 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestCount++
-		if request.URL.Path != "/twitter/user/MKBHD/exclude_rts_replies" {
+		if request.URL.Path != "/twitter/user/MKBHD/count=60&includeReplies=false&includeRts=false&strict=true" {
 			t.Fatalf("path=%q", request.URL.Path)
 		}
 		if authorization := request.Header.Get("Authorization"); authorization != "" {
@@ -213,6 +213,7 @@ func TestRSSHubClientReportsHTTPAndMalformedXML(t *testing.T) {
 	}{
 		{name: "http error", statusCode: http.StatusBadGateway, body: "upstream unavailable", wantError: "HTTP 502"},
 		{name: "malformed xml", statusCode: http.StatusOK, body: "<rss><channel>", wantError: "decode RSSHub response"},
+		{name: "empty feed", statusCode: http.StatusOK, body: `<rss version="2.0"><channel><title>Twitter @MKBHD</title></channel></rss>`, wantError: "RSSHub feed returned no items"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
