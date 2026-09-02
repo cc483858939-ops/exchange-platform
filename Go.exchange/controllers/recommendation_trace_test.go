@@ -52,3 +52,24 @@ func TestBuildRecommendationResultTracesPreservesThreeProvenanceStates(t *testin
 		}
 	}
 }
+
+func TestBuildRecommendationResultTracesPreservesFusionMetadata(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	selected := []selectedRecommendation{{
+		Candidate: embeddingCandidate{
+			PostID: 1, FusionScore: .031, SourceCount: 2,
+			SemanticRank: 3, RecentRank: 8,
+		},
+		Post:          models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10},
+		SelectionMode: recommendationResultSelectionRanked,
+	}}
+
+	traces := buildRecommendationResultTraces(models.RecommendationRequest{RequestID: "request-id"}, selected, now, defaultRecommendationConfig())
+	if len(traces) != 1 {
+		t.Fatalf("trace count=%d want=1", len(traces))
+	}
+	trace := traces[0]
+	if trace.FusionScore != .031 || trace.SourceCount != 2 || trace.SemanticRank != 3 || trace.FollowingRank != 0 || trace.RecentRank != 8 || trace.TrendingRank != 0 {
+		t.Fatalf("trace fusion metadata=%#v", trace)
+	}
+}

@@ -54,6 +54,8 @@ recommendation:
   semantic_recall:
     recent_window_days: 30
     recent_ratio: 0.80
+  fusion:
+    rank_constant: 60
   trending:
     max_age_days: 7
     half_life_hours: 24

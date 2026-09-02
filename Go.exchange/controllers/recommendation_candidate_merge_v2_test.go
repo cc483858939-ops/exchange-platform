@@ -16,7 +16,7 @@ func TestMergeEmbeddingCandidatesContinuesMetadataAggregationAfterCap(t *testing
 		},
 		[]embeddingCandidate{
 			{PostID: 3, FromTrending: true},
-			{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: 0.9},
+			{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: 0.9, SemanticRank: 4, FusionScore: 0.3, SourceCount: 2},
 		},
 		[]embeddingCandidate{
 			{PostID: 2, FromTrending: true, WasSoftServed: true, LastServedAt: now.Add(-time.Hour)},
@@ -26,11 +26,24 @@ func TestMergeEmbeddingCandidatesContinuesMetadataAggregationAfterCap(t *testing
 	if len(merged) != 2 || merged[0].PostID != 1 || merged[1].PostID != 2 {
 		t.Fatalf("merged=%#v, want IDs [1 2]", merged)
 	}
-	if !merged[0].FromRecent || !merged[0].FromSemantic || merged[0].PositiveSemanticSimilarity != 0.9 {
+	if !merged[0].FromRecent || !merged[0].FromSemantic || merged[0].PositiveSemanticSimilarity != 0.9 || merged[0].SemanticRank != 4 || merged[0].FusionScore != 0.3 || merged[0].SourceCount != 2 {
 		t.Fatalf("article 1 metadata=%#v", merged[0])
 	}
 	if !merged[1].FromFollowing || !merged[1].FromTrending || !merged[1].WasSoftServed || !merged[1].LastServedAt.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("article 2 metadata=%#v", merged[1])
+	}
+}
+
+func TestMergeEmbeddingCandidatesMergesFusionMetadataAsSetMetadata(t *testing.T) {
+	merged := mergeEmbeddingCandidates(1,
+		[]embeddingCandidate{{PostID: 1, SemanticRank: 10, FollowingRank: 4, FusionScore: .2, SourceCount: 3}},
+		[]embeddingCandidate{{PostID: 1, SemanticRank: 4, FollowingRank: 0, RecentRank: 8, FusionScore: .5, SourceCount: 2}},
+	)
+	if len(merged) != 1 {
+		t.Fatalf("merged=%#v, want one candidate", merged)
+	}
+	if merged[0].SemanticRank != 4 || merged[0].FollowingRank != 4 || merged[0].RecentRank != 8 || merged[0].FusionScore != .5 || merged[0].SourceCount != 3 {
+		t.Fatalf("merged fusion metadata=%#v, want min ranks, max score, max source count", merged[0])
 	}
 }
 

@@ -27,7 +27,9 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 	for index := range candidates {
 		candidate := &candidates[index]
 		positiveSemantic := 0.0
-		if candidate.Candidate.FromSemantic {
+		if validComparableRecommendationEmbedding(candidate.Embedding, profile.PositiveVector) {
+			positiveSemantic = clampUnit(cosineSimilarity(candidate.Embedding, profile.PositiveVector))
+		} else if candidate.Candidate.FromSemantic && validEmbeddingVector(profile.PositiveVector) {
 			positiveSemantic = clampRecommendationSimilarity(candidate.Candidate.PositiveSemanticSimilarity)
 		}
 		negativeSemantic := cosineSimilarity(candidate.Embedding, profile.NegativeVector)

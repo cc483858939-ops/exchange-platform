@@ -26,7 +26,7 @@ func testRecommendationTrackingClaims(now time.Time) recommendationTrackingClaim
 	}
 }
 
-func TestRecommendationRankerConfigHashIncludesV4ServingSettings(t *testing.T) {
+func TestRecommendationRankerConfigHashIncludesV5ServingSettings(t *testing.T) {
 	base := defaultRecommendationConfig()
 	tests := []struct {
 		name   string
@@ -40,6 +40,7 @@ func TestRecommendationRankerConfigHashIncludesV4ServingSettings(t *testing.T) {
 		{name: "trending reply factor", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.ReplyFactor++ }},
 		{name: "personalized trending cap", mutate: func(cfg *config.RecommendationConfig) { cfg.Candidates.Personalized.Trending++ }},
 		{name: "cold-start trending cap", mutate: func(cfg *config.RecommendationConfig) { cfg.Candidates.ColdStart.Trending++ }},
+		{name: "fusion rank constant", mutate: func(cfg *config.RecommendationConfig) { cfg.Fusion.RankConstant++ }},
 		{name: "exploration ratio", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.Ratio = 0.20 }},
 		{name: "exploration max slots", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.MaxSlots++ }},
 		{name: "exploration recent window", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.RecentWindowDays++ }},
@@ -215,8 +216,8 @@ func TestRecommendationTrackingTokenV3RejectsCompleteInvalidProvenanceMatrix(t *
 	}
 }
 
-func TestRecommendationServingVersionsRemainRev3Contract(t *testing.T) {
-	if recommendationRankerVersion != "rules_v4" {
+func TestRecommendationServingVersionsRemainRRFV5Contract(t *testing.T) {
+	if recommendationRankerVersion != "rules_v5" {
 		t.Fatalf("ranker version=%q", recommendationRankerVersion)
 	}
 	if recommendationPersonalizedStrategyID != "for_you_materialized_profile_v5" || recommendationColdStartStrategyID != recommendationPersonalizedStrategyID {
@@ -228,7 +229,7 @@ func TestRecommendationServingVersionsRemainRev3Contract(t *testing.T) {
 	if recommendationTrackingTokenVersion != "v3" || eventing.RecommendationBehaviorSchemaVersion != 3 {
 		t.Fatalf("tracking=%q behavior schema=%d", recommendationTrackingTokenVersion, eventing.RecommendationBehaviorSchemaVersion)
 	}
-	if recommendationCandidateRetrievalVersion != "social_semantic_materialized_profile_v4" || recommendation.MaterializedProfileVersion != "materialized_profile_v1" {
+	if recommendationCandidateRetrievalVersion != "social_semantic_materialized_profile_rrf_v5" || recommendation.MaterializedProfileVersion != "materialized_profile_v1" {
 		t.Fatalf("retrieval=%q materialized profile=%q", recommendationCandidateRetrievalVersion, recommendation.MaterializedProfileVersion)
 	}
 }

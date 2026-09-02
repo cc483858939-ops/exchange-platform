@@ -28,6 +28,7 @@ func TestRecommendationTraceMigrationIntegration(t *testing.T) {
 		&models.Post{},
 		&models.RecommendationRequest{},
 		&models.RecommendationResultTrace{},
+		&models.RecommendationDailyMetric{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +48,12 @@ func TestRecommendationTraceMigrationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := applyRecommendationTrendingSchemaCleanup(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationExplorationSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationExplorationSchema(db); err != nil {
 		t.Fatal(err)
 	}
 	if err := applyRecommendationTrendingSchemaCleanup(db); err != nil {
@@ -198,6 +205,18 @@ WHERE schemaname = current_schema()
 		!strings.Contains(indexDefinition, "(request_id,post_id)") ||
 		strings.Contains(indexDefinition, "(post_id)") {
 		t.Fatalf("index definition=%q", indexDefinition)
+	}
+	var fusionTraceColumns int
+	if err := db.Raw(`
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'recommendation_result_traces'
+  AND column_name IN ('fusion_score', 'source_count', 'semantic_rank', 'following_rank', 'recent_rank', 'trending_rank')`).Scan(&fusionTraceColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fusionTraceColumns != 6 {
+		t.Fatalf("fusion trace columns=%d, want 6", fusionTraceColumns)
 	}
 
 	user := models.User{

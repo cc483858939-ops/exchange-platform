@@ -13,6 +13,12 @@ type RecommendationResultTrace struct {
 	FromFollowing           bool      `json:"from_following" gorm:"not null;default:false"`
 	FromRecent              bool      `json:"from_recent" gorm:"not null;default:false"`
 	FromTrending            bool      `json:"from_trending" gorm:"not null;default:false"`
+	FusionScore             float64   `json:"fusion_score" gorm:"not null;default:0"`
+	SourceCount             int       `json:"source_count" gorm:"not null;default:0"`
+	SemanticRank            int       `json:"semantic_rank" gorm:"not null;default:0"`
+	FollowingRank           int       `json:"following_rank" gorm:"not null;default:0"`
+	RecentRank              int       `json:"recent_rank" gorm:"not null;default:0"`
+	TrendingRank            int       `json:"trending_rank" gorm:"not null;default:0"`
 	IsInNetwork             bool      `json:"is_in_network" gorm:"not null;default:false"`
 	IsNovelAuthor           bool      `json:"is_novel_author" gorm:"not null;default:false"`
 	WasSoftServedFallback   bool      `json:"was_soft_served_fallback" gorm:"not null;default:false"`

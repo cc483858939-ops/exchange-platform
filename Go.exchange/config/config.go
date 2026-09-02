@@ -64,6 +64,10 @@ type RecommendationSemanticRecallConfig struct {
 	RecentRatio      float64 `mapstructure:"recent_ratio"`
 }
 
+type RecommendationFusionConfig struct {
+	RankConstant int `mapstructure:"rank_constant"`
+}
+
 type RecommendationTrendingConfig struct {
 	MaxAgeDays    int     `mapstructure:"max_age_days"`
 	HalfLifeHours float64 `mapstructure:"half_life_hours"`
@@ -143,6 +147,7 @@ func (c RecommendationProfileMaterializationConfig) Normalized() RecommendationP
 type RecommendationConfig struct {
 	BehaviorWeights                   RecommendationBehaviorWeights              `mapstructure:"behavior_weights"`
 	SemanticRecall                    RecommendationSemanticRecallConfig         `mapstructure:"semantic_recall"`
+	Fusion                            RecommendationFusionConfig                 `mapstructure:"fusion"`
 	Trending                          RecommendationTrendingConfig               `mapstructure:"trending"`
 	Exploration                       RecommendationExplorationConfig            `mapstructure:"exploration"`
 	SignalHalfLifeDays                float64                                    `mapstructure:"signal_half_life_days"`

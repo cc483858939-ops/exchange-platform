@@ -20,7 +20,7 @@ import (
 
 const (
 	recommendationScene                   = "recommendation_page"
-	recommendationRankerVersion           = "rules_v4"
+	recommendationRankerVersion           = "rules_v5"
 	recommendationPersonalizedStrategyID  = "for_you_materialized_profile_v5"
 	recommendationColdStartStrategyID     = "for_you_materialized_profile_v5"
 	recommendationTrackingTokenVersion    = "v3"
@@ -143,7 +143,7 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 	p := cfg.Candidates.Personalized
 	c := cfg.Candidates.ColdStart
 	return fmt.Sprintf(
-		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|post_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_reply_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|exploration_ratio=%g|exploration_max_slots=%d|exploration_recent_window_days=%d|exploration_novel_post_max_age_days=%d|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|candidate_retrieval=%s|materialized_profile=%s|profile_config=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
+		"view=%g|like=%g|click=%g|qualified_read=%g|reply=%g|quick_bounce=%g|not_interested=%g|signal_half_life=%g|lookback=%d|coexist=%g|post_cap=%g|semantic=%g|negative_semantic=%g|negative_confidence_scale=%g|semantic_recent_window_days=%d|semantic_recent_ratio=%g|trending_weight=%g|trending_max_age_days=%d|trending_half_life_hours=%g|trending_reply_factor=%g|author_affinity=%g|author_affinity_scale=%g|following_bonus=%g|out_ratio=%g|hard_minutes=%d|soft_days=%d|served_limit=%d|diversity_enabled=%t|author_window=%d|max_author=%d|duplicate_threshold=%g|duplicate_penalty=%g|exploration_ratio=%g|exploration_max_slots=%d|exploration_recent_window_days=%d|exploration_novel_post_max_age_days=%d|personalized_caps=%d,%d,%d,%d,%d|cold_caps=%d,%d,%d,%d|fusion_rank_constant=%d|candidate_retrieval=%s|materialized_profile=%s|profile_config=%s|canonical_outcome=%s|passive_recency=%s|read_policy=%s|selection_policy=%s|embedding_version=%s",
 		cfg.BehaviorWeights.View, cfg.BehaviorWeights.Like, cfg.BehaviorWeights.Click,
 		cfg.BehaviorWeights.QualifiedRead, cfg.BehaviorWeights.Reply, cfg.BehaviorWeights.QuickBounce,
 		cfg.BehaviorWeights.NotInterested, cfg.SignalHalfLifeDays, cfg.FeedbackLookbackDays,
@@ -157,7 +157,7 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 		cfg.Diversity.SemanticDuplicateThreshold, cfg.Diversity.SemanticDuplicatePenalty,
 		cfg.Exploration.Ratio, cfg.Exploration.MaxSlots, cfg.Exploration.RecentWindowDays, cfg.Exploration.NovelPostMaxAgeDays,
 		p.Semantic, p.Following, p.Recent, p.Trending, p.Merged,
-		c.Following, c.Recent, c.Trending, c.Merged, recommendationCandidateRetrievalVersion,
+		c.Following, c.Recent, c.Trending, c.Merged, cfg.Fusion.RankConstant, recommendationCandidateRetrievalVersion,
 		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion()),
 		recommendationCanonicalOutcomeVersion, recommendationPassiveRecencyPolicy,
 		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, config.ActiveEmbeddingVersion(),

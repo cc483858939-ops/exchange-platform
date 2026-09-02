@@ -21,7 +21,7 @@ const (
 	maxRecommendationLimit                  = 50
 	recommendationFeedbackPostLimit         = recommendation.ProfileReplyLimit
 	recommendationRecentViewPostLimit       = recommendation.ProfileRecentViewLimit
-	recommendationCandidateRetrievalVersion = "social_semantic_materialized_profile_v4"
+	recommendationCandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v5"
 )
 
 type postBehaviorSignal struct {
@@ -31,6 +31,12 @@ type postBehaviorSignal struct {
 type embeddingCandidate struct {
 	PostID                     uint
 	PositiveSemanticSimilarity float64
+	SemanticRank               int
+	FollowingRank              int
+	RecentRank                 int
+	TrendingRank               int
+	FusionScore                float64
+	SourceCount                int
 	FromSemantic               bool
 	FromFollowing              bool
 	FromRecent                 bool

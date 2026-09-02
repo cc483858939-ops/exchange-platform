@@ -309,7 +309,14 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 		return recommendationCandidateSet{}, err
 	}
 
-	merged := mergeEmbeddingCandidates(caps.Merged, semantic, following, recent, trending)
+	merged := fuseRecommendationCandidates(
+		caps.Merged,
+		cfg.Fusion.RankConstant,
+		recommendationRecallList{Source: recommendationRecallSourceSemantic, Candidates: semantic},
+		recommendationRecallList{Source: recommendationRecallSourceFollowing, Candidates: following},
+		recommendationRecallList{Source: recommendationRecallSourceRecent, Candidates: recent},
+		recommendationRecallList{Source: recommendationRecallSourceTrending, Candidates: trending},
+	)
 	for index := range merged {
 		if item, ok := served[merged[index].PostID]; ok {
 			merged[index].LastServedAt = item.LastServedAt
@@ -367,6 +374,8 @@ func recommendationCandidateCaps(profile userInterestProfile, cfg config.Recomme
 }
 
 func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embeddingCandidate {
+	// mergeEmbeddingCandidates performs stable candidate-set union.
+	// Recall-list fusion must use fuseRecommendationCandidates instead.
 	if limit <= 0 {
 		return nil
 	}
@@ -383,6 +392,16 @@ func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embe
 				current.FromFollowing = current.FromFollowing || candidate.FromFollowing
 				current.FromRecent = current.FromRecent || candidate.FromRecent
 				current.FromTrending = current.FromTrending || candidate.FromTrending
+				current.SemanticRank = recommendationMinNonZeroRank(current.SemanticRank, candidate.SemanticRank)
+				current.FollowingRank = recommendationMinNonZeroRank(current.FollowingRank, candidate.FollowingRank)
+				current.RecentRank = recommendationMinNonZeroRank(current.RecentRank, candidate.RecentRank)
+				current.TrendingRank = recommendationMinNonZeroRank(current.TrendingRank, candidate.TrendingRank)
+				if candidate.FusionScore > current.FusionScore {
+					current.FusionScore = candidate.FusionScore
+				}
+				if candidate.SourceCount > current.SourceCount {
+					current.SourceCount = candidate.SourceCount
+				}
 				current.WasSoftServed = current.WasSoftServed || candidate.WasSoftServed
 				if current.LastServedAt.IsZero() || (!candidate.LastServedAt.IsZero() && candidate.LastServedAt.Before(current.LastServedAt)) {
 					current.LastServedAt = candidate.LastServedAt

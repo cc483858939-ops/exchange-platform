@@ -77,9 +77,31 @@ interest profiles, and raw candidate-author affinity atomically. A compatible
 stale profile remains usable while recovery is queued; misses and incompatible
 profiles use cold start.
 
-The active contract is documented in
+The existing materialized-profile implementation details are documented in
 `docs/recommendation-feed-v4.md`; telemetry request profile fields are covered
 by `docs/recommendation-telemetry-v2.md`.
+
+## Recommendation serving pipeline
+
+The authenticated For You path uses the following serving stages:
+
+```text
+Multi-source Recall (semantic, following, recent, trending)
+        ↓
+Equal Reciprocal Rank Fusion
+        ↓
+Rule-based Multi-signal Ranking
+        ↓
+Diversity / Network Balance / Exploration
+```
+
+Equal RRF controls candidate admission into the bounded pool; its score and
+source count are not part of the final ranking `BaseScore`. Positive semantic
+relevance is computed from the hydrated candidate embedding for every
+candidate comparable with the user's positive profile, regardless of recall
+source. Recency is handled by Recent recall, publication-time tie breaking,
+and exploration/selection policies rather than a freshness `BaseScore`
+component.
 
 ## Local Development
 

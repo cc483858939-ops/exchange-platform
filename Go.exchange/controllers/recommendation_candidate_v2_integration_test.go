@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"errors"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ func openRecommendationCandidateIntegrationDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&models.User{},
+		&models.UserFollow{},
 		&models.Post{},
 		&models.PostArticle{},
 		&models.PostBehavior{},
@@ -85,11 +87,44 @@ func newRecommendationCandidateIntegrationArticle(t *testing.T, db *gorm.DB, aut
 }
 
 func cleanupRecommendationCandidateIntegrationData(db *gorm.DB, postIDs, userIDs []uint) {
+	db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
 	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
 	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 	db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
+}
+
+func TestLoadRecommendationCandidateSetUsesEqualRRFFusionIntegration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	viewer := newRecommendationCandidateIntegrationUser(t, db, "rrf-viewer")
+	author := newRecommendationCandidateIntegrationUser(t, db, "rrf-author")
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	article := newRecommendationCandidateIntegrationArticle(t, db, author, "rrf", now)
+	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: author.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.Post{}).Where("id = ?", article.ID).Update("like_count", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs := []uint{article.ID}
+	userIDs := []uint{viewer.ID, author.ID}
+	t.Cleanup(func() { cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs) })
+
+	candidateSet, err := loadRecommendationCandidateSet(viewer.ID, userInterestProfile{}, map[uint]servedPost{}, now, defaultRecommendationConfig(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidateSet.Candidates) != 1 || candidateSet.Candidates[0].PostID != article.ID {
+		t.Fatalf("candidate set=%#v, want one RRF-fused post", candidateSet)
+	}
+	candidate := candidateSet.Candidates[0]
+	if !candidate.FromFollowing || !candidate.FromRecent || !candidate.FromTrending || candidate.SourceCount != 3 || candidate.FollowingRank != 1 || candidate.RecentRank != 1 || candidate.TrendingRank != 1 {
+		t.Fatalf("fused candidate metadata=%#v", candidate)
+	}
+	if want := 3.0 / 61; math.Abs(candidate.FusionScore-want) > 1e-12 {
+		t.Fatalf("fusion score=%v want=%v", candidate.FusionScore, want)
+	}
 }
 
 func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing.T) {

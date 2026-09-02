@@ -17,6 +17,7 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 			View: 0.5, Like: 6, Click: 1.5, QualifiedRead: 3, Reply: 5, QuickBounce: -3, NotInterested: -6,
 		},
 		SemanticRecall:     config.RecommendationSemanticRecallConfig{RecentWindowDays: 30, RecentRatio: 0.80},
+		Fusion:             config.RecommendationFusionConfig{RankConstant: 60},
 		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 7, HalfLifeHours: 24, ReplyFactor: 0.5},
 		Exploration:        config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30},
 		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90,
@@ -78,6 +79,9 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	}
 	if set.FeedbackLookbackDays > 0 {
 		cfg.FeedbackLookbackDays = set.FeedbackLookbackDays
+	}
+	if set.Fusion.RankConstant > 0 {
+		cfg.Fusion.RankConstant = set.Fusion.RankConstant
 	}
 	if set.PositiveSignalCoexistBonus >= 0 && recommendationSettingProvided("positive_signal_coexist_bonus", set.PositiveSignalCoexistBonus != 0) {
 		cfg.PositiveSignalCoexistBonus = set.PositiveSignalCoexistBonus
@@ -256,6 +260,9 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	}
 	if cfg.SemanticRecall.RecentRatio <= 0 || cfg.SemanticRecall.RecentRatio >= 1 {
 		cfg.SemanticRecall.RecentRatio = 0.80
+	}
+	if cfg.Fusion.RankConstant <= 0 {
+		cfg.Fusion.RankConstant = 60
 	}
 	if cfg.Trending.MaxAgeDays <= 0 {
 		cfg.Trending.MaxAgeDays = 7

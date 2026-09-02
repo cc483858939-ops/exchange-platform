@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"fmt"
 	"testing"
 
 	"Go.exchange/config"
@@ -17,6 +18,44 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 		cfg.Exploration.RecentWindowDays != 7 || cfg.Exploration.NovelPostMaxAgeDays != 30 ||
 		!cfg.Diversity.Enabled || cfg.Diversity.SemanticDuplicatePenalty != 1 {
 		t.Fatalf("normalized config=%#v", cfg)
+	}
+}
+
+func TestNormalizedRecommendationConfigUsesDefaultFusionRankConstant(t *testing.T) {
+	original := config.AppConfig
+	config.AppConfig = &config.Config{}
+	t.Cleanup(func() { config.AppConfig = original })
+
+	if got := normalizedRecommendationConfig().Fusion.RankConstant; got != 60 {
+		t.Fatalf("fusion rank constant=%d, want 60", got)
+	}
+}
+
+func TestNormalizedRecommendationConfigOverridesFusionRankConstant(t *testing.T) {
+	original := config.AppConfig
+	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
+		Fusion: config.RecommendationFusionConfig{RankConstant: 30},
+	}}
+	t.Cleanup(func() { config.AppConfig = original })
+
+	if got := normalizedRecommendationConfig().Fusion.RankConstant; got != 30 {
+		t.Fatalf("fusion rank constant=%d, want 30", got)
+	}
+}
+
+func TestNormalizedRecommendationConfigRejectsNonPositiveFusionRankConstant(t *testing.T) {
+	for _, rankConstant := range []int{0, -1} {
+		t.Run(fmt.Sprintf("rank_constant_%d", rankConstant), func(t *testing.T) {
+			original := config.AppConfig
+			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
+				Fusion: config.RecommendationFusionConfig{RankConstant: rankConstant},
+			}}
+			t.Cleanup(func() { config.AppConfig = original })
+
+			if got := normalizedRecommendationConfig().Fusion.RankConstant; got != 60 {
+				t.Fatalf("fusion rank constant=%d, want 60", got)
+			}
+		})
 	}
 }
 
