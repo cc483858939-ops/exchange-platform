@@ -156,7 +156,7 @@ func (o commandOptions) snapshotPath(baseDir string) string {
 }
 
 func parseCommandFlags(command string, args []string, stderr io.Writer, destructive bool) (commandOptions, error) {
-	options := commandOptions{source: "x", profile: "core"}
+	options := commandOptions{source: "rsshub", profile: "core"}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&options.source, "source", options.source, "source adapter (x or rsshub)")

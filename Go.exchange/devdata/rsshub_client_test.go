@@ -11,9 +11,9 @@ import (
 )
 
 const rssHubTestFeed = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
-    <title>MKBHD</title>
+    <title>Twitter @Marques Brownlee</title>
     <description><![CDATA[Technology &amp; hardware feed]]></description>
     <link>https://twitter.com/MKBHD</link>
     <image><url>https://cdn.example.test/mkbhd.png</url></image>
@@ -33,6 +33,14 @@ const rssHubTestFeed = `<?xml version="1.0" encoding="UTF-8"?>
       <author>MKBHD</author>
     </item>
     <item>
+      <title><![CDATA[This root quote has enough standalone text to be rejected]]></title>
+      <description><![CDATA[<p>This root quote has enough standalone text to be rejected</p><div class="rsshub-quote"><a href="https://x.com/Other/status/9001">Quoted source text</a></div>]]></description>
+      <guid isPermaLink="false">https://twitter.com/MKBHD/status/1004</guid>
+      <link>https://x.com/MKBHD/status/1004</link>
+      <pubDate>Tue, 01 Sep 2026 10:54:30 GMT</pubDate>
+      <author>MKBHD</author>
+    </item>
+    <item>
       <title><![CDATA[Another valid RSSHub source post with enough standalone text]]></title>
       <description><![CDATA[<p>Another valid RSSHub source post with enough standalone text</p><img src="https://cdn.example.test/post.png" />]]></description>
       <guid isPermaLink="false">https://twitter.com/MKBHD/status/1003</guid>
@@ -41,6 +49,23 @@ const rssHubTestFeed = `<?xml version="1.0" encoding="UTF-8"?>
       <author>MKBHD</author>
       <media:content url="https://cdn.example.test/post.png" type="image/png" />
     </item>
+    <item>
+      <title></title>
+      <description><![CDATA[<p>Line one &amp; detail</p><br />Line two has enough standalone text]]></description>
+      <content:encoded><![CDATA[<p>Line one &amp; detail</p><br />Line two has enough standalone text]]></content:encoded>
+      <guid isPermaLink="false">https://twitter.com/MKBHD/status/1005</guid>
+      <link>https://x.com/MKBHD/status/1005</link>
+      <pubDate>Tue, 01 Sep 2026 10:53:56 GMT</pubDate>
+      <author>MKBHD</author>
+    </item>
+    <item>
+      <title>short image</title>
+      <description><![CDATA[<p>short image</p><img src="https://cdn.example.test/short.png" />]]></description>
+      <guid isPermaLink="false">https://twitter.com/MKBHD/status/1006</guid>
+      <link>https://x.com/MKBHD/status/1006</link>
+      <pubDate>Tue, 01 Sep 2026 10:52:56 GMT</pubDate>
+      <author>MKBHD</author>
+    </item>
   </channel>
 </rss>`
 
@@ -48,7 +73,7 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestCount++
-		if request.URL.Path != "/twitter/user/MKBHD" {
+		if request.URL.Path != "/twitter/user/MKBHD/exclude_rts_replies" {
 			t.Fatalf("path=%q", request.URL.Path)
 		}
 		if authorization := request.Header.Get("Authorization"); authorization != "" {
@@ -71,7 +96,7 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("users=%#v", users)
 	}
-	if user.ID != "rsshub:mkbhd" || user.Username != "MKBHD" || user.Name != "MKBHD" {
+	if user.ID != "rsshub:mkbhd" || user.Username != "MKBHD" || user.Name != "Marques Brownlee" {
 		t.Fatalf("user=%#v", user)
 	}
 	if user.Description != "Technology & hardware feed" || user.ProfileImageURL != "https://cdn.example.test/mkbhd.png" {
@@ -88,14 +113,32 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	if requestCount != 1 || client.RequestCount() != 1 {
 		t.Fatalf("requestCount=%d clientCount=%d", requestCount, client.RequestCount())
 	}
-	if len(page.Posts) != 3 || page.ResultCount != 3 || page.NextToken != "" {
+	if len(page.Posts) != 6 || page.ResultCount != 6 || page.NextToken != "" {
 		t.Fatalf("page=%#v", page)
 	}
 	if page.Posts[0].ID != "1001" || page.Posts[0].Text != "This is a valid RSSHub source post" {
 		t.Fatalf("first post=%#v", page.Posts[0])
 	}
-	if !page.Posts[2].CreatedAt.Equal(time.Date(2026, 9, 1, 10, 54, 56, 0, time.UTC)) || len(page.Posts[2].Attachments.MediaKeys) != 1 {
-		t.Fatalf("third post=%#v", page.Posts[2])
+	if page.Posts[2].ID != "1004" || len(page.Posts[2].ReferencedTweets) != 1 || page.Posts[2].ReferencedTweets[0].Type != "quote" || page.Posts[2].ReferencedTweets[0].ID != "9001" {
+		t.Fatalf("quote post=%#v", page.Posts[2])
+	}
+	if ok, reason := EligibleSourcePost(page.Posts[2], user.ID); ok || reason != "referenced_post" {
+		t.Fatalf("quote eligibility=%t reason=%q", ok, reason)
+	}
+	if strings.Contains(page.Posts[2].Text, "Quoted source text") {
+		t.Fatalf("quote card text leaked into root text=%q", page.Posts[2].Text)
+	}
+	if !page.Posts[3].CreatedAt.Equal(time.Date(2026, 9, 1, 10, 54, 56, 0, time.UTC)) || len(page.Posts[3].Attachments.MediaKeys) != 1 {
+		t.Fatalf("media post=%#v", page.Posts[3])
+	}
+	if !strings.Contains(page.Posts[4].Text, "Line one & detail") || !strings.Contains(page.Posts[4].Text, "Line two") {
+		t.Fatalf("multiline post=%#v", page.Posts[4])
+	}
+	if len(page.Posts[5].Attachments.MediaKeys) != 1 {
+		t.Fatalf("short media markers=%#v", page.Posts[5])
+	}
+	if ok, reason := EligibleSourcePost(page.Posts[5], user.ID); ok || reason != "media_dependent_text" {
+		t.Fatalf("short media eligibility=%t reason=%q", ok, reason)
 	}
 }
 
@@ -121,7 +164,7 @@ func TestRSSHubFeedUsesExistingFetchFiltersAndSnapshotValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.APIRequests != 1 || report.SourcePostsScanned != 3 || report.EligibleSelected != 2 {
+	if report.APIRequests != 1 || report.SourcePostsScanned != 4 || report.EligibleSelected != 2 {
 		t.Fatalf("report=%#v", report)
 	}
 	if len(snapshot.Posts) != 2 || snapshot.Accounts[0].SourceUserID != "rsshub:mkbhd" {
@@ -160,3 +203,63 @@ func TestRSSHubClientRejectsPagination(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func TestRSSHubClientReportsHTTPAndMalformedXML(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantError  string
+	}{
+		{name: "http error", statusCode: http.StatusBadGateway, body: "upstream unavailable", wantError: "HTTP 502"},
+		{name: "malformed xml", statusCode: http.StatusOK, body: "<rss><channel>", wantError: "decode RSSHub response"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.WriteHeader(test.statusCode)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer server.Close()
+
+			client, err := NewRSSHubClient(server.URL, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.LookupUsers(context.Background(), []string{"MKBHD"})
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error=%v want substring %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestRSSHubClientInvalidStatusIDFailsEligibility(t *testing.T) {
+	feed := strings.Replace(rssHubTestFeed, "status/1001", "status/not-a-number", 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(writer, feed)
+	}))
+	defer server.Close()
+
+	client, err := NewRSSHubClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, err := client.LookupUsers(context.Background(), []string{"MKBHD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.GetUserPosts(context.Background(), users["mkbhd"].ID, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Posts[0].ID != "" {
+		t.Fatalf("invalid status ID=%q", page.Posts[0].ID)
+	}
+	if ok, reason := EligibleSourcePost(page.Posts[0], users["mkbhd"].ID); ok || reason != "missing_id" {
+		t.Fatalf("invalid ID eligibility=%t reason=%q", ok, reason)
+	}
+}
+
+var _ SnapshotSourceClient = (*RSSHubClient)(nil)

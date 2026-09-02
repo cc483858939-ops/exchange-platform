@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+func TestParseCommandFlagsDefaultsToRSSHub(t *testing.T) {
+	options, err := parseCommandFlags("fetch", nil, io.Discard, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.source != "rsshub" {
+		t.Fatalf("default source=%q", options.source)
+	}
+}
+
 func TestParseCommandFlagsSupportsRSSHubAndOfficialXFallback(t *testing.T) {
 	rsshub, err := parseCommandFlags("fetch", []string{"--source=rsshub"}, io.Discard, false)
 	if err != nil {

@@ -21,12 +21,14 @@ const (
 	defaultRSSHubRequestTimeout = 20 * time.Second
 	maxRSSHubResponseBytes      = 16 << 20
 	rssHubSourceUserPrefix      = "rsshub:"
+	rssHubUserRouteSuffix       = "/exclude_rts_replies"
 )
 
 var (
-	rssHubStatusIDPattern  = regexp.MustCompile(`(?i)/status/([0-9]{1,19})(?:[/?#\s]|$)`)
+	rssHubStatusIDPattern  = regexp.MustCompile(`(?i)/status/([0-9]{1,19})(?:[/?#\s"'&<>]|$)`)
 	rssHubHTMLBreakPattern = regexp.MustCompile(`(?is)<\s*(?:br|/p|/div|/li|/blockquote)\s*/?\s*>`)
 	rssHubHTMLTagPattern   = regexp.MustCompile(`(?is)<[^>]+>`)
+	rssHubQuotePattern     = regexp.MustCompile(`(?is)<div\b[^>]*\bclass\s*=\s*["'][^"']*\brsshub-quote\b[^"']*["'][^>]*>`)
 )
 
 // RSSHubClient adapts RSSHub's X user feeds to the existing source client
@@ -188,7 +190,7 @@ func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefres
 		ctx = context.Background()
 	}
 	endpoint := *c.baseURL
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/twitter/user/" + url.PathEscape(handle)
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/twitter/user/" + url.PathEscape(handle) + rssHubUserRouteSuffix
 	endpoint.RawQuery = ""
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -231,10 +233,7 @@ func parseRSSHubFeed(handle string, document rssHubDocument) (rssHubFeed, error)
 	if !xHandlePattern.MatchString(handle) {
 		return rssHubFeed{}, fmt.Errorf("invalid X handle %q", handle)
 	}
-	name := rssHubContentText(document.Channel.Title)
-	if name == "" {
-		name = handle
-	}
+	name := rssHubDisplayName(document.Channel.Title, handle)
 	protected := false
 	feed := rssHubFeed{user: XUser{
 		ID:              rssHubSourceUserID(handle),
@@ -264,8 +263,8 @@ func parseRSSHubItem(handle string, item rssHubItem) XPost {
 	if item.Enclosure != nil || len(item.MediaContent) > 0 || rssHubContainsMedia(item.Description) || rssHubContainsMedia(item.EncodedDescription) {
 		post.Attachments.MediaKeys = []string{"rsshub-media"}
 	}
-	if strings.HasPrefix(strings.TrimSpace(text), "RT @") {
-		post.ReferencedTweets = []XReferencedTweet{{Type: "retweeted", ID: post.ID}}
+	if rssHubContainsQuote(item) {
+		post.ReferencedTweets = []XReferencedTweet{{Type: "quote", ID: rssHubQuoteReferenceID(item, post.ID)}}
 	}
 	return post
 }
@@ -278,6 +277,38 @@ func rssHubItemText(item rssHubItem) string {
 		return encoded
 	}
 	return rssHubContentText(item.Description)
+}
+
+func rssHubDisplayName(raw, handle string) string {
+	name := rssHubContentText(raw)
+	const prefix = "twitter @"
+	if len(name) >= len(prefix) && strings.EqualFold(name[:len(prefix)], prefix) {
+		name = strings.TrimSpace(name[len(prefix):])
+	}
+	if name == "" {
+		return handle
+	}
+	return name
+}
+
+func rssHubContainsQuote(item rssHubItem) bool {
+	for _, raw := range []string{item.Description, item.EncodedDescription} {
+		if rssHubQuotePattern.MatchString(raw) || rssHubQuotePattern.MatchString(html.UnescapeString(raw)) {
+			return true
+		}
+	}
+	return false
+}
+
+func rssHubQuoteReferenceID(item rssHubItem, rootID string) string {
+	for _, raw := range []string{item.Description, item.EncodedDescription} {
+		for _, match := range rssHubStatusIDPattern.FindAllStringSubmatch(html.UnescapeString(raw), -1) {
+			if len(match) == 2 && match[1] != rootID {
+				return match[1]
+			}
+		}
+	}
+	return ""
 }
 
 func rssHubPostID(item rssHubItem) string {
@@ -324,7 +355,7 @@ func rssHubContentText(raw string) string {
 }
 
 func rssHubContainsMedia(raw string) bool {
-	raw = strings.ToLower(raw)
+	raw = strings.ToLower(html.UnescapeString(raw))
 	for _, marker := range []string{"<img", "<video", "<audio", "<source", "<iframe", "media:content"} {
 		if strings.Contains(raw, marker) {
 			return true

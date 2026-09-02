@@ -73,3 +73,5 @@ func TestNewXClientRequiresBearerToken(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+var _ SnapshotSourceClient = (*XClient)(nil)

@@ -21,7 +21,7 @@ const (
 	VerificationModeGeneric         = "generic"
 	VerificationModeCuratedV1Live   = "curated_v1_live"
 	curatedV1MinimumPopulatedUsers  = 12
-	curatedV1MinimumActiveRootPosts = 300
+	curatedV1MinimumActiveRootPosts = 120
 )
 
 type VerificationOptions struct {

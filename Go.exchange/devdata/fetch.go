@@ -37,7 +37,7 @@ func sourceRequestCount(client SnapshotSourceClient) int {
 	return 1
 }
 
-var ErrPreflightFailed = errors.New("X source preflight failed")
+var ErrPreflightFailed = errors.New("source preflight failed")
 
 func PreflightSources(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry) ([]PreflightResult, error) {
 	if err := ValidateRegistry(registry); err != nil {
@@ -61,7 +61,7 @@ func PreflightSources(ctx context.Context, client SnapshotSourceClient, registry
 			if lookupErr != nil {
 				result.Error = lookupErr.Error()
 			} else {
-				result.Error = "X user was not returned"
+				result.Error = "source user was not returned"
 			}
 			continue
 		}
@@ -113,7 +113,7 @@ func FetchSnapshot(ctx context.Context, client SnapshotSourceClient, registry So
 		return Snapshot{}, FetchReport{}, err
 	}
 	if client == nil {
-		return Snapshot{}, FetchReport{}, errors.New("X API client is not initialized")
+		return Snapshot{}, FetchReport{}, errors.New("source client is not initialized")
 	}
 	if fetchedAt.IsZero() {
 		fetchedAt = time.Now().UTC()
@@ -126,7 +126,7 @@ func FetchSnapshot(ctx context.Context, client SnapshotSourceClient, registry So
 	users, err := client.LookupUsers(ctx, handles)
 	report := FetchReport{APIRequests: sourceRequestCount(client), PerAccount: make([]FetchAccountReport, 0, len(accounts))}
 	if err != nil {
-		return Snapshot{}, report, fmt.Errorf("lookup X source accounts: %w", err)
+		return Snapshot{}, report, fmt.Errorf("lookup source accounts: %w", err)
 	}
 
 	snapshot := Snapshot{Version: DefaultSnapshotVersion, FetchedAt: fetchedAt.UTC()}
@@ -135,7 +135,7 @@ func FetchSnapshot(ctx context.Context, client SnapshotSourceClient, registry So
 	for _, account := range accounts {
 		user, exists := users[strings.ToLower(account.Handle)]
 		if !exists {
-			return Snapshot{}, report, fmt.Errorf("source account %q was not returned by X", account.Key)
+			return Snapshot{}, report, fmt.Errorf("source account %q was not returned by source", account.Key)
 		}
 		if user.Protected == nil || *user.Protected {
 			return Snapshot{}, report, fmt.Errorf("source account %q is protected or missing protected status", account.Key)
@@ -194,7 +194,7 @@ func FetchSnapshot(ctx context.Context, client SnapshotSourceClient, registry So
 				break
 			}
 			if page.NextToken == nextToken {
-				return Snapshot{}, report, fmt.Errorf("X pagination token did not advance for %q", account.Key)
+				return Snapshot{}, report, fmt.Errorf("source pagination token did not advance for %q", account.Key)
 			}
 			nextToken = page.NextToken
 		}
