@@ -13,14 +13,9 @@ import (
 
 var requiredMetadataConstraints = map[string][]string{
 	"devdata_mirror_accounts": {
-		"ucon_devdata_mirror_accounts_registry_key",
-		"ucon_devdata_mirror_accounts_platform_source_user",
-		"ucon_devdata_mirror_accounts_local_user",
 		"fk_devdata_mirror_accounts_local_user",
 	},
 	"devdata_mirror_posts": {
-		"ucon_devdata_mirror_posts_platform_source_post",
-		"ucon_devdata_mirror_posts_local_post",
 		"fk_devdata_mirror_posts_account",
 		"fk_devdata_mirror_posts_post",
 		"chk_devdata_mirror_posts_state",
@@ -29,8 +24,17 @@ var requiredMetadataConstraints = map[string][]string{
 }
 
 var requiredMetadataIndexes = map[string][]string{
-	"devdata_mirror_accounts": {"idx_devdata_mirror_accounts_enabled"},
-	"devdata_mirror_posts":    {"idx_devdata_mirror_posts_account_state"},
+	"devdata_mirror_accounts": {
+		"ucon_devdata_mirror_accounts_registry_key",
+		"ucon_devdata_mirror_accounts_platform_source_user",
+		"ucon_devdata_mirror_accounts_local_user",
+		"idx_devdata_mirror_accounts_enabled",
+	},
+	"devdata_mirror_posts": {
+		"ucon_devdata_mirror_posts_platform_source_post",
+		"ucon_devdata_mirror_posts_local_post",
+		"idx_devdata_mirror_posts_account_state",
+	},
 }
 
 // ValidateMetadataSchema is the DevData-only readiness check. It intentionally

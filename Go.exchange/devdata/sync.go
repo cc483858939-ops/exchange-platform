@@ -42,16 +42,18 @@ type SyncResult struct {
 }
 
 type syncMaintenance struct {
-	affected map[uint]struct{}
-	newPosts map[uint]struct{}
-	purged   map[uint]struct{}
+	affected      map[uint]struct{}
+	newPosts      map[uint]struct{}
+	purged        map[uint]struct{}
+	reactivations map[uint]likes.FullState
 }
 
 func newSyncMaintenance() *syncMaintenance {
 	return &syncMaintenance{
-		affected: make(map[uint]struct{}),
-		newPosts: make(map[uint]struct{}),
-		purged:   make(map[uint]struct{}),
+		affected:      make(map[uint]struct{}),
+		newPosts:      make(map[uint]struct{}),
+		purged:        make(map[uint]struct{}),
+		reactivations: make(map[uint]likes.FullState),
 	}
 }
 
@@ -71,6 +73,13 @@ func (m *syncMaintenance) addNew(postID uint) {
 func (m *syncMaintenance) addPurge(postID uint) {
 	if m != nil && postID != 0 {
 		m.purged[postID] = struct{}{}
+		m.affect(postID)
+	}
+}
+
+func (m *syncMaintenance) addReactivation(postID uint, state likes.FullState) {
+	if m != nil && postID != 0 {
+		m.reactivations[postID] = state
 		m.affect(postID)
 	}
 }
@@ -407,6 +416,13 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 	}
 	contentChanged := post.Content != desired.Text || post.AuthorID != account.LocalUserID || post.Visibility != "public" || !post.CreatedAt.Equal(desired.CreatedAt.UTC())
 	reactivate := mapping.State == models.DevDataMirrorPostStateTombstone || post.DeletedAt.Valid
+	if reactivate {
+		likeState, err := loadReactivationLikeState(tx, post.ID, post.LikeCount, post.LikeSyncVersion)
+		if err != nil {
+			return err
+		}
+		maintenance.addReactivation(post.ID, likeState)
+	}
 	values := map[string]interface{}{
 		"author_id":  account.LocalUserID,
 		"content":    desired.Text,
@@ -431,6 +447,17 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 		return err
 	}
 	return nil
+}
+
+func loadReactivationLikeState(tx *gorm.DB, postID uint, count, version int64) (likes.FullState, error) {
+	var userIDs []uint
+	if err := tx.Model(&models.PostReaction{}).
+		Where("post_id = ? AND reaction = ? AND liked = TRUE", postID, models.PostReactionLike).
+		Order("user_id ASC").
+		Pluck("user_id", &userIDs).Error; err != nil {
+		return likes.FullState{}, fmt.Errorf("load canonical like state for reactivated Post %d: %w", postID, err)
+	}
+	return likes.FullState{Count: count, Version: version, UserIDs: userIDs}, nil
 }
 
 func insertPost(tx *gorm.DB, account models.DevDataMirrorAccount, desired SnapshotPost, syncAt time.Time, maintenance *syncMaintenance) error {
@@ -623,11 +650,25 @@ func performPostCommitMaintenance(ctx context.Context, redisClient *redis.Client
 			log.Printf("WARN [DevData] initialize Redis like state for %d: %v", postID, err)
 		}
 	}
+	for _, postID := range sortedIDs(fullStateIDs(maintenance.reactivations)) {
+		state := maintenance.reactivations[postID]
+		if _, err := store.Initialize(ctx, postID, state.Count, state.Version, state.UserIDs); err != nil {
+			log.Printf("WARN [DevData] restore Redis like state for reactivated Post %d: %v", postID, err)
+		}
+	}
 	for _, postID := range sortedIDs(maintenance.purged) {
 		if err := store.PurgePost(ctx, postID); err != nil {
 			log.Printf("WARN [DevData] purge Redis like state for %d: %v", postID, err)
 		}
 	}
+}
+
+func fullStateIDs(values map[uint]likes.FullState) map[uint]struct{} {
+	ids := make(map[uint]struct{}, len(values))
+	for id := range values {
+		ids[id] = struct{}{}
+	}
+	return ids
 }
 
 func sortedIDs(values map[uint]struct{}) []uint {

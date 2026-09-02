@@ -26,6 +26,7 @@ type recommendationCandidateSet struct {
 	SemanticCount  int
 	FollowingCount int
 	RecentCount    int
+	RecentPostIDs  []uint
 	TrendingCount  int
 }
 
@@ -325,7 +326,7 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 	}
 	return recommendationCandidateSet{
 		Candidates: merged, SemanticCount: len(semantic), FollowingCount: len(following),
-		RecentCount: len(recent), TrendingCount: len(trending),
+		RecentCount: len(recent), RecentPostIDs: recommendationCandidatePostIDs(recent), TrendingCount: len(trending),
 	}, nil
 }
 
@@ -422,13 +423,36 @@ func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embe
 }
 
 func mergeCandidateSets(first, second recommendationCandidateSet, mergedLimit int) recommendationCandidateSet {
+	recentPostIDs := append([]uint(nil), first.RecentPostIDs...)
+	seenRecent := make(map[uint]struct{}, len(recentPostIDs))
+	for _, postID := range recentPostIDs {
+		seenRecent[postID] = struct{}{}
+	}
+	for _, postID := range second.RecentPostIDs {
+		if _, exists := seenRecent[postID]; exists {
+			continue
+		}
+		seenRecent[postID] = struct{}{}
+		recentPostIDs = append(recentPostIDs, postID)
+	}
 	return recommendationCandidateSet{
 		Candidates:     mergeEmbeddingCandidates(mergedLimit, first.Candidates, second.Candidates),
 		SemanticCount:  first.SemanticCount + second.SemanticCount,
 		FollowingCount: first.FollowingCount + second.FollowingCount,
 		RecentCount:    first.RecentCount + second.RecentCount,
+		RecentPostIDs:  recentPostIDs,
 		TrendingCount:  first.TrendingCount + second.TrendingCount,
 	}
+}
+
+func recommendationCandidatePostIDs(candidates []embeddingCandidate) []uint {
+	ids := make([]uint, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.PostID != 0 {
+			ids = append(ids, candidate.PostID)
+		}
+	}
+	return ids
 }
 
 func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.Time) ([]hydratedRecommendationCandidate, error) {

@@ -63,56 +63,20 @@ func GetPostRecommendations(ctx *gin.Context) {
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	cfg := normalizedRecommendationConfig()
 
-	profile, err := loadMaterializedUserInterestProfile(userID, now, cfg)
+	serving, err := serveRecommendationCandidatePath(userID, uint(limit), cfg, now, requestID)
 	if err != nil {
-		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(serving.Profile))
 		return
 	}
-	loadedAuthors := make(map[uint]struct{})
-
-	served, err := loadRecommendationServedHistory(userID, now, cfg)
-	if err != nil {
-		log.Printf("[Recommendation] served history for user %d: %v", userID, err)
+	profile := serving.Profile
+	freshSet := serving.FreshSet
+	selected := serving.Selected
+	if serving.ServedHistoryLoadError != nil {
+		log.Printf("[Recommendation] served history for user %d: %v", userID, serving.ServedHistoryLoadError)
 		metrics.RecordRecommendationServedHistoryLoadFailure()
-		served = map[uint]servedPost{}
 	}
-	freshSet, err := loadRecommendationCandidateSet(userID, profile, served, now, cfg, false)
-	if err != nil {
-		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
-		return
-	}
-	recordRecallMetrics(freshSet)
-	freshHydrated, err := hydrateRecommendationCandidates(freshSet.Candidates, now)
-	if err != nil {
-		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
-		return
-	}
-	if err := loadMaterializedCandidateAuthorContext(userID, &profile, freshHydrated, loadedAuthors, cfg); err != nil {
-		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
-		return
-	}
-	rankedFresh := rankRecommendationCandidates(profile, freshHydrated, now, cfg)
-	selected := selectRecommendationCandidates(rankedFresh, nil, limit, cfg, now, recommendationSelectionFresh, requestID)
-
-	if len(selected) < limit {
-		softSet, softErr := loadRecommendationCandidateSet(userID, profile, served, now, cfg, true)
-		if softErr != nil {
-			recommendationErrorResponse(ctx, softErr, recommendationStrategyID(profile))
-			return
-		}
-		recordRecallMetrics(softSet)
-		softHydrated, softErr := hydrateRecommendationCandidates(softSet.Candidates, now)
-		if softErr != nil {
-			recommendationErrorResponse(ctx, softErr, recommendationStrategyID(profile))
-			return
-		}
-		if err := loadMaterializedCandidateAuthorContext(userID, &profile, softHydrated, loadedAuthors, cfg); err != nil {
-			recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
-			return
-		}
-		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg)
-		selected = selectRecommendationCandidates(rankedSoft, selected, limit, cfg, now, recommendationSelectionSoft, requestID)
-		freshSet = mergeCandidateSets(freshSet, softSet, recommendationCandidateCaps(profile, cfg).Merged)
+	for _, recallSet := range serving.RecallSets {
+		recordRecallMetrics(recallSet)
 	}
 
 	recommendations, err := selectedRecommendationResponses(selected)

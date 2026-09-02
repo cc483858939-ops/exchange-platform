@@ -514,6 +514,40 @@ func TestDevDataMirrorSyncLifecycleIntegration(t *testing.T) {
 	}
 }
 
+func TestDevDataVerifyFailsWhenRecommendationPathIsEmptyIntegration(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+	now := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	if _, err := SyncSnapshot(context.Background(), db, data.Registry, data.snapshot(now), nil, now); err != nil {
+		t.Fatalf("seed empty DevData inventory: %v", err)
+	}
+	if _, err := VerifyCore(context.Background(), db, data.Registry, now); err == nil || !strings.Contains(err.Error(), "actual recommendation path returned no recent recall candidates") {
+		t.Fatalf("empty recommendation path error=%v", err)
+	}
+}
+
+func TestDevDataVerifyRejectsUnrelatedRecommendationInventoryIntegration(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+	now := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	if _, err := SyncSnapshot(context.Background(), db, data.Registry, data.snapshot(now), nil, now); err != nil {
+		t.Fatalf("seed empty DevData inventory: %v", err)
+	}
+	author := models.User{Username: "it_unrelated_author_" + data.Tag}
+	if err := db.Create(&author).Error; err != nil {
+		t.Fatalf("create unrelated author: %v", err)
+	}
+	post := models.Post{Model: gorm.Model{CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}, AuthorID: author.ID, Content: "it-marker-" + data.Tag + " unrelated recommendation", Visibility: "public"}
+	if err := db.Create(&post).Error; err != nil {
+		t.Fatalf("create unrelated post: %v", err)
+	}
+	if _, err := VerifyCore(context.Background(), db, data.Registry, now); err == nil || !strings.Contains(err.Error(), "no active DevData imported Post") {
+		t.Fatalf("unrelated recommendation inventory error=%v", err)
+	}
+}
+
 func containsUint(values []uint, wanted uint) bool {
 	for _, value := range values {
 		if value == wanted {

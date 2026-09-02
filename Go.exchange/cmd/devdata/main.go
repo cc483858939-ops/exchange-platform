@@ -122,7 +122,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		verification, err := devdata.VerifyCore(context.Background(), db, registry, time.Now().UTC())
+		verification, err := devdata.VerifyCoreWithOptions(context.Background(), db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
 		if err != nil {
 			return err
 		}
@@ -225,7 +225,7 @@ func syncAndVerify(stdout, stderr io.Writer, registry devdata.SourceRegistry, sn
 		return err
 	}
 	fmt.Fprintf(stdout, "Sync: kept=%d reactivated=%d inserted=%d retired_soft=%d retired_hard=%d\n", result.Kept, result.Reactivated, result.Inserted, result.RetiredSoft, result.RetiredHard)
-	verification, err := devdata.VerifyCore(context.Background(), db, registry, time.Now().UTC())
+	verification, err := devdata.VerifyCoreWithOptions(context.Background(), db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
 	if err != nil {
 		return err
 	}

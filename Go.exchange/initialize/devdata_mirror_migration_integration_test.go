@@ -28,11 +28,10 @@ func TestDevDataMirrorSchemaIntegrationIsIdempotent(t *testing.T) {
 	previous := global.Db
 	global.Db = db
 	t.Cleanup(func() { global.Db = previous })
-	if err := RunMigrations(); err != nil {
-		t.Fatal(err)
-	}
-	if err := RunMigrations(); err != nil {
-		t.Fatalf("second migration: %v", err)
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := RunMigrations(); err != nil {
+			t.Fatalf("migration #%d: %v", attempt, err)
+		}
 	}
 
 	for table, columns := range map[string][]string{
@@ -81,12 +80,7 @@ WHERE namespace.nspname = current_schema()
 		definitions[constraint.Name] = strings.ToLower(strings.Join(strings.Fields(constraint.Definition), ""))
 	}
 	for _, name := range []string{
-		"ucon_devdata_mirror_accounts_registry_key",
-		"ucon_devdata_mirror_accounts_platform_source_user",
-		"ucon_devdata_mirror_accounts_local_user",
 		"fk_devdata_mirror_accounts_local_user",
-		"ucon_devdata_mirror_posts_platform_source_post",
-		"ucon_devdata_mirror_posts_local_post",
 		"fk_devdata_mirror_posts_account",
 		"fk_devdata_mirror_posts_post",
 		"chk_devdata_mirror_posts_state",
@@ -125,6 +119,37 @@ WHERE schemaname = current_schema()
 	}
 	if indexCount != 1 {
 		t.Fatalf("account/state index count=%d", indexCount)
+	}
+
+	var uniqueIndexes []struct {
+		Name   string `gorm:"column:index_name"`
+		Unique bool   `gorm:"column:is_unique"`
+	}
+	if err := db.Raw(`
+SELECT index_class.relname AS index_name, index_catalog.indisunique AS is_unique
+FROM pg_class AS table_class
+JOIN pg_namespace AS namespace ON namespace.oid = table_class.relnamespace
+JOIN pg_index AS index_catalog ON index_catalog.indrelid = table_class.oid
+JOIN pg_class AS index_class ON index_class.oid = index_catalog.indexrelid
+WHERE namespace.nspname = current_schema()
+  AND table_class.relname IN ('devdata_mirror_accounts', 'devdata_mirror_posts')
+  AND index_class.relname IN (
+    'ucon_devdata_mirror_accounts_registry_key',
+    'ucon_devdata_mirror_accounts_platform_source_user',
+    'ucon_devdata_mirror_accounts_local_user',
+    'ucon_devdata_mirror_posts_platform_source_post',
+    'ucon_devdata_mirror_posts_local_post'
+  )
+`).Scan(&uniqueIndexes).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(uniqueIndexes) != 5 {
+		t.Fatalf("DevData unique index count=%d rows=%#v", len(uniqueIndexes), uniqueIndexes)
+	}
+	for _, index := range uniqueIndexes {
+		if !index.Unique {
+			t.Fatalf("DevData index %q is not unique", index.Name)
+		}
 	}
 
 	for table, forbidden := range map[string]string{"users": "devdata_registry_key", "posts": "devdata_source_post_id"} {

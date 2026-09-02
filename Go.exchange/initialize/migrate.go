@@ -3,6 +3,7 @@ package initialize
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -27,6 +28,9 @@ func RunMigrations() error {
 		}
 		if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 			return fmt.Errorf("enable pgvector extension: %w", err)
+		}
+		if err := prepareDevDataMirrorUniqueIndexes(tx); err != nil {
+			return err
 		}
 
 		if err := tx.AutoMigrate(
@@ -121,24 +125,61 @@ WHERE reaction_version = 0
 	})
 }
 
+// prepareDevDataMirrorUniqueIndexes transfers the old explicitly-created
+// single/composite UNIQUE constraints to the GORM-owned unique indexes below.
+//
+// GORM's PostgreSQL AutoMigrate inspects single-column UNIQUE constraints. If
+// it sees one that is not represented by a `unique` field tag, it tries to
+// drop the conventionally named `uni_<table>_<column>` constraint. The old
+// DevData migration used different explicit names, so the second migration
+// could fail while trying to drop a constraint that never existed. Removing
+// the old explicit constraints before AutoMigrate makes the transfer
+// transactional and lets the model's exact unique-index names be the sole
+// owner on fresh and existing databases. Composite constraints are included
+// as well so no old ownership variant survives the transfer.
+func prepareDevDataMirrorUniqueIndexes(tx *gorm.DB) error {
+	for _, model := range []interface{}{
+		&models.DevDataMirrorAccount{},
+		&models.DevDataMirrorPost{},
+	} {
+		if !tx.Migrator().HasTable(model) {
+			continue
+		}
+		table := "devdata_mirror_accounts"
+		if _, ok := model.(*models.DevDataMirrorPost); ok {
+			table = "devdata_mirror_posts"
+		}
+		for _, constraint := range []string{
+			"ucon_devdata_mirror_accounts_registry_key",
+			"ucon_devdata_mirror_accounts_platform_source_user",
+			"ucon_devdata_mirror_accounts_local_user",
+			"ucon_devdata_mirror_posts_platform_source_post",
+			"ucon_devdata_mirror_posts_local_post",
+		} {
+			if strings.HasPrefix(constraint, "ucon_devdata_mirror_accounts_") && table != "devdata_mirror_accounts" {
+				continue
+			}
+			if strings.HasPrefix(constraint, "ucon_devdata_mirror_posts_") && table != "devdata_mirror_posts" {
+				continue
+			}
+			if err := tx.Exec("ALTER TABLE " + table + " DROP CONSTRAINT IF EXISTS " + constraint).Error; err != nil {
+				return fmt.Errorf("prepare DevData unique index ownership for %s: %w", table, err)
+			}
+		}
+	}
+	return nil
+}
+
 // applyDevDataMirrorConstraints is deliberately kept out of the runtime
 // schema canaries. DevData is an operator/showcase dependency and must not
-// make the API or worker readiness contract stricter.
+// make the API or worker readiness contract stricter. Unique indexes are
+// owned by the DevData GORM models; this function owns only explicit FKs,
+// checks, and non-unique indexes.
 func applyDevDataMirrorConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_accounts_registry_key",
-		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT ucon_devdata_mirror_accounts_registry_key UNIQUE (registry_key)",
-		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_accounts_platform_source_user",
-		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT ucon_devdata_mirror_accounts_platform_source_user UNIQUE (platform, source_user_id)",
-		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_accounts_local_user",
-		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT ucon_devdata_mirror_accounts_local_user UNIQUE (local_user_id)",
 		"ALTER TABLE devdata_mirror_accounts DROP CONSTRAINT IF EXISTS fk_devdata_mirror_accounts_local_user",
 		"ALTER TABLE devdata_mirror_accounts ADD CONSTRAINT fk_devdata_mirror_accounts_local_user FOREIGN KEY (local_user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT",
 		"CREATE INDEX IF NOT EXISTS idx_devdata_mirror_accounts_enabled ON devdata_mirror_accounts (enabled, registry_key)",
-		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_posts_platform_source_post",
-		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT ucon_devdata_mirror_posts_platform_source_post UNIQUE (platform, source_post_id)",
-		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS ucon_devdata_mirror_posts_local_post",
-		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT ucon_devdata_mirror_posts_local_post UNIQUE (local_post_id)",
 		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS fk_devdata_mirror_posts_account",
 		"ALTER TABLE devdata_mirror_posts ADD CONSTRAINT fk_devdata_mirror_posts_account FOREIGN KEY (mirror_account_id) REFERENCES devdata_mirror_accounts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE devdata_mirror_posts DROP CONSTRAINT IF EXISTS fk_devdata_mirror_posts_post",
