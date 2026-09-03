@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -40,7 +39,7 @@ func openReplyIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostBehavior{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostBehavior{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
@@ -79,9 +78,6 @@ func newReplyIntegrationFixture(t *testing.T, db *gorm.DB) replyIntegrationFixtu
 		if len([]uint{fixture.Commenter.ID, fixture.Other.ID}) > 0 {
 			db.Unscoped().Where("user_id IN ?", []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}).Delete(&models.PostBehavior{})
 		}
-		if fixture.Article.ID != 0 {
-			db.Unscoped().Where("post_id = ?", fixture.Article.ID).Delete(&models.PostArticle{})
-		}
 		if len(childIDs) > 0 {
 			db.Unscoped().Where("id IN ?", childIDs).Delete(&models.Post{})
 		}
@@ -107,9 +103,6 @@ func newReplyIntegrationFixture(t *testing.T, db *gorm.DB) replyIntegrationFixtu
 		Content: "comment fixture", Visibility: "public",
 	}
 	if err := db.Create(&fixture.Article).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&models.PostArticle{PostID: fixture.Article.ID, Title: "comment fixture", Preview: "comment fixture", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	return fixture
@@ -213,17 +206,13 @@ func TestCreateCanonicalReplyIntegration(t *testing.T) {
 		t.Fatalf("missing user status=%d", recorder.Code)
 	}
 
-	expiredAt := time.Now().Add(-time.Hour)
-	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", fixture.Article.ID).Update("expired_at", expiredAt).Error; err != nil {
-		t.Fatal(err)
-	}
 	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"expired","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, fixture.Commenter.ID)
 	createPost(ctx, nil)
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("expired article status=%d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("reply after post creation status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if replyPostCount(t, db, fixture.Article.ID) != 2 {
-		t.Fatalf("expired create changed count=%d", replyPostCount(t, db, fixture.Article.ID))
+	if replyPostCount(t, db, fixture.Article.ID) != 3 {
+		t.Fatalf("reply after post creation count=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 }
 
@@ -339,14 +328,10 @@ func TestDeleteReplyRowsAffectedIntegration(t *testing.T) {
 	}
 
 	expiring := createReplyRecord(t, db, fixture.Article.ID, fixture.Commenter.ID, "expire then delete", time.Time{})
-	expiredAt := time.Now().Add(-time.Hour)
-	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", fixture.Article.ID).Update("expired_at", expiredAt).Error; err != nil {
-		t.Fatal(err)
-	}
 	ctx, recorder = newReplyIntegrationContext(http.MethodDelete, "/api/posts/"+strconvUint(expiring.ID), strconvUint(expiring.ID), "", fixture.Commenter.ID)
 	DeletePost(ctx)
 	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("delete after article expiry status=%d", recorder.Code)
+		t.Fatalf("delete after post creation status=%d", recorder.Code)
 	}
 	if replyPostCount(t, db, fixture.Article.ID) != 0 {
 		t.Fatalf("delete after expiry count=%d", replyPostCount(t, db, fixture.Article.ID))

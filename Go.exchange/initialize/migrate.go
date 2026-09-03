@@ -32,12 +32,14 @@ func RunMigrations() error {
 		if err := prepareDevDataMirrorUniqueIndexes(tx); err != nil {
 			return err
 		}
+		if err := applyPostArticleCleanup(tx); err != nil {
+			return err
+		}
 
 		if err := tx.AutoMigrate(
 			&models.User{},
 			&models.UserFollow{},
 			&models.Post{},
-			&models.PostArticle{},
 			&models.PostRepost{},
 			&models.PostEmbedding{},
 			&models.OutboxEvent{},
@@ -64,9 +66,6 @@ func RunMigrations() error {
 			return err
 		}
 		if err := applyPostSchemaConstraints(tx); err != nil {
-			return err
-		}
-		if err := applyPostArticleConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyPostEmbeddingConstraints(tx); err != nil {
@@ -207,6 +206,13 @@ func applyLegacyPostEmbeddingJobCleanup(tx *gorm.DB) error {
 	return nil
 }
 
+func applyPostArticleCleanup(tx *gorm.DB) error {
+	if err := tx.Exec("DROP TABLE IF EXISTS post_articles").Error; err != nil {
+		return fmt.Errorf("drop post article table: %w", err)
+	}
+	return nil
+}
+
 func applyPostSchemaConstraints(tx *gorm.DB) error {
 	statements := []string{
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_author",
@@ -240,27 +246,6 @@ func applyPostSchemaConstraints(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply post schema constraints: %w", err)
-		}
-	}
-	return nil
-}
-
-func applyPostArticleConstraints(tx *gorm.DB) error {
-	statements := []string{
-		"ALTER TABLE post_articles ALTER COLUMN post_id SET NOT NULL",
-		"ALTER TABLE post_articles ALTER COLUMN title SET NOT NULL",
-		"ALTER TABLE post_articles ALTER COLUMN preview SET NOT NULL",
-		"ALTER TABLE post_articles ALTER COLUMN cover_image_url SET NOT NULL",
-		"ALTER TABLE post_articles ALTER COLUMN publication_state SET NOT NULL",
-		"ALTER TABLE post_articles ALTER COLUMN published_at SET NOT NULL",
-		"ALTER TABLE post_articles DROP CONSTRAINT IF EXISTS fk_post_articles_post",
-		"ALTER TABLE post_articles ADD CONSTRAINT fk_post_articles_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
-		"ALTER TABLE post_articles DROP CONSTRAINT IF EXISTS chk_post_articles_publication_state",
-		"ALTER TABLE post_articles ADD CONSTRAINT chk_post_articles_publication_state CHECK (publication_state = 'published')",
-	}
-	for _, statement := range statements {
-		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply post article constraints: %w", err)
 		}
 	}
 	return nil
@@ -423,7 +408,6 @@ func applyRecommendationRetrievalV3Indexes(tx *gorm.DB) error {
 		"DROP INDEX IF EXISTS idx_posts_recommendation_popular",
 		"CREATE INDEX IF NOT EXISTS idx_posts_recommendation_recent ON posts (created_at DESC, id DESC) WHERE deleted_at IS NULL AND visibility = 'public' AND reply_to_post_id IS NULL",
 		"CREATE INDEX IF NOT EXISTS idx_posts_recommendation_trending ON posts (created_at DESC, id DESC) WHERE deleted_at IS NULL AND visibility = 'public' AND reply_to_post_id IS NULL AND (like_count > 0 OR reply_count > 0)",
-		"CREATE INDEX IF NOT EXISTS idx_post_articles_recommendation_published ON post_articles (published_at DESC, post_id) WHERE publication_state = 'published' AND published_at IS NOT NULL",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {

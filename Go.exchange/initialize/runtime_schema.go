@@ -17,15 +17,15 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-const RequiredSchemaVersion int64 = 2
+const RequiredSchemaVersion int64 = 3
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 2
-	PublishedSchemaCompatibilityFloor int64 = 2
+	PublishedSchemaCurrentVersion     int64 = 3
+	PublishedSchemaCompatibilityFloor int64 = 3
 )
 
 const runtimeSchemaStateID uint = 1
@@ -77,6 +77,7 @@ type legacySchemaColumn struct {
 
 var legacyContentTableNames = []string{
 	"articles",
+	"post_articles",
 	"comments",
 	"article_reaction",
 	"article_reposts",
@@ -114,13 +115,6 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"idx_posts_conversation_created",
 			"idx_posts_quote",
 			"idx_posts_deleted_at",
-		},
-	},
-	{
-		Table: "post_articles",
-		Constraints: []string{
-			"fk_post_articles_post",
-			"chk_post_articles_publication_state",
 		},
 	},
 	{
@@ -169,7 +163,6 @@ var apiSchemaModels = []interface{}{
 	&models.User{},
 	&models.UserFollow{},
 	&models.Post{},
-	&models.PostArticle{},
 	&models.PostRepost{},
 	&models.PostReaction{},
 	&models.Notification{},

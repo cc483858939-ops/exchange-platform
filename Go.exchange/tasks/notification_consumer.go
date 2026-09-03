@@ -68,20 +68,7 @@ AND EXISTS (
     WHERE post_author.id = posts.author_id
       AND post_author.deleted_at IS NULL
 )
-AND (
-    NOT EXISTS (
-        SELECT 1 FROM post_articles AS pa_any
-        WHERE pa_any.post_id = posts.id
-    )
-    OR EXISTS (
-        SELECT 1 FROM post_articles AS pa_valid
-        WHERE pa_valid.post_id = posts.id
-          AND pa_valid.publication_state = 'published'
-          AND pa_valid.published_at IS NOT NULL
-          AND pa_valid.published_at <= ?
-          AND (pa_valid.expired_at IS NULL OR pa_valid.expired_at > ?)
-    )
-)`, now.UTC(), now.UTC())
+`)
 }
 
 func notificationConsumerConfigured() bool {

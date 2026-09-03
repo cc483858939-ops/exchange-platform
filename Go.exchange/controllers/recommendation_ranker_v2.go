@@ -38,7 +38,7 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 		}
 		negativeConfidence := profile.NegativeConfidence
 		semanticRaw := positiveSemantic - cfg.NegativeSemanticWeight*negativeConfidence*negativeSemantic
-		trendingRaw := recommendationTrendingRawWithArticle(candidate.Post, candidate.PostArticle, now, cfg)
+		trendingRaw := recommendationTrendingRaw(candidate.Post, now, cfg)
 		interactionAffinity := clampUnit(profile.AuthorAffinity[candidate.Post.AuthorID])
 		followingBonus := 0.0
 		_, followed := profile.FollowingAuthorIDs[candidate.Post.AuthorID]
@@ -90,10 +90,6 @@ func recommendationTrendingRaw(post models.Post, now time.Time, cfg config.Recom
 	return recommendationTrendingRawAt(post, postTime, now, cfg)
 }
 
-func recommendationTrendingRawWithArticle(post models.Post, article *models.PostArticle, now time.Time, cfg config.RecommendationConfig) float64 {
-	return recommendationTrendingRawAt(post, recommendationPostTimeWithArticle(post, article), now, cfg)
-}
-
 func recommendationTrendingRawAt(post models.Post, postTime, now time.Time, cfg config.RecommendationConfig) float64 {
 	ageHours := now.Sub(postTime).Hours()
 	if ageHours < 0 {
@@ -115,8 +111,8 @@ func recommendationCandidateBaseBefore(left, right hydratedRecommendationCandida
 	if left.Breakdown.BaseScore != right.Breakdown.BaseScore {
 		return left.Breakdown.BaseScore > right.Breakdown.BaseScore
 	}
-	leftTime := recommendationPostTimeWithArticle(left.Post, left.PostArticle)
-	rightTime := recommendationPostTimeWithArticle(right.Post, right.PostArticle)
+	leftTime := recommendationPostTime(left.Post)
+	rightTime := recommendationPostTime(right.Post)
 	if !leftTime.Equal(rightTime) {
 		return leftTime.After(rightTime)
 	}
@@ -124,13 +120,6 @@ func recommendationCandidateBaseBefore(left, right hydratedRecommendationCandida
 }
 
 func recommendationPostTime(post models.Post) time.Time {
-	return post.CreatedAt.UTC()
-}
-
-func recommendationPostTimeWithArticle(post models.Post, article *models.PostArticle) time.Time {
-	if article != nil && article.PublishedAt != nil && !article.PublishedAt.IsZero() {
-		return article.PublishedAt.UTC()
-	}
 	return post.CreatedAt.UTC()
 }
 

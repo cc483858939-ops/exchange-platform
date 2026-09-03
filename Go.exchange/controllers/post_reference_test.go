@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -88,7 +87,7 @@ func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) 
 	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "author"}, nil
 	}
-	persistPostGraphFn = func(post *models.Post, _ **models.PostArticle, userID uint, content string, _ createPostRequest, now time.Time) error {
+	persistPostGraphFn = func(post *models.Post, userID uint, content string, _ createPostRequest, now time.Time) error {
 		quoteID := uint(99)
 		*post = models.Post{
 			Model:       gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
@@ -121,8 +120,6 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	expiredAt := now.Add(-time.Minute)
-	futurePublishedAt := now.Add(time.Hour)
 
 	deletedPost := models.Post{
 		Model:      gorm.Model{CreatedAt: now, UpdatedAt: now},
@@ -149,25 +146,6 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 	if err := db.Create(&futurePost).Error; err != nil {
 		t.Fatal(err)
 	}
-	futureArticlePost := models.Post{
-		Model:    gorm.Model{CreatedAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour)},
-		AuthorID: fixture.Author.ID, Content: "future article reference content", Visibility: "public",
-	}
-	if err := db.Create(&futureArticlePost).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&models.PostArticle{
-		PostID: unavailablePost.ID, Title: "expired reference", Preview: "expired preview",
-		PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now, ExpiredAt: &expiredAt,
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&models.PostArticle{
-		PostID: futureArticlePost.ID, Title: "future reference", Preview: "future preview",
-		PublicationState: consts.PostPublicationStatePublished, PublishedAt: &futurePublishedAt,
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
 	inactiveAuthor := models.User{Username: "inactive-reference-author-" + strings.ReplaceAll(t.Name(), "/", "-"), Password: "test"}
 	if err := db.Create(&inactiveAuthor).Error; err != nil {
 		t.Fatal(err)
@@ -185,22 +163,21 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 	if err := db.Delete(&deletedPost).Error; err != nil {
 		t.Fatal(err)
 	}
-	ids := []uint{deletedPost.ID, unavailablePost.ID, futurePost.ID, futureArticlePost.ID, inactiveAuthorPost.ID}
+	ids := []uint{deletedPost.ID, unavailablePost.ID, futurePost.ID, inactiveAuthorPost.ID}
 	t.Cleanup(func() {
-		db.Unscoped().Where("post_id IN ?", ids).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id IN ?", ids).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", inactiveAuthor.ID).Delete(&models.User{})
 	})
 
 	activeID := fixture.Article.ID
-	activeArticle, err := loadPostReferenceFromDB(db, &activeID, now)
+	activeReference, err := loadPostReferenceFromDB(db, &activeID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if activeArticle == nil || activeArticle.Deleted || activeArticle.Author == nil || activeArticle.Content == "" {
-		t.Fatalf("active article reference=%#v", activeArticle)
+	if activeReference == nil || activeReference.Deleted || activeReference.Author == nil || activeReference.Content == "" {
+		t.Fatalf("active post reference=%#v", activeReference)
 	}
-	assertActivePostReferenceWire(t, activeArticle, true)
+	assertActivePostReferenceWire(t, activeReference)
 
 	normalActive := models.Post{
 		Model:    gorm.Model{CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)},
@@ -214,10 +191,10 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if normalActiveReference == nil || normalActiveReference.Deleted || normalActiveReference.Article != nil {
+	if normalActiveReference == nil || normalActiveReference.Deleted {
 		t.Fatalf("normal active reference=%#v", normalActiveReference)
 	}
-	assertActivePostReferenceWire(t, normalActiveReference, false)
+	assertActivePostReferenceWire(t, normalActiveReference)
 
 	deleted, err := loadPostReferenceFromDB(db, &deletedPost.ID, now)
 	if err != nil {
@@ -229,22 +206,19 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPostReferenceTombstone(t, unavailable)
+	if unavailable == nil || unavailable.Deleted || unavailable.Content != unavailablePost.Content {
+		t.Fatalf("active post reference=%#v", unavailable)
+	}
+	assertActivePostReferenceWire(t, unavailable)
 
 	future, err := loadPostReferenceFromDB(db, &futurePost.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if future == nil || future.Deleted || future.Content != futurePost.Content || future.Article != nil {
+	if future == nil || future.Deleted || future.Content != futurePost.Content {
 		t.Fatalf("future normal reference=%#v", future)
 	}
-	assertActivePostReferenceWire(t, future, false)
-
-	futureArticle, err := loadPostReferenceFromDB(db, &futureArticlePost.ID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertPostReferenceTombstone(t, futureArticle)
+	assertActivePostReferenceWire(t, future)
 
 	inactive, err := loadPostReferenceFromDB(db, &inactiveAuthorPost.ID, now)
 	if err != nil {
@@ -260,7 +234,7 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 	assertPostReferenceTombstone(t, missing)
 }
 
-func assertActivePostReferenceWire(t *testing.T, reference *postReferenceResponse, wantArticle bool) {
+func assertActivePostReferenceWire(t *testing.T, reference *postReferenceResponse) {
 	t.Helper()
 	payload, err := json.Marshal(reference)
 	if err != nil {
@@ -270,7 +244,7 @@ func assertActivePostReferenceWire(t *testing.T, reference *postReferenceRespons
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	wantKeys := map[string]bool{"id": true, "author": true, "content": true, "published_at": true, "article": true, "deleted": true}
+	wantKeys := map[string]bool{"id": true, "author": true, "content": true, "published_at": true, "deleted": true}
 	if len(decoded) != len(wantKeys) {
 		t.Fatalf("active reference keys=%v payload=%s", decoded, payload)
 	}
@@ -282,24 +256,6 @@ func assertActivePostReferenceWire(t *testing.T, reference *postReferenceRespons
 	var deleted bool
 	if err := json.Unmarshal(decoded["deleted"], &deleted); err != nil || deleted {
 		t.Fatalf("active deleted=%t err=%v payload=%s", deleted, err, payload)
-	}
-	if wantArticle {
-		var article map[string]json.RawMessage
-		if err := json.Unmarshal(decoded["article"], &article); err != nil {
-			t.Fatal(err)
-		}
-		if len(article) != 3 {
-			t.Fatalf("bounded article keys=%v payload=%s", article, payload)
-		}
-		for _, key := range []string{"title", "preview", "cover_image_url"} {
-			if _, ok := article[key]; !ok {
-				t.Fatalf("bounded article missing %q: %s", key, payload)
-			}
-		}
-		return
-	}
-	if string(decoded["article"]) != "null" {
-		t.Fatalf("normal active article=%s want null", decoded["article"])
 	}
 }
 
@@ -326,7 +282,7 @@ func assertPostReferenceTombstone(t *testing.T, reference *postReferenceResponse
 	if err := json.Unmarshal(decoded["deleted"], &deleted); err != nil || !deleted {
 		t.Fatalf("tombstone deleted=%t err=%v payload=%s", deleted, err, payload)
 	}
-	for _, forbidden := range []string{"state", "author", "content", "published_at", "article"} {
+	for _, forbidden := range []string{"state", "author", "content", "published_at"} {
 		if _, ok := decoded[forbidden]; ok {
 			t.Fatalf("tombstone leaked %s: %s", forbidden, payload)
 		}

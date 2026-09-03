@@ -79,7 +79,6 @@ func TestRecommendationExplorationReasonsUseRecentAndNovelAgeCutoffs(t *testing.
 		return hydratedRecommendationCandidate{
 			Candidate:     embeddingCandidate{PostID: id, FromRecent: recent},
 			Post:          models.Post{Model: gorm.Model{ID: id, CreatedAt: at}},
-			PostArticle:   &models.PostArticle{PublishedAt: explorationTimePtr(at)},
 			IsNovelAuthor: novel,
 		}
 	}
@@ -160,7 +159,7 @@ func TestRecommendationSelectionRecordsNaturalAndDisplacedExploration(t *testing
 	cfg.Diversity.Enabled = false
 	candidates := []hydratedRecommendationCandidate{
 		{Candidate: embeddingCandidate{PostID: 1}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 1}, Breakdown: recommendationScoreBreakdown{BaseScore: 10}},
-		{Candidate: embeddingCandidate{PostID: 2, FromRecent: true}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 2}, PostArticle: &models.PostArticle{PublishedAt: explorationTimePtr(now)}, ExplorationSemantic: .8, Breakdown: recommendationScoreBreakdown{BaseScore: 5}},
+		{Candidate: embeddingCandidate{PostID: 2, FromRecent: true}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 2}, ExplorationSemantic: .8, Breakdown: recommendationScoreBreakdown{BaseScore: 5}},
 		{Candidate: embeddingCandidate{PostID: 3}, Post: models.Post{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 3}, Breakdown: recommendationScoreBreakdown{BaseScore: 9}},
 	}
 	displaced := selectRecommendationCandidates(candidates, nil, 3, cfg, now, recommendationSelectionFresh, "natural-and-displaced")
@@ -196,10 +195,6 @@ func TestRecommendationSelectionRecordsNaturalAndDisplacedExploration(t *testing
 	}
 }
 
-func explorationTimePtr(value time.Time) *time.Time {
-	return &value
-}
-
 func makeExplorationTestCandidate(now time.Time, id uint, baseScore, explorationSemantic float64, recent, novel bool) hydratedRecommendationCandidate {
 	at := now.Add(-time.Hour)
 	return hydratedRecommendationCandidate{
@@ -208,7 +203,6 @@ func makeExplorationTestCandidate(now time.Time, id uint, baseScore, exploration
 			Model:    gorm.Model{ID: id, CreatedAt: at},
 			AuthorID: id,
 		},
-		PostArticle:         &models.PostArticle{PublishedAt: explorationTimePtr(at)},
 		IsNovelAuthor:       novel,
 		ExplorationSemantic: explorationSemantic,
 		Breakdown:           recommendationScoreBreakdown{BaseScore: baseScore},
@@ -290,11 +284,11 @@ func TestRecommendationExplorationNovelAuthorIsIndependentFromRecentRecall(t *te
 	if got := recommendationExplorationReason(candidate, now, cfg); got != recommendationExplorationReasonNovelAuthor {
 		t.Fatalf("novel-author reason=%q want=%q", got, recommendationExplorationReasonNovelAuthor)
 	}
-	candidate.PostArticle.PublishedAt = explorationTimePtr(now.Add(-30 * 24 * time.Hour))
+	candidate.Post.CreatedAt = now.Add(-30 * 24 * time.Hour)
 	if got := recommendationExplorationReason(candidate, now, cfg); got != recommendationExplorationReasonNovelAuthor {
 		t.Fatalf("boundary novel-author reason=%q want=%q", got, recommendationExplorationReasonNovelAuthor)
 	}
-	candidate.PostArticle.PublishedAt = explorationTimePtr(now.Add(-30*24*time.Hour - time.Nanosecond))
+	candidate.Post.CreatedAt = now.Add(-30*24*time.Hour - time.Nanosecond)
 	if got := recommendationExplorationReason(candidate, now, cfg); got != "" {
 		t.Fatalf("over-age novel-author reason=%q want empty", got)
 	}

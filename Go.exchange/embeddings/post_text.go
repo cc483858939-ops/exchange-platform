@@ -2,15 +2,14 @@ package embeddings
 
 import "crypto/sha256"
 
-// BuildPostEmbeddingText returns the canonical title, preview, and Post body
-// text used for every Post embedding, including short Posts without metadata.
-func BuildPostEmbeddingText(title, preview, content string) string {
-	return title + "\n\n" + preview + "\n\n" + content
+// BuildPostEmbeddingText returns the canonical text used for every Post embedding.
+func BuildPostEmbeddingText(content string) string {
+	return content
 }
 
 // PostEmbeddingContentHash returns the SHA-256 hash of canonical embedding text.
-func PostEmbeddingContentHash(title, preview, content string) string {
-	sum := sha256.Sum256([]byte(BuildPostEmbeddingText(title, preview, content)))
+func PostEmbeddingContentHash(content string) string {
+	sum := sha256.Sum256([]byte(BuildPostEmbeddingText(content)))
 	return stringHex(sum[:])
 }
 

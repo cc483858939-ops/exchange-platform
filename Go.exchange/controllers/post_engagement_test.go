@@ -32,15 +32,15 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 }
 
 func TestPostEngagementCacheSchemaVersion(t *testing.T) {
-	if postDetailCacheKey("42") != "post:detail:v1:42" {
-		t.Fatalf("article detail cache key=%q", postDetailCacheKey("42"))
+	if postDetailCacheKey("42") != "post:detail:v2:42" {
+		t.Fatalf("post detail cache key=%q", postDetailCacheKey("42"))
 	}
 	for _, column := range []string{
 		"id", "created_at", "updated_at", "author_id", "content", "reply_to_post_id",
 		"quote_post_id", "conversation_id", "visibility", "like_count", "reply_count", "view_count", "like_sync_version",
 	} {
 		if !strings.Contains(publicPostSelectColumns, "posts."+column) {
-			t.Fatalf("public article select columns missing posts.%s: %q", column, publicPostSelectColumns)
+			t.Fatalf("public post select columns missing posts.%s: %q", column, publicPostSelectColumns)
 		}
 	}
 }

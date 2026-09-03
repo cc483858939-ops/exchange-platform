@@ -158,7 +158,6 @@ func cleanupDevDataIntegrationRows(db *gorm.DB, data syncIntegrationData) {
 		// Notifications use RESTRICT while the remaining derived rows rely on
 		// the canonical post cascade graph. Delete all test-only rows first.
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.Notification{})
-		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostEmbedding{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
@@ -307,14 +306,12 @@ func TestDevDataMirrorSyncLifecycleIntegration(t *testing.T) {
 	}
 
 	hardLocalID := localPostIDs[hardRoot.SourcePostID]
-	publishedAt := now.Add(-5 * time.Hour)
 	notificationPostID := hardLocalID
 	derived := []interface{}{
 		&models.PostRepost{UserID: viewer.ID, PostID: hardLocalID, CreatedAt: now.Add(-10 * time.Minute)},
 		&models.PostReaction{UserID: viewer.ID, PostID: hardLocalID, Reaction: models.PostReactionLike, Liked: true, Version: 1, UpdatedAt: now, StateChangedAt: now},
 		&models.PostBehavior{Model: gorm.Model{CreatedAt: now, UpdatedAt: now}, UserID: viewer.ID, PostID: hardLocalID, Action: "view", Count: 1, LastSeenAt: now, Active: true, BehaviorVersion: 1},
 		&models.PostEmbedding{PostID: hardLocalID, Version: "integration", Model: "integration", Dimensions: 2, Embedding: pgvector.NewVector([]float32{0.1, 0.2}), ContentHash: SourceTextContentHash(hardRoot.Text), CreatedAt: now, UpdatedAt: now},
-		&models.PostArticle{PostID: hardLocalID, Title: "Integration article", Preview: "Integration preview", CoverImageURL: "", PublicationState: "published", PublishedAt: &publishedAt},
 		&models.UserPostRecoState{UserID: viewer.ID, PostID: hardLocalID, Interacted: true, CanonicalVersion: "integration", RebuiltAt: now},
 		&models.Notification{RecipientID: viewer.ID, ActorID: accounts[aKey].LocalUserID, Type: models.NotificationTypePostLiked, PostID: &notificationPostID, DedupeKey: "it-" + data.Tag + "-notification", SourceVersion: 1, ActivityAt: now, CreatedAt: now, UpdatedAt: now},
 	}
@@ -420,7 +417,6 @@ func TestDevDataMirrorSyncLifecycleIntegration(t *testing.T) {
 		"reaction":     db.Unscoped().Where("post_id = ?", hardLocalID).Find(&[]models.PostReaction{}),
 		"behavior":     db.Unscoped().Where("post_id = ?", hardLocalID).Find(&[]models.PostBehavior{}),
 		"embedding":    db.Unscoped().Where("post_id = ?", hardLocalID).Find(&[]models.PostEmbedding{}),
-		"article":      db.Unscoped().Where("post_id = ?", hardLocalID).Find(&[]models.PostArticle{}),
 		"reco_state":   db.Unscoped().Where("post_id = ?", hardLocalID).Find(&[]models.UserPostRecoState{}),
 		"notification": db.Unscoped().Where("post_id = ?", hardLocalID).Find(&[]models.Notification{}),
 	} {

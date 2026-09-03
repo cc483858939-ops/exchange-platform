@@ -71,8 +71,7 @@ $$`).Error; err != nil {
 	}
 
 	var reply models.Post
-	var replyArticle *models.PostArticle
-	if err := persistPostGraph(&reply, &replyArticle, commenter.ID, "should rollback", createPostRequest{
+	if err := persistPostGraph(&reply, commenter.ID, "should rollback", createPostRequest{
 		Content:       "should rollback",
 		ReplyToPostID: &article.ID,
 	}, now); err == nil {

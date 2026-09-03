@@ -58,7 +58,6 @@ func openLikeStateClosureIntegration(t *testing.T) *likeStateClosureIntegration 
 	if err := db.AutoMigrate(
 		&models.User{},
 		&models.Post{},
-		&models.PostArticle{},
 		&models.PostRepost{},
 		&models.PostReaction{},
 		&models.PostBehavior{},
@@ -119,7 +118,6 @@ func cleanupLikeStateClosureIntegration(env *likeStateClosureIntegration) error 
 	if len(env.posts) > 0 {
 		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostReaction{})
 		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostBehavior{})
-		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostArticle{})
 		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostRepost{})
 		env.db.Unscoped().Where("id IN ?", env.posts).Delete(&models.Post{})
 	}

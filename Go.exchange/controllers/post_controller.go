@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"Go.exchange/config"
-	"Go.exchange/consts"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/likes"
@@ -24,18 +23,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-type createPostArticleRequest struct {
-	Title         string     `json:"title"`
-	Preview       string     `json:"preview"`
-	CoverImageURL string     `json:"cover_image_url"`
-	ExpiredAt     *time.Time `json:"expired_at"`
-}
-
 type createPostRequest struct {
-	Content       string                    `json:"content"`
-	ReplyToPostID *uint                     `json:"reply_to_post_id"`
-	QuotePostID   *uint                     `json:"quote_post_id"`
-	Article       *createPostArticleRequest `json:"article"`
+	Content       string `json:"content"`
+	ReplyToPostID *uint  `json:"reply_to_post_id"`
+	QuotePostID   *uint  `json:"quote_post_id"`
 }
 
 const (
@@ -66,20 +57,6 @@ func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
 }
 
 var persistPostGraphFn = persistPostGraph
-
-func normalizePostCoverImageURL(raw string) (string, error) {
-	coverImageURL := strings.TrimSpace(raw)
-	if coverImageURL == "" {
-		return "", nil
-	}
-	if !strings.HasPrefix(coverImageURL, "/api/files/article-covers/") {
-		return "", errors.New("invalid cover_image_url")
-	}
-	if strings.Contains(coverImageURL, "..") || strings.ContainsAny(coverImageURL, "\r\n") {
-		return "", errors.New("invalid cover_image_url")
-	}
-	return coverImageURL, nil
-}
 
 func NewCreatePostHandler(publisher eventing.BatchPublisher) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
@@ -129,21 +106,6 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "a post cannot be both a reply and a quote"})
 		return
 	}
-	if req.Article != nil && (req.ReplyToPostID != nil || req.QuotePostID != nil) {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "article posts cannot be replies or quotes"})
-		return
-	}
-	if req.Article != nil {
-		if strings.TrimSpace(req.Article.Title) == "" || strings.TrimSpace(req.Article.Preview) == "" {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "article title and preview are required"})
-			return
-		}
-		if _, err := normalizePostCoverImageURL(req.Article.CoverImageURL); err != nil {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
 	author, err := loadPostAuthorForCreate(userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -155,8 +117,7 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	}
 
 	var post models.Post
-	var article *models.PostArticle
-	err = persistPostGraphFn(&post, &article, userID, content, req, now)
+	err = persistPostGraphFn(&post, userID, content, req, now)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "reply or quote target unavailable"})
@@ -191,7 +152,7 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		DisplayName: author.DisplayName,
 		AvatarURL:   author.AvatarURL,
 	}
-	response, err := postResponseFromModel(post, article)
+	response, err := postResponseFromModel(post)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -203,7 +164,7 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	ctx.JSON(http.StatusCreated, response)
 }
 
-func persistPostGraph(post *models.Post, article **models.PostArticle, userID uint, content string, req createPostRequest, now time.Time) error {
+func persistPostGraph(post *models.Post, userID uint, content string, req createPostRequest, now time.Time) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
@@ -234,26 +195,6 @@ func persistPostGraph(post *models.Post, article **models.PostArticle, userID ui
 		post.UpdatedAt = now
 		if err := tx.Create(post).Error; err != nil {
 			return err
-		}
-		if req.Article != nil {
-			title := strings.TrimSpace(req.Article.Title)
-			preview := strings.TrimSpace(req.Article.Preview)
-			if title == "" || preview == "" {
-				return errors.New("article title and preview are required")
-			}
-			cover, err := normalizePostCoverImageURL(req.Article.CoverImageURL)
-			if err != nil {
-				return err
-			}
-			row := &models.PostArticle{
-				PostID: post.ID, Title: title, Preview: preview, CoverImageURL: cover,
-				PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now,
-				ExpiredAt: req.Article.ExpiredAt,
-			}
-			if err := tx.Create(row).Error; err != nil {
-				return err
-			}
-			*article = row
 		}
 		if post.ReplyToPostID != nil {
 			rowsAffected, err := incrementPostReplyCount(tx, *post.ReplyToPostID)
@@ -290,7 +231,7 @@ func persistPostGraph(post *models.Post, article **models.PostArticle, userID ui
 
 func GetPostByID(ctx *gin.Context) {
 	id := ctx.Param("id")
-	article, err := loadPostDetail(id)
+	post, err := loadPostDetail(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
@@ -299,5 +240,5 @@ func GetPostByID(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	ctx.JSON(http.StatusOK, article)
+	ctx.JSON(http.StatusOK, post)
 }

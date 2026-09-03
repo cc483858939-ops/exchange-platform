@@ -24,7 +24,7 @@ func TestPostRepostIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_reposts_user_post ON post_reposts (user_id, post_id)").Error; err != nil {
@@ -54,9 +54,6 @@ func TestPostRepostIntegration(t *testing.T) {
 		Model: gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt},
 	}
 	if err := db.Create(&article).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: "Repost integration article", Preview: "Repost integration preview", PublicationState: "published", PublishedAt: &publishedAt}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,15 +126,6 @@ func TestPostRepostIntegration(t *testing.T) {
 		t.Fatalf("idempotent DELETE state=%#v err=%v", state, err)
 	}
 
-	expired := time.Now().UTC().Add(-time.Hour)
-	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", article.ID).Update("expired_at", expired).Error; err != nil {
-		t.Fatal(err)
-	}
-	ctx, recorder = newRepostTestContext(http.MethodPut, "/api/posts/"+strconvPostID(article.ID)+"/repost", "", &viewer.ID)
-	RepostPost(ctx)
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("unavailable PUT status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
 }
 
 func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
@@ -149,7 +137,7 @@ func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostArticle{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_reposts_user_post ON post_reposts (user_id, post_id)").Error; err != nil {
@@ -187,9 +175,6 @@ func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
 		Model: gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt},
 	}
 	if err := db.Create(&article).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: "Soft-deleted reposter article", Preview: "Soft-deleted reposter preview", PublicationState: "published", PublishedAt: &publishedAt}).Error; err != nil {
 		t.Fatal(err)
 	}
 	repost := models.PostRepost{UserID: alice.ID, PostID: article.ID, CreatedAt: publishedAt.Add(time.Minute)}

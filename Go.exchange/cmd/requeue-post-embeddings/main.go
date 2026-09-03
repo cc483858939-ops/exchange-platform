@@ -30,8 +30,6 @@ type requeueStats struct {
 
 type requeuePost struct {
 	ID                   uint
-	Title                string
-	Preview              string
 	Content              string
 	EmbeddingPostID      *uint
 	EmbeddingVersion     *string
@@ -53,8 +51,7 @@ func (s gormPostEmbeddingReconciliationScanner) ListPage(ctx context.Context, la
 	var rows []requeuePost
 	err := s.db.WithContext(ctx).
 		Table("posts AS p").
-		Select("p.id, COALESCE(pa.title, '') AS title, COALESCE(pa.preview, '') AS preview, p.content, pe.post_id AS embedding_post_id, pe.version AS embedding_version, pe.content_hash AS embedding_content_hash").
-		Joins("LEFT JOIN post_articles AS pa ON pa.post_id = p.id").
+		Select("p.id, p.content, pe.post_id AS embedding_post_id, pe.version AS embedding_version, pe.content_hash AS embedding_content_hash").
 		Joins("LEFT JOIN post_embeddings AS pe ON pe.post_id = p.id").
 		Where("p.deleted_at IS NULL AND p.id > ?", lastID).
 		Order("p.id ASC").
@@ -120,7 +117,7 @@ func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconcili
 		events := make([]eventing.Envelope, 0, len(rows))
 
 		for _, row := range rows {
-			currentHash := embeddings.PostEmbeddingContentHash(row.Title, row.Preview, row.Content)
+			currentHash := embeddings.PostEmbeddingContentHash(row.Content)
 			if row.EmbeddingPostID != nil && row.EmbeddingVersion != nil && row.EmbeddingContentHash != nil &&
 				*row.EmbeddingVersion == activeVersion && *row.EmbeddingContentHash == currentHash {
 				continue

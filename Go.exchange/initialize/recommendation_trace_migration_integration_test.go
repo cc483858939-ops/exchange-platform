@@ -127,9 +127,9 @@ WHERE table_schema = current_schema()
 SELECT tablename, indexname, indexdef
 FROM pg_indexes
 WHERE schemaname = current_schema()
-  AND ((tablename = 'posts' AND indexname IN (?, ?, ?))
-    OR (tablename = 'post_articles' AND indexname = ?))
-`, "idx_posts_recommendation_popular", "idx_posts_recommendation_recent", "idx_posts_recommendation_trending", "idx_post_articles_recommendation_published").Rows()
+  AND tablename = 'posts'
+  AND indexname IN (?, ?, ?)
+`, "idx_posts_recommendation_popular", "idx_posts_recommendation_recent", "idx_posts_recommendation_trending").Rows()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +163,6 @@ WHERE schemaname = current_schema()
 		strings.Contains(trendingIndex, "published_at") || strings.Contains(trendingIndex, "comment_count") {
 		t.Fatalf("trending index=%q", trendingIndex)
 	}
-	publishedIndex, exists := indexDefinitions["idx_post_articles_recommendation_published"]
-	if !exists || !strings.Contains(publishedIndex, "published_atdesc,post_id") ||
-		!strings.Contains(publishedIndex, "publication_state") || !strings.Contains(publishedIndex, "published_atisnotnull") {
-		t.Fatalf("published PostArticle index=%q", publishedIndex)
-	}
-
 	if err := applyRecommendationTraceConstraints(db); err != nil {
 		t.Fatal(err)
 	}

@@ -114,8 +114,8 @@ func TestRecommendationRankerPenalizesNegativeSimilarityWithConfidence(t *testin
 	cfg := normalizedRecommendationConfig()
 	profile := userInterestProfile{NegativeVector: []float32{1, 0}, NegativeConfidence: 1, AuthorAffinity: map[uint]float64{}, FollowingAuthorIDs: map[uint]struct{}{}}
 	candidates := []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1}, AuthorID: 1}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)}, Embedding: []float32{0, 1}},
-		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 2}, AuthorID: 2}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)}, Embedding: []float32{1, 0}},
+		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 1}, Embedding: []float32{0, 1}},
+		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 2}, Embedding: []float32{1, 0}},
 	}
 	ranked := rankRecommendationCandidates(profile, candidates, now, cfg)
 	if len(ranked) != 2 || ranked[0].Post.ID != 1 || ranked[0].Breakdown.NegativeSemantic != 0 || ranked[1].Breakdown.NegativeSemantic < .99 {
@@ -130,12 +130,12 @@ func TestRecommendationSelectionUsesFreshThenSoftWithoutDuplicate(t *testing.T) 
 	cfg.Diversity.Enabled = false
 	fresh := []hydratedRecommendationCandidate{{
 		Candidate: embeddingCandidate{PostID: 1, FromRecent: true},
-		Post:      models.Post{Model: gorm.Model{ID: 1}, AuthorID: 1}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)},
+		Post:      models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 1},
 		Breakdown: recommendationScoreBreakdown{BaseScore: 2},
 	}}
 	soft := []hydratedRecommendationCandidate{{
 		Candidate: embeddingCandidate{PostID: 2, FromTrending: true, WasSoftServed: true, LastServedAt: now.Add(-time.Hour)},
-		Post:      models.Post{Model: gorm.Model{ID: 2}, AuthorID: 2}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now.Add(-time.Minute))},
+		Post:      models.Post{Model: gorm.Model{ID: 2, CreatedAt: now.Add(-time.Minute)}, AuthorID: 2},
 		Breakdown: recommendationScoreBreakdown{BaseScore: 1},
 	}}
 	selected := selectRecommendationCandidates(fresh, nil, 2, cfg, now, recommendationSelectionFresh)
@@ -143,8 +143,4 @@ func TestRecommendationSelectionUsesFreshThenSoftWithoutDuplicate(t *testing.T) 
 	if len(selected) != 2 || selected[0].Post.ID != 1 || selected[1].Post.ID != 2 {
 		t.Fatalf("selected=%#v", selected)
 	}
-}
-
-func ptrTime(value time.Time) *time.Time {
-	return &value
 }

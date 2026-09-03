@@ -2,8 +2,8 @@ package models
 
 import "gorm.io/gorm"
 
-// Post is the sole canonical content root. Replies, quotes, and short posts
-// share this table; long-form metadata lives in PostArticle.
+// Post is the canonical content root. Replies, quotes, and short posts all
+// share this table.
 type Post struct {
 	gorm.Model
 

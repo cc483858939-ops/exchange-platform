@@ -21,7 +21,7 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.Notification{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.Notification{}); err != nil {
 		t.Fatal(err)
 	}
 

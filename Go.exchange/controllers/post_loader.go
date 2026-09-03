@@ -16,7 +16,7 @@ const publicPostSelectColumns = "posts.id,posts.created_at,posts.updated_at,post
 
 // publicPostEligibilitySQL is the single SQL contract used by raw timeline
 // queries. publicPostScope below exposes the same predicates to GORM queries.
-func publicPostEligibilitySQL(postAlias, articleAlias string) string {
+func publicPostEligibilitySQL(postAlias string) string {
 	return fmt.Sprintf(`
 %s.deleted_at IS NULL
 AND %s.visibility = 'public'
@@ -25,27 +25,13 @@ AND EXISTS (
     WHERE post_author.id = %s.author_id
       AND post_author.deleted_at IS NULL
 )
-AND (
-    NOT EXISTS (
-        SELECT 1 FROM post_articles AS pa_any
-        WHERE pa_any.post_id = %s.id
-    )
-    OR EXISTS (
-        SELECT 1 FROM post_articles AS pa_valid
-        WHERE pa_valid.post_id = %s.id
-          AND pa_valid.publication_state = 'published'
-          AND pa_valid.published_at IS NOT NULL
-          AND pa_valid.published_at <= ?
-          AND (pa_valid.expired_at IS NULL OR pa_valid.expired_at > ?)
-    )
-)`, postAlias, postAlias, postAlias, postAlias, postAlias)
+`, postAlias, postAlias, postAlias)
 }
 
 // publicPostScope is shared by detail, profile, feed, history,
-// recommendations, and notifications. An existing malformed PostArticle row
-// is not allowed to fall back to normal-Post eligibility.
+// recommendations, and notifications.
 func publicPostScope(query *gorm.DB, now time.Time) *gorm.DB {
-	return query.Where(publicPostEligibilitySQL("posts", "pa"), now.UTC(), now.UTC())
+	return query.Where(publicPostEligibilitySQL("posts"))
 }
 
 var invalidatePostDetailCacheKey = func(key string) error {
@@ -59,13 +45,7 @@ func isPublicPostResponseAt(post postResponse, now time.Time) bool {
 	if post.Deleted || post.Visibility != "public" || post.PublishedAt == nil {
 		return false
 	}
-	now = now.UTC()
-	if post.Article == nil {
-		return true
-	}
-	return post.Article.PublicationState == "published" &&
-		post.Article.PublishedAt != nil && !post.Article.PublishedAt.After(now) &&
-		(post.Article.ExpiredAt == nil || post.Article.ExpiredAt.After(now))
+	return true
 }
 
 var loadPostDetailCache = func(key string, loader func() (postResponse, error)) (postResponse, error) {
@@ -78,11 +58,11 @@ func loadPostDetail(id string) (postResponse, error) {
 		if global.Db == nil {
 			return postResponse{}, errors.New("database is not initialized")
 		}
-		post, article, err := loadPublicPostWithArticle(global.Db, id, time.Now().UTC())
+		post, err := loadPublicPost(global.Db, id, time.Now().UTC())
 		if err != nil {
 			return postResponse{}, err
 		}
-		return postResponseFromModel(post, article)
+		return postResponseFromModel(post)
 	}
 
 	response, err := loadPostDetailCache(key, loader)
@@ -101,55 +81,16 @@ func loadPostDetail(id string) (postResponse, error) {
 	return postResponse{}, gorm.ErrRecordNotFound
 }
 
-func effectivePublishedAtSQL(postAlias, articleAlias string) string {
-	return fmt.Sprintf("COALESCE(%s.published_at, %s.created_at)", articleAlias, postAlias)
-}
-
-func loadPostArticlesFromDB(db *gorm.DB, posts []models.Post) (map[uint]*models.PostArticle, error) {
-	result := make(map[uint]*models.PostArticle, len(posts))
-	if len(posts) == 0 {
-		return result, nil
-	}
-	if db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-	ids := make([]uint, 0, len(posts))
-	for _, post := range posts {
-		ids = append(ids, post.ID)
-	}
-	var articles []models.PostArticle
-	if err := db.Where("post_id IN ?", ids).Find(&articles).Error; err != nil {
-		return nil, err
-	}
-	for index := range articles {
-		article := articles[index]
-		result[article.PostID] = &article
-	}
-	return result, nil
-}
-
-func loadPostArticles(posts []models.Post) (map[uint]*models.PostArticle, error) {
-	return loadPostArticlesFromDB(global.Db, posts)
-}
-
-func loadPublicPostWithArticle(db *gorm.DB, rawID string, now time.Time) (models.Post, *models.PostArticle, error) {
+func loadPublicPost(db *gorm.DB, rawID string, now time.Time) (models.Post, error) {
 	id, err := strconv.ParseUint(rawID, 10, 64)
 	if err != nil || id == 0 || uint64(uint(id)) != id {
-		return models.Post{}, nil, gorm.ErrRecordNotFound
+		return models.Post{}, gorm.ErrRecordNotFound
 	}
 	var post models.Post
 	if err := publicPostScope(preloadPostAuthor(db.Model(&models.Post{})).Where("posts.id = ?", uint(id)), now).First(&post).Error; err != nil {
-		return models.Post{}, nil, err
+		return models.Post{}, err
 	}
-	articles, err := loadPostArticlesFromDB(db, []models.Post{post})
-	if err != nil {
-		return models.Post{}, nil, err
-	}
-	article := articles[post.ID]
-	if article == nil {
-		return post, nil, nil
-	}
-	return post, article, nil
+	return post, nil
 }
 
 func hydratePostResponseReferences(response *postResponse, now time.Time) error {
@@ -212,21 +153,13 @@ func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferen
 		}
 		return nil, err
 	}
-	articles, err := loadPostArticlesFromDB(db, []models.Post{post})
-	if err != nil {
-		return nil, err
-	}
-	article := articles[post.ID]
 	publishedAt := post.CreatedAt.UTC()
-	if article != nil && article.PublishedAt != nil {
-		publishedAt = article.PublishedAt.UTC()
-	}
 	author, err := publicAuthorFromPost(post)
 	if err != nil {
 		return nil, err
 	}
 	return &postReferenceResponse{
 		ID: post.ID, Deleted: false, Author: &author, Content: post.Content,
-		PublishedAt: &publishedAt, Article: postReferenceArticleFromModel(article),
+		PublishedAt: &publishedAt,
 	}, nil
 }

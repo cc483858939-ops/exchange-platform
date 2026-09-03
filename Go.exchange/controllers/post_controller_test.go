@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"Go.exchange/config"
-	"Go.exchange/consts"
 	"Go.exchange/eventing"
 	"Go.exchange/models"
 	"bytes"
@@ -29,11 +28,8 @@ func stubCreatePostAuthor(t *testing.T) {
 func stubPostCreatePersistence(t *testing.T, persisted *models.Post, id uint) {
 	original := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = original })
-	persistPostGraphFn = func(post *models.Post, article **models.PostArticle, userID uint, content string, req createPostRequest, now time.Time) error {
+	persistPostGraphFn = func(post *models.Post, userID uint, content string, req createPostRequest, now time.Time) error {
 		*post = models.Post{Model: gorm.Model{ID: id, CreatedAt: now, UpdatedAt: now}, AuthorID: userID, Content: content, Visibility: "public"}
-		if req.Article != nil {
-			*article = &models.PostArticle{PostID: id, Title: strings.TrimSpace(req.Article.Title), Preview: strings.TrimSpace(req.Article.Preview), CoverImageURL: strings.TrimSpace(req.Article.CoverImageURL), PublicationState: consts.PostPublicationStatePublished, PublishedAt: &now, ExpiredAt: req.Article.ExpiredAt}
-		}
 		if persisted != nil {
 			*persisted = *post
 		}
@@ -61,7 +57,7 @@ func TestCreatePostBuildsPublishedRecord(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ID != 42 || response.PublishedAt == nil || response.Article != nil || response.Content != "c" {
+	if response.ID != 42 || response.PublishedAt == nil || response.Content != "c" {
 		t.Fatalf("response=%#v", response)
 	}
 }
@@ -84,29 +80,6 @@ func TestCreatePostTrimsTextFields(t *testing.T) {
 	}
 }
 
-func TestCreatePostDoesNotPersistInvalidCover(t *testing.T) {
-	stubCreatePostAuthor(t)
-	gin.SetMode(gin.TestMode)
-	originalCreate := persistPostGraphFn
-	t.Cleanup(func() { persistPostGraphFn = originalCreate })
-	called := false
-	persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
-		called = true
-		return errors.New("must not persist")
-	}
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\",\"article\":{\"title\":\"title\",\"preview\":\"preview\",\"cover_image_url\":\"https://invalid\"}}"))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
-
-	if recorder.Code != http.StatusBadRequest || called {
-		t.Fatalf("status=%d called=%t", recorder.Code, called)
-	}
-}
-
 func TestCreatePostPersistsWithoutCover(t *testing.T) {
 	stubCreatePostAuthor(t)
 	stubPostCreatePersistence(t, nil, 42)
@@ -117,7 +90,7 @@ func TestCreatePostPersistsWithoutCover(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	createPost(ctx, nil)
-	if recorder.Code != http.StatusCreated || !bytes.Contains(recorder.Body.Bytes(), []byte("\"article\":null")) {
+	if recorder.Code != http.StatusCreated || bytes.Contains(recorder.Body.Bytes(), []byte("\"article\"")) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -128,7 +101,7 @@ func TestCreatePostRejectsWhitespaceOnlyContent(t *testing.T) {
 	originalCreate := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = originalCreate })
 	called := false
-	persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
+	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, time.Time) error {
 		called = true
 		return errors.New("must not persist")
 	}
@@ -168,7 +141,7 @@ func TestCreatePostRejectsReplyAboveUnicodeRuneLimitBeforeSideEffects(t *testing
 	persistCalls := 0
 	initializeCalls := 0
 	invalidateCalls := 0
-	persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
+	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, time.Time) error {
 		persistCalls++
 		return nil
 	}
@@ -203,7 +176,7 @@ func TestCreatePostRejectsReplyAboveUnicodeRuneLimitBeforeSideEffects(t *testing
 	}
 }
 
-func TestCreatePostDoesNotApplyReplyRuneLimitToRootOrArticle(t *testing.T) {
+func TestCreatePostDoesNotApplyReplyRuneLimitToRoot(t *testing.T) {
 	tests := []struct {
 		name    string
 		request createPostRequest
@@ -211,13 +184,6 @@ func TestCreatePostDoesNotApplyReplyRuneLimitToRootOrArticle(t *testing.T) {
 		{
 			name:    "root",
 			request: createPostRequest{Content: strings.Repeat("界", maxReplyContentRunes+1)},
-		},
-		{
-			name: "article",
-			request: createPostRequest{
-				Content: strings.Repeat("界", maxReplyContentRunes+1),
-				Article: &createPostArticleRequest{Title: "long article", Preview: "preview"},
-			},
 		},
 	}
 	for _, test := range tests {
@@ -260,7 +226,7 @@ func TestCreatePostRejectsOversizedAndMalformedJSONBeforeSideEffects(t *testing.
 			persistCalls := 0
 			initializeCalls := 0
 			invalidateCalls := 0
-			persistPostGraphFn = func(*models.Post, **models.PostArticle, uint, string, createPostRequest, time.Time) error {
+			persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, time.Time) error {
 				persistCalls++
 				return nil
 			}

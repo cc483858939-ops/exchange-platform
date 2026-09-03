@@ -28,7 +28,7 @@ func openPostEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostEmbedding{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

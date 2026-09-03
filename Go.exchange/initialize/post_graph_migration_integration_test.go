@@ -56,6 +56,18 @@ WHERE table_schema = current_schema()
 			t.Fatalf("posts contains forbidden Article-era column %q", forbidden)
 		}
 	}
+	var postArticleTables int64
+	if err := db.Raw(`
+SELECT COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = current_schema()
+  AND table_name = 'post_articles'
+`).Scan(&postArticleTables).Error; err != nil {
+		t.Fatal(err)
+	}
+	if postArticleTables != 0 {
+		t.Fatalf("post_articles table still exists")
+	}
 
 	var constraints []struct {
 		Name       string `gorm:"column:conname"`

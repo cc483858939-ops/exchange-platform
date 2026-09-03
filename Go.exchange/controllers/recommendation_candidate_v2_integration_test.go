@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -31,7 +30,6 @@ func openRecommendationCandidateIntegrationDB(t *testing.T) *gorm.DB {
 		&models.User{},
 		&models.UserFollow{},
 		&models.Post{},
-		&models.PostArticle{},
 		&models.PostBehavior{},
 		&models.PostReaction{},
 	); err != nil {
@@ -65,7 +63,7 @@ func newRecommendationCandidateIntegrationUser(t *testing.T, db *gorm.DB, label 
 	return user
 }
 
-func newRecommendationCandidateIntegrationArticle(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time) models.Post {
+func newRecommendationCandidateIntegrationPost(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time) models.Post {
 	t.Helper()
 	article := models.Post{
 		Model:    gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt},
@@ -75,20 +73,15 @@ func newRecommendationCandidateIntegrationArticle(t *testing.T, db *gorm.DB, aut
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostArticle{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 	})
-	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: "body", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &publishedAt}).Error; err != nil {
-		t.Fatal(err)
-	}
 	return article
 }
 
 func cleanupRecommendationCandidateIntegrationData(db *gorm.DB, postIDs, userIDs []uint) {
 	db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
-	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
 	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 	db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
@@ -100,7 +93,7 @@ func TestLoadRecommendationCandidateSetUsesEqualRRFFusionIntegration(t *testing.
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "rrf-viewer")
 	author := newRecommendationCandidateIntegrationUser(t, db, "rrf-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	article := newRecommendationCandidateIntegrationArticle(t, db, author, "rrf", now)
+	article := newRecommendationCandidateIntegrationPost(t, db, author, "rrf", now)
 	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: author.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +127,8 @@ func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing
 	deletedAuthor := newRecommendationCandidateIntegrationUser(t, db, "deleted-author")
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	badArticle := newRecommendationCandidateIntegrationArticle(t, db, deletedAuthor, "bad", now)
-	goodArticle := newRecommendationCandidateIntegrationArticle(t, db, validAuthor, "good", now.Add(-time.Minute))
+	badArticle := newRecommendationCandidateIntegrationPost(t, db, deletedAuthor, "bad", now)
+	goodArticle := newRecommendationCandidateIntegrationPost(t, db, validAuthor, "good", now.Add(-time.Minute))
 	postIDs := []uint{badArticle.ID, goodArticle.ID}
 	userIDs := []uint{viewer.ID, validAuthor.ID, deletedAuthor.ID}
 	t.Cleanup(func() {
@@ -153,7 +146,7 @@ func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing
 		now,
 		defaultRecommendationConfig(),
 		false,
-		effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC",
+		"posts.created_at DESC, posts.id DESC",
 		1,
 		"recent",
 	)
@@ -176,8 +169,8 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 	validAuthor := newRecommendationCandidateIntegrationUser(t, db, "valid-author")
 	deletedAuthor := newRecommendationCandidateIntegrationUser(t, db, "deleted-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	validArticle := newRecommendationCandidateIntegrationArticle(t, db, validAuthor, "valid", now)
-	badArticle := newRecommendationCandidateIntegrationArticle(t, db, deletedAuthor, "bad", now)
+	validArticle := newRecommendationCandidateIntegrationPost(t, db, validAuthor, "valid", now)
+	badArticle := newRecommendationCandidateIntegrationPost(t, db, deletedAuthor, "bad", now)
 	postIDs := []uint{validArticle.ID, badArticle.ID}
 	userIDs := []uint{validAuthor.ID, deletedAuthor.ID}
 	t.Cleanup(func() {
@@ -226,7 +219,7 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 	db := openRecommendationCandidateIntegrationDB(t)
 	deletedAuthor := newRecommendationCandidateIntegrationUser(t, db, "deleted-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	badArticle := newRecommendationCandidateIntegrationArticle(t, db, deletedAuthor, "bad", now)
+	badArticle := newRecommendationCandidateIntegrationPost(t, db, deletedAuthor, "bad", now)
 	postIDs := []uint{badArticle.ID}
 	userIDs := []uint{deletedAuthor.ID}
 	t.Cleanup(func() {
@@ -266,7 +259,7 @@ func TestRecommendationHydrationPropagatesEmbeddingErrorIntegration(t *testing.T
 	db := openRecommendationCandidateIntegrationDB(t)
 	validAuthor := newRecommendationCandidateIntegrationUser(t, db, "valid-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	validArticle := newRecommendationCandidateIntegrationArticle(t, db, validAuthor, "valid", now)
+	validArticle := newRecommendationCandidateIntegrationPost(t, db, validAuthor, "valid", now)
 	postIDs := []uint{validArticle.ID}
 	userIDs := []uint{validAuthor.ID}
 	t.Cleanup(func() {

@@ -110,10 +110,9 @@ func TestRecommendationRankerAppliesTrendingIndependentOfRecallSource(t *testing
 func TestRecommendationRankerUsesDeterministicTieBreak(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	cfg := defaultRecommendationConfig()
-	publishedAt := ptrTime(now.Add(-time.Hour))
 	ranked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 10}, PostArticle: &models.PostArticle{PublishedAt: publishedAt}},
-		{Candidate: embeddingCandidate{PostID: 3, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 10}, PostArticle: &models.PostArticle{PublishedAt: publishedAt}},
+		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 10}},
+		{Candidate: embeddingCandidate{PostID: 3, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 10}},
 	}, now, cfg)
 	if len(ranked) != 2 || ranked[0].Post.ID != 3 || ranked[1].Post.ID != 1 {
 		t.Fatalf("ranked=%#v, want IDs [3 1]", ranked)
@@ -130,8 +129,8 @@ func TestRecommendationExplorationSemanticHonorsNegativePreference(t *testing.T)
 		NegativeConfidence: 1,
 	}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .8}, Post: models.Post{Model: gorm.Model{ID: 1}}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)}, Embedding: []float32{.8, .6, 0}},
-		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 2}}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)}, Embedding: []float32{.5, 0, .8660254}},
+		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .8}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}}, Embedding: []float32{.8, .6, 0}},
+		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}}, Embedding: []float32{.5, 0, .8660254}},
 	}, now, cfg)
 	if len(ranked) != 2 {
 		t.Fatalf("ranked=%#v, want two candidates", ranked)
@@ -155,7 +154,7 @@ func TestRecommendationExplorationSemanticInvalidEmbeddingsRemainFiniteAndBounde
 	} {
 		ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{{
 			Candidate: embeddingCandidate{PostID: uint(index + 1), FromSemantic: true, PositiveSemanticSimilarity: .9},
-			Post:      models.Post{Model: gorm.Model{ID: uint(index + 1)}}, PostArticle: &models.PostArticle{PublishedAt: ptrTime(now)},
+			Post:      models.Post{Model: gorm.Model{ID: uint(index + 1), CreatedAt: now}},
 			Embedding: embedding,
 		}}, now, cfg)
 		if len(ranked) != 1 || math.IsNaN(ranked[0].ExplorationSemantic) || math.IsInf(ranked[0].ExplorationSemantic, 0) || ranked[0].ExplorationSemantic < 0 || ranked[0].ExplorationSemantic > 1 {

@@ -170,21 +170,19 @@ func loadFollowingTimelinePageFromDB(viewerID uint, limit int, cursor *following
 	now := time.Now().UTC()
 	query := `
 WITH activities AS (
-    SELECT
-        'post'::text AS activity_type,
-        ` + effectivePublishedAtSQL("posts", "pa_direct") + ` AS activity_at,
+	SELECT
+	    'post'::text AS activity_type,
+	    posts.created_at AS activity_at,
         posts.id AS source_id,
         posts.id AS post_id,
         posts.author_id AS actor_id,
         1::int AS activity_rank
-    FROM posts
-    LEFT JOIN post_articles AS pa_direct
-      ON pa_direct.post_id = posts.id
-    JOIN user_follows AS direct_follow
+	FROM posts
+	JOIN user_follows AS direct_follow
       ON direct_follow.following_id = posts.author_id
      AND direct_follow.follower_id = ?
     WHERE posts.reply_to_post_id IS NULL
-      AND ` + publicPostEligibilitySQL("posts", "pa_direct") + `
+	      AND ` + publicPostEligibilitySQL("posts") + `
 
     UNION ALL
 
@@ -202,14 +200,12 @@ WITH activities AS (
     JOIN users AS reposter
       ON reposter.id = post_reposts.user_id
      AND reposter.deleted_at IS NULL
-    JOIN posts
-      ON posts.id = post_reposts.post_id
-    LEFT JOIN post_articles AS pa_repost
-      ON pa_repost.post_id = posts.id
+	JOIN posts
+	  ON posts.id = post_reposts.post_id
     JOIN users AS canonical_author
       ON canonical_author.id = posts.author_id
      AND canonical_author.deleted_at IS NULL
-    WHERE ` + publicPostEligibilitySQL("posts", "pa_repost") + `
+	WHERE ` + publicPostEligibilitySQL("posts") + `
 ), latest AS (
     SELECT DISTINCT ON (post_id)
         activity_type,
@@ -226,11 +222,7 @@ FROM latest
 `
 	args := []interface{}{
 		viewerID,
-		now,
-		now,
 		viewerID,
-		now,
-		now,
 	}
 	if cursor != nil {
 		rank := followingActivityRank(cursor.ActivityType)

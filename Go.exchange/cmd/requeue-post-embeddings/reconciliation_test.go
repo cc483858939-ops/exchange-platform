@@ -50,9 +50,9 @@ func (p *reconciliationTestPublisher) PublishBatch(_ context.Context, events []e
 	return nil
 }
 
-func reconciliationPost(id uint, title, content string, version, hash *string) requeuePost {
+func reconciliationPost(id uint, _ string, content string, version, hash *string) requeuePost {
 	return requeuePost{
-		ID: id, Title: title, Content: content,
+		ID: id, Content: content,
 		EmbeddingPostID: func() *uint {
 			if version == nil && hash == nil {
 				return nil
@@ -67,7 +67,7 @@ func reconciliationPost(id uint, title, content string, version, hash *string) r
 func stringPointer(value string) *string { return &value }
 
 func TestReconcilePostEmbeddingsClassifiesAndPublishesOnlyStaleRows(t *testing.T) {
-	currentHash := embeddings.PostEmbeddingContentHash("current", "", "body")
+	currentHash := embeddings.PostEmbeddingContentHash("body")
 	scanner := &reconciliationTestScanner{pages: [][]requeuePost{{
 		reconciliationPost(1, "missing", "body", nil, nil),
 		reconciliationPost(2, "current", "body", stringPointer("v1"), stringPointer(currentHash)),

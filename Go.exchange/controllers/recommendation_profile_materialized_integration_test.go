@@ -66,7 +66,7 @@ func newRecommendationProfileControllerIntegrationUser(t *testing.T, db *gorm.DB
 	return user
 }
 
-func newRecommendationProfileControllerIntegrationArticle(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Post {
+func newRecommendationProfileControllerIntegrationPost(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Post {
 	t.Helper()
 	article := models.Post{
 		Model: gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt}, AuthorID: authorID,
@@ -80,12 +80,8 @@ func newRecommendationProfileControllerIntegrationArticle(t *testing.T, db *gorm
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.UserPostRecoState{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
-		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 	})
-	if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: title + " preview", PublicationState: "published", PublishedAt: &publishedAt}).Error; err != nil {
-		t.Fatal(err)
-	}
 	return article
 }
 
@@ -197,8 +193,8 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 	viewer := newRecommendationProfileControllerIntegrationUser(t, db, "interaction-viewer")
 	author := newRecommendationProfileControllerIntegrationUser(t, db, "interaction-author")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	interacted := newRecommendationProfileControllerIntegrationArticle(t, db, author.ID, "interacted", now)
-	eligible := newRecommendationProfileControllerIntegrationArticle(t, db, author.ID, "eligible", now.Add(-time.Minute))
+	interacted := newRecommendationProfileControllerIntegrationPost(t, db, author.ID, "interacted", now)
+	eligible := newRecommendationProfileControllerIntegrationPost(t, db, author.ID, "eligible", now.Add(-time.Minute))
 	if err := db.Create(&models.UserPostRecoState{
 		UserID: viewer.ID, PostID: interacted.ID, Interacted: true,
 		CanonicalVersion: recommendation.CanonicalOutcomeVersion, RebuiltAt: now,
@@ -216,7 +212,7 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 	profile := userInterestProfile{MaterializedInteractionsReady: true}
 	candidates, err := loadRecommendationSourceCandidates(
 		viewer.ID, profile, map[uint]servedPost{}, now, normalizedRecommendationConfig(), false,
-		effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC", 10, "recent",
+		"posts.created_at DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +227,7 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 	viewer := newRecommendationProfileControllerIntegrationUser(t, db, "ni-viewer")
 	author := newRecommendationProfileControllerIntegrationUser(t, db, "ni-author")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	article := newRecommendationProfileControllerIntegrationArticle(t, db, author.ID, "not-interested", now)
+	article := newRecommendationProfileControllerIntegrationPost(t, db, author.ID, "not-interested", now)
 	if err := db.Create(&models.PostBehavior{
 		UserID: viewer.ID, PostID: article.ID, Action: eventing.RecommendationBehaviorActionNotInterested,
 		Count: 1, LastSeenAt: now.Add(-time.Minute), Active: true,
@@ -248,7 +244,7 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 
 	candidates, err := loadRecommendationSourceCandidates(
 		viewer.ID, userInterestProfile{MaterializedInteractionsReady: true}, map[uint]servedPost{}, now,
-		normalizedRecommendationConfig(), false, effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC", 10, "recent",
+		normalizedRecommendationConfig(), false, "posts.created_at DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
 		t.Fatal(err)

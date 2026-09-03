@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -38,7 +37,7 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +72,6 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		db.Unscoped().Model(&models.Post{}).Where("author_id IN ?", userIDs).Pluck("id", &authoredPostIDs)
 		postIDs = append(postIDs, authoredPostIDs...)
 		if len(postIDs) > 0 {
-			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 		}
 		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
@@ -82,34 +80,17 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	expiredAt := now.Add(-time.Hour)
-	pastPublishedAt := now
-	currentPublishedAt := now
-	futurePublishedAt := now.Add(time.Hour)
 	posts = []models.Post{
 		{AuthorID: target.ID, Content: "older body", LikeCount: 9, ReplyCount: 4, Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)}},
 		{AuthorID: target.ID, Content: "Canonical profile body", LikeCount: 17, ReplyCount: 8, Visibility: "public", Model: gorm.Model{CreatedAt: now, UpdatedAt: now}},
-		{AuthorID: target.ID, Content: "expired body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour)}},
 		{AuthorID: other.ID, Content: "other body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(2 * time.Hour), UpdatedAt: now.Add(2 * time.Hour)}},
-		{AuthorID: target.ID, Content: "future body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(3 * time.Hour), UpdatedAt: now.Add(3 * time.Hour)}},
 		{AuthorID: target.ID, Content: "active short body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(-30 * time.Minute), UpdatedAt: now.Add(-30 * time.Minute)}},
 		{AuthorID: target.ID, Content: "deleted body", Visibility: "public", Model: gorm.Model{CreatedAt: now.Add(6 * time.Hour), UpdatedAt: now.Add(6 * time.Hour)}},
 	}
 	if err := db.Create(&posts).Error; err != nil {
 		t.Fatal(err)
 	}
-	postArticles := []models.PostArticle{
-		{PostID: posts[0].ID, Title: "older", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &pastPublishedAt},
-		{PostID: posts[1].ID, Title: "newer", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &currentPublishedAt},
-		{PostID: posts[2].ID, Title: "expired", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &pastPublishedAt, ExpiredAt: &expiredAt},
-		{PostID: posts[3].ID, Title: "other", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &currentPublishedAt},
-		{PostID: posts[4].ID, Title: "future", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &futurePublishedAt},
-		{PostID: posts[6].ID, Title: "deleted", Preview: "p", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &currentPublishedAt},
-	}
-	if err := db.Create(&postArticles).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Delete(&posts[6]).Error; err != nil {
+	if err := db.Delete(&posts[4]).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,12 +121,12 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 3 || page.NextCursor != nil || page.Items[0].Article == nil || page.Items[0].Article.Title != "newer" || page.Items[0].Content != "Canonical profile body" || page.Items[1].Article == nil || page.Items[1].Article.Title != "older" || page.Items[2].Article != nil || page.Items[2].Content != "active short body" || page.Items[0].LikeCount != 17 || page.Items[0].ReplyCount != 8 {
+	if len(page.Items) != 3 || page.NextCursor != nil || page.Items[0].Content != "Canonical profile body" || page.Items[1].Content != "active short body" || page.Items[2].Content != "older body" || page.Items[0].LikeCount != 17 || page.Items[0].ReplyCount != 8 {
 		t.Fatalf("unexpected author posts: %#v", page)
 	}
-	for _, article := range page.Items {
-		if article.Author.ID != target.ID {
-			t.Fatalf("foreign author in profile response: %#v", article.Author)
+	for _, item := range page.Items {
+		if item.Author.ID != target.ID {
+			t.Fatalf("foreign author in profile response: %#v", item.Author)
 		}
 	}
 
@@ -158,13 +139,13 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=1&cursor="+*firstPage.NextCursor, strconvUint(target.ID))
 	GetUserPosts(ctx)
 	var secondPage postPageResponse
-	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].Article == nil || secondPage.Items[0].Article.Title != "older" || secondPage.NextCursor == nil {
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].Content != "active short body" || secondPage.NextCursor == nil {
 		t.Fatalf("second cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), secondPage)
 	}
 	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=1&cursor="+*secondPage.NextCursor, strconvUint(target.ID))
 	GetUserPosts(ctx)
 	var thirdPage postPageResponse
-	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &thirdPage) != nil || len(thirdPage.Items) != 1 || thirdPage.Items[0].Article != nil || thirdPage.Items[0].Content != "active short body" || thirdPage.NextCursor != nil {
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &thirdPage) != nil || len(thirdPage.Items) != 1 || thirdPage.Items[0].Content != "older body" || thirdPage.NextCursor != nil {
 		t.Fatalf("third cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), thirdPage)
 	}
 

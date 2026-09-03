@@ -32,7 +32,6 @@ const (
 type selectedRecommendation struct {
 	Candidate              embeddingCandidate
 	Post                   models.Post
-	PostArticle            *models.PostArticle
 	Embedding              []float32
 	Breakdown              recommendationScoreBreakdown
 	IsInNetwork            bool
@@ -222,7 +221,7 @@ func selectRecommendationCandidates(candidates []hydratedRecommendationCandidate
 		selectedIDs[chosen.Post.ID] = struct{}{}
 		chosen.Breakdown.FinalScore = chosen.Breakdown.BaseScore - chosen.Breakdown.DiversityPenalty
 		result = append(result, selectedRecommendation{
-			Candidate: chosen.Candidate, Post: chosen.Post, PostArticle: chosen.PostArticle, Embedding: chosen.Embedding,
+			Candidate: chosen.Candidate, Post: chosen.Post, Embedding: chosen.Embedding,
 			Breakdown: chosen.Breakdown, IsInNetwork: chosen.IsInNetwork, IsNovelAuthor: chosen.IsNovelAuthor,
 			ExplorationOpportunity: selectionOpportunity, SelectionMode: selectionMode,
 			ExplorationReason: selectionReason, ExplorationSemantic: selectionSemantic,
@@ -359,7 +358,7 @@ func recommendationPostAgeDays(post models.Post, now time.Time) float64 {
 }
 
 func recommendationExplorationReason(candidate hydratedRecommendationCandidate, now time.Time, cfg config.RecommendationConfig) string {
-	ageDays := now.Sub(recommendationPostTimeWithArticle(candidate.Post, candidate.PostArticle)).Hours() / 24
+	ageDays := now.Sub(recommendationPostTime(candidate.Post)).Hours() / 24
 	if ageDays < 0 {
 		ageDays = 0
 	}
@@ -404,8 +403,8 @@ func recommendationStrictExplorationBefore(left, right hydratedRecommendationCan
 	if leftScore != rightScore {
 		return leftScore > rightScore
 	}
-	leftTime := recommendationPostTimeWithArticle(left.Post, left.PostArticle)
-	rightTime := recommendationPostTimeWithArticle(right.Post, right.PostArticle)
+	leftTime := recommendationPostTime(left.Post)
+	rightTime := recommendationPostTime(right.Post)
 	if !leftTime.Equal(rightTime) {
 		return leftTime.After(rightTime)
 	}
@@ -430,8 +429,8 @@ func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, 
 	if left.Breakdown.BaseScore != right.Breakdown.BaseScore {
 		return left.Breakdown.BaseScore > right.Breakdown.BaseScore
 	}
-	leftTime := recommendationPostTimeWithArticle(left.Post, left.PostArticle)
-	rightTime := recommendationPostTimeWithArticle(right.Post, right.PostArticle)
+	leftTime := recommendationPostTime(left.Post)
+	rightTime := recommendationPostTime(right.Post)
 	if !leftTime.Equal(rightTime) {
 		return leftTime.After(rightTime)
 	}
@@ -441,7 +440,7 @@ func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, 
 func selectedRecommendationResponses(selected []selectedRecommendation) ([]recommendedPostResponse, error) {
 	result := make([]recommendedPostResponse, 0, len(selected))
 	for _, item := range selected {
-		post, err := postResponseFromModel(item.Post, item.PostArticle)
+		post, err := postResponseFromModel(item.Post)
 		if err != nil {
 			continue
 		}

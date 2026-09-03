@@ -415,17 +415,16 @@ func GetUserPosts(ctx *gin.Context) {
 	query := global.Db.
 		Model(&models.Post{}).
 		Where("posts.author_id = ? AND posts.reply_to_post_id IS NULL", id).
-		Joins("LEFT JOIN post_articles AS pa_profile ON pa_profile.post_id = posts.id").
 		Scopes(func(tx *gorm.DB) *gorm.DB { return publicPostScope(tx, now) })
 	if cursor != nil {
 		query = query.Where(
-			"("+effectivePublishedAtSQL("posts", "pa_profile")+" < ?) OR ("+effectivePublishedAtSQL("posts", "pa_profile")+" = ? AND posts.id < ?)",
+			"(posts.created_at < ?) OR (posts.created_at = ? AND posts.id < ?)",
 			cursor.PublishedAt,
 			cursor.PublishedAt,
 			cursor.ID,
 		)
 	}
-	posts, err := loadPostResponses(query.Order(effectivePublishedAtSQL("posts", "pa_profile") + " DESC, posts.id DESC").Limit(limit + 1))
+	posts, err := loadPostResponses(query.Order("posts.created_at DESC, posts.id DESC").Limit(limit + 1))
 	if err != nil {
 		writeUserAPIError(ctx, err)
 		return

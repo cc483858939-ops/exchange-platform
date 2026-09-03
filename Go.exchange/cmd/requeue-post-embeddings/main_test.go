@@ -29,7 +29,7 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostEmbedding{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,7 +52,6 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 		ids = append(ids, authoredIDs...)
 		if len(ids) > 0 {
 			db.Unscoped().Where("post_id IN ?", ids).Delete(&models.PostEmbedding{})
-			db.Unscoped().Where("post_id IN ?", ids).Delete(&models.PostArticle{})
 			db.Unscoped().Where("id IN ?", ids).Delete(&models.Post{})
 		}
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
@@ -73,7 +72,7 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 	for _, post := range posts {
 		postIDs = append(postIDs, post.ID)
 	}
-	currentHash := embeddings.PostEmbeddingContentHash("", "", posts[1].Content)
+	currentHash := embeddings.PostEmbeddingContentHash(posts[1].Content)
 	embeddingsToCreate := []models.PostEmbedding{
 		{PostID: posts[1].ID, Version: "v2", Model: "test", Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: currentHash},
 		{PostID: posts[2].ID, Version: "v1", Model: "test", Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: "old"},

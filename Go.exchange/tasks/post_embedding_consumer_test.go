@@ -53,7 +53,6 @@ type postEmbeddingTestEmbedder struct {
 
 type postEmbeddingTestStore struct {
 	post         models.Post
-	postArticle  *models.PostArticle
 	postErr      error
 	embedding    models.PostEmbedding
 	embeddingErr error
@@ -63,13 +62,6 @@ type postEmbeddingTestStore struct {
 
 func (s *postEmbeddingTestStore) GetPost(context.Context, uint) (models.Post, error) {
 	return s.post, s.postErr
-}
-
-func (s *postEmbeddingTestStore) GetPostArticle(context.Context, uint) (models.PostArticle, error) {
-	if s.postArticle == nil {
-		return models.PostArticle{}, gorm.ErrRecordNotFound
-	}
-	return *s.postArticle, nil
 }
 
 func (s *postEmbeddingTestStore) GetEmbedding(context.Context, uint) (models.PostEmbedding, error) {
@@ -91,10 +83,8 @@ func (s *postEmbeddingTestStore) UpsertEmbedding(_ context.Context, embedding mo
 }
 
 func newPostEmbeddingTestStore() *postEmbeddingTestStore {
-	now := time.Now().UTC()
 	return &postEmbeddingTestStore{
 		post:         models.Post{Model: gorm.Model{ID: 42}, Content: "Body", Visibility: "public"},
-		postArticle:  &models.PostArticle{PostID: 42, Title: "Title", Preview: "Preview", PublicationState: "published", PublishedAt: &now},
 		embeddingErr: gorm.ErrRecordNotFound,
 	}
 }
@@ -173,7 +163,7 @@ func TestDecodePostEmbeddingRequestStrictContract(t *testing.T) {
 		{name: "wrong aggregate type", edit: func(event *eventing.Envelope) { event.AggregateType = "user" }},
 		{name: "missing occurred at", edit: func(event *eventing.Envelope) { event.OccurredAt = time.Time{} }},
 		{name: "aggregate mismatch", edit: func(event *eventing.Envelope) { event.AggregateID = "41" }},
-		{name: "zero article", edit: func(event *eventing.Envelope) {
+		{name: "zero post", edit: func(event *eventing.Envelope) {
 			event.AggregateID = "0"
 			event.Payload = []byte("{\"post_id\":0}")
 		}},
@@ -217,7 +207,7 @@ func TestPostEmbeddingConsumerGeneratesMissingProjection(t *testing.T) {
 	}
 	got := store.upserted[0]
 	if got.PostID != 42 || got.Version != "v1" || got.Model != "test-model" || got.Dimensions != 2 ||
-		got.ContentHash != embeddings.PostEmbeddingContentHash("Title", "Preview", "Body") {
+		got.ContentHash != embeddings.PostEmbeddingContentHash("Body") {
 		t.Fatalf("embedding=%#v", got)
 	}
 }
@@ -226,7 +216,7 @@ func TestPostEmbeddingConsumerSkipsCurrentProjection(t *testing.T) {
 	store := newPostEmbeddingTestStore()
 	store.embeddingErr = nil
 	store.embedding = models.PostEmbedding{
-		PostID: 42, Version: "v1", ContentHash: embeddings.PostEmbeddingContentHash("Title", "Preview", "Body"),
+		PostID: 42, Version: "v1", ContentHash: embeddings.PostEmbeddingContentHash("Body"),
 	}
 	embedder := &postEmbeddingTestEmbedder{}
 	reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
@@ -241,7 +231,7 @@ func TestPostEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T) {
 		version string
 		hash    string
 	}{
-		{name: "stale version", version: "old", hash: embeddings.PostEmbeddingContentHash("Title", "Preview", "Body")},
+		{name: "stale version", version: "old", hash: embeddings.PostEmbeddingContentHash("Body")},
 		{name: "stale content", version: "v1", hash: "old-hash"},
 	}
 	for _, test := range tests {
@@ -258,22 +248,13 @@ func TestPostEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T) {
 	}
 }
 
-func TestPostEmbeddingConsumerCommitsMissingAndUnavailableArticles(t *testing.T) {
+func TestPostEmbeddingConsumerCommitsMissingPosts(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		store := newPostEmbeddingTestStore()
 		store.postErr = gorm.ErrRecordNotFound
 		embedder := &postEmbeddingTestEmbedder{}
 		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 		if err == nil || reader.commitCalls != 1 || embedder.calls != 0 || len(store.upserted) != 0 {
-			t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
-		}
-	})
-	t.Run("draft article metadata is still embedded", func(t *testing.T) {
-		store := newPostEmbeddingTestStore()
-		store.postArticle.PublicationState = "draft"
-		embedder := &postEmbeddingTestEmbedder{}
-		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
-		if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || len(store.upserted) != 1 {
 			t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 		}
 	})
@@ -317,9 +298,9 @@ func TestPostEmbeddingConsumerTerminalProviderErrorsCommit(t *testing.T) {
 }
 
 func TestPostEmbeddingConsumerDBReadAndUpsertFailuresDoNotCommit(t *testing.T) {
-	t.Run("article read", func(t *testing.T) {
+	t.Run("post read", func(t *testing.T) {
 		store := newPostEmbeddingTestStore()
-		store.postErr = errors.New("article read failed")
+		store.postErr = errors.New("post read failed")
 		embedder := &postEmbeddingTestEmbedder{}
 		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
 		if err == nil || reader.commitCalls != 0 || embedder.calls != 0 {

@@ -38,7 +38,6 @@ func TestPostCreationFormsAreImmediatelyLikeReadyIntegration(t *testing.T) {
 			t.Errorf("cleanup post-like Redis integration state: %v", err)
 		}
 		db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostReaction{})
-		db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostArticle{})
 		db.Unscoped().Where("post_id IN ? OR user_id IN ?", createdIDs, userIDs).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserRecoProfileDirty{})
 		for index := len(createdIDs) - 1; index >= 0; index-- {
@@ -50,14 +49,11 @@ func TestPostCreationFormsAreImmediatelyLikeReadyIntegration(t *testing.T) {
 	createdIDs = append(createdIDs, shortRoot.ID)
 	assertPostLikeStateIntegration(t, shortRoot.ID, fixture.Commenter.ID, 0, false)
 
-	articleRoot := createPostForLikeIntegration(t, fixture.Author.ID, `{"content":"article root","article":{"title":"Article root","preview":"Article preview"}}`)
-	createdIDs = append(createdIDs, articleRoot.ID)
-	if articleRoot.Article == nil {
-		t.Fatalf("article root response=%#v", articleRoot)
-	}
-	assertPostLikeStateIntegration(t, articleRoot.ID, fixture.Commenter.ID, 0, false)
+	postRoot := createPostForLikeIntegration(t, fixture.Author.ID, `{"content":"post root","article":{"title":"ignored","preview":"ignored"}}`)
+	createdIDs = append(createdIDs, postRoot.ID)
+	assertPostLikeStateIntegration(t, postRoot.ID, fixture.Commenter.ID, 0, false)
 
-	genericReply := createPostForLikeIntegration(t, fixture.Commenter.ID, `{"content":"generic reply","reply_to_post_id":`+strconvUint(articleRoot.ID)+`}`)
+	genericReply := createPostForLikeIntegration(t, fixture.Commenter.ID, `{"content":"generic reply","reply_to_post_id":`+strconvUint(postRoot.ID)+`}`)
 	createdIDs = append(createdIDs, genericReply.ID)
 	assertPostLikeStateIntegration(t, genericReply.ID, fixture.Other.ID, 0, false)
 

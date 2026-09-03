@@ -58,15 +58,6 @@ func (s gormPostEmbeddingStore) GetPost(ctx context.Context, postID uint) (model
 	return post, err
 }
 
-func (s gormPostEmbeddingStore) GetPostArticle(ctx context.Context, postID uint) (models.PostArticle, error) {
-	var article models.PostArticle
-	if s.db == nil {
-		return article, errors.New("database is not initialized")
-	}
-	err := s.db.WithContext(ctx).Where("post_id = ?", postID).First(&article).Error
-	return article, err
-}
-
 func (s gormPostEmbeddingStore) GetEmbedding(ctx context.Context, postID uint) (models.PostEmbedding, error) {
 	var embedding models.PostEmbedding
 	if s.db == nil {
@@ -246,25 +237,8 @@ func processPostEmbeddingMessage(ctx context.Context, message kafka.Message, emb
 		metrics.RecordPostEmbeddingFailure("db_read")
 		return err
 	}
-	var postArticle *models.PostArticle
-	if metadataStore, ok := store.(interface {
-		GetPostArticle(context.Context, uint) (models.PostArticle, error)
-	}); ok {
-		metadata, metadataErr := metadataStore.GetPostArticle(ctx, postID)
-		if metadataErr == nil {
-			postArticle = &metadata
-		} else if !errors.Is(metadataErr, gorm.ErrRecordNotFound) {
-			metrics.RecordPostEmbeddingFailure("db_read")
-			return metadataErr
-		}
-	}
-	title, preview := "", ""
-	if postArticle != nil {
-		title, preview = postArticle.Title, postArticle.Preview
-	}
-
-	text := embeddings.BuildPostEmbeddingText(title, preview, post.Content)
-	contentHash := embeddings.PostEmbeddingContentHash(title, preview, post.Content)
+	text := embeddings.BuildPostEmbeddingText(post.Content)
+	contentHash := embeddings.PostEmbeddingContentHash(post.Content)
 
 	existing, lookupErr := store.GetEmbedding(ctx, postID)
 	if lookupErr == nil && existing.Version == activeVersion && existing.ContentHash == contentHash {

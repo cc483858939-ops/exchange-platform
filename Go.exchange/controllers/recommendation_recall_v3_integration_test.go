@@ -30,9 +30,9 @@ func openRecommendationRecallV3IntegrationDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func newRecommendationSemanticArticle(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, vector []float32) models.Post {
+func newRecommendationSemanticPost(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, vector []float32) models.Post {
 	t.Helper()
-	article := newRecommendationCandidateIntegrationArticle(t, db, author, title, publishedAt)
+	article := newRecommendationCandidateIntegrationPost(t, db, author, title, publishedAt)
 	if err := db.Create(&models.PostEmbedding{
 		PostID:      article.ID,
 		Version:     config.ActiveEmbeddingVersion(),
@@ -51,7 +51,6 @@ func cleanupRecommendationRecallV3Data(db *gorm.DB, postIDs, userIDs []uint) {
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostEmbedding{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
-		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	}
 	if len(userIDs) > 0 {
@@ -67,11 +66,11 @@ func TestSemanticRecallRecentQuotaAndEvergreenReservationIntegration(t *testing.
 	cutoff := now.AddDate(0, 0, -30)
 	postIDs := make([]uint, 0, 7)
 	for index := 0; index < 4; index++ {
-		article := newRecommendationSemanticArticle(t, db, author, "semantic-old-"+string(rune('a'+index)), cutoff.Add(-time.Duration(index+1)*24*time.Hour), []float32{1, 0})
+		article := newRecommendationSemanticPost(t, db, author, "semantic-old-"+string(rune('a'+index)), cutoff.Add(-time.Duration(index+1)*24*time.Hour), []float32{1, 0})
 		postIDs = append(postIDs, article.ID)
 	}
 	for index := 0; index < 3; index++ {
-		article := newRecommendationSemanticArticle(t, db, author, "semantic-recent-"+string(rune('a'+index)), cutoff.Add(time.Duration(index+1)*24*time.Hour), []float32{0.8, 0.6})
+		article := newRecommendationSemanticPost(t, db, author, "semantic-recent-"+string(rune('a'+index)), cutoff.Add(time.Duration(index+1)*24*time.Hour), []float32{0.8, 0.6})
 		postIDs = append(postIDs, article.ID)
 	}
 	userIDs := []uint{viewer.ID, author.ID}
@@ -96,11 +95,11 @@ func TestSemanticRecallRecentQuotaAndEvergreenReservationIntegration(t *testing.
 			t.Fatalf("duplicate semantic article ID=%d", candidate.PostID)
 		}
 		seen[candidate.PostID] = struct{}{}
-		var article models.PostArticle
-		if err := db.Select("published_at").First(&article, "post_id = ?", candidate.PostID).Error; err != nil {
+		var post models.Post
+		if err := db.Select("created_at").First(&post, candidate.PostID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if article.PublishedAt != nil && !article.PublishedAt.Before(cutoff) {
+		if !post.CreatedAt.Before(cutoff) {
 			recentCount++
 		} else {
 			evergreenCount++
@@ -121,13 +120,13 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 	deletedAuthor := newRecommendationCandidateIntegrationUser(t, db, "semantic-eligibility-deleted-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	vector := []float32{1, 0}
-	valid := newRecommendationSemanticArticle(t, db, validAuthor, "semantic-valid", now.Add(-time.Hour), vector)
-	self := newRecommendationSemanticArticle(t, db, viewer, "semantic-self", now.Add(-2*time.Hour), vector)
-	interacted := newRecommendationSemanticArticle(t, db, validAuthor, "semantic-interacted", now.Add(-3*time.Hour), vector)
-	notInterested := newRecommendationSemanticArticle(t, db, validAuthor, "semantic-not-interested", now.Add(-4*time.Hour), vector)
-	served := newRecommendationSemanticArticle(t, db, validAuthor, "semantic-served", now.Add(-5*time.Hour), vector)
-	deleted := newRecommendationSemanticArticle(t, db, deletedAuthor, "semantic-deleted-author", now.Add(-6*time.Hour), vector)
-	wrongVersion := newRecommendationCandidateIntegrationArticle(t, db, validAuthor, "semantic-wrong-version", now.Add(-7*time.Hour))
+	valid := newRecommendationSemanticPost(t, db, validAuthor, "semantic-valid", now.Add(-time.Hour), vector)
+	self := newRecommendationSemanticPost(t, db, viewer, "semantic-self", now.Add(-2*time.Hour), vector)
+	interacted := newRecommendationSemanticPost(t, db, validAuthor, "semantic-interacted", now.Add(-3*time.Hour), vector)
+	notInterested := newRecommendationSemanticPost(t, db, validAuthor, "semantic-not-interested", now.Add(-4*time.Hour), vector)
+	served := newRecommendationSemanticPost(t, db, validAuthor, "semantic-served", now.Add(-5*time.Hour), vector)
+	deleted := newRecommendationSemanticPost(t, db, deletedAuthor, "semantic-deleted-author", now.Add(-6*time.Hour), vector)
+	wrongVersion := newRecommendationCandidateIntegrationPost(t, db, validAuthor, "semantic-wrong-version", now.Add(-7*time.Hour))
 	if err := db.Create(&models.PostEmbedding{
 		PostID: wrongVersion.ID, Version: "old-embedding-version", Model: "test", Dimensions: 2,
 		Embedding: pgvector.NewVector(vector), ContentHash: "semantic-wrong-version",
@@ -171,10 +170,10 @@ func TestSemanticRecallUnderfillBackfillsNearestNeighborsWithoutDuplicatesIntegr
 		now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 		cutoff := now.AddDate(0, 0, -30)
 		postIDs := make([]uint, 0, 5)
-		recent := newRecommendationSemanticArticle(t, db, author, "semantic-only-recent", cutoff.Add(time.Hour), []float32{0.7, 0.71414286})
+		recent := newRecommendationSemanticPost(t, db, author, "semantic-only-recent", cutoff.Add(time.Hour), []float32{0.7, 0.71414286})
 		postIDs = append(postIDs, recent.ID)
 		for index, vector := range [][]float32{{0.99, 0.14106782}, {0.95, 0.3122499}, {0.9, 0.4358899}, {0.8, 0.6}} {
-			article := newRecommendationSemanticArticle(t, db, author, "semantic-underfill-old-"+string(rune('a'+index)), cutoff.Add(-time.Duration(index+1)*24*time.Hour), vector)
+			article := newRecommendationSemanticPost(t, db, author, "semantic-underfill-old-"+string(rune('a'+index)), cutoff.Add(-time.Duration(index+1)*24*time.Hour), vector)
 			postIDs = append(postIDs, article.ID)
 		}
 		userIDs := []uint{viewer.ID, author.ID}
@@ -203,7 +202,7 @@ func TestSemanticRecallUnderfillBackfillsNearestNeighborsWithoutDuplicatesIntegr
 		now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 		postIDs := make([]uint, 0, 4)
 		for index, vector := range [][]float32{{0.99, 0.14106782}, {0.95, 0.3122499}, {0.9, 0.4358899}, {0.8, 0.6}} {
-			article := newRecommendationSemanticArticle(t, db, author, "semantic-recent-only-"+string(rune('a'+index)), now.Add(-time.Duration(index+1)*time.Hour), vector)
+			article := newRecommendationSemanticPost(t, db, author, "semantic-recent-only-"+string(rune('a'+index)), now.Add(-time.Duration(index+1)*time.Hour), vector)
 			postIDs = append(postIDs, article.ID)
 		}
 		userIDs := []uint{viewer.ID, author.ID}
@@ -234,9 +233,9 @@ func assertUniqueRecommendationPostIDs(t *testing.T, candidates []embeddingCandi
 	}
 }
 
-func newRecommendationTrendingArticle(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, likes, replies int64) models.Post {
+func newRecommendationTrendingPost(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, likes, replies int64) models.Post {
 	t.Helper()
-	article := newRecommendationCandidateIntegrationArticle(t, db, author, title, publishedAt)
+	article := newRecommendationCandidateIntegrationPost(t, db, author, title, publishedAt)
 	if err := db.Model(&models.Post{}).Where("id = ?", article.ID).Updates(map[string]interface{}{
 		"like_count": likes, "reply_count": replies,
 	}).Error; err != nil {
@@ -255,10 +254,10 @@ func TestRecommendationTrendingRecallUsesAgeDecayAndPositiveEngagementIntegratio
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "trending-order-viewer")
 	author := newRecommendationCandidateIntegrationUser(t, db, "trending-order-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	oldLifetimeWinner := newRecommendationTrendingArticle(t, db, author, "trending-old-lifetime-winner", now.Add(-8*24*time.Hour), 100000, 0)
-	olderStrong := newRecommendationTrendingArticle(t, db, author, "trending-older-strong", now.Add(-48*time.Hour), 100, 0)
-	newerWeak := newRecommendationTrendingArticle(t, db, author, "trending-newer-weak", now.Add(-time.Hour), 10, 0)
-	zeroEngagement := newRecommendationTrendingArticle(t, db, author, "trending-zero-engagement", now.Add(-2*time.Hour), 0, 0)
+	oldLifetimeWinner := newRecommendationTrendingPost(t, db, author, "trending-old-lifetime-winner", now.Add(-8*24*time.Hour), 100000, 0)
+	olderStrong := newRecommendationTrendingPost(t, db, author, "trending-older-strong", now.Add(-48*time.Hour), 100, 0)
+	newerWeak := newRecommendationTrendingPost(t, db, author, "trending-newer-weak", now.Add(-time.Hour), 10, 0)
+	zeroEngagement := newRecommendationTrendingPost(t, db, author, "trending-zero-engagement", now.Add(-2*time.Hour), 0, 0)
 	postIDs := []uint{oldLifetimeWinner.ID, olderStrong.ID, newerWeak.ID, zeroEngagement.ID}
 	userIDs := []uint{viewer.ID, author.ID}
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
@@ -299,8 +298,8 @@ func TestRecommendationTrendingRecallUsesPublishedAtAndIDTieBreakIntegration(t *
 	author := newRecommendationCandidateIntegrationUser(t, db, "trending-tie-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	publishedAt := now.Add(-time.Hour)
-	first := newRecommendationTrendingArticle(t, db, author, "trending-tie-first", publishedAt, 20, 4)
-	second := newRecommendationTrendingArticle(t, db, author, "trending-tie-second", publishedAt, 20, 4)
+	first := newRecommendationTrendingPost(t, db, author, "trending-tie-first", publishedAt, 20, 4)
+	second := newRecommendationTrendingPost(t, db, author, "trending-tie-second", publishedAt, 20, 4)
 	postIDs := []uint{first.ID, second.ID}
 	userIDs := []uint{viewer.ID, author.ID}
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
@@ -321,13 +320,13 @@ func TestRecommendationTrendingRecallPreservesEligibilityIntegration(t *testing.
 	validAuthor := newRecommendationCandidateIntegrationUser(t, db, "trending-eligibility-valid-author")
 	deletedAuthor := newRecommendationCandidateIntegrationUser(t, db, "trending-eligibility-deleted-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	valid := newRecommendationTrendingArticle(t, db, validAuthor, "trending-valid", now.Add(-time.Hour), 5, 1)
-	self := newRecommendationTrendingArticle(t, db, viewer, "trending-self", now.Add(-2*time.Hour), 50, 1)
-	notInterested := newRecommendationTrendingArticle(t, db, validAuthor, "trending-not-interested", now.Add(-3*time.Hour), 50, 1)
-	interacted := newRecommendationTrendingArticle(t, db, validAuthor, "trending-interacted", now.Add(-4*time.Hour), 50, 1)
-	hardServed := newRecommendationTrendingArticle(t, db, validAuthor, "trending-hard-served", now.Add(-5*time.Hour), 50, 1)
-	deleted := newRecommendationTrendingArticle(t, db, deletedAuthor, "trending-deleted-author", now.Add(-6*time.Hour), 50, 1)
-	nonPublic := newRecommendationTrendingArticle(t, db, validAuthor, "trending-non-public", now.Add(-7*time.Hour), 50, 1)
+	valid := newRecommendationTrendingPost(t, db, validAuthor, "trending-valid", now.Add(-time.Hour), 5, 1)
+	self := newRecommendationTrendingPost(t, db, viewer, "trending-self", now.Add(-2*time.Hour), 50, 1)
+	notInterested := newRecommendationTrendingPost(t, db, validAuthor, "trending-not-interested", now.Add(-3*time.Hour), 50, 1)
+	interacted := newRecommendationTrendingPost(t, db, validAuthor, "trending-interacted", now.Add(-4*time.Hour), 50, 1)
+	hardServed := newRecommendationTrendingPost(t, db, validAuthor, "trending-hard-served", now.Add(-5*time.Hour), 50, 1)
+	deleted := newRecommendationTrendingPost(t, db, deletedAuthor, "trending-deleted-author", now.Add(-6*time.Hour), 50, 1)
+	nonPublic := newRecommendationTrendingPost(t, db, validAuthor, "trending-non-public", now.Add(-7*time.Hour), 50, 1)
 	postIDs := []uint{valid.ID, self.ID, notInterested.ID, interacted.ID, hardServed.ID, deleted.ID, nonPublic.ID}
 	userIDs := []uint{viewer.ID, validAuthor.ID, deletedAuthor.ID}
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
@@ -341,7 +340,7 @@ func TestRecommendationTrendingRecallPreservesEligibilityIntegration(t *testing.
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", nonPublic.ID).Update("expired_at", now.Add(-time.Hour)).Error; err != nil {
+	if err := db.Model(&models.Post{}).Where("id = ?", nonPublic.ID).Update("visibility", "private").Error; err != nil {
 		t.Fatal(err)
 	}
 

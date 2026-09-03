@@ -71,7 +71,7 @@ func newRecommendationProfileIntegrationUser(t *testing.T, db *gorm.DB, label st
 	return user
 }
 
-func newRecommendationProfileIntegrationArticle(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Post {
+func newRecommendationProfileIntegrationPost(t *testing.T, db *gorm.DB, authorID uint, title string, publishedAt time.Time) models.Post {
 	t.Helper()
 	article := models.Post{
 		Model: gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt}, AuthorID: authorID,
@@ -85,14 +85,8 @@ func newRecommendationProfileIntegrationArticle(t *testing.T, db *gorm.DB, autho
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.UserPostRecoState{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
-		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 	})
-	if err := db.Create(&models.PostArticle{
-		PostID: article.ID, Title: title, Preview: title + " preview", PublicationState: "published", PublishedAt: &publishedAt,
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
 	return article
 }
 
@@ -105,7 +99,6 @@ func cleanupRecommendationProfileIntegrationData(db *gorm.DB, postIDs, userIDs [
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.UserPostRecoState{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
-		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	}
 	if len(userIDs) > 0 {
@@ -148,8 +141,8 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	user := newRecommendationProfileIntegrationUser(t, db, "materializer-user")
 	author := newRecommendationProfileIntegrationUser(t, db, "materializer-author")
-	positiveArticle := newRecommendationProfileIntegrationArticle(t, db, author.ID, "positive", now.Add(-2*time.Hour))
-	negativeArticle := newRecommendationProfileIntegrationArticle(t, db, author.ID, "negative", now.Add(-time.Hour))
+	positiveArticle := newRecommendationProfileIntegrationPost(t, db, author.ID, "positive", now.Add(-2*time.Hour))
+	negativeArticle := newRecommendationProfileIntegrationPost(t, db, author.ID, "negative", now.Add(-time.Hour))
 	postIDs := []uint{positiveArticle.ID, negativeArticle.ID}
 	userIDs := []uint{user.ID, author.ID}
 	t.Cleanup(func() { cleanupRecommendationProfileIntegrationData(db, postIDs, userIDs) })
@@ -332,7 +325,7 @@ func newPostEmbeddingFanoutFixture(t *testing.T, db *gorm.DB, label string) (mod
 	t.Helper()
 	user := newRecommendationProfileIntegrationUser(t, db, "embedding-"+label+"-user")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	article := newRecommendationProfileIntegrationArticle(t, db, user.ID, "embedding-"+label, now)
+	article := newRecommendationProfileIntegrationPost(t, db, user.ID, "embedding-"+label, now)
 	t.Cleanup(func() { cleanupRecommendationProfileIntegrationData(db, []uint{article.ID}, []uint{user.ID}) })
 	return user, article
 }
@@ -503,7 +496,7 @@ func TestPostEmbeddingUpToDateDoesNotInvalidateProfileIntegration(t *testing.T) 
 	user, article := newPostEmbeddingFanoutFixture(t, db, "up-to-date")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	version := config.ActiveEmbeddingVersion()
-	hash := embeddings.PostEmbeddingContentHash("up-to-date", "up-to-date preview", article.Content)
+	hash := embeddings.PostEmbeddingContentHash(article.Content)
 	if err := db.Create(&models.PostEmbedding{
 		PostID: article.ID, Version: version, Model: "existing-model", Dimensions: 2,
 		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: hash, CreatedAt: now, UpdatedAt: now,

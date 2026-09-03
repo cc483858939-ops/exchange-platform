@@ -41,26 +41,10 @@ type postResponse struct {
 	ReplyToPost    *postReferenceResponse `json:"reply_to_post"`
 	QuotePost      *postReferenceResponse `json:"quote_post"`
 	Visibility     string                 `json:"visibility"`
-	Article        *postArticleResponse   `json:"article"`
 	LikeCount      int64                  `json:"like_count"`
 	ReplyCount     int64                  `json:"reply_count"`
 	ViewCount      int64                  `json:"view_count"`
 	Deleted        bool                   `json:"deleted"`
-}
-
-type postArticleResponse struct {
-	Title            string     `json:"title"`
-	Preview          string     `json:"preview"`
-	CoverImageURL    string     `json:"cover_image_url"`
-	PublicationState string     `json:"publication_state"`
-	PublishedAt      *time.Time `json:"published_at"`
-	ExpiredAt        *time.Time `json:"expired_at"`
-}
-
-type postReferenceArticleResponse struct {
-	Title         string `json:"title"`
-	Preview       string `json:"preview"`
-	CoverImageURL string `json:"cover_image_url"`
 }
 
 type postReferenceResponse struct {
@@ -69,7 +53,6 @@ type postReferenceResponse struct {
 	Author      *publicAuthorResponse         `json:"author,omitempty"`
 	Content     string                        `json:"content,omitempty"`
 	PublishedAt *time.Time                    `json:"published_at,omitempty"`
-	Article     *postReferenceArticleResponse `json:"article,omitempty"`
 }
 
 func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
@@ -83,15 +66,14 @@ func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("active post reference is incomplete")
 	}
 	return json.Marshal(struct {
-		ID          uint                          `json:"id"`
-		Author      publicAuthorResponse          `json:"author"`
-		Content     string                        `json:"content"`
-		PublishedAt time.Time                     `json:"published_at"`
-		Article     *postReferenceArticleResponse `json:"article"`
-		Deleted     bool                          `json:"deleted"`
+		ID          uint                 `json:"id"`
+		Author      publicAuthorResponse `json:"author"`
+		Content     string               `json:"content"`
+		PublishedAt time.Time            `json:"published_at"`
+		Deleted     bool                 `json:"deleted"`
 	}{
 		ID: reference.ID, Author: *reference.Author, Content: reference.Content,
-		PublishedAt: reference.PublishedAt.UTC(), Article: reference.Article, Deleted: false,
+		PublishedAt: reference.PublishedAt.UTC(), Deleted: false,
 	})
 }
 
@@ -125,39 +107,8 @@ func newPostResponse(post models.Post) (postResponse, error) {
 	}, nil
 }
 
-func postArticleResponseFromModel(article *models.PostArticle) *postArticleResponse {
-	if article == nil {
-		return nil
-	}
-	return &postArticleResponse{
-		Title: article.Title, Preview: article.Preview, CoverImageURL: article.CoverImageURL,
-		PublicationState: article.PublicationState, PublishedAt: article.PublishedAt,
-		ExpiredAt: article.ExpiredAt,
-	}
-}
-
-func postReferenceArticleFromModel(article *models.PostArticle) *postReferenceArticleResponse {
-	if article == nil {
-		return nil
-	}
-	return &postReferenceArticleResponse{
-		Title: article.Title, Preview: article.Preview, CoverImageURL: article.CoverImageURL,
-	}
-}
-
-func postResponseFromModel(post models.Post, article *models.PostArticle) (postResponse, error) {
-	response, err := newPostResponse(post)
-	if err != nil {
-		return postResponse{}, err
-	}
-	if article != nil {
-		response.Article = postArticleResponseFromModel(article)
-		if article.PublishedAt != nil && !article.PublishedAt.IsZero() {
-			publishedAt := article.PublishedAt.UTC()
-			response.PublishedAt = &publishedAt
-		}
-	}
-	return response, nil
+func postResponseFromModel(post models.Post) (postResponse, error) {
+	return newPostResponse(post)
 }
 
 func newPostResponses(posts []models.Post) ([]postResponse, error) {
@@ -268,22 +219,17 @@ func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
 	if err := preloadPostAuthor(query).Find(&posts).Error; err != nil {
 		return nil, err
 	}
-	// Keep extension hydration on the same transaction/connection as the Post
-	// query. This matters for read-only repeatable-read pages and for newly
-	// committed Post + PostArticle pairs.
-	articleDB := query.Session(&gorm.Session{NewDB: true})
-	articles, err := loadPostArticlesFromDB(articleDB, posts)
-	if err != nil {
-		return nil, err
-	}
+	// Keep reference hydration on the same transaction/connection as the Post
+	// query when the caller provides one.
+	referenceDB := query.Session(&gorm.Session{NewDB: true})
 	responses := make([]postResponse, 0, len(posts))
 	referenceNow := time.Now().UTC()
 	for _, post := range posts {
-		response, err := postResponseFromModel(post, articles[post.ID])
+		response, err := postResponseFromModel(post)
 		if err != nil {
 			return nil, err
 		}
-		if err := hydratePostResponseReferencesFromDB(articleDB, &response, referenceNow); err != nil {
+		if err := hydratePostResponseReferencesFromDB(referenceDB, &response, referenceNow); err != nil {
 			return nil, err
 		}
 		responses = append(responses, response)

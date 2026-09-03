@@ -79,9 +79,6 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
 	}
-	if err := applyPostArticleConstraints(tx); err != nil {
-		t.Fatalf("apply PostArticle constraints: %v", err)
-	}
 	if err := applyPostEmbeddingConstraints(tx); err != nil {
 		t.Fatalf("apply PostEmbedding constraints: %v", err)
 	}

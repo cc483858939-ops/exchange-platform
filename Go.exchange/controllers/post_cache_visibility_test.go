@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/consts"
 	"Go.exchange/global"
 
 	"gorm.io/gorm"
@@ -14,24 +13,20 @@ import (
 func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 	now := time.Now().UTC()
 	past := now.Add(-time.Minute)
-	future := now.Add(time.Minute)
-	expired := now.Add(-time.Minute)
 	cases := []struct {
 		name     string
 		response postResponse
 	}{
 		{
-			name: "expired",
+			name: "deleted",
 			response: postResponse{
-				ID: 42, PublishedAt: &past,
-				Article: &postArticleResponse{PublicationState: consts.PostPublicationStatePublished, PublishedAt: &past, ExpiredAt: &expired},
+				ID: 42, PublishedAt: &past, Visibility: "public", Deleted: true,
 			},
 		},
 		{
-			name: "future",
+			name: "private",
 			response: postResponse{
-				ID: 42, PublishedAt: &future,
-				Article: &postArticleResponse{PublicationState: consts.PostPublicationStatePublished, PublishedAt: &future},
+				ID: 42, PublishedAt: &past, Visibility: "private",
 			},
 		},
 		{
@@ -41,10 +36,9 @@ func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 			},
 		},
 		{
-			name: "unpublished",
+			name: "public missing timestamp",
 			response: postResponse{
-				ID: 42, PublishedAt: &past,
-				Article: &postArticleResponse{PublicationState: "draft", PublishedAt: &past},
+				ID: 42, Visibility: "public",
 			},
 		},
 	}

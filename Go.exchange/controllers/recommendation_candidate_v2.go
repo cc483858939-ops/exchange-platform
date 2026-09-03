@@ -33,7 +33,6 @@ type recommendationCandidateSet struct {
 type hydratedRecommendationCandidate struct {
 	Candidate           embeddingCandidate
 	Post                models.Post
-	PostArticle         *models.PostArticle
 	Embedding           []float32
 	Breakdown           recommendationScoreBreakdown
 	ExplorationSemantic float64
@@ -92,7 +91,6 @@ func recommendationEligibilityQuery(query *gorm.DB, userID uint, served map[uint
 	negative = negative.Where("NOT EXISTS (?)", laterLike).Where("NOT EXISTS (?)", laterReply)
 	query = publicPostScope(query, now).
 		Where("posts.reply_to_post_id IS NULL").
-		Joins("LEFT JOIN post_articles AS pa_recommendation ON pa_recommendation.post_id = posts.id").
 		Where(
 			"EXISTS (SELECT 1 FROM users AS recommendation_authors "+
 				"WHERE recommendation_authors.id = posts.author_id "+
@@ -222,7 +220,7 @@ func loadRecommendationSemanticPool(userID uint, profile userInterestProfile, se
 	)
 	query = applyLegacyProfileInteractionExclusion(query, profile)
 	if comparison != "" {
-		query = query.Where(effectivePublishedAtSQL("posts", "pa_recommendation")+" "+comparison+" ?", cutoff)
+		query = query.Where("posts.created_at "+comparison+" ?", cutoff)
 	}
 	if ids := postIDList(excluded); len(ids) > 0 {
 		query = query.Where("posts.id NOT IN ?", ids)
@@ -256,7 +254,7 @@ func loadRecommendationFollowingCandidates(userID uint, profile userInterestProf
 	)
 	query = applyLegacyProfileInteractionExclusion(query, profile)
 	var ids []uint
-	if err := query.Order(effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC").Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
+	if err := query.Order("posts.created_at DESC, posts.id DESC").Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
 	}
 	result := make([]embeddingCandidate, 0, len(ids))
@@ -301,7 +299,7 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
-	recent, err := loadRecommendationSourceCandidates(userID, profile, served, now, cfg, softOnly, effectivePublishedAtSQL("posts", "pa_recommendation")+" DESC, posts.id DESC", caps.Recent, "recent")
+	recent, err := loadRecommendationSourceCandidates(userID, profile, served, now, cfg, softOnly, "posts.created_at DESC, posts.id DESC", caps.Recent, "recent")
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
@@ -338,10 +336,9 @@ func loadRecommendationTrendingCandidates(userID uint, profile userInterestProfi
 	query := recommendationEligibilityQuery(
 		global.Db.Table("posts").Select("posts.id"),
 		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
-	).Where(effectivePublishedAtSQL("posts", "pa_recommendation")+" >= ?", cutoff).
+	).Where("posts.created_at >= ?", cutoff).
 		Where("posts.like_count > 0 OR posts.reply_count > 0")
 	query = applyLegacyProfileInteractionExclusion(query, profile)
-	effectiveTime := effectivePublishedAtSQL("posts", "pa_recommendation")
 	order := gorm.Expr(`
 (
     LN(1 + GREATEST(posts.like_count, 0))
@@ -350,11 +347,11 @@ func loadRecommendationTrendingCandidates(userID uint, profile userInterestProfi
 *
 EXP(
     -LN(2)
-    * GREATEST(EXTRACT(EPOCH FROM (? - `+effectiveTime+`)) / 3600.0, 0)
+    * GREATEST(EXTRACT(EPOCH FROM (? - posts.created_at)) / 3600.0, 0)
     / ?
 )
 DESC,
-`+effectiveTime+` DESC,
+posts.created_at DESC,
 posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 	var ids []uint
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
@@ -487,10 +484,6 @@ func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.T
 		return nil, err
 	}
 	byID := make(map[uint]models.Post, len(validPosts))
-	postArticles, err := loadPostArticles(validPosts)
-	if err != nil {
-		return nil, err
-	}
 	for _, post := range validPosts {
 		byID[post.ID] = post
 	}
@@ -500,7 +493,7 @@ func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.T
 		if !ok {
 			continue
 		}
-		result = append(result, hydratedRecommendationCandidate{Candidate: candidate, Post: post, PostArticle: postArticles[post.ID], Embedding: embeddings[candidate.PostID]})
+		result = append(result, hydratedRecommendationCandidate{Candidate: candidate, Post: post, Embedding: embeddings[candidate.PostID]})
 	}
 	return result, nil
 }

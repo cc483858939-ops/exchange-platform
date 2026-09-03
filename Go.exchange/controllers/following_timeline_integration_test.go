@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/consts"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -79,7 +78,7 @@ func findFollowingTimelineItem(items []followingTimelineItem, postID uint) *foll
 
 func TestFollowingTimelineIntegration(t *testing.T) {
 	db := openFollowingTimelineIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostArticle{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_reposts_user_post ON post_reposts (user_id, post_id)").Error; err != nil {
@@ -113,7 +112,6 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		db.Unscoped().Model(&models.Post{}).Where("author_id IN ?", userIDs).Pluck("id", &postIDs)
 		if len(postIDs) > 0 {
 			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostRepost{})
-			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostArticle{})
 			db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 		}
 		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
@@ -137,43 +135,30 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	}
 
 	baseTime := time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)
-	expiredAt := baseTime.Add(-time.Hour)
-	createArticle := func(authorID uint, title, content string, createdAt time.Time, expiredAt *time.Time) models.Post {
-		publishedAt := createdAt
-		article := models.Post{
+	createPost := func(authorID uint, content string, createdAt time.Time) models.Post {
+		post := models.Post{
 			AuthorID: authorID, Content: content, Visibility: "public",
 			Model: gorm.Model{CreatedAt: createdAt, UpdatedAt: createdAt},
 		}
-		if err := db.Create(&article).Error; err != nil {
+		if err := db.Create(&post).Error; err != nil {
 			t.Fatal(err)
 		}
-		if title != "" {
-			if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: "preview", PublicationState: consts.PostPublicationStatePublished, PublishedAt: &publishedAt, ExpiredAt: expiredAt}).Error; err != nil {
-				t.Fatal(err)
-			}
-		}
-		return article
+		return post
 	}
 
-	newerContentOnly := createArticle(followedA.ID, "", "Canonical following body", baseTime.Add(5*time.Minute), nil)
-	bTie := createArticle(followedB.ID, "B tie", "B tie body", baseTime.Add(4*time.Minute), nil)
-	aTie := createArticle(followedA.ID, "A tie", "A tie body", baseTime.Add(4*time.Minute), nil)
-	bOlder := createArticle(followedB.ID, "B older", "B older body", baseTime.Add(3*time.Minute), nil)
-	aOlder := createArticle(followedA.ID, "A older", "A older body", baseTime.Add(2*time.Minute), nil)
-	expired := createArticle(followedA.ID, "expired", "expired body", baseTime.Add(10*time.Minute), &expiredAt)
-	futurePublishedAt := time.Now().UTC().Add(24 * time.Hour)
-	future := createArticle(followedA.ID, "future", "future body", baseTime.Add(16*time.Minute), nil)
-	if err := db.Model(&models.PostArticle{}).Where("post_id = ?", future.ID).Update("published_at", futurePublishedAt).Error; err != nil {
-		t.Fatal(err)
-	}
-	deleted := createArticle(followedA.ID, "deleted", "deleted body", baseTime.Add(11*time.Minute), nil)
+	newerContentOnly := createPost(followedA.ID, "Canonical following body", baseTime.Add(5*time.Minute))
+	bTie := createPost(followedB.ID, "B tie body", baseTime.Add(4*time.Minute))
+	aTie := createPost(followedA.ID, "A tie body", baseTime.Add(4*time.Minute))
+	bOlder := createPost(followedB.ID, "B older body", baseTime.Add(3*time.Minute))
+	aOlder := createPost(followedA.ID, "A older body", baseTime.Add(2*time.Minute))
+	deleted := createPost(followedA.ID, "deleted body", baseTime.Add(11*time.Minute))
 	if err := db.Delete(&deleted).Error; err != nil {
 		t.Fatal(err)
 	}
-	softFollowedPost := createArticle(softFollowed.ID, "soft followed", "soft followed body", baseTime.Add(12*time.Minute), nil)
-	unfollowedPost := createArticle(unfollowed.ID, "unfollowed", "unfollowed body", baseTime.Add(13*time.Minute), nil)
-	viewerPost := createArticle(viewer.ID, "viewer own", "viewer own body", baseTime.Add(14*time.Minute), nil)
-	noFollowsPost := createArticle(noFollowsViewer.ID, "no follows own", "no follows own body", baseTime.Add(15*time.Minute), nil)
+	softFollowedPost := createPost(softFollowed.ID, "soft followed body", baseTime.Add(12*time.Minute))
+	unfollowedPost := createPost(unfollowed.ID, "unfollowed body", baseTime.Add(13*time.Minute))
+	viewerPost := createPost(viewer.ID, "viewer own body", baseTime.Add(14*time.Minute))
+	noFollowsPost := createPost(noFollowsViewer.ID, "no follows own body", baseTime.Add(15*time.Minute))
 
 	page1, status, body := requestFollowingTimeline(t, viewer.ID, "limit=2")
 	if status != http.StatusOK || len(page1.Items) != 2 || page1.NextCursor == nil {
@@ -183,7 +168,7 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		t.Fatalf("page1 order=%v", followingTimelinePostIDs(page1.Items))
 	}
 	first := page1.Items[0].Post
-	if first.Article != nil || first.Content != "Canonical following body" || first.LikeCount != 0 || first.ReplyCount != 0 || first.Author.ID != followedA.ID || first.Author.Username != followedA.Username || first.Author.DisplayName != "Followed A" || first.Author.AvatarURL != "a.jpg" {
+	if first.Content != "Canonical following body" || first.LikeCount != 0 || first.ReplyCount != 0 || first.Author.ID != followedA.ID || first.Author.Username != followedA.Username || first.Author.DisplayName != "Followed A" || first.Author.AvatarURL != "a.jpg" {
 		t.Fatalf("content-only response=%#v", first)
 	}
 
@@ -210,9 +195,9 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 			t.Fatalf("all ids=%v expected=%v", allIDs, expectedIDs)
 		}
 	}
-	for _, excluded := range []uint{expired.ID, future.ID, deleted.ID, softFollowedPost.ID, unfollowedPost.ID, viewerPost.ID} {
+	for _, excluded := range []uint{deleted.ID, softFollowedPost.ID, unfollowedPost.ID, viewerPost.ID} {
 		if containsFollowingPostID(page1.Items, excluded) || containsFollowingPostID(page2.Items, excluded) || containsFollowingPostID(page3.Items, excluded) {
-			t.Fatalf("excluded article %d appeared", excluded)
+			t.Fatalf("excluded post %d appeared", excluded)
 		}
 	}
 

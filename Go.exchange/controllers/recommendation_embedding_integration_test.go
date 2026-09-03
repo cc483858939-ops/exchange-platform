@@ -27,7 +27,7 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
@@ -47,20 +47,17 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	makeArticle := func(authorID uint, title string) models.Post {
-		article := models.Post{AuthorID: authorID, Content: title + " body", Visibility: "public", Model: gorm.Model{CreatedAt: now, UpdatedAt: now}}
-		if err := db.Create(&article).Error; err != nil {
+	makePost := func(authorID uint, title string) models.Post {
+		post := models.Post{AuthorID: authorID, Content: title + " body", Visibility: "public", Model: gorm.Model{CreatedAt: now, UpdatedAt: now}}
+		if err := db.Create(&post).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Create(&models.PostArticle{PostID: article.ID, Title: title, Preview: title, PublicationState: "published", PublishedAt: &now}).Error; err != nil {
-			t.Fatal(err)
-		}
-		return article
+		return post
 	}
-	nearest := makeArticle(author.ID, "nearest")
-	orthogonal := makeArticle(author.ID, "orthogonal")
-	interacted := makeArticle(author.ID, "interacted")
-	selfArticle := makeArticle(viewer.ID, "self")
+	nearest := makePost(author.ID, "nearest")
+	orthogonal := makePost(author.ID, "orthogonal")
+	interacted := makePost(author.ID, "interacted")
+	selfArticle := makePost(viewer.ID, "self")
 	for _, item := range []struct {
 		article models.Post
 		vector  []float32
@@ -121,7 +118,7 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostArticle{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
