@@ -16,7 +16,7 @@
         @click.capture="handleNavigationClick($event, item)"
       >
         <span class="mobile-bottom-nav__icon">
-          <AppIcon :name="item.icon" :size="24" :filled="isItemActive(item)" />
+          <AppIcon :name="item.icon" :size="27" :filled="isItemActive(item)" />
           <span
             v-if="item.routeName === 'Notifications' && notificationBadge"
             class="mobile-bottom-nav__badge"
@@ -244,17 +244,20 @@ const notificationBadge = computed(() => props.notificationBadge);
   .mobile-bottom-nav__icon {
     position: relative;
     display: inline-grid;
-    min-width: 24px;
-    min-height: 24px;
+    width: 27px;
+    height: 27px;
     place-items: center;
   }
 
   .mobile-bottom-nav__label {
-    min-width: 0;
-    max-width: 100%;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
     overflow: hidden;
-    padding-inline: 2px;
-    text-overflow: ellipsis;
+    border: 0;
+    clip: rect(0, 0, 0, 0);
     white-space: nowrap;
   }
 

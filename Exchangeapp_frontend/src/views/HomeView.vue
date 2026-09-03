@@ -189,7 +189,7 @@
       aria-label="Post"
       title="Post"
     >
-      <AppIcon name="plus" :size="24" />
+      <AppIcon name="compose" :size="27" />
     </RouterLink>
   </main>
 </template>
