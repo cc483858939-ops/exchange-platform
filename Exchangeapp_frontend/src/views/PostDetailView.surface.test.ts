@@ -125,14 +125,7 @@ const canonicalPost = (overrides: Partial<Post> = {}): Post => ({
   reply_to_post: null,
   quote_post: null,
   visibility: 'public',
-  article: {
-    title: 'A thoughtful post',
-    preview: 'Warm post preview',
-    cover_image_url: '',
-    publication_state: 'published',
-    published_at: '2026-08-27T13:42:00',
-    expired_at: '2026-09-01T00:00:00',
-  },
+  media: [],
   like_count: 11,
   reply_count: 4,
   view_count: 1234,
@@ -148,9 +141,8 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
     display_name: 'Warm Author',
     avatar_url: '/warm-author.png',
   },
-  title: 'Warm post',
-  excerpt: 'Warm post preview',
-  coverImageUrl: '',
+  content: 'Warm post preview',
+  media: [],
   createdAt: '2026-08-27T13:42:00',
   likeCount: 10,
   replyCount: 3,
@@ -248,7 +240,7 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.find('.detail-header__back').text()).toBe('');
     expect(wrapper.findAll('h1')).toHaveLength(1);
     expect(wrapper.find('.post-detail').exists()).toBe(true);
-    expect(wrapper.find('.post-detail__headline').element.tagName).toBe('P');
+    expect(wrapper.find('.post-detail__body').text()).toContain('Full post body');
     expect(wrapper.find('.test-author').attributes('data-variant')).toBe('post');
     expect(wrapper.find('.test-author').attributes('data-created-at')).toBeUndefined();
     expect(wrapper.find('.post-detail__views').text())
@@ -263,6 +255,34 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.text()).not.toContain('Expired');
     expect(wrapper.text()).not.toContain('Expires');
     expect(wrapper.text()).not.toContain('Keep it useful.');
+  });
+
+  it('renders primary and active-reference media with the shared grid', async () => {
+    const reference = {
+      id: 9,
+      deleted: false as const,
+      author: {
+        id: 8,
+        username: 'referenced',
+        display_name: 'Referenced Author',
+        avatar_url: '',
+      },
+      content: 'Referenced post body',
+      published_at: '2026-08-17T00:00:00.000Z',
+      media: [{ type: 'image' as const, url: '/reference.png', position: 0 }],
+    };
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({
+      media: [{ type: 'image', url: '/primary.png', position: 0 }],
+      quote_post_id: 9,
+      quote_post: reference,
+    }));
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    expect(wrapper.findAll('.post-media-grid')).toHaveLength(2);
+    expect(wrapper.find('.post-detail__body img').attributes('src')).toBe('/primary.png');
+    expect(wrapper.find('.post-detail__reference img').attributes('src')).toBe('/reference.png');
   });
 
   it('linkifies the authoritative post body without changing ordinary text', async () => {
@@ -359,7 +379,7 @@ describe('PostDetailView post-first surface', () => {
       },
       content: 'Referenced post body',
       published_at: '2026-08-17T00:00:00.000Z',
-      article: null,
+      media: [],
     };
     mocks.getPostById.mockResolvedValueOnce(canonicalPost({
       quote_post_id: 9,

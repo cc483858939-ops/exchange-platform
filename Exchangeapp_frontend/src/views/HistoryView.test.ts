@@ -47,7 +47,7 @@ vi.mock('vue-router', () => ({
   useRouter: () => mocks.router,
 }));
 
-const post = (id: number, title = `Post ${id}`): Post => ({
+const post = (id: number, content = `Post ${id}`): Post => ({
   id,
   created_at: '2026-08-17T00:00:00.000Z',
   updated_at: '2026-08-17T00:00:00.000Z',
@@ -58,21 +58,14 @@ const post = (id: number, title = `Post ${id}`): Post => ({
     display_name: 'Author',
     avatar_url: '',
   },
-  content: `Body ${id}`,
+  content,
   conversation_id: id,
   reply_to_post_id: null,
   quote_post_id: null,
   reply_to_post: null,
   quote_post: null,
   visibility: 'public',
-  article: {
-    title,
-    preview: `Preview ${id}`,
-    cover_image_url: '',
-    publication_state: 'published',
-    published_at: '2026-08-17T00:00:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 3,
   reply_count: 1,
   view_count: 8,
@@ -98,7 +91,7 @@ const postCardStub = {
       :data-liked="String(post.liked)"
       :data-track-view="String(trackView)"
     >
-      <span>{{ post.title }}</span>
+      <span>{{ post.content }}</span>
       <button class="history-post__like" type="button" @click="$emit('toggleLike', post.id)">Unlike</button>
     </article>
   `,
@@ -156,7 +149,7 @@ describe('HistoryView', () => {
     expect(mocks.getPostLikeStates).not.toHaveBeenCalled();
   });
 
-  it('loads the current viewer once, maps articles, and opts PostCard out of feed telemetry', async () => {
+  it('loads the current viewer once, maps Posts, and opts PostCard out of feed telemetry', async () => {
     setAuth(7);
     mocks.getLikedHistory.mockResolvedValue({ items: [post(42)], next_cursor: null });
     const wrapper = mountHistory();

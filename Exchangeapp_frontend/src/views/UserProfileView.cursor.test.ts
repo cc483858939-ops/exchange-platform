@@ -107,14 +107,7 @@ const post = (id: number, authorID: number) => ({
   reply_to_post: null,
   quote_post: null,
   visibility: 'public' as const,
-  article: {
-    title: `Post ${id}`,
-    preview: `Preview ${id}`,
-    cover_image_url: '',
-    publication_state: 'published' as const,
-    published_at: '2026-08-15T00:00:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 0,
   reply_count: 0,
   view_count: 0,
@@ -267,5 +260,4 @@ describe('UserProfileView cursor pagination', () => {
     mounted.unmount();
   });
 });
-
 

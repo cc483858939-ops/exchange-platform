@@ -1,12 +1,9 @@
 import type { PublicAuthor } from './User';
 
-export interface PostArticle {
-  title: string;
-  preview: string;
-  cover_image_url: string;
-  publication_state: 'published';
-  published_at: string;
-  expired_at: string | null;
+export interface PostMedia {
+  type: 'image';
+  url: string;
+  position: number;
 }
 
 export type PostReference =
@@ -20,7 +17,7 @@ export type PostReference =
       author: PublicAuthor;
       content: string;
       published_at: string;
-      article: Pick<PostArticle, 'title' | 'preview' | 'cover_image_url'> | null;
+      media: PostMedia[];
     };
 
 export interface Post {
@@ -36,7 +33,7 @@ export interface Post {
   reply_to_post: PostReference | null;
   quote_post: PostReference | null;
   visibility: 'public';
-  article: PostArticle | null;
+  media: PostMedia[];
   like_count: number;
   reply_count: number;
   view_count: number;

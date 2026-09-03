@@ -3,7 +3,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 const HomeView = () => import('../views/HomeView.vue');
 const LiveExchangeView = () => import('../views/LiveExchangeView.vue');
 const PostDetailView = () => import('../views/PostDetailView.vue');
-const ArticleCreateView = () => import('../views/ArticleCreateView.vue');
+const PostCreateView = () => import('../views/PostCreateView.vue');
 const UserProfileView = () => import('../views/UserProfileView.vue');
 const UserConnectionsView = () => import('../views/UserConnectionsView.vue');
 const UserSearchView = () => import('../views/UserSearchView.vue');
@@ -16,7 +16,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/', name: 'Home', component: HomeView, meta: { layout: 'app' } },
   { path: '/exchange', name: 'CurrencyExchange', component: LiveExchangeView, meta: { layout: 'app' } },
 
-  { path: '/news/new', name: 'ArticleCreate', component: ArticleCreateView, meta: { layout: 'app' } },
+  { path: '/posts/new', name: 'PostCreate', component: PostCreateView, meta: { layout: 'app' } },
   { path: '/posts/:id', name: 'PostDetail', component: PostDetailView, meta: { layout: 'app' } },
 
   { path: '/users/:id', name: 'UserProfile', component: UserProfileView, meta: { layout: 'app' } },

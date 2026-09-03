@@ -82,20 +82,9 @@
     </div>
 
     <div class="post-card__content">
-      <h2 v-if="post.title.trim()" class="post-card__title">
-        <RouterLink
-          class="post-card__title-link"
-          :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
-          @click.capture="prepareDetailNavigation"
-        >{{ post.title }}</RouterLink>
-      </h2>
-      <p
-        v-if="post.excerpt"
-        class="post-card__excerpt"
-        :class="{ 'post-card__excerpt--standalone': !post.title.trim() }"
-      >
+      <p class="post-card__body">
         <LinkifiedText
-          :text="post.excerpt"
+          :text="post.content"
           :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
           @internal-activate="prepareDetailNavigation"
         />
@@ -124,28 +113,29 @@
             variant="compact"
           />
           <p class="post-card__reference-content">
-            <RouterLink
-              class="post-card__reference-link"
+            <LinkifiedText
+              :text="referenceContent"
               :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
-              @click.capture="prepareDetailNavigation"
-            >{{ referenceContent }}</RouterLink>
+              @internal-activate="prepareDetailNavigation"
+            />
           </p>
+          <RouterLink
+            v-if="referenceMedia.length > 0"
+            class="post-card__reference-media-link"
+            :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
+            @click.capture="prepareDetailNavigation"
+          >
+            <PostMediaGrid :media="referenceMedia" />
+          </RouterLink>
         </template>
       </div>
       <RouterLink
-        v-if="showCover"
-        class="post-card__cover-link"
+        v-if="post.media.length > 0"
+        class="post-card__media-link"
         :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
         @click.capture="prepareDetailNavigation"
       >
-        <figure class="post-card__cover">
-          <img
-            :src="post.coverImageUrl"
-            :alt="post.title.trim() || 'Post image'"
-            loading="lazy"
-            @error="hideCover"
-          />
-        </figure>
+        <PostMediaGrid :media="post.media" />
       </RouterLink>
     </div>
 
@@ -209,6 +199,7 @@ import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import LinkifiedText from '../content/LinkifiedText.vue';
+import PostMediaGrid from '../content/PostMediaGrid.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
@@ -247,7 +238,6 @@ const router = useRouter();
 const postViewTelemetry = getPostViewTelemetry();
 const postDetailHandoff = usePostDetailHandoffStore();
 const postCardRef = ref<HTMLElement | null>(null);
-const showCover = ref(Boolean(props.post.coverImageUrl));
 const moreButtonRef = ref<HTMLButtonElement | null>(null);
 const menuRef = ref<HTMLDivElement | null>(null);
 const menuItemRefs = ref<HTMLButtonElement[]>([]);
@@ -271,7 +261,11 @@ const referenceContent = computed(() => {
   if (!reference || reference.deleted) {
     return '';
   }
-  return reference.article?.title || reference.content || 'Post';
+  return reference.content || 'Post';
+});
+const referenceMedia = computed(() => {
+  const reference = referencePost.value;
+  return reference && !reference.deleted ? reference.media : [];
 });
 
 const handleLikeActivation = () => {
@@ -509,13 +503,6 @@ const handleDeletePost = () => {
 };
 
 watch(
-  () => props.post.coverImageUrl,
-  (coverImageUrl) => {
-    showCover.value = Boolean(coverImageUrl);
-  },
-);
-
-watch(
   [() => props.post.id, () => props.trackView],
   ([postID, trackView], [previousPostID, previousTrackView]) => {
     if (postID === previousPostID && trackView === previousTrackView) {
@@ -532,10 +519,6 @@ watch(
 );
 
 onMounted(observeCurrentPost);
-
-const hideCover = () => {
-  showCover.value = false;
-};
 
 onBeforeUnmount(() => {
   unobserveCurrentPost();
@@ -644,34 +627,27 @@ const repostLabel = computed(() => {
   color: inherit;
 }
 
-.post-card__title-link,
-.post-card__cover-link,
+.post-card__media-link,
+.post-card__reference-media-link,
 .post-card__reference-link {
   color: inherit;
   text-decoration: none;
 }
 
-.post-card__title-link:focus-visible,
-.post-card__cover-link:focus-visible,
+.post-card__media-link:focus-visible,
+.post-card__reference-media-link:focus-visible,
 .post-card__reference-link:focus-visible {
   border-radius: var(--radius-sm);
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;
 }
 
-.post-card__cover-link {
+.post-card__media-link,
+.post-card__reference-media-link {
   display: block;
 }
 
-.post-card__title {
-  margin: var(--space-2) 0 0;
-  color: var(--color-text);
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1.45;
-}
-
-.post-card__excerpt {
+.post-card__body {
   display: -webkit-box;
   max-height: calc(1.5em * 5);
   margin: var(--space-2) 0 0;
@@ -687,25 +663,12 @@ const repostLabel = computed(() => {
   line-clamp: 5;
 }
 
-.post-card__excerpt--standalone {
-  margin-top: 0;
+.post-card__media-link {
+  margin-top: var(--space-3);
 }
 
-.post-card__cover {
-  box-sizing: border-box;
-  aspect-ratio: 16 / 9;
-  margin: var(--space-3) 0 0;
-  overflow: hidden;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-
-.post-card__cover img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.post-card__reference-media-link {
+  margin-top: var(--space-2);
 }
 
 .post-card__engagement {

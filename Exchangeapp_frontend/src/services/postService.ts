@@ -1,17 +1,18 @@
 import apiClient from '../axios';
 import type { PublicAuthor } from '../types/User';
-import type { Post, PostArticle, PostPageResponse } from '../types/Post';
+import type { Post, PostPageResponse } from '../types/Post';
 import { normalizeResourceID } from './resourceId';
+
+export type CreatePostMediaPayload = {
+  type: 'image';
+  url: string;
+};
 
 export type CreatePostPayload = {
   content: string;
   reply_to_post_id?: number;
   quote_post_id?: number;
-  article?: {
-    title: string;
-    preview: string;
-    cover_image_url?: string;
-  };
+  media?: CreatePostMediaPayload[];
 };
 
 export type PostPageQuery = {
@@ -60,14 +61,14 @@ export async function createPost(payload: CreatePostPayload): Promise<Post> {
   return response.data;
 }
 
-export async function uploadArticleCover(file: File): Promise<string> {
+export async function uploadPostMedia(file: File): Promise<string> {
   const formData = new FormData();
   formData.append('image', file);
-  const response = await apiClient.post<{ cover_image_url: string }>(
-    '/uploads/article-cover',
+  const response = await apiClient.post<{ media_url: string }>(
+    '/uploads/post-media',
     formData,
   );
-  return response.data.cover_image_url;
+  return response.data.media_url;
 }
 
-export type { PostArticle, PostPageResponse };
+export type { PostPageResponse };

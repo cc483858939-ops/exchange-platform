@@ -41,7 +41,7 @@
       <router-link
         v-if="authStore.isAuthenticated"
         class="left-sidebar__link left-sidebar__link--icon left-sidebar__link--primary"
-        :to="{ name: 'ArticleCreate' }"
+        :to="{ name: 'PostCreate' }"
         aria-label="Post"
         title="Post"
       >

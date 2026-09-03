@@ -35,9 +35,8 @@ const basePost = (): FeedPost => ({
     display_name: 'Reader',
     avatar_url: '',
   },
-  title: 'Post',
-  excerpt: 'Post body',
-  coverImageUrl: '',
+  content: 'Post body',
+  media: [],
   createdAt: '2026-08-17T00:00:00.000Z',
   likeCount: 12,
   replyCount: 3,
@@ -106,7 +105,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     const post = basePost();
     const wrapper = mountPostCard(post);
     const links = wrapper.findAllComponents(RouterLinkStub);
-    const content = wrapper.find('.post-card__title-link');
+    const content = wrapper.find('.post-card__body .linkified-text__internal');
     const reply = links.find(link => link.classes().includes('post-card__reply'))!;
     const views = links.find(link => link.classes().includes('post-card__views'))!;
 
@@ -129,7 +128,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
   it('does not remember a modified-click navigation', async () => {
     const post = basePost();
     const wrapper = mountPostCard(post);
-    const content = wrapper.find('.post-card__title-link');
+    const content = wrapper.find('.post-card__body .linkified-text__internal');
 
     await content.trigger('click', { ctrlKey: true });
 
@@ -137,8 +136,8 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.emitted('postClick')).toEqual([[post]]);
   });
 
-  it('separates external excerpt links from Post Detail navigation', async () => {
-    const post = { ...basePost(), excerpt: 'Read https://example.com today' };
+  it('separates external URLs from Post Detail navigation', async () => {
+    const post = { ...basePost(), content: 'Read https://example.com today' };
     const wrapper = mountPostCard(post);
     const external = wrapper.get('a.linkified-text__external');
     const internal = wrapper.get('a.linkified-text__internal');
@@ -155,11 +154,14 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.emitted('postClick')).toEqual([[post]]);
   });
 
-  it('keeps the cover as an independent Post Detail link', async () => {
-    const post = { ...basePost(), coverImageUrl: '/cover.png' };
+  it('keeps media as an independent Post Detail link', async () => {
+    const post = {
+      ...basePost(),
+      media: [{ type: 'image' as const, url: '/media.png', position: 0 }],
+    };
     const wrapper = mountPostCard(post);
     const cover = wrapper.findAllComponents(RouterLinkStub)
-      .find(link => link.classes().includes('post-card__cover-link'));
+      .find(link => link.classes().includes('post-card__media-link'));
 
     expect(cover?.props('to')).toEqual({
       name: 'PostDetail',
@@ -269,7 +271,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       },
       content: 'Referenced post body',
       published_at: '2026-08-17T00:00:00.000Z',
-      article: null,
+      media: [],
     };
     const wrapper = mountPostCard({ ...basePost(), quotePost: activeReference });
 

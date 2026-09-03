@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia } from 'pinia';
-import { ArticleReadTracker } from '../services/articleReadTracker';
+import { PostReadTracker } from '../services/postReadTracker';
 import PostDetailView from './PostDetailView.vue';
 import { formatCompactEngagementCount } from '../utils/engagementCount';
 
@@ -125,14 +125,7 @@ const post = {
   reply_to_post: null,
   quote_post: null,
   visibility: 'public',
-  article: {
-    title: 'Tracked post',
-    preview: 'Post body',
-    cover_image_url: '',
-    publication_state: 'published',
-    published_at: '2026-08-15T00:00:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 3,
   reply_count: 0,
   view_count: 1234,
@@ -212,7 +205,7 @@ describe('PostDetailView attributed read lifecycle', () => {
   });
 
   it('renders the server View count without optimistic increment and keeps one lifecycle event', async () => {
-    const trackerStart = vi.spyOn(ArticleReadTracker.prototype, 'start');
+    const trackerStart = vi.spyOn(PostReadTracker.prototype, 'start');
 
     mounted = mountDetail();
     await flushPromises();
@@ -243,4 +236,3 @@ describe('PostDetailView attributed read lifecycle', () => {
     );
   });
 });
-

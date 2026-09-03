@@ -28,16 +28,18 @@
           </button>
         </div>
 
-        <p v-if="detailPresentation.title.trim()" class="post-detail__headline">
-          {{ detailPresentation.title }}
-        </p>
-
         <div
           ref="postBodyRef"
           class="post-detail__body"
           :class="{ 'post-detail__body--loading': detailPresentation.kind === 'warm' }"
           :aria-busy="detailPresentation.kind === 'warm' ? 'true' : undefined"
-        ><LinkifiedText :text="detailPresentation.body" /></div>
+        >
+          <LinkifiedText :text="detailPresentation.body" />
+          <PostMediaGrid
+            v-if="detailPresentation.media.length > 0"
+            :media="detailPresentation.media"
+          />
+        </div>
 
         <aside
           v-if="detailReference"
@@ -54,25 +56,15 @@
               :author="detailReferenceAuthor"
               variant="compact"
             />
-            <p class="post-detail__reference-content">{{ detailReferenceContent }}</p>
+            <p class="post-detail__reference-content">
+              <LinkifiedText :text="detailReferenceContent" />
+            </p>
+            <PostMediaGrid
+              v-if="detailReferenceMedia.length > 0"
+              :media="detailReferenceMedia"
+            />
           </template>
         </aside>
-
-        <figure v-if="detailPresentation.coverUrl" class="post-detail__cover">
-          <img
-            v-if="failedCoverUrl !== detailPresentation.coverUrl"
-            :src="detailPresentation.coverUrl"
-            :alt="detailPresentation.title.trim() || 'Post image'"
-            loading="lazy"
-            @error="handleCoverError"
-          />
-          <div
-            v-else
-            class="post-detail__cover-placeholder"
-            role="img"
-            aria-label="Post image unavailable"
-          ></div>
-        </figure>
 
         <div class="post-detail__meta">
           <span v-if="detailPostTimestamp">{{ detailPostTimestamp }}</span>
@@ -236,6 +228,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 import LinkifiedText from '../components/content/LinkifiedText.vue';
+import PostMediaGrid from '../components/content/PostMediaGrid.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
 import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -248,7 +241,7 @@ import { getPostRepostState, repostPost, undoRepostPost } from '../services/repo
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { createPostViewEventID, getPostViewTelemetry } from '../services/postViewTelemetry';
-import { ArticleReadTracker, createArticleReadGeometry } from '../services/articleReadTracker';
+import { PostReadTracker, createPostReadGeometry } from '../services/postReadTracker';
 import { useAuthStore } from '../store/auth';
 import { usePostDetailHandoffStore } from '../store/postDetailHandoff';
 import { useFeedStore } from '../store/feed';
@@ -280,7 +273,6 @@ const post = ref<Post | null>(null);
 const postLoading = ref(false);
 const postError = ref('');
 const handoffPost = ref<FeedPost | null>(null);
-const failedCoverUrl = ref('');
 const deletePending = ref(false);
 const deleteError = ref('');
 const postBodyRef = ref<HTMLElement | null>(null);
@@ -323,7 +315,7 @@ let replyIntentRetryRequested = false;
 let tracking: RecommendationTracking | null = null;
 let trackedPostID = '';
 let readEndSent = false;
-let readTracker: ArticleReadTracker | null = null;
+let readTracker: PostReadTracker | null = null;
 let readResizeObserver: ResizeObserver | null = null;
 const clampCount = (value: unknown) => {
   const count = Number(value);
@@ -338,10 +330,9 @@ const isValidPostID = (value: string) => {
 type DetailPresentation = {
   kind: 'warm' | 'post';
   author: PublicAuthor;
-  title: string;
   body: string;
+  media: Post['media'];
   createdAt: string;
-  coverUrl: string;
   likeCount: number;
   repostCount: number;
   reposted: boolean;
@@ -351,14 +342,12 @@ type DetailPresentation = {
 
 const detailPresentation = computed<DetailPresentation | null>(() => {
   if (post.value) {
-    const article = post.value.article;
     return {
       kind: 'post',
       author: post.value.author,
-      title: article?.title ?? '',
       body: post.value.content,
+      media: post.value.media,
       createdAt: post.value.published_at || post.value.created_at,
-      coverUrl: article?.cover_image_url || '',
       likeCount: likeCount.value,
       repostCount: repostCount.value,
       reposted: reposted.value,
@@ -371,10 +360,9 @@ const detailPresentation = computed<DetailPresentation | null>(() => {
     return {
       kind: 'warm',
       author: handoffPost.value.author,
-      title: handoffPost.value.title,
-      body: handoffPost.value.excerpt,
+      body: handoffPost.value.content,
+      media: handoffPost.value.media,
       createdAt: handoffPost.value.createdAt,
-      coverUrl: handoffPost.value.coverImageUrl,
       likeCount: handoffPost.value.likeCount,
       repostCount: handoffPost.value.repostCount,
       reposted: handoffPost.value.reposted,
@@ -399,13 +387,16 @@ const detailReferenceContent = computed(() => {
   if (!reference || reference.deleted) {
     return '';
   }
-  return reference.article?.title?.trim()
-    || reference.content?.trim()
+  return reference.content?.trim()
     || 'Post';
 });
 const detailReferenceAuthor = computed(() => {
   const reference = detailReference.value;
   return reference && !reference.deleted ? reference.author : null;
+});
+const detailReferenceMedia = computed(() => {
+  const reference = detailReference.value;
+  return reference && !reference.deleted ? reference.media : [];
 });
 const detailReferenceMessage = 'Post unavailable';
 
@@ -523,7 +514,7 @@ const disconnectReadGeometryObserver = () => {
   readResizeObserver = null;
 };
 
-const getCurrentArticleReadGeometry = () => {
+const getCurrentPostReadGeometry = () => {
   const element = postBodyRef.value;
   if (!element) {
     return null;
@@ -531,14 +522,14 @@ const getCurrentArticleReadGeometry = () => {
 
   const rect = element.getBoundingClientRect();
   return {
-    articleTopDoc: window.scrollY + rect.top,
-    articleHeight: Math.max(rect.height, 1),
+    postTopDoc: window.scrollY + rect.top,
+    postHeight: Math.max(rect.height, 1),
     currentViewportBottomDoc: window.scrollY + window.innerHeight,
   };
 };
 
 const updateReadGeometry = () => {
-  const geometry = getCurrentArticleReadGeometry();
+  const geometry = getCurrentPostReadGeometry();
   if (geometry) {
     readTracker?.updateGeometry(geometry);
   }
@@ -593,10 +584,6 @@ const startRead = (id: string, detailVersion: number) => {
     return;
   }
 
-  if (!post.value?.article) {
-    return;
-  }
-
   const element = postBodyRef.value;
   if (!element) {
     return;
@@ -608,9 +595,9 @@ const startRead = (id: string, detailVersion: number) => {
   }
 
   const rect = element.getBoundingClientRect();
-  readTracker = new ArticleReadTracker();
+  readTracker = new PostReadTracker();
   readTracker.start(
-    createArticleReadGeometry({ top: rect.top, height: rect.height }, window.scrollY, window.innerHeight),
+    createPostReadGeometry({ top: rect.top, height: rect.height }, window.scrollY, window.innerHeight),
     document.visibilityState === 'visible',
   );
 
@@ -660,7 +647,6 @@ const resetPostState = () => {
   post.value = null;
   postLoading.value = false;
   postError.value = '';
-  failedCoverUrl.value = '';
   viewCount.value = 0;
   deletePending.value = false;
   deleteError.value = '';
@@ -1185,7 +1171,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     }
 
     postViewTelemetry.enqueue(Number(id), createPostViewEventID(), 'post_detail');
-    if (postBodyRef.value && loadedPost.article) {
+    if (postBodyRef.value) {
       startRead(id, detailVersion);
     }
     void loadLikeState(id, detailVersion);
@@ -1221,13 +1207,6 @@ const goBack = () => {
   }
 
   void router.push({ name: 'Home' });
-};
-
-const handleCoverError = () => {
-  const coverUrl = detailPresentation.value?.coverUrl ?? '';
-  if (coverUrl) {
-    failedCoverUrl.value = coverUrl;
-  }
 };
 
 watch(
@@ -1396,16 +1375,6 @@ onBeforeUnmount(() => {
   opacity: 0.64;
 }
 
-.post-detail__headline {
-  margin: var(--space-3) 0 0;
-  color: var(--color-text);
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.4;
-  letter-spacing: -0.01em;
-  overflow-wrap: anywhere;
-}
-
 .post-detail__body {
   margin-top: var(--space-3);
   color: var(--color-text);
@@ -1413,6 +1382,10 @@ onBeforeUnmount(() => {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.post-detail__body :deep(.post-media-grid) {
+  margin-top: var(--space-4);
 }
 
 .post-detail__reference {
@@ -1452,28 +1425,6 @@ onBeforeUnmount(() => {
 
 .post-detail__body--loading {
   color: var(--color-text-secondary);
-}
-
-.post-detail__cover {
-  aspect-ratio: 16 / 9;
-  margin: var(--space-3) 0 0;
-  overflow: hidden;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-
-.post-detail__cover img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.post-detail__cover-placeholder {
-  width: 100%;
-  height: 100%;
-  background: var(--color-surface-subtle);
 }
 
 .post-detail__meta {

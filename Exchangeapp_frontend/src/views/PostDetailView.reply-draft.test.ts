@@ -126,14 +126,7 @@ const post = (id = 42, overrides: Partial<Post> = {}): Post => ({
   reply_to_post: null,
   quote_post: null,
   visibility: 'public',
-  article: {
-    title: `Post ${id}`,
-    preview: `Post ${id} preview`,
-    cover_image_url: '',
-    publication_state: 'published',
-    published_at: '2026-08-27T13:42:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 3,
   reply_count: 0,
   view_count: 12,
@@ -149,9 +142,8 @@ const warmPost = (id = 42): FeedPost => ({
     display_name: 'Author',
     avatar_url: '',
   },
-  title: `Post ${id}`,
-  excerpt: `Post ${id} preview`,
-  coverImageUrl: '',
+  content: `Post ${id} body`,
+  media: [],
   createdAt: '2026-08-27T13:42:00.000Z',
   likeCount: 3,
   replyCount: 0,
@@ -181,7 +173,7 @@ const reply = (id: number, postID = 42): Post => ({
   reply_to_post: null,
   quote_post: null,
   visibility: 'public',
-  article: null,
+  media: [],
   like_count: 0,
   reply_count: 0,
   view_count: 0,
@@ -526,4 +518,3 @@ describe('PostDetailView persistent reply drafts', () => {
     expect(textareaValue(wrapper)).toBe('existing draft');
   });
 });
-

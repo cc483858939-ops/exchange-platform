@@ -16,7 +16,10 @@
         </button>
       </div>
     </div>
-    <p class="reply-item__content">{{ reply.content }}</p>
+    <div class="reply-item__content">
+      <LinkifiedText :text="reply.content" />
+      <PostMediaGrid v-if="reply.media.length > 0" :media="reply.media" />
+    </div>
     <span v-if="deleting" class="reply-item__status">Deleting...</span>
   </article>
 </template>
@@ -24,6 +27,8 @@
 <script setup lang="ts">
 import type { Post } from '../../types/Post';
 import AuthorIdentity from '../AuthorIdentity.vue';
+import LinkifiedText from '../content/LinkifiedText.vue';
+import PostMediaGrid from '../content/PostMediaGrid.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
 const props = defineProps<{
@@ -94,6 +99,10 @@ const emit = defineEmits<{
   overflow-wrap: anywhere;
 }
 
+.reply-item__content :deep(.post-media-grid) {
+  margin-top: var(--space-3);
+}
+
 .reply-item__status {
   display: block;
   margin: var(--space-2) 0 0 39px;
@@ -107,4 +116,3 @@ const emit = defineEmits<{
   }
 }
 </style>
-

@@ -22,9 +22,8 @@ const basePost = (): FeedPost => ({
     display_name: 'Reader',
     avatar_url: '/reader.png',
   },
-  title: 'A warm post',
-  excerpt: 'A short preview',
-  coverImageUrl: '/cover-a.png',
+  content: 'A warm post',
+  media: [{ type: 'image', url: '/cover-a.png', position: 0 }],
   createdAt: '2026-08-26T00:00:00.000Z',
   likeCount: 10,
   replyCount: 2,
@@ -65,13 +64,14 @@ describe('postDetailHandoff store', () => {
     const source = basePost();
 
     store.remember(source);
-    source.title = 'Source mutation';
+    source.content = 'Source mutation';
     source.author.username = 'mutated-reader';
     source.likeCount = 999;
 
     expect(store.pending?.post).toMatchObject({
       id: 42,
-      title: 'A warm post',
+      content: 'A warm post',
+      media: [{ type: 'image', url: '/cover-a.png', position: 0 }],
       likeCount: 10,
       author: {
         username: 'reader',
@@ -85,7 +85,8 @@ describe('postDetailHandoff store', () => {
 
     expect(store.consume(42)).toMatchObject({
       id: 42,
-      title: 'A warm post',
+      content: 'A warm post',
+      media: [{ url: '/cover-a.png', position: 0 }],
     });
     expect(store.consume(42)).toBeNull();
     expect(store.pending).toBeNull();
@@ -127,5 +128,3 @@ describe('postDetailHandoff store', () => {
     expect(store.consume(42)).toBeNull();
   });
 });
-
-

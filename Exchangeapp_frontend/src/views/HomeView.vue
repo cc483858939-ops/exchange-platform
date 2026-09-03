@@ -185,7 +185,7 @@
     <RouterLink
       v-if="authStore.isAuthenticated"
       class="home-compose-fab"
-      :to="{ name: 'ArticleCreate' }"
+      :to="{ name: 'PostCreate' }"
       aria-label="Post"
       title="Post"
     >

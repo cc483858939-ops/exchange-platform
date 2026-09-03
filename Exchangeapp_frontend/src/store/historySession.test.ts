@@ -56,14 +56,7 @@ const post = (id: number, authorID = 9): Post => ({
   reply_to_post: null,
   quote_post: null,
   visibility: 'public',
-  article: {
-    title: `Post ${id}`,
-    preview: `Preview ${id}`,
-    cover_image_url: '',
-    publication_state: 'published',
-    published_at: '2026-08-17T00:00:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 3,
   reply_count: 1,
   view_count: 8,
@@ -209,7 +202,7 @@ describe('historySession store', () => {
     expect(store.loaded).toBe(false);
   });
 
-  it('keeps unrelated pending hydration alive when an uncached article is deleted', async () => {
+  it('keeps unrelated pending hydration alive when an uncached Post is deleted', async () => {
     const store = createStore();
     const hydration = deferred<{
       items: Array<{ post_id: number; likes: number; liked: boolean }>;
@@ -244,7 +237,7 @@ describe('historySession store', () => {
     expect(store.items.map(item => [item.id, item.likeCount])).toEqual([[1, 11], [2, 12]]);
   });
 
-  it('tombstones a deleted article while hydrating the other IDs in the batch', async () => {
+  it('tombstones a deleted Post while hydrating the other IDs in the batch', async () => {
     const store = createStore();
     const hydration = deferred<{
       items: Array<{ post_id: number; likes: number; liked: boolean }>;
@@ -273,7 +266,7 @@ describe('historySession store', () => {
     expect(store.items[0].likeCount).toBe(12);
   });
 
-  it('does not invalidate an initial page when its response contains a deleted article', async () => {
+  it('does not invalidate an initial page when its response contains a deleted Post', async () => {
     const store = createStore();
     const page = deferred<{ items: Post[]; next_cursor: string | null }>();
     mocks.getLikedHistory.mockImplementationOnce(() => page.promise);
@@ -289,7 +282,7 @@ describe('historySession store', () => {
     expect(store.initialLoading).toBe(false);
   });
 
-  it('does not invalidate a pending page when its response contains a deleted article', async () => {
+  it('does not invalidate a pending page when its response contains a deleted Post', async () => {
     const store = createStore();
     mocks.getLikedHistory.mockResolvedValueOnce({ items: [post(1)], next_cursor: 'cursor-1' });
     await store.loadInitial();

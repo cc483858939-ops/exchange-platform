@@ -11,9 +11,26 @@ export type PostDetailHandoff = {
   capturedAt: number;
 };
 
+const cloneReference = (reference: FeedPost['quotePost']): FeedPost['quotePost'] => {
+  if (!reference) {
+    return reference;
+  }
+  if (reference.deleted) {
+    return { ...reference };
+  }
+  return {
+    ...reference,
+    author: { ...reference.author },
+    media: reference.media.map(item => ({ ...item })),
+  };
+};
+
 const clonePost = (post: FeedPost): FeedPost => ({
   ...post,
   author: { ...post.author },
+  media: post.media.map(item => ({ ...item })),
+  quotePost: cloneReference(post.quotePost),
+  replyToPost: cloneReference(post.replyToPost),
   repostContext: post.repostContext
     ? { actor: { ...post.repostContext.actor } }
     : undefined,
@@ -65,5 +82,4 @@ export const usePostDetailHandoffStore = defineStore('postDetailHandoff', () => 
     clear,
   };
 });
-
 

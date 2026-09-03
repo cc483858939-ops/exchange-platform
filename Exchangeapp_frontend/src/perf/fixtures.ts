@@ -10,18 +10,18 @@ const fixtureAuthors: PublicAuthor[] = [
 ];
 
 const baseTimestamp = Date.parse('2026-01-01T00:00:00.000Z');
-const longExcerpt = 'A deterministic long-form excerpt keeps the real PostCard text layout exercised without relying on remote content, clocks, or random data. It contains enough words to reach the same clamping and wrapping paths repeatedly across every benchmark run while remaining stable on every machine.';
-const coverSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 160 90"><rect width="160" height="90" fill="#dbeafe"/><path d="M0 70 38 38l22 18 24-28 76 42v20H0Z" fill="#93c5fd"/><circle cx="116" cy="26" r="12" fill="#fbbf24"/></svg>';
-const coverDataURI = `data:image/svg+xml,${encodeURIComponent(coverSvg)}`;
+const longContent = 'A deterministic long-form post keeps the real PostCard text layout exercised without relying on remote content, clocks, or random data. It contains enough words to reach the same clamping and wrapping paths repeatedly across every benchmark run while remaining stable on every machine.';
+const mediaSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 160 90"><rect width="160" height="90" fill="#dbeafe"/><path d="M0 70 38 38l22 18 24-28 76 42v20H0Z" fill="#93c5fd"/><circle cx="116" cy="26" r="12" fill="#fbbf24"/></svg>';
+const mediaDataURI = `data:image/svg+xml,${encodeURIComponent(mediaSvg)}`;
 
-const excerptFor = (position: number, postID: number): string => {
+const contentFor = (position: number, postID: number): string => {
   switch (position % 3) {
     case 1:
       return `A short deterministic note for benchmark post ${postID}.`;
     case 2:
       return `A medium deterministic post ${postID} keeps a few lines of realistic text in the mounted card so wrapping and clamping remain representative.`;
     default:
-      return longExcerpt;
+      return longContent;
   }
 };
 
@@ -45,16 +45,16 @@ export function createPerfPosts(
     const position = index + 1;
     const id = firstID + index;
     const author = fixtureAuthors[index % fixtureAuthors.length];
-    const hasHeadline = fixture === 'mixed' && position % 2 === 0;
-    const hasCover = fixture === 'mixed' && position % 3 === 0;
+    const hasMedia = fixture === 'mixed' && position % 3 === 0;
     const hasRepostContext = fixture === 'mixed' && position % 5 === 0;
 
     return {
       id,
       author: { ...author },
-      title: hasHeadline ? `Deterministic headline ${id}` : '',
-      excerpt: excerptFor(position, id),
-      coverImageUrl: hasCover ? coverDataURI : '',
+      content: contentFor(position, id),
+      media: hasMedia
+        ? [{ type: 'image', url: mediaDataURI, position: 0 }]
+        : [],
       createdAt: new Date(baseTimestamp + index * 60_000).toISOString(),
       likeCount: (position * 7) % 97,
       replyCount: (position * 5) % 31,
@@ -71,4 +71,4 @@ export function createPerfPosts(
   });
 }
 
-export { coverDataURI };
+export { mediaDataURI };

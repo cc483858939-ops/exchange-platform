@@ -1,51 +1,51 @@
-export type ArticleReadGeometry = {
-  articleTopDoc: number;
-  articleHeight: number;
+export type PostReadGeometry = {
+  postTopDoc: number;
+  postHeight: number;
   initialViewportBottomDoc: number;
 };
 
-export type ArticleReadCurrentGeometry = {
-  articleTopDoc: number;
-  articleHeight: number;
+export type PostReadCurrentGeometry = {
+  postTopDoc: number;
+  postHeight: number;
   currentViewportBottomDoc: number;
 };
 
-export type ArticleReadSnapshot = {
+export type PostReadSnapshot = {
   foregroundTimeMS: number;
   scrollProgressPercent: number;
   finished: boolean;
 };
 
-export type ArticleReadEndPayload = {
+export type PostReadEndPayload = {
   foreground_time_ms: number;
   scroll_progress_percent: number;
   exit_type: string;
 };
 
-export type ArticleReadClock = () => number;
+export type PostReadClock = () => number;
 
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, value));
 
-const defaultClock: ArticleReadClock = () =>
+const defaultClock: PostReadClock = () =>
   typeof performance !== 'undefined' ? performance.now() : Date.now();
 
-export const createArticleReadGeometry = (
+export const createPostReadGeometry = (
   rect: Pick<DOMRect, 'top' | 'height'>,
   scrollY: number,
   viewportHeight: number,
-): ArticleReadGeometry => {
-  const articleHeight = Math.max(rect.height, 1);
-  const articleTopDoc = scrollY + rect.top;
+): PostReadGeometry => {
+  const postHeight = Math.max(rect.height, 1);
+  const postTopDoc = scrollY + rect.top;
   return {
-    articleTopDoc,
-    articleHeight,
+    postTopDoc,
+    postHeight,
     initialViewportBottomDoc: scrollY + viewportHeight,
   };
 };
 
-export class ArticleReadTracker {
-  private geometry: ArticleReadCurrentGeometry | null = null;
+export class PostReadTracker {
+  private geometry: PostReadCurrentGeometry | null = null;
   private anchorProgress = 0;
   private anchorReadHeadPx = 0;
   private anchorRemainingPx = 0;
@@ -54,22 +54,22 @@ export class ArticleReadTracker {
   private foregroundStartedAt: number | null = null;
   private finished = false;
 
-  constructor(private readonly clock: ArticleReadClock = defaultClock) {}
+  constructor(private readonly clock: PostReadClock = defaultClock) {}
 
-  start(geometry: ArticleReadGeometry, visible = true) {
+  start(geometry: PostReadGeometry, visible = true) {
     this.geometry = this.normalizeGeometry({
       ...geometry,
       currentViewportBottomDoc: geometry.initialViewportBottomDoc,
     });
     this.anchorProgress = 0;
     this.anchorReadHeadPx = clamp(
-      geometry.initialViewportBottomDoc - this.geometry.articleTopDoc,
+      geometry.initialViewportBottomDoc - this.geometry.postTopDoc,
       0,
-      this.geometry.articleHeight,
+      this.geometry.postHeight,
     );
     this.anchorRemainingPx = Math.max(
       0,
-      this.geometry.articleHeight - this.anchorReadHeadPx,
+      this.geometry.postHeight - this.anchorReadHeadPx,
     );
     this.maxProgress = 0;
     this.foregroundTimeMS = 0;
@@ -80,7 +80,7 @@ export class ArticleReadTracker {
     }
   }
 
-  updateGeometry(geometry: ArticleReadCurrentGeometry) {
+  updateGeometry(geometry: PostReadCurrentGeometry) {
     if (this.finished) {
       return;
     }
@@ -88,13 +88,13 @@ export class ArticleReadTracker {
     this.anchorProgress = this.maxProgress;
     this.geometry = this.normalizeGeometry(geometry);
     this.anchorReadHeadPx = clamp(
-      geometry.currentViewportBottomDoc - this.geometry.articleTopDoc,
+      geometry.currentViewportBottomDoc - this.geometry.postTopDoc,
       0,
-      this.geometry.articleHeight,
+      this.geometry.postHeight,
     );
     this.anchorRemainingPx = Math.max(
       0,
-      this.geometry.articleHeight - this.anchorReadHeadPx,
+      this.geometry.postHeight - this.anchorReadHeadPx,
     );
   }
 
@@ -103,9 +103,9 @@ export class ArticleReadTracker {
       return;
     }
     const currentReadHeadPx = clamp(
-      currentViewportBottomDoc - this.geometry.articleTopDoc,
+      currentViewportBottomDoc - this.geometry.postTopDoc,
       0,
-      this.geometry.articleHeight,
+      this.geometry.postHeight,
     );
     const advancedPx = Math.max(0, currentReadHeadPx - this.anchorReadHeadPx);
     const segmentProgress = this.anchorRemainingPx <= 0
@@ -134,7 +134,7 @@ export class ArticleReadTracker {
     this.foregroundStartedAt = at;
   }
 
-  snapshot(at = this.clock()): ArticleReadSnapshot {
+  snapshot(at = this.clock()): PostReadSnapshot {
     return {
       foregroundTimeMS: this.currentForegroundTimeMS(at),
       scrollProgressPercent: this.maxProgress,
@@ -142,7 +142,7 @@ export class ArticleReadTracker {
     };
   }
 
-  finish(exitType: string, at = this.clock()): ArticleReadEndPayload | null {
+  finish(exitType: string, at = this.clock()): PostReadEndPayload | null {
     if (this.finished) {
       return null;
     }
@@ -167,15 +167,15 @@ export class ArticleReadTracker {
   }
 
   private normalizeGeometry(geometry: {
-    articleTopDoc: number;
-    articleHeight: number;
+    postTopDoc: number;
+    postHeight: number;
     currentViewportBottomDoc?: number;
-  }): ArticleReadCurrentGeometry {
+  }): PostReadCurrentGeometry {
     const currentViewportBottomDoc = geometry.currentViewportBottomDoc;
     return {
-      articleTopDoc: Number.isFinite(geometry.articleTopDoc) ? geometry.articleTopDoc : 0,
-      articleHeight: Math.max(
-        Number.isFinite(geometry.articleHeight) ? geometry.articleHeight : 1,
+      postTopDoc: Number.isFinite(geometry.postTopDoc) ? geometry.postTopDoc : 0,
+      postHeight: Math.max(
+        Number.isFinite(geometry.postHeight) ? geometry.postHeight : 1,
         1,
       ),
       currentViewportBottomDoc: typeof currentViewportBottomDoc === 'number'

@@ -123,7 +123,7 @@ const updatedUser = {
 
 const PostCardStub = {
   props: ['post', 'showDelete'],
-  template: '<article class="post-card">{{ post.title }}</article>',
+  template: '<article class="post-card">{{ post.content }}</article>',
 };
 
 const settle = async () => {

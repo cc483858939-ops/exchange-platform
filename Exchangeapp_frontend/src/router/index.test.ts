@@ -14,7 +14,7 @@ describe('History route', () => {
     const expectedRoutes = [
       ['Home', '/', 'app'],
       ['CurrencyExchange', '/exchange', 'app'],
-      ['ArticleCreate', '/news/new', 'app'],
+      ['PostCreate', '/posts/new', 'app'],
       ['PostDetail', '/posts/:id', 'app'],
       ['UserProfile', '/users/:id', 'app'],
       ['UserFollowing', '/users/:id/following', 'app'],

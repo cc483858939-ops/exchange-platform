@@ -17,18 +17,14 @@ export function postToFeedPost(
   post: Post,
   context: { repostActor?: PublicAuthor } = {},
 ): FeedPost {
-  const article = post.article;
   return {
     id: post.id,
     content: post.content,
-    article,
+    media: post.media.map(item => ({ ...item })),
     quotePost: post.quote_post,
     replyToPost: post.reply_to_post,
     author: post.author,
-    title: article?.title ?? '',
-    excerpt: article?.preview ?? post.content,
-    coverImageUrl: article?.cover_image_url || '',
-    createdAt: post.published_at,
+    createdAt: post.published_at || post.created_at,
     likeCount: post.like_count ?? 0,
     replyCount: post.reply_count ?? 0,
     viewCount: Math.max(0, post.view_count),

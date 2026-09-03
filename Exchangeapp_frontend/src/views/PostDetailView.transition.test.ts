@@ -106,19 +106,7 @@ vi.mock('../store/sessionSync', () => ({
   syncExternalReplyCount: vi.fn(),
 }));
 
-type CanonicalPostOverrides = Partial<Post> & {
-  title?: string;
-  preview?: string;
-  cover_image_url?: string;
-};
-
-const canonicalPost = (input: CanonicalPostOverrides = {}): Post => {
-  const {
-    title,
-    preview,
-    cover_image_url,
-    ...overrides
-  } = input;
+const canonicalPost = (overrides: Partial<Post> = {}): Post => {
   return {
     id: 42,
     created_at: '2026-08-26T00:00:00.000Z',
@@ -137,14 +125,7 @@ const canonicalPost = (input: CanonicalPostOverrides = {}): Post => {
     reply_to_post: null,
     quote_post: null,
     visibility: 'public',
-    article: {
-      title: title ?? 'Server title',
-      preview: preview ?? 'Server preview',
-      cover_image_url: cover_image_url ?? '',
-      publication_state: 'published',
-      published_at: '2026-08-26T00:00:00.000Z',
-      expired_at: null,
-    },
+    media: [],
     like_count: 11,
     reply_count: 4,
     view_count: 321,
@@ -161,9 +142,8 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
     display_name: 'Warm Author',
     avatar_url: '/warm-author.png',
   },
-  title: 'Warm title',
-  excerpt: 'Warm excerpt only',
-  coverImageUrl: '/cover-a.png',
+  content: 'Warm post content',
+  media: [],
   createdAt: '2026-08-25T00:00:00.000Z',
   likeCount: 10,
   replyCount: 3,
@@ -261,7 +241,7 @@ describe('PostDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-header__back').exists()).toBe(true);
     expect(mounted.find('.detail-loading[role="status"]').exists()).toBe(true);
     expect(mounted.find('.detail-loading__spinner').exists()).toBe(true);
-    expect(mounted.text()).not.toContain('Loading full article');
+    expect(mounted.find('.detail-loading .sr-only').text()).toBe('Loading post');
     expect(mounted.find('.post-detail').exists()).toBe(false);
     expect(mocks.getPostLikeState).not.toHaveBeenCalled();
     expect(mocks.getPostRepostState).not.toHaveBeenCalled();
@@ -303,13 +283,11 @@ describe('PostDetailView warm and cold transition', () => {
 
     expect(mocks.consumeHandoff).toHaveBeenCalledWith(42);
     expect(mounted.find('.test-author').text()).toBe('warm-author');
-    expect(mounted.find('.post-detail__headline').text()).toBe('Warm title');
-    expect(mounted.find('.post-detail__body').text()).toBe('Warm excerpt only');
+    expect(mounted.find('.post-detail__body').text()).toBe('Warm post content');
     expect(mounted.find('.post-detail__body').attributes('aria-busy')).toBe('true');
-    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
     expect(mounted.find('.detail-warm-loading[role="status"]').exists()).toBe(true);
     expect(mounted.find('.detail-loading').exists()).toBe(false);
-    expect(mounted.text()).not.toContain('Loading full article');
+    expect(mounted.find('.detail-warm-loading .sr-only').text()).toBe('Loading full post');
     expect(mounted.find('.test-like-action').exists()).toBe(false);
     expect(mounted.find('.repost-action').exists()).toBe(false);
     expect(mounted.find('.post-conversation').exists()).toBe(false);
@@ -324,12 +302,10 @@ describe('PostDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
   });
 
-  it('replaces warm presentation with authoritative title, body, cover, counts, and replies', async () => {
+  it('replaces warm presentation with authoritative body, counts, and replies', async () => {
     const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post({
-      title: 'Warm title',
-      excerpt: 'Warm excerpt only',
-      coverImageUrl: '/cover-a.png',
+      content: 'Warm post content',
       likeCount: 10,
       replyCount: 3,
       viewCount: 300,
@@ -339,23 +315,19 @@ describe('PostDetailView warm and cold transition', () => {
     mounted = mountDetail();
     await flushPromises();
     request.resolve(canonicalPost({
-      title: 'Server title',
-      content: 'Authoritative article body',
-      cover_image_url: '/cover-b.png',
+      content: 'Authoritative post body',
       like_count: 11,
       reply_count: 4,
       view_count: 321,
     }));
     await flushPromises();
 
-    expect(mounted.find('.post-detail__headline').text()).toBe('Server title');
-    expect(mounted.find('.post-detail__body').text()).toBe('Authoritative article body');
+    expect(mounted.find('.post-detail__body').text()).toBe('Authoritative post body');
     expect(mounted.find('.post-detail__body').attributes('aria-busy')).toBeUndefined();
-    expect(mounted.find('.post-detail__cover img').attributes('src')).toBe('/cover-b.png');
     expect(mounted.find('.post-conversation').exists()).toBe(true);
     expect(mounted.find('.test-like-action').exists()).toBe(true);
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
-    expect(mounted.text()).not.toContain('Warm excerpt only');
+    expect(mounted.text()).not.toContain('Warm post content');
     expect(mounted.text()).toContain('4');
     expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
   });
@@ -414,8 +386,7 @@ describe('PostDetailView warm and cold transition', () => {
     const secondRequest = deferred<Post>();
     mocks.consumeHandoff.mockImplementation((id: number) => id === 43 ? post({
       id: 43,
-      title: 'Warm B',
-      excerpt: 'Warm B excerpt',
+      content: 'Warm B content',
     }) : null);
     mocks.getPostById
       .mockImplementationOnce(() => firstRequest.promise)
@@ -427,14 +398,14 @@ describe('PostDetailView warm and cold transition', () => {
     await flushPromises();
 
     expect(mocks.getPostById).toHaveBeenCalledTimes(2);
-    expect(mounted.find('.post-detail__body').text()).toBe('Warm B excerpt');
+    expect(mounted.find('.post-detail__body').text()).toBe('Warm B content');
 
-    firstRequest.resolve(canonicalPost({ id: 42, title: 'Stale A', content: 'Stale A body' }));
+    firstRequest.resolve(canonicalPost({ id: 42, content: 'Stale A body' }));
     await flushPromises();
-    expect(mounted.find('.post-detail__body').text()).toBe('Warm B excerpt');
+    expect(mounted.find('.post-detail__body').text()).toBe('Warm B content');
     expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
 
-    secondRequest.resolve(canonicalPost({ id: 43, title: 'Server B', content: 'Server B body' }));
+    secondRequest.resolve(canonicalPost({ id: 43, content: 'Server B body' }));
     await flushPromises();
     expect(mounted.find('.post-detail__body').text()).toBe('Server B body');
     expect(mocks.postViewTelemetry.enqueue).toHaveBeenCalledTimes(1);
@@ -445,52 +416,4 @@ describe('PostDetailView warm and cold transition', () => {
     );
   });
 
-  it('keeps a failed warm cover slot and retries a different authoritative URL', async () => {
-    const request = deferred<Post>();
-    mocks.consumeHandoff.mockReturnValueOnce(post({ coverImageUrl: '/cover-a.png' }));
-    mocks.getPostById.mockReturnValueOnce(request.promise);
-
-    mounted = mountDetail();
-    await flushPromises();
-    await mounted.find('.post-detail__cover img').trigger('error');
-
-    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
-    expect(mounted.find('.post-detail__cover-placeholder').exists()).toBe(true);
-
-    request.resolve(canonicalPost({ cover_image_url: '/cover-b.png' }));
-    await flushPromises();
-
-    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
-    expect(mounted.find('.post-detail__cover img').attributes('src')).toBe('/cover-b.png');
-    expect(mounted.find('.post-detail__cover-placeholder').exists()).toBe(false);
-  });
-
-  it('keeps the placeholder when the authoritative response returns the same failed cover URL', async () => {
-    const request = deferred<Post>();
-    mocks.consumeHandoff.mockReturnValueOnce(post({ coverImageUrl: '/cover-a.png' }));
-    mocks.getPostById.mockReturnValueOnce(request.promise);
-
-    mounted = mountDetail();
-    await flushPromises();
-    await mounted.find('.post-detail__cover img').trigger('error');
-    request.resolve(canonicalPost({ cover_image_url: '/cover-a.png' }));
-    await flushPromises();
-
-    expect(mounted.find('.post-detail__cover').exists()).toBe(true);
-    expect(mounted.find('.post-detail__cover-placeholder').exists()).toBe(true);
-    expect(mounted.find('.post-detail__cover img').exists()).toBe(false);
-  });
-
-  it('removes the cover figure when the authoritative article removes its cover', async () => {
-    const request = deferred<Post>();
-    mocks.consumeHandoff.mockReturnValueOnce(post({ coverImageUrl: '/cover-a.png' }));
-    mocks.getPostById.mockReturnValueOnce(request.promise);
-
-    mounted = mountDetail();
-    await flushPromises();
-    request.resolve(canonicalPost({ cover_image_url: '' }));
-    await flushPromises();
-
-    expect(mounted.find('.post-detail__cover').exists()).toBe(false);
-  });
 });

@@ -79,14 +79,7 @@ const post = (id: number, authorID = 7) => ({
   reply_to_post: null,
   quote_post: null,
   visibility: 'public' as const,
-  article: {
-    title: `Post ${id}`,
-    preview: `Preview ${id}`,
-    cover_image_url: '',
-    publication_state: 'published' as const,
-    published_at: '2026-08-24T00:00:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 0,
   reply_count: 0,
   view_count: 0,
@@ -413,14 +406,13 @@ describe('home timeline session store', () => {
     expect(store.scrollY.following).toBe(0);
   });
 
-  it('dismisses a recommendation without removing the same article from Following', () => {
+  it('dismisses a recommendation without removing the same Post from Following', () => {
     const store = useHomeTimelineStore();
     const followingPost: FeedPost = {
       id: 4,
       author: author(),
-      title: 'Following',
-      excerpt: 'Following',
-      coverImageUrl: '',
+      content: 'Following',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
       replyCount: 0,
@@ -441,14 +433,13 @@ describe('home timeline session store', () => {
     expect(mocks.feedStore!.markPostDeleted).not.toHaveBeenCalled();
   });
 
-  it('applies a like update to every Home surface and removes deleted articles', () => {
+  it('applies a like update to every Home surface and removes deleted Posts', () => {
     const store = useHomeTimelineStore();
     mocks.feedStore!.recentlyPublishedPosts = [{
       id: 4,
       author: author(),
-      title: 'Recent',
-      excerpt: 'Recent',
-      coverImageUrl: '',
+      content: 'Recent',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 3,
       replyCount: 0,
@@ -462,9 +453,8 @@ describe('home timeline session store', () => {
     store.following.items = [{
       id: 4,
       author: author(),
-      title: 'Following',
-      excerpt: 'Following',
-      coverImageUrl: '',
+      content: 'Following',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 3,
       replyCount: 0,
@@ -582,9 +572,8 @@ describe('home timeline session store', () => {
     store.following.items = [{
       id: 4,
       author: author(),
-      title: 'Following',
-      excerpt: 'Following',
-      coverImageUrl: '',
+      content: 'Following',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 2,
       replyCount: 0,
@@ -619,9 +608,8 @@ describe('home timeline session store', () => {
     const post: FeedPost = {
       id: 4,
       author: author(),
-      title: 'Post',
-      excerpt: 'Post',
-      coverImageUrl: '',
+      content: 'Post',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
       replyCount: 1,
@@ -812,9 +800,8 @@ describe('home timeline session store', () => {
 const feedPostFixture = (id: number, authorID: number): FeedPost => ({
   id,
   author: author(authorID),
-  title: `Post ${id}`,
-  excerpt: `Post ${id}`,
-  coverImageUrl: '',
+  content: `Post ${id}`,
+  media: [],
   createdAt: '2026-08-24T00:00:00.000Z',
   likeCount: 0,
   replyCount: 0,

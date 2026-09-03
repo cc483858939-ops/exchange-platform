@@ -16,19 +16,19 @@ describe('performance fixtures', () => {
   it('uses the mixed fixture pattern without remote assets', () => {
     const posts = createPerfPosts(15);
 
-    expect(posts[1].title).toContain('headline');
-    expect(posts[2].coverImageUrl).toMatch(/^data:image\/svg\+xml,/);
+    expect(posts[1].content).toContain('deterministic post');
+    expect(posts[2].media[0]?.url).toMatch(/^data:image\/svg\+xml,/);
     expect(posts[4].repostContext?.actor.username).toBe('perf_mina');
     expect(posts[0].likeStatus).toBe('ready');
     expect(posts[0].repostStatus).toBe('ready');
-    expect(posts.every(post => post.coverImageUrl === '' || post.coverImageUrl.startsWith('data:'))).toBe(true);
+    expect(posts.every(post => post.media.every(item => item.url.startsWith('data:')))).toBe(true);
   });
 
   it('supports a text-only diagnostic fixture and append-safe IDs', () => {
     const posts = createPerfPosts(3, 'text-only', 301);
 
     expect(posts.map(post => post.id)).toEqual([301, 302, 303]);
-    expect(posts.every(post => post.coverImageUrl === '')).toBe(true);
+    expect(posts.every(post => post.media.length === 0)).toBe(true);
     expect(posts.every(post => post.repostContext === undefined)).toBe(true);
     expect(createPerfPosts(0)).toEqual([]);
     expect(createPerfPosts(-1)).toEqual([]);

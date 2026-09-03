@@ -124,14 +124,7 @@ const post = {
   reply_to_post: null,
   quote_post: null,
   visibility: 'public',
-  article: {
-    title: 'Post 42',
-    preview: 'Post body',
-    cover_image_url: '',
-    publication_state: 'published',
-    published_at: '2026-08-15T00:00:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 3,
   reply_count: 2,
   view_count: 12,
@@ -243,5 +236,4 @@ describe('PostDetailView LikeAction wiring', () => {
     expect(mounted.find('.detail-inline-error').text()).toBe('Like failed. Please try again.');
   });
 });
-
 

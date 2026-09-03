@@ -98,14 +98,7 @@ const post = (id: number, authorID = 7) => ({
   reply_to_post: null,
   quote_post: null,
   visibility: 'public' as const,
-  article: {
-    title: `Post ${id}`,
-    preview: `Preview ${id}`,
-    cover_image_url: '',
-    publication_state: 'published' as const,
-    published_at: '2026-08-24T00:00:00.000Z',
-    expired_at: null,
-  },
+  media: [],
   like_count: 0,
   reply_count: 0,
   view_count: 0,
@@ -203,7 +196,7 @@ describe('profile session store', () => {
     expect(store.sessions.size).toBe(0);
   });
 
-  it('preserves cursor pagination and deduplicates article IDs in one session', async () => {
+  it('preserves cursor pagination and deduplicates Post IDs in one session', async () => {
     mocks.getUserPosts
       .mockResolvedValueOnce({ items: [post(1)], next_cursor: 'cursor-1' })
       .mockResolvedValueOnce({ items: [post(1), post(2)], next_cursor: null });
@@ -370,7 +363,7 @@ describe('profile session store', () => {
     });
   });
 
-  it('keeps an unrelated pending initial article request valid when another article is removed', async () => {
+  it('keeps an unrelated pending initial Post request valid when another Post is removed', async () => {
     let resolvePosts!: (value: {
       items: ReturnType<typeof post>[];
       next_cursor: string | null;
@@ -400,7 +393,7 @@ describe('profile session store', () => {
     expect(session.posts.map((post) => post.id)).toEqual([43]);
   });
 
-  it('does not strand an unrelated pending load-more request after article removal', async () => {
+  it('does not strand an unrelated pending load-more request after Post removal', async () => {
     let resolvePosts!: (value: {
       items: ReturnType<typeof post>[];
       next_cursor: string | null;
@@ -446,9 +439,8 @@ describe('profile session store', () => {
     session.posts = [{
       id: 4,
       author: author(7),
-      title: 'Post 4',
-      excerpt: 'Post 4',
-      coverImageUrl: '',
+      content: 'Post 4',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 2,
       replyCount: 0,
@@ -506,9 +498,8 @@ describe('profile session store', () => {
     const post: FeedPost = {
       id: 4,
       author: author(7),
-      title: 'Post 4',
-      excerpt: 'Post 4',
-      coverImageUrl: '',
+      content: 'Post 4',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
       replyCount: 0,
@@ -537,9 +528,8 @@ describe('profile session store', () => {
     session.posts = [{
       id: 4,
       author: author(7),
-      title: 'Post 4',
-      excerpt: 'Post 4',
-      coverImageUrl: '',
+      content: 'Post 4',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
       replyCount: 0,
@@ -607,16 +597,15 @@ describe('profile session store', () => {
     expect(reconcileFollowStateLocal).toHaveBeenCalledWith(followState(8, true));
   });
 
-  it('updates reply counts in every cached matching Profile article', () => {
+  it('updates reply counts in every cached matching Profile Post', () => {
     const store = useProfileSessionStore();
     const first = store.ensureSession(7)!;
     const second = store.ensureSession(8)!;
     const post = {
       id: 4,
       author: author(7),
-      title: 'Post 4',
-      excerpt: 'Post 4',
-      coverImageUrl: '',
+      content: 'Post 4',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 0,
       replyCount: 1,
@@ -642,9 +631,8 @@ describe('profile session store', () => {
     first.posts = [{
       id: 4,
       author: author(7),
-      title: 'A',
-      excerpt: 'A',
-      coverImageUrl: '',
+      content: 'A',
+      media: [],
       createdAt: '2026-08-24T00:00:00.000Z',
       likeCount: 1,
       replyCount: 0,
