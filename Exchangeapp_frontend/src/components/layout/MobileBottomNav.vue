@@ -13,6 +13,7 @@
         :aria-label="item.label"
         :title="item.label"
         :aria-current="isItemActive(item) ? 'page' : undefined"
+        @click.capture="handleNavigationClick($event, item)"
       >
         <span class="mobile-bottom-nav__icon">
           <AppIcon :name="item.icon" :size="24" :filled="isItemActive(item)" />
@@ -123,6 +124,53 @@ const isItemActive = (item: NavigationItem) => {
   return route.name === item.routeName;
 };
 
+const isReselectableRoot = (item: NavigationItem) => {
+  const routeName = String(route.name || '');
+  if (item.routeName === 'UserProfile') {
+    const profileID = currentProfileID.value;
+    return Boolean(profileID)
+      && routeName === 'UserProfile'
+      && firstRouteParam(route.params?.id) === profileID;
+  }
+
+  return (
+    item.routeName === 'Home'
+    || item.routeName === 'UserSearch'
+    || item.routeName === 'CurrencyExchange'
+    || item.routeName === 'Notifications'
+  ) && routeName === item.routeName;
+};
+
+const isStandardActivation = (event: MouseEvent) => event.button === 0
+  && !event.metaKey
+  && !event.ctrlKey
+  && !event.shiftKey
+  && !event.altKey;
+
+const prefersReducedMotion = () => typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const scrollToTop = () => {
+  if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') {
+    return;
+  }
+
+  window.scrollTo({
+    top: 0,
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  });
+};
+
+const handleNavigationClick = (event: MouseEvent, item: NavigationItem) => {
+  if (!isStandardActivation(event) || !isReselectableRoot(item)) {
+    return;
+  }
+
+  event.preventDefault();
+  scrollToTop();
+};
+
 const notificationBadge = computed(() => props.notificationBadge);
 </script>
 
@@ -162,6 +210,7 @@ const notificationBadge = computed(() => props.notificationBadge);
     align-items: center;
     justify-content: center;
     gap: 2px;
+    touch-action: manipulation;
     color: var(--color-text-secondary);
     font-size: 10px;
     font-weight: 700;
@@ -171,13 +220,20 @@ const notificationBadge = computed(() => props.notificationBadge);
     transition: color var(--transition-fast), background-color var(--transition-fast);
   }
 
-  .mobile-bottom-nav__item:hover,
   .mobile-bottom-nav__item:focus-visible {
     background: var(--color-surface-subtle);
     color: var(--color-text);
   }
 
+  @media (hover: hover) and (pointer: fine) {
+    .mobile-bottom-nav__item:hover {
+      background: var(--color-surface-subtle);
+      color: var(--color-text);
+    }
+  }
+
   .mobile-bottom-nav__item:active {
+    background: var(--color-surface-subtle);
     transform: scale(0.98);
   }
 
