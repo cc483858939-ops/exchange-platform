@@ -79,6 +79,9 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
 	}
+	if err := applyPostMediaConstraints(tx); err != nil {
+		t.Fatalf("apply PostMedia constraints: %v", err)
+	}
 	if err := applyPostEmbeddingConstraints(tx); err != nil {
 		t.Fatalf("apply PostEmbedding constraints: %v", err)
 	}
@@ -146,14 +149,14 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	})
 
 	withIntegrationSavepoint(t, tx, "floor_too_high", func() {
-		if err := updateIntegrationState(tx, primarySchema, 3, 3); err != nil {
+		if err := updateIntegrationState(tx, primarySchema, 4, 5); err != nil {
 			t.Fatalf("set incompatible schema floor: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_incompatible")
 	})
 
 	withIntegrationSavepoint(t, tx, "compatible_newer", func() {
-		if err := updateIntegrationState(tx, primarySchema, 3, 2); err != nil {
+		if err := updateIntegrationState(tx, primarySchema, 5, 4); err != nil {
 			t.Fatalf("set compatible newer schema version: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "")

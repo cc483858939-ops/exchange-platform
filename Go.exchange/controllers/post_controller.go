@@ -24,9 +24,10 @@ import (
 )
 
 type createPostRequest struct {
-	Content       string `json:"content"`
-	ReplyToPostID *uint  `json:"reply_to_post_id"`
-	QuotePostID   *uint  `json:"quote_post_id"`
+	Content       string                   `json:"content"`
+	ReplyToPostID *uint                    `json:"reply_to_post_id"`
+	QuotePostID   *uint                    `json:"quote_post_id"`
+	Media         []createPostMediaRequest `json:"media"`
 }
 
 const (
@@ -115,9 +116,21 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	media, err := validatePostMediaRequests(ctx.Request.Context(), userID, req.Media)
+	if err != nil {
+		switch {
+		case errors.Is(err, errPostMediaObjectUnavailable):
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "media file is unavailable"})
+		case errors.Is(err, errPostMediaStorageUnavailable):
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		default:
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid media"})
+		}
+		return
+	}
 
 	var post models.Post
-	err = persistPostGraphFn(&post, userID, content, req, now)
+	err = persistPostGraphFn(&post, userID, content, req, media, now)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "reply or quote target unavailable"})
@@ -157,6 +170,7 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	response.Media = postMediaResponsesFromValidated(media)
 	if err := hydratePostResponseReferences(&response, now); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -164,7 +178,7 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	ctx.JSON(http.StatusCreated, response)
 }
 
-func persistPostGraph(post *models.Post, userID uint, content string, req createPostRequest, now time.Time) error {
+func persistPostGraph(post *models.Post, userID uint, content string, req createPostRequest, media []validatedPostMedia, now time.Time) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
@@ -195,6 +209,14 @@ func persistPostGraph(post *models.Post, userID uint, content string, req create
 		post.UpdatedAt = now
 		if err := tx.Create(post).Error; err != nil {
 			return err
+		}
+		for position, item := range media {
+			if err := tx.Create(&models.PostMedia{
+				PostID: post.ID, MediaType: item.MediaType, URL: item.PublicURL,
+				Position: position, CreatedAt: now,
+			}).Error; err != nil {
+				return err
+			}
 		}
 		if post.ReplyToPostID != nil {
 			rowsAffected, err := incrementPostReplyCount(tx, *post.ReplyToPostID)

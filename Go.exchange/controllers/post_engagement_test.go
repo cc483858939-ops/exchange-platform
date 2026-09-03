@@ -32,7 +32,7 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 }
 
 func TestPostEngagementCacheSchemaVersion(t *testing.T) {
-	if postDetailCacheKey("42") != "post:detail:v2:42" {
+	if postDetailCacheKey("42") != "post:detail:v3:42" {
 		t.Fatalf("post detail cache key=%q", postDetailCacheKey("42"))
 	}
 	for _, column := range []string{

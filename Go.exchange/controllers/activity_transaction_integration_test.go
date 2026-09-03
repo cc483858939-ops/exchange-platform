@@ -74,7 +74,7 @@ $$`).Error; err != nil {
 	if err := persistPostGraph(&reply, commenter.ID, "should rollback", createPostRequest{
 		Content:       "should rollback",
 		ReplyToPostID: &article.ID,
-	}, now); err == nil {
+	}, nil, now); err == nil {
 		t.Fatal("comment unexpectedly succeeded with failing Outbox insert")
 	}
 	var replyCount int64

@@ -161,7 +161,7 @@ Authenticated endpoints:
 
 - `POST /api/exchangeRates`
 - `GET /api/recommendations/posts`
-- `POST /api/uploads/article-cover`
+- `POST /api/uploads/post-media`
 - `POST /api/posts`
 - GET /api/feed/following?limit=20&cursor=...
 - GET /api/users/:id/posts?limit=20&cursor=...

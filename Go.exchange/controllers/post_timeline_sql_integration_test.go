@@ -24,7 +24,7 @@ func TestPostTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	queryLogger := &postDetailSQLLogger{Interface: logger.Default}

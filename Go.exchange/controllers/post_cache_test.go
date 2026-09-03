@@ -186,11 +186,11 @@ func TestLoadJSONCacheWithStorePreservesPostAuthorDTO(t *testing.T) {
 		}, nil
 	}
 
-	miss, err := loadJSONCacheWithStore("post:detail:v2:42", time.Minute, getter, setter, loader)
+	miss, err := loadJSONCacheWithStore("post:detail:v3:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hit, err := loadJSONCacheWithStore("post:detail:v2:42", time.Minute, getter, setter, loader)
+	hit, err := loadJSONCacheWithStore("post:detail:v3:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,6 +410,7 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 	queries := queryLogger.snapshot()
 	postQueries := 0
 	userQueries := 0
+	mediaQueries := 0
 	selectedAuthorQuery := false
 	for _, query := range queries {
 		normalized := strings.Join(strings.Fields(strings.ToLower(query)), "")
@@ -421,9 +422,12 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 			userQueries++
 			selectedAuthorQuery = true
 		}
+		if strings.Contains(normalized, "frompost_media") {
+			mediaQueries++
+		}
 	}
-	if postQueries != 1 || userQueries != 1 {
-		t.Fatalf("expected one post query and one author preload query, got posts=%d users=%d queries=%v", postQueries, userQueries, queries)
+	if postQueries != 1 || userQueries != 1 || mediaQueries != 1 {
+		t.Fatalf("expected one post query, one author preload query, and one media query, got posts=%d users=%d media=%d queries=%v", postQueries, userQueries, mediaQueries, queries)
 	}
 	if !selectedAuthorQuery {
 		t.Fatalf("author preload selected more than the public summary fields: %v", queries)

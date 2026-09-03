@@ -5,6 +5,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/models"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -28,7 +29,7 @@ func stubCreatePostAuthor(t *testing.T) {
 func stubPostCreatePersistence(t *testing.T, persisted *models.Post, id uint) {
 	original := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = original })
-	persistPostGraphFn = func(post *models.Post, userID uint, content string, req createPostRequest, now time.Time) error {
+	persistPostGraphFn = func(post *models.Post, userID uint, content string, req createPostRequest, _ []validatedPostMedia, now time.Time) error {
 		*post = models.Post{Model: gorm.Model{ID: id, CreatedAt: now, UpdatedAt: now}, AuthorID: userID, Content: content, Visibility: "public"}
 		if persisted != nil {
 			*persisted = *post
@@ -59,6 +60,60 @@ func TestCreatePostBuildsPublishedRecord(t *testing.T) {
 	}
 	if response.ID != 42 || response.PublishedAt == nil || response.Content != "c" {
 		t.Fatalf("response=%#v", response)
+	}
+	if response.Media == nil {
+		t.Fatal("no-media create response must contain an empty media array")
+	}
+}
+
+func TestCreatePostValidatesAndReturnsOrderedMedia(t *testing.T) {
+	stubCreatePostAuthor(t)
+	stubPostCreatePersistence(t, nil, 44)
+	originalStat := statStoredObject
+	t.Cleanup(func() { statStoredObject = originalStat })
+	statStoredObject = func(context.Context, string) error { return nil }
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(7))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString(`{"content":"with media","media":[{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440000.jpg"},{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440001.webp"}]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	createPost(ctx, nil)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response postResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Media) != 2 || response.Media[0].Position != 0 || response.Media[1].Position != 1 || response.Media[1].URL == response.Media[0].URL {
+		t.Fatalf("media=%#v", response.Media)
+	}
+}
+
+func TestCreatePostRejectsMoreThanFourMediaBeforePersistence(t *testing.T) {
+	stubCreatePostAuthor(t)
+	originalStat := statStoredObject
+	originalPersist := persistPostGraphFn
+	t.Cleanup(func() {
+		statStoredObject = originalStat
+		persistPostGraphFn = originalPersist
+	})
+	statStoredObject = func(context.Context, string) error { return nil }
+	persistCalled := false
+	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+		persistCalled = true
+		return nil
+	}
+	items := strings.Repeat(`{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440000.jpg"},`, 4) + `{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440001.jpg"}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(7))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString(`{"content":"too many","media":[`+items+`]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	createPost(ctx, nil)
+	if recorder.Code != http.StatusBadRequest || persistCalled {
+		t.Fatalf("status=%d persistCalled=%t body=%s", recorder.Code, persistCalled, recorder.Body.String())
 	}
 }
 
@@ -101,7 +156,7 @@ func TestCreatePostRejectsWhitespaceOnlyContent(t *testing.T) {
 	originalCreate := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = originalCreate })
 	called := false
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, time.Time) error {
+	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		called = true
 		return errors.New("must not persist")
 	}
@@ -141,7 +196,7 @@ func TestCreatePostRejectsReplyAboveUnicodeRuneLimitBeforeSideEffects(t *testing
 	persistCalls := 0
 	initializeCalls := 0
 	invalidateCalls := 0
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, time.Time) error {
+	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		persistCalls++
 		return nil
 	}
@@ -226,7 +281,7 @@ func TestCreatePostRejectsOversizedAndMalformedJSONBeforeSideEffects(t *testing.
 			persistCalls := 0
 			initializeCalls := 0
 			invalidateCalls := 0
-			persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, time.Time) error {
+			persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 				persistCalls++
 				return nil
 			}

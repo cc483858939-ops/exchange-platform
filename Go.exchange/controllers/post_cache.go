@@ -28,7 +28,7 @@ type cacheSetter func(key string, payload []byte, expiration time.Duration) erro
 
 // postDetailCacheKey returns the canonical Post detail key.
 func postDetailCacheKey(id string) string {
-	return "post:detail:v2:" + id
+	return "post:detail:v3:" + id
 }
 
 // InvalidatePostDetailCacheByIDWithRedis deletes the canonical viewer-

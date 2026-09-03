@@ -40,6 +40,7 @@ func RunMigrations() error {
 			&models.User{},
 			&models.UserFollow{},
 			&models.Post{},
+			&models.PostMedia{},
 			&models.PostRepost{},
 			&models.PostEmbedding{},
 			&models.OutboxEvent{},
@@ -66,6 +67,9 @@ func RunMigrations() error {
 			return err
 		}
 		if err := applyPostSchemaConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyPostMediaConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyPostEmbeddingConstraints(tx); err != nil {
@@ -209,6 +213,26 @@ func applyLegacyPostEmbeddingJobCleanup(tx *gorm.DB) error {
 func applyPostArticleCleanup(tx *gorm.DB) error {
 	if err := tx.Exec("DROP TABLE IF EXISTS post_articles").Error; err != nil {
 		return fmt.Errorf("drop post article table: %w", err)
+	}
+	return nil
+}
+
+func applyPostMediaConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS fk_post_media_post",
+		"ALTER TABLE post_media ADD CONSTRAINT fk_post_media_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_type",
+		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_type CHECK (media_type = 'image')",
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_position",
+		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_position CHECK (position >= 0 AND position <= 3)",
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_url_nonblank",
+		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_url_nonblank CHECK (char_length(trim(url)) > 0)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_media_post_position ON post_media (post_id, position)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply post media constraints: %w", err)
+		}
 	}
 	return nil
 }

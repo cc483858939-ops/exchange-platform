@@ -259,7 +259,7 @@ func assertCanonicalTombstonePayload(t *testing.T, raw json.RawMessage, postID u
 	if err := json.Unmarshal(payload["deleted"], &deleted); err != nil || !deleted {
 		t.Fatalf("tombstone deleted=%t err=%v", deleted, err)
 	}
-	for _, key := range []string{"state", "author", "content", "published_at"} {
+	for _, key := range []string{"state", "author", "content", "published_at", "media"} {
 		if _, ok := payload[key]; ok {
 			t.Fatalf("tombstone leaked %q: %v", key, payload)
 		}

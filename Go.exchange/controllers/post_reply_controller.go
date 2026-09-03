@@ -90,6 +90,10 @@ func GetPostReplies(ctx *gin.Context) {
 		}
 		items = append(items, response)
 	}
+	if err := hydratePostResponsesMediaFromDB(global.Db, items); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	var nextCursor *string
 	if hasMore {

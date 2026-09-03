@@ -18,20 +18,25 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestUploadPostCoverStoresImageAndReturnsURL(t *testing.T) {
+func TestUploadPostMediaStoresImageAndReturnsURL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	originalPutPostCoverObject := putPostCoverObject
+	originalLoader := loadActiveProfileViewer
+	originalPutStoredObject := putStoredObject
 	defer func() {
-		putPostCoverObject = originalPutPostCoverObject
+		loadActiveProfileViewer = originalLoader
+		putStoredObject = originalPutStoredObject
 	}()
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: 42}}, nil
+	}
 
 	pngPayload := append([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, []byte("payload")...)
 	var gotObjectKey string
 	var gotContentType string
 	var gotObjectSize int64
 	var gotPayload []byte
-	putPostCoverObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
+	putStoredObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
 		var err error
 		gotObjectKey = objectKey
 		gotContentType = contentType
@@ -40,18 +45,19 @@ func TestUploadPostCoverStoresImageAndReturnsURL(t *testing.T) {
 		return err
 	}
 
-	body, contentType := multipartImageRequestBody(t, "cover.png", pngPayload)
+	body, contentType := multipartImageRequestBody(t, "post.png", pngPayload)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/article-cover", body)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/post-media", body)
 	ctx.Request.Header.Set("Content-Type", contentType)
+	ctx.Set("user_id", uint(42))
 
-	UploadPostCover(ctx)
+	UploadPostMedia(ctx)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("unexpected status: got %d want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	if !strings.HasPrefix(gotObjectKey, postCoverObjectPrefix) || !strings.HasSuffix(gotObjectKey, ".png") {
+	if !strings.HasPrefix(gotObjectKey, postMediaObjectPrefix+"42/") || !strings.HasSuffix(gotObjectKey, ".png") {
 		t.Fatalf("unexpected object key: %s", gotObjectKey)
 	}
 	if gotContentType != "image/png" {
@@ -64,28 +70,76 @@ func TestUploadPostCoverStoresImageAndReturnsURL(t *testing.T) {
 		t.Fatal("uploaded payload was not preserved")
 	}
 
-	var response postCoverUploadResponse
+	var response postMediaUploadResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !strings.HasPrefix(response.CoverImageURL, "/api/files/"+postCoverObjectPrefix) {
-		t.Fatalf("unexpected cover url: %s", response.CoverImageURL)
+	if !strings.HasPrefix(response.MediaURL, "/api/files/"+postMediaObjectPrefix+"42/") {
+		t.Fatalf("unexpected media url: %s", response.MediaURL)
 	}
 }
 
-func TestUploadPostCoverRejectsUnsupportedFile(t *testing.T) {
+func TestUploadPostMediaRejectsUnsupportedFile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	originalLoader := loadActiveProfileViewer
+	t.Cleanup(func() { loadActiveProfileViewer = originalLoader })
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: 42}}, nil
+	}
 
-	body, contentType := multipartImageRequestBody(t, "cover.txt", []byte("not an image"))
+	body, contentType := multipartImageRequestBody(t, "post.txt", []byte("not an image"))
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/article-cover", body)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/post-media", body)
 	ctx.Request.Header.Set("Content-Type", contentType)
+	ctx.Set("user_id", uint(42))
 
-	UploadPostCover(ctx)
+	UploadPostMedia(ctx)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status: got %d want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestUploadPostMediaAcceptsOnlySupportedImageBytes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalLoader := loadActiveProfileViewer
+	originalPut := putStoredObject
+	t.Cleanup(func() {
+		loadActiveProfileViewer = originalLoader
+		putStoredObject = originalPut
+	})
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: 42}}, nil
+	}
+	putStoredObject = func(context.Context, string, io.Reader, int64, string) error { return nil }
+
+	cases := []struct {
+		name    string
+		payload []byte
+		want    int
+	}{
+		{name: "empty", payload: nil, want: http.StatusBadRequest},
+		{name: "jpeg bytes", payload: []byte{0xff, 0xd8, 0xff, 0xe0, 'j', 'p', 'e', 'g'}, want: http.StatusOK},
+		{name: "png bytes", payload: append([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, []byte("png")...), want: http.StatusOK},
+		{name: "webp bytes", payload: append([]byte{'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'}, []byte("webp")...), want: http.StatusOK},
+		{name: "gif", payload: []byte("GIF89a"), want: http.StatusBadRequest},
+		{name: "text", payload: []byte("plain text"), want: http.StatusBadRequest},
+		{name: "too large", payload: make([]byte, maxPostMediaImageSize+1), want: http.StatusBadRequest},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			body, contentType := multipartImageRequestBody(t, "image.jpg", testCase.payload)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/post-media", body)
+			ctx.Request.Header.Set("Content-Type", contentType)
+			ctx.Set("user_id", uint(42))
+			UploadPostMedia(ctx)
+			if recorder.Code != testCase.want {
+				t.Fatalf("status=%d want=%d body=%s", recorder.Code, testCase.want, recorder.Body.String())
+			}
+		})
 	}
 }
 
@@ -109,10 +163,10 @@ func multipartImageRequestBody(t *testing.T, filename string, payload []byte) (*
 func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalLoader := loadActiveProfileViewer
-	originalPut := putPostCoverObject
+	originalPut := putStoredObject
 	t.Cleanup(func() {
 		loadActiveProfileViewer = originalLoader
-		putPostCoverObject = originalPut
+		putStoredObject = originalPut
 	})
 	loadActiveProfileViewer = func(uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
@@ -135,7 +189,7 @@ func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
 			var gotKey, gotMime string
 			var gotSize int64
 			var gotPayload []byte
-			putPostCoverObject = func(_ context.Context, key string, reader io.Reader, size int64, mime string) error {
+			putStoredObject = func(_ context.Context, key string, reader io.Reader, size int64, mime string) error {
 				gotKey = key
 				gotMime = mime
 				gotSize = size
@@ -175,15 +229,15 @@ func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
 func TestUploadProfileAvatarRejectsInvalidInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalLoader := loadActiveProfileViewer
-	originalPut := putPostCoverObject
+	originalPut := putStoredObject
 	t.Cleanup(func() {
 		loadActiveProfileViewer = originalLoader
-		putPostCoverObject = originalPut
+		putStoredObject = originalPut
 	})
 	loadActiveProfileViewer = func(uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
-	putPostCoverObject = func(context.Context, string, io.Reader, int64, string) error {
+	putStoredObject = func(context.Context, string, io.Reader, int64, string) error {
 		t.Fatal("storage should not be called for invalid input")
 		return nil
 	}
@@ -270,6 +324,7 @@ func TestFileObjectKeyAllowlistAcceptsNestedDevDataAvatarAndRejectsUnsafeKeys(t 
 		"profile-avatars/devdata/mkbhd/../avatar.jpg",
 		"profile-avatars/devdata/mkbhd/avatar\r\n.jpg",
 		"article-covers/../avatar.jpg",
+		"article-covers/avatar.jpg",
 		"private/devdata/mkbhd/avatar.jpg",
 	} {
 		if isAllowedObjectKey(objectKey) {

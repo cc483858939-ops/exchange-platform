@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/global"
 	"Go.exchange/models"
 )
 
@@ -438,17 +439,33 @@ func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, 
 }
 
 func selectedRecommendationResponses(selected []selectedRecommendation) ([]recommendedPostResponse, error) {
-	result := make([]recommendedPostResponse, 0, len(selected))
+	type selectedResponse struct {
+		post  postResponse
+		score float64
+	}
+	prepared := make([]selectedResponse, 0, len(selected))
 	for _, item := range selected {
 		post, err := postResponseFromModel(item.Post)
 		if err != nil {
 			continue
 		}
+		prepared = append(prepared, selectedResponse{post: post, score: item.Breakdown.FinalScore})
+	}
+	posts := make([]postResponse, 0, len(prepared))
+	for _, item := range prepared {
+		posts = append(posts, item.post)
+	}
+	if err := hydratePostResponsesMediaFromDB(global.Db, posts); err != nil {
+		return nil, err
+	}
+	result := make([]recommendedPostResponse, 0, len(prepared))
+	for index, item := range prepared {
+		post := posts[index]
 		if err := hydratePostResponseReferences(&post, time.Now().UTC()); err != nil {
 			return nil, err
 		}
 		result = append(result, recommendedPostResponse{
-			Post: post, Score: item.Breakdown.FinalScore,
+			Post: post, Score: item.score,
 		})
 	}
 	return result, nil

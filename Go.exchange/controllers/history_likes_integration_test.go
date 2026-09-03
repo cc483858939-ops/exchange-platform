@@ -71,7 +71,7 @@ func containsLikedPostID(items []postResponse, want uint) bool {
 
 func TestLikedHistoryIntegration(t *testing.T) {
 	db := openLikedHistoryIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostReaction{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
 

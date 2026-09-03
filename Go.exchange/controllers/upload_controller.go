@@ -18,17 +18,17 @@ import (
 )
 
 const (
-	postCoverObjectPrefix     = "article-covers/"
-	maxPostCoverImageSize     = 5 << 20
+	postMediaObjectPrefix     = "post-media/"
+	maxPostMediaImageSize     = 5 << 20
 	profileAvatarObjectPrefix = "profile-avatars/"
 	maxProfileAvatarImageSize = 2 << 20
 )
 
-type postCoverUploadResponse struct {
-	CoverImageURL string `json:"cover_image_url"`
+type postMediaUploadResponse struct {
+	MediaURL string `json:"media_url"`
 }
 
-var putPostCoverObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
+var putStoredObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
 	if global.MinioClient == nil {
 		return errors.New("storage is not initialized")
 	}
@@ -45,13 +45,35 @@ var getStoredObject = func(ctx context.Context, objectKey string) (*minio.Object
 	return global.MinioClient.GetObject(ctx, config.StorageBucket(), objectKey, minio.GetObjectOptions{})
 }
 
-func UploadPostCover(ctx *gin.Context) {
+var statStoredObject = func(ctx context.Context, objectKey string) error {
+	if global.MinioClient == nil {
+		return errPostMediaStorageUnavailable
+	}
+	_, err := global.MinioClient.StatObject(ctx, config.StorageBucket(), objectKey, minio.StatObjectOptions{})
+	if err == nil {
+		return nil
+	}
+	if isMissingStoredObjectError(err) {
+		return errPostMediaObjectUnavailable
+	}
+	return fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
+}
+
+func UploadPostMedia(ctx *gin.Context) {
+	// Uploaded objects are intentionally retained when a later create-post
+	// request fails; orphan cleanup is outside this phase and a later retry may
+	// still reference the returned URL.
+	viewerID, ok := requireActiveProfileViewerID(ctx)
+	if !ok {
+		return
+	}
+
 	fileHeader, err := ctx.FormFile("image")
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
 		return
 	}
-	if fileHeader.Size <= 0 || fileHeader.Size > maxPostCoverImageSize {
+	if fileHeader.Size <= 0 || fileHeader.Size > maxPostMediaImageSize {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
 		return
 	}
@@ -69,21 +91,21 @@ func UploadPostCover(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
 		return
 	}
-	contentType, extension, ok := detectPostCoverImageType(sniff[:n])
+	contentType, extension, ok := detectSupportedImageType(sniff[:n])
 	if !ok {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
 		return
 	}
 
-	objectKey := postCoverObjectPrefix + uuid.NewString() + extension
+	objectKey := fmt.Sprintf("%s%d/%s%s", postMediaObjectPrefix, viewerID, uuid.NewString(), extension)
 	reader := io.MultiReader(bytes.NewReader(sniff[:n]), file)
-	if err := putPostCoverObject(ctx.Request.Context(), objectKey, reader, fileHeader.Size, contentType); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if err := putStoredObject(ctx.Request.Context(), objectKey, reader, fileHeader.Size, contentType); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
 		return
 	}
 
-	ctx.JSON(http.StatusOK, postCoverUploadResponse{
-		CoverImageURL: postFileURL(objectKey),
+	ctx.JSON(http.StatusOK, postMediaUploadResponse{
+		MediaURL: postFileURL(objectKey),
 	})
 }
 
@@ -116,7 +138,7 @@ func UploadProfileAvatar(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
 		return
 	}
-	contentType, extension, ok := detectPostCoverImageType(sniff[:n])
+	contentType, extension, ok := detectSupportedImageType(sniff[:n])
 	if !ok {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
 		return
@@ -124,7 +146,7 @@ func UploadProfileAvatar(ctx *gin.Context) {
 
 	objectKey := fmt.Sprintf("%s%d/%s%s", profileAvatarObjectPrefix, viewerID, uuid.NewString(), extension)
 	reader := io.MultiReader(bytes.NewReader(sniff[:n]), file)
-	if err := putPostCoverObject(ctx.Request.Context(), objectKey, reader, fileHeader.Size, contentType); err != nil {
+	if err := putStoredObject(ctx.Request.Context(), objectKey, reader, fileHeader.Size, contentType); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -155,7 +177,7 @@ func GetFile(ctx *gin.Context) {
 	ctx.DataFromReader(http.StatusOK, info.Size, info.ContentType, object, nil)
 }
 
-func detectPostCoverImageType(sniff []byte) (string, string, bool) {
+func detectSupportedImageType(sniff []byte) (string, string, bool) {
 	if len(sniff) >= 12 && string(sniff[0:4]) == "RIFF" && string(sniff[8:12]) == "WEBP" {
 		return "image/webp", ".webp", true
 	}
@@ -178,9 +200,10 @@ func isAllowedObjectKey(objectKey string) bool {
 	if strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n") {
 		return false
 	}
-	return strings.HasPrefix(objectKey, postCoverObjectPrefix) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
+	return strings.HasPrefix(objectKey, postMediaObjectPrefix) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
 }
 
-func isAllowedPostObjectKey(objectKey string) bool {
-	return strings.HasPrefix(objectKey, postCoverObjectPrefix) && isAllowedObjectKey(objectKey)
+func isMissingStoredObjectError(err error) bool {
+	response := minio.ToErrorResponse(err)
+	return response.StatusCode == http.StatusNotFound || response.Code == "NoSuchKey" || response.Code == "NoSuchObject" || response.Code == "NotFound"
 }

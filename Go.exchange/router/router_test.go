@@ -58,6 +58,8 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 	}
 	for _, route := range []string{
 		"POST /api/posts",
+		"POST /api/uploads/post-media",
+		"POST /api/uploads/profile-avatar",
 		"DELETE /api/posts/:id",
 		"GET /api/posts/:id/replies",
 	} {
@@ -72,6 +74,7 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 		"DELETE /api/articles/:id",
 		"POST /api/comments",
 		"DELETE /api/comments/:id",
+		"POST /api/uploads/article-cover",
 	} {
 		if _, ok := routes[route]; ok {
 			t.Fatalf("shadow mutation route is registered: %q", route)

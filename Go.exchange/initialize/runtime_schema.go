@@ -17,15 +17,15 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-const RequiredSchemaVersion int64 = 3
+const RequiredSchemaVersion int64 = 4
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 3
-	PublishedSchemaCompatibilityFloor int64 = 3
+	PublishedSchemaCurrentVersion     int64 = 4
+	PublishedSchemaCompatibilityFloor int64 = 4
 )
 
 const runtimeSchemaStateID uint = 1
@@ -125,6 +125,18 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		},
 	},
 	{
+		Table: "post_media",
+		Constraints: []string{
+			"fk_post_media_post",
+			"chk_post_media_type",
+			"chk_post_media_position",
+			"chk_post_media_url_nonblank",
+		},
+		Indexes: []string{
+			"uidx_post_media_post_position",
+		},
+	},
+	{
 		Table: "post_reposts",
 		Constraints: []string{
 			"fk_post_reposts_user",
@@ -163,6 +175,7 @@ var apiSchemaModels = []interface{}{
 	&models.User{},
 	&models.UserFollow{},
 	&models.Post{},
+	&models.PostMedia{},
 	&models.PostRepost{},
 	&models.PostReaction{},
 	&models.Notification{},

@@ -61,7 +61,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.GET("/recommendations/posts", controllers.GetPostRecommendations)
 		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher))
 		api.POST("/post-view-events", controllers.NewPostViewEventsHandler(publisher))
-		api.POST("/uploads/article-cover", controllers.UploadPostCover)
+		api.POST("/uploads/post-media", controllers.UploadPostMedia)
 		api.POST("/uploads/profile-avatar", controllers.UploadProfileAvatar)
 		api.GET("/users/search", controllers.SearchUsers)
 		api.GET("/users/:id", controllers.GetUserByID)

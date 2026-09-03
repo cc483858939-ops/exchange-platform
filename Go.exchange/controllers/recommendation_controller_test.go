@@ -42,7 +42,7 @@ func TestGetPostRecommendationsReturnsPageEnvelopeAndPersistsRequestID(t *testin
 	}
 	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
 		return []recommendedPostResponse{{
-			Post:  postResponse{ID: 101},
+			Post:  postResponse{ID: 101, Media: make([]postMediaResponse, 0)},
 			Score: 0.91,
 		}}, nil
 	}

@@ -190,7 +190,7 @@ func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	apiTables := canaryTableSet(api)
 	workerTables := canaryTableSet(worker)
 	for _, required := range []string{
-		"users", "post_embeddings", "post_behaviors", "user_post_reco_states",
+		"users", "post_media", "post_embeddings", "post_behaviors", "user_post_reco_states",
 		"user_reco_profiles", "user_author_affinities", "user_reco_profile_dirty", "exchange_rates", "runtime_schema_state",
 	} {
 		if !apiTables[required] {

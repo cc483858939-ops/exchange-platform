@@ -35,6 +35,7 @@ type postResponse struct {
 	PublishedAt    *time.Time             `json:"published_at"`
 	Author         publicAuthorResponse   `json:"author"`
 	Content        string                 `json:"content"`
+	Media          []postMediaResponse    `json:"media"`
 	ConversationID uint                   `json:"conversation_id"`
 	ReplyToPostID  *uint                  `json:"reply_to_post_id"`
 	QuotePostID    *uint                  `json:"quote_post_id"`
@@ -53,6 +54,7 @@ type postReferenceResponse struct {
 	Author      *publicAuthorResponse         `json:"author,omitempty"`
 	Content     string                        `json:"content,omitempty"`
 	PublishedAt *time.Time                    `json:"published_at,omitempty"`
+	Media       []postMediaResponse           `json:"media,omitempty"`
 }
 
 func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
@@ -65,15 +67,20 @@ func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
 	if reference.Author == nil || reference.PublishedAt == nil {
 		return nil, errors.New("active post reference is incomplete")
 	}
+	media := reference.Media
+	if media == nil {
+		media = make([]postMediaResponse, 0)
+	}
 	return json.Marshal(struct {
 		ID          uint                 `json:"id"`
 		Author      publicAuthorResponse `json:"author"`
 		Content     string               `json:"content"`
 		PublishedAt time.Time            `json:"published_at"`
+		Media       []postMediaResponse  `json:"media"`
 		Deleted     bool                 `json:"deleted"`
 	}{
 		ID: reference.ID, Author: *reference.Author, Content: reference.Content,
-		PublishedAt: reference.PublishedAt.UTC(), Deleted: false,
+		PublishedAt: reference.PublishedAt.UTC(), Media: media, Deleted: false,
 	})
 }
 
@@ -102,6 +109,7 @@ func newPostResponse(post models.Post) (postResponse, error) {
 		ID: post.ID, CreatedAt: post.CreatedAt.UTC(), UpdatedAt: post.UpdatedAt.UTC(),
 		PublishedAt: &publishedAt, Author: author, Content: post.Content,
 		ConversationID: conversationID, ReplyToPostID: post.ReplyToPostID, QuotePostID: post.QuotePostID,
+		Media: make([]postMediaResponse, 0),
 		Visibility: post.Visibility, LikeCount: post.LikeCount, ReplyCount: post.ReplyCount,
 		ViewCount: post.ViewCount, Deleted: false,
 	}, nil
@@ -219,20 +227,25 @@ func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
 	if err := preloadPostAuthor(query).Find(&posts).Error; err != nil {
 		return nil, err
 	}
-	// Keep reference hydration on the same transaction/connection as the Post
-	// query when the caller provides one.
-	referenceDB := query.Session(&gorm.Session{NewDB: true})
 	responses := make([]postResponse, 0, len(posts))
-	referenceNow := time.Now().UTC()
 	for _, post := range posts {
 		response, err := postResponseFromModel(post)
 		if err != nil {
 			return nil, err
 		}
-		if err := hydratePostResponseReferencesFromDB(referenceDB, &response, referenceNow); err != nil {
+		responses = append(responses, response)
+	}
+	// Keep media and reference hydration on the same transaction/connection as
+	// the Post query when the caller provides one.
+	referenceDB := query.Session(&gorm.Session{NewDB: true})
+	if err := hydratePostResponsesMediaFromDB(referenceDB, responses); err != nil {
+		return nil, err
+	}
+	referenceNow := time.Now().UTC()
+	for index := range responses {
+		if err := hydratePostResponseReferencesFromDB(referenceDB, &responses[index], referenceNow); err != nil {
 			return nil, err
 		}
-		responses = append(responses, response)
 	}
 	return responses, nil
 }

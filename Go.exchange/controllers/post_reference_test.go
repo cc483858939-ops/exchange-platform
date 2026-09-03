@@ -87,7 +87,7 @@ func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) 
 	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "author"}, nil
 	}
-	persistPostGraphFn = func(post *models.Post, userID uint, content string, _ createPostRequest, now time.Time) error {
+	persistPostGraphFn = func(post *models.Post, userID uint, content string, _ createPostRequest, _ []validatedPostMedia, now time.Time) error {
 		quoteID := uint(99)
 		*post = models.Post{
 			Model:       gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
@@ -244,7 +244,7 @@ func assertActivePostReferenceWire(t *testing.T, reference *postReferenceRespons
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	wantKeys := map[string]bool{"id": true, "author": true, "content": true, "published_at": true, "deleted": true}
+	wantKeys := map[string]bool{"id": true, "author": true, "content": true, "published_at": true, "media": true, "deleted": true}
 	if len(decoded) != len(wantKeys) {
 		t.Fatalf("active reference keys=%v payload=%s", decoded, payload)
 	}
@@ -256,6 +256,9 @@ func assertActivePostReferenceWire(t *testing.T, reference *postReferenceRespons
 	var deleted bool
 	if err := json.Unmarshal(decoded["deleted"], &deleted); err != nil || deleted {
 		t.Fatalf("active deleted=%t err=%v payload=%s", deleted, err, payload)
+	}
+	if string(decoded["media"]) != "[]" {
+		t.Fatalf("active reference media=%s want []", decoded["media"])
 	}
 }
 
@@ -282,7 +285,7 @@ func assertPostReferenceTombstone(t *testing.T, reference *postReferenceResponse
 	if err := json.Unmarshal(decoded["deleted"], &deleted); err != nil || !deleted {
 		t.Fatalf("tombstone deleted=%t err=%v payload=%s", deleted, err, payload)
 	}
-	for _, forbidden := range []string{"state", "author", "content", "published_at"} {
+	for _, forbidden := range []string{"state", "author", "content", "published_at", "media"} {
 		if _, ok := decoded[forbidden]; ok {
 			t.Fatalf("tombstone leaked %s: %s", forbidden, payload)
 		}

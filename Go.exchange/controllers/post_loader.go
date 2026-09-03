@@ -62,13 +62,21 @@ func loadPostDetail(id string) (postResponse, error) {
 		if err != nil {
 			return postResponse{}, err
 		}
-		return postResponseFromModel(post)
+		response, err := postResponseFromModel(post)
+		if err != nil {
+			return postResponse{}, err
+		}
+		if err := hydratePostResponseMediaFromDB(global.Db, &response); err != nil {
+			return postResponse{}, err
+		}
+		return response, nil
 	}
 
 	response, err := loadPostDetailCache(key, loader)
 	if err != nil {
 		return postResponse{}, err
 	}
+	ensurePostResponseMedia(&response)
 	// Reference fields are always loaded after the viewer-independent base
 	// record, so a deleted target becomes a tombstone before the response.
 	if err := hydratePostResponseReferences(&response, time.Now().UTC()); err != nil {
@@ -158,8 +166,12 @@ func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferen
 	if err != nil {
 		return nil, err
 	}
+	mediaByPostID, err := loadPostMediaByPostIDs(db, []uint{post.ID})
+	if err != nil {
+		return nil, err
+	}
 	return &postReferenceResponse{
 		ID: post.ID, Deleted: false, Author: &author, Content: post.Content,
-		PublishedAt: &publishedAt,
+		PublishedAt: &publishedAt, Media: mediaByPostID[post.ID],
 	}, nil
 }

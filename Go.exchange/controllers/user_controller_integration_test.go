@@ -37,7 +37,7 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}); err != nil {
 		t.Fatal(err)
 	}
 
