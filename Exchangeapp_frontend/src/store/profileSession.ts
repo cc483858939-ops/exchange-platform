@@ -62,6 +62,7 @@ export type ProfileSessionEntry = {
   scrollY: number;
   lastAccessedAt: number;
   loadedPostIds: Set<number>;
+  postsGeneration: number;
   profileRequestVersion: number;
   postRequestVersion: number;
   followRequestVersion: number;
@@ -139,6 +140,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     scrollY: 0,
     lastAccessedAt: nextAccessTime(),
     loadedPostIds: new Set<number>(),
+    postsGeneration: 0,
     profileRequestVersion: 0,
     postRequestVersion: 0,
     followRequestVersion: 0,
@@ -509,9 +511,11 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const currentPostSession = (
     userID: number,
     session: ProfileSessionEntry,
+    capturedPostsGeneration: number,
     capturedViewerID: number | null,
     capturedViewerGeneration: number,
   ) => sessions.get(userID) === session
+    && session.postsGeneration === capturedPostsGeneration
     && viewerID.value === capturedViewerID
     && viewerGeneration.value === capturedViewerGeneration;
 
@@ -522,6 +526,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     if (session.postsLoaded && !force) return session;
 
     if (force) {
+      session.postsGeneration += 1;
       if (session.postsLoadingMore) {
         session.postRequestVersion += 1;
       }
@@ -545,14 +550,27 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       session.nextCursor = page.next_cursor;
       session.hasMore = page.next_cursor !== null;
       session.postsLoaded = true;
+      const capturedPostsGeneration = session.postsGeneration;
       void hydrateLikeStates(
         newPosts.map((post) => post.id),
         capturedViewerGeneration,
-        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(
+          userID,
+          session,
+          capturedPostsGeneration,
+          capturedViewerID,
+          capturedViewerGeneration,
+        ),
       );
       void hydrateRepostStates(
         newPosts.map((post) => post.id),
-        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(
+          userID,
+          session,
+          capturedPostsGeneration,
+          capturedViewerID,
+          capturedViewerGeneration,
+        ),
       );
     } catch (error) {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
@@ -597,14 +615,27 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       const newPosts = appendPosts(session, page.items);
       session.nextCursor = page.next_cursor;
       session.hasMore = page.next_cursor !== null;
+      const capturedPostsGeneration = session.postsGeneration;
       void hydrateLikeStates(
         newPosts.map((post) => post.id),
         capturedViewerGeneration,
-        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(
+          userID,
+          session,
+          capturedPostsGeneration,
+          capturedViewerID,
+          capturedViewerGeneration,
+        ),
       );
       void hydrateRepostStates(
         newPosts.map((post) => post.id),
-        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(
+          userID,
+          session,
+          capturedPostsGeneration,
+          capturedViewerID,
+          capturedViewerGeneration,
+        ),
       );
     } catch (error) {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
@@ -992,6 +1023,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
     if (force) {
       session.profileRequestVersion += 1;
+      session.postsGeneration += 1;
       session.user = null;
       session.profileLoaded = false;
       session.profileError = '';

@@ -286,6 +286,90 @@ describe('profile session store', () => {
     await page3Request;
   });
 
+  it('rejects old Profile interaction hydration after a forced posts refresh', async () => {
+    const oldLikePending = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const oldRepostPending = deferred<{
+      items: Array<{ post_id: number; reposts: number; reposted: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const newLikePending = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const newRepostPending = deferred<{
+      items: Array<{ post_id: number; reposts: number; reposted: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getUserPosts
+      .mockResolvedValueOnce({ items: [post(2)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [post(2)], next_cursor: null });
+    mocks.getPostLikeStates
+      .mockReturnValueOnce(oldLikePending.promise)
+      .mockReturnValueOnce(newLikePending.promise);
+    mocks.getPostRepostStates
+      .mockReturnValueOnce(oldRepostPending.promise)
+      .mockReturnValueOnce(newRepostPending.promise);
+    const store = useProfileSessionStore();
+
+    await store.loadPosts(7);
+    const session = store.getSession(7)!;
+    const oldPostsGeneration = session.postsGeneration;
+    expect(session.posts).toHaveLength(1);
+    expect(session.posts[0].id).toBe(2);
+    expect(session.posts[0]).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+    });
+
+    const refresh = store.loadPosts(7, true);
+    await refresh;
+
+    expect(session.postsGeneration).toBe(oldPostsGeneration + 1);
+    expect(session.posts).toHaveLength(1);
+    expect(session.posts[0].id).toBe(2);
+    expect(session.posts[0]).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+    });
+
+    oldLikePending.resolve({
+      items: [{ post_id: 2, likes: 99, liked: true }],
+      unavailable_post_ids: [],
+    });
+    oldRepostPending.resolve({
+      items: [{ post_id: 2, reposts: 88, reposted: true }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(session.posts[0]).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+    });
+
+    newLikePending.resolve({
+      items: [{ post_id: 2, likes: 3, liked: false }],
+      unavailable_post_ids: [],
+    });
+    newRepostPending.resolve({
+      items: [{ post_id: 2, reposts: 4, reposted: false }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(session.posts[0]).toMatchObject({
+      likeCount: 3,
+      liked: false,
+      likeStatus: 'ready',
+      repostCount: 4,
+      reposted: false,
+      repostStatus: 'ready',
+    });
+  });
+
   it('keeps an unrelated pending initial article request valid when another article is removed', async () => {
     let resolvePosts!: (value: {
       items: ReturnType<typeof post>[];
