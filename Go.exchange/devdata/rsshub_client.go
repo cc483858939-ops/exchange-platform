@@ -18,7 +18,7 @@ import (
 
 const (
 	DefaultRSSHubBaseURL        = "http://127.0.0.1:1200"
-	defaultRSSHubRequestTimeout = 20 * time.Second
+	defaultRSSHubRequestTimeout = 60 * time.Second
 	maxRSSHubResponseBytes      = 16 << 20
 	rssHubSourceUserPrefix      = "rsshub:"
 	rssHubUserRouteParams       = "/count=60&includeReplies=false&includeRts=false&strict=true"

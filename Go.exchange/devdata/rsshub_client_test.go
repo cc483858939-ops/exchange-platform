@@ -204,6 +204,32 @@ func TestRSSHubClientRejectsPagination(t *testing.T) {
 	}
 }
 
+func TestNewRSSHubClientFromEnvTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "unset", raw: "", want: 60 * time.Second},
+		{name: "override", raw: "45s", want: 45 * time.Second},
+		{name: "invalid", raw: "invalid", want: 60 * time.Second},
+		{name: "zero", raw: "0s", want: 60 * time.Second},
+		{name: "negative", raw: "-5s", want: 60 * time.Second},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("RSSHUB_TIMEOUT", test.raw)
+			client, err := NewRSSHubClientFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.httpClient.Timeout != test.want {
+				t.Fatalf("timeout=%s want %s", client.httpClient.Timeout, test.want)
+			}
+		})
+	}
+}
+
 func TestRSSHubClientReportsHTTPAndMalformedXML(t *testing.T) {
 	tests := []struct {
 		name       string
