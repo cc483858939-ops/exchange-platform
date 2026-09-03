@@ -274,13 +274,17 @@ func parseRSSHubItem(handle string, item rssHubItem) XPost {
 }
 
 func rssHubItemText(item rssHubItem) string {
-	if title := rssHubContentText(item.Title); title != "" {
-		return title
+	// RSSHub's global title-length guard may truncate the title and append
+	// an ellipsis. Prefer the item body, while retaining the existing title
+	// fallback for quote cards and feeds without usable descriptions.
+	if !rssHubContainsQuote(item) {
+		for _, raw := range []string{item.Description, item.EncodedDescription} {
+			if content := rssHubContentText(raw); content != "" {
+				return content
+			}
+		}
 	}
-	if encoded := rssHubContentText(item.EncodedDescription); encoded != "" {
-		return encoded
-	}
-	return rssHubContentText(item.Description)
+	return rssHubContentText(item.Title)
 }
 
 func rssHubDisplayName(raw, handle string) string {

@@ -142,6 +142,17 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	}
 }
 
+func TestRSSHubItemTextPrefersDescriptionOverTruncatedTitle(t *testing.T) {
+	item := rssHubItem{
+		Title:       "EVAN brings it on stage 🔥 He reflects on how performing solo differs from performing in a group. Watch more in his conversation with Billboard News...",
+		Description: "<p>EVAN brings it on stage 🔥 He reflects on how performing solo differs from performing in a group.</p><p>Watch more in his conversation with Billboard News.</p>",
+	}
+
+	if got, want := rssHubItemText(item), "EVAN brings it on stage 🔥 He reflects on how performing solo differs from performing in a group.\nWatch more in his conversation with Billboard News."; got != want {
+		t.Fatalf("item text=%q want %q", got, want)
+	}
+}
+
 func TestRSSHubFeedUsesExistingFetchFiltersAndSnapshotValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/rss+xml")
