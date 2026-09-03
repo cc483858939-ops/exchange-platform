@@ -265,6 +265,22 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.text()).not.toContain('Keep it useful.');
   });
 
+  it('linkifies the authoritative post body without changing ordinary text', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({
+      content: 'Visit https://example.com today',
+    }));
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    const body = wrapper.get('.post-detail__body');
+    const external = body.get('a.linkified-text__external');
+
+    expect(body.text()).toBe('Visit https://example.com today');
+    expect(external.attributes('href')).toBe('https://example.com');
+    expect(external.attributes('target')).toBe('_blank');
+  });
+
   it('keeps Reply non-interactive while warm and replaces cached views on success', async () => {
     const request = deferred<Post>();
     mocks.consumeHandoff.mockReturnValueOnce(post());

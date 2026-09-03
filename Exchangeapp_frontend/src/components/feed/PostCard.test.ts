@@ -106,7 +106,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     const post = basePost();
     const wrapper = mountPostCard(post);
     const links = wrapper.findAllComponents(RouterLinkStub);
-    const content = links.find(link => link.classes().includes('post-card__content'))!;
+    const content = wrapper.find('.post-card__title-link');
     const reply = links.find(link => link.classes().includes('post-card__reply'))!;
     const views = links.find(link => link.classes().includes('post-card__views'))!;
 
@@ -129,11 +129,46 @@ describe('PostCard View metric and telemetry lifecycle', () => {
   it('does not remember a modified-click navigation', async () => {
     const post = basePost();
     const wrapper = mountPostCard(post);
-    const content = wrapper.findComponent(RouterLinkStub);
+    const content = wrapper.find('.post-card__title-link');
 
     await content.trigger('click', { ctrlKey: true });
 
     expect(mocks.remember).not.toHaveBeenCalled();
+    expect(wrapper.emitted('postClick')).toEqual([[post]]);
+  });
+
+  it('separates external excerpt links from Post Detail navigation', async () => {
+    const post = { ...basePost(), excerpt: 'Read https://example.com today' };
+    const wrapper = mountPostCard(post);
+    const external = wrapper.get('a.linkified-text__external');
+    const internal = wrapper.get('a.linkified-text__internal');
+
+    expect(external.attributes('href')).toBe('https://example.com');
+    expect(wrapper.findAll('a a')).toHaveLength(0);
+
+    await external.trigger('click');
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+
+    await internal.trigger('click');
+    expect(mocks.remember).toHaveBeenCalledWith(post);
+    expect(wrapper.emitted('postClick')).toEqual([[post]]);
+  });
+
+  it('keeps the cover as an independent Post Detail link', async () => {
+    const post = { ...basePost(), coverImageUrl: '/cover.png' };
+    const wrapper = mountPostCard(post);
+    const cover = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-card__cover-link'));
+
+    expect(cover?.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '42' },
+    });
+
+    await cover?.trigger('click');
+
+    expect(mocks.remember).toHaveBeenCalledWith(post);
     expect(wrapper.emitted('postClick')).toEqual([[post]]);
   });
 

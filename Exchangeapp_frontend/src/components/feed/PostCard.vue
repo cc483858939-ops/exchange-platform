@@ -81,18 +81,24 @@
       </div>
     </div>
 
-    <RouterLink
-      class="post-card__content"
-      :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
-      @click.capture="prepareDetailNavigation"
-    >
-      <h2 v-if="post.title.trim()" class="post-card__title">{{ post.title }}</h2>
+    <div class="post-card__content">
+      <h2 v-if="post.title.trim()" class="post-card__title">
+        <RouterLink
+          class="post-card__title-link"
+          :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
+          @click.capture="prepareDetailNavigation"
+        >{{ post.title }}</RouterLink>
+      </h2>
       <p
         v-if="post.excerpt"
         class="post-card__excerpt"
         :class="{ 'post-card__excerpt--standalone': !post.title.trim() }"
       >
-        {{ post.excerpt }}
+        <LinkifiedText
+          :text="post.excerpt"
+          :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
+          @internal-activate="prepareDetailNavigation"
+        />
       </p>
       <div
         v-if="post.quotePost || post.replyToPost"
@@ -104,7 +110,11 @@
         </span>
         <template v-if="referencePost?.deleted">
           <p class="post-card__reference-deleted">
-            Post unavailable
+            <RouterLink
+              class="post-card__reference-link"
+              :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
+              @click.capture="prepareDetailNavigation"
+            >Post unavailable</RouterLink>
           </p>
         </template>
         <template v-else>
@@ -114,19 +124,30 @@
             variant="compact"
           />
           <p class="post-card__reference-content">
-            {{ referenceContent }}
+            <RouterLink
+              class="post-card__reference-link"
+              :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
+              @click.capture="prepareDetailNavigation"
+            >{{ referenceContent }}</RouterLink>
           </p>
         </template>
       </div>
-      <figure v-if="showCover" class="post-card__cover">
-        <img
-          :src="post.coverImageUrl"
-          :alt="post.title.trim() || 'Post image'"
-          loading="lazy"
-          @error="hideCover"
-        />
-      </figure>
-    </RouterLink>
+      <RouterLink
+        v-if="showCover"
+        class="post-card__cover-link"
+        :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
+        @click.capture="prepareDetailNavigation"
+      >
+        <figure class="post-card__cover">
+          <img
+            :src="post.coverImageUrl"
+            :alt="post.title.trim() || 'Post image'"
+            loading="lazy"
+            @error="hideCover"
+          />
+        </figure>
+      </RouterLink>
+    </div>
 
     <div class="post-card__engagement" aria-label="Engagement">
       <RouterLink
@@ -187,6 +208,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
+import LinkifiedText from '../content/LinkifiedText.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
@@ -544,7 +566,7 @@ const repostLabel = computed(() => {
 
 .post-card__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   min-width: 0;
 }
 
@@ -620,13 +642,25 @@ const repostLabel = computed(() => {
 .post-card__content {
   display: block;
   color: inherit;
+}
+
+.post-card__title-link,
+.post-card__cover-link,
+.post-card__reference-link {
+  color: inherit;
   text-decoration: none;
 }
 
-.post-card__content:focus-visible {
+.post-card__title-link:focus-visible,
+.post-card__cover-link:focus-visible,
+.post-card__reference-link:focus-visible {
   border-radius: var(--radius-sm);
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;
+}
+
+.post-card__cover-link {
+  display: block;
 }
 
 .post-card__title {
@@ -715,7 +749,7 @@ const repostLabel = computed(() => {
 .post-card__more-button {
   min-width: 40px;
   min-height: 40px;
-  margin: 0;
+  margin: -8px 0;
   border: 0;
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-2);

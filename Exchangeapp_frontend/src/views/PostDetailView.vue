@@ -37,7 +37,7 @@
           class="post-detail__body"
           :class="{ 'post-detail__body--loading': detailPresentation.kind === 'warm' }"
           :aria-busy="detailPresentation.kind === 'warm' ? 'true' : undefined"
-        >{{ detailPresentation.body }}</div>
+        ><LinkifiedText :text="detailPresentation.body" /></div>
 
         <aside
           v-if="detailReference"
@@ -235,6 +235,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
+import LinkifiedText from '../components/content/LinkifiedText.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
 import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
