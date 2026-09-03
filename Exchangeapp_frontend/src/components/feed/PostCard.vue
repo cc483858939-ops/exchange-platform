@@ -544,7 +544,7 @@ const repostLabel = computed(() => {
 
 .post-card__header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   min-width: 0;
 }
 
@@ -711,7 +711,7 @@ const repostLabel = computed(() => {
 .post-card__more-button {
   min-width: 40px;
   min-height: 40px;
-  margin: -8px 0;
+  margin: 0;
   border: 0;
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-2);
