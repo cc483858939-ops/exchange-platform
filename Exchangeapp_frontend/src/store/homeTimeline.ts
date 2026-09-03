@@ -60,6 +60,14 @@ export type HomeFollowingState = HomeFeedState<FeedPost> & {
   revalidateError: boolean;
 };
 
+export type HomeForYouState = HomeFeedState<HomeRecommendationItem> & {
+  loadingMore: boolean;
+  loadMoreError: boolean;
+  depleted: boolean;
+};
+
+const HOME_FOR_YOU_PAGE_SIZE = 20;
+
 const normalizeID = (value: unknown): number | null => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
     return null;
@@ -81,11 +89,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const viewerID = ref<number | null>(null);
   const activeTab = ref<FeedTab>('for-you');
-  const forYou = reactive<HomeFeedState<HomeRecommendationItem>>({
+  const forYou = reactive<HomeForYouState>({
     items: [],
     loading: false,
     error: false,
     loaded: false,
+    loadingMore: false,
+    loadMoreError: false,
+    depleted: false,
   });
   const following = reactive<HomeFollowingState>({
     items: [],
@@ -109,10 +120,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const deleteErrors = reactive(new Map<number, string>());
 
   const followingLoadedPostIds = new Set<number>();
+  const forYouLoadedPostIds = new Set<number>();
   const likeMutationVersions = new Map<number, number>();
   const repostMutationVersions = new Map<number, number>();
   let authGeneration = 0;
   let forYouRequestVersion = 0;
+  let forYouPagingVersion = 0;
+  let forYouNoProgressPages = 0;
   let followingRequestVersion = 0;
   let followingPagingVersion = 0;
   let likeGeneration = 0;
@@ -132,10 +146,16 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const resetForYou = () => {
     forYouRequestVersion += 1;
+    forYouPagingVersion += 1;
     forYou.items = [];
     forYou.loading = false;
     forYou.error = false;
     forYou.loaded = false;
+    forYou.loadingMore = false;
+    forYou.loadMoreError = false;
+    forYou.depleted = false;
+    forYouLoadedPostIds.clear();
+    forYouNoProgressPages = 0;
   };
 
   const resetFollowing = () => {
@@ -491,6 +511,32 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     return newPosts;
   };
 
+  const appendForYouRecommendations = (recommendations: RecommendedPost[]) => {
+    const appended: HomeRecommendationItem[] = [];
+
+    recommendations.forEach((recommendation) => {
+      const postID = normalizeID(recommendation?.post?.id);
+      if (
+        postID === null
+        || forYouLoadedPostIds.has(postID)
+        || feedStore.isPostDeleted(postID)
+      ) {
+        return;
+      }
+
+      forYouLoadedPostIds.add(postID);
+      appended.push({
+        recommendation,
+        post: postToFeedPost(recommendation.post),
+      });
+    });
+
+    if (appended.length > 0) {
+      forYou.items = [...forYou.items, ...appended];
+    }
+    return appended;
+  };
+
   const currentForYouRequest = (version: number, generation: number, capturedViewerID: number) =>
     version === forYouRequestVersion
     && generation === authGeneration
@@ -517,6 +563,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   ) => currentFollowingRequest(requestVersion, generation, capturedViewerID)
     && pagingVersion === followingPagingVersion;
 
+  const currentForYouPage = (
+    requestVersion: number,
+    generation: number,
+    pagingVersion: number,
+    capturedViewerID: number,
+  ) => currentForYouRequest(requestVersion, generation, capturedViewerID)
+    && pagingVersion === forYouPagingVersion;
+
   const loadForYou = async (force = false) => {
     const capturedViewerID = viewerID.value;
     if (
@@ -531,35 +585,31 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
     if (force) {
       clearLikeWork();
-      forYouRequestVersion += 1;
-      forYou.items = [];
-      forYou.loaded = false;
+      resetForYou();
     }
 
     const version = ++forYouRequestVersion;
     const generation = authGeneration;
     forYou.loading = true;
     forYou.error = false;
+    forYou.loadMoreError = false;
+    forYou.depleted = false;
 
     try {
-      const recommendations = await getPostRecommendations(50);
+      const response = await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE);
       if (!currentForYouRequest(version, generation, capturedViewerID)) return;
-      forYou.items = recommendations
-        .filter((recommendation) => !feedStore.isPostDeleted(recommendation.post.id))
-        .map((recommendation) => ({
-          recommendation,
-          post: postToFeedPost(recommendation.post),
-        }));
+      const newItems = appendForYouRecommendations(response.items);
       forYou.loaded = true;
+      forYou.depleted = response.depleted;
       const capturedLikeGeneration = likeGeneration;
       void hydrateLikeStates(
-        forYou.items.map(({ post }) => post.id),
+        newItems.map(({ post }) => post.id),
         () => currentForYouRequest(version, generation, capturedViewerID)
           && likeGeneration === capturedLikeGeneration,
       );
       const capturedRepostGeneration = repostGeneration;
       void hydrateRepostStates(
-        forYou.items.map(({ post }) => post.id),
+        newItems.map(({ post }) => post.id),
         () => currentForYouRequest(version, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
       );
@@ -570,6 +620,66 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     } finally {
       if (version === forYouRequestVersion && generation === authGeneration) {
         forYou.loading = false;
+      }
+    }
+  };
+
+  const loadMoreForYou = async () => {
+    const capturedViewerID = viewerID.value;
+    if (
+      capturedViewerID === null
+      || !isAuthenticatedForViewer(capturedViewerID)
+      || !forYou.loaded
+      || forYou.loading
+      || forYou.loadingMore
+      || forYou.loadMoreError
+      || forYou.depleted
+    ) {
+      return;
+    }
+
+    const requestVersion = forYouRequestVersion;
+    const generation = authGeneration;
+    const pagingVersion = ++forYouPagingVersion;
+    forYou.loadingMore = true;
+    forYou.loadMoreError = false;
+
+    try {
+      const response = await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE);
+      if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)) return;
+
+      const newItems = appendForYouRecommendations(response.items);
+      if (response.depleted) {
+        forYou.depleted = true;
+        forYouNoProgressPages = 0;
+      } else if (newItems.length > 0) {
+        forYouNoProgressPages = 0;
+      } else if (response.items.length > 0) {
+        forYouNoProgressPages += 1;
+        if (forYouNoProgressPages >= 2) {
+          forYou.depleted = true;
+        }
+      }
+
+      const capturedLikeGeneration = likeGeneration;
+      void hydrateLikeStates(
+        newItems.map(({ post }) => post.id),
+        () => currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)
+          && likeGeneration === capturedLikeGeneration,
+      );
+      const capturedRepostGeneration = repostGeneration;
+      void hydrateRepostStates(
+        newItems.map(({ post }) => post.id),
+        () => currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)
+          && repostGeneration === capturedRepostGeneration,
+      );
+    } catch {
+      if (currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
+        forYou.loadMoreError = true;
+      }
+    } finally {
+      if (currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
+        forYou.loadingMore = false;
       }
     }
   };
@@ -995,6 +1105,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     void loadMoreFollowing();
   };
 
+  const retryForYouLoadMore = () => {
+    if (!forYou.loadMoreError) return;
+    forYou.loadMoreError = false;
+    void loadMoreForYou();
+  };
+
   registerHomeTimelineSync({
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
@@ -1062,6 +1178,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     setActiveTab,
     setScrollY,
     loadForYou,
+    loadMoreForYou,
+    retryForYouLoadMore,
     loadFollowing,
     loadMoreFollowing,
     revalidateFollowing,

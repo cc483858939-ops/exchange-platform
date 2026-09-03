@@ -150,7 +150,8 @@ const fetchRecommendations = async () => {
   void recommendationTelemetry.flush(false);
 
   try {
-    recommendations.value = await getPostRecommendations(50);
+    const response = await getPostRecommendations(50);
+    recommendations.value = response.items;
     await nextTick();
     animateCards();
   } catch (error) {

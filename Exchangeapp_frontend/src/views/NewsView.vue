@@ -66,7 +66,8 @@ const fetchArticles = async () => {
   loadError.value = false;
 
   try {
-    posts.value = await getPostRecommendations(50);
+    const response = await getPostRecommendations(50);
+    posts.value = response.items;
   } catch (error) {
     console.error('Failed to load articles:', error);
     loadError.value = true;

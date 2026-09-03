@@ -115,6 +115,29 @@
             @delete-post="handleDeletePost"
           />
         </div>
+
+        <div
+          v-if="!forYouFeed.depleted || forYouFeed.loadingMore || forYouFeed.loadMoreError"
+          ref="forYouSentinelRef"
+          class="home-feed-sentinel"
+          aria-live="polite"
+        >
+          <span v-if="forYouFeed.loadingMore">Loading more recommendations...</span>
+          <template v-else-if="forYouFeed.loadMoreError">
+            <span>Could not load more recommendations.</span>
+            <button class="home-state__primary" type="button" @click="retryForYouLoadMore">
+              Retry
+            </button>
+          </template>
+          <button
+            v-else-if="!forYouIntersectionObserverAvailable && !forYouFeed.depleted"
+            class="home-state__primary"
+            type="button"
+            @click="loadMoreForYou"
+          >
+            Load more recommendations
+          </button>
+        </div>
       </template>
 
       <template v-else>
@@ -196,6 +219,9 @@ const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token
 
 const skeletonPosts = [0, 1, 2];
 const recommendationCardElements = new Map<number, HTMLElement>();
+const forYouSentinelRef = ref<HTMLElement | null>(null);
+const forYouIntersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
+let forYouObserver: IntersectionObserver | null = null;
 const followingSentinelRef = ref<HTMLElement | null>(null);
 const followingIntersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let followingObserver: IntersectionObserver | null = null;
@@ -288,6 +314,35 @@ const disconnectFollowingObserver = () => {
   followingObserver = null;
 };
 
+const disconnectForYouObserver = () => {
+  forYouObserver?.disconnect();
+  forYouObserver = null;
+};
+
+const updateForYouObserver = () => {
+  disconnectForYouObserver();
+  if (
+    !forYouIntersectionObserverAvailable
+    || activeTab.value !== 'for-you'
+    || !forYouSentinelRef.value
+    || !authStore.isAuthenticated
+    || !forYouFeed.loaded
+    || forYouFeed.loading
+    || forYouFeed.loadingMore
+    || forYouFeed.loadMoreError
+    || forYouFeed.depleted
+  ) {
+    return;
+  }
+
+  forYouObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      void homeTimeline.loadMoreForYou();
+    }
+  }, { rootMargin: '800px 0px' });
+  forYouObserver.observe(forYouSentinelRef.value);
+};
+
 const updateFollowingObserver = () => {
   disconnectFollowingObserver();
   if (
@@ -347,6 +402,14 @@ const loadFollowing = async (force = false) => {
 
 const loadMoreFollowing = () => {
   void homeTimeline.loadMoreFollowing();
+};
+
+const loadMoreForYou = () => {
+  void homeTimeline.loadMoreForYou();
+};
+
+const retryForYouLoadMore = () => {
+  homeTimeline.retryForYouLoadMore();
 };
 
 const retryFollowingLoadMore = () => {
@@ -435,6 +498,7 @@ watch(
       saveCurrentScroll(previousTab);
       if (previousTab === 'for-you') {
         resetRecommendationObservation();
+        disconnectForYouObserver();
       } else {
         disconnectFollowingObserver();
       }
@@ -462,6 +526,23 @@ watch(
 );
 
 watch(
+  [
+    activeTab,
+    () => forYouFeed.items.length,
+    () => forYouFeed.loaded,
+    () => forYouFeed.loading,
+    () => forYouFeed.loadingMore,
+    () => forYouFeed.loadMoreError,
+    () => forYouFeed.depleted,
+    () => authStore.isAuthenticated,
+  ],
+  () => {
+    void nextTick(updateForYouObserver);
+  },
+  { flush: 'post', immediate: true },
+);
+
+watch(
   () => forYouFeed.items.map((item) => item.recommendation.post.id).join(','),
   () => {
     void bindCurrentRecommendationCards();
@@ -481,6 +562,7 @@ watch(
 
 onBeforeUnmount(() => {
   saveCurrentScroll(activeTab.value);
+  disconnectForYouObserver();
   disconnectFollowingObserver();
   resetRecommendationObservation();
 });

@@ -51,6 +51,27 @@ type recommendedPostResponse struct {
 	Tracking *recommendationTrackingResponse `json:"tracking,omitempty"`
 }
 
+type postRecommendationPageResponse struct {
+	Items     []recommendedPostResponse `json:"items"`
+	RequestID string                    `json:"request_id"`
+	Depleted  bool                      `json:"depleted"`
+}
+
+var recommendationServingPathForHandler = serveRecommendationCandidatePath
+var selectedRecommendationResponsesForHandler = selectedRecommendationResponses
+var attachRecommendationTrackingForHandler = attachRecommendationTracking
+
+func buildPostRecommendationPageResponse(requestID string, recommendations []recommendedPostResponse) postRecommendationPageResponse {
+	if recommendations == nil {
+		recommendations = make([]recommendedPostResponse, 0)
+	}
+	return postRecommendationPageResponse{
+		Items:     recommendations,
+		RequestID: requestID,
+		Depleted:  len(recommendations) == 0,
+	}
+}
+
 func GetPostRecommendations(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
@@ -63,7 +84,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	cfg := normalizedRecommendationConfig()
 
-	serving, err := serveRecommendationCandidatePath(userID, uint(limit), cfg, now, requestID)
+	serving, err := recommendationServingPathForHandler(userID, uint(limit), cfg, now, requestID)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(serving.Profile))
 		return
@@ -79,12 +100,12 @@ func GetPostRecommendations(ctx *gin.Context) {
 		recordRecallMetrics(recallSet)
 	}
 
-	recommendations, err := selectedRecommendationResponses(selected)
+	recommendations, err := selectedRecommendationResponsesForHandler(selected)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 		return
 	}
-	trackedCount, trackingErr := attachRecommendationTracking(userID, requestID, profile, selected, recommendations, now)
+	trackedCount, trackingErr := attachRecommendationTrackingForHandler(userID, requestID, profile, selected, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
 	}
@@ -129,7 +150,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 		log.Printf("[RecommendationTelemetry] persist serving trace %s: %v", requestID, err)
 		metrics.RecordRecommendationTracePersistFailure()
 	}
-	ctx.JSON(http.StatusOK, recommendations)
+	ctx.JSON(http.StatusOK, buildPostRecommendationPageResponse(requestID, recommendations))
 }
 
 func recommendationErrorResponse(ctx *gin.Context, err error, strategyID string) {

@@ -98,6 +98,15 @@ const recommendation = (id: number) => ({
   score: 1,
 });
 
+const recommendationPage = (
+  items: ReturnType<typeof recommendation>[],
+  depleted = false,
+) => ({
+  items,
+  request_id: 'request-id',
+  depleted,
+});
+
 const followingActivity = (
   id: number,
   postAuthorID = 7,
@@ -152,7 +161,7 @@ describe('home timeline session store', () => {
   });
 
   it('does not refetch a loaded tab after clean Home re-entry', async () => {
-    mocks.getPostRecommendations.mockResolvedValue([recommendation(1)]);
+    mocks.getPostRecommendations.mockResolvedValue(recommendationPage([recommendation(1)]));
     mocks.getFollowingTimeline.mockResolvedValue({
       items: [followingActivity(2)],
       next_cursor: null,
@@ -167,14 +176,156 @@ describe('home timeline session store', () => {
     await settle();
 
     expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostRecommendations).toHaveBeenCalledWith(20);
     expect(mocks.getFollowingTimeline).toHaveBeenCalledTimes(1);
     expect(store.forYou.items).toHaveLength(1);
     expect(store.following.items).toHaveLength(1);
   });
 
+  it('appends multiple For You pages without replacing earlier posts', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2), recommendation(3)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(4), recommendation(5), recommendation(6)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(1, 20);
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(2, 20);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(store.forYou.depleted).toBe(false);
+  });
+
+  it('deduplicates page responses and skips locally deleted posts', async () => {
+    mocks.feedStore!.isPostDeleted.mockImplementation((id: number) => id === 2);
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2), recommendation(3)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(3), recommendation(4), recommendation(2)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+    await settle();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 3, 4]);
+    expect(mocks.getPostLikeStates).toHaveBeenLastCalledWith([4]);
+    expect(mocks.getPostRepostStates).toHaveBeenLastCalledWith([4]);
+  });
+
+  it('suppresses concurrent For You paging calls', async () => {
+    const pending = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockReturnValueOnce(pending.promise);
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    const first = store.loadMoreForYou();
+    const second = store.loadMoreForYou();
+
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(2);
+    expect(store.forYou.loadingMore).toBe(true);
+    pending.resolve(recommendationPage([recommendation(2)]));
+    await Promise.all([first, second]);
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.loadingMore).toBe(false);
+  });
+
+  it('keeps the existing feed when paging fails and retries separately', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.loadMoreError).toBe(true);
+    expect(store.forYou.error).toBe(false);
+    expect(store.forYou.depleted).toBe(false);
+
+    store.retryForYouLoadMore();
+    await settle();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.loadMoreError).toBe(false);
+  });
+
+  it('stops paging after a depleted response', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([], true));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.depleted).toBe(true);
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces the accumulated For You feed on force refresh', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(9)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+    await store.loadForYou(true);
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([9]);
+    expect(store.forYou.loaded).toBe(true);
+    expect(store.forYou.loadingMore).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
+  });
+
+  it('stops after two successful no-progress pages', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+    expect(store.forYou.depleted).toBe(false);
+    await store.loadMoreForYou();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.depleted).toBe(true);
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(3);
+  });
+
+  it('hydrates only newly appended posts for later pages', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2), recommendation(3)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await settle();
+    mocks.getPostLikeStates.mockClear();
+    mocks.getPostRepostStates.mockClear();
+
+    await store.loadMoreForYou();
+    await settle();
+
+    expect(mocks.getPostLikeStates).toHaveBeenCalledWith([3]);
+    expect(mocks.getPostRepostStates).toHaveBeenCalledWith([3]);
+  });
+
   it('drops a late request when the authenticated viewer changes', async () => {
-    let resolveRecommendations!: (items: ReturnType<typeof recommendation>[]) => void;
-    const pending = new Promise<ReturnType<typeof recommendation>[]>(resolve => {
+    let resolveRecommendations!: (response: ReturnType<typeof recommendationPage>) => void;
+    const pending = new Promise<ReturnType<typeof recommendationPage>>(resolve => {
       resolveRecommendations = resolve;
     });
     mocks.getPostRecommendations.mockReturnValue(pending);
@@ -182,7 +333,7 @@ describe('home timeline session store', () => {
     const request = store.loadForYou();
 
     store.setViewer(8);
-    resolveRecommendations([recommendation(9)]);
+    resolveRecommendations(recommendationPage([recommendation(9)]));
     await request;
 
     expect(store.viewerID).toBe(8);
@@ -281,7 +432,7 @@ describe('home timeline session store', () => {
   });
 
   it('batch-hydrates Repost state without changing For You membership', async () => {
-    mocks.getPostRecommendations.mockResolvedValue([recommendation(1), recommendation(2)]);
+    mocks.getPostRecommendations.mockResolvedValue(recommendationPage([recommendation(1), recommendation(2)]));
     mocks.getPostRepostStates.mockResolvedValue({
       items: [{ post_id: 1, reposts: 5, reposted: true }],
       unavailable_post_ids: [2],
