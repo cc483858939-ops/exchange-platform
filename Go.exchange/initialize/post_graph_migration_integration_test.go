@@ -94,7 +94,8 @@ WHERE conrelid = 'post_media'::regclass
 	}
 	mediaDefinitions := make(map[string]string, len(mediaConstraints))
 	for _, constraint := range mediaConstraints {
-		mediaDefinitions[constraint.Name] = strings.ToLower(strings.Join(strings.Fields(constraint.Definition), ""))
+		definition := strings.ToLower(strings.Join(strings.Fields(constraint.Definition), ""))
+		mediaDefinitions[constraint.Name] = strings.ReplaceAll(definition, "\"", "")
 	}
 	for name, requiredParts := range map[string][]string{
 		"fk_post_media_post":          {"foreignkey(post_id)", "referencesposts(id)", "ondeletecascade"},
@@ -147,7 +148,8 @@ WHERE conrelid = 'posts'::regclass
 	}
 	constraintDefinitions := make(map[string]string, len(constraints))
 	for _, constraint := range constraints {
-		constraintDefinitions[constraint.Name] = strings.ToLower(strings.Join(strings.Fields(constraint.Definition), ""))
+		definition := strings.ToLower(strings.Join(strings.Fields(constraint.Definition), ""))
+		constraintDefinitions[constraint.Name] = strings.ReplaceAll(definition, "\"", "")
 	}
 	foreignKeys := map[string][]string{
 		"fk_posts_author":        {"foreignkey(author_id)", "referencesusers(id)"},

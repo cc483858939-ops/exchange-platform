@@ -158,7 +158,7 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 		t.Fatal(err)
 	}
 	if len(candidates) != 1 || candidates[0].PostID != valid.ID {
-		t.Fatalf("candidates=%#v, want only valid article %d", candidates, valid.ID)
+		t.Fatalf("candidates=%#v, want only valid post %d", candidates, valid.ID)
 	}
 }
 
@@ -325,9 +325,9 @@ func TestRecommendationTrendingRecallPreservesEligibilityIntegration(t *testing.
 	notInterested := newRecommendationTrendingPost(t, db, validAuthor, "trending-not-interested", now.Add(-3*time.Hour), 50, 1)
 	interacted := newRecommendationTrendingPost(t, db, validAuthor, "trending-interacted", now.Add(-4*time.Hour), 50, 1)
 	hardServed := newRecommendationTrendingPost(t, db, validAuthor, "trending-hard-served", now.Add(-5*time.Hour), 50, 1)
-	deleted := newRecommendationTrendingPost(t, db, deletedAuthor, "trending-deleted-author", now.Add(-6*time.Hour), 50, 1)
-	nonPublic := newRecommendationTrendingPost(t, db, validAuthor, "trending-non-public", now.Add(-7*time.Hour), 50, 1)
-	postIDs := []uint{valid.ID, self.ID, notInterested.ID, interacted.ID, hardServed.ID, deleted.ID, nonPublic.ID}
+	deletedAuthorPost := newRecommendationTrendingPost(t, db, deletedAuthor, "trending-deleted-author", now.Add(-6*time.Hour), 50, 1)
+	deletedPost := newRecommendationTrendingPost(t, db, validAuthor, "trending-deleted-post", now.Add(-7*time.Hour), 50, 1)
+	postIDs := []uint{valid.ID, self.ID, notInterested.ID, interacted.ID, hardServed.ID, deletedAuthorPost.ID, deletedPost.ID}
 	userIDs := []uint{viewer.ID, validAuthor.ID, deletedAuthor.ID}
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
 
@@ -340,7 +340,7 @@ func TestRecommendationTrendingRecallPreservesEligibilityIntegration(t *testing.
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&models.Post{}).Where("id = ?", nonPublic.ID).Update("visibility", "private").Error; err != nil {
+	if err := db.Delete(&deletedPost).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -352,6 +352,6 @@ func TestRecommendationTrendingRecallPreservesEligibilityIntegration(t *testing.
 		t.Fatal(err)
 	}
 	if len(candidates) != 1 || candidates[0].PostID != valid.ID {
-		t.Fatalf("candidates=%#v, want only valid article %d", candidates, valid.ID)
+		t.Fatalf("candidates=%#v, want only valid post %d", candidates, valid.ID)
 	}
 }

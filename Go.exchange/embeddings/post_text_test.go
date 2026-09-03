@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+func TestBuildPostEmbeddingTextUsesCanonicalContent(t *testing.T) {
 	if got := BuildPostEmbeddingText("Body"); got != "Body" {
 		t.Fatalf("text=%q", got)
 	}
