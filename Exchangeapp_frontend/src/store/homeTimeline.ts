@@ -664,13 +664,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       const capturedLikeGeneration = likeGeneration;
       void hydrateLikeStates(
         newItems.map(({ post }) => post.id),
-        () => currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)
+        () => currentForYouRequest(requestVersion, generation, capturedViewerID)
           && likeGeneration === capturedLikeGeneration,
       );
       const capturedRepostGeneration = repostGeneration;
       void hydrateRepostStates(
         newItems.map(({ post }) => post.id),
-        () => currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)
+        () => currentForYouRequest(requestVersion, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
       );
     } catch {

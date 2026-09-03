@@ -323,6 +323,65 @@ describe('home timeline session store', () => {
     expect(mocks.getPostRepostStates).toHaveBeenCalledWith([3]);
   });
 
+  it('keeps later-page Like and Repost hydration valid when the next page starts', async () => {
+    const page3Pending = deferred<ReturnType<typeof recommendationPage>>();
+    const page2LikePending = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const page2RepostPending = deferred<{
+      items: Array<{ post_id: number; reposts: number; reposted: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)]))
+      .mockReturnValueOnce(page3Pending.promise);
+    mocks.getPostLikeStates
+      .mockResolvedValueOnce({ items: [], unavailable_post_ids: [] })
+      .mockReturnValueOnce(page2LikePending.promise);
+    mocks.getPostRepostStates
+      .mockResolvedValueOnce({ items: [], unavailable_post_ids: [] })
+      .mockReturnValueOnce(page2RepostPending.promise);
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await settle();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.items[1].post).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+    });
+
+    const page3Request = store.loadMoreForYou();
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(3);
+    expect(store.forYou.loadingMore).toBe(true);
+
+    page2LikePending.resolve({
+      items: [{ post_id: 2, likes: 7, liked: true }],
+      unavailable_post_ids: [],
+    });
+    page2RepostPending.resolve({
+      items: [{ post_id: 2, reposts: 9, reposted: true }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(store.forYou.items[1].post).toMatchObject({
+      likeCount: 7,
+      liked: true,
+      likeStatus: 'ready',
+      repostCount: 9,
+      reposted: true,
+      repostStatus: 'ready',
+    });
+
+    page3Pending.resolve(recommendationPage([], true));
+    await page3Request;
+  });
+
   it('drops a late request when the authenticated viewer changes', async () => {
     let resolveRecommendations!: (response: ReturnType<typeof recommendationPage>) => void;
     const pending = new Promise<ReturnType<typeof recommendationPage>>(resolve => {
