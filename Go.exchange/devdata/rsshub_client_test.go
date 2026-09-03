@@ -14,7 +14,7 @@ const rssHubTestFeed = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
     <title>Twitter @Marques Brownlee</title>
-    <description><![CDATA[Technology &amp; hardware feed]]></description>
+    <description><![CDATA[Technology &amp; hardware feed - Powered by RSSHub]]></description>
     <link>https://twitter.com/MKBHD</link>
     <image><url>https://cdn.example.test/mkbhd.png</url></image>
     <item>

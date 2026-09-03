@@ -22,6 +22,7 @@ const (
 	maxRSSHubResponseBytes      = 16 << 20
 	rssHubSourceUserPrefix      = "rsshub:"
 	rssHubUserRouteParams       = "/count=60&includeReplies=false&includeRts=false&strict=true"
+	rssHubAttributionSuffix     = " - Powered by RSSHub"
 )
 
 var (
@@ -242,7 +243,7 @@ func parseRSSHubFeed(handle string, document rssHubDocument) (rssHubFeed, error)
 		ID:              rssHubSourceUserID(handle),
 		Name:            name,
 		Username:        handle,
-		Description:     rssHubContentText(document.Channel.Description),
+		Description:     rssHubDescriptionText(document.Channel.Description),
 		ProfileImageURL: strings.TrimSpace(document.Channel.Image.URL),
 		Protected:       &protected,
 	}, posts: make([]XPost, 0, len(document.Channel.Items))}
@@ -355,6 +356,18 @@ func rssHubContentText(raw string) string {
 	raw = html.UnescapeString(raw)
 	raw = strings.ReplaceAll(raw, "\u00a0", " ")
 	return NormalizeSourceText(raw)
+}
+
+func rssHubDescriptionText(raw string) string {
+	description := rssHubContentText(raw)
+	if len(description) < len(rssHubAttributionSuffix) {
+		return description
+	}
+	suffixStart := len(description) - len(rssHubAttributionSuffix)
+	if !strings.EqualFold(description[suffixStart:], rssHubAttributionSuffix) {
+		return description
+	}
+	return strings.TrimSpace(description[:suffixStart])
 }
 
 func rssHubContainsMedia(raw string) bool {
