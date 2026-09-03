@@ -153,6 +153,67 @@ func TestRSSHubItemTextPrefersDescriptionOverTruncatedTitle(t *testing.T) {
 	}
 }
 
+func TestRSSHubItemTextFallbackOrderAndQuoteProtection(t *testing.T) {
+	tests := []struct {
+		name string
+		item rssHubItem
+		want string
+	}{
+		{
+			name: "encoded description when description is unavailable",
+			item: rssHubItem{EncodedDescription: "<p>encoded</p>", Title: "truncated..."},
+			want: "encoded",
+		},
+		{
+			name: "title when both body fields are unavailable",
+			item: rssHubItem{Title: "fallback"},
+			want: "fallback",
+		},
+		{
+			name: "title for quote post",
+			item: rssHubItem{
+				Title:       "root fallback",
+				Description: `<p>root body</p><div class="rsshub-quote"><a href="https://x.com/Other/status/9001">quoted body</a></div>`,
+			},
+			want: "root fallback",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := rssHubItemText(test.item); got != test.want {
+				t.Fatalf("item text=%q want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRSSHubContentTextNormalizesLineWhitespaceWithoutCollapsingInlineSpaces(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "paragraph tags", raw: "<p>first</p><p>second</p>", want: "first\nsecond"},
+		{name: "br", raw: "first<br>second", want: "first\nsecond"},
+		{name: "whitespace around block break", raw: "<p>first </p> <p> second</p>", want: "first\nsecond"},
+		{name: "tabs around break", raw: "first\t<br>\tsecond", want: "first\nsecond"},
+		{name: "inline spaces preserved", raw: "hello   world", want: "hello   world"},
+		{name: "HTML entities", raw: "Tom &amp; Jerry", want: "Tom & Jerry"},
+		{name: "NBSP", raw: "hello&nbsp;world", want: "hello world"},
+		{name: "empty HTML", raw: "<p></p>", want: ""},
+		{name: "CRLF normalized", raw: "first\r\nsecond", want: "first\nsecond"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := rssHubContentText(test.raw); got != test.want {
+				t.Fatalf("content text=%q want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRSSHubFeedUsesExistingFetchFiltersAndSnapshotValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/rss+xml")

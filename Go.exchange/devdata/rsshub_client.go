@@ -26,10 +26,11 @@ const (
 )
 
 var (
-	rssHubStatusIDPattern  = regexp.MustCompile(`(?i)/status/([0-9]{1,19})(?:[/?#\s"'&<>]|$)`)
-	rssHubHTMLBreakPattern = regexp.MustCompile(`(?is)<\s*(?:br|/p|/div|/li|/blockquote)\s*/?\s*>`)
-	rssHubHTMLTagPattern   = regexp.MustCompile(`(?is)<[^>]+>`)
-	rssHubQuotePattern     = regexp.MustCompile(`(?is)<div\b[^>]*\bclass\s*=\s*["'][^"']*\brsshub-quote\b[^"']*["'][^>]*>`)
+	rssHubStatusIDPattern       = regexp.MustCompile(`(?i)/status/([0-9]{1,19})(?:[/?#\s"'&<>]|$)`)
+	rssHubHTMLBreakPattern      = regexp.MustCompile(`(?is)<\s*(?:br|/p|/div|/li|/blockquote)\s*/?\s*>`)
+	rssHubHTMLTagPattern        = regexp.MustCompile(`(?is)<[^>]+>`)
+	rssHubLineWhitespacePattern = regexp.MustCompile(`[ \t]*\n[ \t]*`)
+	rssHubQuotePattern          = regexp.MustCompile(`(?is)<div\b[^>]*\bclass\s*=\s*["'][^"']*\brsshub-quote\b[^"']*["'][^>]*>`)
 )
 
 // RSSHubClient adapts RSSHub's X user feeds to the existing source client
@@ -359,6 +360,7 @@ func rssHubContentText(raw string) string {
 	raw = rssHubHTMLTagPattern.ReplaceAllString(raw, " ")
 	raw = html.UnescapeString(raw)
 	raw = strings.ReplaceAll(raw, "\u00a0", " ")
+	raw = rssHubLineWhitespacePattern.ReplaceAllString(raw, "\n")
 	return NormalizeSourceText(raw)
 }
 
