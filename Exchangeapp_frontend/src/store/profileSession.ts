@@ -506,6 +506,15 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     && viewerID.value === capturedViewerID
     && viewerGeneration.value === capturedViewerGeneration;
 
+  const currentPostSession = (
+    userID: number,
+    session: ProfileSessionEntry,
+    capturedViewerID: number | null,
+    capturedViewerGeneration: number,
+  ) => sessions.get(userID) === session
+    && viewerID.value === capturedViewerID
+    && viewerGeneration.value === capturedViewerGeneration;
+
   const loadPosts = async (rawUserID: unknown, force = false) => {
     const userID = normalizeID(rawUserID);
     const session = userID === null ? null : ensureSession(userID);
@@ -539,11 +548,11 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       void hydrateLikeStates(
         newPosts.map((post) => post.id),
         capturedViewerGeneration,
-        () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
       );
       void hydrateRepostStates(
         newPosts.map((post) => post.id),
-        () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
       );
     } catch (error) {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
@@ -591,11 +600,11 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       void hydrateLikeStates(
         newPosts.map((post) => post.id),
         capturedViewerGeneration,
-        () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
       );
       void hydrateRepostStates(
         newPosts.map((post) => post.id),
-        () => currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration),
+        () => currentPostSession(userID, session, capturedViewerID, capturedViewerGeneration),
       );
     } catch (error) {
       if (currentRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {

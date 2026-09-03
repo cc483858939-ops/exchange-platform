@@ -117,6 +117,14 @@ const settle = async () => {
   await flushPromises();
 };
 
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 describe('profile session store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -211,6 +219,71 @@ describe('profile session store', () => {
     expect(session.posts.map(post => post.id)).toEqual([1, 2]);
     expect(session.nextCursor).toBeNull();
     expect(session.hasMore).toBe(false);
+  });
+
+  it('keeps previous Profile page interaction hydration valid when the next page starts', async () => {
+    const page3Pending = deferred<{
+      items: ReturnType<typeof post>[];
+      next_cursor: string | null;
+    }>();
+    const page2LikePending = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const page2RepostPending = deferred<{
+      items: Array<{ post_id: number; reposts: number; reposted: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getUserPosts
+      .mockResolvedValueOnce({ items: [post(1)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [post(2)], next_cursor: 'cursor-2' })
+      .mockReturnValueOnce(page3Pending.promise);
+    mocks.getPostLikeStates
+      .mockResolvedValueOnce({ items: [], unavailable_post_ids: [] })
+      .mockReturnValueOnce(page2LikePending.promise);
+    mocks.getPostRepostStates
+      .mockResolvedValueOnce({ items: [], unavailable_post_ids: [] })
+      .mockReturnValueOnce(page2RepostPending.promise);
+    const store = useProfileSessionStore();
+
+    await store.loadPosts(7);
+    await settle();
+    await store.loadMorePosts(7);
+
+    const session = store.getSession(7)!;
+    expect(session.posts.map(item => item.id)).toEqual([1, 2]);
+    expect(session.posts[1]).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+    });
+    const page2RequestVersion = session.postRequestVersion;
+
+    const page3Request = store.loadMorePosts(7);
+    expect(session.postRequestVersion).toBe(page2RequestVersion + 1);
+    expect(mocks.getUserPosts).toHaveBeenCalledTimes(3);
+    expect(session.postsLoadingMore).toBe(true);
+
+    page2LikePending.resolve({
+      items: [{ post_id: 2, likes: 7, liked: true }],
+      unavailable_post_ids: [],
+    });
+    page2RepostPending.resolve({
+      items: [{ post_id: 2, reposts: 9, reposted: true }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(session.posts[1]).toMatchObject({
+      likeCount: 7,
+      liked: true,
+      likeStatus: 'ready',
+      repostCount: 9,
+      reposted: true,
+      repostStatus: 'ready',
+    });
+
+    page3Pending.resolve({ items: [], next_cursor: null });
+    await page3Request;
   });
 
   it('keeps an unrelated pending initial article request valid when another article is removed', async () => {

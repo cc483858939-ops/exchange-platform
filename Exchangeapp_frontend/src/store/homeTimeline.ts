@@ -856,13 +856,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       const capturedLikeGeneration = likeGeneration;
       void hydrateLikeStates(
         freshPosts.map(post => post.id),
-        () => currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)
+        () => currentFollowingRequest(version, generation, capturedViewerID)
           && likeGeneration === capturedLikeGeneration,
       );
       const capturedRepostGeneration = repostGeneration;
       void hydrateRepostStates(
         freshPosts.map(post => post.id),
-        () => currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)
+        () => currentFollowingRequest(version, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
       );
     } catch {

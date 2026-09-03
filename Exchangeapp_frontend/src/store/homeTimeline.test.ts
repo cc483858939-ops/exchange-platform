@@ -699,6 +699,73 @@ describe('home timeline session store', () => {
     expect(store.following.revalidating).toBe(false);
   });
 
+  it('keeps Following revalidation hydration valid when pagination starts afterward', async () => {
+    const pagePending = deferred<{
+      items: ReturnType<typeof followingActivity>[];
+      next_cursor: string | null;
+    }>();
+    const freshLikePending = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const freshRepostPending = deferred<{
+      items: Array<{ post_id: number; reposts: number; reposted: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const store = useHomeTimelineStore();
+    store.following.items = [feedPostFixture(1, 7)];
+    store.following.loaded = true;
+    store.following.stale = true;
+    store.following.nextCursor = 'old-cursor';
+    mocks.getFollowingTimeline
+      .mockResolvedValueOnce({
+        items: [followingActivity(2)],
+        next_cursor: 'cursor-2',
+      })
+      .mockReturnValueOnce(pagePending.promise);
+    mocks.getPostLikeStates.mockReturnValueOnce(freshLikePending.promise);
+    mocks.getPostRepostStates.mockReturnValueOnce(freshRepostPending.promise);
+
+    const refresh = store.revalidateFollowing();
+    await refresh;
+
+    expect(store.following.items.map(post => post.id)).toEqual([2]);
+    expect(store.following.items[0]).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+    });
+    expect(store.following.revalidating).toBe(false);
+
+    const pageRequest = store.loadMoreFollowing();
+    expect(mocks.getFollowingTimeline).toHaveBeenNthCalledWith(2, {
+      limit: 20,
+      cursor: 'cursor-2',
+    });
+    expect(store.following.loadingMore).toBe(true);
+
+    freshLikePending.resolve({
+      items: [{ post_id: 2, likes: 6, liked: true }],
+      unavailable_post_ids: [],
+    });
+    freshRepostPending.resolve({
+      items: [{ post_id: 2, reposts: 4, reposted: true }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(store.following.items[0]).toMatchObject({
+      likeCount: 6,
+      liked: true,
+      likeStatus: 'ready',
+      repostCount: 4,
+      reposted: true,
+      repostStatus: 'ready',
+    });
+
+    pagePending.resolve({ items: [], next_cursor: null });
+    await pageRequest;
+  });
+
   it('preserves cached Following when background revalidation fails', async () => {
     const store = useHomeTimelineStore();
     store.following.items = [feedPostFixture(1, 7)];
