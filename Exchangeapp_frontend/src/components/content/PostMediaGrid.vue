@@ -14,6 +14,7 @@
       <img
         v-if="!failedURLs.has(item.url)"
         class="post-media-grid__image"
+        :class="{ 'post-media-grid__image--single': media.length === 1 }"
         :src="item.url"
         :alt="`Post image ${index + 1}`"
         loading="lazy"
@@ -92,7 +93,9 @@ const markFailed = (url: string) => {
 }
 
 .post-media-grid--count-1 .post-media-grid__item {
-  aspect-ratio: 16 / 9;
+  aspect-ratio: auto;
+  display: flex;
+  justify-content: center;
 }
 
 .post-media-grid--count-3 .post-media-grid__item:first-child {
@@ -109,6 +112,14 @@ const markFailed = (url: string) => {
 
 .post-media-grid__image {
   object-fit: cover;
+}
+
+.post-media-grid--count-1 .post-media-grid__image {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 640px;
+  object-fit: contain;
 }
 
 .post-media-grid__placeholder {

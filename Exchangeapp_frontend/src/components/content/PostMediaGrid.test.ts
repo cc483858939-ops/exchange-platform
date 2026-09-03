@@ -30,6 +30,18 @@ describe('PostMediaGrid', () => {
     expect(wrapper.findAll('.post-media-grid__item')).toHaveLength(count);
   });
 
+  it('exposes the intrinsic-ratio presentation state for a single image', () => {
+    const singleWrapper = mountGrid(1);
+    expect(singleWrapper.get('.post-media-grid').classes())
+      .toContain('post-media-grid--count-1');
+    expect(singleWrapper.get('img').classes())
+      .toContain('post-media-grid__image--single');
+
+    const multiWrapper = mountGrid(2);
+    expect(multiWrapper.findAll('img')[0].classes())
+      .not.toContain('post-media-grid__image--single');
+  });
+
   it('emits the selected index only when the composer enables removal', async () => {
     const displayWrapper = mountGrid(2);
     expect(displayWrapper.findAll('.post-media-grid__remove')).toHaveLength(0);
