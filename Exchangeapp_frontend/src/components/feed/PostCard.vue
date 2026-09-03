@@ -608,6 +608,10 @@ const repostLabel = computed(() => {
   margin-left: var(--space-2);
 }
 
+.post-card__header:has(.post-card__repost-context) .post-card__more {
+  align-self: flex-end;
+}
+
 .post-card__content,
 .post-card__engagement {
   margin-left: calc(var(--post-avatar-size) + var(--post-column-gap));
