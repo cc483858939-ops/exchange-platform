@@ -38,6 +38,8 @@
           <PostMediaGrid
             v-if="detailPresentation.media.length > 0"
             :media="detailPresentation.media"
+            interactive
+            @open="openMediaViewer(detailPresentation.media, $event)"
           />
         </div>
 
@@ -62,6 +64,8 @@
             <PostMediaGrid
               v-if="detailReferenceMedia.length > 0"
               :media="detailReferenceMedia"
+              interactive
+              @open="openMediaViewer(detailReferenceMedia, $event)"
             />
           </template>
         </aside>
@@ -203,6 +207,7 @@
           @load-more="loadMoreReplies"
           @retry="retryLoadMoreReplies"
           @delete="deleteOwnReply"
+          @open-media="openMediaViewer"
         />
       </section>
     </template>
@@ -220,6 +225,13 @@
       </RouterLink>
       <button v-else type="button" @click="retryPost">Try again</button>
     </section>
+
+    <PostMediaViewer
+      v-if="mediaViewer"
+      :media="mediaViewer.media"
+      :initial-index="mediaViewer.index"
+      @close="closeMediaViewer"
+    />
   </main>
 </template>
 
@@ -229,6 +241,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 import LinkifiedText from '../components/content/LinkifiedText.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
+import PostMediaViewer from '../components/content/PostMediaViewer.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
 import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -301,6 +314,13 @@ const deletingReplyId = ref<number | null>(null);
 const composerRef = ref<InstanceType<typeof ReplyComposer> | null>(null);
 const replyCount = ref(0);
 const viewCount = ref(0);
+
+type MediaViewerState = {
+  media: Post['media'];
+  index: number;
+};
+
+const mediaViewer = ref<MediaViewerState | null>(null);
 
 let detailRequestVersion = 0;
 let deleteRequestVersion = 0;
@@ -399,6 +419,22 @@ const detailReferenceMedia = computed(() => {
   return reference && !reference.deleted ? reference.media : [];
 });
 const detailReferenceMessage = 'Post unavailable';
+
+const openMediaViewer = (media: Post['media'], index: number) => {
+  const visibleMedia = media.slice(0, 4);
+  if (visibleMedia.length === 0) {
+    return;
+  }
+
+  mediaViewer.value = {
+    media,
+    index: Math.min(Math.max(Math.trunc(index), 0), visibleMedia.length - 1),
+  };
+};
+
+const closeMediaViewer = () => {
+  mediaViewer.value = null;
+};
 
 const presentationLikeLabel = computed(() => {
   const count = detailPresentation.value?.likeCount ?? 0;
@@ -1126,6 +1162,7 @@ const consumeReplyIntent = async () => {
 
 const loadDetail = async (id: string, isAuthenticated: boolean) => {
   const detailVersion = ++detailRequestVersion;
+  closeMediaViewer();
   finishRead('navigate_to_post');
   void recommendationTelemetry.flush(false);
   resetPostState();

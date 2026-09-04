@@ -12,6 +12,7 @@
         :can-delete="Boolean(currentIdentity && currentIdentity.id === reply.author.id)"
         :deleting="deletingReplyId === reply.id"
         @delete="emit('delete', $event)"
+        @open-media="handleOpenMedia"
       />
     </template>
 
@@ -52,7 +53,12 @@ const emit = defineEmits<{
   loadMore: [];
   retry: [];
   delete: [replyID: number];
+  openMedia: [media: Post['media'], index: number];
 }>();
+
+const handleOpenMedia = (media: Post['media'], index: number) => {
+  emit('openMedia', media, index);
+};
 
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
@@ -146,4 +152,3 @@ onBeforeUnmount(disconnectObserver);
   color: var(--color-text-tertiary);
 }
 </style>
-

@@ -18,7 +18,12 @@
     </div>
     <div class="reply-item__content">
       <LinkifiedText :text="reply.content" />
-      <PostMediaGrid v-if="reply.media.length > 0" :media="reply.media" />
+      <PostMediaGrid
+        v-if="reply.media.length > 0"
+        :media="reply.media"
+        interactive
+        @open="handleOpenMedia"
+      />
     </div>
     <span v-if="deleting" class="reply-item__status">Deleting...</span>
   </article>
@@ -39,7 +44,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   delete: [replyID: number];
+  openMedia: [media: Post['media'], index: number];
 }>();
+
+const handleOpenMedia = (index: number) => {
+  emit('openMedia', props.reply.media, index);
+};
 </script>
 
 <style scoped>

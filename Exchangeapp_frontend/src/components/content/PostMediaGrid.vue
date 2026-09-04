@@ -2,19 +2,35 @@
   <div
     v-if="media.length > 0"
     class="post-media-grid"
-    :class="`post-media-grid--count-${Math.min(media.length, 4)}`"
+    :class="`post-media-grid--count-${visibleMedia.length}`"
     role="group"
     aria-label="Post images"
   >
     <figure
-      v-for="(item, index) in media.slice(0, 4)"
+      v-for="(item, index) in visibleMedia"
       :key="`${item.url}-${item.position}-${index}`"
       class="post-media-grid__item"
     >
+      <button
+        v-if="interactive && !failedURLs.has(item.url)"
+        class="post-media-grid__open"
+        type="button"
+        :aria-label="openImageLabel(index)"
+        @click.stop="emit('open', index)"
+      >
+        <img
+          class="post-media-grid__image"
+          :class="{ 'post-media-grid__image--single': visibleMedia.length === 1 }"
+          :src="item.url"
+          :alt="`Post image ${index + 1}`"
+          loading="lazy"
+          @error="markFailed(item.url)"
+        />
+      </button>
       <img
-        v-if="!failedURLs.has(item.url)"
+        v-else-if="!failedURLs.has(item.url)"
         class="post-media-grid__image"
-        :class="{ 'post-media-grid__image--single': media.length === 1 }"
+        :class="{ 'post-media-grid__image--single': visibleMedia.length === 1 }"
         :src="item.url"
         :alt="`Post image ${index + 1}`"
         loading="lazy"
@@ -43,28 +59,38 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import type { PostMedia } from '../../types/Post';
 import AppIcon from '../icons/AppIcon.vue';
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   media: PostMedia[];
   removable?: boolean;
   disabled?: boolean;
+  interactive?: boolean;
 }>(), {
   removable: false,
   disabled: false,
+  interactive: false,
 });
 
 const emit = defineEmits<{
   remove: [index: number];
+  open: [index: number];
 }>();
 
+const visibleMedia = computed(() => props.media.slice(0, 4));
 const failedURLs = ref(new Set<string>());
 
 const markFailed = (url: string) => {
   failedURLs.value = new Set([...failedURLs.value, url]);
 };
+
+const openImageLabel = (index: number) => (
+  visibleMedia.value.length === 1
+    ? 'Open post image'
+    : `Open post image ${index + 1} of ${visibleMedia.value.length}`
+);
 </script>
 
 <style scoped>
@@ -96,6 +122,32 @@ const markFailed = (url: string) => {
   aspect-ratio: auto;
   display: flex;
   justify-content: center;
+}
+
+.post-media-grid__open {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.post-media-grid--count-1 .post-media-grid__open {
+  height: auto;
+}
+
+.post-media-grid__open:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 .post-media-grid--count-3 .post-media-grid__item:first-child {

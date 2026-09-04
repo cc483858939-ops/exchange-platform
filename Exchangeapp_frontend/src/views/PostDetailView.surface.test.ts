@@ -190,7 +190,16 @@ const mountDetail = () => mount(PostDetailView, {
         },
         template: '<div class="test-composer" />',
       },
-      ReplyList: { template: '<div class="test-comment-list" />' },
+      ReplyList: {
+        props: ['replies'],
+        emits: ['openMedia'],
+        template: '<div class="test-comment-list"><button v-if="replies.length" class="test-open-reply-media" type="button" @click="$emit(\'openMedia\', replies[0].media, 1)">Open reply media</button></div>',
+      },
+      PostMediaViewer: {
+        props: ['media', 'initialIndex'],
+        emits: ['close'],
+        template: '<div class="test-media-viewer" :data-index="String(initialIndex)" :data-media="media.map(item => item.url).join(\',\')"><button class="test-close-media-viewer" type="button" @click="$emit(\'close\')">Close</button></div>',
+      },
       RouterLink: { template: '<a class="test-link"><slot /></a>' },
     },
   },
@@ -283,6 +292,73 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.findAll('.post-media-grid')).toHaveLength(2);
     expect(wrapper.find('.post-detail__body img').attributes('src')).toBe('/primary.png');
     expect(wrapper.find('.post-detail__reference img').attributes('src')).toBe('/reference.png');
+  });
+
+  it('opens primary, reference, and reply media in the shared viewer', async () => {
+    const primaryMedia = [
+      { type: 'image' as const, url: '/primary-1.png', position: 0 },
+      { type: 'image' as const, url: '/primary-2.png', position: 1 },
+    ];
+    const referenceMedia = [
+      { type: 'image' as const, url: '/reference-1.png', position: 0 },
+      { type: 'image' as const, url: '/reference-2.png', position: 1 },
+      { type: 'image' as const, url: '/reference-3.png', position: 2 },
+      { type: 'image' as const, url: '/reference-4.png', position: 3 },
+    ];
+    const replyMedia = [
+      { type: 'image' as const, url: '/reply-1.png', position: 0 },
+      { type: 'image' as const, url: '/reply-2.png', position: 1 },
+    ];
+    const reference = {
+      id: 9,
+      deleted: false as const,
+      author: {
+        id: 8,
+        username: 'referenced',
+        display_name: 'Referenced Author',
+        avatar_url: '',
+      },
+      content: 'Referenced post body',
+      published_at: '2026-08-17T00:00:00.000Z',
+      media: referenceMedia,
+    };
+    const reply = canonicalPost({
+      id: 10,
+      author: {
+        id: 11,
+        username: 'reply-author',
+        display_name: 'Reply Author',
+        avatar_url: '',
+      },
+      content: 'Reply body',
+      media: replyMedia,
+    });
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({
+      media: primaryMedia,
+      quote_post_id: 9,
+      quote_post: reference,
+    }));
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [reply], next_cursor: null });
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.findAll('.post-detail__body .post-media-grid__open')[1].trigger('click');
+    expect(wrapper.get('.test-media-viewer').attributes('data-index')).toBe('1');
+    expect(wrapper.get('.test-media-viewer').attributes('data-media'))
+      .toBe('/primary-1.png,/primary-2.png');
+
+    await wrapper.get('.test-close-media-viewer').trigger('click');
+    await wrapper.findAll('.post-detail__reference .post-media-grid__open')[2].trigger('click');
+    expect(wrapper.get('.test-media-viewer').attributes('data-index')).toBe('2');
+    expect(wrapper.get('.test-media-viewer').attributes('data-media'))
+      .toBe('/reference-1.png,/reference-2.png,/reference-3.png,/reference-4.png');
+
+    await wrapper.get('.test-close-media-viewer').trigger('click');
+    await wrapper.get('.test-open-reply-media').trigger('click');
+    expect(wrapper.get('.test-media-viewer').attributes('data-index')).toBe('1');
+    expect(wrapper.get('.test-media-viewer').attributes('data-media'))
+      .toBe('/reply-1.png,/reply-2.png');
   });
 
   it('linkifies the authoritative post body without changing ordinary text', async () => {

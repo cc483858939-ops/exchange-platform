@@ -10,10 +10,11 @@ const media = (count: number) => Array.from({ length: count }, (_, index) => ({
   position: index,
 }));
 
-const mountGrid = (count: number, removable = false) => mount(PostMediaGrid, {
+const mountGrid = (count: number, removable = false, interactive = false) => mount(PostMediaGrid, {
   props: {
     media: media(count),
     removable,
+    interactive,
   },
   global: {
     stubs: {
@@ -40,6 +41,39 @@ describe('PostMediaGrid', () => {
     const multiWrapper = mountGrid(2);
     expect(multiWrapper.findAll('img')[0].classes())
       .not.toContain('post-media-grid__image--single');
+  });
+
+  it('keeps image-open controls disabled by default', () => {
+    const wrapper = mountGrid(2);
+
+    expect(wrapper.findAll('.post-media-grid__open')).toHaveLength(0);
+  });
+
+  it('exposes accessible image-open controls when interactive', () => {
+    const wrapper = mountGrid(2, false, true);
+
+    expect(wrapper.findAll('.post-media-grid__open')).toHaveLength(2);
+    expect(wrapper.find('.post-media-grid__open').attributes('aria-label'))
+      .toBe('Open post image 1 of 2');
+  });
+
+  it('emits the selected image index', async () => {
+    const firstWrapper = mountGrid(1, false, true);
+    await firstWrapper.get('.post-media-grid__open').trigger('click');
+    expect(firstWrapper.emitted('open')).toEqual([[0]]);
+
+    const thirdWrapper = mountGrid(4, false, true);
+    await thirdWrapper.findAll('.post-media-grid__open')[2].trigger('click');
+    expect(thirdWrapper.emitted('open')).toEqual([[2]]);
+  });
+
+  it('does not make a failed image activatable', async () => {
+    const wrapper = mountGrid(2, false, true);
+    await wrapper.findAll('img')[1].trigger('error');
+
+    expect(wrapper.findAll('.post-media-grid__open')).toHaveLength(1);
+    expect(wrapper.get('[role="img"]').attributes('aria-label'))
+      .toBe('Post image 2 unavailable');
   });
 
   it('emits the selected index only when the composer enables removal', async () => {
