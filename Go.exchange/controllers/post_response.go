@@ -49,12 +49,12 @@ type postResponse struct {
 }
 
 type postReferenceResponse struct {
-	ID          uint                          `json:"id"`
-	Deleted     bool                          `json:"deleted"`
-	Author      *publicAuthorResponse         `json:"author,omitempty"`
-	Content     string                        `json:"content,omitempty"`
-	PublishedAt *time.Time                    `json:"published_at,omitempty"`
-	Media       []postMediaResponse           `json:"media,omitempty"`
+	ID          uint                  `json:"id"`
+	Deleted     bool                  `json:"deleted"`
+	Author      *publicAuthorResponse `json:"author,omitempty"`
+	Content     string                `json:"content,omitempty"`
+	PublishedAt *time.Time            `json:"published_at,omitempty"`
+	Media       []postMediaResponse   `json:"media,omitempty"`
 }
 
 func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
@@ -109,7 +109,7 @@ func newPostResponse(post models.Post) (postResponse, error) {
 		ID: post.ID, CreatedAt: post.CreatedAt.UTC(), UpdatedAt: post.UpdatedAt.UTC(),
 		PublishedAt: &publishedAt, Author: author, Content: post.Content,
 		ConversationID: conversationID, ReplyToPostID: post.ReplyToPostID, QuotePostID: post.QuotePostID,
-		Media: make([]postMediaResponse, 0),
+		Media:      make([]postMediaResponse, 0),
 		Visibility: post.Visibility, LikeCount: post.LikeCount, ReplyCount: post.ReplyCount,
 		ViewCount: post.ViewCount, Deleted: false,
 	}, nil

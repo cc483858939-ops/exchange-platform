@@ -285,7 +285,7 @@ func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *
 
 	global.Db = nil
 	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
-			t.Fatal("cache hit must not hydrate post authors")
+		t.Fatal("cache hit must not hydrate post authors")
 		return nil, nil
 	}
 	now := time.Now().UTC()
