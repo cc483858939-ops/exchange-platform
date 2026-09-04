@@ -393,7 +393,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 600px) {
   .post-media-viewer__stage {
-    padding: 56px 52px 48px;
+    padding: 56px 8px 48px;
   }
 }
 </style>
