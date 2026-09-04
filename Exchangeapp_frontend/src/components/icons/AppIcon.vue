@@ -134,7 +134,7 @@
 
     <template v-else-if="props.name === 'reply'">
       <path
-        d="M19.75 11.5a7.25 7.25 0 0 1-7.25 7.25H8l-3.75 2v-4.75A7.25 7.25 0 1 1 19.75 11.5Z"
+        d="M18.25 5.25H5.75A2.25 2.25 0 0 0 3.5 7.5v5a2.25 2.25 0 0 0 2.25 2.25H8v3.5l3.75-3.5h6.5a2.25 2.25 0 0 0 2.25-2.25v-5a2.25 2.25 0 0 0-2.25-2.25Z"
         fill="none"
         stroke="currentColor"
         stroke-width="1.8"
@@ -241,7 +241,7 @@
 
     <template v-else-if="props.name === 'repost'">
       <path
-        d="M7 6h9.25a3.75 3.75 0 0 1 3.75 3.75V12m0 0-3-3m3 3-3 3M17 18H7.75A3.75 3.75 0 0 1 4 14.25V12m0 0 3 3m-3-3 3-3"
+        d="M4 8.25h15m0 0-2.75-2.75M19 8.25l-2.75 2.75M20 15.75H5m0 0 2.75-2.75M5 15.75l2.75 2.75"
         fill="none"
         stroke="currentColor"
         stroke-width="1.8"
