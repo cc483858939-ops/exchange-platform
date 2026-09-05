@@ -82,13 +82,25 @@
     </div>
 
     <div class="post-card__content">
-      <p class="post-card__body">
+      <p
+        ref="bodyRef"
+        class="post-card__body"
+        :class="{ 'post-card__body--expanded': bodyExpanded }"
+      >
         <LinkifiedText
           :text="post.content"
           :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
           @internal-activate="prepareDetailNavigation"
         />
       </p>
+      <button
+        v-if="bodyOverflowing && !bodyExpanded"
+        class="post-card__show-more"
+        type="button"
+        @click.stop="expandBody"
+      >
+        Show more
+      </button>
       <div
         v-if="post.quotePost || post.replyToPost"
         class="post-card__reference"
@@ -230,10 +242,14 @@ const router = useRouter();
 const postViewTelemetry = getPostViewTelemetry();
 const postDetailHandoff = usePostDetailHandoffStore();
 const postCardRef = ref<HTMLElement | null>(null);
+const bodyRef = ref<HTMLElement | null>(null);
 const moreButtonRef = ref<HTMLButtonElement | null>(null);
 const menuRef = ref<HTMLDivElement | null>(null);
 const menuItemRefs = ref<HTMLButtonElement[]>([]);
 const moreOpen = ref(false);
+const bodyExpanded = ref(false);
+const bodyOverflowing = ref(false);
+let bodyResizeObserver: ResizeObserver | null = null;
 type CopyState = 'idle' | 'success' | 'error';
 const copyState = ref<CopyState>('idle');
 let copyRequestVersion = 0;
@@ -505,6 +521,35 @@ const handleDeletePost = () => {
   emit('deletePost', props.post.id);
 };
 
+const measureBodyOverflow = () => {
+  const body = bodyRef.value;
+  if (!body || bodyExpanded.value) {
+    return;
+  }
+
+  const overflowing = body.scrollHeight > body.clientHeight + 1;
+  if (bodyOverflowing.value !== overflowing) {
+    bodyOverflowing.value = overflowing;
+  }
+};
+
+const scheduleBodyOverflowMeasurement = () => {
+  void nextTick(measureBodyOverflow);
+};
+
+const expandBody = () => {
+  bodyExpanded.value = true;
+};
+
+watch(
+  [() => props.post.id, () => props.post.content],
+  () => {
+    bodyExpanded.value = false;
+    bodyOverflowing.value = false;
+    scheduleBodyOverflowMeasurement();
+  },
+);
+
 watch(
   [() => props.post.id, () => props.trackView],
   ([postID, trackView], [previousPostID, previousTrackView]) => {
@@ -521,10 +566,24 @@ watch(
   },
 );
 
-onMounted(observeCurrentPost);
+onMounted(() => {
+  observeCurrentPost();
+  scheduleBodyOverflowMeasurement();
+
+  if (typeof ResizeObserver !== 'undefined' && bodyRef.value) {
+    bodyResizeObserver = new ResizeObserver(() => {
+      if (!bodyExpanded.value) {
+        scheduleBodyOverflowMeasurement();
+      }
+    });
+    bodyResizeObserver.observe(bodyRef.value);
+  }
+});
 
 onBeforeUnmount(() => {
   unobserveCurrentPost();
+  bodyResizeObserver?.disconnect();
+  bodyResizeObserver = null;
   closeMore();
 });
 
@@ -662,6 +721,38 @@ const repostLabel = computed(() => {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 5;
   line-clamp: 5;
+}
+
+.post-card__body--expanded {
+  display: block;
+  max-height: none;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+
+.post-card__show-more {
+  display: inline-block;
+  margin: var(--space-1) 0 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.post-card__show-more:hover {
+  text-decoration: underline;
+}
+
+.post-card__show-more:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .post-card__media-link {
