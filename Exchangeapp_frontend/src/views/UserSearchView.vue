@@ -12,14 +12,14 @@
         <button v-if="query" class="search-view__clear" type="button" aria-label="Clear search" @click="clearSearch"><AppIcon name="close" :size="18" /></button>
       </form>
       <section v-if="!query" class="search-view__state">Search for people by name or @username.</section>
-      <section v-else-if="initialLoading" class="search-view__state" aria-live="polite">Searching people?</section>
+      <section v-else-if="initialLoading" class="search-view__state" aria-live="polite">Searching people…</section>
       <section v-else-if="initialError" class="search-view__state search-view__state--error" role="alert"><p>{{ initialError }}</p><button class="search-view__button" type="button" @click="reload">Retry</button></section>
-      <section v-else-if="items.length === 0" class="search-view__state">No people found for ?{{ query }}?.</section>
+      <section v-else-if="items.length === 0" class="search-view__state">No people found for “{{ query }}”.</section>
       <section v-else class="search-view__results" aria-label="People search results">
         <header class="search-view__results-heading"><h2>People</h2></header>
         <UserRow v-for="item in items" :key="item.user.id" :item="item" :pending="pendingMutationIDs.has(item.user.id)" :error="mutationErrors.get(item.user.id)" :is-self="item.user.id === viewerID" @toggle-follow="toggleFollow" />
         <div ref="sentinelRef" class="search-view__sentinel" aria-hidden="true"></div>
-        <div v-if="loadingMore" class="search-view__more" aria-live="polite">Loading more?</div>
+        <div v-if="loadingMore" class="search-view__more" aria-live="polite">Loading more…</div>
         <div v-else-if="loadMoreError" class="search-view__more search-view__more--error" role="alert"><span>{{ loadMoreError }}</span><button class="search-view__button" type="button" @click="loadMore">Retry</button></div>
         <div v-else-if="hasMore" class="search-view__more"><button class="search-view__button" type="button" @click="loadMore">Load more</button></div>
       </section>

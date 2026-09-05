@@ -22,7 +22,7 @@
       <RouterLink :to="{ name: 'UserFollowers', params: { id: profile.id } }">Followers</RouterLink>
     </nav>
 
-    <section v-if="profile && initialLoading" class="connections-state" aria-live="polite">Loading {{ modeLabel.toLowerCase() }}?</section>
+    <section v-if="profile && initialLoading" class="connections-state" aria-live="polite">Loading {{ modeLabel.toLowerCase() }}…</section>
     <section v-else-if="profile && initialError" class="connections-state connections-state--error" role="alert">
       <p>{{ initialError }}</p>
       <button class="connections-button" type="button" @click="reload">Retry</button>
@@ -39,7 +39,7 @@
         @toggle-follow="toggleFollow"
       />
       <div ref="sentinelRef" class="connections-sentinel" aria-hidden="true"></div>
-      <div v-if="loadingMore" class="connections-more" aria-live="polite">Loading more?</div>
+      <div v-if="loadingMore" class="connections-more" aria-live="polite">Loading more…</div>
       <div v-else-if="loadMoreError" class="connections-more connections-more--error" role="alert">
         <span>{{ loadMoreError }}</span>
         <button class="connections-button" type="button" @click="loadMore">Retry</button>
