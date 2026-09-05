@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, RouterLinkStub } from '@vue/test-utils';
+import { nextTick } from 'vue';
 import PostCard from './PostCard.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
@@ -14,6 +15,13 @@ const mocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
   remember: vi.fn(),
 }));
+
+type ResizeObserverTestInstance = {
+  trigger: () => void;
+  disconnect: ReturnType<typeof vi.fn>;
+};
+
+const resizeObserverInstances: ResizeObserverTestInstance[] = [];
 
 vi.mock('../../services/postViewTelemetry', () => ({
   getPostViewTelemetry: () => mocks,
@@ -51,9 +59,25 @@ const basePost = (): FeedPost => ({
 describe('PostCard View metric and telemetry lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resizeObserverInstances.length = 0;
+    vi.stubGlobal('ResizeObserver', class {
+      private readonly callback: ResizeObserverCallback;
+      readonly disconnect = vi.fn();
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        resizeObserverInstances.push({
+          trigger: () => this.callback([], this as unknown as ResizeObserver),
+          disconnect: this.disconnect,
+        });
+      }
+
+      observe() {}
+    });
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -75,6 +99,28 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       },
     },
   });
+
+  const setBodyGeometry = (
+    wrapper: ReturnType<typeof mountPostCard>,
+    scrollHeight: number,
+    clientHeight: number,
+  ) => {
+    const body = wrapper.get('.post-card__body').element;
+    Object.defineProperty(body, 'scrollHeight', {
+      configurable: true,
+      value: scrollHeight,
+    });
+    Object.defineProperty(body, 'clientHeight', {
+      configurable: true,
+      value: clientHeight,
+    });
+  };
+
+  const settleBodyMeasurement = async () => {
+    await nextTick();
+    await nextTick();
+    await nextTick();
+  };
 
   it('renders a navigable compact View metric with the analytics icon and destination', async () => {
     const post = basePost();
@@ -186,6 +232,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
   it('observes on mount, replaces stale observation on id change, and unobserves on unmount', async () => {
     const wrapper = mountPostCard();
     const root = wrapper.element;
+    const bodyObserver = resizeObserverInstances[0];
 
     expect(mocks.observeFeedCard).toHaveBeenCalledWith(root, 42);
 
@@ -195,6 +242,93 @@ describe('PostCard View metric and telemetry lifecycle', () => {
 
     wrapper.unmount();
     expect(mocks.unobserveFeedCard).toHaveBeenCalledWith(root);
+    expect(bodyObserver?.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show Show more when the collapsed body fits', async () => {
+    const wrapper = mountPostCard();
+    setBodyGeometry(wrapper, 100, 100);
+    await settleBodyMeasurement();
+
+    expect(wrapper.find('.post-card__show-more').exists()).toBe(false);
+    expect(wrapper.get('.post-card__body').classes()).not.toContain('post-card__body--expanded');
+    wrapper.unmount();
+  });
+
+  it('shows Show more when the collapsed body overflows', async () => {
+    const wrapper = mountPostCard();
+    setBodyGeometry(wrapper, 102, 100);
+    resizeObserverInstances[0]?.trigger();
+    await settleBodyMeasurement();
+
+    expect(wrapper.find('.post-card__show-more').text()).toBe('Show more');
+    expect(wrapper.get('.post-card__body').classes()).not.toContain('post-card__body--expanded');
+    wrapper.unmount();
+  });
+
+  it('performs the initial overflow measurement without ResizeObserver', async () => {
+    vi.stubGlobal('ResizeObserver', undefined);
+    const wrapper = mountPostCard();
+    setBodyGeometry(wrapper, 200, 100);
+    await settleBodyMeasurement();
+
+    expect(wrapper.find('.post-card__show-more').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('expands the body without triggering Post Detail navigation', async () => {
+    const post = { ...basePost(), content: 'A long post body' };
+    const wrapper = mountPostCard(post);
+    setBodyGeometry(wrapper, 200, 100);
+    await settleBodyMeasurement();
+
+    await wrapper.get('.post-card__show-more').trigger('click');
+
+    expect(wrapper.get('.post-card__body').classes()).toContain('post-card__body--expanded');
+    expect(wrapper.find('.post-card__show-more').exists()).toBe(false);
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+    expect(mocks.remember).not.toHaveBeenCalled();
+  });
+
+  it('resets expansion and remeasures when the post id changes', async () => {
+    const wrapper = mountPostCard({ ...basePost(), content: 'First body' });
+    setBodyGeometry(wrapper, 200, 100);
+    await settleBodyMeasurement();
+    await wrapper.get('.post-card__show-more').trigger('click');
+
+    setBodyGeometry(wrapper, 100, 100);
+    await wrapper.setProps({ post: { ...basePost(), id: 43, content: 'Second body' } });
+    await settleBodyMeasurement();
+
+    expect(wrapper.get('.post-card__body').classes()).not.toContain('post-card__body--expanded');
+    expect(wrapper.find('.post-card__show-more').exists()).toBe(false);
+  });
+
+  it('resets expansion and remeasures when content changes on the same post', async () => {
+    const wrapper = mountPostCard({ ...basePost(), content: 'First body' });
+    setBodyGeometry(wrapper, 200, 100);
+    await settleBodyMeasurement();
+    await wrapper.get('.post-card__show-more').trigger('click');
+
+    setBodyGeometry(wrapper, 100, 100);
+    await wrapper.setProps({ post: { ...basePost(), content: 'Updated body' } });
+    await settleBodyMeasurement();
+
+    expect(wrapper.get('.post-card__body').classes()).not.toContain('post-card__body--expanded');
+    expect(wrapper.find('.post-card__show-more').exists()).toBe(false);
+  });
+
+  it('remeasures body overflow when ResizeObserver reports a width change', async () => {
+    const wrapper = mountPostCard();
+    setBodyGeometry(wrapper, 100, 100);
+    await settleBodyMeasurement();
+    expect(wrapper.find('.post-card__show-more').exists()).toBe(false);
+
+    setBodyGeometry(wrapper, 200, 100);
+    resizeObserverInstances[0]?.trigger();
+    await settleBodyMeasurement();
+
+    expect(wrapper.find('.post-card__show-more').exists()).toBe(true);
   });
 
   it('does not observe feed view telemetry when trackView is false and syncs later changes', async () => {
