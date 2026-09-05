@@ -11,7 +11,7 @@
         :reply="reply"
         :can-delete="Boolean(currentIdentity && currentIdentity.id === reply.author.id)"
         :deleting="deletingReplyId === reply.id"
-        @delete="emit('delete', $event)"
+        @request-delete="emit('requestDelete', $event)"
         @open-media="handleOpenMedia"
       />
     </template>
@@ -52,7 +52,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   loadMore: [];
   retry: [];
-  delete: [replyID: number];
+  requestDelete: [replyID: number];
   openMedia: [media: Post['media'], index: number];
 }>();
 

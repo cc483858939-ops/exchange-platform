@@ -10,7 +10,7 @@
           :disabled="deleting"
           aria-label="Delete reply"
           title="Delete reply"
-          @click.stop="emit('delete', reply.id)"
+          @click.stop="emit('requestDelete', reply.id)"
         >
           <AppIcon name="trash" :size="16" />
         </button>
@@ -43,7 +43,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  delete: [replyID: number];
+  requestDelete: [replyID: number];
   openMedia: [media: Post['media'], index: number];
 }>();
 
@@ -75,8 +75,8 @@ const handleOpenMedia = (index: number) => {
 
 .reply-item__delete {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   border: 0;
   border-radius: 50%;

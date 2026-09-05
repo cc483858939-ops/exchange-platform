@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   getPostReplies: vi.fn(),
   createPostReply: vi.fn(),
   deletePostReply: vi.fn(),
+  syncExternalReplyCount: vi.fn(),
   deletePost: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
@@ -104,7 +105,7 @@ vi.mock('../store/sessionSync', () => ({
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
   syncExternalPostRemoval: vi.fn(),
-  syncExternalReplyCount: vi.fn(),
+  syncExternalReplyCount: mocks.syncExternalReplyCount,
 }));
 
 const canonicalPost = (overrides: Partial<Post> = {}): Post => ({
@@ -155,6 +156,18 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   ...overrides,
 });
 
+const reply = (overrides: Partial<Post> = {}): Post => canonicalPost({
+  id: 101,
+  content: 'Reply body',
+  author: {
+    id: 7,
+    username: 'viewer',
+    display_name: 'Viewer',
+    avatar_url: '/viewer.png',
+  },
+  ...overrides,
+});
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -191,9 +204,14 @@ const mountDetail = () => mount(PostDetailView, {
         template: '<div class="test-composer" />',
       },
       ReplyList: {
-        props: ['replies'],
-        emits: ['openMedia'],
-        template: '<div class="test-comment-list"><button v-if="replies.length" class="test-open-reply-media" type="button" @click="$emit(\'openMedia\', replies[0].media, 1)">Open reply media</button></div>',
+        props: ['replies', 'deletingReplyId'],
+        emits: ['openMedia', 'requestDelete'],
+        template: '<div class="test-comment-list"><div v-for="reply in replies" :key="reply.id" class="test-reply" :data-reply-id="reply.id"><span>{{ reply.content }}</span><button class="test-request-delete" type="button" :disabled="deletingReplyId !== null" @click="$emit(\'requestDelete\', reply.id)">Request delete</button></div><button v-if="replies.length" class="test-open-reply-media" type="button" @click="$emit(\'openMedia\', replies[0].media, 1)">Open reply media</button></div>',
+      },
+      ConfirmDialog: {
+        props: ['title', 'description', 'confirmLabel', 'cancelLabel', 'danger', 'busy', 'error'],
+        emits: ['confirm', 'cancel'],
+        template: '<div class="test-confirm-dialog" role="dialog"><h2>{{ title }}</h2><p>{{ description }}</p><p v-if="error" class="test-confirm-error" role="alert">{{ error }}</p><button class="test-confirm-cancel" type="button" :disabled="busy" @click="$emit(\'cancel\')">{{ cancelLabel }}</button><button class="test-confirm-delete" type="button" :disabled="busy" @click="$emit(\'confirm\')">{{ busy ? \'Deleting…\' : confirmLabel }}</button></div>',
       },
       PostMediaViewer: {
         props: ['media', 'initialIndex'],
@@ -438,6 +456,144 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.get('.test-media-viewer').attributes('data-index')).toBe('1');
     expect(wrapper.get('.test-media-viewer').attributes('data-media'))
       .toBe('/reply-1.png,/reply-2.png');
+  });
+
+  it('opens confirmation without deleting and lets Cancel leave the reply unchanged', async () => {
+    const currentReply = reply();
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [currentReply], next_cursor: null });
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.test-request-delete').trigger('click');
+
+    expect(mocks.deletePostReply).not.toHaveBeenCalled();
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(true);
+
+    await wrapper.get('.test-confirm-cancel').trigger('click');
+
+    expect(mocks.deletePostReply).not.toHaveBeenCalled();
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+    expect(wrapper.find('.test-reply').exists()).toBe(true);
+  });
+
+  it('deletes only after confirmation and synchronizes the decremented reply count', async () => {
+    const currentReply = reply();
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [currentReply], next_cursor: null });
+    mocks.deletePostReply.mockResolvedValueOnce(undefined);
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.test-request-delete').trigger('click');
+    await wrapper.get('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mocks.deletePostReply).toHaveBeenCalledTimes(1);
+    expect(mocks.deletePostReply).toHaveBeenCalledWith(101);
+    expect(wrapper.find('.test-reply').exists()).toBe(false);
+    expect(wrapper.find('.post-detail__reply').text()).toContain('3');
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+    expect(mocks.syncExternalReplyCount).toHaveBeenCalledTimes(1);
+    expect(mocks.syncExternalReplyCount).toHaveBeenCalledWith({
+      postId: 42,
+      replyCount: 3,
+    });
+  });
+
+  it('blocks duplicate delete confirmations while the request is pending', async () => {
+    const currentReply = reply();
+    const request = deferred<void>();
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [currentReply], next_cursor: null });
+    mocks.deletePostReply.mockReturnValueOnce(request.promise);
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.test-request-delete').trigger('click');
+    await wrapper.get('.test-confirm-delete').trigger('click');
+    await wrapper.vm.$nextTick();
+
+    expect(mocks.deletePostReply).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('.test-confirm-delete').attributes('disabled')).toBe('');
+    expect(wrapper.get('.test-confirm-delete').text()).toBe('Deleting…');
+    expect(wrapper.get('.test-confirm-cancel').attributes('disabled')).toBe('');
+
+    await wrapper.get('.test-confirm-delete').trigger('click');
+    expect(mocks.deletePostReply).toHaveBeenCalledTimes(1);
+
+    request.resolve();
+    await flushPromises();
+  });
+
+  it('keeps the confirmation open after a delete failure and supports retry', async () => {
+    const currentReply = reply();
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [currentReply], next_cursor: null });
+    mocks.deletePostReply
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.test-request-delete').trigger('click');
+    await wrapper.get('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('.test-reply').exists()).toBe(true);
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(true);
+    expect(wrapper.get('.test-confirm-error').text())
+      .toBe('Reply could not be deleted. Please try again.');
+    expect(wrapper.get('.test-confirm-delete').text()).toBe('Delete');
+
+    await wrapper.get('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mocks.deletePostReply).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('.test-reply').exists()).toBe(false);
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+    expect(mocks.syncExternalReplyCount).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects delete requests for replies owned by another user', async () => {
+    const otherReply = reply({
+      author: {
+        id: 8,
+        username: 'other',
+        display_name: 'Other Author',
+        avatar_url: '',
+      },
+    });
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [otherReply], next_cursor: null });
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.test-request-delete').trigger('click');
+
+    expect(mocks.deletePostReply).not.toHaveBeenCalled();
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+  });
+
+  it('clears the confirmation when the Detail route changes or identity changes', async () => {
+    const currentReply = reply();
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [currentReply], next_cursor: null });
+
+    wrapper = mountDetail();
+    await flushPromises();
+    await wrapper.get('.test-request-delete').trigger('click');
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(true);
+
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ id: 43 }));
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [], next_cursor: null });
+    mocks.route.params.id = '43';
+    await flushPromises();
+
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+
+    mocks.authStore.currentIdentity = null;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
   });
 
   it('linkifies the authoritative post body without changing ordinary text', async () => {

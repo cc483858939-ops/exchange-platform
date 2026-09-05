@@ -216,7 +216,7 @@
           :load-more-error="repliesLoadMoreError"
           @load-more="loadMoreReplies"
           @retry="retryLoadMoreReplies"
-          @delete="deleteOwnReply"
+          @request-delete="requestDeleteReply"
           @open-media="openMediaViewer"
         />
       </section>
@@ -242,6 +242,19 @@
       :initial-index="mediaViewer.index"
       @close="closeMediaViewer"
     />
+
+    <ConfirmDialog
+      v-if="deleteReplyCandidateId !== null"
+      title="Delete reply?"
+      description="This reply will be permanently deleted. This can’t be undone."
+      confirm-label="Delete"
+      cancel-label="Cancel"
+      danger
+      :busy="deletingReplyId !== null"
+      :error="replyDeleteError"
+      @confirm="confirmDeleteReply"
+      @cancel="cancelDeleteReply"
+    />
   </main>
 </template>
 
@@ -252,6 +265,7 @@ import AuthorIdentity from '../components/AuthorIdentity.vue';
 import LinkifiedText from '../components/content/LinkifiedText.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
 import PostMediaViewer from '../components/content/PostMediaViewer.vue';
+import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
 import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -321,6 +335,8 @@ const repliesLoadMoreError = ref('');
 const replySubmitting = ref(false);
 const replyError = ref('');
 const deletingReplyId = ref<number | null>(null);
+const deleteReplyCandidateId = ref<number | null>(null);
+const replyDeleteError = ref('');
 const composerRef = ref<InstanceType<typeof ReplyComposer> | null>(null);
 const replyCount = ref(0);
 const viewCount = ref(0);
@@ -339,6 +355,7 @@ let likeMutationVersion = 0;
 let repostRequestVersion = 0;
 let repostMutationVersion = 0;
 let repliesRequestVersion = 0;
+let replyDeleteRequestVersion = 0;
 let replyIntentTask: Promise<void> | null = null;
 let replyIntentRetryRequested = false;
 
@@ -688,6 +705,7 @@ const resetRepostState = () => {
 
 const resetRepliesState = () => {
   repliesRequestVersion += 1;
+  replyDeleteRequestVersion += 1;
   replies.value = [];
   nextCursor.value = null;
   repliesInitialLoading.value = false;
@@ -697,6 +715,8 @@ const resetRepliesState = () => {
   replySubmitting.value = false;
   replyError.value = '';
   deletingReplyId.value = null;
+  deleteReplyCandidateId.value = null;
+  replyDeleteError.value = '';
   replyCount.value = 0;
 };
 
@@ -1079,22 +1099,64 @@ const handleCreateReply = async (content: string) => {
   }
 };
 
-const deleteOwnReply = async (replyID: number) => {
+const requestDeleteReply = (replyID: number) => {
+  const viewerID = currentViewerID.value;
+  const reply = replies.value.find(item => item.id === replyID);
   if (
     !authStore.isAuthenticated ||
+    viewerID === null ||
     deletingReplyId.value !== null ||
-    !replies.value.some(reply => reply.id === replyID)
+    deleteReplyCandidateId.value !== null ||
+    !reply ||
+    reply.author.id !== viewerID
   ) {
     return;
   }
 
+  deleteReplyCandidateId.value = replyID;
+  replyDeleteError.value = '';
+};
+
+const cancelDeleteReply = () => {
+  if (deletingReplyId.value !== null) {
+    return;
+  }
+
+  deleteReplyCandidateId.value = null;
+  replyDeleteError.value = '';
+};
+
+const confirmDeleteReply = async () => {
+  const replyID = deleteReplyCandidateId.value;
+  const viewerID = currentViewerID.value;
+  const reply = replyID === null
+    ? null
+    : replies.value.find(item => item.id === replyID);
+  if (
+    replyID === null ||
+    !authStore.isAuthenticated ||
+    viewerID === null ||
+    deletingReplyId.value !== null ||
+    !reply ||
+    reply.author.id !== viewerID
+  ) {
+    if (deletingReplyId.value === null) {
+      cancelDeleteReply();
+    }
+    return;
+  }
+
   const detailVersion = detailRequestVersion;
+  const requestVersion = ++replyDeleteRequestVersion;
   deletingReplyId.value = replyID;
-  replyError.value = '';
+  replyDeleteError.value = '';
 
   try {
     await deletePostReply(replyID);
-    if (detailVersion !== detailRequestVersion) {
+    if (
+      detailVersion !== detailRequestVersion
+      || requestVersion !== replyDeleteRequestVersion
+    ) {
       return;
     }
 
@@ -1104,12 +1166,24 @@ const deleteOwnReply = async (replyID: number) => {
       postId: Number(postId.value),
       replyCount: replyCount.value,
     });
+    deletingReplyId.value = null;
+    deleteReplyCandidateId.value = null;
+    replyDeleteError.value = '';
   } catch {
-    if (detailVersion === detailRequestVersion) {
-      replyError.value = 'Reply could not be deleted. Please try again.';
+    if (
+      detailVersion === detailRequestVersion
+      && requestVersion === replyDeleteRequestVersion
+      && deleteReplyCandidateId.value === replyID
+    ) {
+      deletingReplyId.value = null;
+      replyDeleteError.value = 'Reply could not be deleted. Please try again.';
     }
   } finally {
-    if (detailVersion === detailRequestVersion && deletingReplyId.value === replyID) {
+    if (
+      detailVersion === detailRequestVersion
+      && requestVersion === replyDeleteRequestVersion
+      && deletingReplyId.value === replyID
+    ) {
       deletingReplyId.value = null;
     }
   }
@@ -1283,6 +1357,10 @@ watch(currentViewerID, (viewerID, previousViewerID) => {
   deleteRequestVersion += 1;
   deletePending.value = false;
   deleteError.value = '';
+  replyDeleteRequestVersion += 1;
+  deletingReplyId.value = null;
+  deleteReplyCandidateId.value = null;
+  replyDeleteError.value = '';
 });
 
 watch(
