@@ -132,6 +132,11 @@ const reply = (id: number): Post => ({
   deleted: false,
 });
 
+const ownReply = (id: number): Post => ({
+  ...reply(id),
+  author: { id: 7, username: 'viewer', display_name: 'Viewer', avatar_url: '' },
+});
+
 const mountDetail = () => mount(PostDetailView, {
   attachTo: document.body,
   global: {
@@ -151,9 +156,14 @@ const mountDetail = () => mount(PostDetailView, {
         template: '<button class="test-create-comment" type="button" @click="$emit(\'submit\', \'hello\')">Reply</button>',
       },
       ReplyList: {
-        props: ['replies'],
-        emits: ['delete'],
-        template: '<button class="test-delete-comment" type="button" @click="$emit(\'delete\', replies[0]?.id)">Delete reply</button>',
+        props: ['replies', 'deletingReplyId'],
+        emits: ['requestDelete'],
+        template: '<button class="test-delete-comment" type="button" :disabled="deletingReplyId !== null" @click="$emit(\'requestDelete\', replies[0]?.id)">Delete reply</button>',
+      },
+      ConfirmDialog: {
+        props: ['title', 'description', 'confirmLabel', 'cancelLabel', 'danger', 'busy', 'error'],
+        emits: ['confirm', 'cancel'],
+        template: '<div class="test-confirm-dialog"><span v-if="error" class="test-confirm-error">{{ error }}</span><button class="test-confirm-cancel" type="button" :disabled="busy" @click="$emit(\'cancel\')">{{ cancelLabel }}</button><button class="test-confirm-delete" type="button" :disabled="busy" @click="$emit(\'confirm\')">{{ busy ? \'Deleting…\' : confirmLabel }}</button></div>',
       },
     },
   },
@@ -268,7 +278,7 @@ describe('PostDetailView mutation synchronization', () => {
   });
 
   it('syncs absolute comment counts after create and delete success', async () => {
-    mocks.createPostReply.mockResolvedValueOnce(reply(10));
+    mocks.createPostReply.mockResolvedValueOnce(ownReply(10));
     mocks.deletePostReply.mockResolvedValueOnce(undefined);
     const mounted = mountDetail();
     await flushPromises();
@@ -282,23 +292,44 @@ describe('PostDetailView mutation synchronization', () => {
 
     await mounted.find('.test-delete-comment').trigger('click');
     await flushPromises();
+    expect(mocks.deletePostReply).not.toHaveBeenCalled();
+    expect(mounted.find('.test-confirm-dialog').exists()).toBe(true);
+
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mocks.deletePostReply).toHaveBeenCalledWith(10);
     expect(mocks.externalReplyCount).toHaveBeenNthCalledWith(2, {
       postId: 42,
       replyCount: 2,
     });
   });
 
-  it('does not synchronize failed comment mutations', async () => {
+  it('does not synchronize failed reply creation', async () => {
     mocks.createPostReply.mockRejectedValueOnce(new Error('offline'));
-    mocks.deletePostReply.mockRejectedValueOnce(new Error('offline'));
     const mounted = mountDetail();
     await flushPromises();
 
     await mounted.find('.test-create-comment').trigger('click');
     await flushPromises();
-    await mounted.find('.test-delete-comment').trigger('click');
-    await flushPromises();
 
     expect(mocks.externalReplyCount).not.toHaveBeenCalled();
+  });
+
+  it('does not synchronize a failed confirmed reply deletion', async () => {
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [ownReply(9)], next_cursor: null });
+    mocks.deletePostReply.mockRejectedValueOnce(new Error('offline'));
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.test-delete-comment').trigger('click');
+    await flushPromises();
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mocks.deletePostReply).toHaveBeenCalledWith(9);
+    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
+    expect(mounted.find('.test-confirm-error').text())
+      .toBe('Reply could not be deleted. Please try again.');
   });
 });
