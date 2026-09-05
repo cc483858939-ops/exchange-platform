@@ -48,7 +48,14 @@
           class="post-detail__reference"
           aria-label="Referenced post"
         >
-          <span class="post-detail__reference-label">{{ detailReferenceLabel }}</span>
+          <RouterLink
+            v-if="detailReferenceDestination"
+            class="post-detail__reference-label post-detail__reference-link"
+            :to="detailReferenceDestination"
+          >
+            {{ detailReferenceLabel }}
+          </RouterLink>
+          <span v-else class="post-detail__reference-label">{{ detailReferenceLabel }}</span>
           <template v-if="detailReference.deleted">
             <p class="post-detail__reference-tombstone">{{ detailReferenceMessage }}</p>
           </template>
@@ -59,7 +66,10 @@
               variant="compact"
             />
             <p class="post-detail__reference-content">
-              <LinkifiedText :text="detailReferenceContent" />
+              <LinkifiedText
+                :text="detailReferenceContent"
+                :to="detailReferenceDestination"
+              />
             </p>
             <PostMediaGrid
               v-if="detailReferenceMedia.length > 0"
@@ -397,6 +407,18 @@ const detailPresentation = computed<DetailPresentation | null>(() => {
 const detailReference = computed(() => (
   post.value?.quote_post ?? post.value?.reply_to_post ?? null
 ));
+
+const detailReferenceDestination = computed(() => {
+  const reference = detailReference.value;
+  if (!reference || reference.deleted) {
+    return undefined;
+  }
+
+  return {
+    name: 'PostDetail' as const,
+    params: { id: String(reference.id) },
+  };
+});
 
 const detailReferenceLabel = computed(() => (
   post.value?.quote_post ? 'Quoted post' : 'Replying to'
@@ -1441,6 +1463,21 @@ onBeforeUnmount(() => {
   color: var(--color-text-tertiary);
   font-size: 12px;
   font-weight: 750;
+}
+
+.post-detail__reference-link {
+  text-decoration: none;
+}
+
+.post-detail__reference-link:hover,
+.post-detail__reference-link:focus-visible {
+  color: var(--color-accent);
+}
+
+.post-detail__reference-link:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .post-detail__reference-content,

@@ -277,12 +277,143 @@ describe('PostCard View metric and telemetry lifecycle', () => {
 
     expect(wrapper.find('.post-card__reference-content').text()).toBe('Referenced post body');
     expect(wrapper.find('.post-card__reference-deleted').exists()).toBe(false);
+    const referenceBodyLink = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('linkified-text__internal')
+        && link.element.closest('.post-card__reference-content'));
+    expect(referenceBodyLink?.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '9' },
+    });
 
     await wrapper.setProps({
       post: { ...basePost(), quotePost: { id: 9, deleted: true } },
     });
     expect(wrapper.find('.post-card__reference-deleted').text()).toBe('Post unavailable');
     expect(wrapper.find('.post-card__reference-content').exists()).toBe(false);
+    expect(wrapper.find('.post-card__reference-deleted a').exists()).toBe(false);
+  });
+
+  it('routes quote body and media to the referenced Post without outer handoff', async () => {
+    const quotedPost = {
+      id: 9,
+      deleted: false as const,
+      author: {
+        id: 8,
+        username: 'referenced',
+        display_name: 'Referenced Author',
+        avatar_url: '',
+      },
+      content: 'Referenced post body',
+      published_at: '2026-08-17T00:00:00.000Z',
+      media: [{ type: 'image' as const, url: '/reference.png', position: 0 }],
+    };
+    const post = {
+      ...basePost(),
+      media: [{ type: 'image' as const, url: '/outer.png', position: 0 }],
+      quotePost: quotedPost,
+    };
+    const wrapper = mountPostCard(post);
+    const referenceBodyLink = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('linkified-text__internal')
+        && link.element.closest('.post-card__reference-content'))!;
+    const referenceMediaLink = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-card__reference-media-link'))!;
+    const outerMediaLink = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-card__media-link'))!;
+
+    expect(referenceBodyLink.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '9' },
+    });
+    expect(referenceMediaLink.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '9' },
+    });
+    expect(outerMediaLink.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '42' },
+    });
+
+    await referenceBodyLink.trigger('click');
+    await referenceMediaLink.trigger('click');
+
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+
+    await outerMediaLink.trigger('click');
+    expect(mocks.remember).toHaveBeenCalledWith(post);
+    expect(wrapper.emitted('postClick')).toEqual([[post]]);
+  });
+
+  it('routes reply references to the replied-to Post without changing outer navigation', async () => {
+    const repliedToPost = {
+      id: 17,
+      deleted: false as const,
+      author: {
+        id: 8,
+        username: 'parent',
+        display_name: 'Parent Author',
+        avatar_url: '',
+      },
+      content: 'Parent post body',
+      published_at: '2026-08-17T00:00:00.000Z',
+      media: [{ type: 'image' as const, url: '/parent.png', position: 0 }],
+    };
+    const wrapper = mountPostCard({ ...basePost(), replyToPost: repliedToPost });
+    const referenceBodyLink = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('linkified-text__internal')
+        && link.element.closest('.post-card__reference-content'))!;
+    const referenceMediaLink = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-card__reference-media-link'))!;
+
+    expect(referenceBodyLink.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '17' },
+    });
+    expect(referenceMediaLink.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '17' },
+    });
+
+    await referenceBodyLink.trigger('click');
+    await referenceMediaLink.trigger('click');
+
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+  });
+
+  it('keeps reference external URLs external and does not emit outer navigation', async () => {
+    const wrapper = mountPostCard({
+      ...basePost(),
+      quotePost: {
+        id: 9,
+        deleted: false as const,
+        author: {
+          id: 8,
+          username: 'referenced',
+          display_name: 'Referenced Author',
+          avatar_url: '',
+        },
+        content: 'Read https://example.com here',
+        published_at: '2026-08-17T00:00:00.000Z',
+        media: [],
+      },
+    });
+    const external = wrapper.get('.post-card__reference-content .linkified-text__external');
+    const internal = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('linkified-text__internal')
+        && link.element.closest('.post-card__reference-content'))!;
+
+    expect(external.attributes('href')).toBe('https://example.com');
+    expect(internal.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '9' },
+    });
+
+    await external.trigger('click');
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+    expect(wrapper.findAll('a a')).toHaveLength(0);
   });
 
   it('maps unknown and unavailable like status without changing parent mutation logic', async () => {

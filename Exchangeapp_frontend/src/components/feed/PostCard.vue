@@ -98,13 +98,7 @@
           {{ post.quotePost ? 'Quoted post' : 'Replying to' }}
         </span>
         <template v-if="referencePost?.deleted">
-          <p class="post-card__reference-deleted">
-            <RouterLink
-              class="post-card__reference-link"
-              :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
-              @click.capture="prepareDetailNavigation"
-            >Post unavailable</RouterLink>
-          </p>
+          <p class="post-card__reference-deleted">Post unavailable</p>
         </template>
         <template v-else>
           <AuthorIdentity
@@ -115,15 +109,13 @@
           <p class="post-card__reference-content">
             <LinkifiedText
               :text="referenceContent"
-              :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
-              @internal-activate="prepareDetailNavigation"
+              :to="referenceDestination"
             />
           </p>
           <RouterLink
-            v-if="referenceMedia.length > 0"
+            v-if="referenceMedia.length > 0 && referenceDestination"
             class="post-card__reference-media-link"
-            :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
-            @click.capture="prepareDetailNavigation"
+            :to="referenceDestination"
           >
             <PostMediaGrid :media="referenceMedia" />
           </RouterLink>
@@ -251,6 +243,17 @@ const likeUnavailable = computed(() => props.post.likeStatus === 'unavailable');
 const repostLoading = computed(() => props.post.repostStatus === 'unknown');
 const repostUnavailable = computed(() => props.post.repostStatus === 'unavailable');
 const referencePost = computed(() => props.post.quotePost ?? props.post.replyToPost ?? null);
+const referenceDestination = computed(() => {
+  const reference = referencePost.value;
+  if (!reference || reference.deleted) {
+    return undefined;
+  }
+
+  return {
+    name: 'PostDetail' as const,
+    params: { id: String(reference.id) },
+  };
+});
 const referenceAuthor = computed(() => (
   referencePost.value && !referencePost.value.deleted
     ? referencePost.value.author
@@ -628,15 +631,13 @@ const repostLabel = computed(() => {
 }
 
 .post-card__media-link,
-.post-card__reference-media-link,
-.post-card__reference-link {
+.post-card__reference-media-link {
   color: inherit;
   text-decoration: none;
 }
 
 .post-card__media-link:focus-visible,
-.post-card__reference-media-link:focus-visible,
-.post-card__reference-link:focus-visible {
+.post-card__reference-media-link:focus-visible {
   border-radius: var(--radius-sm);
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;

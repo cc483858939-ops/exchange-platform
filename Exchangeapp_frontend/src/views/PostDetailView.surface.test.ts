@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
@@ -200,7 +200,7 @@ const mountDetail = () => mount(PostDetailView, {
         emits: ['close'],
         template: '<div class="test-media-viewer" :data-index="String(initialIndex)" :data-media="media.map(item => item.url).join(\',\')"><button class="test-close-media-viewer" type="button" @click="$emit(\'close\')">Close</button></div>',
       },
-      RouterLink: { template: '<a class="test-link"><slot /></a>' },
+      RouterLink: RouterLinkStub,
     },
   },
 });
@@ -292,6 +292,85 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.findAll('.post-media-grid')).toHaveLength(2);
     expect(wrapper.find('.post-detail__body img').attributes('src')).toBe('/primary.png');
     expect(wrapper.find('.post-detail__reference img').attributes('src')).toBe('/reference.png');
+  });
+
+  it('routes an active quote reference label and body to the source Post', async () => {
+    const reference = {
+      id: 9,
+      deleted: false as const,
+      author: {
+        id: 8,
+        username: 'referenced',
+        display_name: 'Referenced Author',
+        avatar_url: '',
+      },
+      content: 'Read https://example.com',
+      published_at: '2026-08-17T00:00:00.000Z',
+      media: [],
+    };
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({
+      quote_post_id: 9,
+      quote_post: reference,
+    }));
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    const label = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-detail__reference-link'))!;
+    const body = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('linkified-text__internal')
+        && link.element.closest('.post-detail__reference-content'))!;
+
+    expect(label.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '9' },
+    });
+    expect(body.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '9' },
+    });
+    expect(wrapper.get('.post-detail__reference-content .linkified-text__external').attributes('href'))
+      .toBe('https://example.com');
+    expect(wrapper.findAll('a a')).toHaveLength(0);
+  });
+
+  it('routes an active reply reference to the replied-to Post', async () => {
+    const reference = {
+      id: 17,
+      deleted: false as const,
+      author: {
+        id: 8,
+        username: 'parent',
+        display_name: 'Parent Author',
+        avatar_url: '',
+      },
+      content: 'Parent post body',
+      published_at: '2026-08-17T00:00:00.000Z',
+      media: [],
+    };
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({
+      reply_to_post_id: 17,
+      reply_to_post: reference,
+    }));
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    const label = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-detail__reference-link'))!;
+    const body = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('linkified-text__internal')
+        && link.element.closest('.post-detail__reference-content'))!;
+
+    expect(label.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '17' },
+    });
+    expect(body.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '17' },
+    });
   });
 
   it('opens primary, reference, and reply media in the shared viewer', async () => {
@@ -477,6 +556,8 @@ describe('PostDetailView post-first surface', () => {
     wrapper = mountDetail();
     await flushPromises();
     expect(wrapper.find('.post-detail__reference-tombstone').text()).toBe('Post unavailable');
+    expect(wrapper.find('.post-detail__reference-label').element.tagName).toBe('SPAN');
+    expect(wrapper.find('.post-detail__reference-link').exists()).toBe(false);
   });
 
   it('keeps the unauthenticated Post error surface without mounting conversation UI', async () => {
