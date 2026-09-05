@@ -111,9 +111,42 @@ describe('ConfirmDialog', () => {
 
   it('announces an error accessibly', () => {
     const wrapper = mountDialog({ error: 'Reply could not be deleted. Please try again.' });
+    const descriptionID = wrapper.get('dialog').attributes('aria-describedby');
 
     expect(wrapper.get('[role="alert"]').text()).toBe('Reply could not be deleted. Please try again.');
-    expect(wrapper.get('dialog').attributes('aria-describedby')).toBe('confirm-dialog-description');
+    expect(descriptionID).toMatch(/^confirm-dialog-\d+-description$/);
+    expect(wrapper.get('[role="alert"]').attributes('id')).toBeUndefined();
+  });
+
+  it('keeps ARIA IDs unique and correctly wired across simultaneous instances', async () => {
+    const first = mountDialog({ title: 'First dialog', description: 'First description' });
+    const second = mountDialog({ title: 'Second dialog', description: 'Second description' });
+    const firstDialog = first.get('dialog');
+    const secondDialog = second.get('dialog');
+    const firstTitleID = firstDialog.attributes('aria-labelledby');
+    const secondTitleID = secondDialog.attributes('aria-labelledby');
+    const firstDescriptionID = firstDialog.attributes('aria-describedby');
+    const secondDescriptionID = secondDialog.attributes('aria-describedby');
+
+    expect(firstTitleID).toBeTruthy();
+    expect(secondTitleID).toBeTruthy();
+    expect(firstTitleID).not.toBe(secondTitleID);
+    expect(firstDescriptionID).toBeTruthy();
+    expect(secondDescriptionID).toBeTruthy();
+    expect(firstDescriptionID).not.toBe(secondDescriptionID);
+
+    expect(first.get(`#${firstTitleID}`).text()).toBe('First dialog');
+    expect(second.get(`#${secondTitleID}`).text()).toBe('Second dialog');
+    expect(first.get(`#${firstDescriptionID}`).text()).toBe('First description');
+    expect(second.get(`#${secondDescriptionID}`).text()).toBe('Second description');
+    expect(document.querySelectorAll(`#${firstTitleID}`)).toHaveLength(1);
+    expect(document.querySelectorAll(`#${secondTitleID}`)).toHaveLength(1);
+    expect(document.querySelectorAll(`#${firstDescriptionID}`)).toHaveLength(1);
+    expect(document.querySelectorAll(`#${secondDescriptionID}`)).toHaveLength(1);
+
+    await first.setProps({ title: 'Updated first dialog', error: 'First error', busy: true });
+    expect(first.get('dialog').attributes('aria-labelledby')).toBe(firstTitleID);
+    expect(first.get('dialog').attributes('aria-describedby')).toBe(firstDescriptionID);
   });
 
   it('closes the native dialog on unmount', () => {

@@ -12,7 +12,6 @@
       <p :id="descriptionID" class="confirm-dialog__description">{{ description }}</p>
       <p
         v-if="error"
-        :id="errorID"
         class="confirm-dialog__error"
         role="alert"
         aria-live="polite"
@@ -44,6 +43,12 @@
   </dialog>
 </template>
 
+<script lang="ts">
+let confirmDialogSequence = 0;
+
+const nextConfirmDialogInstanceID = () => `confirm-dialog-${++confirmDialogSequence}`;
+</script>
+
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
@@ -70,9 +75,9 @@ const emit = defineEmits<{
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const cancelButtonRef = ref<HTMLButtonElement | null>(null);
-const titleID = 'confirm-dialog-title';
-const descriptionID = 'confirm-dialog-description';
-const errorID = 'confirm-dialog-error';
+const instanceID = nextConfirmDialogInstanceID();
+const titleID = `${instanceID}-title`;
+const descriptionID = `${instanceID}-description`;
 
 const handleCancel = (event: Event) => {
   event.preventDefault();
