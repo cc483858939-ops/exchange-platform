@@ -2,7 +2,7 @@
 
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import { reactive } from 'vue';
+import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import UserConnectionsView from './UserConnectionsView.vue';
 import { useConnectionsSessionStore } from '../store/connectionsSession';
@@ -209,5 +209,67 @@ describe('UserConnectionsView mutation synchronization', () => {
 
     expect(scrollTo).not.toHaveBeenCalled();
     wrapper.unmount();
+  });
+
+  describe('loading copy', () => {
+    it('renders Following initial loading copy with an ellipsis', async () => {
+      let resolvePage!: (value: {
+        items: { user: ReturnType<typeof user>; following: boolean }[];
+        has_more: boolean;
+      }) => void;
+      const pending = new Promise<{
+        items: { user: ReturnType<typeof user>; following: boolean }[];
+        has_more: boolean;
+      }>((resolve) => {
+        resolvePage = resolve;
+      });
+      mocks.getUserFollowing.mockReturnValueOnce(pending);
+      const wrapper = mountConnections();
+      await flushPromises();
+
+      expect(wrapper.text()).toContain('Loading following…');
+      expect(wrapper.text()).not.toContain('Loading following?');
+      resolvePage({ items: [], has_more: false });
+      await flushPromises();
+      wrapper.unmount();
+    });
+
+    it('renders Followers initial loading copy with an ellipsis', async () => {
+      mocks.route.name = 'UserFollowers';
+      let resolvePage!: (value: {
+        items: { user: ReturnType<typeof user>; following: boolean }[];
+        has_more: boolean;
+      }) => void;
+      const pending = new Promise<{
+        items: { user: ReturnType<typeof user>; following: boolean }[];
+        has_more: boolean;
+      }>((resolve) => {
+        resolvePage = resolve;
+      });
+      mocks.getUserFollowers.mockReturnValueOnce(pending);
+      const wrapper = mountConnections();
+      await flushPromises();
+
+      expect(wrapper.text()).toContain('Loading followers…');
+      expect(wrapper.text()).not.toContain('Loading followers?');
+      resolvePage({ items: [], has_more: false });
+      await flushPromises();
+      wrapper.unmount();
+    });
+
+    it('renders the corrected pagination loading copy', async () => {
+      const wrapper = mountConnections();
+      await flushPromises();
+
+      const connectionsSession = useConnectionsSessionStore();
+      const followingSession = connectionsSession.getTargetSession(7)?.following;
+      expect(followingSession).toBeDefined();
+      followingSession!.loadingMore = true;
+      await nextTick();
+
+      expect(wrapper.text()).toContain('Loading more…');
+      expect(wrapper.text()).not.toContain('Loading more?');
+      wrapper.unmount();
+    });
   });
 });

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { reactive } from 'vue';
+import { nextTick, reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import UserSearchView from './UserSearchView.vue';
+import { useSearchSessionStore } from '../store/searchSession';
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
@@ -125,5 +126,56 @@ describe('UserSearchView mutation synchronization', () => {
     await flushPromises();
     expect(wrapper.find('.test-follow').exists()).toBe(true);
     wrapper.unmount();
+  });
+
+  describe('loading and empty-state copy', () => {
+    it('renders the corrected initial loading copy', async () => {
+      let resolvePage!: (value: {
+        items: { user: ReturnType<typeof user>; following: boolean }[];
+        has_more: boolean;
+      }) => void;
+      const pending = new Promise<{
+        items: { user: ReturnType<typeof user>; following: boolean }[];
+        has_more: boolean;
+      }>((resolve) => {
+        resolvePage = resolve;
+      });
+      mocks.searchUsers.mockReturnValueOnce(pending);
+      const wrapper = mountSearch();
+      await nextTick();
+
+      expect(wrapper.text()).toContain('Searching people…');
+      expect(wrapper.text()).not.toContain('Searching people?');
+      resolvePage({ items: [], has_more: false });
+      await flushPromises();
+      wrapper.unmount();
+    });
+
+    it('renders the quoted empty-result query as text', async () => {
+      mocks.searchUsers.mockResolvedValueOnce({ items: [], has_more: false });
+      const wrapper = mountSearch();
+      await flushPromises();
+
+      expect(wrapper.text()).toContain('No people found for “alice”.');
+      expect(wrapper.text()).not.toContain('No people found for ?alice?.');
+      wrapper.unmount();
+    });
+
+    it('renders the corrected pagination loading copy', async () => {
+      mocks.searchUsers.mockResolvedValueOnce({
+        items: [{ user: user(8), following: false }],
+        has_more: true,
+      });
+      const wrapper = mountSearch();
+      await flushPromises();
+
+      const searchSession = useSearchSessionStore();
+      searchSession.loadingMore = true;
+      await nextTick();
+
+      expect(wrapper.text()).toContain('Loading more…');
+      expect(wrapper.text()).not.toContain('Loading more?');
+      wrapper.unmount();
+    });
   });
 });
