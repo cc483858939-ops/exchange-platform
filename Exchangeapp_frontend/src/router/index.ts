@@ -34,4 +34,24 @@ const router = createRouter({
   routes,
 });
 
+router.beforeEach((to, from) => {
+  if (
+    to.name !== 'Login'
+    || to.query.returnTo !== undefined
+    || from.matched.length === 0
+    || from.meta.layout === 'auth'
+  ) {
+    return true;
+  }
+
+  return {
+    name: 'Login',
+    query: {
+      ...to.query,
+      returnTo: from.fullPath,
+    },
+    hash: to.hash,
+  };
+});
+
 export default router;

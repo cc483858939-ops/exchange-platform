@@ -70,8 +70,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { resolveSafeLoginReturnTarget } from '../router/loginReturnTarget';
 import { useAuthStore } from '../store/auth';
 
 const form = ref({
@@ -82,7 +83,17 @@ const submitting = ref(false);
 const formError = ref('');
 
 const authStore = useAuthStore();
+const route = useRoute();
 const router = useRouter();
+const returnTarget = computed(() =>
+  resolveSafeLoginReturnTarget(router, route.query.returnTo),
+);
+
+onMounted(() => {
+  if (authStore.isAuthenticated) {
+    void router.replace(returnTarget.value ?? { name: 'Home' });
+  }
+});
 
 const formatLoginError = (error: unknown) => {
   const message = error instanceof Error ? error.message : '';
@@ -110,7 +121,7 @@ const login = async () => {
   submitting.value = true;
   try {
     await authStore.login(form.value.username, form.value.password);
-    void router.push({ name: 'Home' });
+    void router.replace(returnTarget.value ?? { name: 'Home' });
   } catch (error) {
     formError.value = formatLoginError(error);
   } finally {

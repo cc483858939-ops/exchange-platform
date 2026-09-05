@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import router from './index';
 
 describe('History route', () => {
@@ -37,5 +37,46 @@ describe('History route', () => {
     const loaded = (home?.components?.default as () => Promise<unknown>)?.();
     expect(loaded).toBeInstanceOf(Promise);
     await expect(loaded).resolves.toBeTruthy();
+  });
+});
+
+describe('Login return target navigation', () => {
+  beforeEach(async () => {
+    await router.push('/');
+  });
+
+  afterEach(async () => {
+    await router.push('/');
+  });
+
+  it('captures an app route fullPath when entering Login', async () => {
+    await router.push('/notifications?filter=unread#top');
+    await router.push({ name: 'Login' });
+
+    expect(router.currentRoute.value.query.returnTo).toBe('/notifications?filter=unread#top');
+  });
+
+  it('preserves Post query and hash in returnTo', async () => {
+    await router.push('/posts/42?reply=1#conversation');
+    await router.push({ name: 'Login' });
+
+    expect(router.currentRoute.value.query.returnTo).toBe('/posts/42?reply=1#conversation');
+  });
+
+  it('does not capture an auth-layout source route', async () => {
+    await router.push('/register');
+    await router.push({ name: 'Login' });
+
+    expect(router.currentRoute.value.query.returnTo).toBeUndefined();
+  });
+
+  it('does not overwrite an explicit returnTo query', async () => {
+    await router.push('/notifications');
+    await router.push({
+      name: 'Login',
+      query: { returnTo: '/search?q=alice' },
+    });
+
+    expect(router.currentRoute.value.query.returnTo).toBe('/search?q=alice');
   });
 });
