@@ -24,6 +24,7 @@ describe('History route', () => {
       ['Notifications', '/notifications', 'app'],
       ['Login', '/login', 'auth'],
       ['Register', '/register', 'auth'],
+      ['NotFound', '/:pathMatch(.*)*', 'app'],
     ] as const;
 
     for (const [name, path, layout] of expectedRoutes) {
@@ -37,6 +38,26 @@ describe('History route', () => {
     const loaded = (home?.components?.default as () => Promise<unknown>)?.();
     expect(loaded).toBeInstanceOf(Promise);
     await expect(loaded).resolves.toBeTruthy();
+  });
+
+  it('resolves an unknown URL to NotFound without redirecting', () => {
+    const resolved = router.resolve('/definitely-not-a-route');
+
+    expect(resolved.name).toBe('NotFound');
+    expect(resolved.fullPath).toBe('/definitely-not-a-route');
+  });
+
+  it('preserves query and hash when resolving an unknown URL', () => {
+    const resolved = router.resolve('/missing-page?from=test#section');
+
+    expect(resolved.name).toBe('NotFound');
+    expect(resolved.fullPath).toBe('/missing-page?from=test#section');
+  });
+
+  it('keeps known static, dynamic, and create routes ahead of the catch-all', () => {
+    expect(router.resolve('/notifications').name).toBe('Notifications');
+    expect(router.resolve('/posts/42').name).toBe('PostDetail');
+    expect(router.resolve('/posts/new').name).toBe('PostCreate');
   });
 });
 

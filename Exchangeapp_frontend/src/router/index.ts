@@ -11,6 +11,7 @@ const HistoryView = () => import('../views/HistoryView.vue');
 const NotificationsView = () => import('../views/NotificationsView.vue');
 const Login = () => import('../components/Login.vue');
 const Register = () => import('../components/Register.vue');
+const NotFoundView = () => import('../views/NotFoundView.vue');
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'Home', component: HomeView, meta: { layout: 'app' } },
@@ -27,6 +28,12 @@ const routes: RouteRecordRaw[] = [
   { path: '/notifications', name: 'Notifications', component: NotificationsView, meta: { layout: 'app' } },
   { path: '/login', name: 'Login', component: Login, meta: { layout: 'auth' } },
   { path: '/register', name: 'Register', component: Register, meta: { layout: 'auth' } },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    component: NotFoundView,
+    meta: { layout: 'app' },
+  },
 ];
 
 const router = createRouter({
