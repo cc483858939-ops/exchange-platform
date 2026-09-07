@@ -137,9 +137,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}); err != nil {
 			return err
 		}
-		if avatarReport.Failed > 0 || postMediaReport.Failed > 0 {
-			return fmt.Errorf("media localization failed: avatars=%d post_media=%d", avatarReport.Failed, postMediaReport.Failed)
-		}
+		writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
 		return nil
 	case "rebuild":
 		options, err := parseCommandFlags("rebuild", args[1:], stderr, true)
@@ -173,10 +171,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
-		return syncAndVerify(stdout, stderr, registry, snapshot, devdata.SyncOptions{
+		if err := syncAndVerify(stdout, stderr, registry, snapshot, devdata.SyncOptions{
 			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
-		})
+		}); err != nil {
+			return err
+		}
+		writeMediaLocalizationWarning(stderr, 0, postMediaReport.Failed)
+		return nil
 	case "verify":
 		options, err := parseCommandFlags("verify", args[1:], stderr, false)
 		if err != nil {
@@ -351,4 +353,11 @@ func writeFetchReport(stdout io.Writer, report devdata.FetchReport, snapshotPath
 	for _, account := range report.PerAccount {
 		fmt.Fprintf(stdout, "%s: requests=%d scanned=%d selected=%d\n", account.RegistryKey, account.APIRequests, account.SourcePostsScanned, account.EligibleSelected)
 	}
+}
+
+func writeMediaLocalizationWarning(stderr io.Writer, avatarFailures, postMediaFailures int) {
+	if avatarFailures == 0 && postMediaFailures == 0 {
+		return
+	}
+	fmt.Fprintf(stderr, "WARN: media localization completed with failures: avatars=%d post_media=%d\n", avatarFailures, postMediaFailures)
 }

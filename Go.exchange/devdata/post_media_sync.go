@@ -71,6 +71,11 @@ func insertImportedPostMedia(tx *gorm.DB, postID uint, resolutions []PostMediaRe
 
 func syncImportedPostMedia(tx *gorm.DB, postID uint, desired SnapshotPost, options SyncOptions, syncAt time.Time, maintenance *syncMaintenance) error {
 	if len(desired.Media) == 0 {
+		if desired.HasMedia {
+			// The source still reports media, but there is no definitive
+			// mirrorable photo set. Preserve any existing complete gallery.
+			return nil
+		}
 		result := tx.Unscoped().Where("post_id = ?", postID).Delete(&models.PostMedia{})
 		if result.Error != nil {
 			return fmt.Errorf("clear imported PostMedia for Post %d: %w", postID, result.Error)

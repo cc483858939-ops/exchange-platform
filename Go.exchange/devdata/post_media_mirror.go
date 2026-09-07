@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	postMediaSourceHost                 = "pbs.twimg.com"
-	postMediaObjectPrefix               = "post-media/devdata/"
-	postMediaMaxBytes             int64 = 5 << 20
-	postMediaMaxRedirects                = 3
-	postMediaRequestTimeout              = 10 * time.Second
+	postMediaSourceHost           = "pbs.twimg.com"
+	postMediaObjectPrefix         = "post-media/devdata/"
+	postMediaMaxBytes       int64 = 5 << 20
+	postMediaMaxRedirects         = 3
+	postMediaRequestTimeout       = 10 * time.Second
 )
 
 type SourceMedia struct {

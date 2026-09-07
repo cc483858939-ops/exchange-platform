@@ -261,6 +261,7 @@ func TestDevDataMirrorPostMediaLifecycleIntegration(t *testing.T) {
 	oneChanged := one
 	oneChanged.Media = []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com/media/one-new.jpg"}}
 	fourCleared := four
+	fourCleared.HasMedia = false
 	fourCleared.Media = nil
 	changed := data.snapshot(now.Add(time.Minute), oneChanged, fourCleared)
 	changedResolutions := map[SourcePostKey][]PostMediaResolution{
@@ -297,6 +298,49 @@ func TestDevDataMirrorPostMediaLifecycleIntegration(t *testing.T) {
 	assertIntegrationPostMediaCountAndPositions(t, db, oneMapping.LocalPostID, 1)
 	newMapping := findMirrorMapping(t, db, newIncomplete.SourcePostID)
 	assertIntegrationPostMediaCountAndPositions(t, db, newMapping.LocalPostID, 0)
+}
+
+func TestDevDataMirrorPostMediaMarkerOnlyPreservesExistingIntegration(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+	now := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	accountKey := data.Registry.Accounts[0].Key
+	initialPost := data.sourcePost(accountKey, 1210, now.Add(-time.Hour), "legacy-marker-only")
+	initialPost.HasMedia = true
+	initialPost.Media = []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com/media/legacy.jpg"}}
+	initial := data.snapshot(now, initialPost)
+	resolutions := map[SourcePostKey][]PostMediaResolution{
+		{RegistryKey: initialPost.RegistryKey, SourcePostID: initialPost.SourcePostID}: {
+			integrationPostMediaResolution(t, initialPost, 0, avatarJPEGFixture(t)),
+		},
+	}
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, initial, nil, now, SyncOptions{PostMediaResolutions: resolutions}); err != nil {
+		t.Fatalf("initial marker media sync: %v", err)
+	}
+	mapping := findMirrorMapping(t, db, initialPost.SourcePostID)
+	var before []models.PostMedia
+	if err := db.Where("post_id = ?", mapping.LocalPostID).Order("position ASC").Find(&before).Error; err != nil {
+		t.Fatalf("load initial PostMedia: %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("initial PostMedia count=%d want=1", len(before))
+	}
+
+	legacyStyle := initialPost
+	legacyStyle.Media = nil
+	legacy := data.snapshot(now.Add(time.Minute), legacyStyle)
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, legacy, nil, now.Add(time.Minute), SyncOptions{}); err != nil {
+		t.Fatalf("legacy marker-only media sync: %v", err)
+	}
+
+	var after []models.PostMedia
+	if err := db.Where("post_id = ?", mapping.LocalPostID).Order("position ASC").Find(&after).Error; err != nil {
+		t.Fatalf("load preserved PostMedia: %v", err)
+	}
+	if len(after) != 1 || after[0].URL != before[0].URL || after[0].Position != before[0].Position {
+		t.Fatalf("marker-only sync changed PostMedia before=%#v after=%#v", before, after)
+	}
 }
 
 func integrationPostMediaResolution(t *testing.T, post SnapshotPost, position int, body []byte) PostMediaResolution {

@@ -39,3 +39,17 @@ func TestParseCommandFlagsRejectsUnknownSourceAdapter(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func TestWriteMediaLocalizationWarningOnlyReportsFailures(t *testing.T) {
+	var output strings.Builder
+	writeMediaLocalizationWarning(&output, 1, 2)
+	if got := output.String(); got != "WARN: media localization completed with failures: avatars=1 post_media=2\n" {
+		t.Fatalf("warning=%q", got)
+	}
+
+	output.Reset()
+	writeMediaLocalizationWarning(&output, 0, 0)
+	if output.Len() != 0 {
+		t.Fatalf("unexpected warning for successful localization: %q", output.String())
+	}
+}

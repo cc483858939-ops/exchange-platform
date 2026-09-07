@@ -177,7 +177,7 @@ type xUserEnvelope struct {
 }
 
 type xTimelineEnvelope struct {
-	Data []XPost `json:"data"`
+	Data     []XPost `json:"data"`
 	Includes struct {
 		Media []XMedia `json:"media"`
 	} `json:"includes"`

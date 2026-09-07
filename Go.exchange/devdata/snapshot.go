@@ -47,16 +47,16 @@ type SnapshotMedia struct {
 }
 
 type SnapshotPost struct {
-	RegistryKey       string        `json:"registry_key"`
-	SourcePostID      string        `json:"source_post_id"`
-	SourceURL         string        `json:"source_url"`
-	Text              string        `json:"text"`
-	CreatedAt         time.Time     `json:"created_at"`
-	Language          string        `json:"language"`
-	PossiblySensitive bool          `json:"possibly_sensitive"`
-	HasMedia          bool          `json:"has_media"`
+	RegistryKey       string          `json:"registry_key"`
+	SourcePostID      string          `json:"source_post_id"`
+	SourceURL         string          `json:"source_url"`
+	Text              string          `json:"text"`
+	CreatedAt         time.Time       `json:"created_at"`
+	Language          string          `json:"language"`
+	PossiblySensitive bool            `json:"possibly_sensitive"`
+	HasMedia          bool            `json:"has_media"`
 	Media             []SnapshotMedia `json:"media,omitempty"`
-	SourceMetrics     SourceMetrics `json:"source_metrics"`
+	SourceMetrics     SourceMetrics   `json:"source_metrics"`
 }
 
 type Snapshot struct {
