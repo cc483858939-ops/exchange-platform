@@ -135,6 +135,19 @@ describe('PostCreateView media picker and retry behavior', () => {
     expect(wrapper.get('.post-media-grid__remove').attributes('aria-label')).toBe('Remove image 1');
   });
 
+  it('keeps the image picker icon-only with an accessible name', () => {
+    wrapper = mountPage();
+
+    const picker = wrapper.get('.media-picker');
+    expect(picker.attributes('aria-label')).toBe('Add images');
+    expect(picker.attributes('title')).toBe('Add images');
+    expect(picker.text()).not.toContain('Add images');
+    expect(wrapper.find('#post-media-input').exists()).toBe(true);
+    expect(wrapper.get('#post-media-input').attributes('multiple')).toBeDefined();
+    expect(wrapper.get('#post-media-input').attributes('accept'))
+      .toBe('image/jpeg,image/png,image/webp');
+  });
+
   it('keeps existing images and reports overflow without clearing them', async () => {
     wrapper = mountPage();
     const existing = [1, 2, 3].map(index => imageFile(`existing-${index}.png`));

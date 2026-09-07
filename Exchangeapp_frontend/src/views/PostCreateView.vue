@@ -8,7 +8,6 @@
         @click="goBack"
       >
         <AppIcon name="arrow-left" :size="20" />
-        <span>Back</span>
       </button>
       <h1>Post</h1>
       <button
@@ -52,11 +51,6 @@
           />
 
           <div class="composer-main__content">
-            <div class="composer-author__copy">
-              <strong>{{ authorDisplayName }}</strong>
-              <small>{{ authorHandle }}</small>
-            </div>
-
             <label class="sr-only" for="post-content">Post</label>
             <textarea
               id="post-content"
@@ -66,19 +60,8 @@
               rows="5"
               placeholder="What's happening?"
               :disabled="isSubmitting"
-              aria-describedby="post-content-help post-content-error"
+              :aria-describedby="contentError ? 'post-content-error' : undefined"
             ></textarea>
-            <div id="post-content-help" class="composer-field__meta">
-              <span
-                v-if="contentError"
-                id="post-content-error"
-                class="field-error"
-                role="alert"
-              >{{ contentError }}</span>
-              <span :class="{ 'field-count--over': contentLength > maxContentLength }">
-                {{ contentLength }}/{{ maxContentLength }}
-              </span>
-            </div>
 
             <PostMediaGrid
               v-if="previewMedia.length > 0"
@@ -88,24 +71,43 @@
               @remove="removeMedia"
             />
 
-            <label
-              class="composer-action composer-action--secondary media-picker"
-              :class="{ 'composer-action--disabled': isSubmitting }"
-              :aria-disabled="isSubmitting"
-              for="post-media-input"
+            <div class="composer-toolbar">
+              <label
+                class="composer-tool media-picker"
+                :class="{ 'composer-tool--disabled': isSubmitting }"
+                :aria-disabled="isSubmitting"
+                aria-label="Add images"
+                title="Add images"
+                for="post-media-input"
+              >
+                <AppIcon name="image" :size="20" />
+                <input
+                  id="post-media-input"
+                  class="media-input"
+                  type="file"
+                  multiple
+                  accept="image/jpeg,image/png,image/webp"
+                  :disabled="isSubmitting"
+                  @change="handleMediaChange"
+                />
+              </label>
+              <span
+                v-if="showCharacterCount"
+                class="composer-character-count"
+                :class="{ 'composer-character-count--over': remainingCharacters < 0 }"
+              >
+                {{ remainingCharacters }}
+              </span>
+            </div>
+
+            <p
+              v-if="contentError"
+              id="post-content-error"
+              class="field-error content-error"
+              role="alert"
             >
-              <AppIcon name="image" :size="18" />
-              Add images
-              <input
-                id="post-media-input"
-                class="media-input"
-                type="file"
-                multiple
-                accept="image/jpeg,image/png,image/webp"
-                :disabled="isSubmitting"
-                @change="handleMediaChange"
-              />
-            </label>
+              {{ contentError }}
+            </p>
             <p v-if="mediaError" class="field-error media-error" role="alert">
               {{ mediaError }}
             </p>
@@ -122,9 +124,9 @@
         {{ uploadError || publishError }}
       </div>
 
-      <p v-if="isSubmitting" class="composer-progress" aria-live="polite">
+      <span v-if="isSubmitting" class="sr-only" aria-live="polite">
         {{ publishLabel }}
-      </p>
+      </span>
     </form>
   </main>
 </template>
@@ -174,13 +176,8 @@ const content = computed({
   set: (value: string) => postDraft.setContent(value),
 });
 const contentLength = computed(() => Array.from(content.value.trim()).length);
-const authorUsername = computed(() => currentIdentity.value?.username.trim() || '');
-const authorDisplayName = computed(() => (
-  currentIdentity.value?.display_name.trim() || authorUsername.value || 'Current user'
-));
-const authorHandle = computed(() => (
-  authorUsername.value ? '@' + authorUsername.value : 'Signed-in account'
-));
+const remainingCharacters = computed(() => maxContentLength - contentLength.value);
+const showCharacterCount = computed(() => remainingCharacters.value <= 1000);
 const isSubmitting = computed(() => phase.value !== 'idle');
 const publishLabel = computed(() => {
   if (phase.value === 'uploading') {
@@ -491,7 +488,7 @@ onBeforeUnmount(() => {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   min-height: 56px;
-  padding: var(--space-2) var(--space-5);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   backdrop-filter: blur(10px);
@@ -504,14 +501,13 @@ onBeforeUnmount(() => {
 }
 
 .composer-header__back {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 40px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
   border: 0;
   border-radius: var(--radius-pill);
-  padding: var(--space-2) var(--space-3);
+  padding: 0;
   background: transparent;
   color: var(--color-text);
   cursor: pointer;
@@ -526,10 +522,10 @@ onBeforeUnmount(() => {
 
 .publish-button {
   justify-self: end;
-  min-height: 40px;
+  min-height: 36px;
   border: 0;
   border-radius: var(--radius-pill);
-  padding: var(--space-2) var(--space-4);
+  padding: 0 var(--space-4);
   background: var(--color-accent);
   color: var(--color-surface);
   cursor: pointer;
@@ -554,7 +550,7 @@ onBeforeUnmount(() => {
 }
 
 .composer-section {
-  padding: var(--space-6) var(--space-5);
+  padding: var(--space-3) var(--space-4);
 }
 
 .composer-main {
@@ -588,44 +584,21 @@ onBeforeUnmount(() => {
   object-fit: cover;
 }
 
-.composer-author__copy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-  line-height: 1.15;
-}
-
-.composer-author__copy strong,
-.composer-author__copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-author__copy strong {
-  font-size: 14px;
-}
-
-.composer-author__copy small {
-  color: var(--color-text-tertiary);
-  font-size: 12px;
-}
-
 .composer-input {
   display: block;
   width: 100%;
   min-width: 0;
-  min-height: 140px;
+  min-height: 120px;
   max-height: 360px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
-  background: var(--color-surface);
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
   color: var(--color-text);
   font: inherit;
-  font-size: 17px;
-  line-height: 1.5;
-  resize: vertical;
+  font-size: 20px;
+  line-height: 1.45;
+  resize: none;
   overflow-y: hidden;
 }
 
@@ -633,37 +606,66 @@ onBeforeUnmount(() => {
   color: var(--color-text-tertiary);
 }
 
-.composer-input:focus {
-  border-color: var(--color-accent);
-  outline: 2px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
-  outline-offset: 1px;
-}
-
 .composer-input:disabled {
   cursor: not-allowed;
   opacity: 0.66;
 }
 
-.composer-field__meta {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: 18px;
-  color: var(--color-text-tertiary);
-  font-size: 12px;
-}
-
-.field-count--over,
 .field-error {
   color: var(--color-danger);
 }
 
-.field-count--over {
-  font-weight: 700;
+.composer-toolbar {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.composer-tool {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.composer-tool:hover,
+.composer-tool:focus-within {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.composer-tool:focus-within {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.composer-tool--disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.composer-character-count {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-character-count--over {
+  color: var(--color-danger);
+  font-weight: 750;
 }
 
 .media-picker {
-  justify-self: start;
+  position: relative;
 }
 
 .media-input {
@@ -675,6 +677,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.content-error,
 .media-error {
   margin: 0;
   font-size: 13px;
@@ -704,23 +707,10 @@ onBeforeUnmount(() => {
   color: var(--color-accent);
 }
 
-.composer-action--disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-  pointer-events: none;
-}
-
 .composer-status {
-  padding: 0 var(--space-5) var(--space-3);
+  padding: 0 var(--space-4) var(--space-3);
   color: var(--color-danger);
   font-size: 14px;
-}
-
-.composer-progress {
-  margin: 0;
-  padding: 0 var(--space-5) var(--space-6);
-  color: var(--color-text-secondary);
-  font-size: 13px;
 }
 
 .composer-auth-state {
@@ -759,7 +749,6 @@ onBeforeUnmount(() => {
   .composer-header,
   .composer-section,
   .composer-status,
-  .composer-progress,
   .composer-auth-state {
     padding-inline: var(--space-4);
   }
@@ -768,13 +757,9 @@ onBeforeUnmount(() => {
     min-height: 54px;
   }
 
-  .composer-header__back span {
-    display: none;
-  }
-
   .composer-author__avatar {
-    width: 38px;
-    height: 38px;
+    width: 40px;
+    height: 40px;
   }
 }
 </style>

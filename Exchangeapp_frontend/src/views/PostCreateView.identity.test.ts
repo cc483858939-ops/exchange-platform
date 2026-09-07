@@ -117,8 +117,7 @@ describe('PostCreateView identity and text publishing', () => {
   it('renders the current identity without a profile request', () => {
     wrapper = mountPage();
 
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('Alice Smith');
-    expect(wrapper.get('.composer-author__copy small').text()).toBe('@alice');
+    expect(wrapper.find('.composer-author__copy').exists()).toBe(false);
     expect(wrapper.get('.composer-author__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice.jpg');
   });
@@ -130,10 +129,50 @@ describe('PostCreateView identity and text publishing', () => {
     mocks.authStore!.currentIdentity = identity(8);
     await nextTick();
 
-    expect(wrapper.get('.composer-author__copy strong').text()).toBe('Bob Jones');
-    expect(wrapper.get('.composer-author__copy small').text()).toBe('@bob');
+    expect(wrapper.find('.composer-author__copy').exists()).toBe(false);
+    expect(wrapper.get('.composer-author__avatar .user-avatar__image').attributes('src'))
+      .toBe('https://example.test/bob.jpg');
     expect(usePostDraftStore().viewerID).toBe(8);
     expect(usePostDraftStore().content).toBe('');
+  });
+
+  it('uses a compact composer surface with accessible controls', () => {
+    wrapper = mountPage();
+
+    const back = wrapper.get('.composer-header__back');
+    expect(back.attributes('aria-label')).toBe('Back');
+    expect(back.text()).not.toContain('Back');
+    expect(wrapper.get('.composer-header h1').text()).toBe('Post');
+    expect(wrapper.get('.publish-button').attributes('type')).toBe('submit');
+    expect(wrapper.get('.publish-button').attributes('form')).toBe('composer-form');
+    expect(wrapper.find('.composer-input').exists()).toBe(true);
+    expect(wrapper.find('.composer-toolbar').exists()).toBe(true);
+    expect(wrapper.get('.media-picker').attributes('aria-label')).toBe('Add images');
+    expect(wrapper.get('.media-picker').text()).not.toContain('Add images');
+    expect(wrapper.find('.composer-progress').exists()).toBe(false);
+  });
+
+  it('shows remaining characters only near or beyond the content limit', async () => {
+    wrapper = mountPage();
+    const input = wrapper.get('#post-content');
+
+    await input.setValue('a'.repeat(100));
+    expect(wrapper.find('.composer-character-count').exists()).toBe(false);
+
+    await input.setValue('a'.repeat(9_000));
+    expect(wrapper.get('.composer-character-count').text()).toBe('1000');
+
+    await input.setValue('a'.repeat(10_000));
+    expect(wrapper.get('.composer-character-count').text()).toBe('0');
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeUndefined();
+
+    await input.setValue('a'.repeat(10_001));
+    expect(wrapper.get('.composer-character-count').text()).toBe('-1');
+    expect(wrapper.get('.composer-character-count').classes())
+      .toContain('composer-character-count--over');
+    expect(wrapper.get('.content-error').text())
+      .toContain('Post must be 10000 characters or fewer.');
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
   });
 
   it('publishes a text-only Post and clears the draft after success', async () => {
