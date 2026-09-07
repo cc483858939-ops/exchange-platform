@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
+import { setPageTitle } from '../utils/pageTitle';
 
 const HomeView = () => import('../views/HomeView.vue');
 const LiveExchangeView = () => import('../views/LiveExchangeView.vue');
@@ -14,25 +15,45 @@ const Register = () => import('../components/Register.vue');
 const NotFoundView = () => import('../views/NotFoundView.vue');
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', name: 'Home', component: HomeView, meta: { layout: 'app' } },
-  { path: '/exchange', name: 'CurrencyExchange', component: LiveExchangeView, meta: { layout: 'app' } },
+  { path: '/', name: 'Home', component: HomeView, meta: { layout: 'app', title: 'Home' } },
+  {
+    path: '/exchange',
+    name: 'CurrencyExchange',
+    component: LiveExchangeView,
+    meta: { layout: 'app', title: 'Currency Exchange' },
+  },
 
-  { path: '/posts/new', name: 'PostCreate', component: PostCreateView, meta: { layout: 'app' } },
-  { path: '/posts/:id', name: 'PostDetail', component: PostDetailView, meta: { layout: 'app' } },
+  { path: '/posts/new', name: 'PostCreate', component: PostCreateView, meta: { layout: 'app', title: 'Post' } },
+  { path: '/posts/:id', name: 'PostDetail', component: PostDetailView, meta: { layout: 'app', title: 'Post' } },
 
-  { path: '/users/:id', name: 'UserProfile', component: UserProfileView, meta: { layout: 'app' } },
-  { path: '/users/:id/following', name: 'UserFollowing', component: UserConnectionsView, meta: { layout: 'app' } },
-  { path: '/users/:id/followers', name: 'UserFollowers', component: UserConnectionsView, meta: { layout: 'app' } },
-  { path: '/search', name: 'UserSearch', component: UserSearchView, meta: { layout: 'app' } },
-  { path: '/history', name: 'History', component: HistoryView, meta: { layout: 'app' } },
-  { path: '/notifications', name: 'Notifications', component: NotificationsView, meta: { layout: 'app' } },
-  { path: '/login', name: 'Login', component: Login, meta: { layout: 'auth' } },
-  { path: '/register', name: 'Register', component: Register, meta: { layout: 'auth' } },
+  { path: '/users/:id', name: 'UserProfile', component: UserProfileView, meta: { layout: 'app', title: 'Profile' } },
+  {
+    path: '/users/:id/following',
+    name: 'UserFollowing',
+    component: UserConnectionsView,
+    meta: { layout: 'app', title: 'Following' },
+  },
+  {
+    path: '/users/:id/followers',
+    name: 'UserFollowers',
+    component: UserConnectionsView,
+    meta: { layout: 'app', title: 'Followers' },
+  },
+  { path: '/search', name: 'UserSearch', component: UserSearchView, meta: { layout: 'app', title: 'Search' } },
+  { path: '/history', name: 'History', component: HistoryView, meta: { layout: 'app', title: 'History' } },
+  {
+    path: '/notifications',
+    name: 'Notifications',
+    component: NotificationsView,
+    meta: { layout: 'app', title: 'Notifications' },
+  },
+  { path: '/login', name: 'Login', component: Login, meta: { layout: 'auth', title: 'Log in' } },
+  { path: '/register', name: 'Register', component: Register, meta: { layout: 'auth', title: 'Sign up' } },
   {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: NotFoundView,
-    meta: { layout: 'app' },
+    meta: { layout: 'app', title: 'Page not found' },
   },
 ];
 
@@ -59,6 +80,11 @@ router.beforeEach((to, from) => {
     },
     hash: to.hash,
   };
+});
+
+router.afterEach((to) => {
+  const title = typeof to.meta.title === 'string' ? to.meta.title : undefined;
+  setPageTitle(title);
 });
 
 export default router;

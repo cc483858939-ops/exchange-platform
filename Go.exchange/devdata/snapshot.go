@@ -39,6 +39,13 @@ type SnapshotAccount struct {
 	Category        string `json:"category"`
 }
 
+type SnapshotMedia struct {
+	Type      string `json:"type"`
+	SourceURL string `json:"source_url"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+}
+
 type SnapshotPost struct {
 	RegistryKey       string        `json:"registry_key"`
 	SourcePostID      string        `json:"source_post_id"`
@@ -48,6 +55,7 @@ type SnapshotPost struct {
 	Language          string        `json:"language"`
 	PossiblySensitive bool          `json:"possibly_sensitive"`
 	HasMedia          bool          `json:"has_media"`
+	Media             []SnapshotMedia `json:"media,omitempty"`
 	SourceMetrics     SourceMetrics `json:"source_metrics"`
 }
 
@@ -153,6 +161,18 @@ func EligibleSourcePost(post XPost, sourceUserID string) (bool, string) {
 
 func BuildSnapshotPost(account SourceAccount, post XPost) SnapshotPost {
 	text := SourceText(post)
+	media := make([]SnapshotMedia, 0, len(post.Media))
+	for _, item := range post.Media {
+		if len(media) == 4 {
+			break
+		}
+		media = append(media, SnapshotMedia{
+			Type:      "image",
+			SourceURL: strings.TrimSpace(item.URL),
+			Width:     item.Width,
+			Height:    item.Height,
+		})
+	}
 	return SnapshotPost{
 		RegistryKey:       account.Key,
 		SourcePostID:      strings.TrimSpace(post.ID),
@@ -162,6 +182,7 @@ func BuildSnapshotPost(account SourceAccount, post XPost) SnapshotPost {
 		Language:          strings.TrimSpace(post.Lang),
 		PossiblySensitive: post.PossiblySensitive,
 		HasMedia:          len(post.Attachments.MediaKeys) > 0,
+		Media:             media,
 		SourceMetrics: SourceMetrics{
 			LikeCount:   post.PublicMetrics.LikeCount,
 			ReplyCount:  post.PublicMetrics.ReplyCount,
@@ -241,6 +262,30 @@ func ValidateSnapshot(snapshot Snapshot, registry SourceRegistry) error {
 		expectedURL := fmt.Sprintf("https://x.com/%s/status/%s", strings.TrimSpace(accountsByKey[post.RegistryKey].Handle), post.SourcePostID)
 		if post.SourceURL != expectedURL {
 			return fmt.Errorf("snapshot Post %q has unexpected source_url", post.SourcePostID)
+		}
+		if len(post.Media) > 4 {
+			return fmt.Errorf("snapshot Post %q has more than four media items", post.SourcePostID)
+		}
+		if len(post.Media) > 0 && !post.HasMedia {
+			return fmt.Errorf("snapshot Post %q has media without has_media", post.SourcePostID)
+		}
+		mediaURLs := make(map[string]struct{}, len(post.Media))
+		for _, media := range post.Media {
+			if media.Type != "image" {
+				return fmt.Errorf("snapshot Post %q has unsupported media type %q", post.SourcePostID, media.Type)
+			}
+			if media.Width < 0 || media.Height < 0 {
+				return fmt.Errorf("snapshot Post %q has negative media dimensions", post.SourcePostID)
+			}
+			parsed, err := parsePostMediaSourceURL(media.SourceURL, postMediaSourceHost)
+			if err != nil {
+				return fmt.Errorf("snapshot Post %q has invalid media source URL: %w", post.SourcePostID, err)
+			}
+			mediaURL := parsed.String()
+			if _, exists := mediaURLs[mediaURL]; exists {
+				return fmt.Errorf("snapshot Post %q contains duplicate media source URL", post.SourcePostID)
+			}
+			mediaURLs[mediaURL] = struct{}{}
 		}
 		text := NormalizeSourceText(post.Text)
 		if text != post.Text {

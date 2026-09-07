@@ -31,6 +31,7 @@ var (
 	rssHubHTMLTagPattern        = regexp.MustCompile(`(?is)<[^>]+>`)
 	rssHubLineWhitespacePattern = regexp.MustCompile(`[ \t]*\n[ \t]*`)
 	rssHubQuotePattern          = regexp.MustCompile(`(?is)<div\b[^>]*\bclass\s*=\s*["'][^"']*\brsshub-quote\b[^"']*["'][^>]*>`)
+	rssHubImageSourcePattern    = regexp.MustCompile(`(?is)<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']`)
 )
 
 // RSSHubClient adapts RSSHub's X user feeds to the existing source client
@@ -268,10 +269,47 @@ func parseRSSHubItem(handle string, item rssHubItem) XPost {
 	if item.Enclosure != nil || len(item.MediaContent) > 0 || rssHubContainsMedia(item.Description) || rssHubContainsMedia(item.EncodedDescription) {
 		post.Attachments.MediaKeys = []string{"rsshub-media"}
 	}
+	post.Media = rssHubPhotoMedia(item)
 	if rssHubContainsQuote(item) {
 		post.ReferencedTweets = []XReferencedTweet{{Type: "quote", ID: rssHubQuoteReferenceID(item, post.ID)}}
 	}
 	return post
+}
+
+func rssHubPhotoMedia(item rssHubItem) []SourceMedia {
+	candidates := make([]string, 0, 4)
+	if item.Enclosure != nil {
+		candidates = append(candidates, item.Enclosure.URL)
+	}
+	for _, media := range item.MediaContent {
+		candidates = append(candidates, media.URL)
+	}
+	for _, raw := range []string{item.Description, item.EncodedDescription} {
+		decoded := html.UnescapeString(raw)
+		for _, match := range rssHubImageSourcePattern.FindAllStringSubmatch(decoded, -1) {
+			if len(match) == 2 {
+				candidates = append(candidates, match[1])
+			}
+		}
+	}
+	media := make([]SourceMedia, 0, 4)
+	seen := make(map[string]struct{}, len(candidates))
+	for _, rawURL := range candidates {
+		parsed, err := parsePostMediaSourceURL(rawURL, postMediaSourceHost)
+		if err != nil {
+			continue
+		}
+		canonical := parsed.String()
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		media = append(media, SourceMedia{Type: "image", URL: canonical})
+		if len(media) == 4 {
+			break
+		}
+	}
+	return media
 }
 
 func rssHubItemText(item rssHubItem) string {

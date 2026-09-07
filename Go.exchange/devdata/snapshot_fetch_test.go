@@ -186,7 +186,7 @@ func TestShippedSnapshotFixtureIsValidTestData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Accounts) != 15 || len(snapshot.Posts) != 15 {
+	if len(snapshot.Accounts) != 20 || len(snapshot.Posts) != 20 {
 		t.Fatalf("fixture accounts=%d posts=%d", len(snapshot.Accounts), len(snapshot.Posts))
 	}
 }

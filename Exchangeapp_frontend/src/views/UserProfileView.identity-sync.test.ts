@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import { nextTick } from 'vue';
+import { nextTick, reactive } from 'vue';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
@@ -160,6 +160,8 @@ describe('UserProfileView current identity synchronization', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    mocks.route = reactive({ params: { id: '7' } });
+    document.title = 'Exchange';
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockResolvedValue(originalUser);
@@ -194,6 +196,7 @@ describe('UserProfileView current identity synchronization', () => {
       display_name: 'Updated Viewer',
       avatar_url: '/api/files/profile-avatars/7/new.webp',
     });
+    expect(document.title).toBe('@viewer — Exchange');
   });
 
   it('does not synchronize identity when the profile save fails', async () => {
@@ -205,6 +208,44 @@ describe('UserProfileView current identity synchronization', () => {
 
     expect(mocks.authStore.syncCurrentIdentityProfile).not.toHaveBeenCalled();
     expect(mocks.feedStore.replaceAuthorIdentity).not.toHaveBeenCalled();
+  });
+
+  it('uses a deterministic fallback while loading and username after resolving', async () => {
+    let resolveUser!: (value: typeof originalUser) => void;
+    const pendingUser = new Promise<typeof originalUser>((resolve) => {
+      resolveUser = resolve;
+    });
+    mocks.getUser.mockReturnValueOnce(pendingUser);
+    wrapper = mountProfile();
+
+    expect(document.title).toBe('Profile — Exchange');
+
+    resolveUser({ ...originalUser, username: 'alice', display_name: 'Alice Smith' });
+    await settle();
+
+    expect(document.title).toBe('@alice — Exchange');
+  });
+
+  it('resets the title during a profile route switch before the next user resolves', async () => {
+    let resolveBob!: (value: typeof originalUser) => void;
+    const alice = { ...originalUser, username: 'alice', display_name: 'Alice Smith' };
+    mocks.getUser.mockImplementation((id: string) => {
+      if (id === '7') return Promise.resolve(alice);
+      return new Promise<typeof originalUser>((resolve) => {
+        resolveBob = resolve;
+      });
+    });
+    wrapper = mountProfile();
+    await settle();
+    expect(document.title).toBe('@alice — Exchange');
+
+    mocks.route.params.id = '8';
+    await nextTick();
+    expect(document.title).toBe('Profile — Exchange');
+
+    resolveBob({ ...originalUser, id: 8, username: 'bob', display_name: 'Bob Jones' });
+    await settle();
+    expect(document.title).toBe('@bob — Exchange');
   });
 
   it('keeps the profile fallback visible until the main avatar has loaded', async () => {

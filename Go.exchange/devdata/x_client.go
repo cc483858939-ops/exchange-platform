@@ -130,6 +130,14 @@ type XAttachments struct {
 	MediaKeys []string `json:"media_keys"`
 }
 
+type XMedia struct {
+	MediaKey string `json:"media_key"`
+	Type     string `json:"type"`
+	URL      string `json:"url"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
 type XNoteTweet struct {
 	Text string `json:"text"`
 }
@@ -150,6 +158,7 @@ type XPost struct {
 	PossiblySensitive bool               `json:"possibly_sensitive"`
 	InReplyToUserID   *string            `json:"in_reply_to_user_id"`
 	Attachments       XAttachments       `json:"attachments"`
+	Media             []SourceMedia      `json:"-"`
 	ReferencedTweets  []XReferencedTweet `json:"referenced_tweets"`
 	PublicMetrics     XPublicMetrics     `json:"public_metrics"`
 	NoteTweet         *XNoteTweet        `json:"note_tweet"`
@@ -169,6 +178,9 @@ type xUserEnvelope struct {
 
 type xTimelineEnvelope struct {
 	Data []XPost `json:"data"`
+	Includes struct {
+		Media []XMedia `json:"media"`
+	} `json:"includes"`
 	Meta struct {
 		NextToken   string `json:"next_token"`
 		ResultCount int    `json:"result_count"`
@@ -220,6 +232,8 @@ func (c *XClient) GetUserPosts(ctx context.Context, sourceUserID, paginationToke
 	query.Set("exclude", "replies,retweets")
 	query.Set("max_results", strconv.Itoa(maxResults))
 	query.Set("tweet.fields", xTweetFields)
+	query.Set("expansions", "attachments.media_keys")
+	query.Set("media.fields", "media_key,type,url,width,height")
 	if strings.TrimSpace(paginationToken) != "" {
 		query.Set("pagination_token", paginationToken)
 	}
@@ -231,11 +245,43 @@ func (c *XClient) GetUserPosts(ctx context.Context, sourceUserID, paginationToke
 	if len(envelope.Errors) > 0 {
 		return XTimelinePage{}, &XAPIResponseError{Status: http.StatusOK, Errors: envelope.Errors}
 	}
+	normalizeXTimelineMedia(envelope.Data, envelope.Includes.Media)
 	resultCount := envelope.Meta.ResultCount
 	if resultCount == 0 && len(envelope.Data) > 0 {
 		resultCount = len(envelope.Data)
 	}
 	return XTimelinePage{Posts: envelope.Data, NextToken: envelope.Meta.NextToken, ResultCount: resultCount}, nil
+}
+
+func normalizeXTimelineMedia(posts []XPost, includes []XMedia) {
+	byKey := make(map[string]XMedia, len(includes))
+	for _, media := range includes {
+		key := strings.TrimSpace(media.MediaKey)
+		if key != "" {
+			byKey[key] = media
+		}
+	}
+	for index := range posts {
+		posts[index].Media = nil
+		seenURLs := make(map[string]struct{}, len(posts[index].Attachments.MediaKeys))
+		for _, key := range posts[index].Attachments.MediaKeys {
+			media, ok := byKey[strings.TrimSpace(key)]
+			if !ok || strings.TrimSpace(media.URL) == "" || !strings.EqualFold(strings.TrimSpace(media.Type), "photo") {
+				continue
+			}
+			mediaURL := strings.TrimSpace(media.URL)
+			if _, exists := seenURLs[mediaURL]; exists {
+				continue
+			}
+			seenURLs[mediaURL] = struct{}{}
+			posts[index].Media = append(posts[index].Media, SourceMedia{
+				Type: "image", URL: mediaURL, Width: media.Width, Height: media.Height,
+			})
+			if len(posts[index].Media) == 4 {
+				break
+			}
+		}
+	}
 }
 
 func (c *XClient) getJSON(ctx context.Context, path string, query url.Values, target interface{}) error {

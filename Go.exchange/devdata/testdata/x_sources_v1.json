@@ -4,7 +4,11 @@
   "accounts": [
     {"key": "thsottiaux", "platform": "x", "handle": "thsottiaux", "category": "technology_ai", "max_posts": 40, "enabled": true},
     {"key": "MKBHD", "platform": "x", "handle": "MKBHD", "category": "technology_ai", "max_posts": 40, "enabled": true},
+    {"key": "dotey", "platform": "x", "handle": "dotey", "category": "technology_ai", "max_posts": 40, "enabled": true},
     {"key": "levelsio", "platform": "x", "handle": "levelsio", "category": "business_creator", "max_posts": 40, "enabled": true},
+    {"key": "laozhouhengmei", "platform": "x", "handle": "laozhouhengmei", "category": "business_creator", "max_posts": 40, "enabled": true},
+    {"key": "JamesAI", "platform": "x", "handle": "JamesAI", "category": "business_creator", "max_posts": 40, "enabled": true},
+    {"key": "Svwang1", "platform": "x", "handle": "Svwang1", "category": "business_creator", "max_posts": 40, "enabled": true},
     {"key": "F1", "platform": "x", "handle": "F1", "category": "sports", "max_posts": 40, "enabled": true},
     {"key": "StephenCurry30", "platform": "x", "handle": "StephenCurry30", "category": "sports", "max_posts": 40, "enabled": true},
     {"key": "NintendoAmerica", "platform": "x", "handle": "NintendoAmerica", "category": "gaming", "max_posts": 40, "enabled": true},
@@ -14,6 +18,7 @@
     {"key": "billboard", "platform": "x", "handle": "billboard", "category": "entertainment_creator", "max_posts": 40, "enabled": true},
     {"key": "GordonRamsay", "platform": "x", "handle": "GordonRamsay", "category": "lifestyle_food_humor", "max_posts": 40, "enabled": true},
     {"key": "dog_rates", "platform": "x", "handle": "dog_rates", "category": "lifestyle_food_humor", "max_posts": 40, "enabled": true},
+    {"key": "wenqiangjp", "platform": "x", "handle": "wenqiangjp", "category": "lifestyle_food_humor", "max_posts": 40, "enabled": true},
     {"key": "Reuters", "platform": "x", "handle": "Reuters", "category": "news", "max_posts": 40, "enabled": true},
     {"key": "NASA", "platform": "x", "handle": "NASA", "category": "science", "max_posts": 40, "enabled": true},
     {"key": "neiltyson", "platform": "x", "handle": "neiltyson", "category": "science", "max_posts": 40, "enabled": true}

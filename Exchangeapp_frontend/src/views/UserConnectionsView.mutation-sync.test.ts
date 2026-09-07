@@ -83,6 +83,7 @@ describe('UserConnectionsView mutation synchronization', () => {
       name: 'UserFollowing',
       params: { id: '7' },
     });
+    document.title = 'Exchange';
     mocks.authStore = reactive({
       isAuthenticated: true,
       token: 'Bearer token',
@@ -103,6 +104,7 @@ describe('UserConnectionsView mutation synchronization', () => {
 
   afterEach(() => {
     setWindowScrollY(0);
+    document.title = 'Exchange';
     vi.restoreAllMocks();
   });
 
@@ -212,6 +214,26 @@ describe('UserConnectionsView mutation synchronization', () => {
   });
 
   describe('loading copy', () => {
+    it('uses a mode-aware fallback before profile load and refines after load', async () => {
+      let resolveProfile!: (value: ReturnType<typeof user>) => void;
+      const pendingProfile = new Promise<ReturnType<typeof user>>((resolve) => {
+        resolveProfile = resolve;
+      });
+      mocks.getUser.mockReturnValueOnce(pendingProfile);
+      const wrapper = mountConnections();
+
+      expect(document.title).toBe('Following — Exchange');
+
+      resolveProfile(user(7));
+      await flushPromises();
+      expect(document.title).toBe('Following @user-7 — Exchange');
+
+      mocks.route.name = 'UserFollowers';
+      await nextTick();
+      expect(document.title).toBe('Followers @user-7 — Exchange');
+      wrapper.unmount();
+    });
+
     it('renders Following initial loading copy with an ellipsis', async () => {
       let resolvePage!: (value: {
         items: { user: ReturnType<typeof user>; following: boolean }[];

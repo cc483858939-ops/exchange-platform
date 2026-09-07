@@ -45,6 +45,7 @@ type SyncResult struct {
 // desired-state Post sync and its maintenance behavior unchanged.
 type SyncOptions struct {
 	AvatarResolutions                    map[string]AvatarResolution
+	PostMediaResolutions                 map[SourcePostKey][]PostMediaResolution
 	PreserveExistingAvatarWhenUnresolved bool
 }
 
@@ -125,7 +126,7 @@ func SyncSnapshotWithOptions(ctx context.Context, db *gorm.DB, registry SourceRe
 		if err != nil {
 			return err
 		}
-		if err := syncPosts(tx, registry, snapshot, syncAt, profileChanges, &result, maintenance); err != nil {
+		if err := syncPosts(tx, registry, snapshot, syncAt, profileChanges, options, &result, maintenance); err != nil {
 			return err
 		}
 		return readSyncCounts(tx, &result)
@@ -338,7 +339,7 @@ func truncateRunes(value string, limit int) string {
 	return string(runes[:limit])
 }
 
-func syncPosts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncAt time.Time, profileChanges map[uint]bool, result *SyncResult, maintenance *syncMaintenance) error {
+func syncPosts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncAt time.Time, profileChanges map[uint]bool, options SyncOptions, result *SyncResult, maintenance *syncMaintenance) error {
 	var accounts []models.DevDataMirrorAccount
 	if err := tx.Where("enabled = TRUE").Find(&accounts).Error; err != nil {
 		return fmt.Errorf("load enabled DevData mirror accounts: %w", err)
@@ -398,7 +399,7 @@ func syncPosts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncAt t
 				if mapping.Platform != configured.Platform {
 					return fmt.Errorf("%w: source Post %q platform changed", ErrSourceIdentityMismatch, desiredPost.SourcePostID)
 				}
-				if err := syncExistingPost(tx, account, mapping, desiredPost, syncAt, maintenance); err != nil {
+				if err := syncExistingPost(tx, account, mapping, desiredPost, syncAt, options, maintenance); err != nil {
 					return err
 				}
 				if mapping.State == models.DevDataMirrorPostStateActive {
@@ -411,7 +412,7 @@ func syncPosts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncAt t
 			if other, exists := mappingsBySource[metadataSourceKey(configured.Platform, desiredPost.SourcePostID)]; exists {
 				return fmt.Errorf("%w: source Post %q is mapped to account %d", ErrMirrorMappingInconsistent, desiredPost.SourcePostID, other.MirrorAccountID)
 			}
-			if err := insertPost(tx, account, desiredPost, syncAt, maintenance); err != nil {
+			if err := insertPost(tx, account, desiredPost, syncAt, options, maintenance); err != nil {
 				return err
 			}
 			result.Inserted++
@@ -452,7 +453,7 @@ func desiredPostByID(posts []SnapshotPost, sourceID string) (SnapshotPost, bool)
 	return SnapshotPost{}, false
 }
 
-func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping models.DevDataMirrorPost, desired SnapshotPost, syncAt time.Time, maintenance *syncMaintenance) error {
+func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping models.DevDataMirrorPost, desired SnapshotPost, syncAt time.Time, options SyncOptions, maintenance *syncMaintenance) error {
 	var post models.Post
 	if err := tx.Unscoped().First(&post, mapping.LocalPostID).Error; err != nil {
 		return fmt.Errorf("%w: load mapped Post %d: %w", ErrMirrorMappingInconsistent, mapping.LocalPostID, err)
@@ -489,6 +490,9 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 	if contentChanged || reactivate {
 		maintenance.affect(post.ID)
 	}
+	if err := syncImportedPostMedia(tx, post.ID, desired, options, syncAt, maintenance); err != nil {
+		return err
+	}
 	if err := updateMirrorMapping(tx, mapping, account.ID, desired, models.DevDataMirrorPostStateActive, syncAt); err != nil {
 		return err
 	}
@@ -506,7 +510,7 @@ func loadReactivationLikeState(tx *gorm.DB, postID uint, count, version int64) (
 	return likes.FullState{Count: count, Version: version, UserIDs: userIDs}, nil
 }
 
-func insertPost(tx *gorm.DB, account models.DevDataMirrorAccount, desired SnapshotPost, syncAt time.Time, maintenance *syncMaintenance) error {
+func insertPost(tx *gorm.DB, account models.DevDataMirrorAccount, desired SnapshotPost, syncAt time.Time, options SyncOptions, maintenance *syncMaintenance) error {
 	post := models.Post{
 		Model:           gorm.Model{CreatedAt: desired.CreatedAt.UTC(), UpdatedAt: syncAt},
 		AuthorID:        account.LocalUserID,
@@ -519,6 +523,11 @@ func insertPost(tx *gorm.DB, account models.DevDataMirrorAccount, desired Snapsh
 	}
 	if err := tx.Create(&post).Error; err != nil {
 		return fmt.Errorf("insert imported Post %q: %w", desired.SourcePostID, err)
+	}
+	if resolutions, complete := postMediaResolutionsForSync(desired, options); complete {
+		if err := insertImportedPostMedia(tx, post.ID, resolutions, syncAt); err != nil {
+			return err
+		}
 	}
 	mapping := models.DevDataMirrorPost{
 		Platform:          "x",

@@ -12,25 +12,26 @@ describe('History route', () => {
 
   it('preserves every route contract while loading views lazily', async () => {
     const expectedRoutes = [
-      ['Home', '/', 'app'],
-      ['CurrencyExchange', '/exchange', 'app'],
-      ['PostCreate', '/posts/new', 'app'],
-      ['PostDetail', '/posts/:id', 'app'],
-      ['UserProfile', '/users/:id', 'app'],
-      ['UserFollowing', '/users/:id/following', 'app'],
-      ['UserFollowers', '/users/:id/followers', 'app'],
-      ['UserSearch', '/search', 'app'],
-      ['History', '/history', 'app'],
-      ['Notifications', '/notifications', 'app'],
-      ['Login', '/login', 'auth'],
-      ['Register', '/register', 'auth'],
-      ['NotFound', '/:pathMatch(.*)*', 'app'],
+      ['Home', '/', 'app', 'Home'],
+      ['CurrencyExchange', '/exchange', 'app', 'Currency Exchange'],
+      ['PostCreate', '/posts/new', 'app', 'Post'],
+      ['PostDetail', '/posts/:id', 'app', 'Post'],
+      ['UserProfile', '/users/:id', 'app', 'Profile'],
+      ['UserFollowing', '/users/:id/following', 'app', 'Following'],
+      ['UserFollowers', '/users/:id/followers', 'app', 'Followers'],
+      ['UserSearch', '/search', 'app', 'Search'],
+      ['History', '/history', 'app', 'History'],
+      ['Notifications', '/notifications', 'app', 'Notifications'],
+      ['Login', '/login', 'auth', 'Log in'],
+      ['Register', '/register', 'auth', 'Sign up'],
+      ['NotFound', '/:pathMatch(.*)*', 'app', 'Page not found'],
     ] as const;
 
-    for (const [name, path, layout] of expectedRoutes) {
+    for (const [name, path, layout, title] of expectedRoutes) {
       const route = router.getRoutes().find(item => item.name === name);
       expect(route?.path).toBe(path);
       expect(route?.meta.layout).toBe(layout);
+      expect(route?.meta.title).toBe(title);
       expect(typeof route?.components?.default).toBe('function');
     }
 
@@ -38,6 +39,18 @@ describe('History route', () => {
     const loaded = (home?.components?.default as () => Promise<unknown>)?.();
     expect(loaded).toBeInstanceOf(Promise);
     await expect(loaded).resolves.toBeTruthy();
+  });
+
+  it('updates the browser title after successful navigation', async () => {
+    await router.push('/notifications');
+    await router.isReady();
+    expect(document.title).toBe('Notifications — Exchange');
+
+    await router.push('/posts/42');
+    expect(document.title).toBe('Post — Exchange');
+
+    await router.push('/missing-route');
+    expect(document.title).toBe('Page not found — Exchange');
   });
 
   it('resolves an unknown URL to NotFound without redirecting', () => {

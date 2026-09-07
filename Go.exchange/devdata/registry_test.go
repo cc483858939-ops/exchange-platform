@@ -6,15 +6,15 @@ import (
 	"testing"
 )
 
-func TestCuratedRegistryHasExactlyTheControlledFifteenAccounts(t *testing.T) {
+func TestCuratedRegistryHasExactlyTheControlledTwentyAccounts(t *testing.T) {
 	registry, err := LoadCuratedRegistry(filepath.Join("testdata", "x_sources_v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(registry.EnabledAccounts()) != 15 {
-		t.Fatalf("enabled accounts=%d, want 15", len(registry.EnabledAccounts()))
+	if len(registry.EnabledAccounts()) != 20 {
+		t.Fatalf("enabled accounts=%d, want 20", len(registry.EnabledAccounts()))
 	}
-	for _, key := range []string{"thsottiaux", "MKBHD", "F1", "NASA", "neiltyson"} {
+	for _, key := range []string{"thsottiaux", "MKBHD", "dotey", "laozhouhengmei", "JamesAI", "Svwang1", "wenqiangjp", "F1", "NASA", "neiltyson"} {
 		if _, ok := registry.AccountByKey(key); !ok {
 			t.Fatalf("registry missing %q", key)
 		}

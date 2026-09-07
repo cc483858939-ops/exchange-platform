@@ -57,6 +57,7 @@ import { storeToRefs } from 'pinia';
 import { useRoute } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
+import { usePageTitle } from '../composables/usePageTitle';
 import {
   useConnectionsSessionStore,
   type ConnectionsMode,
@@ -105,6 +106,11 @@ const stale = computed(() => activeModeSession.value?.stale ?? false);
 const revalidating = computed(() => activeModeSession.value?.revalidating ?? false);
 const displayName = computed(() => profile.value?.display_name.trim() || profile.value?.username || 'Profile');
 const modeLabel = computed(() => mode.value === 'followers' ? 'Followers' : 'Following');
+const connectionsPageTitle = computed(() => {
+  const username = profile.value?.username?.trim();
+  return username ? `${modeLabel.value} @${username}` : modeLabel.value;
+});
+usePageTitle(connectionsPageTitle);
 const emptyCopy = computed(() => mode.value === 'followers' ? 'No followers yet.' : 'Not following anyone yet.');
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;

@@ -335,6 +335,7 @@ import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
+import { usePageTitle } from '../composables/usePageTitle';
 import { updateUserProfile, uploadProfileAvatar } from '../services/userService';
 import type { UpdateUserProfilePayload, UserFollowState } from '../services/userService';
 import { useAuthStore } from '../store/auth';
@@ -395,6 +396,11 @@ const profileDisplayName = computed(() => {
   return displayName || user.value?.username || 'Profile';
 });
 const headerUsername = computed(() => profileDisplayName.value);
+const profilePageTitle = computed(() => {
+  const username = user.value?.username?.trim();
+  return username ? `@${username}` : 'Profile';
+});
+usePageTitle(profilePageTitle);
 const joinedLabel = computed(() => {
   const value = user.value?.created_at;
   if (!value) return '';

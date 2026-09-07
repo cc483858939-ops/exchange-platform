@@ -160,7 +160,7 @@ func (d *AvatarDownloader) Download(ctx context.Context, sourceURL string) (Down
 	if int64(len(body)) > avatarMaxBytes {
 		return DownloadedAvatar{}, errors.New("avatar source exceeds the size limit")
 	}
-	contentType, extension, ok := detectAvatarImageType(body)
+	contentType, extension, ok := detectMirrorImageType(body)
 	if !ok {
 		return DownloadedAvatar{}, errors.New("avatar source is not a valid JPEG, PNG, or WebP")
 	}
@@ -197,7 +197,7 @@ func parseAvatarURL(rawURL, allowedHost string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func detectAvatarImageType(body []byte) (string, string, bool) {
+func detectMirrorImageType(body []byte) (string, string, bool) {
 	if len(body) >= 3 && body[0] == 0xff && body[1] == 0xd8 && body[2] == 0xff {
 		if _, err := jpeg.DecodeConfig(bytes.NewReader(body)); err == nil {
 			return "image/jpeg", ".jpg", true
@@ -212,6 +212,12 @@ func detectAvatarImageType(body []byte) (string, string, bool) {
 		return "image/webp", ".webp", true
 	}
 	return "", "", false
+}
+
+// detectAvatarImageType keeps the existing package-local test/helper contract
+// while avatar and post-media downloaders share the same byte validation.
+func detectAvatarImageType(body []byte) (string, string, bool) {
+	return detectMirrorImageType(body)
 }
 
 func isValidWebP(body []byte) bool {
@@ -439,7 +445,7 @@ func (s *minioAvatarObjectStore) Put(ctx context.Context, objectKey string, body
 	if s == nil || s.client == nil {
 		return errors.New("avatar object store is not initialized")
 	}
-	if len(body) == 0 || int64(len(body)) > avatarMaxBytes {
+	if len(body) == 0 || int64(len(body)) > postMediaMaxBytes {
 		return errors.New("avatar object body has an invalid size")
 	}
 	if avatarContentTypeForExtension(extensionFromAvatarObjectKey(objectKey)) != contentType {
