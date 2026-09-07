@@ -1,8 +1,8 @@
 <template>
   <div class="left-sidebar">
-    <router-link class="left-sidebar__brand" :to="{ name: 'Home' }" aria-label="Go Exchange home">
-      <span class="left-sidebar__brand-mark" aria-hidden="true">GX</span>
-      <span class="left-sidebar__brand-name">Go Exchange</span>
+    <router-link class="left-sidebar__brand" :to="{ name: 'Home' }" aria-label="Exchange home">
+      <span class="left-sidebar__brand-mark" aria-hidden="true">EX</span>
+      <span class="left-sidebar__brand-name">Exchange</span>
     </router-link>
 
     <nav class="left-sidebar__nav" aria-label="Main navigation">

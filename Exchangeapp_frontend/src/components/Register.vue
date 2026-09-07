@@ -3,8 +3,8 @@
     <div class="auth-layout">
       <section class="auth-content" aria-labelledby="register-title">
         <div class="auth-brand">
-          <span class="auth-brand__mobile-mark" aria-hidden="true">GX</span>
-          <span class="auth-brand__name">Go Exchange</span>
+          <span class="auth-brand__mobile-mark" aria-hidden="true">EX</span>
+          <span class="auth-brand__name">Exchange</span>
         </div>
 
       <header class="auth-heading">
@@ -63,7 +63,7 @@
       </section>
 
       <div class="auth-visual" aria-hidden="true">
-        <span class="auth-visual__mark">GX</span>
+        <span class="auth-visual__mark">EX</span>
       </div>
     </div>
   </main>

@@ -36,6 +36,16 @@ describe('LeftSidebar history navigation', () => {
     vi.restoreAllMocks();
   });
 
+  it('renders the Exchange brand and accessible home label', () => {
+    const wrapper = mountSidebar();
+
+    expect(wrapper.get('.left-sidebar__brand').attributes('aria-label')).toBe('Exchange home');
+    expect(wrapper.get('.left-sidebar__brand-mark').text()).toBe('EX');
+    expect(wrapper.get('.left-sidebar__brand-name').text()).toBe('Exchange');
+    expect(wrapper.text()).not.toContain('GX');
+    expect(wrapper.text()).not.toContain('Go Exchange');
+  });
+
   it('hides History when signed out', () => {
     const wrapper = mountSidebar();
     expect(wrapper.text()).not.toContain('History');

@@ -71,6 +71,16 @@ describe('Login return navigation', () => {
     await flushPromises();
   };
 
+  it('renders the Exchange brand consistently', () => {
+    wrapper = mountLogin();
+
+    expect(wrapper.get('.auth-brand__mobile-mark').text()).toBe('EX');
+    expect(wrapper.get('.auth-brand__name').text()).toBe('Exchange');
+    expect(wrapper.get('.auth-visual__mark').text()).toBe('EX');
+    expect(wrapper.text()).not.toContain('GX');
+    expect(wrapper.text()).not.toContain('Go Exchange');
+  });
+
   it('replaces to a valid return target after successful login', async () => {
     mocks.route.query = { returnTo: '/posts/42?reply=1#conversation' };
     wrapper = mountLogin();
