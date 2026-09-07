@@ -131,6 +131,9 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	if !page.Posts[3].CreatedAt.Equal(time.Date(2026, 9, 1, 10, 54, 56, 0, time.UTC)) || len(page.Posts[3].Attachments.MediaKeys) != 1 {
 		t.Fatalf("media post=%#v", page.Posts[3])
 	}
+	if len(page.Posts[3].Media) != 0 {
+		t.Fatalf("unsupported external media was retained=%#v", page.Posts[3].Media)
+	}
 	if !strings.Contains(page.Posts[4].Text, "Line one & detail") || !strings.Contains(page.Posts[4].Text, "Line two") {
 		t.Fatalf("multiline post=%#v", page.Posts[4])
 	}
@@ -139,6 +142,47 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	}
 	if ok, reason := EligibleSourcePost(page.Posts[5], user.ID); ok || reason != "media_dependent_text" {
 		t.Fatalf("short media eligibility=%t reason=%q", ok, reason)
+	}
+}
+
+func TestRSSHubPhotoMediaFiltersDeduplicatesAndCapsAtFour(t *testing.T) {
+	item := rssHubItem{
+		Enclosure: &rssHubEnclosure{URL: "https://pbs.twimg.com/media/enclosure.jpg"},
+		MediaContent: []rssHubMediaEntry{
+			{URL: "https://pbs.twimg.com/media/media-content.png"},
+			{URL: "https://cdn.example.test/not-allowed.jpg"},
+		},
+		Description: `<p>body</p><img src="https://pbs.twimg.com/media/html-one.jpg"><img src="https://pbs.twimg.com/media/enclosure.jpg"><img src="https://pbs.twimg.com/media/html-two.webp"><img src="https://pbs.twimg.com/media/html-three.jpg"><img src="https://pbs.twimg.com/media/html-four.jpg">`,
+	}
+	media := rssHubPhotoMedia(item)
+	if len(media) != 4 {
+		t.Fatalf("media=%#v", media)
+	}
+	want := []string{
+		"https://pbs.twimg.com/media/enclosure.jpg",
+		"https://pbs.twimg.com/media/media-content.png",
+		"https://pbs.twimg.com/media/html-one.jpg",
+		"https://pbs.twimg.com/media/html-two.webp",
+	}
+	for index, item := range media {
+		if item.Type != "image" || item.URL != want[index] {
+			t.Fatalf("media[%d]=%#v want %q", index, item, want[index])
+		}
+	}
+	post := parseRSSHubItem("MKBHD", item)
+	if len(post.Attachments.MediaKeys) != 1 || len(post.Media) != 4 {
+		t.Fatalf("parsed post=%#v", post)
+	}
+}
+
+func TestRSSHubPhotoMediaIgnoresKnownNonImageTypes(t *testing.T) {
+	item := rssHubItem{
+		Enclosure:    &rssHubEnclosure{URL: "https://pbs.twimg.com/media/video.mp4", Type: "video/mp4"},
+		MediaContent: []rssHubMediaEntry{{URL: "https://pbs.twimg.com/media/photo.jpg", Type: "image/jpeg"}},
+	}
+	media := rssHubPhotoMedia(item)
+	if len(media) != 1 || media[0].URL != "https://pbs.twimg.com/media/photo.jpg" {
+		t.Fatalf("media=%#v", media)
 	}
 }
 

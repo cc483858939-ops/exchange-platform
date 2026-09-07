@@ -41,8 +41,8 @@ type SyncResult struct {
 	PurgedPostIDs       []uint
 }
 
-// SyncOptions controls optional source-avatar localization while leaving the
-// desired-state Post sync and its maintenance behavior unchanged.
+// SyncOptions controls optional localizations while leaving the desired-state
+// Post sync and its maintenance behavior unchanged.
 type SyncOptions struct {
 	AvatarResolutions                    map[string]AvatarResolution
 	PostMediaResolutions                 map[SourcePostKey][]PostMediaResolution
@@ -100,7 +100,8 @@ func SyncSnapshot(ctx context.Context, db *gorm.DB, registry SourceRegistry, sna
 }
 
 // SyncSnapshotWithOptions applies a complete, already validated snapshot as
-// desired state and optionally uses successful local avatar resolutions.
+// desired state and optionally uses successful local avatar and PostMedia
+// resolutions.
 func SyncSnapshotWithOptions(ctx context.Context, db *gorm.DB, registry SourceRegistry, snapshot Snapshot, redisClient *redis.Client, syncAt time.Time, options SyncOptions) (SyncResult, error) {
 	if ctx == nil {
 		ctx = context.Background()

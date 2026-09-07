@@ -35,13 +35,10 @@ export type QuoteRequestResult = {
 };
 
 const readError = (error: unknown, fallback: string) => {
-  if (isAxiosError(error)) {
-    const message = error.response?.data?.error;
-    if (typeof message === 'string' && message.trim()) {
-      return message;
-    }
+  if (!isAxiosError(error) && error instanceof Error && error.message.trim()) {
+    return error.message;
   }
-  return error instanceof Error && error.message ? error.message : fallback;
+  return fallback;
 };
 
 const sameQuoteForm = (left: ExchangeForm, right: ExchangeForm) => (
@@ -98,7 +95,7 @@ export const useExchangeSessionStore = defineStore('exchangeSession', () => {
     try {
       const { data } = await axios.get<CurrencyResponse>('/exchange/currencies');
       if (!data.currencies?.length) {
-        throw new Error('当前行情没有可用货币');
+        throw new Error('No currencies are available for the current market.');
       }
       if (requestVersion !== currencyRequestVersion.value) {
         return;
@@ -117,7 +114,7 @@ export const useExchangeSessionStore = defineStore('exchangeSession', () => {
       if (requestVersion !== currencyRequestVersion.value) {
         return;
       }
-      const message = readError(error, '汇率数据加载失败，请稍后重试。');
+      const message = readError(error, 'Could not load exchange-rate data. Please try again.');
       if (hasCache) {
         refreshError.value = message;
       } else {
@@ -166,7 +163,7 @@ export const useExchangeSessionStore = defineStore('exchangeSession', () => {
         return { applied: false, success: false, error };
       }
       quote.value = null;
-      const message = readError(error, '暂时无法获取报价，请稍后重试。');
+      const message = readError(error, 'Could not get a quote. Please try again.');
       quoteError.value = message;
       return { applied: true, success: false, error: message };
     } finally {

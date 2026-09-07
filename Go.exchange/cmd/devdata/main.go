@@ -121,14 +121,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Avatars: attempted=%d uploaded=%d reused=%d failed=%d\n", avatarReport.Attempted, avatarReport.Uploaded, avatarReport.Reused, avatarReport.Failed)
+		var postMediaFetcher devdata.PostMediaFetcher
+		if avatarStore != nil {
+			postMediaFetcher = devdata.NewPostMediaDownloader()
+		}
+		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(context.Background(), registry, snapshot, postMediaFetcher, avatarStore)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
 		if err := syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
 			AvatarResolutions:                    resolutions,
+			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
 		}); err != nil {
 			return err
 		}
-		if avatarReport.Failed > 0 {
-			return fmt.Errorf("avatar localization failed for %d enabled accounts", avatarReport.Failed)
+		if avatarReport.Failed > 0 || postMediaReport.Failed > 0 {
+			return fmt.Errorf("media localization failed: avatars=%d post_media=%d", avatarReport.Failed, postMediaReport.Failed)
 		}
 		return nil
 	case "rebuild":
@@ -144,7 +154,29 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return syncAndVerify(stdout, stderr, registry, snapshot, devdata.SyncOptions{PreserveExistingAvatarWhenUnresolved: true})
+		var postMediaStore devdata.AvatarObjectStore
+		storageClient, storageErr := config.NewStorageClient()
+		if storageErr != nil {
+			fmt.Fprintln(stderr, "WARN: post media storage unavailable; existing PostMedia rows will be preserved for unresolved images")
+		} else {
+			postMediaStore, storageErr = devdata.NewMinioAvatarObjectStore(storageClient)
+			if storageErr != nil {
+				fmt.Fprintln(stderr, "WARN: post media storage adapter unavailable; existing PostMedia rows will be preserved for unresolved images")
+			}
+		}
+		var postMediaFetcher devdata.PostMediaFetcher
+		if postMediaStore != nil {
+			postMediaFetcher = devdata.NewPostMediaDownloader()
+		}
+		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(context.Background(), registry, snapshot, postMediaFetcher, postMediaStore)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
+		return syncAndVerify(stdout, stderr, registry, snapshot, devdata.SyncOptions{
+			PostMediaResolutions:                 postMediaResolutions,
+			PreserveExistingAvatarWhenUnresolved: true,
+		})
 	case "verify":
 		options, err := parseCommandFlags("verify", args[1:], stderr, false)
 		if err != nil {

@@ -8,57 +8,57 @@
       <div class="exchange-intro">
         <div class="exchange-intro__copy">
           <p class="eyebrow">REFERENCE RATES</p>
-          <h2>汇率换算</h2>
-          <p>由后端统一报价，清楚展示数据来源与行情日期。</p>
+          <h2>Currency conversion</h2>
+          <p>Convert currencies using reference rates with clear source and market-date information.</p>
         </div>
         <div v-if="market" class="market-status" :class="{ stale: market.freshness === 'stale' }">
-          <strong>{{ market.freshness === 'stale' ? '缓存行情' : '最新行情' }}</strong>
+          <strong>{{ market.freshness === 'stale' ? 'Cached rates' : 'Latest rates' }}</strong>
           <span>{{ market.source }}</span>
-          <small>行情日期 {{ market.asOf }}</small>
+          <small>Market date {{ market.asOf }}</small>
         </div>
       </div>
 
-      <el-alert v-if="market?.freshness === 'stale'" class="page-alert" title="上游行情暂时不可用，当前报价使用最近缓存。" type="warning" :closable="false" show-icon />
+      <el-alert v-if="market?.freshness === 'stale'" class="page-alert" title="Live market data is temporarily unavailable. Quotes are using the latest cached rates." type="warning" :closable="false" show-icon />
       <el-alert v-if="refreshError" class="page-alert" :title="refreshError" type="warning" :closable="false" show-icon />
       <div v-if="!loaded && !loadError" class="skeleton"><el-skeleton animated :rows="5" /></div>
       <el-alert v-else-if="loadError" class="page-alert" :title="loadError" type="error" :closable="false" show-icon>
-        <template #default><el-button type="primary" plain @click="loadCurrencies">重新加载</el-button></template>
+        <template #default><el-button type="primary" plain @click="loadCurrencies">Reload</el-button></template>
       </el-alert>
 
       <div v-else class="exchange-layout">
         <el-form class="exchange-form" label-position="top" @submit.prevent="requestQuote">
           <div class="currency-grid">
-            <el-form-item label="币种">
-              <el-select v-model="form.fromCurrency" filterable placeholder="选择货币">
+            <el-form-item label="Currency">
+              <el-select v-model="form.fromCurrency" filterable placeholder="Select currency">
                 <el-option v-for="currency in currencies" :key="'from-' + currency" :label="currency" :value="currency" />
               </el-select>
             </el-form-item>
-            <el-button class="swap-button" plain :disabled="!form.fromCurrency || !form.toCurrency" @click="swapCurrencies">交换</el-button>
-            <el-form-item label="币种">
-              <el-select v-model="form.toCurrency" filterable placeholder="选择货币">
+            <el-button class="swap-button" plain :disabled="!form.fromCurrency || !form.toCurrency" @click="swapCurrencies">Swap</el-button>
+            <el-form-item label="Currency">
+              <el-select v-model="form.toCurrency" filterable placeholder="Select currency">
                 <el-option v-for="currency in currencies" :key="'to-' + currency" :label="currency" :value="currency" />
               </el-select>
             </el-form-item>
           </div>
-          <el-form-item label="金额"><el-input v-model="form.amount" inputmode="decimal" placeholder="例如 100" @keyup.enter="requestQuote" /></el-form-item>
+          <el-form-item label="Amount"><el-input v-model="form.amount" inputmode="decimal" placeholder="e.g. 100" @keyup.enter="requestQuote" /></el-form-item>
           <div class="form-actions">
-            <el-button type="primary" :loading="quoting" @click="requestQuote">获取报价</el-button>
-            <el-button :loading="refreshing" @click="loadCurrencies">刷新行情</el-button>
+            <el-button type="primary" :loading="quoting" @click="requestQuote">Get quote</el-button>
+            <el-button :loading="refreshing" @click="loadCurrencies">Refresh rates</el-button>
           </div>
         </el-form>
 
         <aside class="quote-panel" aria-live="polite">
           <template v-if="quote">
-            <p class="quote-label">兑换结果</p>
+            <p class="quote-label">Conversion result</p>
             <p class="quote-amount">{{ displayNumber(quote.convertedAmount) }} <span>{{ quote.to }}</span></p>
             <p class="quote-equation">{{ displayNumber(quote.amount) }} {{ quote.from }} = {{ displayNumber(quote.convertedAmount) }} {{ quote.to }}</p>
             <dl>
-              <div><dt>参考汇率</dt><dd>1 {{ quote.from }} = {{ displayNumber(quote.rate) }} {{ quote.to }}</dd></div>
-              <div><dt>行情日期</dt><dd>{{ quote.asOf }}</dd></div>
-              <div><dt>数据来源</dt><dd>{{ quote.source }}</dd></div>
+              <div><dt>Reference rate</dt><dd>1 {{ quote.from }} = {{ displayNumber(quote.rate) }} {{ quote.to }}</dd></div>
+              <div><dt>Market date</dt><dd>{{ quote.asOf }}</dd></div>
+              <div><dt>Data source</dt><dd>{{ quote.source }}</dd></div>
             </dl>
           </template>
-          <template v-else><p class="quote-label">报价结果</p><p class="quote-placeholder">选择两种货币并输入金额后获取报价。</p></template>
+          <template v-else><p class="quote-label">Quote result</p><p class="quote-placeholder">Select two currencies and enter an amount to get a quote.</p></template>
         </aside>
       </div>
     </div>
@@ -114,19 +114,19 @@ const loadCurrencies = () => { void exchangeSession.loadCurrencies({ force: true
 
 const requestQuote = async () => {
   if (!form.value.fromCurrency || !form.value.toCurrency) {
-    ElMessage.error('请选择要兑换的两种货币');
+    ElMessage.error('Select both currencies.');
     return;
   }
   if (!/^\d+(\.\d+)?$/.test(form.value.amount) || Number(form.value.amount) <= 0) {
-    ElMessage.error('请输入大于零的金额');
+    ElMessage.error('Enter an amount greater than zero.');
     return;
   }
   const result = await exchangeSession.requestQuote();
   if (!mounted || !result.applied) return;
   if (!result.success) {
-    ElMessage.error(quoteError.value || '暂时无法获取报价，请稍后重试。');
+    ElMessage.error(quoteError.value || 'Could not get a quote. Please try again.');
   } else if (result.data?.freshness === 'stale') {
-    ElMessage.warning('当前结果使用最近缓存行情');
+    ElMessage.warning('This quote is using the latest cached rates.');
   }
 };
 

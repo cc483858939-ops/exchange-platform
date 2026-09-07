@@ -50,6 +50,44 @@ func TestNormalizeSourceTextAndLongFormSelection(t *testing.T) {
 	}
 }
 
+func TestSnapshotMediaValidationPreservesMarkerSemantics(t *testing.T) {
+	validMedia := SnapshotMedia{Type: "image", SourceURL: "https://pbs.twimg.com/media/one.jpg", Width: 120, Height: 80}
+	valid := testSnapshot(strings.Repeat("m", MinTextRunesWithMedia))
+	valid.Posts[0].HasMedia = true
+	valid.Posts[0].Media = []SnapshotMedia{validMedia}
+	if err := ValidateSnapshot(valid, testRegistry()); err != nil {
+		t.Fatalf("valid media snapshot rejected: %v", err)
+	}
+	markerOnly := testSnapshot(strings.Repeat("m", MinTextRunesWithMedia))
+	markerOnly.Posts[0].HasMedia = true
+	if err := ValidateSnapshot(markerOnly, testRegistry()); err != nil {
+		t.Fatalf("marker-only snapshot rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name  string
+		media []SnapshotMedia
+		mark  bool
+	}{
+		{name: "media without marker", media: []SnapshotMedia{validMedia}, mark: false},
+		{name: "unsupported type", media: []SnapshotMedia{{Type: "video", SourceURL: validMedia.SourceURL}}, mark: true},
+		{name: "negative dimensions", media: []SnapshotMedia{{Type: "image", SourceURL: validMedia.SourceURL, Width: -1}}, mark: true},
+		{name: "wrong host", media: []SnapshotMedia{{Type: "image", SourceURL: "https://cdn.example.test/image.jpg"}}, mark: true},
+		{name: "userinfo", media: []SnapshotMedia{{Type: "image", SourceURL: "https://user:pass@pbs.twimg.com/image.jpg"}}, mark: true},
+		{name: "custom port", media: []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com:443/image.jpg"}}, mark: true},
+		{name: "duplicate URL", media: []SnapshotMedia{{Type: "image", SourceURL: validMedia.SourceURL}, {Type: "image", SourceURL: validMedia.SourceURL}}, mark: true},
+		{name: "too many", media: []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com/1.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/2.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/3.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/4.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/5.jpg"}}, mark: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := testSnapshot(strings.Repeat("m", MinTextRunesWithMedia))
+			snapshot.Posts[0].HasMedia = test.mark
+			snapshot.Posts[0].Media = test.media
+			if err := ValidateSnapshot(snapshot, testRegistry()); err == nil {
+				t.Fatal("invalid media snapshot was accepted")
+			}
+		})
+	}
+}
+
 func TestEligibleSourcePostFiltersRootContent(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	base := XPost{ID: "1", AuthorID: "123", CreatedAt: now, Text: "a valid root Post"}

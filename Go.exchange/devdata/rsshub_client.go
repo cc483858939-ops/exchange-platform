@@ -87,7 +87,13 @@ type rssHubEnclosure struct {
 }
 
 type rssHubMediaEntry struct {
-	URL string `xml:"url,attr"`
+	URL  string `xml:"url,attr"`
+	Type string `xml:"type,attr"`
+}
+
+type rssHubMediaCandidate struct {
+	URL  string
+	Type string
 }
 
 func NewRSSHubClient(baseURL string, httpClient *http.Client) (*RSSHubClient, error) {
@@ -277,25 +283,28 @@ func parseRSSHubItem(handle string, item rssHubItem) XPost {
 }
 
 func rssHubPhotoMedia(item rssHubItem) []SourceMedia {
-	candidates := make([]string, 0, 4)
+	candidates := make([]rssHubMediaCandidate, 0, 4)
 	if item.Enclosure != nil {
-		candidates = append(candidates, item.Enclosure.URL)
+		candidates = append(candidates, rssHubMediaCandidate{URL: item.Enclosure.URL, Type: item.Enclosure.Type})
 	}
 	for _, media := range item.MediaContent {
-		candidates = append(candidates, media.URL)
+		candidates = append(candidates, rssHubMediaCandidate{URL: media.URL, Type: media.Type})
 	}
 	for _, raw := range []string{item.Description, item.EncodedDescription} {
 		decoded := html.UnescapeString(raw)
 		for _, match := range rssHubImageSourcePattern.FindAllStringSubmatch(decoded, -1) {
 			if len(match) == 2 {
-				candidates = append(candidates, match[1])
+				candidates = append(candidates, rssHubMediaCandidate{URL: match[1]})
 			}
 		}
 	}
 	media := make([]SourceMedia, 0, 4)
 	seen := make(map[string]struct{}, len(candidates))
-	for _, rawURL := range candidates {
-		parsed, err := parsePostMediaSourceURL(rawURL, postMediaSourceHost)
+	for _, candidate := range candidates {
+		if !rssHubPhotoContentType(candidate.Type) {
+			continue
+		}
+		parsed, err := parsePostMediaSourceURL(candidate.URL, postMediaSourceHost)
 		if err != nil {
 			continue
 		}
@@ -310,6 +319,15 @@ func rssHubPhotoMedia(item rssHubItem) []SourceMedia {
 		}
 	}
 	return media
+}
+
+func rssHubPhotoContentType(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "image/jpeg", "image/jpg", "image/png", "image/webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func rssHubItemText(item rssHubItem) string {

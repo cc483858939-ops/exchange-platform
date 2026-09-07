@@ -2,6 +2,8 @@ package devdata
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -217,6 +219,135 @@ func findMirrorMapping(t *testing.T, db *gorm.DB, sourcePostID string) models.De
 		t.Fatalf("load mirror mapping %q: %v", sourcePostID, err)
 	}
 	return mapping
+}
+
+func TestDevDataMirrorPostMediaLifecycleIntegration(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+	now := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	accountKey := data.Registry.Accounts[0].Key
+	one := data.sourcePost(accountKey, 1201, now.Add(-time.Hour), "one-image")
+	one.HasMedia = true
+	one.Media = []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com/media/one.jpg"}}
+	four := data.sourcePost(accountKey, 1202, now.Add(-2*time.Hour), "four-images")
+	four.HasMedia = true
+	four.Media = []SnapshotMedia{
+		{Type: "image", SourceURL: "https://pbs.twimg.com/media/four-0.jpg"},
+		{Type: "image", SourceURL: "https://pbs.twimg.com/media/four-1.jpg"},
+		{Type: "image", SourceURL: "https://pbs.twimg.com/media/four-2.jpg"},
+		{Type: "image", SourceURL: "https://pbs.twimg.com/media/four-3.jpg"},
+	}
+	initial := data.snapshot(now, one, four)
+	initialResolutions := map[SourcePostKey][]PostMediaResolution{
+		{RegistryKey: one.RegistryKey, SourcePostID: one.SourcePostID}: {
+			integrationPostMediaResolution(t, one, 0, avatarJPEGFixture(t)),
+		},
+		{RegistryKey: four.RegistryKey, SourcePostID: four.SourcePostID}: {
+			integrationPostMediaResolution(t, four, 0, avatarJPEGFixture(t)),
+			integrationPostMediaResolution(t, four, 1, avatarPNGFixture(t)),
+			integrationPostMediaResolution(t, four, 2, avatarWebPFixture()),
+			integrationPostMediaResolution(t, four, 3, avatarJPEGFixture(t)),
+		},
+	}
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, initial, nil, now, SyncOptions{PostMediaResolutions: initialResolutions}); err != nil {
+		t.Fatalf("initial media sync: %v", err)
+	}
+	oneMapping := findMirrorMapping(t, db, one.SourcePostID)
+	fourMapping := findMirrorMapping(t, db, four.SourcePostID)
+	assertIntegrationPostMedia(t, db, oneMapping.LocalPostID, []string{"/api/files/post-media/devdata/"})
+	assertIntegrationPostMediaCountAndPositions(t, db, fourMapping.LocalPostID, 4)
+
+	oneChanged := one
+	oneChanged.Media = []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com/media/one-new.jpg"}}
+	fourCleared := four
+	fourCleared.Media = nil
+	changed := data.snapshot(now.Add(time.Minute), oneChanged, fourCleared)
+	changedResolutions := map[SourcePostKey][]PostMediaResolution{
+		{RegistryKey: oneChanged.RegistryKey, SourcePostID: oneChanged.SourcePostID}: {
+			integrationPostMediaResolution(t, oneChanged, 0, avatarPNGFixture(t)),
+		},
+	}
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, changed, nil, now.Add(time.Minute), SyncOptions{PostMediaResolutions: changedResolutions}); err != nil {
+		t.Fatalf("changed media sync: %v", err)
+	}
+	assertIntegrationPostMediaCountAndPositions(t, db, oneMapping.LocalPostID, 1)
+	assertIntegrationPostMediaCountAndPositions(t, db, fourMapping.LocalPostID, 0)
+
+	oneIncomplete := oneChanged
+	oneIncomplete.Media = []SnapshotMedia{
+		{Type: "image", SourceURL: "https://pbs.twimg.com/media/incomplete-0.jpg"},
+		{Type: "image", SourceURL: "https://pbs.twimg.com/media/incomplete-1.jpg"},
+	}
+	newIncomplete := data.sourcePost(accountKey, 1203, now.Add(-3*time.Hour), "new-incomplete")
+	newIncomplete.HasMedia = true
+	newIncomplete.Media = append([]SnapshotMedia(nil), oneIncomplete.Media...)
+	incomplete := data.snapshot(now.Add(2*time.Minute), oneIncomplete, fourCleared, newIncomplete)
+	incompleteResolutions := map[SourcePostKey][]PostMediaResolution{
+		{RegistryKey: oneIncomplete.RegistryKey, SourcePostID: oneIncomplete.SourcePostID}: {
+			integrationPostMediaResolution(t, oneIncomplete, 0, avatarJPEGFixture(t)),
+		},
+		{RegistryKey: newIncomplete.RegistryKey, SourcePostID: newIncomplete.SourcePostID}: {
+			integrationPostMediaResolution(t, newIncomplete, 0, avatarJPEGFixture(t)),
+		},
+	}
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, incomplete, nil, now.Add(2*time.Minute), SyncOptions{PostMediaResolutions: incompleteResolutions}); err != nil {
+		t.Fatalf("incomplete media sync: %v", err)
+	}
+	assertIntegrationPostMediaCountAndPositions(t, db, oneMapping.LocalPostID, 1)
+	newMapping := findMirrorMapping(t, db, newIncomplete.SourcePostID)
+	assertIntegrationPostMediaCountAndPositions(t, db, newMapping.LocalPostID, 0)
+}
+
+func integrationPostMediaResolution(t *testing.T, post SnapshotPost, position int, body []byte) PostMediaResolution {
+	t.Helper()
+	_, extension, ok := detectMirrorImageType(body)
+	if !ok {
+		t.Fatal("invalid integration media fixture")
+	}
+	hash := sha256.Sum256(body)
+	contentHash := hex.EncodeToString(hash[:])
+	objectKey, err := BuildPostMediaObjectKey(post.RegistryKey, post.SourcePostID, contentHash, extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return PostMediaResolution{
+		RegistryKey: post.RegistryKey, SourcePostID: post.SourcePostID, Position: position,
+		SourceURL: post.Media[position].SourceURL, ObjectKey: objectKey,
+		LocalURL: postMediaLocalURL(objectKey), ContentHash: contentHash,
+	}
+}
+
+func assertIntegrationPostMedia(t *testing.T, db *gorm.DB, postID uint, wantURLPrefix []string) {
+	t.Helper()
+	var media []models.PostMedia
+	if err := db.Where("post_id = ?", postID).Order("position ASC").Find(&media).Error; err != nil {
+		t.Fatalf("load PostMedia for Post %d: %v", postID, err)
+	}
+	if len(media) != len(wantURLPrefix) {
+		t.Fatalf("Post %d media count=%d want=%d", postID, len(media), len(wantURLPrefix))
+	}
+	for position, item := range media {
+		if item.MediaType != "image" || item.Position != position || !strings.HasPrefix(item.URL, wantURLPrefix[position]) {
+			t.Fatalf("Post %d media[%d]=%#v", postID, position, item)
+		}
+	}
+}
+
+func assertIntegrationPostMediaCountAndPositions(t *testing.T, db *gorm.DB, postID uint, wantCount int) {
+	t.Helper()
+	var media []models.PostMedia
+	if err := db.Where("post_id = ?", postID).Order("position ASC").Find(&media).Error; err != nil {
+		t.Fatalf("load PostMedia for Post %d: %v", postID, err)
+	}
+	if len(media) != wantCount {
+		t.Fatalf("Post %d media count=%d want=%d", postID, len(media), wantCount)
+	}
+	for position, item := range media {
+		if item.MediaType != "image" || item.Position != position || !strings.HasPrefix(item.URL, "/api/files/post-media/devdata/") {
+			t.Fatalf("Post %d media[%d]=%#v", postID, position, item)
+		}
+	}
 }
 
 func TestDevDataMirrorSyncLifecycleIntegration(t *testing.T) {

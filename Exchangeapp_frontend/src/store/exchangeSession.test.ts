@@ -68,6 +68,27 @@ describe('exchange session store', () => {
     expect(store.refreshing).toBe(false);
   });
 
+  it('uses the English empty-market error for an empty currency response', async () => {
+    mocks.get.mockResolvedValueOnce({ data: { ...currencies, currencies: [] } });
+    const store = useExchangeSessionStore();
+
+    await store.loadCurrencies();
+
+    expect(store.loadError).toBe('No currencies are available for the current market.');
+  });
+
+  it('uses a frontend-owned load fallback instead of raw API error copy', async () => {
+    mocks.get.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { data: { error: '任意后端文本' } },
+    });
+    const store = useExchangeSessionStore();
+
+    await store.loadCurrencies();
+
+    expect(store.loadError).toBe('Could not load exchange-rate data. Please try again.');
+  });
+
   it('applies only the latest currency response', async () => {
     const first = deferred<{ data: typeof currencies }>();
     const second = deferred<{ data: typeof currencies & { currencies: string[] } }>();
@@ -121,6 +142,19 @@ describe('exchange session store', () => {
     expect(failed.success).toBe(false);
     expect(store.quote).toBeNull();
     expect(store.quoteError).toContain('quote offline');
+  });
+
+  it('uses a frontend-owned quote fallback instead of raw API error copy', async () => {
+    mocks.get.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { data: { error: '任意后端文本' } },
+    });
+    const store = useExchangeSessionStore();
+
+    const result = await store.requestQuote();
+
+    expect(result.error).toBe('Could not get a quote. Please try again.');
+    expect(store.quoteError).toBe('Could not get a quote. Please try again.');
   });
 
   it('swaps currencies in the store without issuing a quote request', () => {
