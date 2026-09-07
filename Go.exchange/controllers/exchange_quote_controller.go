@@ -17,6 +17,18 @@ type exchangeQuoteReader interface {
 
 var liveExchangeQuoteReader exchangeQuoteReader
 
+const (
+	exchangeErrorInvalidCurrency     = "invalid_currency"
+	exchangeErrorInvalidAmount       = "invalid_amount"
+	exchangeErrorUnsupportedCurrency = "unsupported_currency"
+	exchangeErrorUnavailable         = "exchange_unavailable"
+)
+
+type exchangeErrorResponse struct {
+	Code  string `json:"code"`
+	Error string `json:"error"`
+}
+
 func currentExchangeQuoteReader() exchangeQuoteReader {
 	if liveExchangeQuoteReader == nil {
 		liveExchangeQuoteReader = services.DefaultExchangeRateService()
@@ -50,12 +62,16 @@ func GetExchangeQuote(ctx *gin.Context) {
 func writeExchangeError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, services.ErrInvalidCurrency):
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "?????????????"})
+		writeExchangeErrorResponse(ctx, http.StatusBadRequest, exchangeErrorInvalidCurrency, "Invalid currency.")
 	case errors.Is(err, services.ErrInvalidAmount):
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "?????????????"})
+		writeExchangeErrorResponse(ctx, http.StatusBadRequest, exchangeErrorInvalidAmount, "Invalid amount.")
 	case errors.Is(err, services.ErrUnsupportedCurrency):
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": "?????????"})
+		writeExchangeErrorResponse(ctx, http.StatusUnprocessableEntity, exchangeErrorUnsupportedCurrency, "Currency is not supported.")
 	default:
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "??????????????"})
+		writeExchangeErrorResponse(ctx, http.StatusServiceUnavailable, exchangeErrorUnavailable, "Exchange-rate service is temporarily unavailable.")
 	}
+}
+
+func writeExchangeErrorResponse(ctx *gin.Context, status int, code, message string) {
+	ctx.JSON(status, exchangeErrorResponse{Code: code, Error: message})
 }
