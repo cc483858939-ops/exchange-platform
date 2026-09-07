@@ -1,0 +1,54 @@
+const fixtureAuthors = [
+    { id: 9001, username: 'perf_alex', display_name: 'Alex Chen', avatar_url: '' },
+    { id: 9002, username: 'perf_mina', display_name: 'Mina Park', avatar_url: '' },
+    { id: 9003, username: 'perf_jo', display_name: 'Jo Rivera', avatar_url: '' },
+    { id: 9004, username: 'perf_sam', display_name: 'Sam Okafor', avatar_url: '' },
+];
+const baseTimestamp = Date.parse('2026-01-01T00:00:00.000Z');
+const longContent = 'A deterministic long-form post keeps the real PostCard text layout exercised without relying on remote content, clocks, or random data. It contains enough words to reach the same clamping and wrapping paths repeatedly across every benchmark run while remaining stable on every machine.';
+const mediaSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 160 90"><rect width="160" height="90" fill="#dbeafe"/><path d="M0 70 38 38l22 18 24-28 76 42v20H0Z" fill="#93c5fd"/><circle cx="116" cy="26" r="12" fill="#fbbf24"/></svg>';
+const mediaDataURI = `data:image/svg+xml,${encodeURIComponent(mediaSvg)}`;
+const contentFor = (position, postID) => {
+    switch (position % 3) {
+        case 1:
+            return `A short deterministic note for benchmark post ${postID}.`;
+        case 2:
+            return `A medium deterministic post ${postID} keeps a few lines of realistic text in the mounted card so wrapping and clamping remain representative.`;
+        default:
+            return longContent;
+    }
+};
+const normalizedCount = (count) => (Number.isSafeInteger(count) && count > 0 ? count : 0);
+const normalizedStartID = (startID) => (Number.isSafeInteger(startID) && startID > 0 ? startID : 1);
+export function createPerfPosts(count, fixture = 'mixed', startID = 1) {
+    const total = normalizedCount(count);
+    const firstID = normalizedStartID(startID);
+    return Array.from({ length: total }, (_, index) => {
+        const position = index + 1;
+        const id = firstID + index;
+        const author = fixtureAuthors[index % fixtureAuthors.length];
+        const hasMedia = fixture === 'mixed' && position % 3 === 0;
+        const hasRepostContext = fixture === 'mixed' && position % 5 === 0;
+        return {
+            id,
+            author: { ...author },
+            content: contentFor(position, id),
+            media: hasMedia
+                ? [{ type: 'image', url: mediaDataURI, position: 0 }]
+                : [],
+            createdAt: new Date(baseTimestamp + index * 60_000).toISOString(),
+            likeCount: (position * 7) % 97,
+            replyCount: (position * 5) % 31,
+            viewCount: position * 113,
+            liked: position % 7 === 0,
+            likeStatus: 'ready',
+            repostCount: (position * 3) % 19,
+            reposted: position % 11 === 0,
+            repostStatus: 'ready',
+            repostContext: hasRepostContext
+                ? { actor: { ...fixtureAuthors[(index + 1) % fixtureAuthors.length] } }
+                : undefined,
+        };
+    });
+}
+export { mediaDataURI };

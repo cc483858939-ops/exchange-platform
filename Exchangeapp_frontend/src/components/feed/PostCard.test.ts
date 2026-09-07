@@ -95,6 +95,11 @@ describe('PostCard View metric and telemetry lifecycle', () => {
           props: ['name'],
           template: '<span class="test-icon" :data-icon="name" />',
         },
+        ConfirmDialog: {
+          props: ['title', 'description', 'confirmLabel', 'cancelLabel', 'danger', 'busy', 'error'],
+          emits: ['confirm', 'cancel'],
+          template: '<div class="test-confirm-dialog" role="dialog"><h2>{{ title }}</h2><p>{{ description }}</p><p v-if="error" class="test-confirm-error" role="alert">{{ error }}</p><button class="test-confirm-cancel" type="button" :disabled="busy" @click="$emit(\'cancel\')">{{ cancelLabel }}</button><button class="test-confirm-delete" type="button" :disabled="busy" @click="$emit(\'confirm\')">{{ busy ? \'Deleting…\' : confirmLabel }}</button></div>',
+        },
         RouterLink: RouterLinkStub,
       },
     },
@@ -562,6 +567,90 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(likeAction.props('disabled')).toBe(true);
     expect(likeAction.props('loading')).toBe(false);
     expect(likeAction.props('ariaPressed')).toBe(null);
+  });
+
+  it('opens the Post confirmation from the More menu without emitting deletion', async () => {
+    const wrapper = mountPostCard(basePost(), { showDelete: true });
+
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.get('.post-card__menu-item--danger').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('.post-card__menu').exists()).toBe(false);
+    expect(wrapper.get('.test-confirm-dialog').text())
+      .toContain('Delete post?');
+    expect(wrapper.get('.test-confirm-dialog').text())
+      .toContain('This post will be permanently deleted. This can’t be undone.');
+    expect(wrapper.emitted('deletePost')).toBeUndefined();
+    expect(mocks.remember).not.toHaveBeenCalled();
+  });
+
+  it('cancels Post deletion and restores focus to More actions', async () => {
+    const wrapper = mountPostCard(basePost(), { showDelete: true });
+    const moreButton = wrapper.get('.post-card__more-button').element;
+    const focusSpy = vi.spyOn(HTMLButtonElement.prototype, 'focus');
+
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.get('.post-card__menu-item--danger').trigger('click');
+    await wrapper.get('.test-confirm-cancel').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+    expect(wrapper.emitted('deletePost')).toBeUndefined();
+    expect(focusSpy.mock.contexts).toContain(moreButton);
+    focusSpy.mockRestore();
+  });
+
+  it('emits the Post ID exactly once only after confirmation', async () => {
+    const wrapper = mountPostCard(basePost(), { showDelete: true });
+
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.get('.post-card__menu-item--danger').trigger('click');
+    await wrapper.get('.test-confirm-delete').trigger('click');
+
+    expect(wrapper.emitted('deletePost')).toEqual([[42]]);
+    expect(wrapper.emitted('deletePost')).toHaveLength(1);
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(true);
+  });
+
+  it('keeps both confirmation actions unavailable while deletion is pending', async () => {
+    const wrapper = mountPostCard(basePost(), { showDelete: true });
+
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.get('.post-card__menu-item--danger').trigger('click');
+    await wrapper.setProps({ deletePending: true });
+
+    expect(wrapper.get('.test-confirm-delete').attributes('disabled')).toBe('');
+    expect(wrapper.get('.test-confirm-cancel').attributes('disabled')).toBe('');
+    expect(wrapper.get('.test-confirm-delete').text()).toBe('Deleting…');
+
+    await wrapper.get('.test-confirm-delete').trigger('click');
+    expect(wrapper.emitted('deletePost')).toBeUndefined();
+  });
+
+  it('keeps a failed deletion error inside the open confirmation', async () => {
+    const wrapper = mountPostCard(basePost(), { showDelete: true });
+
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.get('.post-card__menu-item--danger').trigger('click');
+    await wrapper.setProps({ deleteError: 'Could not delete post.' });
+
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(true);
+    expect(wrapper.get('.test-confirm-error').text()).toBe('Could not delete post.');
+    expect(wrapper.find('.post-card__delete-status').exists()).toBe(false);
+    expect(wrapper.find('.post-card').exists()).toBe(true);
+  });
+
+  it('closes the confirmation when the Post identity changes', async () => {
+    const wrapper = mountPostCard(basePost(), { showDelete: true });
+
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.get('.post-card__menu-item--danger').trigger('click');
+    await wrapper.setProps({ post: { ...basePost(), id: 43 } });
+    await nextTick();
+
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+    expect(wrapper.emitted('deletePost')).toBeUndefined();
   });
 
   it('forwards likePending as pending while preserving the optimistic visual props', () => {

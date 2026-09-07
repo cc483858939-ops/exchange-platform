@@ -16,13 +16,14 @@
           />
           <button
             v-if="detailPresentation.kind === 'post' && canDeletePost"
+            ref="deletePostButtonRef"
             class="post-detail__delete"
             type="button"
             aria-label="Delete post"
             title="Delete post"
             :disabled="deletePending"
             :aria-busy="deletePending"
-            @click="handleDeletePost"
+            @click="requestDeletePost"
           >
             <AppIcon name="trash" :size="18" />
           </button>
@@ -164,11 +165,6 @@
           class="detail-inline-error"
           role="status"
         >{{ repostError }}</p>
-        <p
-          v-if="detailPresentation.kind === 'post' && deleteError"
-          class="detail-inline-error"
-          role="alert"
-        >{{ deleteError }}</p>
 
         <div
           v-if="detailPresentation.kind === 'warm'"
@@ -244,6 +240,19 @@
     />
 
     <ConfirmDialog
+      v-if="deletePostConfirmOpen"
+      title="Delete post?"
+      description="This post will be permanently deleted. This can’t be undone."
+      confirm-label="Delete"
+      cancel-label="Cancel"
+      danger
+      :busy="deletePending"
+      :error="deleteError"
+      @confirm="confirmDeletePost"
+      @cancel="cancelDeletePost"
+    />
+
+    <ConfirmDialog
       v-if="deleteReplyCandidateId !== null"
       title="Delete reply?"
       description="This reply will be permanently deleted. This can’t be undone."
@@ -312,6 +321,8 @@ const postError = ref('');
 const handoffPost = ref<FeedPost | null>(null);
 const deletePending = ref(false);
 const deleteError = ref('');
+const deletePostConfirmOpen = ref(false);
+const deletePostButtonRef = ref<HTMLButtonElement | null>(null);
 const postBodyRef = ref<HTMLElement | null>(null);
 
 const liked = ref(false);
@@ -728,12 +739,37 @@ const resetPostState = () => {
   viewCount.value = 0;
   deletePending.value = false;
   deleteError.value = '';
+  deletePostConfirmOpen.value = false;
 };
 
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
-const handleDeletePost = async () => {
+const requestDeletePost = () => {
+  if (
+    !post.value
+    || currentViewerID.value === null
+    || !canDeletePost.value
+    || deletePending.value
+  ) {
+    return;
+  }
+
+  deleteError.value = '';
+  deletePostConfirmOpen.value = true;
+};
+
+const cancelDeletePost = () => {
+  if (deletePending.value) {
+    return;
+  }
+
+  deletePostConfirmOpen.value = false;
+  deleteError.value = '';
+  void nextTick(() => deletePostButtonRef.value?.focus());
+};
+
+const confirmDeletePost = async () => {
   const currentPost = post.value;
   const viewerID = currentViewerID.value;
   if (
@@ -742,9 +778,6 @@ const handleDeletePost = async () => {
     || !canDeletePost.value
     || deletePending.value
   ) {
-    return;
-  }
-  if (!window.confirm('Delete this post? This cannot be undone.')) {
     return;
   }
 
@@ -770,6 +803,7 @@ const handleDeletePost = async () => {
     replyDraftStore.clearDraft(postID);
     finishRead('route_leave');
     void recommendationTelemetry.flush(false);
+    deletePostConfirmOpen.value = false;
     deletePending.value = false;
     deleteError.value = '';
     void router.replace({
@@ -1357,6 +1391,7 @@ watch(currentViewerID, (viewerID, previousViewerID) => {
   deleteRequestVersion += 1;
   deletePending.value = false;
   deleteError.value = '';
+  deletePostConfirmOpen.value = false;
   replyDeleteRequestVersion += 1;
   deletingReplyId.value = null;
   deleteReplyCandidateId.value = null;

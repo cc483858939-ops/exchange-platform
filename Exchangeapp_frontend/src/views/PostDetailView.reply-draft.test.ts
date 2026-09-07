@@ -477,11 +477,11 @@ describe('PostDetailView persistent reply drafts', () => {
     } else {
       mocks.deletePost.mockResolvedValueOnce(undefined);
     }
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     wrapper = mountDetail();
     await flushPromises();
     await wrapper.get('.post-detail__delete').trigger('click');
+    await wrapper.get('.confirm-dialog__button--confirm').trigger('click');
     await flushPromises();
 
     expect(draftStore().getDraft(42)).toBe('');

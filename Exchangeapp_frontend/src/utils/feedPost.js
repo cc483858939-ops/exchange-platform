@@ -1,0 +1,78 @@
+const safeLikeCount = (likes, fallback = 0) => Number.isFinite(likes) ? Math.max(0, likes) : Math.max(0, fallback);
+const safeRepostCount = (reposts, fallback = 0) => {
+    const count = Number(reposts);
+    if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
+        return Math.max(0, Math.floor(Number(fallback) || 0));
+    }
+    return count;
+};
+export function postToFeedPost(post, context = {}) {
+    return {
+        id: post.id,
+        content: post.content,
+        media: post.media.map(item => ({ ...item })),
+        quotePost: post.quote_post,
+        replyToPost: post.reply_to_post,
+        author: post.author,
+        createdAt: post.published_at || post.created_at,
+        likeCount: post.like_count ?? 0,
+        replyCount: post.reply_count ?? 0,
+        viewCount: Math.max(0, post.view_count),
+        liked: false,
+        likeStatus: 'unknown',
+        repostCount: 0,
+        reposted: false,
+        repostStatus: 'unknown',
+        ...(context.repostActor ? { repostContext: { actor: context.repostActor } } : {}),
+    };
+}
+export function setFeedPostLikeReady(post, likes, liked) {
+    post.likeCount = safeLikeCount(likes, post.likeCount);
+    post.liked = liked;
+    post.likeStatus = 'ready';
+    return post;
+}
+export function setFeedPostLikeUnavailable(post) {
+    post.likeStatus = 'unavailable';
+    return post;
+}
+export function applyFeedLikeStateUpdate(post, update) {
+    if (post.id !== update.postId) {
+        return false;
+    }
+    if (update.status === 'ready') {
+        setFeedPostLikeReady(post, update.likes, update.liked);
+    }
+    else if (update.status === 'unavailable') {
+        setFeedPostLikeUnavailable(post);
+    }
+    else {
+        post.likeStatus = 'unknown';
+    }
+    return true;
+}
+export function setFeedPostRepostReady(post, reposts, reposted) {
+    post.repostCount = safeRepostCount(reposts, post.repostCount);
+    post.reposted = reposted;
+    post.repostStatus = 'ready';
+    return post;
+}
+export function setFeedPostRepostUnavailable(post) {
+    post.repostStatus = 'unavailable';
+    return post;
+}
+export function applyFeedRepostStateUpdate(post, update) {
+    if (post.id !== update.postId) {
+        return false;
+    }
+    if (update.status === 'ready') {
+        setFeedPostRepostReady(post, update.reposts, update.reposted);
+    }
+    else if (update.status === 'unavailable') {
+        setFeedPostRepostUnavailable(post);
+    }
+    else {
+        post.repostStatus = 'unknown';
+    }
+    return true;
+}

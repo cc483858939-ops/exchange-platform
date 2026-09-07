@@ -57,7 +57,7 @@
             role="menuitem"
             :disabled="deletePending"
             :aria-busy="deletePending"
-            @click.stop="handleDeletePost"
+            @click.stop="requestDeletePost"
           >
             <AppIcon name="trash" :size="18" />
             <span>Delete post</span>
@@ -69,14 +69,6 @@
           aria-live="polite"
         >
           {{ copyActionLabel }}
-        </span>
-        <span
-          v-if="deleteError"
-          class="post-card__delete-status"
-          role="status"
-          aria-live="polite"
-        >
-          {{ deleteError }}
         </span>
       </div>
     </div>
@@ -194,6 +186,19 @@
         <span>{{ compactViewCount }}</span>
       </RouterLink>
     </div>
+
+    <ConfirmDialog
+      v-if="deleteConfirmOpen"
+      title="Delete post?"
+      description="This post will be permanently deleted. This can’t be undone."
+      confirm-label="Delete"
+      cancel-label="Cancel"
+      danger
+      :busy="deletePending"
+      :error="deleteError"
+      @confirm="confirmDeletePost"
+      @cancel="cancelDeletePost"
+    />
   </article>
 </template>
 
@@ -204,6 +209,7 @@ import type { FeedPost } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import LinkifiedText from '../content/LinkifiedText.vue';
 import PostMediaGrid from '../content/PostMediaGrid.vue';
+import ConfirmDialog from '../dialogs/ConfirmDialog.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
@@ -247,6 +253,7 @@ const moreButtonRef = ref<HTMLButtonElement | null>(null);
 const menuRef = ref<HTMLDivElement | null>(null);
 const menuItemRefs = ref<HTMLButtonElement[]>([]);
 const moreOpen = ref(false);
+const deleteConfirmOpen = ref(false);
 const bodyExpanded = ref(false);
 const bodyOverflowing = ref(false);
 let bodyResizeObserver: ResizeObserver | null = null;
@@ -509,16 +516,30 @@ const handleNotInterested = () => {
   emit('notInterested', props.post.id);
 };
 
-const handleDeletePost = () => {
+const requestDeletePost = () => {
   if (props.deletePending) {
-    return;
-  }
-  if (!window.confirm('Delete this post? This cannot be undone.')) {
     return;
   }
 
   closeMore();
+  deleteConfirmOpen.value = true;
+};
+
+const confirmDeletePost = () => {
+  if (props.deletePending) {
+    return;
+  }
+
   emit('deletePost', props.post.id);
+};
+
+const cancelDeletePost = () => {
+  if (props.deletePending) {
+    return;
+  }
+
+  deleteConfirmOpen.value = false;
+  void nextTick(() => moreButtonRef.value?.focus());
 };
 
 const measureBodyOverflow = () => {
@@ -562,6 +583,7 @@ watch(
     }
     if (postID !== previousPostID) {
       closeMore();
+      deleteConfirmOpen.value = false;
     }
   },
 );
@@ -585,6 +607,7 @@ onBeforeUnmount(() => {
   bodyResizeObserver?.disconnect();
   bodyResizeObserver = null;
   closeMore();
+  deleteConfirmOpen.value = false;
 });
 
 const repostLabel = computed(() => {

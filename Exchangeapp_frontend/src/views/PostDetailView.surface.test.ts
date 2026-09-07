@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils';
-import { reactive } from 'vue';
+import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
 import PostDetailView from './PostDetailView.vue';
@@ -282,6 +282,42 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.text()).not.toContain('Expired');
     expect(wrapper.text()).not.toContain('Expires');
     expect(wrapper.text()).not.toContain('Keep it useful.');
+  });
+
+  it('opens Post deletion confirmation before mutation and lets Cancel restore focus', async () => {
+    wrapper = mountDetail();
+    await flushPromises();
+    const deleteButton = wrapper.get('.post-detail__delete').element;
+
+    await wrapper.get('.post-detail__delete').trigger('click');
+
+    expect(wrapper.get('.test-confirm-dialog h2').text()).toBe('Delete post?');
+    expect(wrapper.get('.test-confirm-dialog').text())
+      .toContain('This post will be permanently deleted. This can’t be undone.');
+    expect(mocks.deletePost).not.toHaveBeenCalled();
+    expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+
+    await wrapper.get('.test-confirm-cancel').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
+    expect(document.activeElement).toBe(deleteButton);
+  });
+
+  it('clears Post deletion confirmation when the Detail Post changes', async () => {
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail__delete').trigger('click');
+    expect(wrapper.get('.test-confirm-dialog h2').text()).toBe('Delete post?');
+
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ id: 43 }));
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [], next_cursor: null });
+    mocks.route.params.id = '43';
+    await flushPromises();
+
+    expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
   });
 
   it('renders primary and active-reference media with the shared grid', async () => {

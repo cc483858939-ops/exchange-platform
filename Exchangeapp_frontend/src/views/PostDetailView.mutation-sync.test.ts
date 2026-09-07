@@ -163,7 +163,7 @@ const mountDetail = () => mount(PostDetailView, {
       ConfirmDialog: {
         props: ['title', 'description', 'confirmLabel', 'cancelLabel', 'danger', 'busy', 'error'],
         emits: ['confirm', 'cancel'],
-        template: '<div class="test-confirm-dialog"><span v-if="error" class="test-confirm-error">{{ error }}</span><button class="test-confirm-cancel" type="button" :disabled="busy" @click="$emit(\'cancel\')">{{ cancelLabel }}</button><button class="test-confirm-delete" type="button" :disabled="busy" @click="$emit(\'confirm\')">{{ busy ? \'Deleting…\' : confirmLabel }}</button></div>',
+        template: '<div class="test-confirm-dialog"><h2>{{ title }}</h2><p>{{ description }}</p><span v-if="error" class="test-confirm-error">{{ error }}</span><button class="test-confirm-cancel" type="button" :disabled="busy" @click="$emit(\'cancel\')">{{ cancelLabel }}</button><button class="test-confirm-delete" type="button" :disabled="busy" @click="$emit(\'confirm\')">{{ busy ? \'Deleting…\' : confirmLabel }}</button></div>',
       },
     },
   },
@@ -258,10 +258,14 @@ describe('PostDetailView mutation synchronization', () => {
     ['terminal 404', { response: { status: 404 } }],
   ])('syncs Detail deletion before navigation on %s', async (_label, error) => {
     if (error) mocks.deletePost.mockRejectedValueOnce(error);
-    window.confirm = vi.fn().mockReturnValue(true);
     const mounted = mountDetail();
     await flushPromises();
     await mounted.find('.post-detail__delete').trigger('click');
+    expect(mounted.find('.test-confirm-dialog').exists()).toBe(true);
+    expect(mounted.find('.test-confirm-dialog h2').text()).toBe('Delete post?');
+    expect(mocks.deletePost).not.toHaveBeenCalled();
+
+    await mounted.find('.test-confirm-delete').trigger('click');
     await flushPromises();
 
     expect(mocks.feedStore.markPostDeleted).toHaveBeenCalledWith(42, 7);
@@ -274,7 +278,85 @@ describe('PostDetailView mutation synchronization', () => {
       .toBeLessThan(mocks.externalRemoval.mock.invocationCallOrder[0]);
     expect(mocks.externalRemoval.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.router.replace.mock.invocationCallOrder[0]);
+    expect(mounted.find('.test-confirm-dialog').exists()).toBe(false);
     mounted.unmount();
+  });
+
+  it('opens Post deletion confirmation and Cancel leaves all mutation state untouched', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.post-detail__delete').trigger('click');
+
+    expect(mounted.find('.test-confirm-dialog h2').text()).toBe('Delete post?');
+    expect(mocks.deletePost).not.toHaveBeenCalled();
+    expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
+    expect(mocks.externalRemoval).not.toHaveBeenCalled();
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+
+    await mounted.find('.test-confirm-cancel').trigger('click');
+
+    expect(mounted.find('.test-confirm-dialog').exists()).toBe(false);
+    expect(mocks.deletePost).not.toHaveBeenCalled();
+    expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
+    expect(mocks.externalRemoval).not.toHaveBeenCalled();
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+  });
+
+  it('keeps Post deletion failure in the confirmation dialog without synchronizing removal', async () => {
+    mocks.deletePost.mockRejectedValueOnce(new Error('offline'));
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.post-detail__delete').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mounted.find('.test-confirm-dialog').exists()).toBe(true);
+    expect(mounted.find('.test-confirm-error').text())
+      .toBe('Could not delete post. Please try again.');
+    expect(mounted.find('.detail-inline-error').exists()).toBe(false);
+    expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
+    expect(mocks.externalRemoval).not.toHaveBeenCalled();
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+  });
+
+  it('preserves the 403 Post deletion error copy inside the confirmation dialog', async () => {
+    mocks.deletePost.mockRejectedValueOnce({ response: { status: 403 } });
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.post-detail__delete').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mounted.find('.test-confirm-error').text())
+      .toBe('You can only delete your own posts.');
+    expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
+  });
+
+  it('blocks repeated Post deletion requests while the confirmation is busy', async () => {
+    let resolveDelete!: () => void;
+    const pendingDelete = new Promise<void>(resolve => {
+      resolveDelete = resolve;
+    });
+    mocks.deletePost.mockReturnValueOnce(pendingDelete);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.post-detail__delete').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await mounted.vm.$nextTick();
+
+    expect(mocks.deletePost).toHaveBeenCalledTimes(1);
+    expect(mounted.find('.test-confirm-delete').attributes('disabled')).toBe('');
+    expect(mounted.find('.test-confirm-cancel').attributes('disabled')).toBe('');
+
+    await mounted.find('.test-confirm-delete').trigger('click');
+    expect(mocks.deletePost).toHaveBeenCalledTimes(1);
+
+    resolveDelete();
+    await flushPromises();
   });
 
   it('syncs absolute comment counts after create and delete success', async () => {
