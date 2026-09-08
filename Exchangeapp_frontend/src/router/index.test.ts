@@ -2,8 +2,13 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import router from './index';
+import { routeScrollBehavior } from './scrollBehavior';
 
 describe('History route', () => {
+  it('configures the centralized scroll policy', () => {
+    expect(router.options.scrollBehavior).toBe(routeScrollBehavior);
+  });
+
   it('registers the private history surface in the app layout', () => {
     const route = router.getRoutes().find(item => item.name === 'History');
     expect(route?.path).toBe('/history');

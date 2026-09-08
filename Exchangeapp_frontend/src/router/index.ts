@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { setPageTitle } from '../utils/pageTitle';
+import { routeScrollBehavior } from './scrollBehavior';
 
 const HomeView = () => import('../views/HomeView.vue');
 const LiveExchangeView = () => import('../views/LiveExchangeView.vue');
@@ -60,6 +61,7 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+  scrollBehavior: routeScrollBehavior,
 });
 
 router.beforeEach((to, from) => {
