@@ -17,7 +17,29 @@
     </header>
 
     <section
-      v-if="profileLoading"
+      v-if="invalidProfileError"
+      class="profile-state profile-state--page"
+      aria-live="polite"
+      role="alert"
+    >
+      <h1>Profile could not be loaded.</h1>
+      <p>{{ invalidProfileError }}</p>
+      <div class="profile-state__actions">
+        <button class="profile-action" type="button" @click="retryProfile">
+          Retry
+        </button>
+      </div>
+    </section>
+
+    <AuthRequiredState
+      v-else-if="authRequired"
+      title="Log in to view this profile."
+      description="Sign in to view this profile, posts, and connections."
+      :return-to="route.fullPath"
+    />
+
+    <section
+      v-else-if="profileLoading"
       class="profile-identity profile-identity--loading"
       aria-live="polite"
       aria-label="Loading profile"
@@ -30,7 +52,7 @@
     </section>
 
     <section
-      v-else-if="user"
+      v-else-if="user && canRenderAuthenticatedProfile"
       class="profile-identity"
       aria-labelledby="profile-name"
     >
@@ -128,7 +150,7 @@
       </div>
     </section>
 
-    <template v-if="user">
+    <template v-if="user && canRenderAuthenticatedProfile">
       <nav class="profile-tabs" aria-label="Profile sections">
         <span class="profile-tab profile-tab--active">Posts</span>
       </nav>
@@ -331,6 +353,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import AuthRequiredState from '../components/auth/AuthRequiredState.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
@@ -391,13 +414,29 @@ let observer: IntersectionObserver | null = null;
 let profileEntryVersion = 0;
 let restoredEntryVersion = -1;
 
+const currentViewerID = computed(() => {
+  if (!authStore.isAuthenticated) return null;
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
+});
+const authRequired = computed(() => Boolean(
+  numericUserID.value !== null
+  && (!authStore.isAuthenticated || currentViewerID.value === null),
+));
+
 const profileDisplayName = computed(() => {
   const displayName = user.value?.display_name?.trim() ?? '';
   return displayName || user.value?.username || 'Profile';
 });
-const headerUsername = computed(() => profileDisplayName.value);
+const headerUsername = computed(() => (
+  authStore.isAuthenticated && currentViewerID.value !== null && user.value
+    ? profileDisplayName.value
+    : 'Profile'
+));
 const profilePageTitle = computed(() => {
-  const username = user.value?.username?.trim();
+  const username = authStore.isAuthenticated && currentViewerID.value !== null
+    ? user.value?.username?.trim()
+    : '';
   return username ? `@${username}` : 'Profile';
 });
 usePageTitle(profilePageTitle);
@@ -412,10 +451,11 @@ const joinedLabel = computed(() => {
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
-const currentViewerID = computed(() => {
-  const id = authStore.currentIdentity?.id;
-  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
-});
+const canRenderAuthenticatedProfile = computed(() => Boolean(
+  authStore.isAuthenticated
+  && currentViewerID.value !== null
+  && user.value,
+));
 const isOwnProfile = computed(() => Boolean(
   user.value
   && currentViewerID.value !== null
@@ -453,7 +493,9 @@ const restoreScrollOnce = async () => {
   const session = activeSession.value;
   const targetUserID = numericUserID.value;
   if (
-    !session
+    !authStore.isAuthenticated
+    || currentViewerID.value === null
+    || !session
     || targetUserID === null
     || !session.profileLoaded
     || (!session.postsLoaded && session.postsInitialLoading)
@@ -717,6 +759,10 @@ const loadProfile = (force = false) => {
     invalidProfileError.value = 'This profile URL is not valid.';
     return;
   }
+  if (!authStore.isAuthenticated || currentViewerID.value === null) {
+    forceCloseEditProfile();
+    return;
+  }
   forceCloseEditProfile();
   void profileStore.loadProfile(numericUserID.value, force);
 };
@@ -785,6 +831,7 @@ const updateObserver = () => {
     || !hasMore.value
     || postsLoadingMore.value
     || postsLoadMoreError.value
+    || !canRenderAuthenticatedProfile.value
     || !user.value
   ) {
     return;
@@ -809,12 +856,15 @@ watch(userId, (nextID, previousID) => {
   loadProfile();
 }, { immediate: true });
 
-watch(currentViewerID, (nextViewerID, previousViewerID) => {
-  if (nextViewerID === previousViewerID) return;
-  profileEntryVersion += 1;
-  forceCloseEditProfile();
-  loadProfile();
-});
+watch(
+  [currentViewerID, () => authStore.isAuthenticated],
+  ([nextViewerID, nextAuthenticated], [previousViewerID, previousAuthenticated]) => {
+    if (nextViewerID === previousViewerID && nextAuthenticated === previousAuthenticated) return;
+    profileEntryVersion += 1;
+    forceCloseEditProfile();
+    loadProfile();
+  },
+);
 
 watch(
   [

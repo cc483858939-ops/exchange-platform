@@ -10,7 +10,9 @@ const createTestRouter = () => createRouter({
     { path: '/', name: 'Home', component: view, meta: { layout: 'app' } },
     { path: '/search', name: 'UserSearch', component: view, meta: { layout: 'app' } },
     { path: '/posts/:id', name: 'PostDetail', component: view, meta: { layout: 'app' } },
+    { path: '/users/:id', name: 'UserProfile', component: view, meta: { layout: 'app' } },
     { path: '/users/:id/followers', name: 'UserFollowers', component: view, meta: { layout: 'app' } },
+    { path: '/users/:id/following', name: 'UserFollowing', component: view, meta: { layout: 'app' } },
     { path: '/notifications', name: 'Notifications', component: view, meta: { layout: 'app' } },
     { path: '/login', name: 'Login', component: view, meta: { layout: 'auth' } },
     { path: '/register', name: 'Register', component: view, meta: { layout: 'auth' } },
@@ -23,7 +25,10 @@ describe('resolveSafeLoginReturnTarget', () => {
     ['/notifications', '/notifications'],
     ['/search?q=alice', '/search?q=alice'],
     ['/posts/42?reply=1#conversation', '/posts/42?reply=1#conversation'],
+    ['/users/7', '/users/7'],
     ['/users/7/followers', '/users/7/followers'],
+    ['/users/7/followers?source=share#top', '/users/7/followers?source=share#top'],
+    ['/users/7/following', '/users/7/following'],
   ])('preserves valid application target %s', (candidate, expected) => {
     const router = createTestRouter();
 

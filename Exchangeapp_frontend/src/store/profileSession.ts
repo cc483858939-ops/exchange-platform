@@ -505,6 +505,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     capturedViewerGeneration: number,
   ) => sessions.get(userID) === session
     && session.postRequestVersion === version
+    && authStore.isAuthenticated
     && viewerID.value === capturedViewerID
     && viewerGeneration.value === capturedViewerGeneration;
 
@@ -516,13 +517,20 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     capturedViewerGeneration: number,
   ) => sessions.get(userID) === session
     && session.postsGeneration === capturedPostsGeneration
+    && authStore.isAuthenticated
     && viewerID.value === capturedViewerID
     && viewerGeneration.value === capturedViewerGeneration;
 
   const loadPosts = async (rawUserID: unknown, force = false) => {
     const userID = normalizeID(rawUserID);
     const session = userID === null ? null : ensureSession(userID);
-    if (!userID || !session || (session.postsInitialLoading && !force)) return session;
+    if (
+      !userID
+      || !session
+      || viewerID.value === null
+      || !authStore.isAuthenticated
+      || (session.postsInitialLoading && !force)
+    ) return session;
     if (session.postsLoaded && !force) return session;
 
     if (force) {
@@ -592,6 +600,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     if (
       !userID
       || !session
+      || viewerID.value === null
+      || !authStore.isAuthenticated
       || !session.postsLoaded
       || !session.hasMore
       || session.postsInitialLoading
@@ -1011,7 +1021,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const loadProfile = async (rawUserID: unknown, force = false) => {
     const userID = normalizeID(rawUserID);
     const session = userID === null ? null : ensureSession(userID);
-    if (!userID || !session) return session;
+    if (!userID || !session || viewerID.value === null || !authStore.isAuthenticated) return session;
     if (session.profileLoading && !force) return session;
     if (session.profileLoaded && !force) {
       if (!session.postsLoaded && !session.postsInitialLoading) void loadPosts(userID);
@@ -1051,6 +1061,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     session.profileNotFound = false;
     const isCurrent = () => sessions.get(userID) === session
       && session.profileRequestVersion === profileVersion
+      && authStore.isAuthenticated
       && viewerID.value === capturedViewerID
       && viewerGeneration.value === capturedViewerGeneration;
     try {
@@ -1112,7 +1123,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   });
 
   watch(
-    () => authStore.currentIdentity?.id,
+    () => authStore.isAuthenticated ? authStore.currentIdentity?.id : null,
     (nextViewerID) => {
       setViewer(nextViewerID ?? null);
     },

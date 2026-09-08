@@ -13,41 +13,62 @@
           <span>@{{ profile.username }}</span>
         </span>
       </RouterLink>
+      <RouterLink
+        v-else-if="authRequired"
+        class="connections-header__identity"
+        :to="profileBackTarget"
+        aria-label="Back to profile"
+      >
+        <AppIcon name="arrow-left" :size="22" />
+        <span class="connections-header__copy">
+          <strong>{{ modeLabel }}</strong>
+          <span>Connections</span>
+        </span>
+      </RouterLink>
       <div v-else-if="profileLoading" class="connections-header__skeleton" aria-label="Loading profile"></div>
       <p v-else class="connections-header__error">{{ profileError || 'Profile could not be loaded.' }}</p>
     </header>
 
-    <nav v-if="profile" class="connections-tabs" aria-label="Connections">
-      <RouterLink :to="{ name: 'UserFollowing', params: { id: profile.id } }">Following</RouterLink>
-      <RouterLink :to="{ name: 'UserFollowers', params: { id: profile.id } }">Followers</RouterLink>
-    </nav>
+    <AuthRequiredState
+      v-if="authRequired"
+      :title="authRequiredTitle"
+      description="Sign in to view this user's connections."
+      :return-to="route.fullPath"
+    />
 
-    <section v-if="profile && initialLoading" class="connections-state" aria-live="polite">Loading {{ modeLabel.toLowerCase() }}…</section>
-    <section v-else-if="profile && initialError" class="connections-state connections-state--error" role="alert">
-      <p>{{ initialError }}</p>
-      <button class="connections-button" type="button" @click="reload">Retry</button>
-    </section>
-    <section v-else-if="profile && items.length === 0" class="connections-state">{{ emptyCopy }}</section>
-    <section v-else-if="profile" class="connections-list" aria-label="User connections">
-      <UserRow
-        v-for="item in items"
-        :key="item.user.id"
-        :item="item"
-        :pending="pendingMutationIDs.has(item.user.id)"
-        :error="mutationErrors.get(item.user.id)"
-        :is-self="item.user.id === viewerID"
-        @toggle-follow="toggleFollow"
-      />
-      <div ref="sentinelRef" class="connections-sentinel" aria-hidden="true"></div>
-      <div v-if="loadingMore" class="connections-more" aria-live="polite">Loading more…</div>
-      <div v-else-if="loadMoreError" class="connections-more connections-more--error" role="alert">
-        <span>{{ loadMoreError }}</span>
-        <button class="connections-button" type="button" @click="loadMore">Retry</button>
-      </div>
-      <div v-else-if="hasMore" class="connections-more">
-        <button class="connections-button" type="button" @click="loadMore">Load more</button>
-      </div>
-    </section>
+    <template v-else>
+      <nav v-if="profile" class="connections-tabs" aria-label="Connections">
+        <RouterLink :to="{ name: 'UserFollowing', params: { id: profile.id } }">Following</RouterLink>
+        <RouterLink :to="{ name: 'UserFollowers', params: { id: profile.id } }">Followers</RouterLink>
+      </nav>
+
+      <section v-if="profile && initialLoading" class="connections-state" aria-live="polite">Loading {{ modeLabel.toLowerCase() }}…</section>
+      <section v-else-if="profile && initialError" class="connections-state connections-state--error" role="alert">
+        <p>{{ initialError }}</p>
+        <button class="connections-button" type="button" @click="reload">Retry</button>
+      </section>
+      <section v-else-if="profile && items.length === 0" class="connections-state">{{ emptyCopy }}</section>
+      <section v-else-if="profile" class="connections-list" aria-label="User connections">
+        <UserRow
+          v-for="item in items"
+          :key="item.user.id"
+          :item="item"
+          :pending="pendingMutationIDs.has(item.user.id)"
+          :error="mutationErrors.get(item.user.id)"
+          :is-self="item.user.id === viewerID"
+          @toggle-follow="toggleFollow"
+        />
+        <div ref="sentinelRef" class="connections-sentinel" aria-hidden="true"></div>
+        <div v-if="loadingMore" class="connections-more" aria-live="polite">Loading more…</div>
+        <div v-else-if="loadMoreError" class="connections-more connections-more--error" role="alert">
+          <span>{{ loadMoreError }}</span>
+          <button class="connections-button" type="button" @click="loadMore">Retry</button>
+        </div>
+        <div v-else-if="hasMore" class="connections-more">
+          <button class="connections-button" type="button" @click="loadMore">Load more</button>
+        </div>
+      </section>
+    </template>
   </main>
 </template>
 
@@ -55,6 +76,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRoute } from 'vue-router';
+import AuthRequiredState from '../components/auth/AuthRequiredState.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
 import { usePageTitle } from '../composables/usePageTitle';
@@ -62,8 +84,10 @@ import {
   useConnectionsSessionStore,
   type ConnectionsMode,
 } from '../store/connectionsSession';
+import { useAuthStore } from '../store/auth';
 
 const route = useRoute();
+const authStore = useAuthStore();
 const connectionsSession = useConnectionsSessionStore();
 const {
   viewerID,
@@ -106,8 +130,17 @@ const stale = computed(() => activeModeSession.value?.stale ?? false);
 const revalidating = computed(() => activeModeSession.value?.revalidating ?? false);
 const displayName = computed(() => profile.value?.display_name.trim() || profile.value?.username || 'Profile');
 const modeLabel = computed(() => mode.value === 'followers' ? 'Followers' : 'Following');
+const authRequired = computed(() => Boolean(
+  numericTargetID.value !== null
+  && mode.value !== null
+  && (!authStore.isAuthenticated || viewerID.value === null),
+));
+const authRequiredTitle = computed(() => `Log in to view ${modeLabel.value.toLowerCase()}.`);
+const profileBackTarget = computed(() => numericTargetID.value === null
+  ? { name: 'Home' }
+  : { name: 'UserProfile', params: { id: numericTargetID.value } });
 const connectionsPageTitle = computed(() => {
-  const username = profile.value?.username?.trim();
+  const username = authRequired.value ? '' : profile.value?.username?.trim();
   return username ? `${modeLabel.value} @${username}` : modeLabel.value;
 });
 usePageTitle(connectionsPageTitle);
@@ -130,6 +163,7 @@ const updateObserver = async () => {
     !mounted
     || numericTargetID.value === null
     || mode.value === null
+    || authRequired.value
     || !('IntersectionObserver' in window)
     || !sentinelRef.value
     || !hasMore.value
@@ -151,6 +185,7 @@ const restoreScrollOnce = async () => {
   const activeSession = activeModeSession.value;
   if (
     !mounted
+    || authRequired.value
     || restoredEntryVersion === capturedEntryVersion
     || !activeSession
     || !activeSession.loaded
@@ -188,8 +223,8 @@ const toggleFollow = (userID: number) => {
 };
 
 watch(
-  [targetID, mode, viewerID],
-  ([nextTargetID, nextMode, nextViewerID], previousValues) => {
+  [targetID, mode, viewerID, () => authStore.isAuthenticated],
+  ([nextTargetID, nextMode, nextViewerID, nextAuthenticated], previousValues) => {
     const [previousTargetID, previousMode, previousViewerID] = previousValues ?? [];
     if (
       previousViewerID === nextViewerID
@@ -201,7 +236,7 @@ watch(
     }
     entryVersion += 1;
     restoredEntryVersion = -1;
-    if (nextViewerID !== null && nextTargetID && nextMode) {
+    if (nextAuthenticated && nextViewerID !== null && nextTargetID && nextMode) {
       connectionsSession.activate(Number(nextTargetID), nextMode);
     }
   },
@@ -212,7 +247,7 @@ watch([targetID, mode, loaded, initialLoading], () => {
   void restoreScrollOnce();
 }, { flush: 'post' });
 
-watch([targetID, mode, hasMore, loadingMore, loadMoreError, () => items.value.length, stale, revalidating], () => {
+watch([targetID, mode, authRequired, hasMore, loadingMore, loadMoreError, () => items.value.length, stale, revalidating], () => {
   void updateObserver();
 }, { flush: 'post' });
 
