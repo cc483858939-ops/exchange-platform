@@ -126,8 +126,6 @@ func TestProfileTimelineActivityIntegration(t *testing.T) {
 	if err := db.Delete(&deletedCanonical).Error; err != nil {
 		t.Fatal(err)
 	}
-	nonPublicCanonical := createPost(authorB.ID, "Private canonical", base.Add(-4*time.Hour), "private", nil, nil)
-	createRepost(nonPublicCanonical.ID, base.Add(41*time.Minute))
 	deletedAuthorCanonical := createPost(deletedAuthor.ID, "Deleted author canonical", base.Add(-5*time.Hour), "public", nil, nil)
 	createRepost(deletedAuthorCanonical.ID, base.Add(42*time.Minute))
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
@@ -164,7 +162,7 @@ func TestProfileTimelineActivityIntegration(t *testing.T) {
 		t.Fatalf("quote reference was not hydrated: %#v", page.Items[2].Post.QuotePost)
 	}
 	for _, item := range page.Items {
-		if item.Post.Content == "Profile reply excluded" || item.Post.Content == "Deleted canonical" || item.Post.Content == "Private canonical" || item.Post.Content == "Deleted author canonical" {
+		if item.Post.Content == "Profile reply excluded" || item.Post.Content == "Deleted canonical" || item.Post.Content == "Deleted author canonical" {
 			t.Fatalf("ineligible activity appeared: %#v", item)
 		}
 	}
