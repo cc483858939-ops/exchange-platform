@@ -27,11 +27,12 @@ const rssHubTestFeed = `<?xml version="1.0" encoding="UTF-8"?>
       <author>MKBHD</author>
     </item>
     <item>
-      <title>tiny</title>
+      <title>😂</title>
       <guid isPermaLink="false">https://twitter.com/MKBHD/status/1002</guid>
       <link>https://x.com/MKBHD/status/1002</link>
       <pubDate>Tue, 01 Sep 2026 10:55:56 GMT</pubDate>
       <author>MKBHD</author>
+      <enclosure url="https://video.twimg.com/ext_tw_video/1002/pu/vid/1280x720/video.mp4" type="video/mp4" />
     </item>
     <item>
       <title><![CDATA[This root quote has enough standalone text to be rejected]]></title>
@@ -60,8 +61,8 @@ const rssHubTestFeed = `<?xml version="1.0" encoding="UTF-8"?>
       <author>MKBHD</author>
     </item>
     <item>
-      <title>short image</title>
-      <description><![CDATA[<p>short image</p><img src="https://cdn.example.test/short.png" />]]></description>
+      <title>猫</title>
+      <description><![CDATA[<p>猫</p><img src="https://pbs.twimg.com/media/short.png" />]]></description>
       <guid isPermaLink="false">https://twitter.com/MKBHD/status/1006</guid>
       <link>https://x.com/MKBHD/status/1006</link>
       <pubDate>Tue, 01 Sep 2026 10:52:56 GMT</pubDate>
@@ -138,11 +139,17 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	if !strings.Contains(page.Posts[4].Text, "Line one & detail") || !strings.Contains(page.Posts[4].Text, "Line two") {
 		t.Fatalf("multiline post=%#v", page.Posts[4])
 	}
-	if len(page.Posts[5].Attachments.MediaKeys) != 1 {
-		t.Fatalf("short media markers=%#v", page.Posts[5])
+	if len(page.Posts[1].Attachments.MediaKeys) != 1 || len(page.Posts[1].Media) != 0 {
+		t.Fatalf("video-only media mapping=%#v", page.Posts[1])
 	}
-	if ok, reason := EligibleSourcePost(page.Posts[5], user.ID); ok || reason != "media_dependent_text" {
-		t.Fatalf("short media eligibility=%t reason=%q", ok, reason)
+	if ok, reason := EligibleSourcePost(page.Posts[1], user.ID); ok || reason != "short_text" {
+		t.Fatalf("video-only eligibility=%t reason=%q", ok, reason)
+	}
+	if len(page.Posts[5].Attachments.MediaKeys) != 1 || len(page.Posts[5].Media) != 1 || page.Posts[5].Media[0].URL != "https://pbs.twimg.com/media/short.png" {
+		t.Fatalf("short photo mapping=%#v", page.Posts[5])
+	}
+	if ok, reason := EligibleSourcePost(page.Posts[5], user.ID); !ok || reason != "" {
+		t.Fatalf("short photo eligibility=%t reason=%q", ok, reason)
 	}
 }
 

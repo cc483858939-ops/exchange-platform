@@ -52,16 +52,26 @@ func TestNormalizeSourceTextAndLongFormSelection(t *testing.T) {
 
 func TestSnapshotMediaValidationPreservesMarkerSemantics(t *testing.T) {
 	validMedia := SnapshotMedia{Type: "image", SourceURL: "https://pbs.twimg.com/media/one.jpg", Width: 120, Height: 80}
-	valid := testSnapshot(strings.Repeat("m", MinTextRunesWithMedia))
+	valid := testSnapshot("猫")
 	valid.Posts[0].HasMedia = true
 	valid.Posts[0].Media = []SnapshotMedia{validMedia}
 	if err := ValidateSnapshot(valid, testRegistry()); err != nil {
 		t.Fatalf("valid media snapshot rejected: %v", err)
 	}
-	markerOnly := testSnapshot(strings.Repeat("m", MinTextRunesWithMedia))
+	markerOnlyShort := testSnapshot("猫")
+	markerOnlyShort.Posts[0].HasMedia = true
+	if err := ValidateSnapshot(markerOnlyShort, testRegistry()); err == nil {
+		t.Fatal("short marker-only snapshot unexpectedly accepted")
+	}
+	markerOnly := testSnapshot(strings.Repeat("m", MinTextRunes))
 	markerOnly.Posts[0].HasMedia = true
 	if err := ValidateSnapshot(markerOnly, testRegistry()); err != nil {
 		t.Fatalf("marker-only snapshot rejected: %v", err)
+	}
+	actualImageWithoutMarker := testSnapshot("猫")
+	actualImageWithoutMarker.Posts[0].Media = []SnapshotMedia{validMedia}
+	if err := ValidateSnapshot(actualImageWithoutMarker, testRegistry()); err == nil {
+		t.Fatal("snapshot image without source media marker unexpectedly accepted")
 	}
 	for _, test := range []struct {
 		name  string
@@ -78,7 +88,7 @@ func TestSnapshotMediaValidationPreservesMarkerSemantics(t *testing.T) {
 		{name: "too many", media: []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com/1.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/2.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/3.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/4.jpg"}, {Type: "image", SourceURL: "https://pbs.twimg.com/5.jpg"}}, mark: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			snapshot := testSnapshot(strings.Repeat("m", MinTextRunesWithMedia))
+			snapshot := testSnapshot(strings.Repeat("m", MinTextRunes))
 			snapshot.Posts[0].HasMedia = test.mark
 			snapshot.Posts[0].Media = test.media
 			if err := ValidateSnapshot(snapshot, testRegistry()); err == nil {
@@ -93,6 +103,21 @@ func TestEligibleSourcePostFiltersRootContent(t *testing.T) {
 	base := XPost{ID: "1", AuthorID: "123", CreatedAt: now, Text: "a valid root Post"}
 	if ok, reason := EligibleSourcePost(base, "123"); !ok || reason != "" {
 		t.Fatalf("base eligibility=%t reason=%q", ok, reason)
+	}
+	missingID := base
+	missingID.ID = ""
+	if ok, reason := EligibleSourcePost(missingID, "123"); ok || reason != "missing_id" {
+		t.Fatalf("missing ID eligibility=%t reason=%q", ok, reason)
+	}
+	differentAuthor := base
+	differentAuthor.AuthorID = "456"
+	if ok, reason := EligibleSourcePost(differentAuthor, "123"); ok || reason != "different_author" {
+		t.Fatalf("different author eligibility=%t reason=%q", ok, reason)
+	}
+	missingCreatedAt := base
+	missingCreatedAt.CreatedAt = time.Time{}
+	if ok, reason := EligibleSourcePost(missingCreatedAt, "123"); ok || reason != "missing_created_at" {
+		t.Fatalf("missing created_at eligibility=%t reason=%q", ok, reason)
 	}
 	reply := base
 	reply.InReplyToUserID = stringPointer("123")
@@ -114,19 +139,64 @@ func TestEligibleSourcePostFiltersRootContent(t *testing.T) {
 	if ok, reason := EligibleSourcePost(sensitive, "123"); ok || reason != "possibly_sensitive" {
 		t.Fatalf("sensitive eligibility=%t reason=%q", ok, reason)
 	}
-	media := base
-	media.Attachments.MediaKeys = []string{"3"}
-	if ok, reason := EligibleSourcePost(media, "123"); ok || reason != "media_dependent_text" {
-		t.Fatalf("media eligibility=%t reason=%q", ok, reason)
-	}
-	media.Text = strings.Repeat("m", MinTextRunesWithMedia)
-	if ok, reason := EligibleSourcePost(media, "123"); !ok || reason != "" {
-		t.Fatalf("media long eligibility=%t reason=%q", ok, reason)
-	}
 	tooLong := base
 	tooLong.Text = strings.Repeat("x", MaxTextRunes+1)
 	if ok, reason := EligibleSourcePost(tooLong, "123"); ok || reason != "text_too_long" {
 		t.Fatalf("long eligibility=%t reason=%q", ok, reason)
+	}
+}
+
+func TestEligibleSourcePostUsesSupportedImageForTextEligibility(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	validImage := []SourceMedia{{Type: "image", URL: "https://pbs.twimg.com/media/test.jpg"}}
+	tests := []struct {
+		name      string
+		text      string
+		media     []SourceMedia
+		mediaKeys []string
+		want      bool
+		reason    string
+	}{
+		{name: "image plus one rune", text: "猫", media: validImage, want: true},
+		{name: "image plus emoji", text: "🌅", media: validImage, want: true},
+		{name: "image plus empty text", media: validImage, reason: "empty_text"},
+		{name: "image plus whitespace text", text: "   ", media: validImage, reason: "empty_text"},
+		{name: "text only nine runes", text: strings.Repeat("a", MinTextRunes-1), reason: "short_text"},
+		{name: "text only ten runes", text: strings.Repeat("a", MinTextRunes), want: true},
+		{name: "unsupported video plus short text", text: "😂", mediaKeys: []string{"video-1"}, reason: "short_text"},
+		{name: "supported image without source marker", text: "猫", media: validImage, want: true},
+		{name: "image over maximum", text: strings.Repeat("x", MaxTextRunes+1), media: validImage, reason: "text_too_long"},
+		{name: "text only over maximum", text: strings.Repeat("x", MaxTextRunes+1), reason: "text_too_long"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			post := XPost{
+				ID: "1", AuthorID: "123", CreatedAt: now, Text: test.text,
+				Attachments: XAttachments{MediaKeys: test.mediaKeys}, Media: test.media,
+			}
+			if ok, reason := EligibleSourcePost(post, "123"); ok != test.want || reason != test.reason {
+				t.Fatalf("eligibility=%t reason=%q want %t/%q", ok, reason, test.want, test.reason)
+			}
+		})
+	}
+}
+
+func TestBuildSnapshotPostPreservesSourceMediaMarkerSemantics(t *testing.T) {
+	account := testRegistry().Accounts[0]
+	imagePost := XPost{
+		ID: "1", AuthorID: "123", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Text: "猫",
+		Media: []SourceMedia{{Type: "image", URL: "https://pbs.twimg.com/media/test.jpg"}},
+	}
+	builtImage := BuildSnapshotPost(account, imagePost)
+	if builtImage.HasMedia || len(builtImage.Media) != 1 {
+		t.Fatalf("image without source marker=%#v", builtImage)
+	}
+	markerPost := imagePost
+	markerPost.Media = nil
+	markerPost.Attachments.MediaKeys = []string{"video-1"}
+	builtMarker := BuildSnapshotPost(account, markerPost)
+	if !builtMarker.HasMedia || len(builtMarker.Media) != 0 {
+		t.Fatalf("source media marker=%#v", builtMarker)
 	}
 }
 

@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	MinTextRunes          = 10
-	MinTextRunesWithMedia = 40
-	MaxTextRunes          = 2000
+	MinTextRunes                   = 10
+	MaxTextRunes                   = 2000
+	SourceEligibilityPolicyVersion = "source_eligibility_v2"
 )
 
 type SourceMetrics struct {
@@ -114,6 +114,21 @@ func SourceText(post XPost) string {
 	return NormalizeSourceText(post.Text)
 }
 
+func sourceTextEligibility(text string, hasSupportedImage bool) (bool, string) {
+	text = NormalizeSourceText(text)
+	if text == "" {
+		return false, "empty_text"
+	}
+	textRunes := utf8.RuneCountInString(text)
+	if !hasSupportedImage && textRunes < MinTextRunes {
+		return false, "short_text"
+	}
+	if textRunes > MaxTextRunes {
+		return false, "text_too_long"
+	}
+	return true, ""
+}
+
 func SourceTextContentHash(text string) string {
 	sum := sha256.Sum256([]byte(NormalizeSourceText(text)))
 	return hex.EncodeToString(sum[:])
@@ -141,20 +156,8 @@ func EligibleSourcePost(post XPost, sourceUserID string) (bool, string) {
 	if post.CreatedAt.IsZero() {
 		return false, "missing_created_at"
 	}
-	text := SourceText(post)
-	if text == "" {
-		return false, "empty_text"
-	}
-	textRunes := utf8.RuneCountInString(text)
-	hasMedia := len(post.Attachments.MediaKeys) > 0
-	if hasMedia && textRunes < MinTextRunesWithMedia {
-		return false, "media_dependent_text"
-	}
-	if !hasMedia && textRunes < MinTextRunes {
-		return false, "short_text"
-	}
-	if textRunes > MaxTextRunes {
-		return false, "text_too_long"
+	if eligible, reason := sourceTextEligibility(SourceText(post), len(post.Media) > 0); !eligible {
+		return false, reason
 	}
 	return true, ""
 }
@@ -291,12 +294,8 @@ func ValidateSnapshot(snapshot Snapshot, registry SourceRegistry) error {
 		if text != post.Text {
 			return fmt.Errorf("snapshot Post %q text is not normalized", post.SourcePostID)
 		}
-		textRunes := utf8.RuneCountInString(text)
-		if post.HasMedia && textRunes < MinTextRunesWithMedia || !post.HasMedia && textRunes < MinTextRunes {
-			return fmt.Errorf("snapshot Post %q does not meet text eligibility", post.SourcePostID)
-		}
-		if textRunes > MaxTextRunes {
-			return fmt.Errorf("snapshot Post %q exceeds maximum text length", post.SourcePostID)
+		if eligible, reason := sourceTextEligibility(text, len(post.Media) > 0); !eligible {
+			return fmt.Errorf("snapshot Post %q does not meet text eligibility: %s", post.SourcePostID, reason)
 		}
 		metrics := post.SourceMetrics
 		if metrics.LikeCount < 0 || metrics.ReplyCount < 0 || metrics.RepostCount < 0 || metrics.QuoteCount < 0 {

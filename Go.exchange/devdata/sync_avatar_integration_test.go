@@ -2,10 +2,10 @@ package devdata
 
 import (
 	"context"
-	"crypto/sha256"
 	"testing"
 	"time"
 
+	"Go.exchange/avatarimage"
 	"Go.exchange/models"
 )
 
@@ -84,13 +84,11 @@ func TestDevDataMirrorAvatarSyncOptionsLifecycleIntegration(t *testing.T) {
 
 func integrationAvatarResolution(t *testing.T, source SnapshotAccount, body []byte) AvatarResolution {
 	t.Helper()
-	hash := sha256.Sum256(body)
-	contentHash := hexHash(hash)
-	_, extension, ok := detectAvatarImageType(body)
-	if !ok {
-		t.Fatal("invalid avatar fixture")
+	derivative, err := avatarimage.Optimize(body)
+	if err != nil {
+		t.Fatal(err)
 	}
-	objectKey, err := BuildAvatarObjectKey(source.RegistryKey, contentHash, extension)
+	objectKey, err := BuildAvatarObjectKeyV1(source.RegistryKey, derivative.ContentHash, derivative.Extension)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +97,6 @@ func integrationAvatarResolution(t *testing.T, source SnapshotAccount, body []by
 		SourceURL:   source.ProfileImageURL,
 		ObjectKey:   objectKey,
 		LocalURL:    avatarLocalURL(objectKey),
-		ContentHash: contentHash,
+		ContentHash: derivative.ContentHash,
 	}
 }

@@ -14,9 +14,9 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/profileavatar"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -274,35 +274,8 @@ func decodeProfileAvatarURL(raw json.RawMessage, viewerID uint) (string, error) 
 }
 
 func validateProfileAvatarURL(value string, viewerID uint) error {
-	if viewerID == 0 || strings.ContainsAny(value, "\r\n") || strings.Contains(value, "..") {
-		return errors.New("invalid avatar_url")
-	}
-	prefix := fmt.Sprintf("/api/files/profile-avatars/%d/", viewerID)
-	if !strings.HasPrefix(value, prefix) {
-		return errors.New("avatar_url must belong to the current user")
-	}
-	filename := strings.TrimPrefix(value, prefix)
-	if filename == "" || strings.ContainsAny(filename, "/\\") {
-		return errors.New("invalid avatar_url")
-	}
-
-	var extension string
-	for _, candidate := range []string{".jpg", ".png", ".webp"} {
-		if strings.HasSuffix(filename, candidate) {
-			extension = candidate
-			break
-		}
-	}
-	if extension == "" {
-		return errors.New("invalid avatar_url extension")
-	}
-
-	uuidValue := strings.TrimSuffix(filename, extension)
-	parsed, err := uuid.Parse(uuidValue)
-	if err != nil || parsed.String() != uuidValue {
-		return errors.New("invalid avatar_url filename")
-	}
-	return nil
+	_, _, err := profileavatar.ParseUserAvatarURL(value, viewerID)
+	return err
 }
 
 func UpdateUserProfile(ctx *gin.Context) {

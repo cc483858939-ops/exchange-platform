@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestXClientUsesV2LookupAndTimelineContracts(t *testing.T) {
@@ -108,6 +109,22 @@ func TestNormalizeXTimelineMediaIgnoresUnknownUnsupportedAndCapsPhotos(t *testin
 		if media.Type != "image" || media.URL != "https://pbs.twimg.com/"+string(rune('1'+index))+".jpg" {
 			t.Fatalf("media[%d]=%#v", index, media)
 		}
+	}
+}
+
+func TestNormalizeXTimelineMediaVideoOnlyDoesNotRelaxShortText(t *testing.T) {
+	posts := []XPost{{
+		ID: "1", AuthorID: "123", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Text: "😂",
+		Attachments: XAttachments{MediaKeys: []string{"video-1"}},
+	}}
+	normalizeXTimelineMedia(posts, []XMedia{{
+		MediaKey: "video-1", Type: "video", URL: "https://video.twimg.com/video.mp4",
+	}})
+	if len(posts[0].Media) != 0 {
+		t.Fatalf("video-only media=%#v", posts[0].Media)
+	}
+	if ok, reason := EligibleSourcePost(posts[0], "123"); ok || reason != "short_text" {
+		t.Fatalf("video-only eligibility=%t reason=%q", ok, reason)
 	}
 }
 

@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"strings"
 
+	"Go.exchange/avatarimage"
 	"Go.exchange/config"
 	"Go.exchange/global"
+	"Go.exchange/profileavatar"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -26,6 +28,11 @@ const (
 
 type postMediaUploadResponse struct {
 	MediaURL string `json:"media_url"`
+}
+
+type storedObjectInfo struct {
+	Size        int64
+	ContentType string
 }
 
 var putStoredObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
@@ -57,6 +64,20 @@ var statStoredObject = func(ctx context.Context, objectKey string) error {
 		return errPostMediaObjectUnavailable
 	}
 	return fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
+}
+
+var statProfileAvatarObject = func(ctx context.Context, objectKey string) (storedObjectInfo, bool, error) {
+	if global.MinioClient == nil {
+		return storedObjectInfo{}, false, errors.New("storage is not initialized")
+	}
+	info, err := global.MinioClient.StatObject(ctx, config.StorageBucket(), objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		if isMissingStoredObjectError(err) {
+			return storedObjectInfo{}, false, nil
+		}
+		return storedObjectInfo{}, false, fmt.Errorf("stat profile avatar object: %w", err)
+	}
+	return storedObjectInfo{Size: info.Size, ContentType: info.ContentType}, true, nil
 }
 
 func UploadPostMedia(ctx *gin.Context) {
@@ -132,23 +153,36 @@ func UploadProfileAvatar(ctx *gin.Context) {
 	}
 	defer file.Close()
 
-	sniff := make([]byte, 512)
-	n, err := file.Read(sniff)
-	if err != nil && !errors.Is(err, io.EOF) {
+	body, err := io.ReadAll(io.LimitReader(file, int64(avatarimage.MaxSourceBytes)+1))
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
 		return
 	}
-	contentType, extension, ok := detectSupportedImageType(sniff[:n])
-	if !ok {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
+	if len(body) == 0 || len(body) > avatarimage.MaxSourceBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 2MB"})
 		return
 	}
 
-	objectKey := fmt.Sprintf("%s%d/%s%s", profileAvatarObjectPrefix, viewerID, uuid.NewString(), extension)
-	reader := io.MultiReader(bytes.NewReader(sniff[:n]), file)
-	if err := putStoredObject(ctx.Request.Context(), objectKey, reader, fileHeader.Size, contentType); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	derivative, err := avatarimage.Optimize(body)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
 		return
+	}
+	objectKey, err := profileavatar.BuildUserV1ObjectKey(viewerID, derivative.ContentHash, derivative.Extension)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build avatar object key"})
+		return
+	}
+	info, exists, err := statProfileAvatarObject(ctx.Request.Context(), objectKey)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "avatar storage is unavailable"})
+		return
+	}
+	if !exists || info.Size != int64(len(derivative.Body)) || info.ContentType != derivative.ContentType {
+		if err := putStoredObject(ctx.Request.Context(), objectKey, bytes.NewReader(derivative.Body), int64(len(derivative.Body)), derivative.ContentType); err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"avatar_url": postFileURL(objectKey)})
@@ -173,8 +207,15 @@ func GetFile(ctx *gin.Context) {
 		return
 	}
 
-	ctx.Header("Cache-Control", "public, max-age=86400")
+	ctx.Header("Cache-Control", fileCacheControl(objectKey))
 	ctx.DataFromReader(http.StatusOK, info.Size, info.ContentType, object, nil)
+}
+
+func fileCacheControl(objectKey string) string {
+	if strings.HasPrefix(objectKey, profileavatar.UserV1ObjectPrefix) || strings.HasPrefix(objectKey, profileavatar.DevDataV1ObjectPrefix) {
+		return "public, max-age=31536000, immutable"
+	}
+	return "public, max-age=86400"
 }
 
 func detectSupportedImageType(sniff []byte) (string, string, bool) {

@@ -18,8 +18,10 @@ import (
 	"time"
 	"unicode"
 
+	"Go.exchange/avatarimage"
 	"Go.exchange/config"
 	"Go.exchange/models"
+	"Go.exchange/profileavatar"
 
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
@@ -287,6 +289,23 @@ func BuildAvatarObjectKey(registryKey, contentHash, extension string) (string, e
 	return avatarObjectPrefix + safeKey + "/" + contentHash + extension, nil
 }
 
+// BuildAvatarObjectKeyV1 returns the optimized DevData avatar namespace. The
+// legacy builder above remains unchanged so existing rows stay readable.
+func BuildAvatarObjectKeyV1(registryKey, derivativeHash, extension string) (string, error) {
+	safeKey := sanitizeAvatarRegistryKey(registryKey)
+	if safeKey == "" {
+		return "", errors.New("registry key cannot produce a safe avatar path")
+	}
+	if !isLowerHexHash(derivativeHash) {
+		return "", errors.New("avatar derivative hash must be lowercase SHA-256")
+	}
+	extension = strings.ToLower(strings.TrimSpace(extension))
+	if extension != ".jpg" && extension != ".png" {
+		return "", errors.New("avatar V1 extension is not supported")
+	}
+	return profileavatar.DevDataV1ObjectPrefix + safeKey + "/" + derivativeHash + extension, nil
+}
+
 func sanitizeAvatarRegistryKey(raw string) string {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	var builder strings.Builder
@@ -336,7 +355,7 @@ func avatarResolutionUsable(source SnapshotAccount, resolution AvatarResolution)
 	if !isLowerHexHash(resolution.ContentHash) {
 		return false
 	}
-	objectKey, err := BuildAvatarObjectKey(source.RegistryKey, resolution.ContentHash, extensionFromAvatarObjectKey(resolution.ObjectKey))
+	objectKey, err := BuildAvatarObjectKeyV1(source.RegistryKey, resolution.ContentHash, extensionFromAvatarObjectKey(resolution.ObjectKey))
 	if err != nil || resolution.ObjectKey != objectKey || resolution.LocalURL != avatarLocalURL(objectKey) {
 		return false
 	}
@@ -380,7 +399,12 @@ func PrepareAvatarMirrors(ctx context.Context, registry SourceRegistry, snapshot
 			report.Failed++
 			continue
 		}
-		objectKey, err := BuildAvatarObjectKey(configured.Key, downloaded.ContentHash, downloaded.Extension)
+		derivative, err := avatarimage.Optimize(downloaded.Body)
+		if err != nil {
+			report.Failed++
+			continue
+		}
+		objectKey, err := BuildAvatarObjectKeyV1(configured.Key, derivative.ContentHash, derivative.Extension)
 		if err != nil {
 			report.Failed++
 			continue
@@ -390,10 +414,10 @@ func PrepareAvatarMirrors(ctx context.Context, registry SourceRegistry, snapshot
 			report.Failed++
 			continue
 		}
-		if exists && info.Size == int64(len(downloaded.Body)) && info.ContentType == downloaded.ContentType {
+		if exists && info.Size == int64(len(derivative.Body)) && info.ContentType == derivative.ContentType {
 			report.Reused++
 		} else {
-			if err := store.Put(ctx, objectKey, downloaded.Body, downloaded.ContentType); err != nil {
+			if err := store.Put(ctx, objectKey, derivative.Body, derivative.ContentType); err != nil {
 				report.Failed++
 				continue
 			}
@@ -404,7 +428,7 @@ func PrepareAvatarMirrors(ctx context.Context, registry SourceRegistry, snapshot
 			SourceURL:   strings.TrimSpace(source.ProfileImageURL),
 			ObjectKey:   objectKey,
 			LocalURL:    avatarLocalURL(objectKey),
-			ContentHash: downloaded.ContentHash,
+			ContentHash: derivative.ContentHash,
 		}
 	}
 	return resolutions, report, nil
@@ -508,7 +532,11 @@ func VerifyAvatars(ctx context.Context, db *gorm.DB, registry SourceRegistry, st
 
 		expectedKey := ""
 		if account.AvatarObjectKey != "" {
-			expectedKey, _ = BuildAvatarObjectKey(configured.Key, account.AvatarContentHash, extensionFromAvatarObjectKey(account.AvatarObjectKey))
+			if strings.HasPrefix(account.AvatarObjectKey, profileavatar.DevDataV1ObjectPrefix) {
+				expectedKey, _ = BuildAvatarObjectKeyV1(configured.Key, account.AvatarContentHash, extensionFromAvatarObjectKey(account.AvatarObjectKey))
+			} else {
+				expectedKey, _ = BuildAvatarObjectKey(configured.Key, account.AvatarContentHash, extensionFromAvatarObjectKey(account.AvatarObjectKey))
+			}
 		}
 		if expectedKey == "" || account.AvatarObjectKey != expectedKey {
 			valid = false

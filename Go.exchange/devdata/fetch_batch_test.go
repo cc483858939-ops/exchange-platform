@@ -380,7 +380,7 @@ func TestFetchCheckpointAtomicReadAndFingerprintValidation(t *testing.T) {
 	}
 	changed := registry
 	changed.Accounts[0].Category = "changed"
-	if err := ValidateFetchCheckpoint(got, changed, "rsshub"); err == nil || !strings.Contains(err.Error(), "does not match current source registry") {
+	if err := ValidateFetchCheckpoint(got, changed, "rsshub"); err == nil || !strings.Contains(err.Error(), "does not match current fetch configuration") || !strings.Contains(err.Error(), "--reset-checkpoint") {
 		t.Fatalf("fingerprint mismatch error=%v", err)
 	}
 	if err := RemoveFetchCheckpoint(path); err != nil {
@@ -388,6 +388,28 @@ func TestFetchCheckpointAtomicReadAndFingerprintValidation(t *testing.T) {
 	}
 	if err := RemoveFetchCheckpoint(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFetchCheckpointFingerprintIncludesEligibilityPolicy(t *testing.T) {
+	registry := batchTestRegistry(1)
+	current := RegistryFingerprint(registry)
+	legacy := registryFingerprintWithEligibilityPolicy(registry, "source_eligibility_v1")
+	if current == legacy {
+		t.Fatal("eligibility policy version did not change the fingerprint")
+	}
+	checkpoint := FetchCheckpoint{
+		Version:             FetchCheckpointVersion,
+		Source:              FetchCheckpointSource,
+		RegistryFingerprint: legacy,
+		StartedAt:           testFetchedAt(),
+		UpdatedAt:           testFetchedAt(),
+		Completed:           map[string]FetchAccountData{},
+		Failures:            map[string]FetchFailure{},
+	}
+	err := ValidateFetchCheckpoint(checkpoint, registry, FetchCheckpointSource)
+	if err == nil || !strings.Contains(err.Error(), "does not match current fetch configuration") || !strings.Contains(err.Error(), "--reset-checkpoint") {
+		t.Fatalf("legacy eligibility checkpoint error=%v", err)
 	}
 }
 

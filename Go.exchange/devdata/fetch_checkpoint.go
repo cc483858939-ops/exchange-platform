@@ -55,15 +55,20 @@ type fetchFingerprintAccount struct {
 }
 
 type fetchFingerprintPayload struct {
-	Version         string                    `json:"version"`
-	DefaultMaxPosts int                       `json:"default_max_posts"`
-	Accounts        []fetchFingerprintAccount `json:"accounts"`
+	Version            string                    `json:"version"`
+	EligibilityVersion string                    `json:"eligibility_version"`
+	DefaultMaxPosts    int                       `json:"default_max_posts"`
+	Accounts           []fetchFingerprintAccount `json:"accounts"`
 }
 
 // RegistryFingerprint returns a stable lowercase SHA-256 digest for the
-// enabled source configuration. The explicit slice order and struct fields
-// avoid depending on Go map or JSON map ordering.
+// enabled source configuration and current eligibility policy. The explicit
+// slice order and struct fields avoid depending on Go map or JSON map ordering.
 func RegistryFingerprint(registry SourceRegistry) string {
+	return registryFingerprintWithEligibilityPolicy(registry, SourceEligibilityPolicyVersion)
+}
+
+func registryFingerprintWithEligibilityPolicy(registry SourceRegistry, eligibilityVersion string) string {
 	accounts := make([]fetchFingerprintAccount, 0, len(registry.Accounts))
 	for _, account := range registry.Accounts {
 		if !account.Enabled {
@@ -85,9 +90,10 @@ func RegistryFingerprint(registry SourceRegistry) string {
 		return accounts[i].Handle < accounts[j].Handle
 	})
 	payload, _ := json.Marshal(fetchFingerprintPayload{
-		Version:         strings.TrimSpace(registry.Version),
-		DefaultMaxPosts: registry.DefaultMaxPosts,
-		Accounts:        accounts,
+		Version:            strings.TrimSpace(registry.Version),
+		EligibilityVersion: strings.TrimSpace(eligibilityVersion),
+		DefaultMaxPosts:    registry.DefaultMaxPosts,
+		Accounts:           accounts,
 	})
 	digest := sha256.Sum256(payload)
 	return hex.EncodeToString(digest[:])
@@ -193,7 +199,7 @@ func ValidateFetchCheckpoint(checkpoint FetchCheckpoint, registry SourceRegistry
 		return fmt.Errorf("fetch checkpoint source %q does not match requested source %q; use --reset-checkpoint to discard it", checkpoint.Source, source)
 	}
 	if checkpoint.RegistryFingerprint != RegistryFingerprint(registry) {
-		return errors.New("fetch checkpoint does not match current source registry; use --reset-checkpoint to discard it")
+		return errors.New("fetch checkpoint does not match current fetch configuration; use --reset-checkpoint to discard it")
 	}
 	enabled := make(map[string]struct{}, len(registry.EnabledAccounts()))
 	for _, account := range registry.EnabledAccounts() {

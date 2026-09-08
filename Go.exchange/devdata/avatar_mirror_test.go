@@ -19,6 +19,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"Go.exchange/models"
+
+	"Go.exchange/avatarimage"
 )
 
 func TestAvatarDownloaderAcceptsJPEGPNGAndWebPFromBytes(t *testing.T) {
@@ -171,7 +175,7 @@ func TestPrepareAvatarMirrorsContentAddressesAndContinuesPerAccount(t *testing.T
 	registry, snapshot := avatarTestRegistrySnapshot()
 	aBody := avatarJPEGFixture(t)
 	bBody := avatarPNGFixture(t)
-	cBody := avatarWebPFixture()
+	cBody := avatarJPEGFixture(t)
 	fetcher := fakeAvatarFetcher{items: map[string]fakeAvatarFetch{
 		snapshot.Accounts[0].ProfileImageURL: {avatar: downloadedAvatar(aBody)},
 		snapshot.Accounts[1].ProfileImageURL: {err: errors.New("fixture failure")},
@@ -179,11 +183,15 @@ func TestPrepareAvatarMirrorsContentAddressesAndContinuesPerAccount(t *testing.T
 	}}
 	store := newFakeAvatarStore()
 	bDownloaded := downloadedAvatar(bBody)
-	bKey, err := BuildAvatarObjectKey(registry.Accounts[1].Key, bDownloaded.ContentHash, bDownloaded.Extension)
+	bDerivative, err := avatarimage.Optimize(bBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.objects[bKey] = fakeAvatarObject{size: int64(len(bBody)), contentType: bDownloaded.ContentType}
+	bKey, err := BuildAvatarObjectKeyV1(registry.Accounts[1].Key, bDerivative.ContentHash, bDerivative.Extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.objects[bKey] = fakeAvatarObject{body: bDerivative.Body, size: int64(len(bDerivative.Body)), contentType: bDerivative.ContentType}
 
 	resolutions, report, err := PrepareAvatarMirrors(context.Background(), registry, snapshot, fetcher, store)
 	if err != nil {
@@ -194,6 +202,21 @@ func TestPrepareAvatarMirrorsContentAddressesAndContinuesPerAccount(t *testing.T
 	}
 	if len(resolutions) != 2 || resolutions[registry.Accounts[0].Key].ObjectKey == resolutions[registry.Accounts[2].Key].ObjectKey {
 		t.Fatalf("resolutions=%#v", resolutions)
+	}
+	for _, key := range []string{registry.Accounts[0].Key, registry.Accounts[2].Key} {
+		resolution := resolutions[key]
+		derivative, err := avatarimage.Optimize(fetcher.items[resolution.SourceURL].avatar.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expectedKey, err := BuildAvatarObjectKeyV1(key, derivative.ContentHash, derivative.Extension)
+		if err != nil || resolution.ObjectKey != expectedKey || resolution.ContentHash != derivative.ContentHash || resolution.LocalURL != avatarLocalURL(expectedKey) {
+			t.Fatalf("resolution %q=%#v expected_key=%q err=%v", key, resolution, expectedKey, err)
+		}
+		stored := store.objects[resolution.ObjectKey]
+		if !bytes.Equal(stored.body, derivative.Body) || stored.contentType != derivative.ContentType {
+			t.Fatalf("stored derivative %q does not match optimizer", key)
+		}
 	}
 	if len(store.puts) != 2 {
 		t.Fatalf("put count=%d", len(store.puts))
@@ -225,6 +248,117 @@ func TestBuildAvatarObjectKeySanitizesRegistryAndKeepsHashNamespace(t *testing.T
 		if _, err := BuildAvatarObjectKey("MKBHD", badHash, ".jpg"); err == nil {
 			t.Fatalf("bad hash accepted: %q", badHash)
 		}
+	}
+}
+
+func TestBuildAvatarObjectKeyV1UsesDerivativeHashAndOnlyOutputFormats(t *testing.T) {
+	hash := strings.Repeat("b", sha256.Size*2)
+	key, err := BuildAvatarObjectKeyV1("MKBHD", hash, ".png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "profile-avatars/devdata/v1/mkbhd/"+hash+".png" {
+		t.Fatalf("key=%q", key)
+	}
+	for _, extension := range []string{".webp", ".gif"} {
+		if _, err := BuildAvatarObjectKeyV1("MKBHD", hash, extension); err == nil {
+			t.Fatalf("unsupported V1 extension accepted: %q", extension)
+		}
+	}
+}
+
+func TestAvatarResolutionUsableRequiresV1Shape(t *testing.T) {
+	_, snapshot := avatarTestRegistrySnapshot()
+	source := snapshot.Accounts[0]
+	derivative, err := avatarimage.Optimize(avatarJPEGFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Key, err := BuildAvatarObjectKeyV1(source.RegistryKey, derivative.ContentHash, derivative.Extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1 := AvatarResolution{RegistryKey: source.RegistryKey, SourceURL: source.ProfileImageURL, ObjectKey: v1Key, LocalURL: avatarLocalURL(v1Key), ContentHash: derivative.ContentHash}
+	if !avatarResolutionUsable(source, v1) {
+		t.Fatalf("valid V1 resolution was rejected: %#v", v1)
+	}
+	legacyHash := sha256.Sum256(avatarJPEGFixture(t))
+	legacyKey, err := BuildAvatarObjectKey(source.RegistryKey, hexHash(legacyHash), ".jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := v1
+	legacy.ObjectKey = legacyKey
+	legacy.LocalURL = avatarLocalURL(legacyKey)
+	legacy.ContentHash = hexHash(legacyHash)
+	if avatarResolutionUsable(source, legacy) {
+		t.Fatal("legacy resolution was accepted as a fresh V1 resolution")
+	}
+}
+
+func TestVerifyAvatarsAcceptsMixedLegacyAndV1State(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	data.Registry.Accounts = data.Registry.Accounts[:2]
+	snapshot := data.snapshot(time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC))
+	snapshot.Accounts = snapshot.Accounts[:2]
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, snapshot, nil, snapshot.FetchedAt, SyncOptions{}); err != nil {
+		t.Fatalf("seed mixed-state accounts: %v", err)
+	}
+
+	accountA := findMirrorAccount(t, db, data.Registry.Accounts[0].Key)
+	accountB := findMirrorAccount(t, db, data.Registry.Accounts[1].Key)
+	var userA, userB models.User
+	if err := db.First(&userA, accountA.LocalUserID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&userB, accountB.LocalUserID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	legacyBody := avatarJPEGFixture(t)
+	legacyHash := sha256.Sum256(legacyBody)
+	legacyKey, err := BuildAvatarObjectKey(accountA.RegistryKey, hexHash(legacyHash), ".jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Derivative, err := avatarimage.Optimize(avatarPNGFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Key, err := BuildAvatarObjectKeyV1(accountB.RegistryKey, v1Derivative.ContentHash, v1Derivative.Extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&accountA).Updates(map[string]any{
+		"avatar_object_key":   legacyKey,
+		"avatar_content_hash": hexHash(legacyHash),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&accountB).Updates(map[string]any{
+		"avatar_object_key":   v1Key,
+		"avatar_content_hash": v1Derivative.ContentHash,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&userA).Update("avatar_url", avatarLocalURL(legacyKey)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&userB).Update("avatar_url", avatarLocalURL(v1Key)).Error; err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeAvatarStore()
+	store.objects[legacyKey] = fakeAvatarObject{body: legacyBody, size: int64(len(legacyBody)), contentType: "image/jpeg"}
+	store.objects[v1Key] = fakeAvatarObject{body: v1Derivative.Body, size: int64(len(v1Derivative.Body)), contentType: v1Derivative.ContentType}
+
+	report, err := VerifyAvatars(context.Background(), db, data.Registry, store)
+	if err != nil {
+		t.Fatalf("mixed-state verification: %v report=%#v", err, report)
+	}
+	if report.Invalid != 0 || report.LocalURLs != 2 || report.ObjectsPresent != 2 {
+		t.Fatalf("mixed-state report=%#v", report)
 	}
 }
 
