@@ -172,7 +172,7 @@ Authenticated endpoints:
 - `PUT /api/posts/:id/like`
 - `DELETE /api/posts/:id/like`
 
-Following and profile-timeline endpoints return {"items":[],"next_cursor":null}; cursor values are opaque.
+Following and profile-timeline endpoints return {"items":[],"next_cursor":null}; cursor values are opaque. The profile timeline contains authored top-level posts and active reposts, ordered by activity time using cursor pagination.
 
 ## Project Layout
 

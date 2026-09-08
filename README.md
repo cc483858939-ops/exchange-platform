@@ -318,7 +318,7 @@ GET    /api/feed/following?limit=20&cursor=...
 
 `POST /api/uploads/post-media` accepts one JPEG, PNG, or WebP image per multipart request (`image`) and returns a user-scoped `media_url`. A post may reference zero to four uploaded media URLs in request order.
 
-Following 和 profile-timeline endpoints 返回 {"items": [], "next_cursor": null} 形状；cursor 是 opaque cursor。
+Following 和 profile-timeline endpoints 返回 {"items": [], "next_cursor": null} 形状；cursor 是 opaque cursor。Profile timeline 包含用户发布的顶层帖子和有效转发，按活动时间使用 cursor 分页排序。
 
 ### 认证接口
 
