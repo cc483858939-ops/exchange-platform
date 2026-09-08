@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="title">
-  <title id="title">EX</title>
-  <rect width="32" height="32" rx="8" fill="#1d9bf0"/>
-  <text x="16" y="21" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800" letter-spacing="-1" text-anchor="middle">EX</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Exchange</title>
+  <rect width="64" height="64" rx="15" fill="#f26445"/>
+  <path fill="#fff" fill-rule="evenodd" d="M26 19h15a2 2 0 0 1 2 2v3a4 4 0 0 0 4 4h2a2 2 0 0 1 2 2v11a10 10 0 0 1-10 10H21v2a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1h3v-3c-3-3-4-7-4-12v-2a14 14 0 0 1 14-14Zm.5 11a2.5 2.5 0 0 0-2.5 2.5v5a2.5 2.5 0 0 0 5 0v-5a2.5 2.5 0 0 0-2.5-2.5Zm11 2a2.5 2.5 0 0 0-2.5 2.5v5a2.5 2.5 0 0 0 5 0v-5a2.5 2.5 0 0 0-2.5-2.5Z"/>
+  <path fill="#fff" d="M46 12a1.5 1.5 0 0 1 2.56-1.06l8.5 8.5A1.5 1.5 0 0 1 56 22H48a2 2 0 0 1-2-2Z"/>
 </svg>

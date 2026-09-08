@@ -6,7 +6,7 @@
       aria-label="Exchange home"
       title="Exchange"
     >
-      <span class="left-sidebar__brand-mark" aria-hidden="true">EX</span>
+      <span class="left-sidebar__brand-mark" aria-hidden="true"><BrandMark /></span>
     </router-link>
 
     <nav class="left-sidebar__nav" aria-label="Main navigation">
@@ -82,6 +82,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useLogout } from '../../composables/useLogout';
+import BrandMark from '../brand/BrandMark.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
 withDefaults(defineProps<{ notificationBadge?: string | null }>(), {
@@ -127,15 +128,9 @@ const visibleNavigation = computed(() => navigation.filter((item) => !item.authO
 }
 
 .left-sidebar__brand-mark {
-  display: grid;
+  display: block;
   width: 34px;
   height: 34px;
-  place-items: center;
-  border: 1px solid var(--color-text);
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
 }
 
 .left-sidebar__nav {

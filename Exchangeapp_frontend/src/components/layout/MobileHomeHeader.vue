@@ -27,7 +27,7 @@
     </RouterLink>
 
     <RouterLink class="mobile-home-header__brand" :to="{ name: 'Home' }" aria-label="Exchange home">
-      EX
+      <span class="mobile-home-header__mark"><BrandMark /></span>
     </RouterLink>
 
     <span class="mobile-home-header__spacer" aria-hidden="true"></span>
@@ -37,6 +37,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useAuthStore } from '../../store/auth';
+import BrandMark from '../brand/BrandMark.vue';
 import AppIcon from '../icons/AppIcon.vue';
 import UserAvatar from '../users/UserAvatar.vue';
 
@@ -110,9 +111,12 @@ const identity = computed(() => authStore.currentIdentity);
 
   .mobile-home-header__brand {
     justify-self: center;
-    font-size: 22px;
-    font-weight: 800;
-    letter-spacing: -0.03em;
+  }
+
+  .mobile-home-header__mark {
+    display: block;
+    width: 34px;
+    height: 34px;
   }
 }
 </style>

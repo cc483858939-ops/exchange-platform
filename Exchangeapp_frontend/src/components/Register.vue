@@ -3,7 +3,7 @@
     <div class="auth-layout">
       <section class="auth-content" aria-labelledby="register-title">
         <div class="auth-brand">
-          <span class="auth-brand__mobile-mark" aria-hidden="true">EX</span>
+          <span class="auth-brand__mobile-mark" aria-hidden="true"><BrandMark /></span>
           <span class="auth-brand__name">Exchange</span>
         </div>
 
@@ -63,7 +63,7 @@
       </section>
 
       <div class="auth-visual" aria-hidden="true">
-        <span class="auth-visual__mark">EX</span>
+        <span class="auth-visual__mark"><BrandMark /></span>
       </div>
     </div>
   </main>
@@ -73,6 +73,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
+import BrandMark from './brand/BrandMark.vue';
 
 const form = ref({
   username: '',
@@ -197,14 +198,6 @@ const register = async () => {
   display: none;
   width: 48px;
   height: 48px;
-  place-items: center;
-  border: 1px solid rgba(125, 211, 252, 0.28);
-  border-radius: 16px;
-  background: rgba(29, 155, 240, 0.16);
-  color: #e0f2fe;
-  font-size: 15px;
-  font-weight: 850;
-  letter-spacing: 0.08em;
 }
 
 .auth-brand__name {
@@ -223,14 +216,9 @@ const register = async () => {
 }
 
 .auth-visual__mark {
-  color: rgba(224, 242, 254, 0.88);
-  font-size: clamp(200px, 26vw, 420px);
-  font-weight: 900;
-  letter-spacing: -0.1em;
-  line-height: 0.78;
-  user-select: none;
-  white-space: nowrap;
-  text-shadow: 0 10px 34px rgba(29, 155, 240, 0.1);
+  display: block;
+  width: clamp(200px, 26vw, 360px);
+  height: clamp(200px, 26vw, 360px);
 }
 
 .auth-heading {
@@ -422,7 +410,7 @@ const register = async () => {
   }
 
   .auth-brand__mobile-mark {
-    display: grid;
+    display: block;
   }
 
   .auth-heading h1 {

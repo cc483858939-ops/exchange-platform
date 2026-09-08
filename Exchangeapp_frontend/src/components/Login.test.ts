@@ -74,9 +74,9 @@ describe('Login return navigation', () => {
   it('renders the Exchange brand consistently', () => {
     wrapper = mountLogin();
 
-    expect(wrapper.get('.auth-brand__mobile-mark').text()).toBe('EX');
+    expect(wrapper.get('.auth-brand__mobile-mark img').attributes('src')).toBe('/favicon.svg');
     expect(wrapper.get('.auth-brand__name').text()).toBe('Exchange');
-    expect(wrapper.get('.auth-visual__mark').text()).toBe('EX');
+    expect(wrapper.get('.auth-visual__mark img').attributes('src')).toBe('/favicon.svg');
     expect(wrapper.text()).not.toContain('GX');
     expect(wrapper.text()).not.toContain('Go Exchange');
   });

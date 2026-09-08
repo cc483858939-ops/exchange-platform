@@ -59,11 +59,13 @@ describe('MobileHomeHeader', () => {
     setAuthenticated(identity());
   });
 
-  it('renders EX as a Home link', () => {
+  it('renders the messenger mark as an accessible Home link', () => {
     const wrapper = mountHeader();
     const brand = wrapper.find('.mobile-home-header__brand');
 
-    expect(brand.text()).toBe('EX');
+    expect(brand.get('img').attributes('src')).toBe('/favicon.svg');
+    expect(brand.get('img').attributes('alt')).toBe('');
+    expect(brand.attributes('aria-label')).toBe('Exchange home');
     expect(brand.attributes('data-route-name')).toBe('Home');
   });
 

@@ -36,14 +36,17 @@ describe('LeftSidebar navigation', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the EX brand mark without a duplicate wordmark', () => {
+  it('renders the messenger brand mark without a duplicate wordmark', () => {
     const wrapper = mountSidebar();
 
     const brand = wrapper.get('.left-sidebar__brand');
 
     expect(brand.attributes('aria-label')).toBe('Exchange home');
     expect(brand.attributes('title')).toBe('Exchange');
-    expect(wrapper.get('.left-sidebar__brand-mark').text()).toBe('EX');
+    const mark = wrapper.get('.left-sidebar__brand-mark img');
+    expect(mark.attributes('src')).toBe('/favicon.svg');
+    expect(mark.attributes('alt')).toBe('');
+    expect(mark.attributes('aria-hidden')).toBe('true');
     expect(wrapper.find('.left-sidebar__brand-name').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('GX');
     expect(wrapper.text()).not.toContain('Go Exchange');
