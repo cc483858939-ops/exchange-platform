@@ -45,11 +45,6 @@ export interface PostLikeState {
   liked: boolean;
 }
 
-export interface PostPageResponse {
-  items: Post[];
-  next_cursor: string | null;
-}
-
 export interface PostReplyPageResponse {
   items: Post[];
   next_cursor: string | null;

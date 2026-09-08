@@ -36,6 +36,7 @@ vi.mock('./sessionSync', () => ({
   syncExternalPostRepostState: vi.fn((update: any) => {
     mocks.historySync?.applyExternalRepostStateLocal(update);
   }),
+  markOwnProfileTimelineStale: vi.fn(),
 }));
 
 const post = (id: number, authorID = 9): Post => ({

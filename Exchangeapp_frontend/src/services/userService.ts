@@ -1,9 +1,9 @@
 import apiClient from '../axios';
-import type { PostPageResponse } from '../types/Post';
 import type { PublicUser } from '../types/User';
+import type { TimelineResponse } from './postService';
 import { normalizeResourceID } from './resourceId';
 
-export type UserPostQuery = {
+export type UserTimelineQuery = {
   limit?: number;
   cursor?: string;
 };
@@ -35,12 +35,12 @@ export async function getUser(userId: number | string): Promise<PublicUser> {
   return response.data;
 }
 
-export async function getUserPosts(
+export async function getUserTimeline(
   userId: number | string,
-  options: UserPostQuery = {},
-): Promise<PostPageResponse> {
+  options: UserTimelineQuery = {},
+): Promise<TimelineResponse> {
   const id = normalizeResourceID(userId, 'user');
-  const response = await apiClient.get<PostPageResponse>(`/users/${id}/posts`, { params: options });
+  const response = await apiClient.get<TimelineResponse>(`/users/${id}/timeline`, { params: options });
   return response.data;
 }
 

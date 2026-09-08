@@ -62,6 +62,7 @@
         :display-name="user.display_name"
         :username="user.username"
         :size="76"
+        loading="eager"
         decorative
       />
       <div class="profile-identity__copy">
@@ -159,10 +160,10 @@
         <h2 id="profile-posts-heading" class="sr-only">Posts</h2>
 
         <div
-          v-if="postsInitialLoading"
+          v-if="timelineInitialLoading"
           class="profile-skeleton-list"
           aria-live="polite"
-          aria-label="Loading posts"
+          aria-label="Loading timeline"
         >
           <div v-for="slot in skeletonCount" :key="slot" class="profile-skeleton-post">
             <span class="profile-skeleton profile-skeleton--identity" aria-hidden="true"></span>
@@ -175,30 +176,30 @@
         </div>
 
         <div
-          v-else-if="postsInitialError"
+          v-else-if="timelineInitialError"
           class="profile-state profile-state--inline"
           role="alert"
         >
-          <p>Posts could not be loaded.</p>
-          <button class="profile-action" type="button" @click="retryInitialPosts">
-            Retry posts
+          <p>Timeline could not be loaded.</p>
+          <button class="profile-action" type="button" @click="retryInitialTimeline">
+            Retry timeline
           </button>
         </div>
 
-        <p v-else-if="posts.length === 0" class="profile-empty">
-          No posts yet.
+        <p v-else-if="timelineItems.length === 0" class="profile-empty">
+          No posts or reposts yet.
         </p>
 
         <div v-else class="profile-post-list">
           <PostCard
-            v-for="post in posts"
-            :key="post.id"
-            :post="post"
-            :like-pending="likePendingPostIds.has(post.id)"
-            :repost-pending="repostPendingPostIds.has(post.id)"
-            :show-delete="canDeletePost(post)"
-            :delete-pending="pendingDeletePostIds.has(post.id)"
-            :delete-error="deleteErrors.get(post.id) || ''"
+            v-for="item in timelineItems"
+            :key="`${item.activityType}:${item.sourceId}`"
+            :post="item.post"
+            :like-pending="likePendingPostIds.has(item.post.id)"
+            :repost-pending="repostPendingPostIds.has(item.post.id)"
+            :show-delete="canDeletePost(item.post)"
+            :delete-pending="pendingDeletePostIds.has(item.post.id)"
+            :delete-error="deleteErrors.get(item.post.id) || ''"
             @toggle-like="handleLikeToggle"
             @toggle-repost="handleRepostToggle"
             @delete-post="handleDeletePost"
@@ -206,15 +207,15 @@
         </div>
 
         <div
-          v-if="hasMore || postsLoadingMore || postsLoadMoreError"
+          v-if="hasMore || timelineLoadingMore || timelineLoadMoreError"
           ref="sentinelRef"
           class="profile-feed-sentinel"
           aria-live="polite"
         >
-          <span v-if="postsLoadingMore">Loading more posts...</span>
+          <span v-if="timelineLoadingMore">Loading more activity...</span>
 
-          <template v-else-if="postsLoadMoreError">
-            <span>Could not load more posts.</span>
+          <template v-else-if="timelineLoadMoreError">
+            <span>Could not load more activity.</span>
             <button class="profile-action" type="button" @click="retryLoadMore">
               Retry
             </button>
@@ -224,9 +225,9 @@
             v-else-if="!intersectionObserverAvailable && hasMore"
             class="profile-action"
             type="button"
-            @click="loadMorePosts"
+            @click="loadMoreTimeline"
           >
-            Load more posts
+            Load more activity
           </button>
         </div>
       </section>
@@ -390,11 +391,11 @@ const user = computed(() => activeSession.value?.user ?? null);
 const profileLoading = computed(() => activeSession.value?.profileLoading ?? false);
 const profileError = computed(() => invalidProfileError.value || activeSession.value?.profileError || '');
 const profileNotFound = computed(() => activeSession.value?.profileNotFound ?? false);
-const posts = computed(() => activeSession.value?.posts ?? []);
-const postsInitialLoading = computed(() => activeSession.value?.postsInitialLoading ?? false);
-const postsLoadingMore = computed(() => activeSession.value?.postsLoadingMore ?? false);
-const postsInitialError = computed(() => activeSession.value?.postsInitialError ?? '');
-const postsLoadMoreError = computed(() => activeSession.value?.postsLoadMoreError ?? '');
+const timelineItems = computed(() => activeSession.value?.timelineItems ?? []);
+const timelineInitialLoading = computed(() => activeSession.value?.timelineInitialLoading ?? false);
+const timelineLoadingMore = computed(() => activeSession.value?.timelineLoadingMore ?? false);
+const timelineInitialError = computed(() => activeSession.value?.timelineInitialError ?? '');
+const timelineLoadMoreError = computed(() => activeSession.value?.timelineLoadMoreError ?? '');
 const nextCursor = computed(() => activeSession.value?.nextCursor ?? null);
 const hasMore = computed(() => activeSession.value?.hasMore ?? false);
 const followState = computed<UserFollowState | null>(() => activeSession.value?.followState ?? null);
@@ -498,7 +499,7 @@ const restoreScrollOnce = async () => {
     || !session
     || targetUserID === null
     || !session.profileLoaded
-    || (!session.postsLoaded && session.postsInitialLoading)
+    || (!session.timelineLoaded && session.timelineInitialLoading)
     || typeof window === 'undefined'
   ) return;
 
@@ -771,21 +772,21 @@ const retryProfile = () => {
   loadProfile(true);
 };
 
-const retryInitialPosts = () => {
+const retryInitialTimeline = () => {
   if (numericUserID.value !== null) {
-    void profileStore.loadPosts(numericUserID.value, true);
+    void profileStore.loadTimeline(numericUserID.value, true);
   }
 };
 
-const loadMorePosts = () => {
+const loadMoreTimeline = () => {
   if (numericUserID.value !== null) {
-    void profileStore.loadMorePosts(numericUserID.value);
+    void profileStore.loadMoreTimeline(numericUserID.value);
   }
 };
 
 const retryLoadMore = () => {
   if (numericUserID.value !== null) {
-    profileStore.retryLoadMorePosts(numericUserID.value);
+    profileStore.retryLoadMoreTimeline(numericUserID.value);
   }
 };
 
@@ -829,8 +830,8 @@ const updateObserver = () => {
     !intersectionObserverAvailable
     || !sentinelRef.value
     || !hasMore.value
-    || postsLoadingMore.value
-    || postsLoadMoreError.value
+    || timelineLoadingMore.value
+    || timelineLoadMoreError.value
     || !canRenderAuthenticatedProfile.value
     || !user.value
   ) {
@@ -839,7 +840,7 @@ const updateObserver = () => {
 
   observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
-      loadMorePosts();
+      loadMoreTimeline();
     }
   }, { rootMargin: '240px 0px' });
   observer.observe(sentinelRef.value);
@@ -870,9 +871,9 @@ watch(
   [
     userId,
     () => activeSession.value?.profileLoaded,
-    () => activeSession.value?.postsLoaded,
-    () => activeSession.value?.postsInitialLoading,
-    () => activeSession.value?.postsInitialError,
+    () => activeSession.value?.timelineLoaded,
+    () => activeSession.value?.timelineInitialLoading,
+    () => activeSession.value?.timelineInitialError,
   ],
   () => { void restoreScrollOnce(); },
   { flush: 'post', immediate: true },
@@ -882,11 +883,11 @@ watch(
   [
     userId,
     () => activeSession.value?.profileLoaded,
-    () => activeSession.value?.postsLoaded,
+    () => activeSession.value?.timelineLoaded,
     () => activeSession.value?.hasMore,
-    () => activeSession.value?.postsLoadingMore,
-    () => activeSession.value?.postsLoadMoreError,
-    () => activeSession.value?.posts.length,
+    () => activeSession.value?.timelineLoadingMore,
+    () => activeSession.value?.timelineLoadMoreError,
+    () => activeSession.value?.timelineItems.length,
   ],
   () => { void nextTick(updateObserver); },
   { flush: 'post' },

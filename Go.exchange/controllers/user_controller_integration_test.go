@@ -37,7 +37,7 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,40 +112,40 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		}
 	}
 
-	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=20", strconvUint(target.ID))
-	GetUserPosts(ctx)
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/timeline?limit=20", strconvUint(target.ID))
+	GetUserTimeline(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("posts status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var page postPageResponse
+	var page timelinePageResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 3 || page.NextCursor != nil || page.Items[0].Content != "Canonical profile body" || page.Items[1].Content != "active short body" || page.Items[2].Content != "older body" || page.Items[0].LikeCount != 17 || page.Items[0].ReplyCount != 8 {
+	if len(page.Items) != 3 || page.NextCursor != nil || page.Items[0].Post.Content != "Canonical profile body" || page.Items[1].Post.Content != "active short body" || page.Items[2].Post.Content != "older body" || page.Items[0].Post.LikeCount != 17 || page.Items[0].Post.ReplyCount != 8 {
 		t.Fatalf("unexpected author posts: %#v", page)
 	}
 	for _, item := range page.Items {
-		if item.Author.ID != target.ID {
-			t.Fatalf("foreign author in profile response: %#v", item.Author)
+		if item.Post.Author.ID != target.ID || item.Actor.ID != target.ID || item.ActivityType != timelineActivityPost {
+			t.Fatalf("foreign author in profile response: %#v", item)
 		}
 	}
 
-	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=1", strconvUint(target.ID))
-	GetUserPosts(ctx)
-	var firstPage postPageResponse
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/timeline?limit=1", strconvUint(target.ID))
+	GetUserTimeline(ctx)
+	var firstPage timelinePageResponse
 	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &firstPage) != nil || len(firstPage.Items) != 1 || firstPage.NextCursor == nil {
 		t.Fatalf("first cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), firstPage)
 	}
-	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=1&cursor="+*firstPage.NextCursor, strconvUint(target.ID))
-	GetUserPosts(ctx)
-	var secondPage postPageResponse
-	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].Content != "active short body" || secondPage.NextCursor == nil {
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/timeline?limit=1&cursor="+*firstPage.NextCursor, strconvUint(target.ID))
+	GetUserTimeline(ctx)
+	var secondPage timelinePageResponse
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].Post.Content != "active short body" || secondPage.NextCursor == nil {
 		t.Fatalf("second cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), secondPage)
 	}
-	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=1&cursor="+*secondPage.NextCursor, strconvUint(target.ID))
-	GetUserPosts(ctx)
-	var thirdPage postPageResponse
-	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &thirdPage) != nil || len(thirdPage.Items) != 1 || thirdPage.Items[0].Content != "older body" || thirdPage.NextCursor != nil {
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/timeline?limit=1&cursor="+*secondPage.NextCursor, strconvUint(target.ID))
+	GetUserTimeline(ctx)
+	var thirdPage timelinePageResponse
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &thirdPage) != nil || len(thirdPage.Items) != 1 || thirdPage.Items[0].Post.Content != "older body" || thirdPage.NextCursor != nil {
 		t.Fatalf("third cursor page status=%d body=%s response=%#v", recorder.Code, recorder.Body.String(), thirdPage)
 	}
 
@@ -156,8 +156,8 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 			t.Fatalf("invalid id %q status=%d", invalid, recorder.Code)
 		}
 	}
-	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=-1", strconvUint(target.ID))
-	GetUserPosts(ctx)
+	ctx, recorder = newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/timeline?limit=-1", strconvUint(target.ID))
+	GetUserTimeline(ctx)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("invalid limit status=%d", recorder.Code)
 	}

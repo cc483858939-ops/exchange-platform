@@ -22,8 +22,6 @@ import (
 )
 
 const (
-	defaultUserPostLimit   = 20
-	maxUserPostLimit       = 50
 	maxProfileDisplayRunes = 50
 	maxProfileBioRunes     = 160
 )
@@ -387,55 +385,6 @@ func SearchUsers(ctx *gin.Context) {
 	}
 	if page.Items == nil {
 		page.Items = []userConnectionResponse{}
-	}
-	ctx.JSON(http.StatusOK, page)
-}
-
-func GetUserPosts(ctx *gin.Context) {
-	id, err := parsePublicUserID(ctx.Param("id"))
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	limit, cursor, err := parsePostPageQuery(ctx)
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if _, err := loadPublicUserByID(id); err != nil {
-		writeUserAPIError(ctx, err)
-		return
-	}
-	if global.Db == nil {
-		writeUserAPIError(ctx, errors.New("database is not initialized"))
-		return
-	}
-
-	now := time.Now().UTC()
-	query := global.Db.
-		Model(&models.Post{}).
-		Where("posts.author_id = ? AND posts.reply_to_post_id IS NULL", id).
-		Scopes(func(tx *gorm.DB) *gorm.DB { return publicPostScope(tx, now) })
-	if cursor != nil {
-		query = query.Where(
-			"(posts.created_at < ?) OR (posts.created_at = ? AND posts.id < ?)",
-			cursor.PublishedAt,
-			cursor.PublishedAt,
-			cursor.ID,
-		)
-	}
-	posts, err := loadPostResponses(query.Order("posts.created_at DESC, posts.id DESC").Limit(limit + 1))
-	if err != nil {
-		writeUserAPIError(ctx, err)
-		return
-	}
-	page, err := buildPostPageResponse(posts, limit)
-	if err != nil {
-		writeUserAPIError(ctx, err)
-		return
-	}
-	if page.Items == nil {
-		page.Items = make([]postResponse, 0)
 	}
 	ctx.JSON(http.StatusOK, page)
 }

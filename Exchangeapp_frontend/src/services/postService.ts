@@ -1,6 +1,6 @@
 import apiClient from '../axios';
 import type { PublicAuthor } from '../types/User';
-import type { Post, PostPageResponse } from '../types/Post';
+import type { Post } from '../types/Post';
 import { normalizeResourceID } from './resourceId';
 
 export type CreatePostMediaPayload = {
@@ -15,36 +15,35 @@ export type CreatePostPayload = {
   media?: CreatePostMediaPayload[];
 };
 
-export type PostPageQuery = {
+export type TimelineQuery = {
   limit?: number;
   cursor?: string;
 };
 
-export type FollowingActivityType = 'post' | 'repost';
+export type TimelineActivityType = 'post' | 'repost';
 
-export interface FollowingTimelineItem {
-  activity_type: FollowingActivityType;
+export interface TimelineItem {
+  activity_type: TimelineActivityType;
   activity_at: string;
   source_id: number;
   actor: PublicAuthor;
   post: Post;
 }
 
-export interface FollowingTimelineResponse {
-  items: FollowingTimelineItem[];
+export interface TimelineResponse {
+  items: TimelineItem[];
   next_cursor: string | null;
 }
 
 export async function getFollowingTimeline(
-  options: PostPageQuery = {},
-): Promise<FollowingTimelineResponse> {
-  const response = await apiClient.get<FollowingTimelineResponse>(
+  options: TimelineQuery = {},
+): Promise<TimelineResponse> {
+  const response = await apiClient.get<TimelineResponse>(
     '/feed/following',
     { params: options },
   );
   return response.data;
 }
-
 export async function getPostById(postID: number | string): Promise<Post> {
   const id = normalizeResourceID(postID, 'post');
   const response = await apiClient.get<Post>('/posts/' + id);
@@ -70,5 +69,3 @@ export async function uploadPostMedia(file: File): Promise<string> {
   );
   return response.data.media_url;
 }
-
-export type { PostPageResponse };

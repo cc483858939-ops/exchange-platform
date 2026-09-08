@@ -30,7 +30,7 @@ func openFollowingTimelineIntegrationDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (followingTimelinePageResponse, int, string) {
+func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (timelinePageResponse, int, string) {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -41,7 +41,7 @@ func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (follow
 	ctx.Request = httptest.NewRequest(http.MethodGet, path, nil)
 	ctx.Set("user_id", viewerID)
 	GetFollowingTimeline(ctx)
-	var response followingTimelinePageResponse
+	var response timelinePageResponse
 	if recorder.Code == http.StatusOK {
 		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
@@ -50,7 +50,7 @@ func requestFollowingTimeline(t *testing.T, viewerID uint, query string) (follow
 	return response, recorder.Code, recorder.Body.String()
 }
 
-func followingTimelinePostIDs(items []followingTimelineItem) []uint {
+func followingTimelinePostIDs(items []timelineItem) []uint {
 	ids := make([]uint, 0, len(items))
 	for _, item := range items {
 		ids = append(ids, item.Post.ID)
@@ -58,7 +58,7 @@ func followingTimelinePostIDs(items []followingTimelineItem) []uint {
 	return ids
 }
 
-func containsFollowingPostID(items []followingTimelineItem, want uint) bool {
+func containsFollowingPostID(items []timelineItem, want uint) bool {
 	for _, item := range items {
 		if item.Post.ID == want {
 			return true
@@ -67,7 +67,7 @@ func containsFollowingPostID(items []followingTimelineItem, want uint) bool {
 	return false
 }
 
-func findFollowingTimelineItem(items []followingTimelineItem, postID uint) *followingTimelineItem {
+func findFollowingTimelineItem(items []timelineItem, postID uint) *timelineItem {
 	for index := range items {
 		if items[index].Post.ID == postID {
 			return &items[index]

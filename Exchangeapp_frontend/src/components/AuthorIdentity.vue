@@ -12,6 +12,7 @@
       :display-name="author.display_name"
       :username="author.username"
       :size="variant === 'post' ? 40 : 30"
+      :loading="avatarLoading"
       decorative
     />
     <span class="author-copy">
@@ -32,8 +33,10 @@ const props = withDefaults(defineProps<{
   author: PublicAuthor;
   createdAt?: string;
   variant?: 'compact' | 'post';
+  avatarLoading?: 'eager' | 'lazy';
 }>(), {
   variant: 'compact',
+  avatarLoading: 'lazy',
 });
 
 const username = computed(() => props.author.username.trim() || '?');

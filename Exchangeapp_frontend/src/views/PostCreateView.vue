@@ -47,6 +47,7 @@
             :display-name="currentIdentity?.display_name"
             :username="currentIdentity?.username"
             :size="42"
+            loading="eager"
             decorative
           />
 
@@ -430,7 +431,7 @@ const submitPost = async () => {
       publishError.value = 'The post was posted, but Home could not update for this account. Your draft was preserved.';
       return;
     }
-    profileSessionStore.registerPublishedPost(post, publisherUserID);
+    profileSessionStore.registerPublishedTimelinePost(post, publisherUserID);
     authStore.syncCurrentIdentityProfile(post.author);
     postDraft.clear();
 

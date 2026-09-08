@@ -52,10 +52,10 @@ func TestPostTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("following status=%d body=%s", status, body)
 	}
-	ctx, recorder := newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/posts?limit=20", strconvUint(target.ID))
-	GetUserPosts(ctx)
+	ctx, recorder := newUserControllerContext("/api/users/"+strconvUint(target.ID)+"/timeline?limit=20", strconvUint(target.ID))
+	GetUserTimeline(ctx)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("user posts status=%d body=%s", recorder.Code, recorder.Body.String())
+		t.Fatalf("user timeline status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
 	postQueries := 0
@@ -70,6 +70,6 @@ func TestPostTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 		}
 	}
 	if postQueries < 2 {
-		t.Fatalf("expected bounded Article queries for Following and User Articles, got %d queries=%v", postQueries, queryLogger.snapshot())
+		t.Fatalf("expected bounded queries for Following and User Timeline, got %d queries=%v", postQueries, queryLogger.snapshot())
 	}
 }

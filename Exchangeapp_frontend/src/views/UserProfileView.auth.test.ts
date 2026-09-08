@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
     push: vi.fn(),
   },
   getUser: vi.fn(),
-  getUserPosts: vi.fn(),
+  getUserTimeline: vi.fn(),
   getUserFollowState: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
@@ -50,7 +50,7 @@ vi.mock('../store/feed', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
-  getUserPosts: mocks.getUserPosts,
+  getUserTimeline: mocks.getUserTimeline,
   getUserFollowState: mocks.getUserFollowState,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -81,6 +81,7 @@ vi.mock('../store/sessionSync', () => ({
   syncProfileLikeState: vi.fn(),
   syncProfileRepostState: vi.fn(),
   syncProfileFollowState: vi.fn(),
+  markOwnProfileTimelineStale: vi.fn(),
 }));
 
 const RouterLinkStub = {
@@ -120,6 +121,19 @@ const post = (id: number, authorID: number) => ({
   reply_count: 0,
   view_count: 0,
   deleted: false as const,
+});
+
+const timelineItem = (id: number, authorID: number) => ({
+  activity_type: 'post' as const,
+  activity_at: '2026-08-15T00:00:00.000Z',
+  source_id: id,
+  actor: {
+    id: authorID,
+    username: `user-${authorID}`,
+    display_name: `User ${authorID}`,
+    avatar_url: '',
+  },
+  post: post(id, authorID),
 });
 
 const PostCardStub = {
@@ -163,7 +177,7 @@ describe('UserProfileView auth-required state', () => {
     });
     setAuth(false, null);
     mocks.getUser.mockResolvedValue(profile(7));
-    mocks.getUserPosts.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUserTimeline.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
       following: false,
       follower_count: 0,
@@ -185,7 +199,7 @@ describe('UserProfileView auth-required state', () => {
     expect(wrapper.get('.auth-required-state__action').text()).toBe('Log in');
     expect(wrapper.text()).not.toContain('Profile could not be loaded.');
     expect(mocks.getUser).not.toHaveBeenCalled();
-    expect(mocks.getUserPosts).not.toHaveBeenCalled();
+    expect(mocks.getUserTimeline).not.toHaveBeenCalled();
     expect(mocks.getUserFollowState).not.toHaveBeenCalled();
     expect(document.title).toBe('Profile — Exchange');
     wrapper.unmount();
@@ -222,14 +236,14 @@ describe('UserProfileView auth-required state', () => {
     mocks.route.fullPath = '/users/8';
     setAuth(true, 7);
     mocks.getUser.mockResolvedValue(profile(8));
-    mocks.getUserPosts.mockResolvedValue({ items: [post(101, 8)], next_cursor: null });
+    mocks.getUserTimeline.mockResolvedValue({ items: [timelineItem(101, 8)], next_cursor: null });
     const wrapper = mountProfile();
     await settle();
 
     expect(wrapper.text()).toContain('User 8');
     expect(wrapper.text()).toContain('Body 101');
     expect(mocks.getUser).toHaveBeenCalledTimes(1);
-    expect(mocks.getUserPosts).toHaveBeenCalledTimes(1);
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(1);
 
     mocks.authStore.isAuthenticated = false;
     mocks.authStore.currentIdentity = null;
@@ -239,7 +253,7 @@ describe('UserProfileView auth-required state', () => {
     expect(wrapper.text()).not.toContain('User 8');
     expect(wrapper.text()).not.toContain('Body 101');
     expect(mocks.getUser).toHaveBeenCalledTimes(1);
-    expect(mocks.getUserPosts).toHaveBeenCalledTimes(1);
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(1);
     expect(document.title).toBe('Profile — Exchange');
     wrapper.unmount();
   });

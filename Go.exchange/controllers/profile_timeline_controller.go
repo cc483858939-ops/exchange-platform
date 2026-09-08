@@ -9,42 +9,28 @@ import (
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
-var loadActiveFollowingViewer = loadActiveFollowingViewerFromDB
-var loadFollowingTimelinePage = loadFollowingTimelinePageFromDB
+var loadUserTimelineProfile = loadPublicUserByID
+var loadUserTimelinePage = loadUserTimelinePageFromDB
 
-func loadActiveFollowingViewerFromDB(id uint) error {
-	if global.Db == nil {
-		return errors.New("database is not initialized")
-	}
-	var user models.User
-	return global.Db.Select("id").First(&user, id).Error
-}
-
-func GetFollowingTimeline(ctx *gin.Context) {
-	viewerID, ok := userIDFromContext(ctx)
-	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+func GetUserTimeline(ctx *gin.Context) {
+	id, err := parsePublicUserID(ctx.Param("id"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := loadActiveFollowingViewer(viewerID); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
-		} else {
-			writePostTimelineStoreError(ctx)
-		}
-		return
-	}
-
 	limit, cursor, err := parseTimelinePageQuery(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if _, err := loadUserTimelineProfile(id); err != nil {
+		writeUserAPIError(ctx, err)
+		return
+	}
 
-	response, err := loadFollowingTimelinePage(viewerID, limit, cursor)
+	response, err := loadUserTimelinePage(id, limit, cursor)
 	if err != nil {
 		writePostTimelineStoreError(ctx)
 		return
@@ -55,7 +41,7 @@ func GetFollowingTimeline(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
-func loadFollowingTimelinePageFromDB(viewerID uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
+func loadUserTimelinePageFromDB(userID uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
 	if global.Db == nil {
 		return timelinePageResponse{}, errors.New("database is not initialized")
 	}
@@ -66,19 +52,17 @@ func loadFollowingTimelinePageFromDB(viewerID uint, limit int, cursor *timelineC
 	now := time.Now().UTC()
 	query := `
 WITH activities AS (
-	SELECT
-	    'post'::text AS activity_type,
-	    posts.created_at AS activity_at,
+    SELECT
+        'post'::text AS activity_type,
+        posts.created_at AS activity_at,
         posts.id AS source_id,
         posts.id AS post_id,
         posts.author_id AS actor_id,
         1::int AS activity_rank
-	FROM posts
-	JOIN user_follows AS direct_follow
-      ON direct_follow.following_id = posts.author_id
-     AND direct_follow.follower_id = ?
-    WHERE posts.reply_to_post_id IS NULL
-	      AND ` + publicPostEligibilitySQL("posts") + `
+    FROM posts
+    WHERE posts.author_id = ?
+      AND posts.reply_to_post_id IS NULL
+      AND ` + publicPostEligibilitySQL("posts") + `
 
     UNION ALL
 
@@ -90,36 +74,21 @@ WITH activities AS (
         post_reposts.user_id AS actor_id,
         2::int AS activity_rank
     FROM post_reposts
-    JOIN user_follows AS repost_follow
-      ON repost_follow.following_id = post_reposts.user_id
-     AND repost_follow.follower_id = ?
     JOIN users AS reposter
       ON reposter.id = post_reposts.user_id
      AND reposter.deleted_at IS NULL
-	JOIN posts
-	  ON posts.id = post_reposts.post_id
+    JOIN posts
+      ON posts.id = post_reposts.post_id
     JOIN users AS canonical_author
       ON canonical_author.id = posts.author_id
      AND canonical_author.deleted_at IS NULL
-	WHERE ` + publicPostEligibilitySQL("posts") + `
-), latest AS (
-    SELECT DISTINCT ON (post_id)
-        activity_type,
-        activity_at,
-        source_id,
-        post_id,
-        actor_id,
-        activity_rank
-    FROM activities
-    ORDER BY post_id, activity_at DESC, activity_rank DESC, source_id DESC
+    WHERE post_reposts.user_id = ?
+      AND ` + publicPostEligibilitySQL("posts") + `
 )
 SELECT activity_type, activity_at, source_id, post_id, actor_id, activity_rank
-FROM latest
+FROM activities
 `
-	args := []interface{}{
-		viewerID,
-		viewerID,
-	}
+	args := []interface{}{userID, userID}
 	if cursor != nil {
 		rank := timelineActivityRank(cursor.ActivityType)
 		if rank == 0 {

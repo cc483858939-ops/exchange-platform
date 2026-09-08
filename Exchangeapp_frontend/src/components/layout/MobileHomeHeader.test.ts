@@ -76,6 +76,8 @@ describe('MobileHomeHeader', () => {
     const image = wrapper.find('.user-avatar__image');
 
     expect(image.attributes('src')).toBe('/avatar.webp');
+    expect(image.attributes('loading')).toBe('eager');
+    expect(image.attributes('decoding')).toBe('async');
     expect(profile.attributes('data-route-name')).toBe('UserProfile');
     expect(profile.attributes('data-route-id')).toBe('123');
   });

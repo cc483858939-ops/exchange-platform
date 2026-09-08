@@ -5,7 +5,7 @@ import { useFeedStore } from './feed';
 import {
   deletePost as deletePostRequest,
   getFollowingTimeline,
-  type FollowingTimelineItem,
+  type TimelineItem,
 } from '../services/postService';
 import { getPostRecommendations } from '../services/recommendationService';
 import { getPostLikeStates, likePost, unlikePost } from '../services/likeService';
@@ -36,6 +36,7 @@ import {
   syncHomeAuthorIdentity,
   syncHomeLikeState,
   syncHomeRepostState,
+  markOwnProfileTimelineStale,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
 
@@ -493,7 +494,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
-  const appendFollowingPosts = (activities: FollowingTimelineItem[]) => {
+  const appendFollowingPosts = (activities: TimelineItem[]) => {
     const newPosts = activities
       .filter((activity) => {
         const postID = activity.post.id;
@@ -979,6 +980,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         status: 'ready',
       }, settledVersion);
       repostPendingPostIds.delete(postId);
+      markOwnProfileTimelineStale();
       return true;
     } catch {
       if (!isCurrent()) return false;

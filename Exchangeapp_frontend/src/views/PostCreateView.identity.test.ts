@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
     replace: vi.fn(),
   },
   feedStore: { registerPublishedPost: vi.fn() },
-  profileSessionStore: { registerPublishedPost: vi.fn() },
+  profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
   uploadPostMedia: vi.fn(),
 }));
@@ -118,8 +118,10 @@ describe('PostCreateView identity and text publishing', () => {
     wrapper = mountPage();
 
     expect(wrapper.find('.composer-author__copy').exists()).toBe(false);
-    expect(wrapper.get('.composer-author__avatar .user-avatar__image').attributes('src'))
-      .toBe('https://example.test/alice.jpg');
+    const image = wrapper.get('.composer-author__avatar .user-avatar__image');
+    expect(image.attributes('src')).toBe('https://example.test/alice.jpg');
+    expect(image.attributes('loading')).toBe('eager');
+    expect(image.attributes('decoding')).toBe('async');
   });
 
   it('clears the draft when the authenticated viewer changes', async () => {
@@ -189,7 +191,7 @@ describe('PostCreateView identity and text publishing', () => {
       publishedPost(),
       7,
     );
-    expect(mocks.profileSessionStore.registerPublishedPost).toHaveBeenCalledWith(
+    expect(mocks.profileSessionStore.registerPublishedTimelinePost).toHaveBeenCalledWith(
       publishedPost(),
       7,
     );

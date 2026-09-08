@@ -164,7 +164,7 @@ Authenticated endpoints:
 - `POST /api/uploads/post-media`
 - `POST /api/posts`
 - GET /api/feed/following?limit=20&cursor=...
-- GET /api/users/:id/posts?limit=20&cursor=...
+- GET /api/users/:id/timeline?limit=20&cursor=...
 - `GET /api/posts/:id`
 - `GET /api/posts/:id/replies?limit=20&cursor=...`
 - `DELETE /api/posts/:id`
@@ -172,7 +172,7 @@ Authenticated endpoints:
 - `PUT /api/posts/:id/like`
 - `DELETE /api/posts/:id/like`
 
-Following and user-post endpoints return {"items":[],"next_cursor":null}; cursor values are opaque.
+Following and profile-timeline endpoints return {"items":[],"next_cursor":null}; cursor values are opaque.
 
 ## Project Layout
 

@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
     replace: vi.fn(),
   },
   feedStore: { registerPublishedPost: vi.fn() },
-  profileSessionStore: { registerPublishedPost: vi.fn() },
+  profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
   uploadPostMedia: vi.fn(),
 }));

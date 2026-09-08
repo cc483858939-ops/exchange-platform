@@ -14,6 +14,8 @@
       :class="{ 'user-avatar__image--loaded': imageLoaded }"
       :src="avatarURL"
       :alt="decorative ? '' : accessibleLabel"
+      :loading="loading"
+      decoding="async"
       @load="handleLoad"
       @error="handleError"
     />
@@ -30,12 +32,14 @@ const props = withDefaults(defineProps<{
   size?: number;
   alt?: string;
   decorative?: boolean;
+  loading?: 'eager' | 'lazy';
 }>(), {
   avatarUrl: '',
   displayName: '',
   username: '',
   size: 40,
   decorative: false,
+  loading: 'lazy',
 });
 
 const imageLoaded = ref(false);
@@ -75,10 +79,7 @@ const handleError = () => {
   imageFailed.value = true;
 };
 
-watch(
-  [avatarURL, displayName, username],
-  resetImageState,
-);
+watch(avatarURL, resetImageState);
 </script>
 
 <style scoped>

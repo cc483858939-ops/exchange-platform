@@ -20,6 +20,7 @@ import {
 import { useAuthStore } from './auth';
 import {
   registerHistorySessionSync,
+  markOwnProfileTimelineStale,
   syncExternalPostLikeState,
   syncExternalPostRepostState,
 } from './sessionSync';
@@ -727,6 +728,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         status: 'ready',
       });
       repostPendingPostIDs.value.delete(postID);
+      markOwnProfileTimelineStale();
       return true;
     } catch {
       if (!isCurrentMutation()) return false;

@@ -13,6 +13,7 @@
           <AuthorIdentity
             :author="detailPresentation.author"
             variant="post"
+            avatar-loading="eager"
           />
           <button
             v-if="detailPresentation.kind === 'post' && canDeletePost"
@@ -297,6 +298,7 @@ import {
   syncExternalPostRepostState,
   syncExternalPostRemoval,
   syncExternalReplyCount,
+  markOwnProfileTimelineStale,
 } from '../store/sessionSync';
 import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
@@ -1001,6 +1003,7 @@ const toggleRepost = async () => {
       reposted: response.reposted,
       status: 'ready',
     });
+    markOwnProfileTimelineStale();
   } catch {
     if (detailVersion === detailRequestVersion && mutationVersion === repostMutationVersion) {
       reposted.value = previousReposted;

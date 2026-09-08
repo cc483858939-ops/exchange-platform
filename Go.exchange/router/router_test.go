@@ -82,6 +82,24 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 	}
 }
 
+func TestSetupRouterRegistersProfileTimelineRoute(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := make(map[string]struct{}, len(engine.Routes()))
+	for _, route := range engine.Routes() {
+		routes[route.Method+" "+route.Path] = struct{}{}
+	}
+	if _, ok := routes["GET /api/users/:id/timeline"]; !ok {
+		t.Fatal("missing profile timeline route")
+	}
+	if _, ok := routes["GET /api/users/:id/posts"]; ok {
+		t.Fatal("legacy user posts route is still registered")
+	}
+}
+
 func newClientIPTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

@@ -12,6 +12,7 @@
         :display-name="identity.display_name"
         :username="identity.username"
         :size="36"
+        loading="eager"
         decorative
       />
     </RouterLink>

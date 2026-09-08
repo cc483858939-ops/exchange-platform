@@ -25,6 +25,7 @@ export type ProfileSessionSync = {
   applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyReplyCountUpdateEverywhereLocal: (update: PostReplyCountUpdate) => boolean;
   applyExternalFollowStateLocal: (state: UserFollowState) => boolean;
+  markOwnProfileTimelineStale?: () => boolean;
   removePostEverywhereLocal: (postID: number) => void;
   replaceAuthorIdentityEverywhereLocal: (author: PublicAuthor) => void;
 };
@@ -129,6 +130,9 @@ export const syncExternalPostRepostState = (update: FeedRepostStateUpdate) => {
   profileSessionSync?.applyExternalRepostStateLocal(update);
   historySessionSync?.applyExternalRepostStateLocal(update);
 };
+
+export const markOwnProfileTimelineStale = () =>
+  profileSessionSync?.markOwnProfileTimelineStale?.() ?? false;
 
 export const syncExternalPostRemoval = (postID: number) => {
   homeTimelineSync?.removePostLocal(postID);

@@ -101,11 +101,11 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 		t.Fatalf("status=%d body=%s", status, body)
 	}
 	bobItem := findFollowingTimelineItem(page.Items, bobArticle.ID)
-	if bobItem == nil || bobItem.ActivityType != followingActivityRepost || bobItem.Actor.ID != charlie.ID || bobItem.Post.Author.ID != bob.ID {
+	if bobItem == nil || bobItem.ActivityType != timelineActivityRepost || bobItem.Actor.ID != charlie.ID || bobItem.Post.Author.ID != bob.ID {
 		t.Fatalf("latest repost item=%#v", bobItem)
 	}
 	tieItem := findFollowingTimelineItem(page.Items, tieArticle.ID)
-	if tieItem == nil || tieItem.ActivityType != followingActivityRepost || tieItem.SourceID != tieRepost.ID {
+	if tieItem == nil || tieItem.ActivityType != timelineActivityRepost || tieItem.SourceID != tieRepost.ID {
 		t.Fatalf("equal timestamp rank item=%#v", tieItem)
 	}
 	if findFollowingTimelineItem(page.Items, deletedArticle.ID) != nil {
@@ -163,7 +163,7 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 		t.Fatalf("direct fallback status=%d body=%s", status, body)
 	}
 	directItem := findFollowingTimelineItem(page.Items, directAndReposted.ID)
-	if directItem == nil || directItem.ActivityType != followingActivityPost || directItem.Actor.ID != directAuthor.ID {
+	if directItem == nil || directItem.ActivityType != timelineActivityPost || directItem.Actor.ID != directAuthor.ID {
 		t.Fatalf("undo did not reveal direct activity=%#v", directItem)
 	}
 
@@ -178,7 +178,7 @@ func TestFollowingRepostActivityIntegration(t *testing.T) {
 		t.Fatalf("bobArticle remained after Alice unfollow: %v", followingTimelinePostIDs(page.Items))
 	}
 	tieItem = findFollowingTimelineItem(page.Items, tieArticle.ID)
-	if tieItem == nil || tieItem.ActivityType != followingActivityPost || tieItem.Actor.ID != directAuthor.ID || tieItem.SourceID != tieArticle.ID || tieItem.Post.ID != tieArticle.ID || tieItem.Post.Author.ID != directAuthor.ID {
+	if tieItem == nil || tieItem.ActivityType != timelineActivityPost || tieItem.Actor.ID != directAuthor.ID || tieItem.SourceID != tieArticle.ID || tieItem.Post.ID != tieArticle.ID || tieItem.Post.Author.ID != directAuthor.ID {
 		t.Fatalf("tieArticle did not fall back to direct post after Alice unfollow: %#v", tieItem)
 	}
 	for _, item := range page.Items {

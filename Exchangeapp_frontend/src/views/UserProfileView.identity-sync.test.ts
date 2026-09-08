@@ -9,7 +9,7 @@ import UserProfileView from './UserProfileView.vue';
 const mocks = vi.hoisted(() => ({
   route: { params: { id: '7' } },
   getUser: vi.fn(),
-  getUserPosts: vi.fn(),
+  getUserTimeline: vi.fn(),
   getUserFollowState: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
@@ -56,7 +56,7 @@ vi.mock('../store/feed', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
-  getUserPosts: mocks.getUserPosts,
+  getUserTimeline: mocks.getUserTimeline,
   getUserFollowState: mocks.getUserFollowState,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -165,7 +165,7 @@ describe('UserProfileView current identity synchronization', () => {
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockResolvedValue(originalUser);
-    mocks.getUserPosts.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUserTimeline.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
       following: false,
       follower_count: 0,
@@ -259,6 +259,8 @@ describe('UserProfileView current identity synchronization', () => {
     const image = wrapper.get('.profile-avatar .user-avatar__image');
     expect(wrapper.get('.profile-avatar .user-avatar__fallback').text()).toBe('V');
     expect(image.classes()).not.toContain('user-avatar__image--loaded');
+    expect(image.attributes('loading')).toBe('eager');
+    expect(image.attributes('decoding')).toBe('async');
 
     await image.trigger('load');
     await nextTick();

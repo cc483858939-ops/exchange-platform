@@ -307,7 +307,7 @@ POST   /api/uploads/profile-avatar
 GET    /api/users/search
 GET    /api/users/:id
 PATCH  /api/users/:id
-GET    /api/users/:id/posts?limit=20&cursor=...
+GET    /api/users/:id/timeline?limit=20&cursor=...
 GET    /api/users/:id/follow
 PUT    /api/users/:id/follow
 DELETE /api/users/:id/follow
@@ -318,7 +318,7 @@ GET    /api/feed/following?limit=20&cursor=...
 
 `POST /api/uploads/post-media` accepts one JPEG, PNG, or WebP image per multipart request (`image`) and returns a user-scoped `media_url`. A post may reference zero to four uploaded media URLs in request order.
 
-Following 和 user-post endpoints 返回 {"items": [], "next_cursor": null} 形状；cursor 是 opaque cursor。
+Following 和 profile-timeline endpoints 返回 {"items": [], "next_cursor": null} 形状；cursor 是 opaque cursor。
 
 ### 认证接口
 

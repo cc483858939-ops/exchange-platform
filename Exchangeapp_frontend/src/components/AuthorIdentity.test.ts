@@ -81,9 +81,28 @@ describe('AuthorIdentity time display', () => {
     const image = wrapper.get('.user-avatar__image');
     expect(wrapper.find('.user-avatar__fallback').text()).toBe('R');
     expect(image.classes()).not.toContain('user-avatar__image--loaded');
+    expect(image.attributes('loading')).toBe('lazy');
+    expect(image.attributes('decoding')).toBe('async');
 
     await image.trigger('load');
     await nextTick();
     expect(image.classes()).toContain('user-avatar__image--loaded');
+  });
+
+  it('passes an explicit eager loading strategy to UserAvatar', () => {
+    wrapper = mount(AuthorIdentity, {
+      props: {
+        author: { ...author, avatar_url: '/avatar.webp' },
+        avatarLoading: 'eager',
+      },
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>' },
+        },
+      },
+    });
+
+    expect(wrapper.get('.user-avatar__image').attributes('loading')).toBe('eager');
+    expect(wrapper.get('.user-avatar__image').attributes('decoding')).toBe('async');
   });
 });

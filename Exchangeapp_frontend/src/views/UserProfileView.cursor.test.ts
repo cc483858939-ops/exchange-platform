@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   route: { params: { id: '7' } },
   setRouteID: (_id: string) => {},
   getUser: vi.fn(),
-  getUserPosts: vi.fn(),
+  getUserTimeline: vi.fn(),
   getUserFollowState: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
@@ -62,7 +62,7 @@ vi.mock('../store/feed', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
-  getUserPosts: mocks.getUserPosts,
+  getUserTimeline: mocks.getUserTimeline,
   getUserFollowState: mocks.getUserFollowState,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -114,6 +114,19 @@ const post = (id: number, authorID: number) => ({
   deleted: false as const,
 });
 
+const timelineItem = (id: number, authorID: number) => ({
+  activity_type: 'post' as const,
+  activity_at: '2026-08-15T00:00:00.000Z',
+  source_id: id,
+  actor: {
+    id: authorID,
+    username: `user-${authorID}`,
+    display_name: `User ${authorID}`,
+    avatar_url: '',
+  },
+  post: post(id, authorID),
+});
+
 const PostCardStub = {
   props: ['post', 'showDelete'],
   template: `
@@ -147,7 +160,7 @@ describe('UserProfileView cursor pagination', () => {
     mocks.setRouteID('7');
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
-    mocks.getUserPosts.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUserTimeline.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
       following: false,
       follower_count: 0,
@@ -160,25 +173,25 @@ describe('UserProfileView cursor pagination', () => {
   });
 
   it('stores the next cursor, loads with it, deduplicates IDs, and stops at null', async () => {
-    mocks.getUserPosts
-      .mockResolvedValueOnce({ items: [post(1, 7)], next_cursor: 'cursor-1' })
-      .mockResolvedValueOnce({ items: [post(1, 7), post(2, 7)], next_cursor: null });
+    mocks.getUserTimeline
+      .mockResolvedValueOnce({ items: [timelineItem(1, 7)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [timelineItem(1, 7), timelineItem(2, 7)], next_cursor: null });
 
     const mounted = mountProfile();
     await settle();
 
-    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(1, '7', { limit: 20 });
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(1, '7', { limit: 20 });
     expect(mounted.findAll('.post-card')).toHaveLength(1);
 
     await mounted.find('.profile-feed-sentinel .profile-action').trigger('click');
     await settle();
 
-    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
     expect(mounted.findAll('.post-card')).toHaveLength(2);
     expect(mounted.find('.profile-feed-sentinel').exists()).toBe(false);
 
     await mounted.vm.$nextTick();
-    expect(mocks.getUserPosts).toHaveBeenCalledTimes(2);
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
     mounted.unmount();
   });
 
@@ -187,20 +200,20 @@ describe('UserProfileView cursor pagination', () => {
     const profileA = new Promise<ReturnType<typeof profile>>((resolve) => {
       resolveA = resolve;
     });
-    let resolveMore!: (value: { items: ReturnType<typeof post>[]; next_cursor: string | null }) => void;
-    const loadMoreA = new Promise<{ items: ReturnType<typeof post>[]; next_cursor: string | null }>((resolve) => {
+    let resolveMore!: (value: { items: ReturnType<typeof timelineItem>[]; next_cursor: string | null }) => void;
+    const loadMoreA = new Promise<{ items: ReturnType<typeof timelineItem>[]; next_cursor: string | null }>((resolve) => {
       resolveMore = resolve;
     });
 
     mocks.getUser.mockImplementation((id: string) => id === '7' ? profileA : Promise.resolve(profile(8)));
-    mocks.getUserPosts.mockImplementation((id: string, options?: { cursor?: string }) => {
+    mocks.getUserTimeline.mockImplementation((id: string, options?: { cursor?: string }) => {
       if (id === '7' && options?.cursor) {
         return loadMoreA;
       }
       if (id === '8') {
-        return Promise.resolve({ items: [post(8, 8)], next_cursor: null });
+        return Promise.resolve({ items: [timelineItem(8, 8)], next_cursor: null });
       }
-      return Promise.resolve({ items: [post(7, 7)], next_cursor: 'cursor-a' });
+      return Promise.resolve({ items: [timelineItem(7, 7)], next_cursor: 'cursor-a' });
     });
 
     const mounted = mountProfile();
@@ -226,7 +239,7 @@ describe('UserProfileView cursor pagination', () => {
     await flushPromises();
     mocks.setRouteID('8');
     await settle();
-    resolveMore({ items: [post(2, 7)], next_cursor: null });
+    resolveMore({ items: [timelineItem(2, 7)], next_cursor: null });
     await settle();
 
     expect(mountedWithMore.find('h1').text()).toBe('User 8');
@@ -237,9 +250,9 @@ describe('UserProfileView cursor pagination', () => {
 
   it('ignores a stale delete response after switching profile', async () => {
     let resolveDelete!: () => void;
-    mocks.getUserPosts.mockImplementation((id: string) => id === '8'
-      ? Promise.resolve({ items: [post(8, 8)], next_cursor: null })
-      : Promise.resolve({ items: [post(1, 7)], next_cursor: 'cursor-1' }));
+    mocks.getUserTimeline.mockImplementation((id: string) => id === '8'
+      ? Promise.resolve({ items: [timelineItem(8, 8)], next_cursor: null })
+      : Promise.resolve({ items: [timelineItem(1, 7)], next_cursor: 'cursor-1' }));
     mocks.deletePost.mockImplementation(() => new Promise<void>((resolve) => {
       resolveDelete = resolve;
     }));

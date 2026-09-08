@@ -24,10 +24,25 @@ describe('UserAvatar', () => {
     expect(wrapper.get('.user-avatar__fallback').text()).toBe('A');
     expect(image.classes()).not.toContain('user-avatar__image--loaded');
     expect(image.attributes('alt')).toBe('');
+    expect(image.attributes('loading')).toBe('lazy');
+    expect(image.attributes('decoding')).toBe('async');
     expect(wrapper.attributes('aria-hidden')).toBe('true');
 
     await image.trigger('load');
     expect(image.classes()).toContain('user-avatar__image--loaded');
+  });
+
+  it('supports explicit eager loading', () => {
+    const wrapper = mount(UserAvatar, {
+      props: {
+        avatarUrl: '/alice.webp',
+        displayName: 'Alice',
+        loading: 'eager',
+      },
+    });
+
+    expect(wrapper.get('img').attributes('loading')).toBe('eager');
+    expect(wrapper.get('img').attributes('decoding')).toBe('async');
   });
 
   it('returns to the fallback when an image fails', async () => {
@@ -41,7 +56,7 @@ describe('UserAvatar', () => {
     expect(wrapper.get('.user-avatar__fallback').text()).toBe('A');
   });
 
-  it('resets image state when the URL or identity changes', async () => {
+  it('resets image state when the avatar URL changes', async () => {
     const wrapper = mount(UserAvatar, {
       props: { avatarUrl: '/broken.webp', displayName: 'Alice' },
     });
@@ -51,7 +66,36 @@ describe('UserAvatar', () => {
     await nextTick();
 
     expect(wrapper.get('img').attributes('src')).toBe('/bob.webp');
+    expect(wrapper.get('img').classes()).not.toContain('user-avatar__image--loaded');
     expect(wrapper.get('.user-avatar__fallback').text()).toBe('B');
+  });
+
+  it('keeps a loaded image visible when the display name changes', async () => {
+    const wrapper = mount(UserAvatar, {
+      props: { avatarUrl: '/alice.webp', displayName: 'Alice' },
+    });
+    const image = wrapper.get('img');
+
+    await image.trigger('load');
+    await wrapper.setProps({ displayName: 'Alice Chen' });
+    await nextTick();
+
+    expect(wrapper.get('img').element).toBe(image.element);
+    expect(wrapper.get('img').classes()).toContain('user-avatar__image--loaded');
+  });
+
+  it('keeps a loaded image visible when the username changes', async () => {
+    const wrapper = mount(UserAvatar, {
+      props: { avatarUrl: '/alice.webp', displayName: 'Alice', username: 'alice' },
+    });
+    const image = wrapper.get('img');
+
+    await image.trigger('load');
+    await wrapper.setProps({ username: 'alice-chen' });
+    await nextTick();
+
+    expect(wrapper.get('img').element).toBe(image.element);
+    expect(wrapper.get('img').classes()).toContain('user-avatar__image--loaded');
   });
 
   it('uses the first Unicode code point and then the documented fallbacks', async () => {

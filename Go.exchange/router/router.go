@@ -66,7 +66,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.GET("/users/search", controllers.SearchUsers)
 		api.GET("/users/:id", controllers.GetUserByID)
 		api.PATCH("/users/:id", controllers.UpdateUserProfile)
-		api.GET("/users/:id/posts", controllers.GetUserPosts)
+		api.GET("/users/:id/timeline", controllers.GetUserTimeline)
 		api.GET("/users/:id/follow", controllers.GetUserFollowState)
 		api.PUT("/users/:id/follow", controllers.FollowUser)
 		api.GET("/users/:id/followers", controllers.GetUserFollowers)

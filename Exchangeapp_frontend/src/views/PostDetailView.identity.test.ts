@@ -169,7 +169,10 @@ const mountDetail = () => mount(PostDetailView, {
     plugins: [createPinia()],
     stubs: {
       AppIcon: { template: '<span />' },
-      AuthorIdentity: { template: '<span />' },
+      AuthorIdentity: {
+        props: ['avatarLoading'],
+        template: '<span class="author-identity-stub" :data-avatar-loading="avatarLoading" />',
+      },
       ReplyList: { template: '<div />' },
       LikeAction: { template: '<button type="button" />' },
       RouterLink: { template: '<a><slot /></a>' },
@@ -214,6 +217,13 @@ describe('PostDetailView reply composer identity', () => {
     });
     expect(wrapper.get('.reply-composer__avatar .user-avatar__image').attributes('src'))
       .toBe('https://example.test/alice.jpg');
+  });
+
+  it('loads the main post author avatar eagerly', async () => {
+    wrapper = mountDetail();
+    await flushPromises();
+
+    expect(wrapper.get('.author-identity-stub').attributes('data-avatar-loading')).toBe('eager');
   });
 
   it('updates the reply identity when the authenticated viewer changes', async () => {

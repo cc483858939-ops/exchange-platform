@@ -201,7 +201,7 @@ func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
 		t.Fatalf("following before delete status=%d body=%s", status, body)
 	}
 	item := findFollowingTimelineItem(page.Items, article.ID)
-	if item == nil || item.ActivityType != followingActivityRepost || item.Actor.ID != alice.ID || item.Post.ID != article.ID {
+	if item == nil || item.ActivityType != timelineActivityRepost || item.Actor.ID != alice.ID || item.Post.ID != article.ID {
 		t.Fatalf("following before delete item=%#v", item)
 	}
 

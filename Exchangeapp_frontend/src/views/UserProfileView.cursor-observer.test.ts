@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   route: { params: { id: '7' } },
   setRouteID: (_id: string) => {},
   getUser: vi.fn(),
-  getUserPosts: vi.fn(),
+  getUserTimeline: vi.fn(),
   getUserFollowState: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
@@ -67,7 +67,7 @@ vi.mock('../store/feed', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
-  getUserPosts: mocks.getUserPosts,
+  getUserTimeline: mocks.getUserTimeline,
   getUserFollowState: mocks.getUserFollowState,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -176,6 +176,43 @@ const post = (id: number, authorID: number) => ({
   deleted: false as const,
 });
 
+const timelineItem = (id: number, authorID: number) => ({
+  activity_type: 'post' as const,
+  activity_at: '2026-08-15T00:00:00.000Z',
+  source_id: id,
+  actor: {
+    id: authorID,
+    username: `user-${authorID}`,
+    display_name: `User ${authorID}`,
+    avatar_url: '',
+  },
+  post: post(id, authorID),
+});
+
+const profileTimelineItem = (id: number, authorID: number) => ({
+  activityType: 'post' as const,
+  activityAt: '2026-08-15T00:00:00.000Z',
+  sourceId: id,
+  actor: {
+    id: authorID,
+    username: `user-${authorID}`,
+    display_name: `User ${authorID}`,
+    avatar_url: '',
+  },
+  post: {
+    ...post(id, authorID),
+    createdAt: '2026-08-15T00:00:00.000Z',
+    likeCount: 0,
+    replyCount: 0,
+    viewCount: 0,
+    liked: false,
+    likeStatus: 'ready' as const,
+    repostCount: 0,
+    reposted: false,
+    repostStatus: 'ready' as const,
+  },
+});
+
 const PostCardStub = {
   props: ['post', 'showDelete'],
   template: `
@@ -241,7 +278,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     mocks.setRouteID('7');
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
-    mocks.getUserPosts.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getUserTimeline.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
       following: false,
       follower_count: 0,
@@ -254,9 +291,9 @@ describe('UserProfileView observer and cursor concurrency', () => {
   });
 
   it('re-establishes the observer after delete and continues cursor pagination', async () => {
-    mocks.getUserPosts
-      .mockResolvedValueOnce({ items: [post(1, 7)], next_cursor: 'cursor-1' })
-      .mockResolvedValueOnce({ items: [post(2, 7)], next_cursor: null });
+    mocks.getUserTimeline
+      .mockResolvedValueOnce({ items: [timelineItem(1, 7)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [timelineItem(2, 7)], next_cursor: null });
 
     const mounted = mountProfile();
     mountedViews.push(mounted);
@@ -280,22 +317,22 @@ describe('UserProfileView observer and cursor concurrency', () => {
     replacementObserver?.trigger();
     await settle();
 
-    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
     expect(mounted.findAll('.post-card__id').map((node) => node.text())).toEqual(['2']);
     expect(mounted.findAll('.post-card__id')).toHaveLength(1);
     expect(mounted.find('.profile-feed-sentinel').exists()).toBe(false);
-    expect(mounted.text()).not.toContain('Loading more posts...');
+    expect(mounted.text()).not.toContain('Loading more activity...');
   });
 
   it('invalidates a pending load-more response without losing the original cursor', async () => {
-    const pendingLoadMore = deferred<{ items: ReturnType<typeof post>[]; next_cursor: string | null }>();
+    const pendingLoadMore = deferred<{ items: ReturnType<typeof timelineItem>[]; next_cursor: string | null }>();
     let serveNewPage = false;
-    mocks.getUserPosts.mockImplementation((_id: string, options?: { cursor?: string }) => {
+    mocks.getUserTimeline.mockImplementation((_id: string, options?: { cursor?: string }) => {
       if (!options?.cursor) {
-        return Promise.resolve({ items: [post(1, 7)], next_cursor: 'cursor-1' });
+        return Promise.resolve({ items: [timelineItem(1, 7)], next_cursor: 'cursor-1' });
       }
       return serveNewPage
-        ? Promise.resolve({ items: [post(2, 7)], next_cursor: null })
+        ? Promise.resolve({ items: [timelineItem(2, 7)], next_cursor: null })
         : pendingLoadMore.promise;
     });
 
@@ -309,7 +346,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     await nextTick();
     await flushPromises();
 
-    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'cursor-1' });
 
     await mounted.find('.post-card__delete').trigger('click');
     await settle();
@@ -317,11 +354,11 @@ describe('UserProfileView observer and cursor concurrency', () => {
     expect(mounted.findAll('.post-card')).toHaveLength(0);
     expect(activeObserver()).toBeDefined();
 
-    pendingLoadMore.resolve({ items: [post(2, 7)], next_cursor: 'cursor-2' });
+    pendingLoadMore.resolve({ items: [timelineItem(2, 7)], next_cursor: 'cursor-2' });
     await settle();
 
     expect(mounted.findAll('.post-card')).toHaveLength(0);
-    expect(mocks.getUserPosts).toHaveBeenCalledTimes(2);
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
 
     serveNewPage = true;
     const replacementObserver = activeObserver();
@@ -329,11 +366,11 @@ describe('UserProfileView observer and cursor concurrency', () => {
     replacementObserver?.trigger();
     await settle();
 
-    expect(mocks.getUserPosts).toHaveBeenNthCalledWith(3, '7', { limit: 20, cursor: 'cursor-1' });
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(3, '7', { limit: 20, cursor: 'cursor-1' });
     expect(mounted.findAll('.post-card__id').map((node) => node.text())).toEqual(['2']);
     expect(mounted.findAll('.post-card__id')).toHaveLength(1);
     expect(mounted.find('.profile-feed-sentinel').exists()).toBe(false);
-    expect(mounted.text()).not.toContain('Loading more posts...');
+    expect(mounted.text()).not.toContain('Loading more activity...');
   });
 
   it('restores cached scroll once and never rewinds it during pagination changes', async () => {
@@ -347,9 +384,9 @@ describe('UserProfileView observer and cursor concurrency', () => {
     const session = profileStore.ensureSession(7)!;
     session.user = profile(7);
     session.profileLoaded = true;
-    session.postsLoaded = true;
-    session.posts = [post(1, 7) as any];
-    session.loadedPostIds.add(1);
+    session.timelineLoaded = true;
+    session.timelineItems = [profileTimelineItem(1, 7)];
+    session.loadedActivityKeys.add('post:1');
     session.hasMore = true;
     session.nextCursor = 'cursor-1';
     session.scrollY = 500;
@@ -360,9 +397,9 @@ describe('UserProfileView observer and cursor concurrency', () => {
     expect(scrollTo).toHaveBeenCalledTimes(1);
     expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'auto' });
 
-    session.postsLoadingMore = true;
-    session.posts = [...session.posts, post(2, 7) as any];
-    session.postsLoadingMore = false;
+    session.timelineLoadingMore = true;
+    session.timelineItems = [...session.timelineItems, profileTimelineItem(2, 7)];
+    session.timelineLoadingMore = false;
     await settle();
     expect(scrollTo).toHaveBeenCalledTimes(1);
 
@@ -388,12 +425,12 @@ describe('UserProfileView observer and cursor concurrency', () => {
     const first = profileStore.ensureSession(7)!;
     first.user = profile(7);
     first.profileLoaded = true;
-    first.postsLoaded = true;
+    first.timelineLoaded = true;
     first.scrollY = 400;
     const second = profileStore.ensureSession(8)!;
     second.user = profile(8);
     second.profileLoaded = true;
-    second.postsLoaded = true;
+    second.timelineLoaded = true;
     second.scrollY = 900;
 
     const mounted = mountProfile();

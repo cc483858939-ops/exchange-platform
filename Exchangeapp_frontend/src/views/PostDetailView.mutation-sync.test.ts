@@ -58,6 +58,7 @@ vi.mock('../store/postDetailHandoff', () => ({
 vi.mock('../store/sessionSync', () => ({
   syncExternalPostLikeState: mocks.externalLike,
   syncExternalPostRepostState: mocks.externalRepost,
+  markOwnProfileTimelineStale: vi.fn(),
   syncExternalPostRemoval: mocks.externalRemoval,
   syncExternalReplyCount: mocks.externalReplyCount,
 }));
