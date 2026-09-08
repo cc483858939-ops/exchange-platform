@@ -2,6 +2,7 @@ package devdata
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -142,6 +143,89 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	}
 	if ok, reason := EligibleSourcePost(page.Posts[5], user.ID); ok || reason != "media_dependent_text" {
 		t.Fatalf("short media eligibility=%t reason=%q", ok, reason)
+	}
+}
+
+func TestRSSHubClientStopsLookupBatchAfterFirstError(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		switch {
+		case strings.Contains(request.URL.Path, "/twitter/user/MKBHD/"):
+			writer.Header().Set("Content-Type", "application/rss+xml")
+			_, _ = io.WriteString(writer, rssHubTestFeed)
+		case strings.Contains(request.URL.Path, "/twitter/user/broken/"):
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(writer, "upstream unavailable")
+		default:
+			t.Fatalf("unexpected request after failed handle: %q", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewRSSHubClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, err := client.LookupUsers(context.Background(), []string{"MKBHD", "broken", "should-not-be-requested"})
+	if err == nil || !strings.Contains(err.Error(), `fetch RSSHub feed for "broken"`) {
+		t.Fatalf("error=%v", err)
+	}
+	if requestCount != 2 || client.RequestCount() != 2 {
+		t.Fatalf("requestCount=%d clientCount=%d", requestCount, client.RequestCount())
+	}
+	if _, ok := users["mkbhd"]; !ok {
+		t.Fatalf("partial users=%#v", users)
+	}
+}
+
+func TestRSSHubClientReturnsTyped429AndRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Retry-After", "120")
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(writer, "rate limited")
+	}))
+	defer server.Close()
+
+	client, err := NewRSSHubClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.LookupUsers(context.Background(), []string{"MKBHD"})
+	var httpErr *RSSHubHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error=%v", err)
+	}
+	if httpErr.StatusCode != http.StatusTooManyRequests || httpErr.RetryAfter < 119*time.Second || httpErr.RetryAfter > 121*time.Second {
+		t.Fatalf("typed error=%#v", httpErr)
+	}
+	if !IsRSSHubRateLimitError(err) {
+		t.Fatalf("429 was not classified as rate limit: %v", err)
+	}
+}
+
+func TestRSSHubRetryAfterParsesHTTPDateAnd503IsNotRateLimit(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	date := now.Add(90 * time.Second).Format(http.TimeFormat)
+	if got := parseRetryAfter(date, now); got != 90*time.Second {
+		t.Fatalf("HTTP-date retry after=%s", got)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	client, err := NewRSSHubClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.LookupUsers(context.Background(), []string{"MKBHD"})
+	var httpErr *RSSHubHTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("503 error=%v typed=%#v", err, httpErr)
+	}
+	if IsRSSHubRateLimitError(err) {
+		t.Fatalf("503 was classified as rate limit: %v", err)
 	}
 }
 

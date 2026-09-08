@@ -13,13 +13,14 @@ import (
 )
 
 const (
-	SourceRegistryVersion  = "x_sources_v1"
-	DefaultMaxPosts        = 40
-	DefaultMaxScanned      = 200
-	DefaultSnapshotVersion = "nexus_x_mirror_v1"
-	DefaultXAPIBaseURL     = "https://api.x.com"
-	DefaultSnapshotRelPath = ".devdata/x_latest.json"
-	DefaultRegistryRelPath = "devdata/testdata/x_sources_v1.json"
+	SourceRegistryVersion         = "x_sources_v1"
+	DefaultMaxPosts               = 40
+	DefaultMaxScanned             = 200
+	DefaultSnapshotVersion        = "nexus_x_mirror_v1"
+	DefaultXAPIBaseURL            = "https://api.x.com"
+	DefaultSnapshotRelPath        = ".devdata/x_latest.json"
+	DefaultFetchCheckpointRelPath = ".devdata/x_fetch_checkpoint.json"
+	DefaultRegistryRelPath        = "devdata/testdata/x_sources_v1.json"
 )
 
 // SourceRegistry is repository-controlled configuration. It is deliberately
@@ -76,6 +77,13 @@ func DefaultSnapshotPath(baseDir string) string {
 		baseDir = "."
 	}
 	return filepath.Join(baseDir, filepath.FromSlash(DefaultSnapshotRelPath))
+}
+
+func DefaultFetchCheckpointPath(baseDir string) string {
+	if strings.TrimSpace(baseDir) == "" {
+		baseDir = "."
+	}
+	return filepath.Join(baseDir, filepath.FromSlash(DefaultFetchCheckpointRelPath))
 }
 
 func LoadRegistry(path string) (SourceRegistry, error) {

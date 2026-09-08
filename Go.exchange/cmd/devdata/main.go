@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,7 +49,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		results, preflightErr := devdata.PreflightSources(context.Background(), client, registry)
+		var results []devdata.PreflightResult
+		var preflightErr error
+		if options.source == "rsshub" {
+			results, preflightErr = devdata.PreflightRSSHubSources(context.Background(), client, registry, devdata.ResumableFetchOptions{
+				BatchSize:  options.batchSize,
+				BatchDelay: options.batchDelay,
+				MaxRetries: options.maxRetries,
+				Progress: func(message string) {
+					fmt.Fprintln(stdout, message)
+				},
+			})
+		} else {
+			results, preflightErr = devdata.PreflightSources(context.Background(), client, registry)
+		}
 		_, _ = io.WriteString(stdout, devdata.FormatPreflightResults(results))
 		return preflightErr
 	case "fetch":
@@ -64,14 +78,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		snapshot, report, err := devdata.FetchSnapshot(context.Background(), client, registry, time.Now().UTC())
+		_, report, err := fetchSnapshotForCommand(context.Background(), client, registry, options, baseDir, stdout)
 		if err != nil {
 			return err
 		}
-		if err := devdata.WriteSnapshotAtomic(options.snapshotPath(baseDir), snapshot, registry); err != nil {
-			return err
+		if options.source == "rsshub" {
+			writeFetchReportSummary(stdout, report)
+		} else {
+			writeFetchReport(stdout, report, options.snapshotPath(baseDir))
 		}
-		writeFetchReport(stdout, report, options.snapshotPath(baseDir))
 		return nil
 	case "refresh":
 		options, err := parseCommandFlags("refresh", args[1:], stderr, true)
@@ -86,14 +101,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		snapshot, report, err := devdata.FetchSnapshot(context.Background(), client, registry, time.Now().UTC())
+		snapshot, report, err := fetchSnapshotForCommand(context.Background(), client, registry, options, baseDir, stdout)
 		if err != nil {
 			return err
 		}
-		if err := devdata.WriteSnapshotAtomic(options.snapshotPath(baseDir), snapshot, registry); err != nil {
-			return err
+		if options.source == "rsshub" {
+			writeFetchReportSummary(stdout, report)
+		} else {
+			writeFetchReport(stdout, report, options.snapshotPath(baseDir))
 		}
-		writeFetchReport(stdout, report, options.snapshotPath(baseDir))
 		db, err := initDatabase()
 		if err != nil {
 			return err
@@ -239,6 +255,11 @@ type commandOptions struct {
 	allowDestructive bool
 	registry         string
 	snapshot         string
+	checkpoint       string
+	resetCheckpoint  bool
+	batchSize        int
+	batchDelay       time.Duration
+	maxRetries       int
 }
 
 func (o commandOptions) registryPath(baseDir string) string {
@@ -255,8 +276,33 @@ func (o commandOptions) snapshotPath(baseDir string) string {
 	return o.snapshot
 }
 
+func (o commandOptions) checkpointPath(baseDir string) string {
+	if strings.TrimSpace(o.checkpoint) == "" {
+		return devdata.DefaultFetchCheckpointPath(baseDir)
+	}
+	return o.checkpoint
+}
+
 func parseCommandFlags(command string, args []string, stderr io.Writer, destructive bool) (commandOptions, error) {
-	options := commandOptions{source: "rsshub", profile: "core"}
+	batchSize, err := fetchIntEnv("DEVDATA_FETCH_BATCH_SIZE", DefaultCommandBatchSize)
+	if err != nil {
+		return commandOptions{}, err
+	}
+	batchDelay, err := fetchDurationEnv("DEVDATA_FETCH_BATCH_DELAY", DefaultCommandBatchDelay)
+	if err != nil {
+		return commandOptions{}, err
+	}
+	maxRetries, err := fetchIntEnv("DEVDATA_FETCH_MAX_RETRIES", DefaultCommandMaxRetries)
+	if err != nil {
+		return commandOptions{}, err
+	}
+	options := commandOptions{
+		source:     "rsshub",
+		profile:    "core",
+		batchSize:  batchSize,
+		batchDelay: batchDelay,
+		maxRetries: maxRetries,
+	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&options.source, "source", options.source, "source adapter (x or rsshub)")
@@ -264,6 +310,11 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	flags.BoolVar(&options.allowDestructive, "allow-destructive", false, "allow desired-state retirement/deletion")
 	flags.StringVar(&options.registry, "registry", "", "source registry path (operator/test override)")
 	flags.StringVar(&options.snapshot, "snapshot", "", "snapshot path (operator/test override)")
+	flags.StringVar(&options.checkpoint, "checkpoint", "", "fetch checkpoint path (operator/test override)")
+	flags.BoolVar(&options.resetCheckpoint, "reset-checkpoint", false, "remove the existing fetch checkpoint before fetching")
+	flags.IntVar(&options.batchSize, "batch-size", options.batchSize, "RSSHub accounts per sequential batch")
+	flags.DurationVar(&options.batchDelay, "batch-delay", options.batchDelay, "delay between RSSHub batches")
+	flags.IntVar(&options.maxRetries, "max-retries", options.maxRetries, "maximum HTTP 429 retries per account")
 	if err := flags.Parse(args); err != nil {
 		return commandOptions{}, err
 	}
@@ -277,7 +328,46 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	if destructive && !options.allowDestructive {
 		return commandOptions{}, fmt.Errorf("%s requires --allow-destructive", command)
 	}
+	if options.batchSize < 1 {
+		return commandOptions{}, errors.New("--batch-size must be at least 1")
+	}
+	if options.batchDelay < 0 {
+		return commandOptions{}, errors.New("--batch-delay must be non-negative")
+	}
+	if options.maxRetries < 0 {
+		return commandOptions{}, errors.New("--max-retries must be non-negative")
+	}
 	return options, nil
+}
+
+const (
+	DefaultCommandBatchSize  = devdata.DefaultSourceBatchSize
+	DefaultCommandBatchDelay = devdata.DefaultRSSHubBatchDelay
+	DefaultCommandMaxRetries = devdata.DefaultFetchMaxRetries
+)
+
+func fetchIntEnv(name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", name, err)
+	}
+	return value, nil
+}
+
+func fetchDurationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration such as 60s: %w", name, err)
+	}
+	return value, nil
 }
 
 func loadCuratedRegistry(path string) (devdata.SourceRegistry, error) {
@@ -300,6 +390,30 @@ func newLiveSource(source string) (devdata.SnapshotSourceClient, error) {
 	default:
 		return nil, errors.New("unsupported source adapter")
 	}
+}
+
+func fetchSnapshotForCommand(ctx context.Context, client devdata.SnapshotSourceClient, registry devdata.SourceRegistry, options commandOptions, baseDir string, stdout io.Writer) (devdata.Snapshot, devdata.FetchReport, error) {
+	if options.source == "rsshub" {
+		return devdata.FetchRSSHubResumable(ctx, client, registry, devdata.ResumableFetchOptions{
+			BatchSize:       options.batchSize,
+			BatchDelay:      options.batchDelay,
+			MaxRetries:      options.maxRetries,
+			CheckpointPath:  options.checkpointPath(baseDir),
+			SnapshotPath:    options.snapshotPath(baseDir),
+			ResetCheckpoint: options.resetCheckpoint,
+			Progress: func(message string) {
+				fmt.Fprintln(stdout, message)
+			},
+		})
+	}
+	snapshot, report, err := devdata.FetchSnapshot(ctx, client, registry, time.Now().UTC())
+	if err != nil {
+		return devdata.Snapshot{}, report, err
+	}
+	if err := devdata.WriteSnapshotAtomic(options.snapshotPath(baseDir), snapshot, registry); err != nil {
+		return devdata.Snapshot{}, report, err
+	}
+	return snapshot, report, nil
 }
 
 func initDatabase() (*gorm.DB, error) {
@@ -347,7 +461,11 @@ func syncAndVerifyWithDB(stdout io.Writer, registry devdata.SourceRegistry, snap
 
 func writeFetchReport(stdout io.Writer, report devdata.FetchReport, snapshotPath string) {
 	fmt.Fprintf(stdout, "Snapshot written: %s\n", snapshotPath)
-	fmt.Fprintf(stdout, "API requests: %d\n", report.APIRequests)
+	writeFetchReportSummary(stdout, report)
+}
+
+func writeFetchReportSummary(stdout io.Writer, report devdata.FetchReport) {
+	fmt.Fprintf(stdout, "API requests (current run): %d\n", report.APIRequests)
 	fmt.Fprintf(stdout, "Source Posts scanned: %d\n", report.SourcePostsScanned)
 	fmt.Fprintf(stdout, "Eligible Posts selected: %d\n", report.EligibleSelected)
 	for _, account := range report.PerAccount {

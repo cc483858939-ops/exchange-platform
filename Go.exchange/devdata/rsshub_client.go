@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,20 @@ type RSSHubClient struct {
 	mu       sync.Mutex
 	feeds    map[string]rssHubFeed
 	requests int
+}
+
+// RSSHubHTTPError preserves the response status and optional Retry-After
+// metadata without retaining or exposing response headers or bodies.
+type RSSHubHTTPError struct {
+	StatusCode int
+	RetryAfter time.Duration
+}
+
+func (e *RSSHubHTTPError) Error() string {
+	if e == nil {
+		return "RSSHub request failed"
+	}
+	return fmt.Sprintf("RSSHub request failed with HTTP %d", e.StatusCode)
 }
 
 type rssHubFeed struct {
@@ -142,25 +157,18 @@ func (c *RSSHubClient) LookupUsers(ctx context.Context, handles []string) (map[s
 		return map[string]XUser{}, errors.New("RSSHub user lookup requires at least one handle")
 	}
 	users := make(map[string]XUser, len(handles))
-	var firstErr error
 	for _, rawHandle := range handles {
 		handle := strings.TrimSpace(rawHandle)
 		if !xHandlePattern.MatchString(handle) {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("invalid X handle %q", handle)
-			}
-			continue
+			return users, fmt.Errorf("invalid X handle %q", handle)
 		}
 		feed, err := c.fetchFeed(ctx, handle, true)
 		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("fetch RSSHub feed for %q: %w", handle, err)
-			}
-			continue
+			return users, fmt.Errorf("fetch RSSHub feed for %q: %w", handle, err)
 		}
 		users[strings.ToLower(handle)] = feed.user
 	}
-	return users, firstErr
+	return users, nil
 }
 
 func (c *RSSHubClient) GetUserPosts(ctx context.Context, sourceUserID, paginationToken string, maxResults int) (XTimelinePage, error) {
@@ -214,7 +222,10 @@ func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefres
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return rssHubFeed{}, fmt.Errorf("RSSHub request failed with HTTP %d", response.StatusCode)
+		return rssHubFeed{}, &RSSHubHTTPError{
+			StatusCode: response.StatusCode,
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now().UTC()),
+		}
 	}
 	var document rssHubDocument
 	decoder := xml.NewDecoder(io.LimitReader(response.Body, maxRSSHubResponseBytes))
@@ -232,6 +243,31 @@ func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefres
 	c.feeds[key] = feed
 	c.mu.Unlock()
 	return feed, nil
+}
+
+func parseRetryAfter(raw string, now time.Time) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(raw)
+	if err != nil {
+		return 0
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	delay := when.Sub(now)
+	if delay <= 0 {
+		return 0
+	}
+	return delay
 }
 
 func (c *RSSHubClient) incrementRequests() {
