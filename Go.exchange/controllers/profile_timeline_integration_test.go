@@ -81,6 +81,17 @@ func TestProfileTimelineActivityIntegration(t *testing.T) {
 			ReplyToPostID: replyTo, QuotePostID: quote,
 			Model: gorm.Model{CreatedAt: createdAt, UpdatedAt: createdAt},
 		}
+		if replyTo != nil {
+			var parent models.Post
+			if err := db.First(&parent, *replyTo).Error; err != nil {
+				t.Fatal(err)
+			}
+			conversationID := parent.ID
+			if parent.ConversationID != nil && *parent.ConversationID != 0 {
+				conversationID = *parent.ConversationID
+			}
+			item.ConversationID = &conversationID
+		}
 		if err := db.Create(&item).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +113,13 @@ func TestProfileTimelineActivityIntegration(t *testing.T) {
 	ownB := createPost(profileUser.ID, "Profile authored B", base.Add(20*time.Minute), "public", nil, nil)
 	repostB := createRepost(bCanonical.ID, base.Add(30*time.Minute))
 	replyParent := createPost(authorA.ID, "Reply parent", base.Add(-2*time.Hour), "public", nil, nil)
-	_ = createPost(profileUser.ID, "Profile reply excluded", base.Add(25*time.Minute), "public", &replyParent.ID, nil)
+	reply := createPost(profileUser.ID, "Profile reply excluded", base.Add(25*time.Minute), "public", &replyParent.ID, nil)
+	if reply.ReplyToPostID == nil || *reply.ReplyToPostID != replyParent.ID {
+		t.Fatalf("reply parent=%v want %d", reply.ReplyToPostID, replyParent.ID)
+	}
+	if reply.ConversationID == nil || *reply.ConversationID != replyParent.ID {
+		t.Fatalf("reply conversation=%v want %d", reply.ConversationID, replyParent.ID)
+	}
 
 	deletedCanonical := createPost(authorA.ID, "Deleted canonical", base.Add(-3*time.Hour), "public", nil, nil)
 	createRepost(deletedCanonical.ID, base.Add(40*time.Minute))
