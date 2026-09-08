@@ -13,18 +13,7 @@ import (
 const (
 	DefaultSourceBatchSize  = 5
 	DefaultRSSHubBatchDelay = 60 * time.Second
-	DefaultFetchMaxRetries  = 3
-	MaxRSSHubRetryAfter     = 30 * time.Minute
-	MaxRateLimitBackoff     = 15 * time.Minute
 )
-
-var defaultRateLimitBackoff = [...]time.Duration{
-	60 * time.Second,
-	120 * time.Second,
-	240 * time.Second,
-	480 * time.Second,
-	900 * time.Second,
-}
 
 var ErrFetchIncomplete = errors.New("fetch incomplete")
 
@@ -47,12 +36,11 @@ func (e *FetchIncompleteError) Unwrap() error { return ErrFetchIncomplete }
 type FetchWaiter func(context.Context, time.Duration) error
 
 // ResumableFetchOptions controls RSSHub batching. Wait and Now are injectable
-// to keep retry and pacing tests deterministic without weakening production
-// cancellation behavior.
+// to keep pacing and checkpoint-timing tests deterministic without weakening
+// production cancellation behavior.
 type ResumableFetchOptions struct {
 	BatchSize       int
 	BatchDelay      time.Duration
-	MaxRetries      int
 	CheckpointPath  string
 	SnapshotPath    string
 	ResetCheckpoint bool
@@ -130,53 +118,40 @@ func FetchRSSHubResumable(ctx context.Context, client SnapshotSourceClient, regi
 		}
 		batchNumber := batchStart/options.BatchSize + 1
 		emitProgress(options.Progress, "RSSHub fetch: completed=%d pending=%d batch=%d/%d", len(checkpoint.Completed), len(accounts)-len(checkpoint.Completed), batchNumber, batchCount)
-		rateWaitUsed := false
 		for _, account := range pending[batchStart:batchEnd] {
-			rateRetries := 0
-			for {
-				beforeRequests, hasCounter := requestCountValue(client)
-				data, fetchErr := FetchSnapshotAccount(ctx, client, account)
-				afterRequests, _ := requestCountValue(client)
-				runRequests += accountRequestDelta(beforeRequests, afterRequests, hasCounter, data, fetchErr)
-				if fetchErr == nil {
-					data.Report.RegistryKey = account.Key
-					if hasCounter {
-						data.Report.APIRequests = positiveRequestDelta(beforeRequests, afterRequests)
-					}
-					checkpoint.Completed[account.Key] = data
-					delete(checkpoint.Failures, account.Key)
-					checkpoint.UpdatedAt = checkpointNow(now)
-					if err := WriteFetchCheckpointAtomic(options.CheckpointPath, checkpoint); err != nil {
-						return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), fmt.Errorf("save fetch checkpoint after %q: %w", account.Key, err)
-					}
-					emitProgress(options.Progress, "Checkpoint saved: %s completed=%d pending=%d", options.CheckpointPath, len(checkpoint.Completed), len(accounts)-len(checkpoint.Completed))
-					break
+			beforeRequests, hasCounter := requestCountValue(client)
+			data, fetchErr := FetchSnapshotAccount(ctx, client, account)
+			afterRequests, _ := requestCountValue(client)
+			runRequests += accountRequestDelta(beforeRequests, afterRequests, hasCounter, data, fetchErr)
+			if fetchErr == nil {
+				data.Report.RegistryKey = account.Key
+				if hasCounter {
+					data.Report.APIRequests = positiveRequestDelta(beforeRequests, afterRequests)
 				}
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), ctxErr
-				}
-				checkpointFailure(checkpoint, account.Key, fetchErr, now)
+				checkpoint.Completed[account.Key] = data
+				delete(checkpoint.Failures, account.Key)
+				checkpoint.UpdatedAt = checkpointNow(now)
 				if err := WriteFetchCheckpointAtomic(options.CheckpointPath, checkpoint); err != nil {
-					return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), fmt.Errorf("save fetch checkpoint after %q failure: %w", account.Key, err)
+					return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), fmt.Errorf("save fetch checkpoint after %q: %w", account.Key, err)
 				}
-				emitProgress(options.Progress, "WARN: %s fetch failed: %v", account.Key, fetchErr)
 				emitProgress(options.Progress, "Checkpoint saved: %s completed=%d pending=%d", options.CheckpointPath, len(checkpoint.Completed), len(accounts)-len(checkpoint.Completed))
-				if !isRSSHubRateLimitError(fetchErr) {
-					break
-				}
-				if rateRetries >= options.MaxRetries {
-					return incompleteFetchResult(checkpoint, registry, runRequests, len(accounts))
-				}
-				delay := rateLimitRetryDelay(fetchErr, rateRetries)
-				rateRetries++
-				rateWaitUsed = true
-				emitProgress(options.Progress, "WARN: RSSHub rate limited while fetching %s; retrying in %s", account.Key, delay)
-				if err := waitForDelay(ctx, wait, delay); err != nil {
-					return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), err
-				}
+				continue
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), ctxErr
+			}
+			checkpointFailure(checkpoint, account.Key, fetchErr, now)
+			if err := WriteFetchCheckpointAtomic(options.CheckpointPath, checkpoint); err != nil {
+				return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), fmt.Errorf("save fetch checkpoint after %q failure: %w", account.Key, err)
+			}
+			emitProgress(options.Progress, "WARN: %s fetch failed: %v", account.Key, fetchErr)
+			emitProgress(options.Progress, "Checkpoint saved: %s completed=%d pending=%d", options.CheckpointPath, len(checkpoint.Completed), len(accounts)-len(checkpoint.Completed))
+			if isRSSHubRateLimitError(fetchErr) {
+				emitProgress(options.Progress, "WARN: RSSHub rate limited while fetching %s; stopping fetch with checkpoint preserved", account.Key)
+				return incompleteFetchResult(checkpoint, registry, runRequests, len(accounts))
 			}
 		}
-		if batchEnd < len(pending) && !rateWaitUsed {
+		if batchEnd < len(pending) {
 			emitProgress(options.Progress, "Waiting %s before next batch...", options.BatchDelay)
 			if err := waitForDelay(ctx, wait, options.BatchDelay); err != nil {
 				return Snapshot{}, reportFromCheckpointOrZero(checkpoint, registry, runRequests), err
@@ -238,50 +213,36 @@ func PreflightRSSHubSources(ctx context.Context, client SnapshotSourceClient, re
 		if batchEnd > len(accounts) {
 			batchEnd = len(accounts)
 		}
-		rateWaitUsed := false
 		emitProgress(options.Progress, "RSSHub preflight: batch=%d/%d", batchStart/options.BatchSize+1, batchTotal)
 		for index := batchStart; index < batchEnd; index++ {
 			account := accounts[index]
-			rateRetries := 0
-			for {
-				users, lookupErr := client.LookupUsers(ctx, []string{account.Handle})
-				if lookupErr == nil {
-					results[index].Error = ""
-					user, exists := users[strings.ToLower(account.Handle)]
-					if !exists {
-						results[index].ProfileStatus = "missing"
-						results[index].Error = "source user was not returned"
-						failed = true
-					} else if err := fillPreflightResult(&results[index], account, user); err != nil {
-						failed = true
-					}
-					break
-				}
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return results, ctxErr
-				}
-				results[index].ProfileStatus = "missing"
-				results[index].Error = lookupErr.Error()
-				if !isRSSHubRateLimitError(lookupErr) {
+			users, lookupErr := client.LookupUsers(ctx, []string{account.Handle})
+			if lookupErr == nil {
+				results[index].Error = ""
+				user, exists := users[strings.ToLower(account.Handle)]
+				if !exists {
+					results[index].ProfileStatus = "missing"
+					results[index].Error = "source user was not returned"
 					failed = true
-					break
-				}
-				results[index].ProfileStatus = "rate_limited"
-				if rateRetries >= options.MaxRetries {
+				} else if err := fillPreflightResult(&results[index], account, user); err != nil {
 					failed = true
-					markPreflightNotAttempted(results, index+1, fmt.Sprintf("source preflight stopped after rate limit: %v", lookupErr))
-					return results, ErrPreflightFailed
 				}
-				delay := rateLimitRetryDelay(lookupErr, rateRetries)
-				rateRetries++
-				rateWaitUsed = true
-				emitProgress(options.Progress, "WARN: RSSHub rate limited while preflighting %s; retrying in %s", account.Key, delay)
-				if err := waitForDelay(ctx, wait, delay); err != nil {
-					return results, err
-				}
+				continue
 			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return results, ctxErr
+			}
+			results[index].ProfileStatus = "missing"
+			results[index].Error = lookupErr.Error()
+			if isRSSHubRateLimitError(lookupErr) {
+				results[index].ProfileStatus = "rate_limited"
+				emitProgress(options.Progress, "WARN: RSSHub rate limited while preflighting %s; stopping preflight", account.Key)
+				markPreflightNotAttempted(results, index+1, fmt.Sprintf("source preflight not attempted after rate limit at %s", account.Key))
+				return results, ErrPreflightFailed
+			}
+			failed = true
 		}
-		if batchEnd < len(accounts) && !rateWaitUsed {
+		if batchEnd < len(accounts) {
 			emitProgress(options.Progress, "Waiting %s before next preflight batch...", options.BatchDelay)
 			if err := waitForDelay(ctx, wait, options.BatchDelay); err != nil {
 				return results, err
@@ -303,9 +264,6 @@ func validateResumableFetchOptions(options *ResumableFetchOptions) error {
 	}
 	if options.BatchDelay < 0 {
 		return errors.New("batch-delay must be non-negative")
-	}
-	if options.MaxRetries < 0 {
-		return errors.New("max-retries must be non-negative")
 	}
 	return nil
 }
@@ -417,27 +375,6 @@ func accountRequestDelta(before, after int, hasCounter bool, data FetchAccountDa
 		return 1
 	}
 	return 0
-}
-
-func rateLimitRetryDelay(err error, retryIndex int) time.Duration {
-	var httpErr *RSSHubHTTPError
-	if errors.As(err, &httpErr) && httpErr != nil && httpErr.RetryAfter > 0 {
-		if httpErr.RetryAfter > MaxRSSHubRetryAfter {
-			return MaxRSSHubRetryAfter
-		}
-		return httpErr.RetryAfter
-	}
-	if retryIndex < 0 {
-		retryIndex = 0
-	}
-	if retryIndex >= len(defaultRateLimitBackoff) {
-		return MaxRateLimitBackoff
-	}
-	delay := defaultRateLimitBackoff[retryIndex]
-	if delay > MaxRateLimitBackoff {
-		return MaxRateLimitBackoff
-	}
-	return delay
 }
 
 func isRSSHubRateLimitError(err error) bool {

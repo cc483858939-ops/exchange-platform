@@ -17,6 +17,7 @@ type checkpointTestSourceClient struct {
 	lookupHandles []string
 	failHandles   map[string]int
 	rateHandles   map[string]int
+	rateAfter     time.Duration
 	attempts      map[string]int
 }
 
@@ -32,7 +33,7 @@ func (client *checkpointTestSourceClient) LookupUsers(_ context.Context, handles
 	client.attempts[strings.ToLower(handle)]++
 	if remaining := client.rateHandles[strings.ToLower(handle)]; remaining > 0 {
 		client.rateHandles[strings.ToLower(handle)] = remaining - 1
-		return nil, &RSSHubHTTPError{StatusCode: 429}
+		return nil, &RSSHubHTTPError{StatusCode: 429, RetryAfter: client.rateAfter}
 	}
 	if remaining := client.failHandles[strings.ToLower(handle)]; remaining > 0 {
 		client.failHandles[strings.ToLower(handle)] = remaining - 1
@@ -76,11 +77,10 @@ func TestFetchRSSHubResumableSavesEachSuccessAndResumesOnlyPending(t *testing.T)
 	directory := t.TempDir()
 	checkpointPath := filepath.Join(directory, "checkpoint.json")
 	snapshotPath := filepath.Join(directory, "snapshot.json")
-	firstClient := &checkpointTestSourceClient{failHandles: map[string]int{"source3": 1}}
+	firstClient := &checkpointTestSourceClient{failHandles: map[string]int{"source1": 1}}
 	options := ResumableFetchOptions{
 		BatchSize:      4,
 		BatchDelay:     0,
-		MaxRetries:     0,
 		CheckpointPath: checkpointPath,
 		SnapshotPath:   snapshotPath,
 		Now:            func() time.Time { return testFetchedAt() },
@@ -112,7 +112,7 @@ func TestFetchRSSHubResumableSavesEachSuccessAndResumesOnlyPending(t *testing.T)
 	if len(snapshot.Accounts) != 4 || len(report.PerAccount) != 4 {
 		t.Fatalf("snapshot accounts=%d report accounts=%d", len(snapshot.Accounts), len(report.PerAccount))
 	}
-	if got := strings.Join(secondClient.lookupHandles, ","); got != "source3" {
+	if got := strings.Join(secondClient.lookupHandles, ","); got != "source1" {
 		t.Fatalf("resume lookup sequence=%q", got)
 	}
 	if _, err := os.Stat(checkpointPath); !errors.Is(err, os.ErrNotExist) {
@@ -179,46 +179,160 @@ func TestFetchRSSHubResumablePacesPendingAccountsByBatch(t *testing.T) {
 	}
 }
 
-func TestFetchRSSHubResumableUsesBounded429Backoff(t *testing.T) {
-	registry := batchTestRegistry(1)
+func TestFetchRSSHubResumableStopsImmediatelyOn429(t *testing.T) {
+	registry := batchTestRegistry(6)
 	directory := t.TempDir()
 	var waits []time.Duration
-	client := &checkpointTestSourceClient{rateHandles: map[string]int{"source0": 4}}
+	var progress []string
+	client := &checkpointTestSourceClient{
+		rateHandles: map[string]int{"source2": 1},
+		rateAfter:   120 * time.Second,
+	}
 	_, _, err := FetchRSSHubResumable(context.Background(), client, registry, ResumableFetchOptions{
-		BatchSize:      1,
-		BatchDelay:     0,
-		MaxRetries:     3,
+		BatchSize:      5,
+		BatchDelay:     7 * time.Second,
 		CheckpointPath: filepath.Join(directory, "checkpoint.json"),
 		SnapshotPath:   filepath.Join(directory, "snapshot.json"),
 		Wait: func(_ context.Context, delay time.Duration) error {
 			waits = append(waits, delay)
 			return nil
 		},
+		Progress: func(message string) { progress = append(progress, message) },
 	})
 	if !errors.Is(err, ErrFetchIncomplete) {
 		t.Fatalf("error=%v", err)
 	}
-	want := []time.Duration{60 * time.Second, 120 * time.Second, 240 * time.Second}
-	if fmt.Sprint(waits) != fmt.Sprint(want) {
-		t.Fatalf("waits=%v want=%v", waits, want)
+	if len(waits) != 0 {
+		t.Fatalf("429 triggered waits=%v", waits)
+	}
+	if got := strings.Join(client.lookupHandles, ","); got != "source0,source1,source2" {
+		t.Fatalf("lookup sequence=%q", got)
 	}
 	checkpoint, err := ReadFetchCheckpoint(filepath.Join(directory, "checkpoint.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint.Failures["source0"].Attempts != 4 {
-		t.Fatalf("failure=%#v", checkpoint.Failures["source0"])
+	if len(checkpoint.Completed) != 2 {
+		t.Fatalf("completed=%d", len(checkpoint.Completed))
+	}
+	failure, exists := checkpoint.Failures["source2"]
+	if !exists || failure.Attempts != 1 || !strings.Contains(failure.LastError, "HTTP 429") {
+		t.Fatalf("source2 failure=%#v", failure)
+	}
+	for _, handle := range []string{"source3", "source4", "source5"} {
+		if _, attempted := client.attempts[handle]; attempted {
+			t.Fatalf("account after rate limit was attempted: %s", handle)
+		}
+	}
+	if strings.Contains(strings.ToLower(strings.Join(progress, "\n")), "retry") {
+		t.Fatalf("progress advertised retry: %v", progress)
 	}
 }
 
-func TestPreflightRSSHubSourcesPacesAndRecovers429(t *testing.T) {
+func TestFetchRSSHubResumable429PreservesExistingSnapshotAndManualResume(t *testing.T) {
 	registry := batchTestRegistry(6)
-	client := &checkpointTestSourceClient{rateHandles: map[string]int{"source0": 1}}
+	directory := t.TempDir()
+	checkpointPath := filepath.Join(directory, "checkpoint.json")
+	snapshotPath := filepath.Join(directory, "snapshot.json")
+	options := ResumableFetchOptions{
+		BatchSize:      5,
+		BatchDelay:     7 * time.Second,
+		CheckpointPath: checkpointPath,
+		SnapshotPath:   snapshotPath,
+	}
+	if _, _, err := FetchRSSHubResumable(context.Background(), &checkpointTestSourceClient{}, registry, options); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var waits []time.Duration
+	firstClient := &checkpointTestSourceClient{
+		rateHandles: map[string]int{"source2": 1},
+		rateAfter:   120 * time.Second,
+	}
+	options.Wait = func(_ context.Context, delay time.Duration) error {
+		waits = append(waits, delay)
+		return nil
+	}
+	if _, _, err := FetchRSSHubResumable(context.Background(), firstClient, registry, options); !errors.Is(err, ErrFetchIncomplete) {
+		t.Fatalf("first invocation error=%v", err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("429 triggered waits=%v", waits)
+	}
+	after, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("existing final snapshot changed during 429 fetch")
+	}
+	checkpoint, err := ReadFetchCheckpoint(checkpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoint.Completed) != 2 || checkpoint.Failures["source2"].Attempts != 1 {
+		t.Fatalf("checkpoint completed=%d failure=%#v", len(checkpoint.Completed), checkpoint.Failures["source2"])
+	}
+
+	secondClient := &checkpointTestSourceClient{}
+	if _, _, err := FetchRSSHubResumable(context.Background(), secondClient, registry, options); err != nil {
+		t.Fatalf("resume error=%v", err)
+	}
+	if got := strings.Join(secondClient.lookupHandles, ","); got != "source2,source3,source4,source5" {
+		t.Fatalf("resume lookup sequence=%q", got)
+	}
+	if _, err := os.Stat(checkpointPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("checkpoint was not removed: %v", err)
+	}
+	if _, err := ReadSnapshot(snapshotPath, registry); err != nil {
+		t.Fatalf("final snapshot invalid: %v", err)
+	}
+}
+
+func TestPreflightRSSHubSourcesStopsImmediatelyOn429(t *testing.T) {
+	registry := batchTestRegistry(6)
+	client := &checkpointTestSourceClient{
+		rateHandles: map[string]int{"source1": 1},
+		rateAfter:   120 * time.Second,
+	}
 	var waits []time.Duration
 	results, err := PreflightRSSHubSources(context.Background(), client, registry, ResumableFetchOptions{
 		BatchSize:  5,
 		BatchDelay: 9 * time.Second,
-		MaxRetries: 1,
+		Wait: func(_ context.Context, delay time.Duration) error {
+			waits = append(waits, delay)
+			return nil
+		},
+	})
+	if !errors.Is(err, ErrPreflightFailed) {
+		t.Fatalf("error=%v", err)
+	}
+	if len(results) != 6 || len(waits) != 0 {
+		t.Fatalf("results=%d waits=%v", len(results), waits)
+	}
+	if results[0].ProfileStatus != "ok" || results[1].ProfileStatus != "rate_limited" {
+		t.Fatalf("rate-limit results=%#v", results[:2])
+	}
+	for index := 2; index < len(results); index++ {
+		if results[index].ProfileStatus != "not_attempted" {
+			t.Fatalf("result[%d]=%#v", index, results[index])
+		}
+	}
+	if got := strings.Join(client.lookupHandles, ","); got != "source0,source1" {
+		t.Fatalf("lookup sequence=%q", got)
+	}
+}
+
+func TestPreflightRSSHubSourcesPacesBatches(t *testing.T) {
+	registry := batchTestRegistry(12)
+	var waits []time.Duration
+	results, err := PreflightRSSHubSources(context.Background(), &checkpointTestSourceClient{}, registry, ResumableFetchOptions{
+		BatchSize:  5,
+		BatchDelay: 7 * time.Second,
 		Wait: func(_ context.Context, delay time.Duration) error {
 			waits = append(waits, delay)
 			return nil
@@ -227,8 +341,8 @@ func TestPreflightRSSHubSourcesPacesAndRecovers429(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 6 || len(waits) != 1 || waits[0] != 60*time.Second {
-		t.Fatalf("results=%d waits=%v", len(results), waits)
+	if fmt.Sprint(waits) != fmt.Sprint([]time.Duration{7 * time.Second, 7 * time.Second}) {
+		t.Fatalf("waits=%v", waits)
 	}
 	for index, result := range results {
 		if result.ProfileStatus != "ok" || result.Error != "" {

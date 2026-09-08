@@ -55,7 +55,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 			results, preflightErr = devdata.PreflightRSSHubSources(context.Background(), client, registry, devdata.ResumableFetchOptions{
 				BatchSize:  options.batchSize,
 				BatchDelay: options.batchDelay,
-				MaxRetries: options.maxRetries,
 				Progress: func(message string) {
 					fmt.Fprintln(stdout, message)
 				},
@@ -259,7 +258,6 @@ type commandOptions struct {
 	resetCheckpoint  bool
 	batchSize        int
 	batchDelay       time.Duration
-	maxRetries       int
 }
 
 func (o commandOptions) registryPath(baseDir string) string {
@@ -292,16 +290,11 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	if err != nil {
 		return commandOptions{}, err
 	}
-	maxRetries, err := fetchIntEnv("DEVDATA_FETCH_MAX_RETRIES", DefaultCommandMaxRetries)
-	if err != nil {
-		return commandOptions{}, err
-	}
 	options := commandOptions{
 		source:     "rsshub",
 		profile:    "core",
 		batchSize:  batchSize,
 		batchDelay: batchDelay,
-		maxRetries: maxRetries,
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -314,7 +307,6 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	flags.BoolVar(&options.resetCheckpoint, "reset-checkpoint", false, "remove the existing fetch checkpoint before fetching")
 	flags.IntVar(&options.batchSize, "batch-size", options.batchSize, "RSSHub accounts per sequential batch")
 	flags.DurationVar(&options.batchDelay, "batch-delay", options.batchDelay, "delay between RSSHub batches")
-	flags.IntVar(&options.maxRetries, "max-retries", options.maxRetries, "maximum HTTP 429 retries per account")
 	if err := flags.Parse(args); err != nil {
 		return commandOptions{}, err
 	}
@@ -334,16 +326,12 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	if options.batchDelay < 0 {
 		return commandOptions{}, errors.New("--batch-delay must be non-negative")
 	}
-	if options.maxRetries < 0 {
-		return commandOptions{}, errors.New("--max-retries must be non-negative")
-	}
 	return options, nil
 }
 
 const (
 	DefaultCommandBatchSize  = devdata.DefaultSourceBatchSize
 	DefaultCommandBatchDelay = devdata.DefaultRSSHubBatchDelay
-	DefaultCommandMaxRetries = devdata.DefaultFetchMaxRetries
 )
 
 func fetchIntEnv(name string, fallback int) (int, error) {
@@ -397,7 +385,6 @@ func fetchSnapshotForCommand(ctx context.Context, client devdata.SnapshotSourceC
 		return devdata.FetchRSSHubResumable(ctx, client, registry, devdata.ResumableFetchOptions{
 			BatchSize:       options.batchSize,
 			BatchDelay:      options.batchDelay,
-			MaxRetries:      options.maxRetries,
 			CheckpointPath:  options.checkpointPath(baseDir),
 			SnapshotPath:    options.snapshotPath(baseDir),
 			ResetCheckpoint: options.resetCheckpoint,

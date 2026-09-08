@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseCommandFlagsDefaultsToRSSHub(t *testing.T) {
-	for _, name := range []string{"DEVDATA_FETCH_BATCH_SIZE", "DEVDATA_FETCH_BATCH_DELAY", "DEVDATA_FETCH_MAX_RETRIES"} {
+	for _, name := range []string{"DEVDATA_FETCH_BATCH_SIZE", "DEVDATA_FETCH_BATCH_DELAY"} {
 		t.Setenv(name, "")
 	}
 	options, err := parseCommandFlags("fetch", nil, io.Discard, false)
@@ -18,27 +18,26 @@ func TestParseCommandFlagsDefaultsToRSSHub(t *testing.T) {
 	if options.source != "rsshub" {
 		t.Fatalf("default source=%q", options.source)
 	}
-	if options.batchSize != DefaultCommandBatchSize || options.batchDelay != DefaultCommandBatchDelay || options.maxRetries != DefaultCommandMaxRetries {
-		t.Fatalf("defaults batch_size=%d batch_delay=%s max_retries=%d", options.batchSize, options.batchDelay, options.maxRetries)
+	if options.batchSize != DefaultCommandBatchSize || options.batchDelay != DefaultCommandBatchDelay {
+		t.Fatalf("defaults batch_size=%d batch_delay=%s", options.batchSize, options.batchDelay)
 	}
 }
 
 func TestParseCommandFlagsEnvironmentAndCLIPrecedence(t *testing.T) {
 	t.Setenv("DEVDATA_FETCH_BATCH_SIZE", "7")
 	t.Setenv("DEVDATA_FETCH_BATCH_DELAY", "13s")
-	t.Setenv("DEVDATA_FETCH_MAX_RETRIES", "4")
 	fromEnv, err := parseCommandFlags("fetch", nil, io.Discard, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fromEnv.batchSize != 7 || fromEnv.batchDelay != 13*time.Second || fromEnv.maxRetries != 4 {
+	if fromEnv.batchSize != 7 || fromEnv.batchDelay != 13*time.Second {
 		t.Fatalf("environment options=%#v", fromEnv)
 	}
-	fromCLI, err := parseCommandFlags("fetch", []string{"--batch-size=2", "--batch-delay=0s", "--max-retries=0", "--checkpoint=custom.json"}, io.Discard, false)
+	fromCLI, err := parseCommandFlags("fetch", []string{"--batch-size=2", "--batch-delay=0s", "--checkpoint=custom.json"}, io.Discard, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fromCLI.batchSize != 2 || fromCLI.batchDelay != 0 || fromCLI.maxRetries != 0 || fromCLI.checkpoint != "custom.json" {
+	if fromCLI.batchSize != 2 || fromCLI.batchDelay != 0 || fromCLI.checkpoint != "custom.json" {
 		t.Fatalf("CLI options=%#v", fromCLI)
 	}
 }
@@ -46,15 +45,11 @@ func TestParseCommandFlagsEnvironmentAndCLIPrecedence(t *testing.T) {
 func TestParseCommandFlagsRejectsInvalidFetchPacing(t *testing.T) {
 	t.Setenv("DEVDATA_FETCH_BATCH_SIZE", "")
 	t.Setenv("DEVDATA_FETCH_BATCH_DELAY", "")
-	t.Setenv("DEVDATA_FETCH_MAX_RETRIES", "")
 	if _, err := parseCommandFlags("fetch", []string{"--batch-size=0"}, io.Discard, false); err == nil {
 		t.Fatal("zero batch size unexpectedly accepted")
 	}
 	if _, err := parseCommandFlags("fetch", []string{"--batch-delay=-1s"}, io.Discard, false); err == nil {
 		t.Fatal("negative batch delay unexpectedly accepted")
-	}
-	if _, err := parseCommandFlags("fetch", []string{"--max-retries=-1"}, io.Discard, false); err == nil {
-		t.Fatal("negative max retries unexpectedly accepted")
 	}
 }
 
