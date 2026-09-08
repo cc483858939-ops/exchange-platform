@@ -17,7 +17,10 @@ vi.mock('../../composables/useLogout', () => ({
 const mountSidebar = () => mount(LeftSidebar, {
   global: {
     stubs: {
-      AppIcon: { props: ['name'], template: '<span class="test-icon" :data-icon="name" />' },
+      AppIcon: {
+        props: ['name', 'size'],
+        template: '<span class="test-icon" :data-icon="name" :data-size="size" />',
+      },
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
@@ -73,5 +76,22 @@ describe('LeftSidebar navigation', () => {
     expect(historyIndex).toBeLessThan(profileIndex);
     expect(profileIndex).toBeLessThan(postIndex);
     expect(wrapper.find('[data-icon="history"]').exists()).toBe(true);
+  });
+
+  it('uses the stronger desktop navigation scale for every authenticated action', async () => {
+    const wrapper = mountSidebar();
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
+    await nextTick();
+
+    const iconSize = (name: string) => wrapper.get(`[data-icon="${name}"]`).attributes('data-size');
+
+    expect(iconSize('home')).toBe('26');
+    expect(iconSize('search')).toBe('26');
+    expect(iconSize('notifications')).toBe('26');
+    expect(iconSize('history')).toBe('26');
+    expect(iconSize('profile')).toBe('26');
+    expect(iconSize('compose')).toBe('24');
+    expect(iconSize('logout')).toBe('26');
   });
 });

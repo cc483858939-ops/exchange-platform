@@ -21,7 +21,7 @@
         :aria-label="item.label"
         :title="item.label"
       >
-        <AppIcon :name="item.icon" :size="24" />
+        <AppIcon :name="item.icon" :size="26" />
         <span class="left-sidebar__label">{{ item.label }}</span>
         <span
           v-if="item.name === 'Notifications' && notificationBadge"
@@ -39,7 +39,7 @@
         aria-label="Profile"
         title="Profile"
       >
-        <AppIcon name="profile" :size="24" />
+        <AppIcon name="profile" :size="26" />
         <span class="left-sidebar__label">Profile</span>
       </router-link>
       <router-link
@@ -49,7 +49,7 @@
         aria-label="Post"
         title="Post"
       >
-        <AppIcon name="compose" :size="22" />
+        <AppIcon name="compose" :size="24" />
         <span class="left-sidebar__label">Post</span>
       </router-link>
     </nav>
@@ -63,7 +63,7 @@
           title="Log out"
           @click="handleLogout"
         >
-          <AppIcon name="logout" :size="24" />
+          <AppIcon name="logout" :size="26" />
           <span class="left-sidebar__label">Log out</span>
         </button>
       </template>
@@ -142,8 +142,8 @@ const visibleNavigation = computed(() => navigation.filter((item) => !item.authO
 .left-sidebar__link {
   display: flex;
   align-items: center;
-  min-height: 50px;
-  gap: 14px;
+  min-height: 54px;
+  gap: 16px;
   margin: 0 var(--space-2);
   padding: 0 var(--space-4);
   border: 0;
@@ -152,7 +152,7 @@ const visibleNavigation = computed(() => navigation.filter((item) => !item.authO
   color: var(--color-text-secondary);
   cursor: pointer;
   font: inherit;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 620;
   text-align: left;
   text-decoration: none;
@@ -195,7 +195,7 @@ const visibleNavigation = computed(() => navigation.filter((item) => !item.authO
 }
 
 .left-sidebar__link--primary {
-  min-height: 48px;
+  min-height: 52px;
   margin-top: var(--space-2);
   justify-content: center;
   background: var(--color-accent);

@@ -140,6 +140,11 @@ onBeforeUnmount(() => {
     gap: 0;
   }
 
+  .app-layout__left :deep(.left-sidebar__link .app-icon) {
+    width: 24px;
+    height: 24px;
+  }
+
   .app-layout__left :deep(.left-sidebar__link--icon .left-sidebar__label) {
     display: none;
   }
@@ -152,6 +157,8 @@ onBeforeUnmount(() => {
   }
 
   .app-layout__left :deep(.left-sidebar__link--primary .app-icon) {
+    width: 22px;
+    height: 22px;
     color: var(--color-surface);
   }
 }
