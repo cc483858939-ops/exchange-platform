@@ -1,8 +1,12 @@
 <template>
   <div class="left-sidebar">
-    <router-link class="left-sidebar__brand" :to="{ name: 'Home' }" aria-label="Exchange home">
+    <router-link
+      class="left-sidebar__brand"
+      :to="{ name: 'Home' }"
+      aria-label="Exchange home"
+      title="Exchange"
+    >
       <span class="left-sidebar__brand-mark" aria-hidden="true">EX</span>
-      <span class="left-sidebar__brand-name">Exchange</span>
     </router-link>
 
     <nav class="left-sidebar__nav" aria-label="Main navigation">
@@ -115,7 +119,6 @@ const visibleNavigation = computed(() => navigation.filter((item) => !item.authO
   display: inline-flex;
   align-items: center;
   min-height: 48px;
-  gap: var(--space-3);
   padding: 0 var(--space-4);
   color: var(--color-text);
   font-size: 16px;

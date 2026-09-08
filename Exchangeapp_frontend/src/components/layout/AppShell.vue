@@ -127,10 +127,6 @@ onBeforeUnmount(() => {
     padding-inline: var(--space-2);
   }
 
-  .app-layout__left :deep(.left-sidebar__brand-name) {
-    display: none;
-  }
-
   .app-layout__left :deep(.left-sidebar__link) {
     justify-content: center;
     min-height: 48px;

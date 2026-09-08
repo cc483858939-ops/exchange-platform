@@ -23,7 +23,7 @@ const mountSidebar = () => mount(LeftSidebar, {
   },
 });
 
-describe('LeftSidebar history navigation', () => {
+describe('LeftSidebar navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.authStore = reactive({
@@ -36,12 +36,15 @@ describe('LeftSidebar history navigation', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the Exchange brand and accessible home label', () => {
+  it('renders the EX brand mark without a duplicate wordmark', () => {
     const wrapper = mountSidebar();
 
-    expect(wrapper.get('.left-sidebar__brand').attributes('aria-label')).toBe('Exchange home');
+    const brand = wrapper.get('.left-sidebar__brand');
+
+    expect(brand.attributes('aria-label')).toBe('Exchange home');
+    expect(brand.attributes('title')).toBe('Exchange');
     expect(wrapper.get('.left-sidebar__brand-mark').text()).toBe('EX');
-    expect(wrapper.get('.left-sidebar__brand-name').text()).toBe('Exchange');
+    expect(wrapper.find('.left-sidebar__brand-name').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('GX');
     expect(wrapper.text()).not.toContain('Go Exchange');
   });
