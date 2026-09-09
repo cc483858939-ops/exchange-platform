@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-func TestGroqProviderSendsConstrainedChatCompletionRequest(t *testing.T) {
+func TestOpenAICompatibleClientSendsConstrainedChatCompletionRequest(t *testing.T) {
 	content := "你好 @alice https://example.com #Exchange $BTC\nkeep this"
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/chat/completions" {
@@ -24,11 +25,18 @@ func TestGroqProviderSendsConstrainedChatCompletionRequest(t *testing.T) {
 			t.Errorf("Content-Type = %q", got)
 		}
 
-		var payload groqCompletionRequest
-		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		rawBody, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		if strings.Contains(string(rawBody), "reasoning_effort") {
+			t.Error("request body contains provider-specific reasoning_effort")
+		}
+		var payload completionRequest
+		if err := json.Unmarshal(rawBody, &payload); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if payload.Model != "test-model" || payload.Temperature != 0 || payload.ReasoningEffort != "none" || payload.MaxCompletionTokens != 123 {
+		if payload.Model != "test-model" || payload.MaxCompletionTokens != 123 {
 			t.Errorf("request controls = %+v", payload)
 		}
 		if len(payload.Messages) != 2 || payload.Messages[0].Role != "system" || payload.Messages[1].Role != "user" {
@@ -46,11 +54,10 @@ func TestGroqProviderSendsConstrainedChatCompletionRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewGroqProviderWithClient(GroqConfig{
+	provider := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{
 		BaseURL:             server.URL,
 		APIKey:              "test-key",
 		Model:               "test-model",
-		PromptVersion:       "social_v1",
 		MaxCompletionTokens: 123,
 	}, server.Client())
 
@@ -67,19 +74,19 @@ func TestGroqProviderSendsConstrainedChatCompletionRequest(t *testing.T) {
 	}
 }
 
-func TestGroqProviderRequiresAPIKeyAndValidTarget(t *testing.T) {
-	provider := NewGroqProvider(GroqConfig{})
+func TestOpenAICompatibleClientRequiresAPIKeyAndValidTarget(t *testing.T) {
+	provider := NewOpenAICompatibleClient(ClientConfig{})
 	if _, err := provider.Translate(context.Background(), Request{TargetLanguage: "en"}); !errors.Is(err, ErrProviderMisconfigured) {
 		t.Fatalf("missing key error = %v", err)
 	}
 
-	provider = NewGroqProvider(GroqConfig{APIKey: "key"})
+	provider = NewOpenAICompatibleClient(ClientConfig{APIKey: "key"})
 	if _, err := provider.Translate(context.Background(), Request{TargetLanguage: "fr"}); !errors.Is(err, ErrInvalidTargetLanguage) {
 		t.Fatalf("invalid target error = %v", err)
 	}
 }
 
-func TestGroqProviderMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T) {
+func TestOpenAICompatibleClientMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		statusCode int
@@ -88,6 +95,7 @@ func TestGroqProviderMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T) {
 	}{
 		{name: "rate limit", statusCode: http.StatusTooManyRequests, retryAfter: "23", expected: ErrProviderRateLimited},
 		{name: "unauthorized", statusCode: http.StatusUnauthorized, expected: ErrProviderMisconfigured},
+		{name: "forbidden", statusCode: http.StatusForbidden, expected: ErrProviderMisconfigured},
 		{name: "provider unavailable", statusCode: http.StatusBadGateway, expected: ErrProviderUnavailable},
 		{name: "other client error", statusCode: http.StatusBadRequest, expected: ErrProviderInvalidResponse},
 	} {
@@ -102,7 +110,7 @@ func TestGroqProviderMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T) {
 			}))
 			defer server.Close()
 
-			provider := NewGroqProviderWithClient(GroqConfig{BaseURL: server.URL, APIKey: "key"}, server.Client())
+			provider := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{BaseURL: server.URL, APIKey: "key", Model: "test-model"}, server.Client())
 			_, err := provider.Translate(context.Background(), Request{
 				Content:        "hello",
 				SourceLanguage: "en",
@@ -124,7 +132,7 @@ func TestGroqProviderMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T) {
 	}
 }
 
-func TestGroqProviderRejectsMalformedAndOversizedResponses(t *testing.T) {
+func TestOpenAICompatibleClientRejectsMalformedAndOversizedResponses(t *testing.T) {
 	for _, body := range []string{
 		"not-json",
 		`{"choices":[]}`,
@@ -137,7 +145,7 @@ func TestGroqProviderRejectsMalformedAndOversizedResponses(t *testing.T) {
 			_, _ = response.Write([]byte(body))
 		}))
 
-		provider := NewGroqProviderWithClient(GroqConfig{BaseURL: server.URL, APIKey: "key"}, server.Client())
+		provider := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{BaseURL: server.URL, APIKey: "key", Model: "test-model"}, server.Client())
 		_, err := provider.Translate(context.Background(), Request{
 			Content:        "hello",
 			SourceLanguage: "en",
@@ -150,14 +158,15 @@ func TestGroqProviderRejectsMalformedAndOversizedResponses(t *testing.T) {
 	}
 }
 
-func TestGroqProviderMapsClientTimeout(t *testing.T) {
+func TestOpenAICompatibleClientMapsClientTimeout(t *testing.T) {
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		<-request.Context().Done()
 		return nil, request.Context().Err()
 	})
-	provider := NewGroqProvider(GroqConfig{
+	provider := NewOpenAICompatibleClient(ClientConfig{
 		BaseURL: "http://translation.test",
 		APIKey:  "key",
+		Model:   "test-model",
 		Timeout: 5 * time.Millisecond,
 	})
 	provider.client.Transport = transport
@@ -171,13 +180,13 @@ func TestGroqProviderMapsClientTimeout(t *testing.T) {
 	}
 }
 
-func TestGroqProviderHonorsContextCancellation(t *testing.T) {
+func TestOpenAICompatibleClientHonorsContextCancellation(t *testing.T) {
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		<-request.Context().Done()
 		return nil, request.Context().Err()
 	})
-	provider := NewGroqProviderWithClient(
-		GroqConfig{BaseURL: "http://translation.test", APIKey: "key"},
+	provider := NewOpenAICompatibleClientWithHTTPClient(
+		ClientConfig{BaseURL: "http://translation.test", APIKey: "key", Model: "test-model"},
 		&http.Client{Transport: transport},
 	)
 	ctx, cancel := context.WithCancel(context.Background())

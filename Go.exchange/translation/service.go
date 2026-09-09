@@ -17,27 +17,20 @@ import (
 )
 
 const (
-	DefaultBaseTTL             = 7 * 24 * time.Hour
-	DefaultCacheJitter         = 24 * time.Hour
-	DefaultMaxSourceRunes      = 2000
-	DefaultMaxCompletionTokens = 2048
-	DefaultTimeout             = 10 * time.Second
-	DefaultModel               = "qwen/qwen3.6-27b"
-	DefaultBaseURL             = "https://api.groq.com/openai/v1"
+	DefaultBaseTTL        = 7 * 24 * time.Hour
+	DefaultCacheJitter    = 24 * time.Hour
+	DefaultMaxSourceRunes = 2000
 )
 
 type ServiceConfig struct {
-	Enabled             bool
-	Model               string
-	PromptVersion       string
-	BaseTTL             time.Duration
-	CacheJitter         time.Duration
-	MaxSourceRunes      int
-	Jitter              JitterFunc
-	MaxCompletionTokens int
-	Timeout             time.Duration
-	BaseURL             string
-	APIKey              string
+	Enabled        bool
+	BaseURL        string
+	Model          string
+	PromptVersion  string
+	BaseTTL        time.Duration
+	CacheJitter    time.Duration
+	MaxSourceRunes int
+	Jitter         JitterFunc
 }
 
 type TranslationService struct {
@@ -55,9 +48,6 @@ type cachedValue struct {
 }
 
 func NewService(provider Provider, cache Cache, config ServiceConfig) *TranslationService {
-	if strings.TrimSpace(config.Model) == "" {
-		config.Model = DefaultModel
-	}
 	if strings.TrimSpace(config.PromptVersion) == "" {
 		config.PromptVersion = DefaultPromptVersion
 	}
@@ -66,15 +56,6 @@ func NewService(provider Provider, cache Cache, config ServiceConfig) *Translati
 	}
 	if config.MaxSourceRunes <= 0 {
 		config.MaxSourceRunes = DefaultMaxSourceRunes
-	}
-	if config.MaxCompletionTokens <= 0 {
-		config.MaxCompletionTokens = DefaultMaxCompletionTokens
-	}
-	if config.Timeout <= 0 {
-		config.Timeout = DefaultTimeout
-	}
-	if strings.TrimSpace(config.BaseURL) == "" {
-		config.BaseURL = DefaultBaseURL
 	}
 	if config.Jitter == nil {
 		config.Jitter = cryptoJitter
@@ -113,7 +94,7 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 		return Result{}, ErrSourceTooLong
 	}
 
-	key := CacheKey(postID, content, source, target, s.config.Model, s.config.PromptVersion)
+	key := CacheKey(postID, content, source, target, BackendIdentity(s.config.BaseURL, s.config.Model), s.config.PromptVersion)
 	if cached, found, _ := s.readCache(key, source, target); found {
 		outcome = "cache_hit"
 		return cached, nil
@@ -129,8 +110,7 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 			return nil, newProviderError(ProviderErrorMisconfigured, 0, ErrProviderMisconfigured)
 		}
 
-		providerContext, cancelProvider := context.WithTimeout(context.WithoutCancel(ctx), s.config.Timeout)
-		defer cancelProvider()
+		providerContext := context.WithoutCancel(ctx)
 		providerStarted := time.Now()
 		providerResult, err := s.provider.Translate(providerContext, Request{
 			Content: content, SourceLanguage: source, TargetLanguage: target,
@@ -144,7 +124,7 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 			if errors.As(err, &providerError) {
 				statusCode = providerError.StatusCode
 			}
-			log.Printf("[Translation] provider=groq model=%s target_language=%s error_class=%s upstream_status=%d", s.config.Model, target, errorClass, statusCode)
+			log.Printf("[Translation] client=openai_compatible model=%s target_language=%s error_class=%s upstream_status=%d", s.config.Model, target, errorClass, statusCode)
 			if !isKnownProviderError(err) {
 				return nil, newProviderError(ProviderErrorUnavailable, 0, err)
 			}

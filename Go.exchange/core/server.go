@@ -41,26 +41,22 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	})
 	translationConfig := config.AppConfig.Translation.Normalized()
 	translationService := translation.NewService(
-		translation.NewGroqProvider(translation.GroqConfig{
+		translation.NewOpenAICompatibleClient(translation.ClientConfig{
 			BaseURL:             translationConfig.BaseURL,
 			APIKey:              translationConfig.APIKey,
 			Model:               translationConfig.Model,
-			PromptVersion:       translationConfig.PromptVersion,
 			Timeout:             time.Duration(translationConfig.TimeoutSeconds) * time.Second,
 			MaxCompletionTokens: translationConfig.MaxCompletionTokens,
 		}),
 		translation.NewRedisCache(global.RedisDB),
 		translation.ServiceConfig{
-			Enabled:             translationConfig.Enabled,
-			Model:               translationConfig.Model,
-			PromptVersion:       translationConfig.PromptVersion,
-			BaseTTL:             time.Duration(translationConfig.CacheTTLHours) * time.Hour,
-			CacheJitter:         time.Duration(translationConfig.CacheJitterHours) * time.Hour,
-			MaxSourceRunes:      translationConfig.MaxSourceRunes,
-			MaxCompletionTokens: translationConfig.MaxCompletionTokens,
-			Timeout:             time.Duration(translationConfig.TimeoutSeconds) * time.Second,
-			BaseURL:             translationConfig.BaseURL,
-			APIKey:              translationConfig.APIKey,
+			Enabled:        translationConfig.Enabled,
+			Model:          translationConfig.Model,
+			PromptVersion:  translationConfig.PromptVersion,
+			BaseTTL:        time.Duration(translationConfig.CacheTTLHours) * time.Hour,
+			CacheJitter:    time.Duration(translationConfig.CacheJitterHours) * time.Hour,
+			MaxSourceRunes: translationConfig.MaxSourceRunes,
+			BaseURL:        translationConfig.BaseURL,
 		},
 	)
 	handler, err := router.SetupRouter(authController, tokens, publisher, readiness, translationService)

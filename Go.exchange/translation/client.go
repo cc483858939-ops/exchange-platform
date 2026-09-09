@@ -14,47 +14,40 @@ import (
 
 const maxProviderResponseBodyBytes int64 = 1 << 20
 
-type GroqConfig struct {
+const (
+	DefaultMaxCompletionTokens = 2048
+	DefaultTimeout             = 10 * time.Second
+)
+
+type ClientConfig struct {
 	BaseURL             string
 	APIKey              string
 	Model               string
-	PromptVersion       string
 	Timeout             time.Duration
 	MaxCompletionTokens int
 }
 
-type GroqProvider struct {
+type OpenAICompatibleClient struct {
 	baseURL             string
 	apiKey              string
 	model               string
-	promptVersion       string
 	maxCompletionTokens int
 	client              *http.Client
 }
 
-func NewGroqProvider(config GroqConfig) *GroqProvider {
-	return newGroqProvider(config, &http.Client{Timeout: normalizedTimeout(config.Timeout)})
+func NewOpenAICompatibleClient(config ClientConfig) *OpenAICompatibleClient {
+	return newOpenAICompatibleClient(config, &http.Client{Timeout: normalizedTimeout(config.Timeout)})
 }
 
-// NewGroqProviderWithClient keeps the provider HTTP behavior testable without
+// NewOpenAICompatibleClientWithHTTPClient keeps the client HTTP behavior testable without
 // changing production to use the global default HTTP client.
-func NewGroqProviderWithClient(config GroqConfig, client *http.Client) *GroqProvider {
-	return newGroqProvider(config, client)
+func NewOpenAICompatibleClientWithHTTPClient(config ClientConfig, client *http.Client) *OpenAICompatibleClient {
+	return newOpenAICompatibleClient(config, client)
 }
 
-func newGroqProvider(config GroqConfig, client *http.Client) *GroqProvider {
+func newOpenAICompatibleClient(config ClientConfig, client *http.Client) *OpenAICompatibleClient {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
-	}
 	model := strings.TrimSpace(config.Model)
-	if model == "" {
-		model = DefaultModel
-	}
-	promptVersion := strings.TrimSpace(config.PromptVersion)
-	if promptVersion == "" {
-		promptVersion = DefaultPromptVersion
-	}
 	maxCompletionTokens := config.MaxCompletionTokens
 	if maxCompletionTokens <= 0 {
 		maxCompletionTokens = DefaultMaxCompletionTokens
@@ -62,9 +55,9 @@ func newGroqProvider(config GroqConfig, client *http.Client) *GroqProvider {
 	if client == nil {
 		client = &http.Client{Timeout: normalizedTimeout(config.Timeout)}
 	}
-	return &GroqProvider{
+	return &OpenAICompatibleClient{
 		baseURL: baseURL, apiKey: strings.TrimSpace(config.APIKey), model: model,
-		promptVersion: promptVersion, maxCompletionTokens: maxCompletionTokens, client: client,
+		maxCompletionTokens: maxCompletionTokens, client: client,
 	}
 }
 
@@ -75,46 +68,47 @@ func normalizedTimeout(timeout time.Duration) time.Duration {
 	return timeout
 }
 
-type groqCompletionRequest struct {
-	Model               string        `json:"model"`
-	Temperature         int           `json:"temperature"`
-	ReasoningEffort     string        `json:"reasoning_effort"`
-	MaxCompletionTokens int           `json:"max_completion_tokens"`
-	Messages            []groqMessage `json:"messages"`
+type completionRequest struct {
+	Model               string              `json:"model"`
+	MaxCompletionTokens int                 `json:"max_completion_tokens"`
+	Messages            []completionMessage `json:"messages"`
 }
 
-type groqMessage struct {
+type completionMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-type groqCompletionResponse struct {
-	Choices []groqChoice `json:"choices"`
+type completionResponse struct {
+	Choices []completionChoice `json:"choices"`
 }
 
-type groqChoice struct {
-	Message *groqMessage `json:"message"`
+type completionChoice struct {
+	Message *completionMessage `json:"message"`
 }
 
-func (p *GroqProvider) Translate(ctx context.Context, req Request) (ProviderResult, error) {
+func (p *OpenAICompatibleClient) Translate(ctx context.Context, req Request) (ProviderResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if p == nil || strings.TrimSpace(p.apiKey) == "" || p.client == nil {
+	if p == nil {
 		return ProviderResult{}, newProviderError(ProviderErrorMisconfigured, 0, ErrProviderMisconfigured)
 	}
 	target, ok := NormalizeTargetLanguage(req.TargetLanguage)
 	if !ok {
 		return ProviderResult{}, ErrInvalidTargetLanguage
 	}
+	if strings.TrimSpace(p.baseURL) == "" || strings.TrimSpace(p.apiKey) == "" || strings.TrimSpace(p.model) == "" || p.client == nil {
+		return ProviderResult{}, newProviderError(ProviderErrorMisconfigured, 0, ErrProviderMisconfigured)
+	}
 	systemPrompt, userPrompt, err := BuildPrompt(req.SourceLanguage, target, req.Content)
 	if err != nil {
 		return ProviderResult{}, err
 	}
-	payload, err := json.Marshal(groqCompletionRequest{
-		Model: p.model, Temperature: 0, ReasoningEffort: "none",
+	payload, err := json.Marshal(completionRequest{
+		Model:               p.model,
 		MaxCompletionTokens: p.maxCompletionTokens,
-		Messages: []groqMessage{
+		Messages: []completionMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
@@ -168,7 +162,7 @@ func (p *GroqProvider) Translate(ctx context.Context, req Request) (ProviderResu
 	if int64(len(body)) > maxProviderResponseBodyBytes {
 		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, response.StatusCode, errors.New("provider response body too large"))
 	}
-	var decoded groqCompletionResponse
+	var decoded completionResponse
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, response.StatusCode, err)
 	}

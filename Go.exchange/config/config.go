@@ -399,7 +399,7 @@ func applySensitiveEnvironmentOverrides(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("TRANSLATION_BASE_URL")); value != "" {
 		cfg.Translation.BaseURL = value
 	}
-	if value, exists := os.LookupEnv("GROQ_API_KEY"); exists {
+	if value, exists := os.LookupEnv("TRANSLATION_API_KEY"); exists {
 		cfg.Translation.APIKey = strings.TrimSpace(value)
 	}
 	if value := strings.TrimSpace(os.Getenv("TRANSLATION_MODEL")); value != "" {

@@ -7,7 +7,8 @@ import (
 
 func TestCacheKeyUsesHashedContentAndConfigurationIdentity(t *testing.T) {
 	content := "do not put this post in a cache key"
-	key := CacheKey(42, content, "zh", "en", "qwen/qwen3.6-27b", "social_v1")
+	backend := BackendIdentity("https://one.example/v1/", "test-model")
+	key := CacheKey(42, content, "zh", "en", backend, "social_v1")
 
 	if strings.Contains(key, content) {
 		t.Fatalf("cache key contains raw post content: %q", key)
@@ -15,14 +16,33 @@ func TestCacheKeyUsesHashedContentAndConfigurationIdentity(t *testing.T) {
 	if !strings.Contains(key, ContentHash(content)) {
 		t.Fatalf("cache key does not contain the content hash: %q", key)
 	}
-	if key == CacheKey(42, content+"!", "zh", "en", "qwen/qwen3.6-27b", "social_v1") {
+	if key == CacheKey(42, content+"!", "zh", "en", backend, "social_v1") {
 		t.Fatal("different post content produced the same cache key")
 	}
-	if key == CacheKey(42, content, "zh", "en", "another-model", "social_v1") {
+	if key == CacheKey(42, content, "zh", "en", BackendIdentity("https://two.example/v1", "test-model"), "social_v1") {
+		t.Fatal("different BaseURL identity produced the same cache key")
+	}
+	if key == CacheKey(42, content, "zh", "en", BackendIdentity("https://one.example/v1", "another-model"), "social_v1") {
 		t.Fatal("different model identity produced the same cache key")
 	}
-	if key == CacheKey(42, content, "zh", "en", "qwen/qwen3.6-27b", "social_v2") {
+	if key == CacheKey(42, content, "zh", "en", backend, "social_v2") {
 		t.Fatal("different prompt version produced the same cache key")
+	}
+	// API keys are intentionally absent from CacheKey's signature and therefore
+	// cannot invalidate the same endpoint/model/prompt cache identity.
+	if key != CacheKey(42, content, "zh", "en", BackendIdentity("https://one.example/v1", "test-model"), "social_v1") {
+		t.Fatal("equivalent endpoint identity changed the cache key")
+	}
+}
+
+func TestCacheKeyDoesNotDependOnAPIKey(t *testing.T) {
+	keyForAPIKey := func(apiKey string) string {
+		_ = apiKey
+		return CacheKey(42, "你好", "zh", "en", BackendIdentity("https://one.example/v1", "test-model"), "social_v1")
+	}
+
+	if keyForAPIKey("key-a") != keyForAPIKey("key-b") {
+		t.Fatal("changing API key changed the translation cache key")
 	}
 }
 

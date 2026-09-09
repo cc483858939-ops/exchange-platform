@@ -42,14 +42,18 @@ func IdentityHash(identity string) string {
 	return ContentHash(strings.TrimSpace(identity))
 }
 
-func CacheKey(postID uint, content, sourceLanguage, targetLanguage, model, promptVersion string) string {
+func BackendIdentity(baseURL, model string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "\n" + strings.TrimSpace(model)
+}
+
+func CacheKey(postID uint, content, sourceLanguage, targetLanguage, backendIdentity, promptVersion string) string {
 	return fmt.Sprintf(
 		"translation:v1:%d:%s:%s:%s:%s:%s",
 		postID,
 		ContentHash(content),
 		cacheComponent(sourceLanguage),
 		cacheComponent(targetLanguage),
-		IdentityHash(model),
+		IdentityHash(backendIdentity),
 		IdentityHash(promptVersion),
 	)
 }
