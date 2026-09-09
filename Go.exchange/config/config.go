@@ -31,8 +31,8 @@ type TranslationConfig struct {
 }
 
 const (
-	DefaultTranslationBaseURL             = "https://api.groq.com/openai/v1"
-	DefaultTranslationModel               = "qwen/qwen3.6-27b"
+	DefaultTranslationBaseURL             = ""
+	DefaultTranslationModel               = "@cf/qwen/qwen3-30b-a3b-fp8"
 	DefaultTranslationPromptVersion       = "social_v2"
 	DefaultTranslationTimeoutSeconds      = 10
 	DefaultTranslationCacheTTLHours       = 168
