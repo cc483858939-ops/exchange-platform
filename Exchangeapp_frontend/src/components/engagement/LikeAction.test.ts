@@ -37,10 +37,10 @@ describe('LikeAction', () => {
     expect(wrapper.findComponent(AppIcon).props('filled')).toBe(false);
   });
 
-  it('renders one decorative sprite burst without the legacy particle DOM', () => {
+  it('renders one integrated sprite without the legacy particle DOM', () => {
     const wrapper = mountLikeAction();
 
-    expect(wrapper.findAll('.like-action__burst')).toHaveLength(1);
+    expect(wrapper.findAll('.like-action__sprite')).toHaveLength(1);
     expect(wrapper.find('.like-action__halo').exists()).toBe(false);
     expect(wrapper.find('.like-action__particles').exists()).toBe(false);
     expect(wrapper.find('.like-action__particle').exists()).toBe(false);
@@ -83,7 +83,7 @@ describe('LikeAction', () => {
     expect(wrapper.find('button').classes()).not.toContain('like-action--liking');
     expect(wrapper.find('button').classes()).not.toContain('like-action--liked');
     expect(wrapper.findComponent(AppIcon).props('filled')).toBe(false);
-    expect(wrapper.find('.like-action__burst').exists()).toBe(true);
+    expect(wrapper.find('.like-action__sprite').exists()).toBe(true);
   });
 
   it.each([
@@ -168,7 +168,7 @@ describe('LikeAction', () => {
     const wrapper = mountLikeAction();
 
     await wrapper.find('button').trigger('click');
-    vi.advanceTimersByTime(599);
+    vi.advanceTimersByTime(799);
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('button').attributes('data-motion')).toBe('liking');

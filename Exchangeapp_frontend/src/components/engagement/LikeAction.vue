@@ -21,7 +21,7 @@
     @click="activate"
   >
     <span class="like-action__visual" aria-hidden="true">
-      <span class="like-action__burst"></span>
+      <span class="like-action__sprite"></span>
       <span class="like-action__heart">
         <AppIcon
           name="heart"
@@ -52,8 +52,7 @@ type LikeMotion = 'idle' | 'liking' | 'unliking';
 type CountIntent = 'up' | 'down' | null;
 type CountTransition = 'like-count-up' | 'like-count-down' | 'like-count-fade';
 
-const likeBurstDurationMs = 600;
-const likeHeartDurationMs = 320;
+const likeMotionDurationMs = 800;
 const unlikeMotionDurationMs = 160;
 
 const props = withDefaults(defineProps<{
@@ -86,8 +85,7 @@ const countTransitionName = ref<CountTransition>('like-count-fade');
 let motionTimer: ReturnType<typeof setTimeout> | null = null;
 
 const motionStyle = computed(() => ({
-  '--like-burst-duration': `${likeBurstDurationMs}ms`,
-  '--like-heart-duration': `${likeHeartDurationMs}ms`,
+  '--like-motion-duration': `${likeMotionDurationMs}ms`,
   '--unlike-motion-duration': `${unlikeMotionDurationMs}ms`,
 }));
 
@@ -149,7 +147,7 @@ const startMotion = (nextMotion: Exclude<LikeMotion, 'idle'>) => {
     expectedLiked.value = null;
     expectedStateObserved.value = false;
     clearIntent();
-  }, nextMotion === 'liking' ? likeBurstDurationMs : unlikeMotionDurationMs);
+  }, nextMotion === 'liking' ? likeMotionDurationMs : unlikeMotionDurationMs);
 };
 
 const armIntentCountDirection = (intent: Exclude<CountIntent, null>) => {
@@ -291,7 +289,7 @@ onBeforeUnmount(() => {
 
 .like-action__heart {
   position: relative;
-  z-index: 2;
+  z-index: 1;
   display: inline-flex;
   transform-origin: center;
 }
@@ -300,17 +298,17 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-.like-action__burst {
+.like-action__sprite {
   position: absolute;
   top: 50%;
   left: 50%;
-  z-index: 1;
+  z-index: 2;
   width: var(--like-burst-size);
   height: var(--like-burst-size);
   background-image: url('../../assets/like/like-burst.svg');
   background-repeat: no-repeat;
   background-position: 0% 0;
-  background-size: 2000% 100%;
+  background-size: 2900% 100%;
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, -50%);
@@ -343,33 +341,7 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes nexus-like-heart {
-  0% {
-    transform: scale(0.65);
-  }
-
-  20% {
-    transform: scale(0.82);
-  }
-
-  50% {
-    transform: scale(1.18);
-  }
-
-  68% {
-    transform: scale(0.94);
-  }
-
-  82% {
-    transform: scale(1.04);
-  }
-
-  100% {
-    transform: scale(1);
-  }
-}
-
-@keyframes nexus-like-burst {
+@keyframes nexus-like-sprite {
   0% {
     background-position: 0% 0;
   }
@@ -379,17 +351,17 @@ onBeforeUnmount(() => {
   }
 }
 
-.like-action--liking .like-action__heart {
-  animation: nexus-like-heart var(--like-heart-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
 .like-action--unliking .like-action__heart {
   animation: nexus-unlike-heart var(--unlike-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.like-action--liking .like-action__burst {
+.like-action--liking .like-action__heart {
+  opacity: 0;
+}
+
+.like-action--liking .like-action__sprite {
   opacity: 1;
-  animation: nexus-like-burst var(--like-burst-duration) steps(19, end) both;
+  animation: nexus-like-sprite var(--like-motion-duration) steps(28, end) both;
 }
 
 .like-count-up-enter-active,
@@ -439,12 +411,16 @@ onBeforeUnmount(() => {
 
   .like-action--liking .like-action__heart,
   .like-action--unliking .like-action__heart,
-  .like-action--liking .like-action__burst {
+  .like-action--liking .like-action__sprite {
     animation: none;
   }
 
-  .like-action--liking .like-action__burst {
+  .like-action--liking .like-action__sprite {
     opacity: 0;
+  }
+
+  .like-action--liking .like-action__heart {
+    opacity: 1;
   }
 
   .like-count-up-enter-active,
