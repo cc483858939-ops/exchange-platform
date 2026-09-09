@@ -101,6 +101,13 @@ type RecommendationCandidatesConfig struct {
 	ColdStart    RecommendationCandidateCaps `mapstructure:"cold_start"`
 }
 
+type RecommendationLanguageAffinityConfig struct {
+	Enabled                 bool    `mapstructure:"enabled"`
+	Weight                  float64 `mapstructure:"weight"`
+	EvidenceSaturationScale float64 `mapstructure:"evidence_saturation_scale"`
+	MaxBehaviorShare        float64 `mapstructure:"max_behavior_share"`
+}
+
 // RecommendationProfileMaterializationConfig controls the nearline profile
 // projection worker. These values affect scheduling only; they are
 // deliberately excluded from the profile and ranker configuration hashes.
@@ -169,6 +176,7 @@ type RecommendationConfig struct {
 	Trace                             RecommendationTraceConfig                  `mapstructure:"trace"`
 	Candidates                        RecommendationCandidatesConfig             `mapstructure:"candidates"`
 	ProfileMaterialization            RecommendationProfileMaterializationConfig `mapstructure:"profile_materialization"`
+	LanguageAffinity                  RecommendationLanguageAffinityConfig       `mapstructure:"language_affinity"`
 }
 
 type OutboxConfig struct {
@@ -234,6 +242,10 @@ var recommendationPresenceKeys = []string{
 	"diversity.enabled",
 	"diversity.semantic_duplicate_threshold",
 	"diversity.semantic_duplicate_penalty",
+	"language_affinity.enabled",
+	"language_affinity.weight",
+	"language_affinity.evidence_saturation_scale",
+	"language_affinity.max_behavior_share",
 }
 
 func recommendationSettingPresence(v *viper.Viper) map[string]bool {

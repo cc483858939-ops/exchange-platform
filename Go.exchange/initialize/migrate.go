@@ -105,6 +105,9 @@ func RunMigrations() error {
 		if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
 			return err
 		}
+		if err := applyRecommendationLanguageAffinitySchema(tx); err != nil {
+			return err
+		}
 		if err := applyOutboxSchema(tx); err != nil {
 			return err
 		}

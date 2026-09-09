@@ -26,7 +26,7 @@ func testRecommendationTrackingClaims(now time.Time) recommendationTrackingClaim
 	}
 }
 
-func TestRecommendationRankerConfigHashIncludesV5ServingSettings(t *testing.T) {
+func TestRecommendationRankerConfigHashIncludesV6ServingSettings(t *testing.T) {
 	base := defaultRecommendationConfig()
 	tests := []struct {
 		name   string
@@ -46,6 +46,10 @@ func TestRecommendationRankerConfigHashIncludesV5ServingSettings(t *testing.T) {
 		{name: "exploration max slots", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.MaxSlots++ }},
 		{name: "exploration recent window", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.RecentWindowDays++ }},
 		{name: "exploration novel age", mutate: func(cfg *config.RecommendationConfig) { cfg.Exploration.NovelPostMaxAgeDays++ }},
+		{name: "language enabled", mutate: func(cfg *config.RecommendationConfig) { cfg.LanguageAffinity.Enabled = !cfg.LanguageAffinity.Enabled }},
+		{name: "language weight", mutate: func(cfg *config.RecommendationConfig) { cfg.LanguageAffinity.Weight += 0.1 }},
+		{name: "language evidence scale", mutate: func(cfg *config.RecommendationConfig) { cfg.LanguageAffinity.EvidenceSaturationScale++ }},
+		{name: "language max behavior share", mutate: func(cfg *config.RecommendationConfig) { cfg.LanguageAffinity.MaxBehaviorShare = 0.9 }},
 	}
 
 	baseHash := recommendationRankerConfigHash(base)
@@ -67,6 +71,10 @@ func TestRecommendationRankerConfigHashExplorationDoesNotChangeProfileHash(t *te
 	mutated.Exploration.MaxSlots++
 	mutated.Exploration.RecentWindowDays++
 	mutated.Exploration.NovelPostMaxAgeDays++
+	mutated.LanguageAffinity.Enabled = false
+	mutated.LanguageAffinity.Weight = 0.1
+	mutated.LanguageAffinity.EvidenceSaturationScale = 9
+	mutated.LanguageAffinity.MaxBehaviorShare = 0.8
 	if got, want := recommendation.ProfileConfigHash(mutated, config.ActiveEmbeddingVersion()), recommendation.ProfileConfigHash(base, config.ActiveEmbeddingVersion()); got != want {
 		t.Fatalf("profile hash changed with exploration settings: got=%q want=%q", got, want)
 	}
@@ -217,11 +225,11 @@ func TestRecommendationTrackingTokenV3RejectsCompleteInvalidProvenanceMatrix(t *
 	}
 }
 
-func TestRecommendationServingVersionsRemainRRFV5Contract(t *testing.T) {
-	if recommendationRankerVersion != "rules_v5" {
+func TestRecommendationServingVersionsRemainRRFV6Contract(t *testing.T) {
+	if recommendationRankerVersion != "rules_v6" {
 		t.Fatalf("ranker version=%q", recommendationRankerVersion)
 	}
-	if recommendationPersonalizedStrategyID != "for_you_materialized_profile_v5" || recommendationColdStartStrategyID != recommendationPersonalizedStrategyID {
+	if recommendationPersonalizedStrategyID != "for_you_materialized_profile_v6" || recommendationColdStartStrategyID != recommendationPersonalizedStrategyID {
 		t.Fatalf("strategy versions personalized=%q cold-start=%q", recommendationPersonalizedStrategyID, recommendationColdStartStrategyID)
 	}
 	if recommendationSelectionPolicyVersion != "network_balance_exploration_v2" {

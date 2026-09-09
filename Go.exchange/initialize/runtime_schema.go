@@ -17,14 +17,14 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-const RequiredSchemaVersion int64 = 5
+const RequiredSchemaVersion int64 = 6
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 5
+	PublishedSchemaCurrentVersion     int64 = 6
 	PublishedSchemaCompatibilityFloor int64 = 4
 )
 

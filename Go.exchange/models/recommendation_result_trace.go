@@ -19,6 +19,9 @@ type RecommendationResultTrace struct {
 	FollowingRank           int       `json:"following_rank" gorm:"not null;default:0"`
 	RecentRank              int       `json:"recent_rank" gorm:"not null;default:0"`
 	TrendingRank            int       `json:"trending_rank" gorm:"not null;default:0"`
+	PostLanguage            string    `json:"post_language" gorm:"size:8;not null;default:'und'"`
+	LanguageAffinity        float64   `json:"language_affinity" gorm:"not null;default:0"`
+	LanguageComponent       float64   `json:"language_component" gorm:"not null;default:0"`
 	IsInNetwork             bool      `json:"is_in_network" gorm:"not null;default:false"`
 	IsNovelAuthor           bool      `json:"is_novel_author" gorm:"not null;default:false"`
 	WasSoftServedFallback   bool      `json:"was_soft_served_fallback" gorm:"not null;default:false"`

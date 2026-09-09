@@ -15,6 +15,13 @@ type RecommendationRequest struct {
 	ProfileConfigHash           string    `json:"profile_config_hash" gorm:"size:32;not null;default:''"`
 	ProfileStatus               string    `json:"profile_status" gorm:"size:16;not null;default:'miss';check:chk_recommendation_request_profile_status,profile_status IN ('hit','stale','miss','incompatible')"`
 	ProfileAgeMS                int64     `json:"profile_age_ms" gorm:"not null;default:0;check:chk_recommendation_request_profile_age,profile_age_ms >= 0"`
+	BrowserLanguagePrimary      string    `json:"browser_language_primary" gorm:"size:8;not null;default:''"`
+	LanguageContextSource       string    `json:"language_context_source" gorm:"size:16;not null;default:'none'"`
+	LanguageBehaviorEvidence    float64   `json:"language_behavior_evidence" gorm:"not null;default:0"`
+	LanguageBehaviorShare       float64   `json:"language_behavior_share" gorm:"not null;default:0"`
+	LanguageAffinityZH          float64   `json:"language_affinity_zh" gorm:"not null;default:0"`
+	LanguageAffinityJA          float64   `json:"language_affinity_ja" gorm:"not null;default:0"`
+	LanguageAffinityEN          float64   `json:"language_affinity_en" gorm:"not null;default:0"`
 	RequestedLimit              int       `json:"requested_limit" gorm:"not null;check:chk_recommendation_request_limit,requested_limit > 0"`
 	CandidateCount              int       `json:"candidate_count" gorm:"not null;default:0;check:chk_recommendation_request_candidates,candidate_count >= 0"`
 	ResultCount                 int       `json:"result_count" gorm:"not null;default:0;check:chk_recommendation_request_results,result_count >= 0"`

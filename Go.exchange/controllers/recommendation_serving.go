@@ -24,12 +24,13 @@ type recommendationServingOutcome struct {
 	RecallSets             []recommendationCandidateSet
 	Selected               []selectedRecommendation
 	ServedHistoryLoadError error
+	LanguageContext        recommendationLanguageContext
 }
 
 // serveRecommendationCandidatePath is shared by GetPostRecommendations and
 // DevData verification. Keeping the path here prevents verification from
 // copying the recommender's SQL, ranking, or selection rules.
-func serveRecommendationCandidatePath(userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string) (recommendationServingOutcome, error) {
+func serveRecommendationCandidatePath(userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, browser recommendationLanguageContext) (recommendationServingOutcome, error) {
 	outcome := recommendationServingOutcome{}
 	if userID == 0 {
 		return outcome, errors.New("missing recommendation verification user")
@@ -52,6 +53,13 @@ func serveRecommendationCandidatePath(userID, limit uint, cfg config.Recommendat
 	if err != nil {
 		return outcome, err
 	}
+	languageContext := buildRecommendationLanguageContext(
+		browser,
+		recommendationLanguagePrior{ZH: profile.LanguageZHWeight, JA: profile.LanguageJAWeight, EN: profile.LanguageENWeight},
+		profile.LanguageEvidence,
+		cfg,
+	)
+	outcome.LanguageContext = languageContext
 	loadedAuthors := make(map[uint]struct{})
 
 	served, err := loadRecommendationServedHistory(userID, now, cfg)
@@ -73,7 +81,7 @@ func serveRecommendationCandidatePath(userID, limit uint, cfg config.Recommendat
 	if err := loadMaterializedCandidateAuthorContext(userID, &profile, freshHydrated, loadedAuthors, cfg); err != nil {
 		return outcome, err
 	}
-	rankedFresh := rankRecommendationCandidates(profile, freshHydrated, now, cfg)
+	rankedFresh := rankRecommendationCandidates(profile, freshHydrated, now, cfg, languageContext)
 	selected := selectRecommendationCandidates(rankedFresh, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
 
 	if len(selected) < int(limit) {
@@ -89,7 +97,7 @@ func serveRecommendationCandidatePath(userID, limit uint, cfg config.Recommendat
 		if err := loadMaterializedCandidateAuthorContext(userID, &profile, softHydrated, loadedAuthors, cfg); err != nil {
 			return outcome, err
 		}
-		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg)
+		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg, languageContext)
 		selected = selectRecommendationCandidates(rankedSoft, selected, int(limit), cfg, now, recommendationSelectionSoft, requestID)
 		freshSet = mergeCandidateSets(freshSet, softSet, recommendationCandidateCaps(profile, cfg).Merged)
 	}
@@ -108,7 +116,7 @@ func VerifyRecommendationServing(userID uint, limit int, now time.Time) (Recomme
 	if limit <= 0 {
 		limit = defaultRecommendationLimit
 	}
-	outcome, err := serveRecommendationCandidatePath(userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString())
+	outcome, err := serveRecommendationCandidatePath(userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString(), recommendationLanguageContext{})
 	if err != nil {
 		return RecommendationServingVerification{}, err
 	}

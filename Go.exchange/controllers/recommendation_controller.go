@@ -83,8 +83,10 @@ func GetPostRecommendations(ctx *gin.Context) {
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	cfg := normalizedRecommendationConfig()
+	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
+	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
 
-	serving, err := recommendationServingPathForHandler(userID, uint(limit), cfg, now, requestID)
+	serving, err := recommendationServingPathForHandler(userID, uint(limit), cfg, now, requestID, browserLanguageContext)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(serving.Profile))
 		return
@@ -130,7 +132,11 @@ func GetPostRecommendations(ctx *gin.Context) {
 		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg),
 		ProfileVersion: profile.ProfileVersion, ProfileConfigHash: profile.ProfileConfigHash,
 		ProfileStatus: profile.ProfileStatus, ProfileAgeMS: profile.ProfileAgeMS,
-		RequestedLimit: limit, CandidateCount: len(freshSet.Candidates), ResultCount: len(recommendations),
+		BrowserLanguagePrimary: serving.LanguageContext.BrowserPrimary, LanguageContextSource: serving.LanguageContext.Source,
+		LanguageBehaviorEvidence: serving.LanguageContext.BehaviorEvidence, LanguageBehaviorShare: serving.LanguageContext.BehaviorShare,
+		LanguageAffinityZH: serving.LanguageContext.Combined.ZH, LanguageAffinityJA: serving.LanguageContext.Combined.JA,
+		LanguageAffinityEN: serving.LanguageContext.Combined.EN,
+		RequestedLimit:     limit, CandidateCount: len(freshSet.Candidates), ResultCount: len(recommendations),
 		TrackedResultCount: trackedCount, PersonalizedSignalCount: profile.PersonalizedSignalCount,
 		SemanticCandidateCount: freshSet.SemanticCount, FollowingCandidateCount: freshSet.FollowingCount,
 		RecentCandidateCount: freshSet.RecentCount, TrendingCandidateCount: freshSet.TrendingCount,

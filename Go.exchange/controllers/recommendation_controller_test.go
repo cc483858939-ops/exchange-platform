@@ -34,7 +34,7 @@ func TestGetPostRecommendationsReturnsPageEnvelopeAndPersistsRequestID(t *testin
 	})
 
 	var persistedRequest models.RecommendationRequest
-	recommendationServingPathForHandler = func(userID, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(userID, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, _ recommendationLanguageContext) (recommendationServingOutcome, error) {
 		if userID != 7 || limit != 20 || requestID == "" {
 			t.Fatalf("serving args user=%d limit=%d request_id=%q", userID, limit, requestID)
 		}
@@ -85,7 +85,7 @@ func TestGetPostRecommendationsReturnsEmptyPageAsEmptyArrayAndDepleted(t *testin
 	})
 
 	var servedLimit uint
-	recommendationServingPathForHandler = func(_ uint, limit uint, _ config.RecommendationConfig, _ time.Time, _ string) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ uint, limit uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext) (recommendationServingOutcome, error) {
 		servedLimit = limit
 		return recommendationServingOutcome{}, nil
 	}

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"math"
 	"time"
 
 	"Go.exchange/config"
@@ -23,6 +24,8 @@ func buildRecommendationResultTraces(request models.RecommendationRequest, selec
 			FusionScore: item.Candidate.FusionScore, SourceCount: item.Candidate.SourceCount,
 			SemanticRank: item.Candidate.SemanticRank, FollowingRank: item.Candidate.FollowingRank,
 			RecentRank: item.Candidate.RecentRank, TrendingRank: item.Candidate.TrendingRank,
+			PostLanguage:     recommendationPostLanguage(item.Post.Language),
+			LanguageAffinity: clampUnit(breakdown.LanguageAffinity), LanguageComponent: nonNegativeRecommendationScore(breakdown.LanguageComponent),
 			IsInNetwork: item.IsInNetwork, IsNovelAuthor: item.IsNovelAuthor,
 			WasSoftServedFallback: item.Candidate.WasSoftServed,
 			PositiveSemantic:      breakdown.PositiveSemantic, NegativeSemantic: breakdown.NegativeSemantic,
@@ -37,4 +40,11 @@ func buildRecommendationResultTraces(request models.RecommendationRequest, selec
 		})
 	}
 	return result
+}
+
+func nonNegativeRecommendationScore(value float64) float64 {
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return value
 }

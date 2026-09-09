@@ -17,6 +17,10 @@ type UserRecoProfile struct {
 	PositiveVector          *pgvector.Vector `json:"-" gorm:"type:vector"`
 	NegativeVector          *pgvector.Vector `json:"-" gorm:"type:vector"`
 	NegativeEvidence        float64          `json:"negative_evidence" gorm:"not null;default:0"`
+	LanguageZHWeight        float64          `json:"language_zh_weight" gorm:"not null;default:0"`
+	LanguageJAWeight        float64          `json:"language_ja_weight" gorm:"not null;default:0"`
+	LanguageENWeight        float64          `json:"language_en_weight" gorm:"not null;default:0"`
+	LanguageEvidence        float64          `json:"language_evidence" gorm:"not null;default:0"`
 	PositiveSignalCount     int              `json:"positive_signal_count" gorm:"not null;default:0"`
 	NegativeSignalCount     int              `json:"negative_signal_count" gorm:"not null;default:0"`
 	PersonalizedSignalCount int              `json:"personalized_signal_count" gorm:"not null;default:0"`

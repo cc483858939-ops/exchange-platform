@@ -20,6 +20,7 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 		Fusion:             config.RecommendationFusionConfig{RankConstant: 60},
 		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 3, HalfLifeHours: 12, ReplyFactor: 1.5},
 		Exploration:        config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30},
+		LanguageAffinity:   config.RecommendationLanguageAffinityConfig{Enabled: true, Weight: 0.35, EvidenceSaturationScale: 5, MaxBehaviorShare: 0.95},
 		SignalHalfLifeDays: 14, FeedbackLookbackDays: 90,
 		PositiveSignalCoexistBonus: 1, PositivePostWeightCap: 7,
 		SemanticWeight: 4, NegativeSemanticWeight: 1.5, NegativeConfidenceSaturationScale: 12,
@@ -164,6 +165,18 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Diversity.SemanticDuplicatePenalty >= 0 && recommendationSettingProvided("diversity.semantic_duplicate_penalty", set.Diversity.SemanticDuplicatePenalty != 0) {
 		cfg.Diversity.SemanticDuplicatePenalty = set.Diversity.SemanticDuplicatePenalty
 	}
+	if recommendationSettingProvided("language_affinity.enabled", set.LanguageAffinity.Enabled) {
+		cfg.LanguageAffinity.Enabled = set.LanguageAffinity.Enabled
+	}
+	if recommendationSettingProvided("language_affinity.weight", set.LanguageAffinity.Weight != 0) {
+		cfg.LanguageAffinity.Weight = set.LanguageAffinity.Weight
+	}
+	if recommendationSettingProvided("language_affinity.evidence_saturation_scale", set.LanguageAffinity.EvidenceSaturationScale != 0) {
+		cfg.LanguageAffinity.EvidenceSaturationScale = set.LanguageAffinity.EvidenceSaturationScale
+	}
+	if recommendationSettingProvided("language_affinity.max_behavior_share", set.LanguageAffinity.MaxBehaviorShare != 0) {
+		cfg.LanguageAffinity.MaxBehaviorShare = set.LanguageAffinity.MaxBehaviorShare
+	}
 	if set.Trace.ResultRetentionDays > 0 {
 		cfg.Trace.ResultRetentionDays = set.Trace.ResultRetentionDays
 	}
@@ -276,6 +289,15 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if cfg.TrendingWeight < 0 {
 		cfg.TrendingWeight = 0.5
 	}
+	if math.IsNaN(cfg.LanguageAffinity.Weight) || math.IsInf(cfg.LanguageAffinity.Weight, 0) || cfg.LanguageAffinity.Weight < 0 || cfg.LanguageAffinity.Weight > 1 {
+		cfg.LanguageAffinity.Weight = 0.35
+	}
+	if math.IsNaN(cfg.LanguageAffinity.EvidenceSaturationScale) || math.IsInf(cfg.LanguageAffinity.EvidenceSaturationScale, 0) || cfg.LanguageAffinity.EvidenceSaturationScale <= 0 {
+		cfg.LanguageAffinity.EvidenceSaturationScale = 5
+	}
+	if math.IsNaN(cfg.LanguageAffinity.MaxBehaviorShare) || math.IsInf(cfg.LanguageAffinity.MaxBehaviorShare, 0) || cfg.LanguageAffinity.MaxBehaviorShare < 0 || cfg.LanguageAffinity.MaxBehaviorShare > 1 {
+		cfg.LanguageAffinity.MaxBehaviorShare = 0.95
+	}
 	return cfg
 }
 
@@ -309,6 +331,10 @@ type userInterestProfile struct {
 	PositiveSignalCount           int
 	NegativeSignalCount           int
 	PersonalizedSignalCount       int
+	LanguageZHWeight              float64
+	LanguageJAWeight              float64
+	LanguageENWeight              float64
+	LanguageEvidence              float64
 	PositiveContributions         map[uint]float64
 	PositiveAffinityContributions map[uint]float64
 	AuthorAffinity                map[uint]float64

@@ -214,14 +214,14 @@ func materializeRecommendationProfileUser(userID uint, now time.Time, settings c
 		if err != nil {
 			return err
 		}
-		affinity, err := loadMaterializerAuthorAffinity(tx, built.PositiveAffinityContributions)
+		affinity, languageAffinity, err := loadMaterializerAffinities(tx, built.PositiveAffinityContributions)
 		if err != nil {
 			return err
 		}
 		if err := replaceMaterializedCanonicalState(tx, userID, canonical, now); err != nil {
 			return err
 		}
-		if err := upsertMaterializedProfile(tx, userID, built, now, settings, cfg, embeddingVersion); err != nil {
+		if err := upsertMaterializedProfile(tx, userID, built, languageAffinity, now, settings, cfg, embeddingVersion); err != nil {
 			return err
 		}
 		if err := replaceMaterializedAuthorAffinity(tx, userID, affinity, now); err != nil {
@@ -286,7 +286,20 @@ type materializedAuthorAffinity struct {
 	RawAffinity float64
 }
 
-func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64) ([]materializedAuthorAffinity, error) {
+type materializedLanguageAffinity struct {
+	LanguageZHWeight float64
+	LanguageJAWeight float64
+	LanguageENWeight float64
+	LanguageEvidence float64
+}
+
+type materializerPostMetadata struct {
+	PostID   uint
+	AuthorID uint
+	Language string
+}
+
+func loadMaterializerAffinities(tx *gorm.DB, contributions map[uint]float64) ([]materializedAuthorAffinity, materializedLanguageAffinity, error) {
 	postIDs := make([]uint, 0, len(contributions))
 	for postID := range contributions {
 		if postID != 0 {
@@ -295,20 +308,39 @@ func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64)
 	}
 	sort.Slice(postIDs, func(i, j int) bool { return postIDs[i] < postIDs[j] })
 	if len(postIDs) == 0 {
-		return nil, nil
+		return nil, materializedLanguageAffinity{}, nil
 	}
-	type postAuthorRow struct {
-		PostID   uint
-		AuthorID uint
+	var rows []materializerPostMetadata
+	if err := tx.Table("posts").Select("id AS post_id, author_id, language").Where("id IN ?", postIDs).Find(&rows).Error; err != nil {
+		return nil, materializedLanguageAffinity{}, err
 	}
-	var rows []postAuthorRow
-	if err := tx.Table("posts").Select("id AS post_id, author_id").Where("id IN ?", postIDs).Find(&rows).Error; err != nil {
-		return nil, err
-	}
+	affinities, languageAffinity := aggregateMaterializerAffinities(contributions, rows)
+	return affinities, languageAffinity, nil
+}
+
+func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64) ([]materializedAuthorAffinity, error) {
+	affinities, _, err := loadMaterializerAffinities(tx, contributions)
+	return affinities, err
+}
+
+func aggregateMaterializerAffinities(contributions map[uint]float64, rows []materializerPostMetadata) ([]materializedAuthorAffinity, materializedLanguageAffinity) {
 	raw := make(map[uint]float64)
+	languageAffinity := materializedLanguageAffinity{}
 	for _, row := range rows {
+		contribution := contributions[row.PostID]
+		if contribution <= 0 || math.IsNaN(contribution) || math.IsInf(contribution, 0) {
+			continue
+		}
 		if row.AuthorID != 0 {
-			raw[row.AuthorID] += contributions[row.PostID]
+			raw[row.AuthorID] += contribution
+		}
+		switch strings.ToLower(strings.TrimSpace(row.Language)) {
+		case "zh":
+			languageAffinity.LanguageZHWeight += contribution
+		case "ja":
+			languageAffinity.LanguageJAWeight += contribution
+		case "en":
+			languageAffinity.LanguageENWeight += contribution
 		}
 	}
 	result := make([]materializedAuthorAffinity, 0, len(raw))
@@ -318,7 +350,18 @@ func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64)
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].AuthorID < result[j].AuthorID })
-	return result, nil
+	languageAffinity.LanguageEvidence = languageAffinity.LanguageZHWeight + languageAffinity.LanguageJAWeight + languageAffinity.LanguageENWeight
+	if !validMaterializerLanguageWeight(languageAffinity.LanguageZHWeight) ||
+		!validMaterializerLanguageWeight(languageAffinity.LanguageJAWeight) ||
+		!validMaterializerLanguageWeight(languageAffinity.LanguageENWeight) ||
+		!validMaterializerLanguageWeight(languageAffinity.LanguageEvidence) {
+		languageAffinity = materializedLanguageAffinity{}
+	}
+	return result, languageAffinity
+}
+
+func validMaterializerLanguageWeight(value float64) bool {
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func replaceMaterializedCanonicalState(tx *gorm.DB, userID uint, canonical recommendation.CanonicalizationResult, rebuiltAt time.Time) error {
@@ -365,7 +408,7 @@ func replaceMaterializedCanonicalState(tx *gorm.DB, userID uint, canonical recom
 	return tx.CreateInBatches(&rows, 200).Error
 }
 
-func upsertMaterializedProfile(tx *gorm.DB, userID uint, built recommendation.InterestProfile, now time.Time, settings config.RecommendationProfileMaterializationConfig, cfg config.RecommendationConfig, embeddingVersion string) error {
+func upsertMaterializedProfile(tx *gorm.DB, userID uint, built recommendation.InterestProfile, languageAffinity materializedLanguageAffinity, now time.Time, settings config.RecommendationProfileMaterializationConfig, cfg config.RecommendationConfig, embeddingVersion string) error {
 	dimensions := 0
 	if len(built.PositiveVector) > 0 {
 		dimensions = len(built.PositiveVector)
@@ -391,6 +434,8 @@ func upsertMaterializedProfile(tx *gorm.DB, userID uint, built recommendation.In
 		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, embeddingVersion), EmbeddingVersion: embeddingVersion,
 		Dimensions: dimensions, PositiveVector: positiveVector, NegativeVector: negativeVector,
 		NegativeEvidence: built.NegativeEvidence, PositiveSignalCount: built.PositiveSignalCount,
+		LanguageZHWeight: languageAffinity.LanguageZHWeight, LanguageJAWeight: languageAffinity.LanguageJAWeight,
+		LanguageENWeight: languageAffinity.LanguageENWeight, LanguageEvidence: languageAffinity.LanguageEvidence,
 		NegativeSignalCount: built.NegativeSignalCount, PersonalizedSignalCount: built.PersonalizedSignalCount,
 		ComputedAt: now, NextRebuildAt: now.Add(time.Duration(settings.RebuildIntervalHours) * time.Hour), UpdatedAt: now,
 	}
@@ -404,6 +449,10 @@ func upsertMaterializedProfile(tx *gorm.DB, userID uint, built recommendation.In
 			"positive_vector":           profile.PositiveVector,
 			"negative_vector":           profile.NegativeVector,
 			"negative_evidence":         profile.NegativeEvidence,
+			"language_zh_weight":        profile.LanguageZHWeight,
+			"language_ja_weight":        profile.LanguageJAWeight,
+			"language_en_weight":        profile.LanguageENWeight,
+			"language_evidence":         profile.LanguageEvidence,
 			"positive_signal_count":     profile.PositiveSignalCount,
 			"negative_signal_count":     profile.NegativeSignalCount,
 			"personalized_signal_count": profile.PersonalizedSignalCount,

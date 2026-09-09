@@ -65,6 +65,11 @@ recommendation:
     max_slots: 3
     recent_window_days: 7
     novel_post_max_age_days: 30
+  language_affinity:
+    enabled: true
+    weight: 0.35
+    evidence_saturation_scale: 5
+    max_behavior_share: 0.95
   signal_half_life_days: 14
   feedback_lookback_days: 90
   semantic_weight: 4

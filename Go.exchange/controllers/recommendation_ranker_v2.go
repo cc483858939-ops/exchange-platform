@@ -18,12 +18,18 @@ type recommendationScoreBreakdown struct {
 	SemanticComponent       float64
 	TrendingComponent       float64
 	AuthorAffinityComponent float64
+	LanguageAffinity        float64
+	LanguageComponent       float64
 	DiversityPenalty        float64
 	BaseScore               float64
 	FinalScore              float64
 }
 
-func rankRecommendationCandidates(profile userInterestProfile, candidates []hydratedRecommendationCandidate, now time.Time, cfg config.RecommendationConfig) []hydratedRecommendationCandidate {
+func rankRecommendationCandidates(profile userInterestProfile, candidates []hydratedRecommendationCandidate, now time.Time, cfg config.RecommendationConfig, languageContexts ...recommendationLanguageContext) []hydratedRecommendationCandidate {
+	languageContext := recommendationLanguageContext{}
+	if len(languageContexts) > 0 {
+		languageContext = languageContexts[0]
+	}
 	for index := range candidates {
 		candidate := &candidates[index]
 		positiveSemantic := 0.0
@@ -46,6 +52,22 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 			followingBonus = cfg.FollowingBonus
 		}
 		authorScore := clampUnit(interactionAffinity + followingBonus)
+		languageAffinity := 0.0
+		languageComponent := 0.0
+		if cfg.LanguageAffinity.Enabled {
+			languageAffinity = recommendationLanguageAffinityForPost(candidate.Post.Language, languageContext)
+			weight := cfg.LanguageAffinity.Weight
+			if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
+				weight = 0
+			}
+			if weight > 1 {
+				weight = 1
+			}
+			languageComponent = weight * languageAffinity
+			if math.IsNaN(languageComponent) || math.IsInf(languageComponent, 0) || languageComponent < 0 {
+				languageComponent = 0
+			}
+		}
 		candidate.IsInNetwork = followed
 		candidate.IsNovelAuthor = !candidate.IsInNetwork && interactionAffinity <= 0
 		candidate.Breakdown = recommendationScoreBreakdown{
@@ -54,10 +76,13 @@ func rankRecommendationCandidates(profile userInterestProfile, candidates []hydr
 			SemanticComponent:       cfg.SemanticWeight * semanticRaw,
 			TrendingComponent:       cfg.TrendingWeight * trendingRaw,
 			AuthorAffinityComponent: cfg.AuthorAffinityWeight * authorScore,
+			LanguageAffinity:        languageAffinity,
+			LanguageComponent:       languageComponent,
 		}
 		candidate.Breakdown.BaseScore = candidate.Breakdown.SemanticComponent +
 			candidate.Breakdown.TrendingComponent +
-			candidate.Breakdown.AuthorAffinityComponent
+			candidate.Breakdown.AuthorAffinityComponent +
+			candidate.Breakdown.LanguageComponent
 		candidate.Breakdown.FinalScore = candidate.Breakdown.BaseScore
 		candidate.ExplorationSemantic = recommendationExplorationSemantic(*candidate, profile, cfg)
 	}

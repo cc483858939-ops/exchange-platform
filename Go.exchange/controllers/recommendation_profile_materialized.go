@@ -63,6 +63,10 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 	profile.PositiveSignalCount = row.PositiveSignalCount
 	profile.NegativeSignalCount = row.NegativeSignalCount
 	profile.PersonalizedSignalCount = row.PersonalizedSignalCount
+	profile.LanguageZHWeight = row.LanguageZHWeight
+	profile.LanguageJAWeight = row.LanguageJAWeight
+	profile.LanguageENWeight = row.LanguageENWeight
+	profile.LanguageEvidence = row.LanguageEvidence
 	if row.PositiveVector != nil {
 		profile.PositiveVector = append([]float32(nil), row.PositiveVector.Slice()...)
 	}
