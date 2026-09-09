@@ -37,6 +37,15 @@ describe('LikeAction', () => {
     expect(wrapper.findComponent(AppIcon).props('filled')).toBe(false);
   });
 
+  it('renders one decorative sprite burst without the legacy particle DOM', () => {
+    const wrapper = mountLikeAction();
+
+    expect(wrapper.findAll('.like-action__burst')).toHaveLength(1);
+    expect(wrapper.find('.like-action__halo').exists()).toBe(false);
+    expect(wrapper.find('.like-action__particles').exists()).toBe(false);
+    expect(wrapper.find('.like-action__particle').exists()).toBe(false);
+  });
+
   it('renders an active liked state', () => {
     const wrapper = mountLikeAction({
       liked: true,
@@ -74,7 +83,7 @@ describe('LikeAction', () => {
     expect(wrapper.find('button').classes()).not.toContain('like-action--liking');
     expect(wrapper.find('button').classes()).not.toContain('like-action--liked');
     expect(wrapper.findComponent(AppIcon).props('filled')).toBe(false);
-    expect(wrapper.find('.like-action__halo').attributes('style')).toBeUndefined();
+    expect(wrapper.find('.like-action__burst').exists()).toBe(true);
   });
 
   it.each([
@@ -159,12 +168,12 @@ describe('LikeAction', () => {
     const wrapper = mountLikeAction();
 
     await wrapper.find('button').trigger('click');
-    vi.advanceTimersByTime(359);
+    vi.advanceTimersByTime(799);
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('button').attributes('data-motion')).toBe('liking');
 
-    vi.advanceTimersByTime(2);
+    vi.advanceTimersByTime(1);
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('button').attributes('data-motion')).toBe('idle');

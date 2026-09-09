@@ -17,18 +17,11 @@
     :aria-pressed="resolvedAriaPressed"
     :aria-label="ariaLabel"
     :data-motion="motion"
+    :style="motionStyle"
     @click="activate"
   >
     <span class="like-action__visual" aria-hidden="true">
-      <span class="like-action__halo"></span>
-      <span class="like-action__particles">
-        <span
-          v-for="particle in particles"
-          :key="particle.id"
-          class="like-action__particle"
-          :class="'like-action__particle--' + particle.shape"
-        ></span>
-      </span>
+      <span class="like-action__burst"></span>
       <span class="like-action__heart">
         <AppIcon
           name="heart"
@@ -59,7 +52,8 @@ type LikeMotion = 'idle' | 'liking' | 'unliking';
 type CountIntent = 'up' | 'down' | null;
 type CountTransition = 'like-count-up' | 'like-count-down' | 'like-count-fade';
 
-type ParticleShape = 'dot' | 'diamond';
+const likeBurstDurationMs = 800;
+const unlikeMotionDurationMs = 160;
 
 const props = withDefaults(defineProps<{
   liked: boolean;
@@ -82,17 +76,6 @@ const emit = defineEmits<{
   toggle: [];
 }>();
 
-const particles: Array<{ id: number; shape: ParticleShape }> = [
-  { id: 1, shape: 'dot' },
-  { id: 2, shape: 'dot' },
-  { id: 3, shape: 'dot' },
-  { id: 4, shape: 'dot' },
-  { id: 5, shape: 'diamond' },
-  { id: 6, shape: 'diamond' },
-  { id: 7, shape: 'diamond' },
-  { id: 8, shape: 'diamond' },
-];
-
 const motion = ref<LikeMotion>('idle');
 const expectedLiked = ref<boolean | null>(null);
 const expectedStateObserved = ref(false);
@@ -100,6 +83,11 @@ const countIntent = ref<CountIntent>(null);
 const awaitingIntentCount = ref(false);
 const countTransitionName = ref<CountTransition>('like-count-fade');
 let motionTimer: ReturnType<typeof setTimeout> | null = null;
+
+const motionStyle = computed(() => ({
+  '--like-burst-duration': `${likeBurstDurationMs}ms`,
+  '--unlike-motion-duration': `${unlikeMotionDurationMs}ms`,
+}));
 
 const visualLiked = computed(() => {
   if (motion.value === 'liking') {
@@ -159,7 +147,7 @@ const startMotion = (nextMotion: Exclude<LikeMotion, 'idle'>) => {
     expectedLiked.value = null;
     expectedStateObserved.value = false;
     clearIntent();
-  }, nextMotion === 'liking' ? 360 : 160);
+  }, nextMotion === 'liking' ? likeBurstDurationMs : unlikeMotionDurationMs);
 };
 
 const armIntentCountDirection = (intent: Exclude<CountIntent, null>) => {
@@ -230,14 +218,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .like-action {
-  --like-burst-pink: #f91880;
-  --like-burst-purple: #a855f7;
-  --like-burst-blue: #1d9bf0;
-  --like-burst-cyan: #06b6d4;
-  --like-burst-yellow: #eab308;
-  --like-burst-orange: #f97316;
-  --like-burst-violet: #7c3aed;
-  --like-burst-pink-soft: #f472b6;
+  --like-burst-size: 48px;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -262,6 +243,7 @@ onBeforeUnmount(() => {
 }
 
 .like-action--detail {
+  --like-burst-size: 53.333px;
   min-height: 40px;
   padding-inline: var(--space-2);
 }
@@ -316,99 +298,20 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-.like-action__halo {
+.like-action__burst {
   position: absolute;
   top: 50%;
   left: 50%;
-  z-index: 0;
-  width: 20px;
-  height: 20px;
-  border: 1.25px solid var(--color-like);
-  border-radius: 999px;
+  z-index: 3;
+  width: var(--like-burst-size);
+  height: var(--like-burst-size);
+  background-image: url('../../assets/like/like-burst.svg');
+  background-repeat: no-repeat;
+  background-position: 0% 0;
+  background-size: 2900% 100%;
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, -50%) scale(0.45);
-}
-
-.like-action__particles {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-
-.like-action__particle {
-  --particle-rotation: 0deg;
-  --particle-x: 0px;
-  --particle-y: -17px;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 2.5px;
-  height: 2.5px;
-  border-radius: 50%;
-  background: var(--color-like);
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(0, 0) rotate(var(--particle-rotation)) scale(0.4);
-}
-
-.like-action__particle--diamond {
-  width: 3px;
-  height: 3px;
-  border-radius: 0.5px;
-}
-
-.like-action__particle:nth-child(1) {
-  --particle-x: 0px;
-  --particle-y: -17px;
-  background: var(--like-burst-pink);
-}
-
-.like-action__particle:nth-child(2) {
-  --particle-x: 12px;
-  --particle-y: -12px;
-  background: var(--like-burst-violet);
-}
-
-.like-action__particle:nth-child(3) {
-  --particle-x: 17px;
-  --particle-y: 0px;
-  background: var(--like-burst-blue);
-}
-
-.like-action__particle:nth-child(4) {
-  --particle-x: 12px;
-  --particle-y: 12px;
-  background: var(--like-burst-yellow);
-}
-
-.like-action__particle:nth-child(5) {
-  --particle-x: 0px;
-  --particle-y: 17px;
-  --particle-rotation: 45deg;
-  background: var(--like-burst-orange);
-}
-
-.like-action__particle:nth-child(6) {
-  --particle-x: -12px;
-  --particle-y: 12px;
-  --particle-rotation: 45deg;
-  background: var(--like-burst-purple);
-}
-
-.like-action__particle:nth-child(7) {
-  --particle-x: -17px;
-  --particle-y: 0px;
-  --particle-rotation: 45deg;
-  background: var(--like-burst-cyan);
-}
-
-.like-action__particle:nth-child(8) {
-  --particle-x: -12px;
-  --particle-y: -12px;
-  --particle-rotation: 45deg;
-  background: var(--like-burst-pink-soft);
+  transform: translate(-50%, -50%);
 }
 
 .like-action__count-window {
@@ -422,32 +325,6 @@ onBeforeUnmount(() => {
 .like-action__count {
   grid-area: 1 / 1;
   text-align: left;
-}
-
-@keyframes nexus-like-heart {
-  0% {
-    transform: scale(1);
-  }
-
-  15% {
-    transform: scale(0.72);
-  }
-
-  45% {
-    transform: scale(1.28);
-  }
-
-  68% {
-    transform: scale(0.94);
-  }
-
-  84% {
-    transform: scale(1.06);
-  }
-
-  100% {
-    transform: scale(1);
-  }
 }
 
 @keyframes nexus-unlike-heart {
@@ -464,61 +341,27 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes nexus-like-halo {
+@keyframes nexus-like-sprite {
   0% {
-    transform: translate(-50%, -50%) scale(0.45);
-    opacity: 0;
-  }
-
-  20% {
-    opacity: 0.45;
-  }
-
-  55% {
-    opacity: 0.25;
+    background-position: 0% 0;
   }
 
   100% {
-    transform: translate(-50%, -50%) scale(1.65);
-    opacity: 0;
-  }
-}
-
-@keyframes nexus-like-particle {
-  0% {
-    transform: translate(0, 0) rotate(var(--particle-rotation)) scale(0.25);
-    opacity: 0;
-  }
-
-  20% {
-    opacity: 1;
-  }
-
-  65% {
-    opacity: 0.9;
-  }
-
-  100% {
-    transform: translate(var(--particle-x), var(--particle-y))
-      rotate(var(--particle-rotation)) scale(0.75);
-    opacity: 0;
+    background-position: 100% 0;
   }
 }
 
 .like-action--liking .like-action__heart {
-  animation: nexus-like-heart 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  opacity: 0;
 }
 
 .like-action--unliking .like-action__heart {
-  animation: nexus-unlike-heart 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: nexus-unlike-heart var(--unlike-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.like-action--liking .like-action__halo {
-  animation: nexus-like-halo 240ms ease-out 55ms both;
-}
-
-.like-action--liking .like-action__particle {
-  animation: nexus-like-particle 220ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+.like-action--liking .like-action__burst {
+  opacity: 1;
+  animation: nexus-like-sprite var(--like-burst-duration) steps(28, end) both;
 }
 
 .like-count-up-enter-active,
@@ -568,14 +411,16 @@ onBeforeUnmount(() => {
 
   .like-action--liking .like-action__heart,
   .like-action--unliking .like-action__heart,
-  .like-action--liking .like-action__halo,
-  .like-action--liking .like-action__particle {
+  .like-action--liking .like-action__burst {
     animation: none;
   }
 
-  .like-action__halo,
-  .like-action__particle {
+  .like-action--liking .like-action__burst {
     opacity: 0;
+  }
+
+  .like-action--liking .like-action__heart {
+    opacity: 1;
   }
 
   .like-count-up-enter-active,
