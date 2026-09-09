@@ -27,7 +27,7 @@ type ClientConfig struct {
 	MaxCompletionTokens int
 }
 
-type WorkersAIClient struct {
+type OpenAICompatibleClient struct {
 	baseURL             string
 	apiKey              string
 	model               string
@@ -35,17 +35,17 @@ type WorkersAIClient struct {
 	client              *http.Client
 }
 
-func NewWorkersAIClient(config ClientConfig) *WorkersAIClient {
-	return newWorkersAIClient(config, &http.Client{Timeout: normalizedTimeout(config.Timeout)})
+func NewOpenAICompatibleClient(config ClientConfig) *OpenAICompatibleClient {
+	return newOpenAICompatibleClient(config, &http.Client{Timeout: normalizedTimeout(config.Timeout)})
 }
 
-// NewWorkersAIClientWithHTTPClient keeps the client HTTP behavior testable without
+// NewOpenAICompatibleClientWithHTTPClient keeps the client HTTP behavior testable without
 // changing production to use the global default HTTP client.
-func NewWorkersAIClientWithHTTPClient(config ClientConfig, client *http.Client) *WorkersAIClient {
-	return newWorkersAIClient(config, client)
+func NewOpenAICompatibleClientWithHTTPClient(config ClientConfig, client *http.Client) *OpenAICompatibleClient {
+	return newOpenAICompatibleClient(config, client)
 }
 
-func newWorkersAIClient(config ClientConfig, client *http.Client) *WorkersAIClient {
+func newOpenAICompatibleClient(config ClientConfig, client *http.Client) *OpenAICompatibleClient {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	model := strings.TrimSpace(config.Model)
 	maxCompletionTokens := config.MaxCompletionTokens
@@ -55,7 +55,7 @@ func newWorkersAIClient(config ClientConfig, client *http.Client) *WorkersAIClie
 	if client == nil {
 		client = &http.Client{Timeout: normalizedTimeout(config.Timeout)}
 	}
-	return &WorkersAIClient{
+	return &OpenAICompatibleClient{
 		baseURL: baseURL, apiKey: strings.TrimSpace(config.APIKey), model: model,
 		maxCompletionTokens: maxCompletionTokens, client: client,
 	}
@@ -69,14 +69,10 @@ func normalizedTimeout(timeout time.Duration) time.Duration {
 }
 
 type completionRequest struct {
-	Model              string              `json:"model"`
-	MaxTokens          int                 `json:"max_tokens"`
-	ChatTemplateKwargs chatTemplateKwargs  `json:"chat_template_kwargs"`
-	Messages           []completionMessage `json:"messages"`
-}
-
-type chatTemplateKwargs struct {
-	EnableThinking bool `json:"enable_thinking"`
+	Model               string              `json:"model"`
+	ReasoningEffort     string              `json:"reasoning_effort"`
+	MaxCompletionTokens int                 `json:"max_completion_tokens"`
+	Messages            []completionMessage `json:"messages"`
 }
 
 type completionMessage struct {
@@ -89,16 +85,10 @@ type completionResponse struct {
 }
 
 type completionChoice struct {
-	Message *completionResponseMessage `json:"message"`
+	Message *completionMessage `json:"message"`
 }
 
-type completionResponseMessage struct {
-	Content          string `json:"content"`
-	Reasoning        string `json:"reasoning"`
-	ReasoningContent string `json:"reasoning_content"`
-}
-
-func (p *WorkersAIClient) Translate(ctx context.Context, req Request) (ProviderResult, error) {
+func (p *OpenAICompatibleClient) Translate(ctx context.Context, req Request) (ProviderResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -117,9 +107,9 @@ func (p *WorkersAIClient) Translate(ctx context.Context, req Request) (ProviderR
 		return ProviderResult{}, err
 	}
 	payload, err := json.Marshal(completionRequest{
-		Model:              p.model,
-		MaxTokens:          p.maxCompletionTokens,
-		ChatTemplateKwargs: chatTemplateKwargs{EnableThinking: false},
+		Model:               p.model,
+		ReasoningEffort:     "none",
+		MaxCompletionTokens: p.maxCompletionTokens,
 		Messages: []completionMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -181,11 +171,7 @@ func (p *WorkersAIClient) Translate(ctx context.Context, req Request) (ProviderR
 	if len(decoded.Choices) == 0 || decoded.Choices[0].Message == nil {
 		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, response.StatusCode, errors.New("provider choices are missing"))
 	}
-	message := decoded.Choices[0].Message
-	if strings.TrimSpace(message.Reasoning) != "" || strings.TrimSpace(message.ReasoningContent) != "" {
-		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, response.StatusCode, errors.New("provider returned unexpected reasoning"))
-	}
-	translated := strings.TrimSpace(message.Content)
+	translated := strings.TrimSpace(decoded.Choices[0].Message.Content)
 	if translated == "" {
 		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, response.StatusCode, errors.New("provider content is empty"))
 	}

@@ -17,9 +17,9 @@ embedding:
 
 translation:
   enabled: false
-  base_url: ""
+  base_url: "https://api.groq.com/openai/v1"
   api_key: ""
-  model: "@cf/qwen/qwen3-30b-a3b-fp8"
+  model: "qwen/qwen3.6-27b"
   prompt_version: "social_v2"
   timeout_seconds: 10
   cache_ttl_hours: 168

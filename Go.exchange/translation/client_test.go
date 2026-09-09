@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestWorkersAIClientSendsConstrainedChatCompletionRequest(t *testing.T) {
+func TestOpenAICompatibleClientSendsConstrainedChatCompletionRequest(t *testing.T) {
 	content := "你好 @alice https://example.com #Exchange $BTC\nkeep this"
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/chat/completions" {
@@ -29,17 +29,14 @@ func TestWorkersAIClientSendsConstrainedChatCompletionRequest(t *testing.T) {
 		if err != nil {
 			t.Errorf("read request body: %v", err)
 		}
-		if !strings.Contains(string(rawBody), `"chat_template_kwargs":{"enable_thinking":false}`) {
-			t.Error("request body is missing chat_template_kwargs.enable_thinking=false")
-		}
-		if strings.Contains(string(rawBody), `"reasoning_effort"`) || strings.Contains(string(rawBody), `"max_completion_tokens"`) {
-			t.Error("request body contains legacy Groq/OpenAI reasoning controls")
+		if !strings.Contains(string(rawBody), `"reasoning_effort":"none"`) {
+			t.Error("request body is missing reasoning_effort=none")
 		}
 		var payload completionRequest
 		if err := json.Unmarshal(rawBody, &payload); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if payload.Model != "test-model" || payload.ChatTemplateKwargs.EnableThinking || payload.MaxTokens != 123 {
+		if payload.Model != "test-model" || payload.ReasoningEffort != "none" || payload.MaxCompletionTokens != 123 {
 			t.Errorf("request controls = %+v", payload)
 		}
 		if len(payload.Messages) != 2 || payload.Messages[0].Role != "system" || payload.Messages[1].Role != "user" {
@@ -57,7 +54,7 @@ func TestWorkersAIClientSendsConstrainedChatCompletionRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewWorkersAIClientWithHTTPClient(ClientConfig{
+	provider := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{
 		BaseURL:             server.URL,
 		APIKey:              "test-key",
 		Model:               "test-model",
@@ -77,19 +74,19 @@ func TestWorkersAIClientSendsConstrainedChatCompletionRequest(t *testing.T) {
 	}
 }
 
-func TestWorkersAIClientRequiresAPIKeyAndValidTarget(t *testing.T) {
-	provider := NewWorkersAIClient(ClientConfig{})
+func TestOpenAICompatibleClientRequiresAPIKeyAndValidTarget(t *testing.T) {
+	provider := NewOpenAICompatibleClient(ClientConfig{})
 	if _, err := provider.Translate(context.Background(), Request{TargetLanguage: "en"}); !errors.Is(err, ErrProviderMisconfigured) {
 		t.Fatalf("missing key error = %v", err)
 	}
 
-	provider = NewWorkersAIClient(ClientConfig{APIKey: "key"})
+	provider = NewOpenAICompatibleClient(ClientConfig{APIKey: "key"})
 	if _, err := provider.Translate(context.Background(), Request{TargetLanguage: "fr"}); !errors.Is(err, ErrInvalidTargetLanguage) {
 		t.Fatalf("invalid target error = %v", err)
 	}
 }
 
-func TestWorkersAIClientMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T) {
+func TestOpenAICompatibleClientMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		statusCode int
@@ -113,7 +110,7 @@ func TestWorkersAIClientMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T)
 			}))
 			defer server.Close()
 
-			provider := NewWorkersAIClientWithHTTPClient(ClientConfig{BaseURL: server.URL, APIKey: "key", Model: "test-model"}, server.Client())
+			provider := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{BaseURL: server.URL, APIKey: "key", Model: "test-model"}, server.Client())
 			_, err := provider.Translate(context.Background(), Request{
 				Content:        "hello",
 				SourceLanguage: "en",
@@ -135,7 +132,7 @@ func TestWorkersAIClientMapsHTTPFailuresWithoutLeakingUpstreamBody(t *testing.T)
 	}
 }
 
-func TestWorkersAIClientRejectsMalformedAndOversizedResponses(t *testing.T) {
+func TestOpenAICompatibleClientRejectsMalformedAndOversizedResponses(t *testing.T) {
 	for _, body := range []string{
 		"not-json",
 		`{"choices":[]}`,
@@ -148,7 +145,7 @@ func TestWorkersAIClientRejectsMalformedAndOversizedResponses(t *testing.T) {
 			_, _ = response.Write([]byte(body))
 		}))
 
-		provider := NewWorkersAIClientWithHTTPClient(ClientConfig{BaseURL: server.URL, APIKey: "key", Model: "test-model"}, server.Client())
+		provider := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{BaseURL: server.URL, APIKey: "key", Model: "test-model"}, server.Client())
 		_, err := provider.Translate(context.Background(), Request{
 			Content:        "hello",
 			SourceLanguage: "en",
@@ -161,7 +158,7 @@ func TestWorkersAIClientRejectsMalformedAndOversizedResponses(t *testing.T) {
 	}
 }
 
-func TestWorkersAIClientRejectsReasoningMarkupButAcceptsNormalText(t *testing.T) {
+func TestOpenAICompatibleClientRejectsReasoningMarkupButAcceptsNormalText(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		content    string
@@ -176,12 +173,12 @@ func TestWorkersAIClientRejectsReasoningMarkupButAcceptsNormalText(t *testing.T)
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 				response.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(response).Encode(completionResponse{
-					Choices: []completionChoice{{Message: &completionResponseMessage{Content: testCase.content}}},
+					Choices: []completionChoice{{Message: &completionMessage{Content: testCase.content}}},
 				})
 			}))
 			defer server.Close()
 
-			client := NewWorkersAIClientWithHTTPClient(ClientConfig{
+			client := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{
 				BaseURL: server.URL,
 				APIKey:  "key",
 				Model:   "test-model",
@@ -210,42 +207,12 @@ func TestWorkersAIClientRejectsReasoningMarkupButAcceptsNormalText(t *testing.T)
 	}
 }
 
-func TestWorkersAIClientRejectsUnexpectedReasoningFields(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode(completionResponse{
-			Choices: []completionChoice{{Message: &completionResponseMessage{
-				Content:   "翻译结果",
-				Reasoning: "internal reasoning",
-			}}},
-		})
-	}))
-	defer server.Close()
-
-	client := NewWorkersAIClientWithHTTPClient(ClientConfig{
-		BaseURL: server.URL,
-		APIKey:  "key",
-		Model:   "test-model",
-	}, server.Client())
-	_, err := client.Translate(context.Background(), Request{
-		Content:        "hello",
-		SourceLanguage: "en",
-		TargetLanguage: "zh",
-	})
-	if !errors.Is(err, ErrProviderInvalidResponse) {
-		t.Fatalf("error = %v, want %v", err, ErrProviderInvalidResponse)
-	}
-	if strings.Contains(err.Error(), "internal reasoning") {
-		t.Fatalf("error leaked reasoning content: %v", err)
-	}
-}
-
-func TestWorkersAIClientMapsClientTimeout(t *testing.T) {
+func TestOpenAICompatibleClientMapsClientTimeout(t *testing.T) {
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		<-request.Context().Done()
 		return nil, request.Context().Err()
 	})
-	provider := NewWorkersAIClient(ClientConfig{
+	provider := NewOpenAICompatibleClient(ClientConfig{
 		BaseURL: "http://translation.test",
 		APIKey:  "key",
 		Model:   "test-model",
@@ -262,12 +229,12 @@ func TestWorkersAIClientMapsClientTimeout(t *testing.T) {
 	}
 }
 
-func TestWorkersAIClientHonorsContextCancellation(t *testing.T) {
+func TestOpenAICompatibleClientHonorsContextCancellation(t *testing.T) {
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		<-request.Context().Done()
 		return nil, request.Context().Err()
 	})
-	provider := NewWorkersAIClientWithHTTPClient(
+	provider := NewOpenAICompatibleClientWithHTTPClient(
 		ClientConfig{BaseURL: "http://translation.test", APIKey: "key", Model: "test-model"},
 		&http.Client{Transport: transport},
 	)

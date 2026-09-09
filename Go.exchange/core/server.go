@@ -41,7 +41,7 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	})
 	translationConfig := config.AppConfig.Translation.Normalized()
 	translationService := translation.NewService(
-		translation.NewWorkersAIClient(translation.ClientConfig{
+		translation.NewOpenAICompatibleClient(translation.ClientConfig{
 			BaseURL:             translationConfig.BaseURL,
 			APIKey:              translationConfig.APIKey,
 			Model:               translationConfig.Model,
