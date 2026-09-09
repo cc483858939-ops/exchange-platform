@@ -48,7 +48,7 @@
   <!-- Frame 3: compressed outline with the first thin ring. -->
   <g transform="translate(192 0)">
     <circle cx="32" cy="32" r="2" fill="#f91880" opacity=".72" />
-    <circle cx="32" cy="32" r="4.5" fill="none" stroke="#a855f7" stroke-width="1" opacity=".52" />
+    <circle cx="32" cy="32" r="3.5" fill="none" stroke="#a855f7" stroke-width="2" opacity=".58" />
     <g transform="translate(20 20)">
       <use href="#heart-outline" transform="translate(12 12) scale(.58) translate(-12 -12)" />
     </g>
@@ -57,369 +57,530 @@
   <!-- Frame 4: the outline overlaps a growing ring and tiny core. -->
   <g transform="translate(256 0)">
     <circle cx="32" cy="32" r="2.5" fill="#f91880" opacity=".78" />
-    <circle cx="32" cy="32" r="6" fill="none" stroke="#f91880" stroke-width="1.2" opacity=".72" />
+    <circle cx="32" cy="32" r="5" fill="none" stroke="#f91880" stroke-width="4" opacity=".72" />
     <g transform="translate(20 20)">
       <use href="#heart-outline" transform="translate(12 12) scale(.36) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 5: filled heart appears as the outline hands off to the ring. -->
+  <!-- Frame 5: outline and tiny filled heart crossfade inside the thick bubble. -->
   <g transform="translate(320 0)">
-    <circle cx="32" cy="32" r="8" fill="none" stroke="#a855f7" stroke-width="1.4" opacity=".8" />
+    <circle cx="32" cy="32" r="7.5" fill="none" stroke="#a855f7" stroke-width="5" opacity=".8" />
+    <g transform="translate(20 20)" opacity=".55">
+      <use href="#heart-outline" transform="translate(12 12) scale(.18) translate(-12 -12)" />
+    </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.22) translate(-12 -12)" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.10) translate(-12 -12)" />
     </g>
   </g>
 
   <!-- Frame 6: the filled heart grows through the expanding ring. -->
   <g transform="translate(384 0)">
-    <circle cx="32" cy="32" r="10.5" fill="none" stroke="#f91880" stroke-width="1.6" opacity=".86" />
+    <circle cx="32" cy="32" r="10.5" fill="none" stroke="#f91880" stroke-width="4.5" opacity=".8" />
     <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.38) translate(-12 -12)" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.24) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 7: the ring expands with the first subtle particles and a visible heart. -->
+  <!-- Frame 7: thin bubble expansion with the first subtle paired particles. -->
   <g transform="translate(448 0)">
-    <circle cx="32" cy="32" r="13" fill="none" stroke="#a855f7" stroke-width="1.9" opacity=".9" />
-    <g opacity=".55">
-      <use href="#burst-dot" x="32" y="16" fill="#eab308" />
-      <use href="#burst-diamond" x="43" y="21" fill="#7c3aed" />
-      <use href="#burst-dot" x="48" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="43" y="43" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="48" fill="#f91880" />
-      <use href="#burst-diamond" x="21" y="43" fill="#a855f7" />
-      <use href="#burst-dot" x="16" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="21" y="21" fill="#f472b6" />
+    <circle cx="32" cy="32" r="13.5" fill="none" stroke="#a855f7" stroke-width="3.2" opacity=".78" />
+    <g opacity=".35">
+      <g>
+        <use href="#burst-dot" transform="translate(30.5 18.1) scale(1)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 22) scale(.76)" fill="#f472b6" opacity=".88" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(42.1 22.3) scale(.92)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(40 26) scale(.72)" fill="#06b6d4" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(45.9 33.9) scale(1.04)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(41.7 34.2) scale(.70)" fill="#f472b6" opacity=".86" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(39 44.1) scale(.96)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(36.1 41.1) scale(.78)" fill="#a855f7" opacity=".9" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(26.8 45) scale(1.02)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(27.5 40.9) scale(.74)" fill="#eab308" opacity=".84" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(18.5 35.9) scale(.9)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(22.1 33.4) scale(.68)" fill="#1d9bf0" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(20.7 23.8) scale(.98)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(24.6 25.3) scale(.75)" fill="#f91880" opacity=".88" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.58) translate(-12 -12)" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.42) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 8: the hollow ring nears its peak as particles become clearer. -->
+  <!-- Frame 8: the bubble thins while paired particles expand. -->
   <g transform="translate(512 0)">
-    <circle cx="32" cy="32" r="15.5" fill="none" stroke="#f91880" stroke-width="2" opacity=".84" />
-    <g opacity=".8">
-      <use href="#burst-dot" x="32" y="13" fill="#eab308" />
-      <use href="#burst-diamond" x="45.5" y="18.5" fill="#7c3aed" />
-      <use href="#burst-dot" x="51" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="45.5" y="45.5" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="51" fill="#f91880" />
-      <use href="#burst-diamond" x="18.5" y="45.5" fill="#a855f7" />
-      <use href="#burst-dot" x="13" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="18.5" y="18.5" fill="#f472b6" />
+    <circle cx="32" cy="32" r="16" fill="none" stroke="#f91880" stroke-width="2" opacity=".62" />
+    <g opacity=".7">
+      <g>
+        <use href="#burst-dot" transform="translate(30.2 15.1) scale(1)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 19) scale(.74)" fill="#f472b6" opacity=".88" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(44.2 20.2) scale(.92)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(42.4 24.2) scale(.70)" fill="#06b6d4" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(48.8 34.4) scale(1.04)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(44.7 34.9) scale(.68)" fill="#f472b6" opacity=".86" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(40.5 46.7) scale(.96)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(37.3 43.9) scale(.76)" fill="#a855f7" opacity=".9" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(25.6 47.8) scale(1.02)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(26.1 43.6) scale(.72)" fill="#eab308" opacity=".84" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(15.7 36.7) scale(.9)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(19.1 33.8) scale(.67)" fill="#1d9bf0" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(18.2 22) scale(.98)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(22.3 23.3) scale(.73)" fill="#f91880" opacity=".88" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.78) translate(-12 -12)" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.62) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 9: clear radial burst around an almost full-size heart. -->
+  <!-- Frame 9: clear asymmetric expansion with a fading thin ring. -->
   <g transform="translate(576 0)">
-    <circle cx="32" cy="32" r="17.5" fill="none" stroke="#a855f7" stroke-width="2.1" opacity=".8" />
-    <g opacity=".94">
-      <use href="#burst-dot" x="32" y="10" fill="#eab308" />
-      <use href="#burst-diamond" x="47.6" y="16.4" fill="#7c3aed" />
-      <use href="#burst-dot" x="54" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="47.6" y="47.6" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="54" fill="#f91880" />
-      <use href="#burst-diamond" x="16.4" y="47.6" fill="#a855f7" />
-      <use href="#burst-dot" x="10" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="16.4" y="16.4" fill="#f472b6" />
+    <circle cx="32" cy="32" r="18.5" fill="none" stroke="#a855f7" stroke-width="1.1" opacity=".46" />
+    <g opacity=".95">
+      <g>
+        <use href="#burst-dot" transform="translate(29.9 12.1) scale(.95)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 16) scale(.70)" fill="#f472b6" opacity=".86" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(46.4 18.1) scale(.87)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(44.8 22.4) scale(.66)" fill="#06b6d4" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(51.8 34.8) scale(.99)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(47.6 35.6) scale(.64)" fill="#f472b6" opacity=".84" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(42 49.3) scale(.86)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(38.5 46.6) scale(.72)" fill="#a855f7" opacity=".88" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(24.5 50.5) scale(.97)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(24.7 46.3) scale(.68)" fill="#eab308" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(12.8 37.5) scale(.86)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(16.2 34.2) scale(.63)" fill="#1d9bf0" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(15.8 20.2) scale(.93)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(20.1 21.3) scale(.69)" fill="#f91880" opacity=".84" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.98) translate(-12 -12)" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.82) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 10: burst peak begins as the ring starts fading. -->
+  <!-- Frame 10: particle energy peaks as the bubble nearly disappears. -->
   <g transform="translate(640 0)">
-    <circle cx="32" cy="32" r="19.5" fill="none" stroke="#f91880" stroke-width="2.2" opacity=".66" />
-    <g opacity=".98">
-      <use href="#burst-dot" x="32" y="7" fill="#eab308" />
-      <use href="#burst-diamond" x="49.7" y="14.3" fill="#7c3aed" />
-      <use href="#burst-dot" x="57" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="49.7" y="49.7" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="57" fill="#f91880" />
-      <use href="#burst-diamond" x="14.3" y="49.7" fill="#a855f7" />
-      <use href="#burst-dot" x="7" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="14.3" y="14.3" fill="#f472b6" />
+    <circle cx="32" cy="32" r="20" fill="none" stroke="#f91880" stroke-width=".6" opacity=".3" />
+    <g opacity="1">
+      <g>
+        <use href="#burst-dot" transform="translate(29.6 9.1) scale(.9)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 13) scale(.66)" fill="#f472b6" opacity=".84" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(48.5 16) scale(.83)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(47.2 20.6) scale(.62)" fill="#06b6d4" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(54.8 35.2) scale(.94)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(50.5 36.3) scale(.6)" fill="#f472b6" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(43.5 51.9) scale(.86)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(39.7 49.4) scale(.68)" fill="#a855f7" opacity=".86" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(23.4 53.3) scale(.92)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(23.4 48.9) scale(.64)" fill="#eab308" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(9.9 38.3) scale(.81)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(13.2 34.6) scale(.59)" fill="#1d9bf0" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(13.4 18.5) scale(.88)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(17.9 19.3) scale(.65)" fill="#f91880" opacity=".82" />
+      </g>
+    </g>
+    <g transform="translate(20 20)">
+      <use href="#heart-filled" transform="translate(12 12) scale(1) translate(-12 -12)" />
+    </g>
+  </g>
+
+  <!-- Frame 11: maximum outward energy with no dominant ring. -->
+  <g transform="translate(704 0)">
+    <g opacity=".92">
+      <g>
+        <use href="#burst-dot" transform="translate(29.4 7.1) scale(.82)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 10) scale(.6)" fill="#f472b6" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(50 14.6) scale(.75)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(49.6 18.8) scale(.56)" fill="#06b6d4" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(56.8 35.5) scale(.85)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(53.4 36.9) scale(.55)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(44.5 53.7) scale(.79)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(40.9 52.1) scale(.62)" fill="#a855f7" opacity=".84" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(22.6 55.2) scale(.84)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(22 51.6) scale(.58)" fill="#eab308" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(8 38.9) scale(.74)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(10.2 35.1) scale(.54)" fill="#1d9bf0" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(11.8 17.3) scale(.8)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(15.7 17.3) scale(.59)" fill="#f91880" opacity=".8" />
+      </g>
+    </g>
+    <g transform="translate(20 20)">
+      <use href="#heart-filled" transform="translate(12 12) scale(1.14) translate(-12 -12)" />
+    </g>
+  </g>
+
+  <!-- Frame 12: heart peak and particles at their maximum outward reach. -->
+  <g transform="translate(768 0)">
+    <g opacity=".8">
+      <g>
+        <use href="#burst-dot" transform="translate(29.2 5.1) scale(.72)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 8) scale(.53)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(51.4 13.2) scale(.66)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(51.2 17.6) scale(.5)" fill="#06b6d4" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(58.7 35.8) scale(.75)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(55.4 37.4) scale(.48)" fill="#f472b6" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(45.5 55.4) scale(.69)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(41.8 53.9) scale(.55)" fill="#a855f7" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(21.9 57) scale(.73)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(21.1 53.4) scale(.51)" fill="#eab308" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(6 39.4) scale(.65)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(8.2 35.3) scale(.47)" fill="#1d9bf0" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(10.2 16.1) scale(.71)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(14.2 15.9) scale(.52)" fill="#f91880" opacity=".78" />
+      </g>
+    </g>
+    <g transform="translate(20 20)">
+      <use href="#heart-filled" transform="translate(12 12) scale(1.24) translate(-12 -12)" />
+    </g>
+  </g>
+
+  <!-- Frame 13: low-amplitude settle begins while particles keep their outward reach. -->
+  <g transform="translate(832 0)">
+    <g opacity=".64">
+      <g>
+        <use href="#burst-dot" transform="translate(29.1 4.2) scale(.62)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 7) scale(.46)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(52.1 12.5) scale(.57)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(52 17) scale(.43)" fill="#06b6d4" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(59.7 35.9) scale(.64)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(56.4 37.6) scale(.42)" fill="#f472b6" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(46 56.2) scale(.6)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(42.2 54.8) scale(.48)" fill="#a855f7" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(21.5 58) scale(.63)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(20.7 54.3) scale(.44)" fill="#eab308" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(5.1 39.7) scale(.56)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(7.2 35.5) scale(.41)" fill="#1d9bf0" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(9.3 15.5) scale(.61)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(13.4 15.3) scale(.45)" fill="#f91880" opacity=".78" />
+      </g>
     </g>
     <g transform="translate(20 20)">
       <use href="#heart-filled" transform="translate(12 12) scale(1.16) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 11: burst peak and heart overshoot. -->
-  <g transform="translate(704 0)">
-    <circle cx="32" cy="32" r="21" fill="none" stroke="#a855f7" stroke-width="1.8" opacity=".5" />
-    <g opacity=".86">
-      <use href="#burst-dot" x="32" y="5" fill="#eab308" />
-      <use href="#burst-diamond" x="51.1" y="12.9" fill="#7c3aed" />
-      <use href="#burst-dot" x="59" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="51.1" y="51.1" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="59" fill="#f91880" />
-      <use href="#burst-diamond" x="12.9" y="51.1" fill="#a855f7" />
-      <use href="#burst-dot" x="5" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="12.9" y="12.9" fill="#f472b6" />
-    </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.22) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 12: ring mostly gone while the heart begins settling. -->
-  <g transform="translate(768 0)">
-    <circle cx="32" cy="32" r="22" fill="none" stroke="#f91880" stroke-width="1.3" opacity=".22" />
-    <g opacity=".5">
-      <use href="#burst-dot" x="32" y="4" fill="#eab308" />
-      <use href="#burst-diamond" x="52" y="12" fill="#7c3aed" />
-      <use href="#burst-dot" x="60" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="52" y="52" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="60" fill="#f91880" />
-      <use href="#burst-diamond" x="12" y="52" fill="#a855f7" />
-      <use href="#burst-dot" x="4" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="12" y="12" fill="#f472b6" />
-    </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.12) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 13: first settle undershoot. -->
-  <g transform="translate(832 0)">
-    <g opacity=".34">
-      <use href="#burst-dot" x="32" y="5" fill="#eab308" />
-      <use href="#burst-diamond" x="51.1" y="12.9" fill="#7c3aed" />
-      <use href="#burst-dot" x="59" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="51.1" y="51.1" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="59" fill="#f91880" />
-      <use href="#burst-diamond" x="12.9" y="51.1" fill="#a855f7" />
-      <use href="#burst-dot" x="5" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="12.9" y="12.9" fill="#f472b6" />
-    </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.02) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 14: settle rebound. -->
+  <!-- Frame 14: the settle rebound is smaller as particles continue outward. -->
   <g transform="translate(896 0)">
-    <g opacity=".22">
-      <use href="#burst-dot" x="32" y="6" fill="#eab308" />
-      <use href="#burst-diamond" x="50.4" y="13.6" fill="#7c3aed" />
-      <use href="#burst-dot" x="58" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="50.4" y="50.4" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="58" fill="#f91880" />
-      <use href="#burst-diamond" x="13.6" y="50.4" fill="#a855f7" />
-      <use href="#burst-dot" x="6" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="13.6" y="13.6" fill="#f472b6" />
+    <g opacity=".48">
+      <g>
+        <use href="#burst-dot" transform="translate(29 3.7) scale(.52)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 6) scale(.39)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(52.5 12.2) scale(.48)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(52.8 16.4) scale(.36)" fill="#06b6d4" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(60.2 36) scale(.54)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(57.3 37.8) scale(.36)" fill="#f472b6" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(46.3 56.7) scale(.5)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(42.6 55.8) scale(.41)" fill="#a855f7" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(21.3 58.4) scale(.53)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(20.2 55.2) scale(.37)" fill="#eab308" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(4.6 39.9) scale(.47)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(6.3 35.6) scale(.35)" fill="#1d9bf0" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(8.9 15.2) scale(.51)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(12.7 14.6) scale(.38)" fill="#f91880" opacity=".78" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.96) translate(-12 -12)" />
+      <use href="#heart-filled" transform="translate(12 12) scale(1.07) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 15: the heart returns through its resting scale. -->
+  <!-- Frame 15: the heart passes through rest as the particle marks shrink. -->
   <g transform="translate(960 0)">
-    <g opacity=".14">
-      <use href="#burst-dot" x="32" y="7" fill="#eab308" />
-      <use href="#burst-diamond" x="49.7" y="14.3" fill="#7c3aed" />
-      <use href="#burst-dot" x="57" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="49.7" y="49.7" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="57" fill="#f91880" />
-      <use href="#burst-diamond" x="14.3" y="49.7" fill="#a855f7" />
-      <use href="#burst-dot" x="7" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="14.3" y="14.3" fill="#f472b6" />
+    <g opacity=".32">
+      <g>
+        <use href="#burst-dot" transform="translate(29 3.2) scale(.42)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 5) scale(.32)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(52.9 11.9) scale(.39)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(53.6 15.8) scale(.3)" fill="#06b6d4" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(60.7 36) scale(.44)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(58.3 38.1) scale(.3)" fill="#f472b6" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(46.5 57.1) scale(.4)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(43 56.7) scale(.34)" fill="#a855f7" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(21.1 58.9) scale(.43)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(19.7 56.1) scale(.31)" fill="#eab308" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(4.1 40) scale(.38)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(5.3 35.8) scale(.29)" fill="#1d9bf0" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(8.5 15) scale(.41)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(11.9 13.9) scale(.31)" fill="#f91880" opacity=".78" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.04) translate(-12 -12)" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.99) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 16: settled heart with only a faint trace of the burst. -->
+  <!-- Frame 16: a small rebound with particles nearly faded. -->
   <g transform="translate(1024 0)">
-    <g opacity=".08">
-      <use href="#burst-dot" x="32" y="8" fill="#eab308" />
-      <use href="#burst-diamond" x="48.9" y="15.1" fill="#7c3aed" />
-      <use href="#burst-dot" x="56" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="48.9" y="48.9" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="56" fill="#f91880" />
-      <use href="#burst-diamond" x="15.1" y="48.9" fill="#a855f7" />
-      <use href="#burst-dot" x="8" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="15.1" y="15.1" fill="#f472b6" />
+    <g opacity=".2">
+      <g>
+        <use href="#burst-dot" transform="translate(29 3.2) scale(.34)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 4.5) scale(.26)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(52.9 11.9) scale(.31)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(54 15.5) scale(.24)" fill="#06b6d4" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(60.7 36) scale(.35)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(58.8 38.2) scale(.24)" fill="#f472b6" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(46.5 57.1) scale(.33)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(43.2 57.1) scale(.28)" fill="#a855f7" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(21.1 58.9) scale(.35)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(19.5 56.5) scale(.25)" fill="#eab308" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(4.1 40) scale(.31)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(4.8 35.8) scale(.23)" fill="#1d9bf0" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(8.5 15) scale(.33)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(11.6 13.6) scale(.25)" fill="#f91880" opacity=".78" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(1.035) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 17: the heart holds while cleanup continues. -->
+  <!-- Frame 17: residual settle is almost imperceptible. -->
   <g transform="translate(1088 0)">
-    <g opacity=".055">
-      <use href="#burst-dot" x="32" y="9" fill="#eab308" />
-      <use href="#burst-diamond" x="48.3" y="15.7" fill="#7c3aed" />
-      <use href="#burst-dot" x="55" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="48.3" y="48.3" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="55" fill="#f91880" />
-      <use href="#burst-diamond" x="15.7" y="48.3" fill="#a855f7" />
-      <use href="#burst-dot" x="9" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="15.7" y="15.7" fill="#f472b6" />
+    <g opacity=".12">
+      <g>
+        <use href="#burst-dot" transform="translate(29 3.2) scale(.27)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 4) scale(.21)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(52.9 11.9) scale(.25)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(54.4 15.1) scale(.19)" fill="#06b6d4" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(60.7 36) scale(.28)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(59.3 38.3) scale(.19)" fill="#f472b6" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(46.5 57.1) scale(.26)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(43.4 57.6) scale(.22)" fill="#a855f7" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(21.1 58.9) scale(.28)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(19.3 56.9) scale(.2)" fill="#eab308" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(4.1 40) scale(.24)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(4.3 35.9) scale(.18)" fill="#1d9bf0" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(8.5 15) scale(.26)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(11.2 13.3) scale(.2)" fill="#f91880" opacity=".78" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(1.008) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 18: cleanup fades further. -->
+  <!-- Frame 18: final particle fade with a tiny settle undershoot. -->
   <g transform="translate(1152 0)">
-    <g opacity=".04">
-      <use href="#burst-dot" x="32" y="10" fill="#eab308" />
-      <use href="#burst-diamond" x="47.6" y="16.4" fill="#7c3aed" />
-      <use href="#burst-dot" x="54" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="47.6" y="47.6" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="54" fill="#f91880" />
-      <use href="#burst-diamond" x="16.4" y="47.6" fill="#a855f7" />
-      <use href="#burst-dot" x="10" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="16.4" y="16.4" fill="#f472b6" />
+    <g opacity=".06">
+      <g>
+        <use href="#burst-dot" transform="translate(29 3.2) scale(.2)" fill="#eab308" />
+        <use href="#burst-diamond" transform="translate(32 3.5) scale(.16)" fill="#f472b6" opacity=".8" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(52.9 11.9) scale(.18)" fill="#7c3aed" />
+        <use href="#burst-dot" transform="translate(54.8 14.8) scale(.15)" fill="#06b6d4" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(60.7 36) scale(.21)" fill="#1d9bf0" />
+        <use href="#burst-diamond" transform="translate(59.8 38.4) scale(.15)" fill="#f472b6" opacity=".78" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(46.5 57.1) scale(.19)" fill="#f97316" />
+        <use href="#burst-dot" transform="translate(43.6 58) scale(.17)" fill="#a855f7" opacity=".82" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(21.1 58.9) scale(.2)" fill="#f91880" />
+        <use href="#burst-diamond" transform="translate(19.1 57.4) scale(.15)" fill="#eab308" opacity=".76" />
+      </g>
+      <g>
+        <use href="#burst-diamond" transform="translate(4.1 40) scale(.18)" fill="#a855f7" />
+        <use href="#burst-dot" transform="translate(3.8 36) scale(.14)" fill="#1d9bf0" opacity=".74" />
+      </g>
+      <g>
+        <use href="#burst-dot" transform="translate(8.5 15) scale(.2)" fill="#06b6d4" />
+        <use href="#burst-diamond" transform="translate(10.8 12.9) scale(.15)" fill="#f91880" opacity=".78" />
+      </g>
     </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.997) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 19: the heart holds while the last particles fade. -->
+  <!-- Frame 19: particles are gone and the residual settle continues. -->
   <g transform="translate(1216 0)">
-    <g opacity=".03">
-      <use href="#burst-dot" x="32" y="5" fill="#eab308" />
-      <use href="#burst-diamond" x="51.1" y="12.9" fill="#7c3aed" />
-      <use href="#burst-dot" x="59" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="51.1" y="51.1" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="59" fill="#f91880" />
-      <use href="#burst-diamond" x="12.9" y="51.1" fill="#a855f7" />
-      <use href="#burst-dot" x="5" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="12.9" y="12.9" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(1.018) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 20: settled heart with a nearly invisible particle trace. -->
+  <!-- Frame 20: the settle amplitude falls again. -->
   <g transform="translate(1280 0)">
-    <g opacity=".02">
-      <use href="#burst-dot" x="32" y="5" fill="#eab308" />
-      <use href="#burst-diamond" x="51.1" y="12.9" fill="#7c3aed" />
-      <use href="#burst-dot" x="59" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="51.1" y="51.1" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="59" fill="#f91880" />
-      <use href="#burst-diamond" x="12.9" y="51.1" fill="#a855f7" />
-      <use href="#burst-dot" x="5" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="12.9" y="12.9" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(1.006) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 21: cleanup continues without moving the heart. -->
+  <!-- Frame 21: a nearly imperceptible settle undershoot. -->
   <g transform="translate(1344 0)">
-    <g opacity=".015">
-      <use href="#burst-dot" x="32" y="6" fill="#eab308" />
-      <use href="#burst-diamond" x="50.4" y="13.6" fill="#7c3aed" />
-      <use href="#burst-dot" x="58" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="50.4" y="50.4" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="58" fill="#f91880" />
-      <use href="#burst-diamond" x="13.6" y="50.4" fill="#a855f7" />
-      <use href="#burst-dot" x="6" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="13.6" y="13.6" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(.999) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 22: final heart hold. -->
+  <!-- Frame 22: a tiny settle rebound. -->
   <g transform="translate(1408 0)">
-    <g opacity=".01">
-      <use href="#burst-dot" x="32" y="7" fill="#eab308" />
-      <use href="#burst-diamond" x="49.7" y="14.3" fill="#7c3aed" />
-      <use href="#burst-dot" x="57" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="49.7" y="49.7" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="57" fill="#f91880" />
-      <use href="#burst-diamond" x="14.3" y="49.7" fill="#a855f7" />
-      <use href="#burst-dot" x="7" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="14.3" y="14.3" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(1.008) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 23: particles fade. -->
+  <!-- Frame 23: settle approaches its final center. -->
   <g transform="translate(1472 0)">
-    <g opacity=".007">
-      <use href="#burst-dot" x="32" y="8" fill="#eab308" />
-      <use href="#burst-diamond" x="48.9" y="15.1" fill="#7c3aed" />
-      <use href="#burst-dot" x="56" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="48.9" y="48.9" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="56" fill="#f91880" />
-      <use href="#burst-diamond" x="15.1" y="48.9" fill="#a855f7" />
-      <use href="#burst-dot" x="8" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="15.1" y="15.1" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
-      <use href="#heart-filled" />
+      <use href="#heart-filled" transform="translate(12 12) scale(1.002) translate(-12 -12)" />
     </g>
   </g>
 
-  <!-- Frame 24: only a trace of the burst remains. -->
+  <!-- Frame 24: exact resting scale resumes. -->
   <g transform="translate(1536 0)">
-    <g opacity=".004">
-      <use href="#burst-dot" x="32" y="9" fill="#eab308" />
-      <use href="#burst-diamond" x="48.3" y="15.7" fill="#7c3aed" />
-      <use href="#burst-dot" x="55" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="48.3" y="48.3" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="55" fill="#f91880" />
-      <use href="#burst-diamond" x="15.7" y="48.3" fill="#a855f7" />
-      <use href="#burst-dot" x="9" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="15.7" y="15.7" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
       <use href="#heart-filled" />
     </g>
   </g>
 
-  <!-- Frame 25: cleanup particles. -->
+  <!-- Frame 25: stable filled heart. -->
   <g transform="translate(1600 0)">
-    <g opacity=".002">
-      <use href="#burst-dot" x="32" y="10" fill="#eab308" />
-      <use href="#burst-diamond" x="47.6" y="16.4" fill="#7c3aed" />
-      <use href="#burst-dot" x="54" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="47.6" y="47.6" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="54" fill="#f91880" />
-      <use href="#burst-diamond" x="16.4" y="47.6" fill="#a855f7" />
-      <use href="#burst-dot" x="10" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="16.4" y="16.4" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
       <use href="#heart-filled" />
     </g>
   </g>
 
-  <!-- Frame 26: final cleanup. -->
+  <!-- Frame 26: stable filled heart before the final pair. -->
   <g transform="translate(1664 0)">
-    <g opacity=".001">
-      <use href="#burst-dot" x="32" y="11" fill="#eab308" />
-      <use href="#burst-diamond" x="46.8" y="17.2" fill="#7c3aed" />
-      <use href="#burst-dot" x="53" y="32" fill="#1d9bf0" />
-      <use href="#burst-diamond" x="46.8" y="46.8" fill="#f97316" />
-      <use href="#burst-dot" x="32" y="53" fill="#f91880" />
-      <use href="#burst-diamond" x="17.2" y="46.8" fill="#a855f7" />
-      <use href="#burst-dot" x="11" y="32" fill="#06b6d4" />
-      <use href="#burst-diamond" x="17.2" y="17.2" fill="#f472b6" />
-    </g>
     <g transform="translate(20 20)">
       <use href="#heart-filled" />
     </g>
