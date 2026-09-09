@@ -1,90 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1856" height="64" viewBox="0 0 1856 64">
-  <!-- Sprite heart color mirrors the color-like token (#ff4d6d) from tokens.css. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="64" viewBox="0 0 1280 64">
   <defs>
-    <path
-      id="heart-outline"
-      d="M20.5 8.75c0 5.05-8.5 9.95-8.5 9.95s-8.5-4.9-8.5-9.95A4.55 4.55 0 0 1 12 6.55a4.55 4.55 0 0 1 8.5 2.2Z"
-      fill="none"
-      stroke="#71767b"
-      stroke-width="1.8"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-    <path
-      id="heart-filled"
-      d="M20.5 8.75c0 5.05-8.5 9.95-8.5 9.95s-8.5-4.9-8.5-9.95A4.55 4.55 0 0 1 12 6.55a4.55 4.55 0 0 1 8.5 2.2Z"
-      fill="#ff4d6d"
-      stroke="#ff4d6d"
-      stroke-width="1.8"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
     <circle id="burst-dot" cx="0" cy="0" r="1.35" />
     <path id="burst-diamond" d="M0-2.1 2.1 0 0 2.1-2.1 0Z" />
   </defs>
 
-  <!-- Frame 0: neutral outline heart. -->
+  <!-- Frame 0: tiny burst ignition. -->
   <g transform="translate(0 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-outline" />
-    </g>
+    <circle cx="32" cy="32" r="1.2" fill="#f91880" opacity=".35" />
   </g>
 
-  <!-- Frame 1: first compression. -->
+  <!-- Frame 1: small bubble edge begins. -->
   <g transform="translate(64 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-outline" transform="translate(12 12) scale(.90) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 2: deeper compression with a subordinate ignition point. -->
-  <g transform="translate(128 0)">
-    <circle cx="32" cy="32" r="1.2" fill="#f91880" opacity=".55" />
-    <g transform="translate(20 20)">
-      <use href="#heart-outline" transform="translate(12 12) scale(.76) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 3: compressed outline with the first thin ring. -->
-  <g transform="translate(192 0)">
-    <circle cx="32" cy="32" r="2" fill="#f91880" opacity=".72" />
+    <circle cx="32" cy="32" r="1.8" fill="#f91880" opacity=".55" />
     <circle cx="32" cy="32" r="3.5" fill="none" stroke="#a855f7" stroke-width="2" opacity=".58" />
-    <g transform="translate(20 20)">
-      <use href="#heart-outline" transform="translate(12 12) scale(.58) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 4: the outline overlaps a growing ring and tiny core. -->
-  <g transform="translate(256 0)">
-    <circle cx="32" cy="32" r="2.5" fill="#f91880" opacity=".78" />
+  <!-- Frame 2: thick bubble ignition. -->
+  <g transform="translate(128 0)">
+    <circle cx="32" cy="32" r="2" fill="#f91880" opacity=".65" />
     <circle cx="32" cy="32" r="5" fill="none" stroke="#f91880" stroke-width="4" opacity=".72" />
-    <g transform="translate(20 20)">
-      <use href="#heart-outline" transform="translate(12 12) scale(.36) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 5: outline and tiny filled heart crossfade inside the thick bubble. -->
-  <g transform="translate(320 0)">
+  <!-- Frame 3: thick bubble expands. -->
+  <g transform="translate(192 0)">
     <circle cx="32" cy="32" r="7.5" fill="none" stroke="#a855f7" stroke-width="5" opacity=".8" />
-    <g transform="translate(20 20)" opacity=".55">
-      <use href="#heart-outline" transform="translate(12 12) scale(.18) translate(-12 -12)" />
-    </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.10) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 6: the filled heart grows through the expanding ring. -->
-  <g transform="translate(384 0)">
+  <!-- Frame 4: bubble edge starts thinning. -->
+  <g transform="translate(256 0)">
     <circle cx="32" cy="32" r="10.5" fill="none" stroke="#f91880" stroke-width="4.5" opacity=".8" />
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.24) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 7: thin bubble expansion with the first subtle paired particles. -->
-  <g transform="translate(448 0)">
+  <!-- Frame 5: thin expansion begins. -->
+  <g transform="translate(320 0)">
     <circle cx="32" cy="32" r="13.5" fill="none" stroke="#a855f7" stroke-width="3.2" opacity=".78" />
+  </g>
+
+  <!-- Frame 6: ring expands and thins. -->
+  <g transform="translate(384 0)">
+    <circle cx="32" cy="32" r="16" fill="none" stroke="#f91880" stroke-width="2" opacity=".62" />
+  </g>
+
+  <!-- Frame 7: the first subtle paired particles join the fading bubble. -->
+  <g transform="translate(448 0)">
+    <circle cx="32" cy="32" r="18.5" fill="none" stroke="#a855f7" stroke-width="1.1" opacity=".46" />
     <g opacity=".35">
       <g>
         <use href="#burst-dot" transform="translate(30.5 18.1) scale(1)" fill="#eab308" />
@@ -115,14 +74,11 @@
         <use href="#burst-diamond" transform="translate(24.6 25.3) scale(.75)" fill="#f91880" opacity=".88" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.42) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 8: the bubble thins while paired particles expand. -->
+  <!-- Frame 8: the final trace of the bubble fades behind the particles. -->
   <g transform="translate(512 0)">
-    <circle cx="32" cy="32" r="16" fill="none" stroke="#f91880" stroke-width="2" opacity=".62" />
+    <circle cx="32" cy="32" r="20" fill="none" stroke="#f91880" stroke-width=".6" opacity=".3" />
     <g opacity=".7">
       <g>
         <use href="#burst-dot" transform="translate(30.2 15.1) scale(1)" fill="#eab308" />
@@ -153,14 +109,10 @@
         <use href="#burst-diamond" transform="translate(22.3 23.3) scale(.73)" fill="#f91880" opacity=".88" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.62) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 9: clear asymmetric expansion with a fading thin ring. -->
+  <!-- Frame 9: clear asymmetric particle expansion after the ring disappears. -->
   <g transform="translate(576 0)">
-    <circle cx="32" cy="32" r="18.5" fill="none" stroke="#a855f7" stroke-width="1.1" opacity=".46" />
     <g opacity=".95">
       <g>
         <use href="#burst-dot" transform="translate(29.9 12.1) scale(.95)" fill="#eab308" />
@@ -191,14 +143,10 @@
         <use href="#burst-diamond" transform="translate(20.1 21.3) scale(.69)" fill="#f91880" opacity=".84" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.82) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 10: particle energy peaks as the bubble nearly disappears. -->
+  <!-- Frame 10: particle energy peaks. -->
   <g transform="translate(640 0)">
-    <circle cx="32" cy="32" r="20" fill="none" stroke="#f91880" stroke-width=".6" opacity=".3" />
     <g opacity="1">
       <g>
         <use href="#burst-dot" transform="translate(29.6 9.1) scale(.9)" fill="#eab308" />
@@ -228,9 +176,6 @@
         <use href="#burst-dot" transform="translate(13.4 18.5) scale(.88)" fill="#06b6d4" />
         <use href="#burst-diamond" transform="translate(17.9 19.3) scale(.65)" fill="#f91880" opacity=".82" />
       </g>
-    </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1) translate(-12 -12)" />
     </g>
   </g>
 
@@ -266,12 +211,9 @@
         <use href="#burst-diamond" transform="translate(15.7 17.3) scale(.59)" fill="#f91880" opacity=".8" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.14) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 12: heart peak and particles at their maximum outward reach. -->
+  <!-- Frame 12: particles at their maximum outward reach. -->
   <g transform="translate(768 0)">
     <g opacity=".8">
       <g>
@@ -303,12 +245,9 @@
         <use href="#burst-diamond" transform="translate(14.2 15.9) scale(.52)" fill="#f91880" opacity=".78" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.24) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 13: low-amplitude settle begins while particles keep their outward reach. -->
+  <!-- Frame 13: particles hold their outward reach while shrinking. -->
   <g transform="translate(832 0)">
     <g opacity=".64">
       <g>
@@ -340,12 +279,9 @@
         <use href="#burst-diamond" transform="translate(13.4 15.3) scale(.45)" fill="#f91880" opacity=".78" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.16) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 14: the settle rebound is smaller as particles continue outward. -->
+  <!-- Frame 14: particles continue shrinking at the outer edge. -->
   <g transform="translate(896 0)">
     <g opacity=".48">
       <g>
@@ -377,12 +313,9 @@
         <use href="#burst-diamond" transform="translate(12.7 14.6) scale(.38)" fill="#f91880" opacity=".78" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.07) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 15: the heart passes through rest as the particle marks shrink. -->
+  <!-- Frame 15: particle marks shrink as the burst decays. -->
   <g transform="translate(960 0)">
     <g opacity=".32">
       <g>
@@ -413,9 +346,6 @@
         <use href="#burst-dot" transform="translate(8.5 15) scale(.41)" fill="#06b6d4" />
         <use href="#burst-diamond" transform="translate(11.9 13.9) scale(.31)" fill="#f91880" opacity=".78" />
       </g>
-    </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.99) translate(-12 -12)" />
     </g>
   </g>
 
@@ -451,12 +381,9 @@
         <use href="#burst-diamond" transform="translate(11.6 13.6) scale(.25)" fill="#f91880" opacity=".78" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.035) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 17: residual settle is almost imperceptible. -->
+  <!-- Frame 17: particle residue is almost imperceptible. -->
   <g transform="translate(1088 0)">
     <g opacity=".12">
       <g>
@@ -488,12 +415,9 @@
         <use href="#burst-diamond" transform="translate(11.2 13.3) scale(.2)" fill="#f91880" opacity=".78" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.008) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 18: final particle fade with a tiny settle undershoot. -->
+  <!-- Frame 18: final low-opacity particle fade. -->
   <g transform="translate(1152 0)">
     <g opacity=".06">
       <g>
@@ -525,76 +449,10 @@
         <use href="#burst-diamond" transform="translate(10.8 12.9) scale(.15)" fill="#f91880" opacity=".78" />
       </g>
     </g>
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.997) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 19: particles are gone and the residual settle continues. -->
+  <!-- Frame 19: empty final burst frame. -->
   <g transform="translate(1216 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.018) translate(-12 -12)" />
-    </g>
   </g>
 
-  <!-- Frame 20: the settle amplitude falls again. -->
-  <g transform="translate(1280 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.006) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 21: a nearly imperceptible settle undershoot. -->
-  <g transform="translate(1344 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(.999) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 22: a tiny settle rebound. -->
-  <g transform="translate(1408 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.008) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 23: settle approaches its final center. -->
-  <g transform="translate(1472 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" transform="translate(12 12) scale(1.002) translate(-12 -12)" />
-    </g>
-  </g>
-
-  <!-- Frame 24: exact resting scale resumes. -->
-  <g transform="translate(1536 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" />
-    </g>
-  </g>
-
-  <!-- Frame 25: stable filled heart. -->
-  <g transform="translate(1600 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" />
-    </g>
-  </g>
-
-  <!-- Frame 26: stable filled heart before the final pair. -->
-  <g transform="translate(1664 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" />
-    </g>
-  </g>
-
-  <!-- Frames 27-28: stable final filled heart. -->
-  <g transform="translate(1728 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" />
-    </g>
-  </g>
-  <g transform="translate(1792 0)">
-    <g transform="translate(20 20)">
-      <use href="#heart-filled" />
-    </g>
-  </g>
 </svg>

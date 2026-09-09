@@ -168,7 +168,7 @@ describe('LikeAction', () => {
     const wrapper = mountLikeAction();
 
     await wrapper.find('button').trigger('click');
-    vi.advanceTimersByTime(799);
+    vi.advanceTimersByTime(599);
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('button').attributes('data-motion')).toBe('liking');
