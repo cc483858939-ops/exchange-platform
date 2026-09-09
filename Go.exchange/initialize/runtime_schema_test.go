@@ -245,3 +245,30 @@ func TestDefaultSchemaValidationOptionsUsesBinaryVersion(t *testing.T) {
 		t.Fatalf("default API schema options unexpectedly require worker tables: %#v", options)
 	}
 }
+
+func TestRuntimeSchemaVersionsCompatibleUsesRequiredVersionInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  int64
+		floor    int64
+		required int64
+		want     bool
+	}{
+		{name: "required current within published interval", current: 5, floor: 4, required: 5, want: true},
+		{name: "required floor within published interval", current: 5, floor: 4, required: 4, want: true},
+		{name: "single version exact match", current: 5, floor: 5, required: 5, want: true},
+		{name: "required older than single version", current: 5, floor: 5, required: 4, want: false},
+		{name: "required newer than single version", current: 4, floor: 4, required: 5, want: false},
+		{name: "older published interval includes required", current: 5, floor: 3, required: 4, want: true},
+		{name: "floor exceeds current", current: 4, floor: 5, required: 5, want: false},
+		{name: "current is zero", current: 0, floor: 0, required: 0, want: false},
+		{name: "floor is zero", current: 5, floor: 0, required: 5, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := runtimeSchemaVersionsCompatible(test.current, test.floor, test.required); got != test.want {
+				t.Fatalf("runtimeSchemaVersionsCompatible(current=%d, floor=%d, required=%d)=%t want %t", test.current, test.floor, test.required, got, test.want)
+			}
+		})
+	}
+}

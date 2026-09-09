@@ -288,13 +288,15 @@ func validateRuntimeSchema(ctx context.Context, db *gorm.DB, options SchemaValid
 		}
 		return schemaError("schema_state_unavailable")
 	}
-	if state.CurrentVersion < RequiredSchemaVersion || state.CompatibilityFloor < RequiredSchemaVersion ||
-		state.CompatibilityFloor > state.CurrentVersion ||
-		state.CompatibilityFloor > options.RequiredVersion || options.RequiredVersion > state.CurrentVersion {
+	if !runtimeSchemaVersionsCompatible(state.CurrentVersion, state.CompatibilityFloor, options.RequiredVersion) {
 		return schemaError("schema_incompatible")
 	}
 
 	return validateSchemaCanaries(ctx, db, options)
+}
+
+func runtimeSchemaVersionsCompatible(current, floor, required int64) bool {
+	return current >= 1 && floor >= 1 && floor <= current && required >= floor && required <= current
 }
 
 func validateSchemaCanaries(ctx context.Context, db *gorm.DB, options SchemaValidationOptions) error {

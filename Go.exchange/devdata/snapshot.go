@@ -350,8 +350,16 @@ func normalizeSnapshotLanguages(snapshot *Snapshot) {
 	}
 	for index := range snapshot.Posts {
 		post := &snapshot.Posts[index]
-		post.Language = postlanguage.ResolveSource(post.Language, post.Text)
+		post.Language = normalizePersistedPostLanguage(post.Language, post.Text)
 	}
+}
+
+func normalizePersistedPostLanguage(raw string, text string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return postlanguage.Detect(text)
+	}
+	return postlanguage.NormalizeSource(raw)
 }
 
 func WriteSnapshotAtomic(path string, snapshot Snapshot, registry SourceRegistry) error {
