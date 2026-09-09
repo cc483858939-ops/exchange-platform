@@ -20,7 +20,7 @@ translation:
   base_url: "https://api.groq.com/openai/v1"
   api_key: ""
   model: "qwen/qwen3.6-27b"
-  prompt_version: "social_v1"
+  prompt_version: "social_v2"
   timeout_seconds: 10
   cache_ttl_hours: 168
   cache_jitter_hours: 24
