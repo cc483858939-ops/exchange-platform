@@ -48,7 +48,7 @@ func BackendIdentity(baseURL, model string) string {
 
 func CacheKey(postID uint, content, sourceLanguage, targetLanguage, backendIdentity, promptVersion string) string {
 	return fmt.Sprintf(
-		"translation:v1:%d:%s:%s:%s:%s:%s",
+		"translation:v2:%d:%s:%s:%s:%s:%s",
 		postID,
 		ContentHash(content),
 		cacheComponent(sourceLanguage),

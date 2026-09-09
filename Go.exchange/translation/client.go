@@ -70,6 +70,7 @@ func normalizedTimeout(timeout time.Duration) time.Duration {
 
 type completionRequest struct {
 	Model               string              `json:"model"`
+	ReasoningEffort     string              `json:"reasoning_effort"`
 	MaxCompletionTokens int                 `json:"max_completion_tokens"`
 	Messages            []completionMessage `json:"messages"`
 }
@@ -107,6 +108,7 @@ func (p *OpenAICompatibleClient) Translate(ctx context.Context, req Request) (Pr
 	}
 	payload, err := json.Marshal(completionRequest{
 		Model:               p.model,
+		ReasoningEffort:     "none",
 		MaxCompletionTokens: p.maxCompletionTokens,
 		Messages: []completionMessage{
 			{Role: "system", Content: systemPrompt},
@@ -173,7 +175,15 @@ func (p *OpenAICompatibleClient) Translate(ctx context.Context, req Request) (Pr
 	if translated == "" {
 		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, response.StatusCode, errors.New("provider content is empty"))
 	}
+	if containsReasoningMarkup(translated) {
+		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, response.StatusCode, errors.New("provider returned reasoning markup"))
+	}
 	return ProviderResult{Translation: translated}, nil
+}
+
+func containsReasoningMarkup(content string) bool {
+	normalized := strings.ToLower(content)
+	return strings.Contains(normalized, "<think>") || strings.Contains(normalized, "</think>")
 }
 
 func isNetworkTimeout(err error) bool {

@@ -165,6 +165,24 @@ func TestTranslationServiceTreatsRedisFailuresAsNonFatal(t *testing.T) {
 	}
 }
 
+func TestTranslationServiceDoesNotCacheInvalidProviderResponses(t *testing.T) {
+	provider := &fakeTranslationProvider{err: newProviderError(
+		ProviderErrorInvalidResponse,
+		200,
+		errors.New("provider returned reasoning markup"),
+	)}
+	cache := newFakeTranslationCache()
+	service := NewService(provider, cache, ServiceConfig{Enabled: true})
+
+	_, err := service.Translate(context.Background(), 42, "你好", "zh", "en")
+	if !errors.Is(err, ErrProviderInvalidResponse) {
+		t.Fatalf("error = %v, want %v", err, ErrProviderInvalidResponse)
+	}
+	if cache.setCalls != 0 {
+		t.Fatalf("cache Set calls = %d, want 0", cache.setCalls)
+	}
+}
+
 func TestTranslationServiceCoalescesConcurrentProviderCalls(t *testing.T) {
 	release := make(chan struct{})
 	provider := &fakeTranslationProvider{

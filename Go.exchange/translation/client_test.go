@@ -29,14 +29,14 @@ func TestOpenAICompatibleClientSendsConstrainedChatCompletionRequest(t *testing.
 		if err != nil {
 			t.Errorf("read request body: %v", err)
 		}
-		if strings.Contains(string(rawBody), "reasoning_effort") {
-			t.Error("request body contains provider-specific reasoning_effort")
+		if !strings.Contains(string(rawBody), `"reasoning_effort":"none"`) {
+			t.Error("request body is missing reasoning_effort=none")
 		}
 		var payload completionRequest
 		if err := json.Unmarshal(rawBody, &payload); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if payload.Model != "test-model" || payload.MaxCompletionTokens != 123 {
+		if payload.Model != "test-model" || payload.ReasoningEffort != "none" || payload.MaxCompletionTokens != 123 {
 			t.Errorf("request controls = %+v", payload)
 		}
 		if len(payload.Messages) != 2 || payload.Messages[0].Role != "system" || payload.Messages[1].Role != "user" {
@@ -155,6 +155,55 @@ func TestOpenAICompatibleClientRejectsMalformedAndOversizedResponses(t *testing.
 		if !errors.Is(err, ErrProviderInvalidResponse) {
 			t.Fatalf("body prefix %q error = %v", body[:min(len(body), 20)], err)
 		}
+	}
+}
+
+func TestOpenAICompatibleClientRejectsReasoningMarkupButAcceptsNormalText(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		content    string
+		shouldFail bool
+	}{
+		{name: "lowercase reasoning tags", content: "<think>internal reasoning</think>\n真正的翻译", shouldFail: true},
+		{name: "uppercase reasoning tags", content: "<THINK>internal reasoning</THINK>\n真正的翻译", shouldFail: true},
+		{name: "mixed case reasoning tags", content: "<Think>internal reasoning</Think>\n真正的翻译", shouldFail: true},
+		{name: "ordinary think word", content: "I think this is good.", shouldFail: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(completionResponse{
+					Choices: []completionChoice{{Message: &completionMessage{Content: testCase.content}}},
+				})
+			}))
+			defer server.Close()
+
+			client := NewOpenAICompatibleClientWithHTTPClient(ClientConfig{
+				BaseURL: server.URL,
+				APIKey:  "key",
+				Model:   "test-model",
+			}, server.Client())
+			result, err := client.Translate(context.Background(), Request{
+				Content:        "hello",
+				SourceLanguage: "en",
+				TargetLanguage: "zh",
+			})
+			if testCase.shouldFail {
+				if !errors.Is(err, ErrProviderInvalidResponse) {
+					t.Fatalf("error = %v, want %v", err, ErrProviderInvalidResponse)
+				}
+				if strings.Contains(err.Error(), "internal reasoning") {
+					t.Fatalf("error leaked reasoning content: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Translate() error = %v", err)
+			}
+			if result.Translation != testCase.content {
+				t.Fatalf("translation = %q, want %q", result.Translation, testCase.content)
+			}
+		})
 	}
 }
 

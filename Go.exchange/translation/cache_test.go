@@ -9,6 +9,12 @@ func TestCacheKeyUsesHashedContentAndConfigurationIdentity(t *testing.T) {
 	content := "do not put this post in a cache key"
 	backend := BackendIdentity("https://one.example/v1/", "test-model")
 	key := CacheKey(42, content, "zh", "en", backend, "social_v1")
+	if !strings.HasPrefix(key, "translation:v2:") {
+		t.Fatalf("cache key namespace = %q", key)
+	}
+	if strings.HasPrefix(key, "translation:v1:") {
+		t.Fatalf("cache key still uses the contaminated v1 namespace: %q", key)
+	}
 
 	if strings.Contains(key, content) {
 		t.Fatalf("cache key contains raw post content: %q", key)
