@@ -310,10 +310,38 @@ describe('PostDetailView post-first surface', () => {
     expect(mocks.translatePost).toHaveBeenCalledWith(42, 'en');
     expect(wrapper.get('.post-detail__body').text()).toContain('Full post body');
     expect(wrapper.get('.post-detail__translation-body').text()).toBe('Translated detail body');
-    expect(wrapper.get('.post-detail__translation-label').text()).toBe('Translated from Chinese');
+    expect(wrapper.get('.post-detail__translation-label').text()).toBe('Translated to English');
+    expect(wrapper.text()).not.toContain('Translated from');
+    expect(wrapper.text()).not.toContain('detected language');
 
     await wrapper.get('.post-detail__translation-action').trigger('click');
     expect(wrapper.find('.post-detail__translation-body').exists()).toBe(false);
+  });
+
+  it('only offers translation for a different language or an undetermined source', async () => {
+    for (const language of ['en', 'zh', 'ja', 'und'] as const) {
+      mocks.getPostById.mockResolvedValueOnce(canonicalPost({ language }));
+      const languageWrapper = mountDetail();
+      await flushPromises();
+
+      expect(languageWrapper.find('.post-detail__translation-action').exists())
+        .toBe(language !== 'en');
+      languageWrapper.unmount();
+    }
+
+    vi.stubGlobal('navigator', {
+      languages: ['zh-CN'],
+      language: 'zh-CN',
+    });
+    for (const language of ['zh', 'en', 'ja', 'und'] as const) {
+      mocks.getPostById.mockResolvedValueOnce(canonicalPost({ language }));
+      const targetChineseWrapper = mountDetail();
+      await flushPromises();
+
+      expect(targetChineseWrapper.find('.post-detail__translation-action').exists())
+        .toBe(language !== 'zh');
+      targetChineseWrapper.unmount();
+    }
   });
 
   it('opens Post deletion confirmation before mutation and lets Cancel restore focus', async () => {

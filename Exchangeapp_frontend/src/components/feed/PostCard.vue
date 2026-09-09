@@ -101,7 +101,7 @@
       >
         <template v-if="translatedVisible && translatedContent">
           <p class="post-card__translation-label">
-            Translated from {{ translatedFromLabel }}
+            Translated to {{ translatedToLabel }}
           </p>
           <p class="post-card__translation-body">
             <LinkifiedText :text="translatedContent" />
@@ -243,6 +243,7 @@ import { usePostDetailHandoffStore } from '../../store/postDetailHandoff';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../../utils/engagementCount';
 import {
   getPreferredTranslationLanguage,
+  isPostTranslationAvailable,
   translationLanguageName,
 } from '../../utils/translationLanguage';
 
@@ -294,16 +295,15 @@ const translationTargetLanguage = getPreferredTranslationLanguage();
 const translationState = ref<TranslationState>('idle');
 const translatedContent = ref('');
 const translatedVisible = ref(false);
-const translatedSourceLanguage = ref<FeedPost['language'] | null>(null);
 let translationRequestVersion = 0;
 
 const likeLoading = computed(() => props.post.likeStatus === 'unknown');
 const likeUnavailable = computed(() => props.post.likeStatus === 'unavailable');
 const repostLoading = computed(() => props.post.repostStatus === 'unknown');
 const repostUnavailable = computed(() => props.post.repostStatus === 'unavailable');
-const translationAvailable = computed(() => (
-  props.post.language === 'und'
-  || props.post.language !== translationTargetLanguage
+const translationAvailable = computed(() => isPostTranslationAvailable(
+  props.post.language,
+  translationTargetLanguage,
 ));
 const translationActionLabel = computed(() => {
   if (translationState.value === 'loading') {
@@ -317,8 +317,8 @@ const translationActionLabel = computed(() => {
   }
   return 'Translate post';
 });
-const translatedFromLabel = computed(() => (
-  translationLanguageName(translatedSourceLanguage.value ?? props.post.language)
+const translatedToLabel = computed(() => (
+  translationLanguageName(translationTargetLanguage)
 ));
 const referencePost = computed(() => props.post.quotePost ?? props.post.replyToPost ?? null);
 const referenceDestination = computed(() => {
@@ -632,7 +632,6 @@ const resetTranslation = () => {
   translationState.value = 'idle';
   translatedContent.value = '';
   translatedVisible.value = false;
-  translatedSourceLanguage.value = null;
 };
 
 const handleTranslationAction = async () => {
@@ -653,7 +652,6 @@ const handleTranslationAction = async () => {
   translationState.value = 'loading';
   translatedContent.value = '';
   translatedVisible.value = false;
-  translatedSourceLanguage.value = null;
 
   try {
     const response = await translatePost(postID, translationTargetLanguage);
@@ -666,7 +664,6 @@ const handleTranslationAction = async () => {
     }
 
     translatedContent.value = response.translation;
-    translatedSourceLanguage.value = response.source_language;
     translatedVisible.value = true;
     translationState.value = 'success';
   } catch {

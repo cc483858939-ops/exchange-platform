@@ -168,9 +168,27 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(differentLanguage.find('.post-card__translation-action').exists()).toBe(true);
     differentLanguage.unmount();
 
+    const anotherDifferentLanguage = mountPostCard({ ...basePost(), language: 'ja' });
+    expect(anotherDifferentLanguage.find('.post-card__translation-action').exists()).toBe(true);
+    anotherDifferentLanguage.unmount();
+
     const undeterminedLanguage = mountPostCard({ ...basePost(), language: 'und' });
     expect(undeterminedLanguage.find('.post-card__translation-action').exists()).toBe(true);
     undeterminedLanguage.unmount();
+
+    vi.stubGlobal('navigator', {
+      languages: ['zh-CN'],
+      language: 'zh-CN',
+    });
+    const sameChineseLanguage = mountPostCard({ ...basePost(), language: 'zh' });
+    expect(sameChineseLanguage.find('.post-card__translation-action').exists()).toBe(false);
+    sameChineseLanguage.unmount();
+
+    for (const language of ['en', 'ja', 'und'] as const) {
+      const targetChineseLanguage = mountPostCard({ ...basePost(), language });
+      expect(targetChineseLanguage.find('.post-card__translation-action').exists()).toBe(true);
+      targetChineseLanguage.unmount();
+    }
   });
 
   it('captures content, reply, and view navigation with one handoff and one postClick each', async () => {
@@ -348,7 +366,9 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(mocks.translatePost).toHaveBeenCalledWith(42, 'en');
     expect(wrapper.get('.post-card__body').text()).toContain('Post body');
     expect(wrapper.get('.post-card__translation-body').text()).toBe('Translated post body');
-    expect(wrapper.get('.post-card__translation-label').text()).toBe('Translated from Chinese');
+    expect(wrapper.get('.post-card__translation-label').text()).toBe('Translated to English');
+    expect(wrapper.text()).not.toContain('Translated from');
+    expect(wrapper.text()).not.toContain('detected language');
     expect(wrapper.get('.post-card__translation-action').text()).toBe('Hide translation');
 
     await wrapper.get('.post-card__translation-action').trigger('click');

@@ -37,16 +37,18 @@ export function getPreferredTranslationLanguage(): TranslationLanguage {
   return fallback || 'en';
 }
 
-export function translationLanguageName(language: TranslationSourceLanguage): string {
-  switch (language) {
-    case 'zh':
-      return 'Chinese';
-    case 'ja':
-      return 'Japanese';
-    case 'en':
-      return 'English';
-    default:
-      return 'detected language';
-  }
+export function isPostTranslationAvailable(
+  sourceLanguage: TranslationSourceLanguage,
+  targetLanguage: TranslationLanguage,
+): boolean {
+  return sourceLanguage === 'und' || sourceLanguage !== targetLanguage;
 }
 
+export function translationLanguageName(language: TranslationLanguage): string {
+  const names: Record<TranslationLanguage, string> = {
+    zh: 'Chinese',
+    ja: 'Japanese',
+    en: 'English',
+  };
+  return names[language];
+}

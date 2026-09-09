@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getPreferredTranslationLanguage,
+  isPostTranslationAvailable,
   normalizeTranslationLanguage,
 } from './translationLanguage';
 
@@ -52,5 +53,22 @@ describe('translation language helpers', () => {
     vi.stubGlobal('navigator', { languages: [], language: '' });
 
     expect(getPreferredTranslationLanguage()).toBe('en');
+  });
+
+  it.each([
+    ['zh', 'zh', false],
+    ['zh', 'ja', true],
+    ['zh', 'en', true],
+    ['ja', 'zh', true],
+    ['ja', 'ja', false],
+    ['ja', 'en', true],
+    ['en', 'zh', true],
+    ['en', 'ja', true],
+    ['en', 'en', false],
+    ['und', 'zh', true],
+    ['und', 'ja', true],
+    ['und', 'en', true],
+  ] as const)('uses the target language for %s to %s eligibility', (source, target, expected) => {
+    expect(isPostTranslationAvailable(source, target)).toBe(expected);
   });
 });

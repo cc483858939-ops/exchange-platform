@@ -53,7 +53,7 @@
         >
           <template v-if="translatedVisible && translatedContent">
             <p class="post-detail__translation-label">
-              Translated from {{ translatedFromLabel }}
+              Translated to {{ translatedToLabel }}
             </p>
             <p class="post-detail__translation-body">
               <LinkifiedText :text="translatedContent" />
@@ -334,6 +334,7 @@ import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '.
 import { formatPostDetailTimestamp } from '../utils/time';
 import {
   getPreferredTranslationLanguage,
+  isPostTranslationAvailable,
   translationLanguageName,
 } from '../utils/translationLanguage';
 
@@ -361,7 +362,6 @@ const translationTargetLanguage = getPreferredTranslationLanguage();
 const translationState = ref<TranslationState>('idle');
 const translatedContent = ref('');
 const translatedVisible = ref(false);
-const translatedSourceLanguage = ref<Post['language'] | null>(null);
 let translationRequestVersion = 0;
 
 const liked = ref(false);
@@ -513,7 +513,7 @@ const translationAvailable = computed(() => {
   const sourceLanguage = post.value?.language;
   return Boolean(
     sourceLanguage
-    && (sourceLanguage === 'und' || sourceLanguage !== translationTargetLanguage),
+    && isPostTranslationAvailable(sourceLanguage, translationTargetLanguage),
   );
 });
 
@@ -530,8 +530,8 @@ const translationActionLabel = computed(() => {
   return 'Translate post';
 });
 
-const translatedFromLabel = computed(() => (
-  translationLanguageName(translatedSourceLanguage.value ?? post.value?.language ?? 'und')
+const translatedToLabel = computed(() => (
+  translationLanguageName(translationTargetLanguage)
 ));
 
 const isCurrentTranslationRequest = (
@@ -553,7 +553,6 @@ const resetTranslation = () => {
   translationState.value = 'idle';
   translatedContent.value = '';
   translatedVisible.value = false;
-  translatedSourceLanguage.value = null;
 };
 
 const handleTranslationAction = async () => {
@@ -577,7 +576,6 @@ const handleTranslationAction = async () => {
   translationState.value = 'loading';
   translatedContent.value = '';
   translatedVisible.value = false;
-  translatedSourceLanguage.value = null;
 
   try {
     const response = await translatePost(postID, translationTargetLanguage);
@@ -596,7 +594,6 @@ const handleTranslationAction = async () => {
     }
 
     translatedContent.value = response.translation;
-    translatedSourceLanguage.value = response.source_language;
     translatedVisible.value = true;
     translationState.value = 'success';
   } catch {
