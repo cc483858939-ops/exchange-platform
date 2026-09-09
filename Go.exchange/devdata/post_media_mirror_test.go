@@ -176,8 +176,8 @@ func TestPreparePostMediaMirrorsIsolatesFailuresAndReusesObjects(t *testing.T) {
 		Version: DefaultSnapshotVersion, FetchedAt: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC),
 		Accounts: []SnapshotAccount{{RegistryKey: "source", SourceUserID: "123", Handle: "source", Name: "Source", Category: "test"}},
 		Posts: []SnapshotPost{
-			{RegistryKey: "source", SourcePostID: "100", SourceURL: "https://x.com/source/status/100", Text: strings.Repeat("a", 40), CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), HasMedia: true, Media: []SnapshotMedia{{Type: "image", SourceURL: firstURL}}},
-			{RegistryKey: "source", SourcePostID: "101", SourceURL: "https://x.com/source/status/101", Text: strings.Repeat("b", 40), CreatedAt: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), HasMedia: true, Media: []SnapshotMedia{{Type: "image", SourceURL: secondURL}, {Type: "image", SourceURL: thirdURL}}},
+			{RegistryKey: "source", SourcePostID: "100", SourceURL: "https://x.com/source/status/100", Text: strings.Repeat("a", 40), CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Language: "und", HasMedia: true, Media: []SnapshotMedia{{Type: "image", SourceURL: firstURL}}},
+			{RegistryKey: "source", SourcePostID: "101", SourceURL: "https://x.com/source/status/101", Text: strings.Repeat("b", 40), CreatedAt: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), Language: "und", HasMedia: true, Media: []SnapshotMedia{{Type: "image", SourceURL: secondURL}, {Type: "image", SourceURL: thirdURL}}},
 		},
 	}
 	firstBody := avatarJPEGFixture(t)

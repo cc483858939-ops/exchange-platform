@@ -16,6 +16,7 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 		AuthorID:   7,
 		Author:     models.User{Model: gorm.Model{ID: 7}, Username: "alice"},
 		Content:    "engagement",
+		Language:   "und",
 		Visibility: "public",
 		LikeCount:  17,
 		ReplyCount: 8,
@@ -29,14 +30,17 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 	if response.LikeCount != 17 || response.ReplyCount != 8 || response.ViewCount != 1234 {
 		t.Fatalf("response like_count=%d comment_count=%d view_count=%d", response.LikeCount, response.ReplyCount, response.ViewCount)
 	}
+	if response.Language != "und" {
+		t.Fatalf("response language=%q want und", response.Language)
+	}
 }
 
 func TestPostEngagementCacheSchemaVersion(t *testing.T) {
-	if postDetailCacheKey("42") != "post:detail:v3:42" {
+	if postDetailCacheKey("42") != "post:detail:v4:42" {
 		t.Fatalf("post detail cache key=%q", postDetailCacheKey("42"))
 	}
 	for _, column := range []string{
-		"id", "created_at", "updated_at", "author_id", "content", "reply_to_post_id",
+		"id", "created_at", "updated_at", "author_id", "content", "language", "reply_to_post_id",
 		"quote_post_id", "conversation_id", "visibility", "like_count", "reply_count", "view_count", "like_sync_version",
 	} {
 		if !strings.Contains(publicPostSelectColumns, "posts."+column) {
@@ -51,6 +55,7 @@ func TestPublicPostSelectionIncludesEngagementMetadataIntegration(t *testing.T) 
 		"like_count":  17,
 		"reply_count": 8,
 		"view_count":  4321,
+		"language":    "zh",
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +68,7 @@ func TestPublicPostSelectionIncludesEngagementMetadataIntegration(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(responses) != 1 || responses[0].LikeCount != 17 || responses[0].ReplyCount != 8 || responses[0].ViewCount != 4321 {
+	if len(responses) != 1 || responses[0].LikeCount != 17 || responses[0].ReplyCount != 8 || responses[0].ViewCount != 4321 || responses[0].Language != "zh" {
 		t.Fatalf("article list responses=%#v", responses)
 	}
 }

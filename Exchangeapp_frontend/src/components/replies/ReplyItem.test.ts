@@ -17,6 +17,7 @@ const makeReply = (overrides: Partial<Post> = {}): Post => ({
     avatar_url: '',
   },
   content: 'Reply body',
+  language: 'und',
   conversation_id: 42,
   reply_to_post_id: 42,
   quote_post_id: null,

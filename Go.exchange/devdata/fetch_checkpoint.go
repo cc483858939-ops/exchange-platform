@@ -250,6 +250,7 @@ func AssembleSnapshotFromCheckpoint(checkpoint FetchCheckpoint, registry SourceR
 	}
 	sortSnapshotAccounts(snapshot.Accounts)
 	sortSnapshotPosts(snapshot.Posts)
+	normalizeSnapshotLanguages(&snapshot)
 	if err := ValidateSnapshot(snapshot, registry); err != nil {
 		return Snapshot{}, err
 	}

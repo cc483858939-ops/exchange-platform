@@ -239,6 +239,11 @@ func applyPostMediaConstraints(tx *gorm.DB) error {
 
 func applyPostSchemaConstraints(tx *gorm.DB) error {
 	statements := []string{
+		"UPDATE posts SET language = 'und' WHERE language IS NULL OR btrim(language) = ''",
+		"ALTER TABLE posts ALTER COLUMN language SET DEFAULT 'und'",
+		"ALTER TABLE posts ALTER COLUMN language SET NOT NULL",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_language_supported",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_language_supported CHECK (language IN ('zh', 'ja', 'en', 'und'))",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_author",
 		"ALTER TABLE posts ADD CONSTRAINT fk_posts_author FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_reply_to_post",

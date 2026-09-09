@@ -231,7 +231,7 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != RequiredSchemaVersion || PublishedSchemaCompatibilityFloor != RequiredSchemaVersion {
+	if PublishedSchemaCurrentVersion != RequiredSchemaVersion || PublishedSchemaCompatibilityFloor != 4 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
 	}
 }

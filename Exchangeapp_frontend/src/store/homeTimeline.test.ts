@@ -73,6 +73,7 @@ const post = (id: number, authorID = 7) => ({
   published_at: '2026-08-24T00:00:00.000Z',
   author: author(authorID),
   content: `Body ${id}`,
+  language: 'und' as const,
   conversation_id: id,
   reply_to_post_id: null,
   quote_post_id: null,

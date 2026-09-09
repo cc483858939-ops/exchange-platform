@@ -35,6 +35,7 @@ type postResponse struct {
 	PublishedAt    *time.Time             `json:"published_at"`
 	Author         publicAuthorResponse   `json:"author"`
 	Content        string                 `json:"content"`
+	Language       string                 `json:"language"`
 	Media          []postMediaResponse    `json:"media"`
 	ConversationID uint                   `json:"conversation_id"`
 	ReplyToPostID  *uint                  `json:"reply_to_post_id"`
@@ -107,7 +108,7 @@ func newPostResponse(post models.Post) (postResponse, error) {
 	}
 	return postResponse{
 		ID: post.ID, CreatedAt: post.CreatedAt.UTC(), UpdatedAt: post.UpdatedAt.UTC(),
-		PublishedAt: &publishedAt, Author: author, Content: post.Content,
+		PublishedAt: &publishedAt, Author: author, Content: post.Content, Language: post.Language,
 		ConversationID: conversationID, ReplyToPostID: post.ReplyToPostID, QuotePostID: post.QuotePostID,
 		Media:      make([]postMediaResponse, 0),
 		Visibility: post.Visibility, LikeCount: post.LikeCount, ReplyCount: post.ReplyCount,

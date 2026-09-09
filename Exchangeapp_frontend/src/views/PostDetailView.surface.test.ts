@@ -120,6 +120,7 @@ const canonicalPost = (overrides: Partial<Post> = {}): Post => ({
     avatar_url: '/post-author.png',
   },
   content: 'Full post body',
+  language: 'und',
   conversation_id: 42,
   reply_to_post_id: null,
   quote_post_id: null,

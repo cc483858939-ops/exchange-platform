@@ -225,6 +225,48 @@ func findMirrorMapping(t *testing.T, db *gorm.DB, sourcePostID string) models.De
 	return mapping
 }
 
+func TestDevDataMirrorLanguageResyncIntegration(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+	now := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	post := data.sourcePost(data.Registry.Accounts[0].Key, 1199, now.Add(-time.Hour), "language-resync")
+	post.Language = "und"
+	initial := data.snapshot(now, post)
+	if _, err := SyncSnapshot(context.Background(), db, data.Registry, initial, nil, now); err != nil {
+		t.Fatalf("initial language sync: %v", err)
+	}
+	mappingBefore := findMirrorMapping(t, db, post.SourcePostID)
+	var storedBefore models.Post
+	if err := db.First(&storedBefore, mappingBefore.LocalPostID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedBefore.Language != "und" {
+		t.Fatalf("initial stored language=%q want und", storedBefore.Language)
+	}
+
+	next := post
+	next.Language = "ja"
+	result, err := SyncSnapshot(context.Background(), db, data.Registry, data.snapshot(now.Add(time.Minute), next), nil, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("language resync: %v", err)
+	}
+	if result.Kept != 1 || !containsUint(result.AffectedPostIDs, mappingBefore.LocalPostID) {
+		t.Fatalf("language resync result=%#v", result)
+	}
+	mappingAfter := findMirrorMapping(t, db, post.SourcePostID)
+	if mappingAfter.ID != mappingBefore.ID || mappingAfter.LocalPostID != mappingBefore.LocalPostID || mappingAfter.SourcePostID != mappingBefore.SourcePostID {
+		t.Fatalf("mapping identity changed before=%#v after=%#v", mappingBefore, mappingAfter)
+	}
+	var storedAfter models.Post
+	if err := db.First(&storedAfter, mappingAfter.LocalPostID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedAfter.Language != "ja" || storedAfter.Content != storedBefore.Content || storedAfter.AuthorID != storedBefore.AuthorID || storedAfter.Visibility != storedBefore.Visibility {
+		t.Fatalf("language resync changed unexpected Post fields before=%#v after=%#v", storedBefore, storedAfter)
+	}
+}
+
 func TestDevDataMirrorPostMediaLifecycleIntegration(t *testing.T) {
 	db := openDevDataIntegrationDB(t)
 	data := newSyncIntegrationData()

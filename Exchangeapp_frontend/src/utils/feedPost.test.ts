@@ -16,6 +16,7 @@ const post = (overrides: Partial<Post> = {}): Post => ({
   published_at: '2026-08-27T00:00:00.000Z',
   author: canonicalAuthor,
   content: 'Canonical body',
+  language: 'und',
   conversation_id: 42,
   reply_to_post_id: null,
   quote_post_id: null,

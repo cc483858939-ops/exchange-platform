@@ -15,6 +15,7 @@ import (
 	"Go.exchange/likes"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/postlanguage"
 	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
@@ -185,7 +186,7 @@ func persistPostGraph(post *models.Post, userID uint, content string, req create
 	return global.Db.Transaction(func(tx *gorm.DB) error {
 		var parentAuthor uint
 		*post = models.Post{
-			AuthorID: userID, Content: content, ReplyToPostID: req.ReplyToPostID,
+			AuthorID: userID, Content: content, Language: postlanguage.Detect(content), ReplyToPostID: req.ReplyToPostID,
 			QuotePostID: req.QuotePostID, Visibility: "public",
 		}
 		if req.ReplyToPostID != nil {

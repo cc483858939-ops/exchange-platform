@@ -51,6 +51,7 @@ const post = (id: number, authorID = 9): Post => ({
     avatar_url: '',
   },
   content: `Body ${id}`,
+  language: 'und',
   conversation_id: id,
   reply_to_post_id: null,
   quote_post_id: null,

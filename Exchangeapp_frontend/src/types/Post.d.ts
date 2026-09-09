@@ -6,6 +6,8 @@ export interface PostMedia {
   position: number;
 }
 
+export type PostLanguage = 'zh' | 'ja' | 'en' | 'und';
+
 export type PostReference =
   | {
       id: number;
@@ -27,6 +29,7 @@ export interface Post {
   published_at: string;
   author: PublicAuthor;
   content: string;
+  language: PostLanguage;
   conversation_id: number;
   reply_to_post_id: number | null;
   quote_post_id: number | null;

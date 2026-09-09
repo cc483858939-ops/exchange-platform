@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"Go.exchange/postlanguage"
 )
 
 const (
@@ -182,7 +184,7 @@ func BuildSnapshotPost(account SourceAccount, post XPost) SnapshotPost {
 		SourceURL:         fmt.Sprintf("https://x.com/%s/status/%s", account.Handle, strings.TrimSpace(post.ID)),
 		Text:              text,
 		CreatedAt:         post.CreatedAt.UTC(),
-		Language:          strings.TrimSpace(post.Lang),
+		Language:          postlanguage.ResolveSource(post.Lang, text),
 		PossiblySensitive: post.PossiblySensitive,
 		HasMedia:          len(post.Attachments.MediaKeys) > 0,
 		Media:             media,
@@ -262,6 +264,9 @@ func ValidateSnapshot(snapshot Snapshot, registry SourceRegistry) error {
 		if strings.TrimSpace(post.SourceURL) == "" {
 			return fmt.Errorf("snapshot Post %q is missing source_url", post.SourcePostID)
 		}
+		if !postlanguage.IsCanonical(post.Language) {
+			return fmt.Errorf("snapshot Post %q has non-canonical language %q", post.SourcePostID, post.Language)
+		}
 		expectedURL := fmt.Sprintf("https://x.com/%s/status/%s", strings.TrimSpace(accountsByKey[post.RegistryKey].Handle), post.SourcePostID)
 		if post.SourceURL != expectedURL {
 			return fmt.Errorf("snapshot Post %q has unexpected source_url", post.SourcePostID)
@@ -325,6 +330,7 @@ func ReadSnapshot(path string, registry SourceRegistry) (Snapshot, error) {
 	if err := decoder.Decode(&snapshot); err != nil {
 		return Snapshot{}, fmt.Errorf("decode X snapshot: %w", err)
 	}
+	normalizeSnapshotLanguages(&snapshot)
 	var trailing interface{}
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
@@ -336,6 +342,16 @@ func ReadSnapshot(path string, registry SourceRegistry) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func normalizeSnapshotLanguages(snapshot *Snapshot) {
+	if snapshot == nil {
+		return
+	}
+	for index := range snapshot.Posts {
+		post := &snapshot.Posts[index]
+		post.Language = postlanguage.ResolveSource(post.Language, post.Text)
+	}
 }
 
 func WriteSnapshotAtomic(path string, snapshot Snapshot, registry SourceRegistry) error {

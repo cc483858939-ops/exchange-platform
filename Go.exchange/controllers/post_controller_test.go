@@ -30,7 +30,7 @@ func stubPostCreatePersistence(t *testing.T, persisted *models.Post, id uint) {
 	original := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = original })
 	persistPostGraphFn = func(post *models.Post, userID uint, content string, req createPostRequest, _ []validatedPostMedia, now time.Time) error {
-		*post = models.Post{Model: gorm.Model{ID: id, CreatedAt: now, UpdatedAt: now}, AuthorID: userID, Content: content, Visibility: "public"}
+		*post = models.Post{Model: gorm.Model{ID: id, CreatedAt: now, UpdatedAt: now}, AuthorID: userID, Content: content, Language: "und", Visibility: "public"}
 		if persisted != nil {
 			*persisted = *post
 		}

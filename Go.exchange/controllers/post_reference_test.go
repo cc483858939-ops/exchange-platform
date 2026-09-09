@@ -42,6 +42,7 @@ func TestSelectedRecommendationResponsesPropagatesReferenceHydrationError(t *tes
 			Model:       gorm.Model{ID: 1},
 			AuthorID:    7,
 			Author:      models.User{Model: gorm.Model{ID: 7}},
+			Language:    "und",
 			QuotePostID: &quoteID,
 		},
 	}})
@@ -93,6 +94,7 @@ func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) 
 			Model:       gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
 			AuthorID:    userID,
 			Content:     content,
+			Language:    "und",
 			QuotePostID: &quoteID,
 			Visibility:  "public",
 		}

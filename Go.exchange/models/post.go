@@ -10,7 +10,8 @@ type Post struct {
 	AuthorID uint `json:"-" gorm:"not null"`
 	Author   User `json:"-" gorm:"foreignKey:AuthorID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
 
-	Content string `json:"content" gorm:"type:text;not null"`
+	Content  string `json:"content" gorm:"type:text;not null"`
+	Language string `json:"language" gorm:"size:8;not null;default:und"`
 
 	ReplyToPostID *uint `json:"reply_to_post_id"`
 	ReplyToPost   *Post `json:"-" gorm:"foreignKey:ReplyToPostID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`

@@ -106,6 +106,20 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	expectIntegrationSchemaCode(t, tx, apiOptions, "")
 	expectIntegrationSchemaCode(t, tx, workerOptions, "")
 
+	withIntegrationSavepoint(t, tx, "missing_post_language_column", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "posts") + " DROP COLUMN language").Error; err != nil {
+			t.Fatalf("drop Post language column: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_column_missing")
+	})
+
+	withIntegrationSavepoint(t, tx, "missing_post_language_constraint", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "posts") + " DROP CONSTRAINT chk_posts_language_supported").Error; err != nil {
+			t.Fatalf("drop Post language constraint: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
+	})
+
 	withIntegrationSavepoint(t, tx, "missing_post_constraint", func() {
 		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "posts") + " DROP CONSTRAINT chk_posts_visibility_public").Error; err != nil {
 			t.Fatalf("drop Post visibility constraint: %v", err)
@@ -149,14 +163,14 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	})
 
 	withIntegrationSavepoint(t, tx, "floor_too_high", func() {
-		if err := updateIntegrationState(tx, primarySchema, 4, 5); err != nil {
+		if err := updateIntegrationState(tx, primarySchema, RequiredSchemaVersion, RequiredSchemaVersion+1); err != nil {
 			t.Fatalf("set incompatible schema floor: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_incompatible")
 	})
 
 	withIntegrationSavepoint(t, tx, "compatible_newer", func() {
-		if err := updateIntegrationState(tx, primarySchema, 5, 4); err != nil {
+		if err := updateIntegrationState(tx, primarySchema, PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor); err != nil {
 			t.Fatalf("set compatible newer schema version: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "")

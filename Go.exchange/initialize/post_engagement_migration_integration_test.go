@@ -49,6 +49,36 @@ WHERE table_schema = current_schema()
 	if column.Nullable != "NO" || !strings.Contains(column.Default, "0") {
 		t.Fatalf("posts.reply_count nullable=%q default=%q", column.Nullable, column.Default)
 	}
+	var languageColumn struct {
+		Nullable string `gorm:"column:is_nullable"`
+		Default  string `gorm:"column:column_default"`
+	}
+	if err := db.Raw(`
+SELECT is_nullable, COALESCE(column_default, '') AS column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'posts'
+  AND column_name = 'language'
+`).Scan(&languageColumn).Error; err != nil {
+		t.Fatal(err)
+	}
+	if languageColumn.Nullable != "NO" || !strings.Contains(strings.ToLower(languageColumn.Default), "und") {
+		t.Fatalf("posts.language nullable=%q default=%q", languageColumn.Nullable, languageColumn.Default)
+	}
+	var languageConstraint string
+	if err := db.Raw(`
+SELECT pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'posts'::regclass
+  AND conname = 'chk_posts_language_supported'
+`).Scan(&languageConstraint).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"zh", "ja", "en", "und"} {
+		if !strings.Contains(strings.ToLower(languageConstraint), value) {
+			t.Fatalf("language constraint=%q missing %q", languageConstraint, value)
+		}
+	}
 	var viewColumn struct {
 		Nullable string `gorm:"column:is_nullable"`
 		Default  string `gorm:"column:column_default"`
@@ -106,11 +136,31 @@ WHERE conrelid = 'posts'::regclass
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
+	if article.Language != "und" {
+		t.Fatalf("default Post language=%q want und", article.Language)
+	}
+	validLanguages := []string{"zh", "ja", "en", "und"}
+	validPostIDs := make([]uint, 0, len(validLanguages))
+	for _, language := range validLanguages {
+		validPost := models.Post{AuthorID: user.ID, Content: "language migration " + language, Language: language, Visibility: "public"}
+		if err := db.Create(&validPost).Error; err != nil {
+			t.Fatalf("create valid language %q: %v", language, err)
+		}
+		validPostIDs = append(validPostIDs, validPost.ID)
+	}
 	t.Cleanup(func() {
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostRepost{})
+		if len(validPostIDs) > 0 {
+			db.Unscoped().Where("id IN ?", validPostIDs).Delete(&models.Post{})
+		}
 		db.Unscoped().Delete(&article)
 		db.Unscoped().Delete(&user)
 	})
+	for _, language := range []string{"", "fr", "english", "jp"} {
+		if err := db.Exec("INSERT INTO posts (author_id, content, language, visibility) VALUES (?, ?, ?, ?)", user.ID, "invalid language "+language, language, "public").Error; err == nil {
+			t.Fatalf("database accepted invalid language %q", language)
+		}
+	}
 
 	repost := models.PostRepost{UserID: user.ID, PostID: article.ID}
 	if err := db.Create(&repost).Error; err != nil {
@@ -126,5 +176,35 @@ WHERE conrelid = 'posts'::regclass
 	}
 	if err := db.Model(&article).Update("view_count", -1).Error; err == nil {
 		t.Fatal("database accepted a negative article view_count")
+	}
+
+	legacyTx := db.Begin()
+	if legacyTx.Error != nil {
+		t.Fatal(legacyTx.Error)
+	}
+	defer legacyTx.Rollback()
+	legacyUser := models.User{Username: "language-legacy-" + uuid.NewString(), Password: "test"}
+	if err := legacyTx.Create(&legacyUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyTx.Exec("ALTER TABLE posts ALTER COLUMN language DROP NOT NULL").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyTx.Exec("ALTER TABLE posts DROP CONSTRAINT chk_posts_language_supported").Error; err != nil {
+		t.Fatal(err)
+	}
+	var legacyPostID uint
+	if err := legacyTx.Raw("INSERT INTO posts (author_id, content, language, visibility) VALUES (?, ?, ?, ?) RETURNING id", legacyUser.ID, "legacy blank language", "", "public").Scan(&legacyPostID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPostSchemaConstraints(legacyTx); err != nil {
+		t.Fatal(err)
+	}
+	var migratedLanguage string
+	if err := legacyTx.Raw("SELECT language FROM posts WHERE id = ?", legacyPostID).Scan(&migratedLanguage).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migratedLanguage != "und" {
+		t.Fatalf("legacy blank language migrated to %q want und", migratedLanguage)
 	}
 }

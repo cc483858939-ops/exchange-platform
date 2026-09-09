@@ -31,7 +31,7 @@ func testSnapshot(text string) Snapshot {
 		}},
 		Posts: []SnapshotPost{{
 			RegistryKey: "source", SourcePostID: "456", SourceURL: "https://x.com/source/status/456",
-			Text: text, CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Text: text, CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Language: "und",
 		}},
 	}
 }

@@ -462,7 +462,7 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 	if post.ReplyToPostID != nil || post.QuotePostID != nil || post.ConversationID != nil {
 		return fmt.Errorf("%w: imported Post %d is not a root", ErrMirrorMappingInconsistent, post.ID)
 	}
-	contentChanged := post.Content != desired.Text || post.AuthorID != account.LocalUserID || post.Visibility != "public" || !post.CreatedAt.Equal(desired.CreatedAt.UTC())
+	contentChanged := post.Content != desired.Text || post.Language != desired.Language || post.AuthorID != account.LocalUserID || post.Visibility != "public" || !post.CreatedAt.Equal(desired.CreatedAt.UTC())
 	reactivate := mapping.State == models.DevDataMirrorPostStateTombstone || post.DeletedAt.Valid
 	if reactivate {
 		likeState, err := loadReactivationLikeState(tx, post.ID, post.LikeCount, post.LikeSyncVersion)
@@ -474,6 +474,7 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 	values := map[string]interface{}{
 		"author_id":  account.LocalUserID,
 		"content":    desired.Text,
+		"language":   desired.Language,
 		"created_at": desired.CreatedAt.UTC(),
 		"updated_at": syncAt,
 		"visibility": "public",
@@ -516,6 +517,7 @@ func insertPost(tx *gorm.DB, account models.DevDataMirrorAccount, desired Snapsh
 		Model:           gorm.Model{CreatedAt: desired.CreatedAt.UTC(), UpdatedAt: syncAt},
 		AuthorID:        account.LocalUserID,
 		Content:         desired.Text,
+		Language:        desired.Language,
 		Visibility:      "public",
 		LikeCount:       0,
 		ReplyCount:      0,
