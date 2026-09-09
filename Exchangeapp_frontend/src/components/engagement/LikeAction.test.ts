@@ -49,17 +49,19 @@ describe('LikeAction', () => {
     expect(wrapper.findComponent(AppIcon).props('filled')).toBe(true);
   });
 
-  it('starts liking motion and emits one toggle on activation', async () => {
+  it('fills the heart immediately when liking before parent props update', async () => {
     const wrapper = mountLikeAction();
 
     await wrapper.find('button').trigger('click');
 
     expect(wrapper.emitted('toggle')).toHaveLength(1);
     expect(wrapper.find('button').classes()).toContain('like-action--liking');
+    expect(wrapper.find('button').classes()).toContain('like-action--liked');
     expect(wrapper.find('button').attributes('data-motion')).toBe('liking');
+    expect(wrapper.findComponent(AppIcon).props('filled')).toBe(true);
   });
 
-  it('starts quiet unlike motion without a like burst', async () => {
+  it('switches to the outline heart immediately when unliking', async () => {
     const wrapper = mountLikeAction({
       liked: true,
       count: 13,
@@ -70,6 +72,8 @@ describe('LikeAction', () => {
 
     expect(wrapper.find('button').classes()).toContain('like-action--unliking');
     expect(wrapper.find('button').classes()).not.toContain('like-action--liking');
+    expect(wrapper.find('button').classes()).not.toContain('like-action--liked');
+    expect(wrapper.findComponent(AppIcon).props('filled')).toBe(false);
     expect(wrapper.find('.like-action__halo').attributes('style')).toBeUndefined();
   });
 
@@ -125,12 +129,15 @@ describe('LikeAction', () => {
     await wrapper.find('button').trigger('click');
     await wrapper.setProps({ liked: true, count: 13 });
     expect(wrapper.find('button').classes()).toContain('like-action--liking');
+    expect(wrapper.findComponent(AppIcon).props('filled')).toBe(true);
 
     await wrapper.setProps({ liked: false, count: 12 });
 
     expect(wrapper.find('button').attributes('data-motion')).toBe('idle');
     expect(wrapper.find('button').classes()).not.toContain('like-action--liking');
     expect(wrapper.find('button').classes()).not.toContain('like-action--unliking');
+    expect(wrapper.find('button').classes()).not.toContain('like-action--liked');
+    expect(wrapper.findComponent(AppIcon).props('filled')).toBe(false);
   });
 
   it('cancels an in-flight unlike motion on rollback without starting like motion', async () => {
@@ -152,7 +159,12 @@ describe('LikeAction', () => {
     const wrapper = mountLikeAction();
 
     await wrapper.find('button').trigger('click');
-    vi.advanceTimersByTime(321);
+    vi.advanceTimersByTime(359);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('button').attributes('data-motion')).toBe('liking');
+
+    vi.advanceTimersByTime(2);
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('button').attributes('data-motion')).toBe('idle');

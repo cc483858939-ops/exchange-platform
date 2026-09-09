@@ -5,7 +5,7 @@
     :class="{
       'like-action--compact': variant === 'compact',
       'like-action--detail': variant === 'detail',
-      'like-action--liked': liked,
+      'like-action--liked': visualLiked,
       'like-action--disabled': disabled,
       'like-action--loading': loading,
       'like-action--pending': pending,
@@ -33,7 +33,7 @@
         <AppIcon
           name="heart"
           :size="variant === 'detail' ? 20 : 18"
-          :filled="liked"
+          :filled="visualLiked"
         />
       </span>
     </span>
@@ -101,6 +101,18 @@ const awaitingIntentCount = ref(false);
 const countTransitionName = ref<CountTransition>('like-count-fade');
 let motionTimer: ReturnType<typeof setTimeout> | null = null;
 
+const visualLiked = computed(() => {
+  if (motion.value === 'liking') {
+    return true;
+  }
+
+  if (motion.value === 'unliking') {
+    return false;
+  }
+
+  return props.liked;
+});
+
 const effectivelyDisabled = computed(() =>
   props.disabled || props.loading || props.pending,
 );
@@ -147,7 +159,7 @@ const startMotion = (nextMotion: Exclude<LikeMotion, 'idle'>) => {
     expectedLiked.value = null;
     expectedStateObserved.value = false;
     clearIntent();
-  }, nextMotion === 'liking' ? 300 : 160);
+  }, nextMotion === 'liking' ? 360 : 160);
 };
 
 const armIntentCountDirection = (intent: Exclude<CountIntent, null>) => {
@@ -301,13 +313,13 @@ onBeforeUnmount(() => {
   top: 50%;
   left: 50%;
   z-index: 0;
-  width: 8px;
-  height: 8px;
+  width: 20px;
+  height: 20px;
   border: 1.25px solid var(--color-like);
   border-radius: 999px;
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, -50%) scale(0.35);
+  transform: translate(-50%, -50%) scale(0.45);
 }
 
 .like-action__particles {
@@ -320,7 +332,7 @@ onBeforeUnmount(() => {
 .like-action__particle {
   --particle-rotation: 0deg;
   --particle-x: 0px;
-  --particle-y: -14px;
+  --particle-y: -17px;
   position: absolute;
   top: 50%;
   left: 50%;
@@ -341,45 +353,45 @@ onBeforeUnmount(() => {
 
 .like-action__particle:nth-child(1) {
   --particle-x: 0px;
-  --particle-y: -14px;
+  --particle-y: -17px;
 }
 
 .like-action__particle:nth-child(2) {
   --particle-x: 12px;
-  --particle-y: -7px;
+  --particle-y: -12px;
 }
 
 .like-action__particle:nth-child(3) {
-  --particle-x: 14px;
-  --particle-y: 5px;
+  --particle-x: 17px;
+  --particle-y: 0px;
 }
 
 .like-action__particle:nth-child(4) {
-  --particle-x: 5px;
-  --particle-y: 14px;
+  --particle-x: 12px;
+  --particle-y: 12px;
 }
 
 .like-action__particle:nth-child(5) {
-  --particle-x: -8px;
-  --particle-y: 13px;
+  --particle-x: 0px;
+  --particle-y: 17px;
   --particle-rotation: 45deg;
 }
 
 .like-action__particle:nth-child(6) {
-  --particle-x: -15px;
-  --particle-y: 4px;
+  --particle-x: -12px;
+  --particle-y: 12px;
   --particle-rotation: 45deg;
 }
 
 .like-action__particle:nth-child(7) {
-  --particle-x: -12px;
-  --particle-y: -8px;
+  --particle-x: -17px;
+  --particle-y: 0px;
   --particle-rotation: 45deg;
 }
 
 .like-action__particle:nth-child(8) {
-  --particle-x: -4px;
-  --particle-y: -15px;
+  --particle-x: -12px;
+  --particle-y: -12px;
   --particle-rotation: 45deg;
 }
 
@@ -405,16 +417,20 @@ onBeforeUnmount(() => {
     transform: scale(1);
   }
 
-  18% {
-    transform: scale(0.86);
+  15% {
+    transform: scale(0.72);
   }
 
-  46% {
-    transform: scale(1.12);
+  45% {
+    transform: scale(1.28);
   }
 
-  70% {
-    transform: scale(0.97);
+  68% {
+    transform: scale(0.94);
+  }
+
+  84% {
+    transform: scale(1.06);
   }
 
   100% {
@@ -438,32 +454,36 @@ onBeforeUnmount(() => {
 
 @keyframes nexus-like-halo {
   0% {
-    transform: translate(-50%, -50%) scale(0.35);
+    transform: translate(-50%, -50%) scale(0.45);
     opacity: 0;
   }
 
-  22% {
-    opacity: 0.3;
+  20% {
+    opacity: 0.45;
   }
 
-  65% {
-    opacity: 0.16;
+  55% {
+    opacity: 0.25;
   }
 
   100% {
-    transform: translate(-50%, -50%) scale(1.3);
+    transform: translate(-50%, -50%) scale(1.65);
     opacity: 0;
   }
 }
 
 @keyframes nexus-like-particle {
   0% {
-    transform: translate(0, 0) rotate(var(--particle-rotation)) scale(0.4);
+    transform: translate(0, 0) rotate(var(--particle-rotation)) scale(0.25);
     opacity: 0;
   }
 
   20% {
-    opacity: 0.8;
+    opacity: 1;
+  }
+
+  65% {
+    opacity: 0.9;
   }
 
   100% {
@@ -474,7 +494,7 @@ onBeforeUnmount(() => {
 }
 
 .like-action--liking .like-action__heart {
-  animation: nexus-like-heart 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: nexus-like-heart 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .like-action--unliking .like-action__heart {
@@ -482,11 +502,11 @@ onBeforeUnmount(() => {
 }
 
 .like-action--liking .like-action__halo {
-  animation: nexus-like-halo 240ms ease-out 60ms both;
+  animation: nexus-like-halo 240ms ease-out 55ms both;
 }
 
 .like-action--liking .like-action__particle {
-  animation: nexus-like-particle 190ms cubic-bezier(0.22, 1, 0.36, 1) 75ms both;
+  animation: nexus-like-particle 220ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
 }
 
 .like-count-up-enter-active,
