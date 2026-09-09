@@ -69,9 +69,14 @@ func normalizedTimeout(timeout time.Duration) time.Duration {
 }
 
 type completionRequest struct {
-	Model     string              `json:"model"`
-	Messages  []completionMessage `json:"messages"`
-	MaxTokens int                 `json:"max_tokens"`
+	Model               string              `json:"model"`
+	Messages            []completionMessage `json:"messages"`
+	MaxCompletionTokens int                 `json:"max_completion_tokens"`
+	ChatTemplateKwargs  chatTemplateKwargs  `json:"chat_template_kwargs"`
+}
+
+type chatTemplateKwargs struct {
+	EnableThinking bool `json:"enable_thinking"`
 }
 
 type completionMessage struct {
@@ -112,11 +117,14 @@ func (p *WorkersAIClient) Translate(ctx context.Context, req Request) (ProviderR
 		return ProviderResult{}, err
 	}
 	payload, err := json.Marshal(completionRequest{
-		Model:     p.model,
-		MaxTokens: p.maxCompletionTokens,
+		Model:               p.model,
+		MaxCompletionTokens: p.maxCompletionTokens,
 		Messages: []completionMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
+		},
+		ChatTemplateKwargs: chatTemplateKwargs{
+			EnableThinking: false,
 		},
 	})
 	if err != nil {

@@ -11,6 +11,9 @@ func TestBuildPromptProtectsPostTextAndPreservesSocialSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPrompt() error = %v", err)
 	}
+	if DefaultPromptVersion != "social_v4" {
+		t.Fatalf("DefaultPromptVersion = %q, want social_v4", DefaultPromptVersion)
+	}
 
 	for _, expected := range []string{
 		"high-precision translation engine",
@@ -41,8 +44,8 @@ func TestBuildPromptProtectsPostTextAndPreservesSocialSemantics(t *testing.T) {
 			t.Errorf("system prompt does not contain %q", expected)
 		}
 	}
-	if !strings.HasSuffix(strings.TrimSpace(system), "/no_think") {
-		t.Fatalf("system prompt must end with /no_think, got suffix %q", system[max(0, len(system)-32):])
+	if strings.Contains(system, "/no_think") {
+		t.Fatal("system prompt must not contain /no_think")
 	}
 	if user != "<post_content>\n"+content+"\n</post_content>" {
 		t.Fatalf("user prompt = %q", user)

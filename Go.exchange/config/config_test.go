@@ -110,7 +110,7 @@ func TestTranslationConfigDefaultsAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("TRANSLATION_BASE_URL", "https://api.cloudflare.com/client/v4/accounts/test-account/ai/v1")
 	t.Setenv("TRANSLATION_API_KEY", " runtime-key ")
 	t.Setenv("TRANSLATION_MODEL", "model-b")
-	t.Setenv("TRANSLATION_PROMPT_VERSION", "social_v3")
+	t.Setenv("TRANSLATION_PROMPT_VERSION", "social_test")
 	t.Setenv("TRANSLATION_TIMEOUT_SECONDS", "12")
 	t.Setenv("TRANSLATION_CACHE_TTL_HOURS", "72")
 	t.Setenv("TRANSLATION_CACHE_JITTER_HOURS", "6")
@@ -121,7 +121,7 @@ func TestTranslationConfigDefaultsAndEnvironmentOverrides(t *testing.T) {
 	applySensitiveEnvironmentOverrides(cfg)
 	got := cfg.Translation.Normalized()
 	if !got.Enabled || got.BaseURL != "https://api.cloudflare.com/client/v4/accounts/test-account/ai/v1" || got.APIKey != "runtime-key" ||
-		got.Model != "model-b" || got.PromptVersion != "social_v3" || got.TimeoutSeconds != 12 ||
+		got.Model != "model-b" || got.PromptVersion != "social_test" || got.TimeoutSeconds != 12 ||
 		got.CacheTTLHours != 72 || got.CacheJitterHours != 6 || got.MaxSourceRunes != 1500 ||
 		got.MaxCompletionTokens != 512 {
 		t.Fatalf("translation overrides = %+v", got)

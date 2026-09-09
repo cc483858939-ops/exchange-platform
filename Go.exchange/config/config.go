@@ -32,8 +32,8 @@ type TranslationConfig struct {
 
 const (
 	DefaultTranslationBaseURL             = ""
-	DefaultTranslationModel               = "@cf/qwen/qwen3-30b-a3b-fp8"
-	DefaultTranslationPromptVersion       = "social_v3"
+	DefaultTranslationModel               = "@cf/google/gemma-4-26b-a4b-it"
+	DefaultTranslationPromptVersion       = "social_v4"
 	DefaultTranslationTimeoutSeconds      = 10
 	DefaultTranslationCacheTTLHours       = 168
 	DefaultTranslationCacheJitterHours    = 24

@@ -2,7 +2,7 @@ package translation
 
 import "fmt"
 
-const DefaultPromptVersion = "social_v3"
+const DefaultPromptVersion = "social_v4"
 
 func BuildSystemPrompt(sourceLanguage, targetLanguage string) (string, error) {
 	target, ok := NormalizeTargetLanguage(targetLanguage)
@@ -77,7 +77,7 @@ Target language: %s
 
 The source-language hint is metadata only. If it is unknown or inconsistent with the actual text, infer the source language from the post itself.
 
-/no_think`, TargetLanguageName(target), SourceLanguageName(sourceLanguage), TargetLanguageName(target)), nil
+`, TargetLanguageName(target), SourceLanguageName(sourceLanguage), TargetLanguageName(target)), nil
 }
 
 func BuildUserPrompt(content string) string {
