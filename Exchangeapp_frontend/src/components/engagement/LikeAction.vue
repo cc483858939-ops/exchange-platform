@@ -230,6 +230,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .like-action {
+  --like-burst-pink: #f91880;
+  --like-burst-purple: #a855f7;
+  --like-burst-blue: #1d9bf0;
+  --like-burst-cyan: #06b6d4;
+  --like-burst-yellow: #eab308;
+  --like-burst-orange: #f97316;
+  --like-burst-violet: #7c3aed;
+  --like-burst-pink-soft: #f472b6;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -354,49 +362,53 @@ onBeforeUnmount(() => {
 .like-action__particle:nth-child(1) {
   --particle-x: 0px;
   --particle-y: -17px;
+  background: var(--like-burst-pink);
 }
 
 .like-action__particle:nth-child(2) {
   --particle-x: 12px;
   --particle-y: -12px;
+  background: var(--like-burst-violet);
 }
 
 .like-action__particle:nth-child(3) {
   --particle-x: 17px;
   --particle-y: 0px;
+  background: var(--like-burst-blue);
 }
 
 .like-action__particle:nth-child(4) {
   --particle-x: 12px;
   --particle-y: 12px;
+  background: var(--like-burst-yellow);
 }
 
 .like-action__particle:nth-child(5) {
   --particle-x: 0px;
   --particle-y: 17px;
   --particle-rotation: 45deg;
+  background: var(--like-burst-orange);
 }
 
 .like-action__particle:nth-child(6) {
   --particle-x: -12px;
   --particle-y: 12px;
   --particle-rotation: 45deg;
+  background: var(--like-burst-purple);
 }
 
 .like-action__particle:nth-child(7) {
   --particle-x: -17px;
   --particle-y: 0px;
   --particle-rotation: 45deg;
+  background: var(--like-burst-cyan);
 }
 
 .like-action__particle:nth-child(8) {
   --particle-x: -12px;
   --particle-y: -12px;
   --particle-rotation: 45deg;
-}
-
-.like-action__particle:nth-child(n + 6) {
-  background: var(--color-like-soft);
+  background: var(--like-burst-pink-soft);
 }
 
 .like-action__count-window {
