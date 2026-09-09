@@ -19,6 +19,7 @@ import (
 	"Go.exchange/initialize"
 	"Go.exchange/router"
 	"Go.exchange/runtimehealth"
+	"Go.exchange/translation"
 )
 
 var httpReadinessByServer sync.Map
@@ -38,7 +39,31 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 		RequiredSchemaVersion: initialize.RequiredSchemaVersion,
 		EmbeddingEnabled:      config.AppConfig != nil && config.AppConfig.Embedding.Enabled,
 	})
-	handler, err := router.SetupRouter(authController, tokens, publisher, readiness)
+	translationConfig := config.AppConfig.Translation.Normalized()
+	translationService := translation.NewService(
+		translation.NewGroqProvider(translation.GroqConfig{
+			BaseURL:             translationConfig.BaseURL,
+			APIKey:              translationConfig.APIKey,
+			Model:               translationConfig.Model,
+			PromptVersion:       translationConfig.PromptVersion,
+			Timeout:             time.Duration(translationConfig.TimeoutSeconds) * time.Second,
+			MaxCompletionTokens: translationConfig.MaxCompletionTokens,
+		}),
+		translation.NewRedisCache(global.RedisDB),
+		translation.ServiceConfig{
+			Enabled:             translationConfig.Enabled,
+			Model:               translationConfig.Model,
+			PromptVersion:       translationConfig.PromptVersion,
+			BaseTTL:             time.Duration(translationConfig.CacheTTLHours) * time.Hour,
+			CacheJitter:         time.Duration(translationConfig.CacheJitterHours) * time.Hour,
+			MaxSourceRunes:      translationConfig.MaxSourceRunes,
+			MaxCompletionTokens: translationConfig.MaxCompletionTokens,
+			Timeout:             time.Duration(translationConfig.TimeoutSeconds) * time.Second,
+			BaseURL:             translationConfig.BaseURL,
+			APIKey:              translationConfig.APIKey,
+		},
+	)
+	handler, err := router.SetupRouter(authController, tokens, publisher, readiness, translationService)
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}

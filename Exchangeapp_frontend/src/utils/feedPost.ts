@@ -20,6 +20,7 @@ export function postToFeedPost(
   return {
     id: post.id,
     content: post.content,
+    language: post.language,
     media: post.media.map(item => ({ ...item })),
     quotePost: post.quote_post,
     replyToPost: post.reply_to_post,

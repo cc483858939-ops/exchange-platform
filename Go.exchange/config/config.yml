@@ -15,6 +15,18 @@ embedding:
   version: "post_embedding_v1"
   timeout_seconds: 10
 
+translation:
+  enabled: false
+  base_url: "https://api.groq.com/openai/v1"
+  api_key: ""
+  model: "qwen/qwen3.6-27b"
+  prompt_version: "social_v1"
+  timeout_seconds: 10
+  cache_ttl_hours: 168
+  cache_jitter_hours: 24
+  max_source_runes: 2000
+  max_completion_tokens: 2048
+
 kafka:
   brokers:
     - "kafka:9092"

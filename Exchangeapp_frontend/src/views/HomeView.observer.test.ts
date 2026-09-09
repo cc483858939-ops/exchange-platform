@@ -86,6 +86,7 @@ const feedPost: FeedPost = {
   id: 1,
   author,
   content: 'Post 1',
+  language: 'und',
   media: [],
   createdAt: '2026-08-24T00:00:00.000Z',
   likeCount: 0,

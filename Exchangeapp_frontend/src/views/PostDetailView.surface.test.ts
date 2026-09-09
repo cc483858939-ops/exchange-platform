@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   handoffStore: null as any,
   consumeHandoff: vi.fn(),
   getPostById: vi.fn(),
+  translatePost: vi.fn(),
   getPostLikeState: vi.fn(),
   getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   likePost: vi.fn(),
@@ -68,6 +69,10 @@ vi.mock('../store/postDetailHandoff', () => ({
 vi.mock('../services/postService', () => ({
   deletePost: mocks.deletePost,
   getPostById: mocks.getPostById,
+}));
+
+vi.mock('../services/translationService', () => ({
+  translatePost: mocks.translatePost,
 }));
 
 vi.mock('../services/likeService', () => ({
@@ -144,6 +149,7 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
     avatar_url: '/warm-author.png',
   },
   content: 'Warm post preview',
+  language: 'und',
   media: [],
   createdAt: '2026-08-27T13:42:00',
   likeCount: 10,
@@ -247,6 +253,7 @@ describe('PostDetailView post-first surface', () => {
     mocks.handoffStore = { consume: mocks.consumeHandoff };
     mocks.consumeHandoff.mockReturnValue(null);
     mocks.getPostById.mockResolvedValue(canonicalPost());
+    mocks.translatePost.mockReset();
     mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 11 });
     mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
     mocks.consumeAttribution.mockReturnValue(null);
@@ -283,6 +290,30 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.text()).not.toContain('Expired');
     expect(wrapper.text()).not.toContain('Expires');
     expect(wrapper.text()).not.toContain('Keep it useful.');
+  });
+
+  it('translates the loaded post on demand while preserving the canonical body', async () => {
+    mocks.translatePost.mockResolvedValue({
+      post_id: 42,
+      source_language: 'zh',
+      target_language: 'en',
+      translated: true,
+      translation: 'Translated detail body',
+    });
+    wrapper = mountDetail();
+    await flushPromises();
+
+    expect(wrapper.get('.post-detail__translation-action').text()).toBe('Translate post');
+    await wrapper.get('.post-detail__translation-action').trigger('click');
+    await flushPromises();
+
+    expect(mocks.translatePost).toHaveBeenCalledWith(42, 'en');
+    expect(wrapper.get('.post-detail__body').text()).toContain('Full post body');
+    expect(wrapper.get('.post-detail__translation-body').text()).toBe('Translated detail body');
+    expect(wrapper.get('.post-detail__translation-label').text()).toBe('Translated from Chinese');
+
+    await wrapper.get('.post-detail__translation-action').trigger('click');
+    expect(wrapper.find('.post-detail__translation-body').exists()).toBe(false);
   });
 
   it('opens Post deletion confirmation before mutation and lets Cancel restore focus', async () => {

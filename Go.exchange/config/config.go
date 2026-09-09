@@ -17,6 +17,58 @@ type EmbeddingConfig struct {
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 }
 
+type TranslationConfig struct {
+	Enabled             bool   `mapstructure:"enabled"`
+	BaseURL             string `mapstructure:"base_url"`
+	APIKey              string `mapstructure:"api_key"`
+	Model               string `mapstructure:"model"`
+	PromptVersion       string `mapstructure:"prompt_version"`
+	TimeoutSeconds      int    `mapstructure:"timeout_seconds"`
+	CacheTTLHours       int    `mapstructure:"cache_ttl_hours"`
+	CacheJitterHours    int    `mapstructure:"cache_jitter_hours"`
+	MaxSourceRunes      int    `mapstructure:"max_source_runes"`
+	MaxCompletionTokens int    `mapstructure:"max_completion_tokens"`
+}
+
+const (
+	DefaultTranslationBaseURL             = "https://api.groq.com/openai/v1"
+	DefaultTranslationModel               = "qwen/qwen3.6-27b"
+	DefaultTranslationPromptVersion       = "social_v1"
+	DefaultTranslationTimeoutSeconds      = 10
+	DefaultTranslationCacheTTLHours       = 168
+	DefaultTranslationCacheJitterHours    = 24
+	DefaultTranslationMaxSourceRunes      = 2000
+	DefaultTranslationMaxCompletionTokens = 2048
+)
+
+func (c TranslationConfig) Normalized() TranslationConfig {
+	if strings.TrimSpace(c.BaseURL) == "" {
+		c.BaseURL = DefaultTranslationBaseURL
+	}
+	if strings.TrimSpace(c.Model) == "" {
+		c.Model = DefaultTranslationModel
+	}
+	if strings.TrimSpace(c.PromptVersion) == "" {
+		c.PromptVersion = DefaultTranslationPromptVersion
+	}
+	if c.TimeoutSeconds <= 0 {
+		c.TimeoutSeconds = DefaultTranslationTimeoutSeconds
+	}
+	if c.CacheTTLHours <= 0 {
+		c.CacheTTLHours = DefaultTranslationCacheTTLHours
+	}
+	if c.CacheJitterHours <= 0 {
+		c.CacheJitterHours = DefaultTranslationCacheJitterHours
+	}
+	if c.MaxSourceRunes <= 0 {
+		c.MaxSourceRunes = DefaultTranslationMaxSourceRunes
+	}
+	if c.MaxCompletionTokens <= 0 {
+		c.MaxCompletionTokens = DefaultTranslationMaxCompletionTokens
+	}
+	return c
+}
+
 const DefaultEmbeddingVersion = "post_embedding_v1"
 
 type KafkaConfig struct {
@@ -204,6 +256,7 @@ type Config struct {
 		MaxOpenConns int
 	}
 	Embedding              EmbeddingConfig
+	Translation            TranslationConfig
 	Kafka                  KafkaConfig
 	Recommendation         RecommendationConfig
 	RecommendationPresence map[string]bool `mapstructure:"-" json:"-" yaml:"-"`
@@ -308,6 +361,7 @@ func LoadConfig() {
 	}
 	AppConfig.RecommendationPresence = recommendationSettingPresence(viper.GetViper())
 	applySensitiveEnvironmentOverrides(AppConfig)
+	AppConfig.Translation = AppConfig.Translation.Normalized()
 }
 
 func applySensitiveEnvironmentOverrides(cfg *Config) {
@@ -337,6 +391,58 @@ func applySensitiveEnvironmentOverrides(cfg *Config) {
 			cfg.Embedding.TimeoutSeconds = parsed
 		}
 	}
+	if value, exists := os.LookupEnv("TRANSLATION_ENABLED"); exists {
+		if parsed, ok := parseEnvironmentBool(value); ok {
+			cfg.Translation.Enabled = parsed
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_BASE_URL")); value != "" {
+		cfg.Translation.BaseURL = value
+	}
+	if value, exists := os.LookupEnv("GROQ_API_KEY"); exists {
+		cfg.Translation.APIKey = strings.TrimSpace(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_MODEL")); value != "" {
+		cfg.Translation.Model = value
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_PROMPT_VERSION")); value != "" {
+		cfg.Translation.PromptVersion = value
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_TIMEOUT_SECONDS")); value != "" {
+		if parsed := parsePositiveInt(value); parsed > 0 {
+			cfg.Translation.TimeoutSeconds = parsed
+		} else if value == "0" {
+			cfg.Translation.TimeoutSeconds = 0
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_CACHE_TTL_HOURS")); value != "" {
+		if parsed := parsePositiveInt(value); parsed > 0 {
+			cfg.Translation.CacheTTLHours = parsed
+		} else if value == "0" {
+			cfg.Translation.CacheTTLHours = 0
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_CACHE_JITTER_HOURS")); value != "" {
+		if parsed := parsePositiveInt(value); parsed > 0 {
+			cfg.Translation.CacheJitterHours = parsed
+		} else if value == "0" {
+			cfg.Translation.CacheJitterHours = 0
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_MAX_SOURCE_RUNES")); value != "" {
+		if parsed := parsePositiveInt(value); parsed > 0 {
+			cfg.Translation.MaxSourceRunes = parsed
+		} else if value == "0" {
+			cfg.Translation.MaxSourceRunes = 0
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("TRANSLATION_MAX_COMPLETION_TOKENS")); value != "" {
+		if parsed := parsePositiveInt(value); parsed > 0 {
+			cfg.Translation.MaxCompletionTokens = parsed
+		} else if value == "0" {
+			cfg.Translation.MaxCompletionTokens = 0
+		}
+	}
 	if value := strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")); value != "" {
 		cfg.Storage.Endpoint = value
 	}
@@ -348,6 +454,17 @@ func applySensitiveEnvironmentOverrides(cfg *Config) {
 	}
 	if value := strings.TrimSpace(os.Getenv("MINIO_BUCKET")); value != "" {
 		cfg.Storage.Bucket = value
+	}
+}
+
+func parseEnvironmentBool(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on":
+		return true, true
+	case "0", "false", "no", "n", "off":
+		return false, true
+	default:
+		return false, false
 	}
 }
 

@@ -93,6 +93,41 @@ func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestTranslationConfigDefaultsAndEnvironmentOverrides(t *testing.T) {
+	defaults := (TranslationConfig{}).Normalized()
+	if defaults.BaseURL != DefaultTranslationBaseURL ||
+		defaults.Model != DefaultTranslationModel ||
+		defaults.PromptVersion != DefaultTranslationPromptVersion ||
+		defaults.TimeoutSeconds != DefaultTranslationTimeoutSeconds ||
+		defaults.CacheTTLHours != DefaultTranslationCacheTTLHours ||
+		defaults.CacheJitterHours != DefaultTranslationCacheJitterHours ||
+		defaults.MaxSourceRunes != DefaultTranslationMaxSourceRunes ||
+		defaults.MaxCompletionTokens != DefaultTranslationMaxCompletionTokens {
+		t.Fatalf("translation defaults = %+v", defaults)
+	}
+
+	t.Setenv("TRANSLATION_ENABLED", "true")
+	t.Setenv("TRANSLATION_BASE_URL", "https://groq.example/v1")
+	t.Setenv("GROQ_API_KEY", " runtime-key ")
+	t.Setenv("TRANSLATION_MODEL", "model-b")
+	t.Setenv("TRANSLATION_PROMPT_VERSION", "social_v2")
+	t.Setenv("TRANSLATION_TIMEOUT_SECONDS", "12")
+	t.Setenv("TRANSLATION_CACHE_TTL_HOURS", "72")
+	t.Setenv("TRANSLATION_CACHE_JITTER_HOURS", "6")
+	t.Setenv("TRANSLATION_MAX_SOURCE_RUNES", "1500")
+	t.Setenv("TRANSLATION_MAX_COMPLETION_TOKENS", "512")
+
+	cfg := &Config{}
+	applySensitiveEnvironmentOverrides(cfg)
+	got := cfg.Translation.Normalized()
+	if !got.Enabled || got.BaseURL != "https://groq.example/v1" || got.APIKey != "runtime-key" ||
+		got.Model != "model-b" || got.PromptVersion != "social_v2" || got.TimeoutSeconds != 12 ||
+		got.CacheTTLHours != 72 || got.CacheJitterHours != 6 || got.MaxSourceRunes != 1500 ||
+		got.MaxCompletionTokens != 512 {
+		t.Fatalf("translation overrides = %+v", got)
+	}
+}
+
 func TestValidateRuntimeEventingConfigByRole(t *testing.T) {
 	original := AppConfig
 	t.Cleanup(func() { AppConfig = original })

@@ -10,12 +10,13 @@ import (
 	"Go.exchange/metrics"
 	"Go.exchange/middlewares"
 	"Go.exchange/runtimehealth"
+	"Go.exchange/translation"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider) (*gin.Engine, error) {
+func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, translationServices ...translation.Service) (*gin.Engine, error) {
 	trustedProxies, err := config.TrustedProxyCIDRs()
 	if err != nil {
 		return nil, err
@@ -33,7 +34,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
+		ExposeHeaders:    []string{"Content-Length", "Retry-After"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
@@ -57,6 +58,10 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	api.GET("/files/*objectKey", controllers.GetFile)
 
 	api.Use(middlewares.AuthMiddleware(verifier))
+	var translationService translation.Service
+	if len(translationServices) > 0 {
+		translationService = translationServices[0]
+	}
 	{
 		api.GET("/recommendations/posts", controllers.GetPostRecommendations)
 		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher))
@@ -81,6 +86,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.POST("/posts", controllers.NewCreatePostHandler(publisher))
 		api.POST("/posts/repost-states", controllers.GetPostRepostStates)
 		api.GET("/posts/:id", controllers.GetPostByID)
+		api.POST("/posts/:id/translation", controllers.NewPostTranslationHandler(translationService))
 		api.DELETE("/posts/:id", controllers.DeletePost)
 		api.GET("/posts/:id/replies", controllers.GetPostReplies)
 		api.POST("/posts/like-states", controllers.GetPostLikeStates)

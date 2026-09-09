@@ -14,6 +14,7 @@ export interface FeedRepostContext {
 export interface FeedPost {
   id: number;
   content: Post['content'];
+  language: Post['language'];
   media: PostMedia[];
   quotePost?: PostReference | null;
   replyToPost?: PostReference | null;

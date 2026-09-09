@@ -94,6 +94,30 @@
         Show more
       </button>
       <div
+        v-if="translationAvailable"
+        class="post-card__translation"
+        aria-live="polite"
+        :aria-busy="translationState === 'loading'"
+      >
+        <template v-if="translatedVisible && translatedContent">
+          <p class="post-card__translation-label">
+            Translated from {{ translatedFromLabel }}
+          </p>
+          <p class="post-card__translation-body">
+            <LinkifiedText :text="translatedContent" />
+          </p>
+        </template>
+        <button
+          class="post-card__translation-action"
+          type="button"
+          :disabled="translationState === 'loading'"
+          :aria-busy="translationState === 'loading'"
+          @click.stop="handleTranslationAction"
+        >
+          {{ translationActionLabel }}
+        </button>
+      </div>
+      <div
         v-if="post.quotePost || post.replyToPost"
         class="post-card__reference"
         aria-label="Referenced post"
@@ -214,8 +238,13 @@ import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
 import AppIcon from '../icons/AppIcon.vue';
 import { getPostViewTelemetry } from '../../services/postViewTelemetry';
+import { translatePost } from '../../services/translationService';
 import { usePostDetailHandoffStore } from '../../store/postDetailHandoff';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../../utils/engagementCount';
+import {
+  getPreferredTranslationLanguage,
+  translationLanguageName,
+} from '../../utils/translationLanguage';
 
 const props = withDefaults(defineProps<{
   post: FeedPost;
@@ -260,11 +289,37 @@ let bodyResizeObserver: ResizeObserver | null = null;
 type CopyState = 'idle' | 'success' | 'error';
 const copyState = ref<CopyState>('idle');
 let copyRequestVersion = 0;
+type TranslationState = 'idle' | 'loading' | 'success' | 'error';
+const translationTargetLanguage = getPreferredTranslationLanguage();
+const translationState = ref<TranslationState>('idle');
+const translatedContent = ref('');
+const translatedVisible = ref(false);
+const translatedSourceLanguage = ref<FeedPost['language'] | null>(null);
+let translationRequestVersion = 0;
 
 const likeLoading = computed(() => props.post.likeStatus === 'unknown');
 const likeUnavailable = computed(() => props.post.likeStatus === 'unavailable');
 const repostLoading = computed(() => props.post.repostStatus === 'unknown');
 const repostUnavailable = computed(() => props.post.repostStatus === 'unavailable');
+const translationAvailable = computed(() => (
+  props.post.language === 'und'
+  || props.post.language !== translationTargetLanguage
+));
+const translationActionLabel = computed(() => {
+  if (translationState.value === 'loading') {
+    return 'Translating…';
+  }
+  if (translationState.value === 'error') {
+    return 'Translation unavailable · Retry';
+  }
+  if (translationState.value === 'success') {
+    return translatedVisible.value ? 'Hide translation' : 'Show translation';
+  }
+  return 'Translate post';
+});
+const translatedFromLabel = computed(() => (
+  translationLanguageName(translatedSourceLanguage.value ?? props.post.language)
+));
 const referencePost = computed(() => props.post.quotePost ?? props.post.replyToPost ?? null);
 const referenceDestination = computed(() => {
   const reference = referencePost.value;
@@ -562,11 +617,71 @@ const expandBody = () => {
   bodyExpanded.value = true;
 };
 
+const isCurrentTranslationRequest = (
+  requestVersion: number,
+  postID: number,
+  sourceContent: string,
+) => (
+  requestVersion === translationRequestVersion
+  && props.post.id === postID
+  && props.post.content === sourceContent
+);
+
+const resetTranslation = () => {
+  translationRequestVersion += 1;
+  translationState.value = 'idle';
+  translatedContent.value = '';
+  translatedVisible.value = false;
+  translatedSourceLanguage.value = null;
+};
+
+const handleTranslationAction = async () => {
+  if (!translationAvailable.value) {
+    return;
+  }
+  if (translationState.value === 'success') {
+    translatedVisible.value = !translatedVisible.value;
+    return;
+  }
+  if (translationState.value === 'loading') {
+    return;
+  }
+
+  const requestVersion = ++translationRequestVersion;
+  const postID = props.post.id;
+  const sourceContent = props.post.content;
+  translationState.value = 'loading';
+  translatedContent.value = '';
+  translatedVisible.value = false;
+  translatedSourceLanguage.value = null;
+
+  try {
+    const response = await translatePost(postID, translationTargetLanguage);
+    if (
+      !isCurrentTranslationRequest(requestVersion, postID, sourceContent)
+      || response.post_id !== postID
+      || !response.translation.trim()
+    ) {
+      return;
+    }
+
+    translatedContent.value = response.translation;
+    translatedSourceLanguage.value = response.source_language;
+    translatedVisible.value = true;
+    translationState.value = 'success';
+  } catch {
+    if (isCurrentTranslationRequest(requestVersion, postID, sourceContent)) {
+      translationState.value = 'error';
+    }
+  }
+};
+
 watch(
-  [() => props.post.id, () => props.post.content],
+  [() => props.post.id, () => props.post.content, () => props.post.language],
   () => {
     bodyExpanded.value = false;
     bodyOverflowing.value = false;
+    resetTranslation();
     scheduleBodyOverflowMeasurement();
   },
 );
@@ -607,6 +722,7 @@ onBeforeUnmount(() => {
   bodyResizeObserver?.disconnect();
   bodyResizeObserver = null;
   closeMore();
+  resetTranslation();
   deleteConfirmOpen.value = false;
 });
 
@@ -776,6 +892,57 @@ const repostLabel = computed(() => {
   border-radius: var(--radius-sm);
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+.post-card__translation {
+  margin-top: var(--space-2);
+}
+
+.post-card__translation-action {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.post-card__translation-action:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.post-card__translation-action:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.post-card__translation-action:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.post-card__translation-label {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.post-card__translation-body {
+  margin: var(--space-1) 0 0;
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .post-card__media-link {

@@ -45,6 +45,31 @@
           />
         </div>
 
+        <div
+          v-if="detailPresentation.kind === 'post' && translationAvailable"
+          class="post-detail__translation"
+          aria-live="polite"
+          :aria-busy="translationState === 'loading'"
+        >
+          <template v-if="translatedVisible && translatedContent">
+            <p class="post-detail__translation-label">
+              Translated from {{ translatedFromLabel }}
+            </p>
+            <p class="post-detail__translation-body">
+              <LinkifiedText :text="translatedContent" />
+            </p>
+          </template>
+          <button
+            class="post-detail__translation-action"
+            type="button"
+            :disabled="translationState === 'loading'"
+            :aria-busy="translationState === 'loading'"
+            @click="handleTranslationAction"
+          >
+            {{ translationActionLabel }}
+          </button>
+        </div>
+
         <aside
           v-if="detailReference"
           class="post-detail__reference"
@@ -289,6 +314,7 @@ import { consumePendingRecommendationAttribution } from '../services/recommendat
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { createPostViewEventID, getPostViewTelemetry } from '../services/postViewTelemetry';
 import { PostReadTracker, createPostReadGeometry } from '../services/postReadTracker';
+import { translatePost } from '../services/translationService';
 import { useAuthStore } from '../store/auth';
 import { usePostDetailHandoffStore } from '../store/postDetailHandoff';
 import { useFeedStore } from '../store/feed';
@@ -306,6 +332,10 @@ import type { RecommendationTracking } from '../types/Recommendation';
 import type { PublicAuthor } from '../types/User';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
 import { formatPostDetailTimestamp } from '../utils/time';
+import {
+  getPreferredTranslationLanguage,
+  translationLanguageName,
+} from '../utils/translationLanguage';
 
 const route = useRoute();
 const router = useRouter();
@@ -326,6 +356,13 @@ const deleteError = ref('');
 const deletePostConfirmOpen = ref(false);
 const deletePostButtonRef = ref<HTMLButtonElement | null>(null);
 const postBodyRef = ref<HTMLElement | null>(null);
+type TranslationState = 'idle' | 'loading' | 'success' | 'error';
+const translationTargetLanguage = getPreferredTranslationLanguage();
+const translationState = ref<TranslationState>('idle');
+const translatedContent = ref('');
+const translatedVisible = ref(false);
+const translatedSourceLanguage = ref<Post['language'] | null>(null);
+let translationRequestVersion = 0;
 
 const liked = ref(false);
 const likeCount = ref(0);
@@ -471,6 +508,109 @@ const detailReferenceMedia = computed(() => {
   return reference && !reference.deleted ? reference.media : [];
 });
 const detailReferenceMessage = 'Post unavailable';
+
+const translationAvailable = computed(() => {
+  const sourceLanguage = post.value?.language;
+  return Boolean(
+    sourceLanguage
+    && (sourceLanguage === 'und' || sourceLanguage !== translationTargetLanguage),
+  );
+});
+
+const translationActionLabel = computed(() => {
+  if (translationState.value === 'loading') {
+    return 'Translating…';
+  }
+  if (translationState.value === 'error') {
+    return 'Translation unavailable · Retry';
+  }
+  if (translationState.value === 'success') {
+    return translatedVisible.value ? 'Hide translation' : 'Show translation';
+  }
+  return 'Translate post';
+});
+
+const translatedFromLabel = computed(() => (
+  translationLanguageName(translatedSourceLanguage.value ?? post.value?.language ?? 'und')
+));
+
+const isCurrentTranslationRequest = (
+  requestVersion: number,
+  detailVersion: number,
+  postID: number,
+  sourceContent: string,
+  sourceLanguage: Post['language'],
+) => (
+  requestVersion === translationRequestVersion
+  && detailVersion === detailRequestVersion
+  && post.value?.id === postID
+  && post.value?.content === sourceContent
+  && post.value?.language === sourceLanguage
+);
+
+const resetTranslation = () => {
+  translationRequestVersion += 1;
+  translationState.value = 'idle';
+  translatedContent.value = '';
+  translatedVisible.value = false;
+  translatedSourceLanguage.value = null;
+};
+
+const handleTranslationAction = async () => {
+  const currentPost = post.value;
+  if (!currentPost || !translationAvailable.value) {
+    return;
+  }
+  if (translationState.value === 'success') {
+    translatedVisible.value = !translatedVisible.value;
+    return;
+  }
+  if (translationState.value === 'loading') {
+    return;
+  }
+
+  const requestVersion = ++translationRequestVersion;
+  const detailVersion = detailRequestVersion;
+  const postID = currentPost.id;
+  const sourceContent = currentPost.content;
+  const sourceLanguage = currentPost.language;
+  translationState.value = 'loading';
+  translatedContent.value = '';
+  translatedVisible.value = false;
+  translatedSourceLanguage.value = null;
+
+  try {
+    const response = await translatePost(postID, translationTargetLanguage);
+    if (
+      !isCurrentTranslationRequest(
+        requestVersion,
+        detailVersion,
+        postID,
+        sourceContent,
+        sourceLanguage,
+      )
+      || response.post_id !== postID
+      || !response.translation.trim()
+    ) {
+      return;
+    }
+
+    translatedContent.value = response.translation;
+    translatedSourceLanguage.value = response.source_language;
+    translatedVisible.value = true;
+    translationState.value = 'success';
+  } catch {
+    if (isCurrentTranslationRequest(
+      requestVersion,
+      detailVersion,
+      postID,
+      sourceContent,
+      sourceLanguage,
+    )) {
+      translationState.value = 'error';
+    }
+  }
+};
 
 const openMediaViewer = (media: Post['media'], index: number) => {
   const visibleMedia = media.slice(0, 4);
@@ -735,6 +875,7 @@ const resetRepliesState = () => {
 
 const resetPostState = () => {
   deleteRequestVersion += 1;
+  resetTranslation();
   post.value = null;
   postLoading.value = false;
   postError.value = '';
@@ -1435,6 +1576,7 @@ onBeforeUnmount(() => {
   finishRead('route_leave');
   void recommendationTelemetry.flush(false);
   disconnectReadGeometryObserver();
+  resetTranslation();
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('scroll', handleReadScroll);
   window.removeEventListener('resize', updateReadGeometry);
@@ -1561,6 +1703,57 @@ onBeforeUnmount(() => {
 
 .post-detail__body :deep(.post-media-grid) {
   margin-top: var(--space-4);
+}
+
+.post-detail__translation {
+  margin-top: var(--space-3);
+}
+
+.post-detail__translation-action {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.post-detail__translation-action:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.post-detail__translation-action:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.post-detail__translation-action:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.post-detail__translation-label {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.post-detail__translation-body {
+  margin: var(--space-1) 0 0;
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .post-detail__reference {

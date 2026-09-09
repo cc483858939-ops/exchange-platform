@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mount, RouterLinkStub } from '@vue/test-utils';
+import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import PostCard from './PostCard.vue';
 import LikeAction from '../engagement/LikeAction.vue';
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   unobserveFeedCard: vi.fn(),
   enqueue: vi.fn(),
   remember: vi.fn(),
+  translatePost: vi.fn(),
 }));
 
 type ResizeObserverTestInstance = {
@@ -31,6 +32,10 @@ vi.mock('../../store/postDetailHandoff', () => ({
   usePostDetailHandoffStore: () => ({ remember: mocks.remember }),
 }));
 
+vi.mock('../../services/translationService', () => ({
+  translatePost: mocks.translatePost,
+}));
+
 vi.mock('vue-router', () => ({
   useRouter: () => ({ resolve: () => ({ href: '/posts/42' }) }),
 }));
@@ -44,6 +49,7 @@ const basePost = (): FeedPost => ({
     avatar_url: '',
   },
   content: 'Post body',
+  language: 'en',
   media: [],
   createdAt: '2026-08-17T00:00:00.000Z',
   likeCount: 12,
@@ -59,6 +65,7 @@ const basePost = (): FeedPost => ({
 describe('PostCard View metric and telemetry lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.translatePost.mockReset();
     resizeObserverInstances.length = 0;
     vi.stubGlobal('ResizeObserver', class {
       private readonly callback: ResizeObserverCallback;
@@ -150,6 +157,20 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.emitted('notInterested') ?? []).toHaveLength(0);
     expect(wrapper.emitted('deletePost') ?? []).toHaveLength(0);
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('only offers translation for a different language or an undetermined source', () => {
+    const sameLanguage = mountPostCard(basePost());
+    expect(sameLanguage.find('.post-card__translation-action').exists()).toBe(false);
+    sameLanguage.unmount();
+
+    const differentLanguage = mountPostCard({ ...basePost(), language: 'zh' });
+    expect(differentLanguage.find('.post-card__translation-action').exists()).toBe(true);
+    differentLanguage.unmount();
+
+    const undeterminedLanguage = mountPostCard({ ...basePost(), language: 'und' });
+    expect(undeterminedLanguage.find('.post-card__translation-action').exists()).toBe(true);
+    undeterminedLanguage.unmount();
   });
 
   it('captures content, reply, and view navigation with one handoff and one postClick each', async () => {
@@ -307,6 +328,106 @@ describe('PostCard View metric and telemetry lifecycle', () => {
 
     expect(wrapper.get('.post-card__body').classes()).not.toContain('post-card__body--expanded');
     expect(wrapper.find('.post-card__show-more').exists()).toBe(false);
+  });
+
+  it('translates on demand without replacing the original post body and supports hide/show', async () => {
+    const post = { ...basePost(), language: 'und' as const };
+    mocks.translatePost.mockResolvedValue({
+      post_id: 42,
+      source_language: 'zh',
+      target_language: 'en',
+      translated: true,
+      translation: 'Translated post body',
+    });
+    const wrapper = mountPostCard(post);
+
+    expect(wrapper.get('.post-card__translation-action').text()).toBe('Translate post');
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    await flushPromises();
+
+    expect(mocks.translatePost).toHaveBeenCalledWith(42, 'en');
+    expect(wrapper.get('.post-card__body').text()).toContain('Post body');
+    expect(wrapper.get('.post-card__translation-body').text()).toBe('Translated post body');
+    expect(wrapper.get('.post-card__translation-label').text()).toBe('Translated from Chinese');
+    expect(wrapper.get('.post-card__translation-action').text()).toBe('Hide translation');
+
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    expect(wrapper.find('.post-card__translation-body').exists()).toBe(false);
+    expect(wrapper.get('.post-card__translation-action').text()).toBe('Show translation');
+
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    expect(wrapper.get('.post-card__translation-body').text()).toBe('Translated post body');
+  });
+
+  it('exposes a pending state while the translation request is in flight', async () => {
+    let resolveTranslation!: (value: unknown) => void;
+    mocks.translatePost.mockReturnValueOnce(new Promise(resolve => {
+      resolveTranslation = resolve;
+    }));
+    const wrapper = mountPostCard({ ...basePost(), language: 'und' as const });
+
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    await nextTick();
+    expect(wrapper.get('.post-card__translation-action').text()).toBe('Translating…');
+    expect(wrapper.get('.post-card__translation-action').attributes('disabled')).toBe('');
+
+    resolveTranslation({
+      post_id: 42,
+      source_language: 'zh',
+      target_language: 'en',
+      translated: true,
+      translation: 'Done',
+    });
+    await flushPromises();
+    expect(wrapper.get('.post-card__translation-body').text()).toBe('Done');
+  });
+
+  it('shows a retry action after a translation failure', async () => {
+    const post = { ...basePost(), language: 'und' as const };
+    mocks.translatePost.mockRejectedValueOnce(new Error('unavailable'));
+    const wrapper = mountPostCard(post);
+
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.post-card__translation-action').text()).toBe('Translation unavailable · Retry');
+
+    mocks.translatePost.mockResolvedValueOnce({
+      post_id: 42,
+      source_language: 'ja',
+      target_language: 'en',
+      translated: true,
+      translation: 'Retry succeeded',
+    });
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('.post-card__translation-body').text()).toBe('Retry succeeded');
+    expect(mocks.translatePost).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a late translation response after the post content changes', async () => {
+    let resolveTranslation!: (value: unknown) => void;
+    mocks.translatePost.mockReturnValueOnce(new Promise(resolve => {
+      resolveTranslation = resolve;
+    }));
+    const wrapper = mountPostCard({ ...basePost(), language: 'und' as const });
+
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    await wrapper.setProps({
+      post: { ...basePost(), language: 'und' as const, content: 'Updated post body' },
+    });
+    resolveTranslation({
+      post_id: 42,
+      source_language: 'zh',
+      target_language: 'en',
+      translated: true,
+      translation: 'Stale translation',
+    });
+    await flushPromises();
+
+    expect(wrapper.get('.post-card__body').text()).toContain('Updated post body');
+    expect(wrapper.find('.post-card__translation-body').exists()).toBe(false);
+    expect(wrapper.get('.post-card__translation-action').text()).toBe('Translate post');
   });
 
   it('resets expansion and remeasures when content changes on the same post', async () => {

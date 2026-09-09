@@ -23,6 +23,7 @@ const basePost = (): FeedPost => ({
     avatar_url: '/reader.png',
   },
   content: 'A warm post',
+  language: 'und',
   media: [{ type: 'image', url: '/cover-a.png', position: 0 }],
   createdAt: '2026-08-26T00:00:00.000Z',
   likeCount: 10,

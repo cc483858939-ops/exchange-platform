@@ -144,6 +144,7 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
     avatar_url: '/warm-author.png',
   },
   content: 'Warm post content',
+  language: 'und',
   media: [],
   createdAt: '2026-08-25T00:00:00.000Z',
   likeCount: 10,

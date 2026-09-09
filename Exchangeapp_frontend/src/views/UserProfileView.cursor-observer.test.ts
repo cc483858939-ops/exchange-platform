@@ -163,6 +163,7 @@ const post = (id: number, authorID: number) => ({
     avatar_url: '',
   },
   content: `Body ${id}`,
+  language: 'und' as const,
   conversation_id: id,
   reply_to_post_id: null,
   quote_post_id: null,

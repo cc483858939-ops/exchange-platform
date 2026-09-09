@@ -52,6 +52,11 @@ var (
 	recommendationProfileMaterialization         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_profile_materialization_total", Help: "Recommendation profile materialization outcomes."}, []string{"result"})
 	recommendationProfileMaterializationDuration = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_profile_materialization_duration_seconds", Help: "Recommendation profile materialization duration in seconds.", Buckets: prometheus.DefBuckets})
 	recommendationProfileDirtyQueueDepth         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_recommendation_profile_dirty_queue_depth", Help: "Current recommendation profile dirty queue depth."})
+	translationRequests                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_translation_requests_total", Help: "Post translation requests by outcome and language pair."}, []string{"outcome", "source_language", "target_language"})
+	translationRequestDuration                   = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_translation_request_duration_seconds", Help: "Post translation request latency in seconds.", Buckets: prometheus.DefBuckets})
+	translationCacheOperations                   = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_translation_cache_operations_total", Help: "Post translation cache operations by result."}, []string{"operation", "result"})
+	translationProviderRequests                  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_translation_provider_requests_total", Help: "Translation provider requests by outcome."}, []string{"outcome"})
+	translationProviderDuration                  = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_translation_provider_duration_seconds", Help: "Translation provider request latency in seconds.", Buckets: prometheus.DefBuckets})
 	runtimeReadiness                             = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "runtime_readiness", Help: "Runtime readiness by role and check."}, []string{"role", "check"})
 	runtimeReadinessTransitions                  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "runtime_readiness_transitions_total", Help: "Runtime readiness state transitions."}, []string{"role", "from", "to", "reason"})
 	runtimeReadinessLastSuccess                  = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "runtime_readiness_last_success_timestamp", Help: "Unix timestamp of the last successful readiness evaluation."}, []string{"role"})
@@ -72,6 +77,7 @@ func init() {
 		recommendationRequestLogFailures, recommendationTrackingResults,
 		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
+		translationRequests, translationRequestDuration, translationCacheOperations, translationProviderRequests, translationProviderDuration,
 		runtimeReadiness, runtimeReadinessTransitions, runtimeReadinessLastSuccess, runtimeReadinessLastEvaluation,
 		workerPipelineHealthy, workerPipelineConsecutiveFailures, workerPipelineLastSuccess, workerPipelineBacklog, workerPipelineBacklogStalled,
 	)
@@ -222,6 +228,26 @@ func ObserveRecommendationProfileMaterializationDuration(duration time.Duration)
 
 func SetRecommendationProfileDirtyQueueDepth(value float64) {
 	recommendationProfileDirtyQueueDepth.Set(value)
+}
+
+func RecordTranslationRequest(outcome, sourceLanguage, targetLanguage string) {
+	translationRequests.WithLabelValues(outcome, sourceLanguage, targetLanguage).Inc()
+}
+
+func ObserveTranslationRequestDuration(duration time.Duration) {
+	translationRequestDuration.Observe(duration.Seconds())
+}
+
+func RecordTranslationCacheOperation(operation, result string) {
+	translationCacheOperations.WithLabelValues(operation, result).Inc()
+}
+
+func RecordTranslationProviderRequest(outcome string) {
+	translationProviderRequests.WithLabelValues(outcome).Inc()
+}
+
+func ObserveTranslationProviderDuration(duration time.Duration) {
+	translationProviderDuration.Observe(duration.Seconds())
 }
 
 func SetRuntimeReadiness(role, check string, healthy bool) {

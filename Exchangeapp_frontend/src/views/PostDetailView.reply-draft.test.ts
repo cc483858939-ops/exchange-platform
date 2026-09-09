@@ -144,6 +144,7 @@ const warmPost = (id = 42): FeedPost => ({
     avatar_url: '',
   },
   content: `Post ${id} body`,
+  language: 'und',
   media: [],
   createdAt: '2026-08-27T13:42:00.000Z',
   likeCount: 3,

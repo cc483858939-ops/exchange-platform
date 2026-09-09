@@ -39,6 +39,7 @@ describe('feed post mapping', () => {
       id: 42,
       author: canonicalAuthor,
       content: 'Canonical body',
+      language: 'und',
       media: [],
       replyCount: 2,
       repostCount: 0,

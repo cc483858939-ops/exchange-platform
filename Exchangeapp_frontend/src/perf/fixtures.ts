@@ -52,6 +52,7 @@ export function createPerfPosts(
       id,
       author: { ...author },
       content: contentFor(position, id),
+      language: 'und',
       media: hasMedia
         ? [{ type: 'image', url: mediaDataURI, position: 0 }]
         : [],
