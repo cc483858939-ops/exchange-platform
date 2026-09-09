@@ -33,7 +33,7 @@ type TranslationConfig struct {
 const (
 	DefaultTranslationBaseURL             = ""
 	DefaultTranslationModel               = "@cf/qwen/qwen3-30b-a3b-fp8"
-	DefaultTranslationPromptVersion       = "social_v2"
+	DefaultTranslationPromptVersion       = "social_v3"
 	DefaultTranslationTimeoutSeconds      = 10
 	DefaultTranslationCacheTTLHours       = 168
 	DefaultTranslationCacheJitterHours    = 24

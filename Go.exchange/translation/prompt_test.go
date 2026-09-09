@@ -41,6 +41,9 @@ func TestBuildPromptProtectsPostTextAndPreservesSocialSemantics(t *testing.T) {
 			t.Errorf("system prompt does not contain %q", expected)
 		}
 	}
+	if !strings.HasSuffix(strings.TrimSpace(system), "/no_think") {
+		t.Fatalf("system prompt must end with /no_think, got suffix %q", system[max(0, len(system)-32):])
+	}
 	if user != "<post_content>\n"+content+"\n</post_content>" {
 		t.Fatalf("user prompt = %q", user)
 	}

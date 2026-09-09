@@ -69,19 +69,14 @@ func normalizedTimeout(timeout time.Duration) time.Duration {
 }
 
 type completionRequest struct {
-	Model              string              `json:"model"`
-	Messages           []completionMessage `json:"messages"`
-	MaxTokens          int                 `json:"max_tokens"`
-	ChatTemplateKwargs chatTemplateKwargs  `json:"chat_template_kwargs"`
+	Model     string              `json:"model"`
+	Messages  []completionMessage `json:"messages"`
+	MaxTokens int                 `json:"max_tokens"`
 }
 
 type completionMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
-}
-
-type chatTemplateKwargs struct {
-	EnableThinking bool `json:"enable_thinking"`
 }
 
 type completionResponse struct {
@@ -123,7 +118,6 @@ func (p *WorkersAIClient) Translate(ctx context.Context, req Request) (ProviderR
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		ChatTemplateKwargs: chatTemplateKwargs{EnableThinking: false},
 	})
 	if err != nil {
 		return ProviderResult{}, newProviderError(ProviderErrorInvalidResponse, 0, err)

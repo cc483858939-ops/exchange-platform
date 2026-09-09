@@ -20,7 +20,7 @@ translation:
   base_url: ""
   api_key: ""
   model: "@cf/qwen/qwen3-30b-a3b-fp8"
-  prompt_version: "social_v2"
+  prompt_version: "social_v3"
   timeout_seconds: 10
   cache_ttl_hours: 168
   cache_jitter_hours: 24
