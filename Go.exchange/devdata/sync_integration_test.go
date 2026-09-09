@@ -102,8 +102,12 @@ func (data syncIntegrationData) sourcePost(key string, offset int64, at time.Tim
 }
 
 func (data syncIntegrationData) snapshot(fetchedAt time.Time, posts ...SnapshotPost) Snapshot {
-	accounts := make([]SnapshotAccount, 0, len(data.Registry.Accounts))
-	for _, configured := range data.Registry.Accounts {
+	return data.snapshotFor(data.Registry, fetchedAt, posts...)
+}
+
+func (data syncIntegrationData) snapshotFor(registry SourceRegistry, fetchedAt time.Time, posts ...SnapshotPost) Snapshot {
+	accounts := make([]SnapshotAccount, 0, len(registry.Accounts))
+	for _, configured := range registry.Accounts {
 		accounts = append(accounts, SnapshotAccount{
 			RegistryKey:     configured.Key,
 			SourceUserID:    data.SourceIDs[configured.Key],
@@ -340,6 +344,139 @@ func TestDevDataMirrorPostMediaMarkerOnlyPreservesExistingIntegration(t *testing
 	}
 	if len(after) != 1 || after[0].URL != before[0].URL || after[0].Position != before[0].Position {
 		t.Fatalf("marker-only sync changed PostMedia before=%#v after=%#v", before, after)
+	}
+}
+
+func TestDevDataMirrorSourceReplacementPreservesRemovedAccountHistoryIntegration(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+
+	oldRegistry := data.Registry
+	oldRegistry.Accounts = append([]SourceAccount(nil), oldRegistry.Accounts[:2]...)
+	newLandscape := SourceAccount{Key: "it_land_" + data.Tag, Platform: "x", Handle: "it_land_" + data.Tag, Category: "travel_nature", MaxPosts: DefaultMaxPosts, Enabled: true}
+	newCute := SourceAccount{Key: "it_cute_" + data.Tag, Platform: "x", Handle: "it_cute_" + data.Tag, Category: "lifestyle_food_humor", MaxPosts: DefaultMaxPosts, Enabled: true}
+	data.Registry.Accounts = append(append([]SourceAccount(nil), oldRegistry.Accounts...), newLandscape, newCute)
+	data.SourceIDs[newLandscape.Key] = strconv.FormatInt(data.Base+3, 10)
+	data.SourceIDs[newCute.Key] = strconv.FormatInt(data.Base+4, 10)
+	newRegistry := SourceRegistry{Version: SourceRegistryVersion, DefaultMaxPosts: DefaultMaxPosts, Accounts: []SourceAccount{newLandscape, newCute}}
+
+	now := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	oldA := data.sourcePost(oldRegistry.Accounts[0].Key, 1301, now.Add(-time.Hour), "removed source A")
+	oldA.HasMedia = true
+	oldA.Media = []SnapshotMedia{{Type: "image", SourceURL: "https://pbs.twimg.com/media/replacement.jpg"}}
+	oldB := data.sourcePost(oldRegistry.Accounts[1].Key, 1302, now.Add(-2*time.Hour), "removed source B")
+	oldSnapshot := data.snapshotFor(oldRegistry, now, oldA, oldB)
+	oldResolutions := map[SourcePostKey][]PostMediaResolution{
+		{RegistryKey: oldA.RegistryKey, SourcePostID: oldA.SourcePostID}: {
+			integrationPostMediaResolution(t, oldA, 0, avatarJPEGFixture(t)),
+		},
+	}
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, oldRegistry, oldSnapshot, nil, now, SyncOptions{PostMediaResolutions: oldResolutions}); err != nil {
+		t.Fatalf("initial source replacement sync: %v", err)
+	}
+	oldAccountA := findMirrorAccount(t, db, oldA.RegistryKey)
+	oldAccountB := findMirrorAccount(t, db, oldB.RegistryKey)
+	oldMappingA := findMirrorMapping(t, db, oldA.SourcePostID)
+	oldMappingB := findMirrorMapping(t, db, oldB.SourcePostID)
+	var oldPostA, oldPostB models.Post
+	if err := db.Unscoped().First(&oldPostA, oldMappingA.LocalPostID).Error; err != nil {
+		t.Fatalf("load removed source A Post: %v", err)
+	}
+	if err := db.Unscoped().First(&oldPostB, oldMappingB.LocalPostID).Error; err != nil {
+		t.Fatalf("load removed source B Post: %v", err)
+	}
+	var oldMedia []models.PostMedia
+	if err := db.Where("post_id = ?", oldPostA.ID).Order("position ASC").Find(&oldMedia).Error; err != nil {
+		t.Fatalf("load removed source PostMedia: %v", err)
+	}
+	if len(oldMedia) != 1 {
+		t.Fatalf("initial removed source PostMedia count=%d", len(oldMedia))
+	}
+	oldUsernameA := MirrorUsername(oldA.RegistryKey)
+	oldUsernameB := MirrorUsername(oldB.RegistryKey)
+
+	newLandscapePost := data.sourcePost(newLandscape.Key, 1303, now.Add(-3*time.Hour), "new landscape")
+	newCutePost := data.sourcePost(newCute.Key, 1304, now.Add(-4*time.Hour), "new cute animals")
+	newSnapshot := data.snapshotFor(newRegistry, now.Add(time.Minute), newLandscapePost, newCutePost)
+	result, err := SyncSnapshot(context.Background(), db, newRegistry, newSnapshot, nil, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("replacement sync: %v", err)
+	}
+	if result.Inserted != 2 || result.RetiredSoft != 0 || result.RetiredHard != 0 || result.MirrorUsers != 2 || result.ActiveImportedRoots != 2 {
+		t.Fatalf("replacement result=%#v", result)
+	}
+
+	for _, want := range []struct {
+		key      string
+		account  models.DevDataMirrorAccount
+		userID   uint
+		mapping  models.DevDataMirrorPost
+		post     models.Post
+		content  string
+		username string
+	}{
+		{key: oldA.RegistryKey, account: oldAccountA, userID: oldAccountA.LocalUserID, mapping: oldMappingA, post: oldPostA, content: oldPostA.Content, username: oldUsernameA},
+		{key: oldB.RegistryKey, account: oldAccountB, userID: oldAccountB.LocalUserID, mapping: oldMappingB, post: oldPostB, content: oldPostB.Content, username: oldUsernameB},
+	} {
+		var account models.DevDataMirrorAccount
+		if err := db.Unscoped().First(&account, want.account.ID).Error; err != nil {
+			t.Fatalf("load preserved mirror account %q: %v", want.key, err)
+		}
+		if account.RegistryKey != want.key || account.Enabled {
+			t.Fatalf("preserved mirror account=%#v", account)
+		}
+		var user models.User
+		if err := db.Unscoped().First(&user, want.userID).Error; err != nil {
+			t.Fatalf("load preserved mirror user %q: %v", want.key, err)
+		}
+		if user.DeletedAt.Valid || user.Username != want.username {
+			t.Fatalf("preserved mirror user=%#v", user)
+		}
+		mapping := findMirrorMapping(t, db, want.mapping.SourcePostID)
+		if mapping.ID != want.mapping.ID || mapping.LocalPostID != want.mapping.LocalPostID || mapping.State != models.DevDataMirrorPostStateActive {
+			t.Fatalf("preserved mirror mapping=%#v", mapping)
+		}
+		var post models.Post
+		if err := db.Unscoped().First(&post, want.post.ID).Error; err != nil {
+			t.Fatalf("load preserved Post %q: %v", want.key, err)
+		}
+		if post.DeletedAt.Valid || post.Content != want.content {
+			t.Fatalf("preserved Post=%#v", post)
+		}
+	}
+
+	newAccountA := findMirrorAccount(t, db, newLandscape.Key)
+	newAccountB := findMirrorAccount(t, db, newCute.Key)
+	if !newAccountA.Enabled || !newAccountB.Enabled || newAccountA.LocalUserID == oldAccountA.LocalUserID || newAccountB.LocalUserID == oldAccountB.LocalUserID {
+		t.Fatalf("new mirror accounts=%#v %#v", newAccountA, newAccountB)
+	}
+	for _, want := range []struct {
+		key     string
+		account models.DevDataMirrorAccount
+		postID  string
+	}{
+		{key: newLandscape.Key, account: newAccountA, postID: newLandscapePost.SourcePostID},
+		{key: newCute.Key, account: newAccountB, postID: newCutePost.SourcePostID},
+	} {
+		var user models.User
+		if err := db.Unscoped().First(&user, want.account.LocalUserID).Error; err != nil {
+			t.Fatalf("load new mirror user %q: %v", want.key, err)
+		}
+		if user.DeletedAt.Valid || user.Username != MirrorUsername(want.key) {
+			t.Fatalf("new mirror user=%#v", user)
+		}
+		mapping := findMirrorMapping(t, db, want.postID)
+		if mapping.MirrorAccountID != want.account.ID || mapping.State != models.DevDataMirrorPostStateActive {
+			t.Fatalf("new mirror mapping=%#v", mapping)
+		}
+	}
+	var afterMedia []models.PostMedia
+	if err := db.Where("post_id = ?", oldPostA.ID).Order("position ASC").Find(&afterMedia).Error; err != nil {
+		t.Fatalf("reload preserved PostMedia: %v", err)
+	}
+	if len(afterMedia) != 1 || afterMedia[0].URL != oldMedia[0].URL || afterMedia[0].Position != oldMedia[0].Position {
+		t.Fatalf("source replacement changed old PostMedia before=%#v after=%#v", oldMedia, afterMedia)
 	}
 }
 

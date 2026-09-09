@@ -14,10 +14,21 @@ func TestCuratedRegistryHasExactlyTheControlledTwentyAccounts(t *testing.T) {
 	if len(registry.EnabledAccounts()) != 20 {
 		t.Fatalf("enabled accounts=%d, want 20", len(registry.EnabledAccounts()))
 	}
-	for _, key := range []string{"thsottiaux", "MKBHD", "dotey", "laozhouhengmei", "JamesAI", "Svwang1", "wenqiangjp", "F1", "NASA", "neiltyson"} {
+	for _, key := range []string{"thsottiaux", "MKBHD", "dotey", "laozhouhengmei", "JamesAI", "Svwang1", "wenqiangjp", "visualsofearth1", "CuddlyCutePets", "NASA", "neiltyson"} {
 		if _, ok := registry.AccountByKey(key); !ok {
 			t.Fatalf("registry missing %q", key)
 		}
+	}
+	for _, key := range []string{"F1", "dog_rates"} {
+		if _, ok := registry.AccountByKey(key); ok {
+			t.Fatalf("removed registry key %q is still present", key)
+		}
+	}
+	if account, ok := registry.AccountByKey("visualsofearth1"); !ok || account.Category != "travel_nature" || account.Handle != "visualsofearth1" {
+		t.Fatalf("landscape account=%#v exists=%t", account, ok)
+	}
+	if account, ok := registry.AccountByKey("CuddlyCutePets"); !ok || account.Category != "lifestyle_food_humor" || account.Handle != "CuddlyCutePets" {
+		t.Fatalf("cute animals account=%#v exists=%t", account, ok)
 	}
 	if got := MirrorUsername("MKBHD"); got != "x_MKBHD" {
 		t.Fatalf("mirror username=%q", got)
