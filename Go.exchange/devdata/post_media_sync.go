@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"Go.exchange/models"
+	"Go.exchange/postmedia"
+	"Go.exchange/postmediaimage"
 
 	"gorm.io/gorm"
 )
@@ -36,20 +38,35 @@ func postMediaResolutionsForSync(desired SnapshotPost, options SyncOptions) ([]P
 		if !exists || resolution.RegistryKey != desired.RegistryKey || resolution.SourcePostID != desired.SourcePostID {
 			return nil, false
 		}
-		if strings.TrimSpace(resolution.SourceURL) != strings.TrimSpace(media.SourceURL) || strings.TrimSpace(resolution.LocalURL) == "" {
+		if strings.TrimSpace(resolution.SourceURL) != strings.TrimSpace(media.SourceURL) || strings.TrimSpace(resolution.LocalURL) == "" || strings.TrimSpace(resolution.LargeObjectKey) == "" || strings.TrimSpace(resolution.LargeLocalURL) == "" {
 			return nil, false
 		}
 		if !isLowerHexHash(resolution.ContentHash) {
 			return nil, false
 		}
-		extension := extensionFromAvatarObjectKey(resolution.ObjectKey)
-		objectKey, err := BuildPostMediaObjectKey(desired.RegistryKey, desired.SourcePostID, resolution.ContentHash, extension)
-		if err != nil || resolution.ObjectKey != objectKey || resolution.LocalURL != postMediaLocalURL(objectKey) {
+		mediumExtension := postmedia.ObjectExtension(resolution.ObjectKey)
+		largeExtension := postmedia.ObjectExtension(resolution.LargeObjectKey)
+		mediumKey, err := postmedia.BuildDevDataV1VariantObjectKey(desired.RegistryKey, desired.SourcePostID, resolution.ContentHash, "medium", mediumExtension)
+		if err != nil || resolution.ObjectKey != mediumKey || resolution.LocalURL != postmedia.PublicURL(mediumKey) {
+			return nil, false
+		}
+		largeKey, err := postmedia.BuildDevDataV1VariantObjectKey(desired.RegistryKey, desired.SourcePostID, resolution.ContentHash, "large", largeExtension)
+		if err != nil || resolution.LargeObjectKey != largeKey || resolution.LargeLocalURL != postmedia.PublicURL(largeKey) {
+			return nil, false
+		}
+		if resolution.Width <= 0 || resolution.Height <= 0 || resolution.Width > postmediaimage.MediumMaxSide || resolution.Height > postmediaimage.MediumMaxSide || maxPostMediaDimension(resolution.Width, resolution.Height) > postmediaimage.MediumMaxSide {
 			return nil, false
 		}
 		ordered[position] = resolution
 	}
 	return ordered, true
+}
+
+func maxPostMediaDimension(first, second int) int {
+	if first > second {
+		return first
+	}
+	return second
 }
 
 func insertImportedPostMedia(tx *gorm.DB, postID uint, resolutions []PostMediaResolution, createdAt time.Time) error {
@@ -61,6 +78,7 @@ func insertImportedPostMedia(tx *gorm.DB, postID uint, resolutions []PostMediaRe
 		}
 		if err := tx.Create(&models.PostMedia{
 			PostID: postID, MediaType: "image", URL: resolution.LocalURL,
+			LargeURL: resolution.LargeLocalURL, Width: resolution.Width, Height: resolution.Height,
 			Position: position, CreatedAt: createdAt.UTC(),
 		}).Error; err != nil {
 			return fmt.Errorf("insert imported PostMedia for Post %d position %d: %w", postID, position, err)
@@ -96,7 +114,7 @@ func syncImportedPostMedia(tx *gorm.DB, postID uint, desired SnapshotPost, optio
 	identical := len(current) == len(resolutions)
 	if identical {
 		for position, resolution := range resolutions {
-			if current[position].MediaType != "image" || current[position].URL != resolution.LocalURL || current[position].Position != position {
+			if current[position].MediaType != "image" || current[position].URL != resolution.LocalURL || current[position].LargeURL != resolution.LargeLocalURL || current[position].Width != resolution.Width || current[position].Height != resolution.Height || current[position].Position != position {
 				identical = false
 				break
 			}

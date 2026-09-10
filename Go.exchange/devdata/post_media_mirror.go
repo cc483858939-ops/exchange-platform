@@ -11,13 +11,15 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
+
+	"Go.exchange/postmedia"
+	"Go.exchange/postmediaimage"
 )
 
 const (
 	postMediaSourceHost           = "pbs.twimg.com"
-	postMediaObjectPrefix         = "post-media/devdata/"
-	postMediaMaxBytes       int64 = 5 << 20
+	postMediaObjectPrefix         = postmedia.DevDataV1ObjectPrefix
+	postMediaMaxBytes       int64 = postmediaimage.MaxSourceBytes
 	postMediaMaxRedirects         = 3
 	postMediaRequestTimeout       = 10 * time.Second
 )
@@ -154,43 +156,23 @@ func parsePostMediaSourceURL(rawURL, allowedHost string) (*url.URL, error) {
 	return parsed, nil
 }
 
+// BuildPostMediaObjectKey is kept as a small compatibility helper for local
+// DevData callers. It now returns the V1 Medium object key; new code should
+// use postmedia.BuildDevDataV1ObjectPaths when it also needs Original/Large.
 func BuildPostMediaObjectKey(registryKey, sourcePostID, contentHash, extension string) (string, error) {
-	safeRegistryKey, err := sanitizePostMediaRegistryKey(registryKey)
+	derivativeExtension := strings.ToLower(strings.TrimSpace(extension))
+	if derivativeExtension == ".webp" {
+		derivativeExtension = ".jpg"
+	}
+	paths, err := postmedia.BuildDevDataV1ObjectPaths(registryKey, sourcePostID, contentHash, extension, derivativeExtension)
 	if err != nil {
 		return "", err
 	}
-	if !isNumericSourceID(strings.TrimSpace(sourcePostID)) {
-		return "", errors.New("source Post ID must be numeric")
-	}
-	if !isLowerHexHash(contentHash) {
-		return "", errors.New("post media content hash must be lowercase SHA-256")
-	}
-	extension = strings.ToLower(strings.TrimSpace(extension))
-	if extension != ".jpg" && extension != ".png" && extension != ".webp" {
-		return "", errors.New("post media extension is not supported")
-	}
-	return postMediaObjectPrefix + safeRegistryKey + "/" + strings.TrimSpace(sourcePostID) + "/" + contentHash + extension, nil
-}
-
-func sanitizePostMediaRegistryKey(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.Contains(raw, "..") || strings.ContainsAny(raw, `/\\`) {
-		return "", errors.New("registry key is unsafe for a post media object key")
-	}
-	for _, r := range raw {
-		if unicode.IsControl(r) {
-			return "", errors.New("registry key contains control characters")
-		}
-	}
-	safe := sanitizeAvatarRegistryKey(raw)
-	if safe == "" {
-		return "", errors.New("registry key cannot produce a safe post media path")
-	}
-	return safe, nil
+	return paths.MediumObjectKey, nil
 }
 
 func postMediaLocalURL(objectKey string) string {
-	return avatarLocalURLPrefix + objectKey
+	return postmedia.PublicURL(objectKey)
 }
 
 type SourcePostKey struct {
@@ -199,13 +181,17 @@ type SourcePostKey struct {
 }
 
 type PostMediaResolution struct {
-	RegistryKey  string
-	SourcePostID string
-	Position     int
-	SourceURL    string
-	ObjectKey    string
-	LocalURL     string
-	ContentHash  string
+	RegistryKey    string
+	SourcePostID   string
+	Position       int
+	SourceURL      string
+	ObjectKey      string
+	LocalURL       string
+	LargeObjectKey string
+	LargeLocalURL  string
+	Width          int
+	Height         int
+	ContentHash    string
 }
 
 type PostMediaMirrorReport struct {
@@ -243,36 +229,61 @@ func PreparePostMediaMirrors(ctx context.Context, registry SourceRegistry, snaps
 				report.Failed++
 				continue
 			}
-			contentType, extension, ok := detectMirrorImageType(downloaded.Body)
-			if !ok {
+			processed, err := postmediaimage.Process(downloaded.Body)
+			if err != nil {
 				report.Failed++
 				continue
 			}
 			hash := sha256.Sum256(downloaded.Body)
 			contentHash := hex.EncodeToString(hash[:])
-			objectKey, err := BuildPostMediaObjectKey(post.RegistryKey, post.SourcePostID, contentHash, extension)
+			paths, err := postmedia.BuildDevDataV1ObjectPaths(post.RegistryKey, post.SourcePostID, contentHash, processed.OriginalExtension, processed.Medium.Extension)
 			if err != nil {
 				report.Failed++
 				continue
 			}
-			info, exists, err := store.Stat(ctx, objectKey)
-			if err != nil {
-				report.Failed++
-				continue
+			objects := []struct {
+				key         string
+				body        []byte
+				contentType string
+			}{
+				{key: paths.OriginalObjectKey, body: downloaded.Body, contentType: processed.OriginalContentType},
+				{key: paths.MediumObjectKey, body: processed.Medium.Body, contentType: processed.Medium.ContentType},
+				{key: paths.LargeObjectKey, body: processed.Large.Body, contentType: processed.Large.ContentType},
 			}
-			if exists && info.Size == int64(len(downloaded.Body)) && info.ContentType == contentType {
-				report.Reused++
-			} else {
-				if err := store.Put(ctx, objectKey, downloaded.Body, contentType); err != nil {
+			allReused := true
+			objectFailed := false
+			for _, object := range objects {
+				info, exists, err := store.Stat(ctx, object.key)
+				if err != nil {
 					report.Failed++
+					objectFailed = true
+					allReused = false
+					break
+				}
+				if exists && info.Size == int64(len(object.body)) && info.ContentType == object.contentType {
 					continue
 				}
+				allReused = false
+				if err := store.Put(ctx, object.key, object.body, object.contentType); err != nil {
+					report.Failed++
+					objectFailed = true
+					break
+				}
+			}
+			if objectFailed {
+				continue
+			}
+			if !allReused {
 				report.Uploaded++
+			} else {
+				report.Reused++
 			}
 			resolutions[key] = append(resolutions[key], PostMediaResolution{
 				RegistryKey: post.RegistryKey, SourcePostID: post.SourcePostID,
 				Position: position, SourceURL: strings.TrimSpace(media.SourceURL),
-				ObjectKey: objectKey, LocalURL: postMediaLocalURL(objectKey), ContentHash: contentHash,
+				ObjectKey: paths.MediumObjectKey, LocalURL: postMediaLocalURL(paths.MediumObjectKey),
+				LargeObjectKey: paths.LargeObjectKey, LargeLocalURL: postMediaLocalURL(paths.LargeObjectKey),
+				Width: processed.Medium.Width, Height: processed.Medium.Height, ContentHash: contentHash,
 			})
 		}
 	}

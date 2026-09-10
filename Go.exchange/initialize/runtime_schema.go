@@ -132,6 +132,10 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"chk_post_media_type",
 			"chk_post_media_position",
 			"chk_post_media_url_nonblank",
+			"chk_post_media_large_url_nonblank",
+			"chk_post_media_width_positive",
+			"chk_post_media_height_positive",
+			"chk_post_media_medium_dimensions",
 		},
 		Indexes: []string{
 			"uidx_post_media_post_position",

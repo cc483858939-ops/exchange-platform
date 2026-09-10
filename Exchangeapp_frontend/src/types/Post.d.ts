@@ -3,6 +3,9 @@ import type { PublicAuthor } from './User';
 export interface PostMedia {
   type: 'image';
   url: string;
+  large_url: string;
+  width: number;
+  height: number;
   position: number;
 }
 

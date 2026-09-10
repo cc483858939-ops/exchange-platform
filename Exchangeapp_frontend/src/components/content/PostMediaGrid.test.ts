@@ -7,6 +7,9 @@ import PostMediaGrid from './PostMediaGrid.vue';
 const media = (count: number) => Array.from({ length: count }, (_, index) => ({
   type: 'image' as const,
   url: `/media/${index}.jpg`,
+  large_url: `/media/${index}-large.jpg`,
+  width: 1200,
+  height: 800,
   position: index,
 }));
 
@@ -41,6 +44,28 @@ describe('PostMediaGrid', () => {
     const multiWrapper = mountGrid(2);
     expect(multiWrapper.findAll('img')[0].classes())
       .not.toContain('post-media-grid__image--single');
+  });
+
+  it('uses async decoding and known dimensions for server media', () => {
+    const wrapper = mountGrid(1);
+    const image = wrapper.get('img');
+
+    expect(image.attributes('loading')).toBe('lazy');
+    expect(image.attributes('decoding')).toBe('async');
+    expect(image.attributes('width')).toBe('1200');
+    expect(image.attributes('height')).toBe('800');
+  });
+
+  it('omits dimensions when a local preview does not know them yet', () => {
+    const wrapper = mount(PostMediaGrid, {
+      props: {
+        media: [{ type: 'image', url: '/preview.jpg', large_url: '/preview.jpg', width: 0, height: 0, position: 0 }],
+      },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+
+    expect(wrapper.get('img').attributes('width')).toBeUndefined();
+    expect(wrapper.get('img').attributes('height')).toBeUndefined();
   });
 
   it('keeps image-open controls disabled by default', () => {

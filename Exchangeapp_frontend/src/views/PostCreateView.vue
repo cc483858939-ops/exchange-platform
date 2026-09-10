@@ -312,6 +312,9 @@ const previewMedia = computed<PostMedia[]>(() => postDraft.media
   .map((item, index) => ({
     type: 'image' as const,
     url: previewEntries.value.get(item.id)?.url || '',
+    large_url: previewEntries.value.get(item.id)?.url || '',
+    width: 0,
+    height: 0,
     position: index,
   }))
   .filter(item => Boolean(item.url)));

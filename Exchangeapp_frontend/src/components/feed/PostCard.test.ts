@@ -247,7 +247,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
   it('keeps media as an independent Post Detail link', async () => {
     const post = {
       ...basePost(),
-      media: [{ type: 'image' as const, url: '/media.png', position: 0 }],
+      media: [{ type: 'image' as const, url: '/media.png', large_url: '/media-large.png', width: 1200, height: 800, position: 0 }],
     };
     const wrapper = mountPostCard(post);
     const cover = wrapper.findAllComponents(RouterLinkStub)
@@ -585,11 +585,11 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       },
       content: 'Referenced post body',
       published_at: '2026-08-17T00:00:00.000Z',
-      media: [{ type: 'image' as const, url: '/reference.png', position: 0 }],
+      media: [{ type: 'image' as const, url: '/reference.png', large_url: '/reference-large.png', width: 1200, height: 800, position: 0 }],
     };
     const post = {
       ...basePost(),
-      media: [{ type: 'image' as const, url: '/outer.png', position: 0 }],
+      media: [{ type: 'image' as const, url: '/outer.png', large_url: '/outer-large.png', width: 1200, height: 800, position: 0 }],
       quotePost: quotedPost,
     };
     const wrapper = mountPostCard(post);
@@ -637,7 +637,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       },
       content: 'Parent post body',
       published_at: '2026-08-17T00:00:00.000Z',
-      media: [{ type: 'image' as const, url: '/parent.png', position: 0 }],
+      media: [{ type: 'image' as const, url: '/parent.png', large_url: '/parent-large.png', width: 1200, height: 800, position: 0 }],
     };
     const wrapper = mountPostCard({ ...basePost(), replyToPost: repliedToPost });
     const referenceBodyLink = wrapper.findAllComponents(RouterLinkStub)

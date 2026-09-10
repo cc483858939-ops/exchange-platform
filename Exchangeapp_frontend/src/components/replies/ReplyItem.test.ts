@@ -84,7 +84,7 @@ describe('ReplyItem', () => {
   });
 
   it('preserves reply media activation', async () => {
-    const replyMedia = [{ type: 'image' as const, url: '/reply.png', position: 0 }];
+    const replyMedia = [{ type: 'image' as const, url: '/reply.png', large_url: '/reply-large.png', width: 1200, height: 800, position: 0 }];
     const wrapper = mountReply({ reply: makeReply({ media: replyMedia }) });
 
     await wrapper.get('.test-media-grid').trigger('click');

@@ -10,6 +10,9 @@ type PostMedia struct {
 	PostID    uint      `json:"-" gorm:"not null"`
 	MediaType string    `json:"type" gorm:"not null"`
 	URL       string    `json:"url" gorm:"not null"`
+	LargeURL  string    `json:"large_url" gorm:"not null"`
+	Width     int       `json:"width" gorm:"not null"`
+	Height    int       `json:"height" gorm:"not null"`
 	Position  int       `json:"position" gorm:"not null"`
 	CreatedAt time.Time `json:"-" gorm:"not null"`
 }

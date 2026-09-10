@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"Go.exchange/postmedia"
+	"Go.exchange/postmediaimage"
 )
 
 func TestPostMediaDownloaderAcceptsValidatedImageBytes(t *testing.T) {
@@ -144,7 +147,7 @@ func TestBuildPostMediaObjectKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "post-media/devdata/dotey/123456/" + hash + ".jpg"; key != want {
+	if want := "post-media/devdata/v1/dotey/123456/" + hash + "/medium.jpg"; key != want {
 		t.Fatalf("key=%q want %q", key, want)
 	}
 	for _, test := range []struct {
@@ -182,18 +185,24 @@ func TestPreparePostMediaMirrorsIsolatesFailuresAndReusesObjects(t *testing.T) {
 	}
 	firstBody := avatarJPEGFixture(t)
 	secondBody := avatarPNGFixture(t)
-	fetcher := fakePostMediaFetcher{items: map[string]fakePostMediaFetch{
+	fetcher := &fakePostMediaFetcher{items: map[string]fakePostMediaFetch{
 		firstURL:  {media: downloadedPostMedia(firstBody)},
 		secondURL: {media: downloadedPostMedia(secondBody)},
 		thirdURL:  {err: errors.New("fixture failure")},
-	}}
+	}, calls: make(map[string]int)}
 	store := newFakeAvatarStore()
 	secondDownloaded := downloadedPostMedia(secondBody)
-	secondKey, err := BuildPostMediaObjectKey("source", "101", secondDownloaded.ContentHash, secondDownloaded.Extension)
+	processed, err := postmediaimage.Process(secondBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.objects[secondKey] = fakeAvatarObject{size: int64(len(secondBody)), contentType: secondDownloaded.ContentType}
+	paths, err := postmedia.BuildDevDataV1ObjectPaths("source", "101", secondDownloaded.ContentHash, processed.OriginalExtension, processed.Medium.Extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.objects[paths.OriginalObjectKey] = fakeAvatarObject{size: int64(len(secondBody)), contentType: processed.OriginalContentType}
+	store.objects[paths.MediumObjectKey] = fakeAvatarObject{size: int64(len(processed.Medium.Body)), contentType: processed.Medium.ContentType}
+	store.objects[paths.LargeObjectKey] = fakeAvatarObject{size: int64(len(processed.Large.Body)), contentType: processed.Large.ContentType}
 
 	resolutions, report, err := PreparePostMediaMirrors(context.Background(), registry, snapshot, fetcher, store)
 	if err != nil {
@@ -207,6 +216,35 @@ func TestPreparePostMediaMirrorsIsolatesFailuresAndReusesObjects(t *testing.T) {
 	if len(resolutions[key100]) != 1 || len(resolutions[key101]) != 1 {
 		t.Fatalf("resolutions=%#v", resolutions)
 	}
+	if fetcher.calls[firstURL] != 1 || fetcher.calls[secondURL] != 1 || fetcher.calls[thirdURL] != 1 {
+		t.Fatalf("download calls=%#v", fetcher.calls)
+	}
+	firstDownloaded := downloadedPostMedia(firstBody)
+	firstProcessed, err := postmediaimage.Process(firstBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPaths, err := postmedia.BuildDevDataV1ObjectPaths("source", "100", firstDownloaded.ContentHash, firstProcessed.OriginalExtension, firstProcessed.Medium.Extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range []struct {
+		key         string
+		body        []byte
+		contentType string
+	}{
+		{key: firstPaths.OriginalObjectKey, body: firstBody, contentType: firstProcessed.OriginalContentType},
+		{key: firstPaths.MediumObjectKey, body: firstProcessed.Medium.Body, contentType: firstProcessed.Medium.ContentType},
+		{key: firstPaths.LargeObjectKey, body: firstProcessed.Large.Body, contentType: firstProcessed.Large.ContentType},
+	} {
+		stored, ok := store.objects[object.key]
+		if !ok || stored.size != int64(len(object.body)) || stored.contentType != object.contentType {
+			t.Fatalf("stored object %q=%#v want size=%d type=%q", object.key, stored, len(object.body), object.contentType)
+		}
+	}
+	if len(store.puts) != 3 {
+		t.Fatalf("puts=%v want three first-media variants", store.puts)
+	}
 	if _, complete := postMediaResolutionsForSync(snapshot.Posts[1], SyncOptions{PostMediaResolutions: resolutions}); complete {
 		t.Fatal("partial post media resolutions were considered complete")
 	}
@@ -219,9 +257,11 @@ type fakePostMediaFetch struct {
 
 type fakePostMediaFetcher struct {
 	items map[string]fakePostMediaFetch
+	calls map[string]int
 }
 
-func (f fakePostMediaFetcher) Download(_ context.Context, sourceURL string) (DownloadedPostMedia, error) {
+func (f *fakePostMediaFetcher) Download(_ context.Context, sourceURL string) (DownloadedPostMedia, error) {
+	f.calls[sourceURL]++
 	item, ok := f.items[sourceURL]
 	if !ok {
 		return DownloadedPostMedia{}, errors.New("missing fixture media")

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -19,6 +20,7 @@ import (
 
 	"Go.exchange/avatarimage"
 	"Go.exchange/models"
+	"Go.exchange/postmedia"
 	"Go.exchange/profileavatar"
 
 	"github.com/gin-gonic/gin"
@@ -38,20 +40,23 @@ func TestUploadPostMediaStoresImageAndReturnsURL(t *testing.T) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 
-	pngPayload := append([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, []byte("payload")...)
-	var gotObjectKey string
-	var gotContentType string
-	var gotObjectSize int64
-	var gotPayload []byte
-	putStoredObject = func(ctx context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
-		var err error
-		gotObjectKey = objectKey
-		gotContentType = contentType
-		gotObjectSize = objectSize
-		gotPayload, err = io.ReadAll(reader)
-		return err
+	type storedUpload struct {
+		key         string
+		contentType string
+		size        int64
+		body        []byte
+	}
+	var uploads []storedUpload
+	putStoredObject = func(_ context.Context, objectKey string, reader io.Reader, objectSize int64, contentType string) error {
+		body, err := io.ReadAll(reader)
+		if err != nil {
+			return err
+		}
+		uploads = append(uploads, storedUpload{key: objectKey, contentType: contentType, size: objectSize, body: body})
+		return nil
 	}
 
+	pngPayload := profilePNGFixture(t)
 	body, contentType := multipartImageRequestBody(t, "post.png", pngPayload)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -64,24 +69,37 @@ func TestUploadPostMediaStoresImageAndReturnsURL(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("unexpected status: got %d want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	if !strings.HasPrefix(gotObjectKey, postMediaObjectPrefix+"42/") || !strings.HasSuffix(gotObjectKey, ".png") {
-		t.Fatalf("unexpected object key: %s", gotObjectKey)
+	if len(uploads) != 4 {
+		t.Fatalf("upload count=%d want 4: %#v", len(uploads), uploads)
 	}
-	if gotContentType != "image/png" {
-		t.Fatalf("unexpected content type: %s", gotContentType)
+	if !strings.Contains(uploads[0].key, postMediaObjectPrefix+"42/") || !strings.HasSuffix(uploads[0].key, "/original.png") {
+		t.Fatalf("unexpected original object key: %s", uploads[0].key)
 	}
-	if gotObjectSize != int64(len(pngPayload)) {
-		t.Fatalf("unexpected object size: got %d want %d", gotObjectSize, len(pngPayload))
+	if uploads[0].contentType != "image/png" || uploads[0].size != int64(len(pngPayload)) || !bytes.Equal(uploads[0].body, pngPayload) {
+		t.Fatalf("original upload=%#v", uploads[0])
 	}
-	if !bytes.Equal(gotPayload, pngPayload) {
-		t.Fatal("uploaded payload was not preserved")
+	if !strings.HasSuffix(uploads[1].key, "/medium.jpg") || uploads[1].contentType != "image/jpeg" {
+		t.Fatalf("unexpected Medium upload=%#v", uploads[1])
+	}
+	if !strings.HasSuffix(uploads[2].key, "/large.jpg") || uploads[2].contentType != "image/jpeg" {
+		t.Fatalf("unexpected Large upload=%#v", uploads[2])
+	}
+	if !strings.HasSuffix(uploads[3].key, "/manifest.json") || uploads[3].contentType != "application/json" {
+		t.Fatalf("unexpected manifest upload=%#v", uploads[3])
+	}
+	var manifest postmedia.Manifest
+	if err := json.Unmarshal(uploads[3].body, &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	if manifest.Version != 1 || manifest.OwnerID != 42 || manifest.Medium.ObjectKey != uploads[1].key || manifest.Large.ObjectKey != uploads[2].key || manifest.OriginalObjectKey != uploads[0].key {
+		t.Fatalf("manifest=%#v", manifest)
 	}
 
 	var response postMediaUploadResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !strings.HasPrefix(response.MediaURL, "/api/files/"+postMediaObjectPrefix+"42/") {
+	if response.MediaURL != "/api/files/"+uploads[1].key {
 		t.Fatalf("unexpected media url: %s", response.MediaURL)
 	}
 }
@@ -127,9 +145,12 @@ func TestUploadPostMediaAcceptsOnlySupportedImageBytes(t *testing.T) {
 		want    int
 	}{
 		{name: "empty", payload: nil, want: http.StatusBadRequest},
-		{name: "jpeg bytes", payload: []byte{0xff, 0xd8, 0xff, 0xe0, 'j', 'p', 'e', 'g'}, want: http.StatusOK},
-		{name: "png bytes", payload: append([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, []byte("png")...), want: http.StatusOK},
-		{name: "webp bytes", payload: append([]byte{'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'}, []byte("webp")...), want: http.StatusOK},
+		{name: "jpeg", payload: profileJPEGFixture(t), want: http.StatusOK},
+		{name: "png", payload: profilePNGFixture(t), want: http.StatusOK},
+		{name: "webp", payload: profileWebPFixture(t), want: http.StatusOK},
+		{name: "invalid jpeg bytes", payload: []byte{0xff, 0xd8, 0xff, 0xe0, 'j', 'p', 'e', 'g'}, want: http.StatusBadRequest},
+		{name: "invalid png bytes", payload: append([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, []byte("png")...), want: http.StatusBadRequest},
+		{name: "invalid webp bytes", payload: append([]byte{'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'}, []byte("webp")...), want: http.StatusBadRequest},
 		{name: "gif", payload: []byte("GIF89a"), want: http.StatusBadRequest},
 		{name: "text", payload: []byte("plain text"), want: http.StatusBadRequest},
 		{name: "too large", payload: make([]byte, maxPostMediaImageSize+1), want: http.StatusBadRequest},
@@ -145,6 +166,50 @@ func TestUploadPostMediaAcceptsOnlySupportedImageBytes(t *testing.T) {
 			UploadPostMedia(ctx)
 			if recorder.Code != testCase.want {
 				t.Fatalf("status=%d want=%d body=%s", recorder.Code, testCase.want, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestUploadPostMediaReportsStorageUnavailableAndPreservesWriteOrder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalLoader := loadActiveProfileViewer
+	originalPut := putStoredObject
+	t.Cleanup(func() {
+		loadActiveProfileViewer = originalLoader
+		putStoredObject = originalPut
+	})
+	loadActiveProfileViewer = func(uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: 42}}, nil
+	}
+
+	for failAt := 1; failAt <= 4; failAt++ {
+		t.Run(fmt.Sprintf("write-%d", failAt), func(t *testing.T) {
+			var attempted []string
+			putStoredObject = func(_ context.Context, objectKey string, _ io.Reader, _ int64, _ string) error {
+				attempted = append(attempted, objectKey)
+				if len(attempted) == failAt {
+					return fmt.Errorf("put %d failed", failAt)
+				}
+				return nil
+			}
+			body, contentType := multipartImageRequestBody(t, "post.png", profilePNGFixture(t))
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/post-media", body)
+			ctx.Request.Header.Set("Content-Type", contentType)
+			ctx.Set("user_id", uint(42))
+
+			UploadPostMedia(ctx)
+
+			if recorder.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d want=%d body=%s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+			}
+			if len(attempted) != failAt {
+				t.Fatalf("attempted writes=%d want=%d keys=%v", len(attempted), failAt, attempted)
+			}
+			if failAt < 4 && strings.HasSuffix(attempted[len(attempted)-1], "/manifest.json") {
+				t.Fatalf("manifest was written before earlier failure: %v", attempted)
 			}
 		})
 	}
@@ -411,11 +476,15 @@ func TestUploadProfileAvatarRequiresActiveViewer(t *testing.T) {
 	}
 }
 
-func TestFileObjectKeyAllowlistAcceptsNestedDevDataAvatarAndRejectsUnsafeKeys(t *testing.T) {
+func TestFileObjectKeyAllowlistAcceptsPublicMediaVariantsAndRejectsPrivateKeys(t *testing.T) {
 	for _, valid := range []string{
 		"profile-avatars/devdata/mkbhd/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg",
 		"profile-avatars/users/v1/42/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.png",
 		"profile-avatars/devdata/v1/mkbhd/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg",
+		"post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/medium.jpg",
+		"post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/large.png",
+		"post-media/devdata/v1/mkbhd/371/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/medium.jpg",
+		"post-media/devdata/v1/mkbhd/371/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/large.png",
 	} {
 		if !isAllowedObjectKey(valid) {
 			t.Fatalf("valid avatar key was rejected: %s", valid)
@@ -427,6 +496,10 @@ func TestFileObjectKeyAllowlistAcceptsNestedDevDataAvatarAndRejectsUnsafeKeys(t 
 		"article-covers/../avatar.jpg",
 		"article-covers/avatar.jpg",
 		"private/devdata/mkbhd/avatar.jpg",
+		"post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/original.jpg",
+		"post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/manifest.json",
+		"post-media/users/v1/42/550E8400-E29B-41D4-A716-446655440000/medium.jpg",
+		"post-media/devdata/v1/mkbhd/371/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/original.png",
 	} {
 		if isAllowedObjectKey(objectKey) {
 			t.Fatalf("unsafe object key was accepted: %q", objectKey)
@@ -434,7 +507,7 @@ func TestFileObjectKeyAllowlistAcceptsNestedDevDataAvatarAndRejectsUnsafeKeys(t 
 	}
 }
 
-func TestFileCacheControlOnlyMakesV1AvatarsImmutable(t *testing.T) {
+func TestFileCacheControlMakesOnlyV1PublicMediaImmutable(t *testing.T) {
 	for _, testCase := range []struct {
 		key  string
 		want string
@@ -443,6 +516,10 @@ func TestFileCacheControlOnlyMakesV1AvatarsImmutable(t *testing.T) {
 		{key: "profile-avatars/devdata/v1/mkbhd/" + strings.Repeat("b", 64) + ".png", want: "public, max-age=31536000, immutable"},
 		{key: "profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg", want: "public, max-age=86400"},
 		{key: "post-media/42/image.jpg", want: "public, max-age=86400"},
+		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/medium.jpg", want: "public, max-age=31536000, immutable"},
+		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/large.png", want: "public, max-age=31536000, immutable"},
+		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/original.jpg", want: "public, max-age=86400"},
+		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/manifest.json", want: "public, max-age=86400"},
 	} {
 		if got := fileCacheControl(testCase.key); got != testCase.want {
 			t.Fatalf("fileCacheControl(%q)=%q want=%q", testCase.key, got, testCase.want)

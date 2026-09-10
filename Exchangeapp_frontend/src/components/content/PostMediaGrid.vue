@@ -24,6 +24,9 @@
           :src="item.url"
           :alt="`Post image ${index + 1}`"
           loading="lazy"
+          decoding="async"
+          :width="item.width > 0 ? item.width : undefined"
+          :height="item.height > 0 ? item.height : undefined"
           @error="markFailed(item.url)"
         />
       </button>
@@ -34,6 +37,9 @@
         :src="item.url"
         :alt="`Post image ${index + 1}`"
         loading="lazy"
+        decoding="async"
+        :width="item.width > 0 ? item.width : undefined"
+        :height="item.height > 0 ? item.height : undefined"
         @error="markFailed(item.url)"
       />
       <div

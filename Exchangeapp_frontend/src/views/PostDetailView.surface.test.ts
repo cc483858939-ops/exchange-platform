@@ -392,10 +392,10 @@ describe('PostDetailView post-first surface', () => {
       },
       content: 'Referenced post body',
       published_at: '2026-08-17T00:00:00.000Z',
-      media: [{ type: 'image' as const, url: '/reference.png', position: 0 }],
+      media: [{ type: 'image' as const, url: '/reference.png', large_url: '/reference-large.png', width: 1200, height: 800, position: 0 }],
     };
     mocks.getPostById.mockResolvedValueOnce(canonicalPost({
-      media: [{ type: 'image', url: '/primary.png', position: 0 }],
+      media: [{ type: 'image', url: '/primary.png', large_url: '/primary-large.png', width: 1200, height: 800, position: 0 }],
       quote_post_id: 9,
       quote_post: reference,
     }));
@@ -489,18 +489,18 @@ describe('PostDetailView post-first surface', () => {
 
   it('opens primary, reference, and reply media in the shared viewer', async () => {
     const primaryMedia = [
-      { type: 'image' as const, url: '/primary-1.png', position: 0 },
-      { type: 'image' as const, url: '/primary-2.png', position: 1 },
+      { type: 'image' as const, url: '/primary-1.png', large_url: '/primary-1-large.png', width: 1200, height: 800, position: 0 },
+      { type: 'image' as const, url: '/primary-2.png', large_url: '/primary-2-large.png', width: 1200, height: 800, position: 1 },
     ];
     const referenceMedia = [
-      { type: 'image' as const, url: '/reference-1.png', position: 0 },
-      { type: 'image' as const, url: '/reference-2.png', position: 1 },
-      { type: 'image' as const, url: '/reference-3.png', position: 2 },
-      { type: 'image' as const, url: '/reference-4.png', position: 3 },
+      { type: 'image' as const, url: '/reference-1.png', large_url: '/reference-1-large.png', width: 1200, height: 800, position: 0 },
+      { type: 'image' as const, url: '/reference-2.png', large_url: '/reference-2-large.png', width: 1200, height: 800, position: 1 },
+      { type: 'image' as const, url: '/reference-3.png', large_url: '/reference-3-large.png', width: 1200, height: 800, position: 2 },
+      { type: 'image' as const, url: '/reference-4.png', large_url: '/reference-4-large.png', width: 1200, height: 800, position: 3 },
     ];
     const replyMedia = [
-      { type: 'image' as const, url: '/reply-1.png', position: 0 },
-      { type: 'image' as const, url: '/reply-2.png', position: 1 },
+      { type: 'image' as const, url: '/reply-1.png', large_url: '/reply-1-large.png', width: 1200, height: 800, position: 0 },
+      { type: 'image' as const, url: '/reply-2.png', large_url: '/reply-2-large.png', width: 1200, height: 800, position: 1 },
     ];
     const reference = {
       id: 9,

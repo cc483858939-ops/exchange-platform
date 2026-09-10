@@ -16,6 +16,8 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
+	"Go.exchange/postmedia"
+	"Go.exchange/postmediaimage"
 
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/driver/postgres"
@@ -301,7 +303,7 @@ func TestDevDataMirrorPostMediaLifecycleIntegration(t *testing.T) {
 	}
 	oneMapping := findMirrorMapping(t, db, one.SourcePostID)
 	fourMapping := findMirrorMapping(t, db, four.SourcePostID)
-	assertIntegrationPostMedia(t, db, oneMapping.LocalPostID, []string{"/api/files/post-media/devdata/"})
+	assertIntegrationPostMedia(t, db, oneMapping.LocalPostID, []string{"/api/files/post-media/devdata/v1/"})
 	assertIntegrationPostMediaCountAndPositions(t, db, fourMapping.LocalPostID, 4)
 
 	oneChanged := one
@@ -524,20 +526,22 @@ func TestDevDataMirrorSourceReplacementPreservesRemovedAccountHistoryIntegration
 
 func integrationPostMediaResolution(t *testing.T, post SnapshotPost, position int, body []byte) PostMediaResolution {
 	t.Helper()
-	_, extension, ok := detectMirrorImageType(body)
-	if !ok {
-		t.Fatal("invalid integration media fixture")
+	processed, err := postmediaimage.Process(body)
+	if err != nil {
+		t.Fatalf("process integration media fixture: %v", err)
 	}
 	hash := sha256.Sum256(body)
 	contentHash := hex.EncodeToString(hash[:])
-	objectKey, err := BuildPostMediaObjectKey(post.RegistryKey, post.SourcePostID, contentHash, extension)
+	paths, err := postmedia.BuildDevDataV1ObjectPaths(post.RegistryKey, post.SourcePostID, contentHash, processed.OriginalExtension, processed.Medium.Extension)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return PostMediaResolution{
 		RegistryKey: post.RegistryKey, SourcePostID: post.SourcePostID, Position: position,
-		SourceURL: post.Media[position].SourceURL, ObjectKey: objectKey,
-		LocalURL: postMediaLocalURL(objectKey), ContentHash: contentHash,
+		SourceURL: post.Media[position].SourceURL, ObjectKey: paths.MediumObjectKey,
+		LocalURL:       postMediaLocalURL(paths.MediumObjectKey),
+		LargeObjectKey: paths.LargeObjectKey, LargeLocalURL: postMediaLocalURL(paths.LargeObjectKey),
+		Width: processed.Medium.Width, Height: processed.Medium.Height, ContentHash: contentHash,
 	}
 }
 
@@ -551,7 +555,7 @@ func assertIntegrationPostMedia(t *testing.T, db *gorm.DB, postID uint, wantURLP
 		t.Fatalf("Post %d media count=%d want=%d", postID, len(media), len(wantURLPrefix))
 	}
 	for position, item := range media {
-		if item.MediaType != "image" || item.Position != position || !strings.HasPrefix(item.URL, wantURLPrefix[position]) {
+		if item.MediaType != "image" || item.Position != position || !strings.HasPrefix(item.URL, wantURLPrefix[position]) || !strings.HasPrefix(item.LargeURL, "/api/files/post-media/devdata/v1/") || item.Width <= 0 || item.Height <= 0 {
 			t.Fatalf("Post %d media[%d]=%#v", postID, position, item)
 		}
 	}
@@ -567,7 +571,7 @@ func assertIntegrationPostMediaCountAndPositions(t *testing.T, db *gorm.DB, post
 		t.Fatalf("Post %d media count=%d want=%d", postID, len(media), wantCount)
 	}
 	for position, item := range media {
-		if item.MediaType != "image" || item.Position != position || !strings.HasPrefix(item.URL, "/api/files/post-media/devdata/") {
+		if item.MediaType != "image" || item.Position != position || !strings.HasPrefix(item.URL, "/api/files/post-media/devdata/v1/") || !strings.HasPrefix(item.LargeURL, "/api/files/post-media/devdata/v1/") || item.Width <= 0 || item.Height <= 0 {
 			t.Fatalf("Post %d media[%d]=%#v", postID, position, item)
 		}
 	}

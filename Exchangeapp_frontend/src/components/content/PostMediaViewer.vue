@@ -36,10 +36,12 @@
 
         <div class="post-media-viewer__image-frame" :aria-label="imagePositionLabel">
           <img
-            v-if="activeMedia && !failedURLs.has(activeMedia.url)"
+            v-if="activeMedia && !failedMediumURLs.has(activeMedia.url)"
             class="post-media-viewer__image"
-            :src="activeMedia.url"
+            :src="resolvedImageURL"
             :alt="imageAlt"
+            loading="eager"
+            decoding="async"
             @error="handleImageError"
           />
           <div
@@ -102,9 +104,12 @@ const clampIndex = (index: number, length: number) => {
 };
 
 const currentIndex = ref(clampIndex(props.initialIndex, visibleMedia.value.length));
-const failedURLs = ref(new Set<string>());
+const failedMediumURLs = ref(new Set<string>());
+const failedLargeURLs = ref(new Set<string>());
 const activeMedia = computed(() => visibleMedia.value[currentIndex.value] ?? null);
 const hasMultipleMedia = computed(() => visibleMedia.value.length > 1);
+const resolvedImageURL = ref('');
+let largeUpgradeVersion = 0;
 const imageAlt = computed(() => (
   hasMultipleMedia.value
     ? `Post image ${currentIndex.value + 1} of ${visibleMedia.value.length}`
@@ -137,14 +142,64 @@ const showNext = () => {
   }
 };
 
-const markFailed = (url: string) => {
-  failedURLs.value = new Set([...failedURLs.value, url]);
+const markMediumFailed = (url: string) => {
+  failedMediumURLs.value = new Set([...failedMediumURLs.value, url]);
+};
+
+const markLargeFailed = (url: string) => {
+  failedLargeURLs.value = new Set([...failedLargeURLs.value, url]);
+};
+
+const waitForImageLoad = (image: HTMLImageElement) => new Promise<void>((resolve, reject) => {
+  image.onload = () => resolve();
+  image.onerror = () => reject(new Error('large image failed to load'));
+});
+
+const preloadLarge = async (media: PostMedia, version: number) => {
+  const image = new Image();
+  image.decoding = 'async';
+  image.src = media.large_url;
+
+  try {
+    if (typeof image.decode === 'function') {
+      await image.decode();
+    } else {
+      await waitForImageLoad(image);
+    }
+  } catch {
+    markLargeFailed(media.large_url);
+    return;
+  }
+
+  if (version !== largeUpgradeVersion || activeMedia.value !== media) {
+    return;
+  }
+
+  resolvedImageURL.value = media.large_url;
+};
+
+const queueLargeUpgrade = (media: PostMedia, version: number) => {
+  const callback = () => {
+    void preloadLarge(media, version);
+  };
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(callback);
+  } else {
+    window.setTimeout(callback, 0);
+  }
 };
 
 const handleImageError = () => {
-  if (activeMedia.value) {
-    markFailed(activeMedia.value.url);
+  const media = activeMedia.value;
+  if (!media) {
+    return;
   }
+  if (resolvedImageURL.value === media.large_url && media.large_url !== media.url) {
+    markLargeFailed(media.large_url);
+    resolvedImageURL.value = media.url;
+    return;
+  }
+  markMediumFailed(media.url);
 };
 
 const handleKeydown = (event: KeyboardEvent) => {
@@ -207,6 +262,26 @@ watch(
   },
 );
 
+watch(
+  activeMedia,
+  media => {
+    largeUpgradeVersion += 1;
+    const version = largeUpgradeVersion;
+
+    if (!media) {
+      resolvedImageURL.value = '';
+      return;
+    }
+
+    resolvedImageURL.value = media.url;
+    if (!media.large_url || media.large_url === media.url || failedLargeURLs.value.has(media.large_url)) {
+      return;
+    }
+    queueLargeUpgrade(media, version);
+  },
+  { immediate: true },
+);
+
 onMounted(async () => {
   const dialog = dialogRef.value;
   if (!dialog) {
@@ -232,6 +307,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   closeRequested = true;
+  largeUpgradeVersion += 1;
   window.removeEventListener('keydown', handleKeydown);
   const dialog = dialogRef.value;
   if (!dialog) {

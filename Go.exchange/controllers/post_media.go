@@ -2,18 +2,24 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"Go.exchange/models"
+	"Go.exchange/postmedia"
+	"Go.exchange/postmediaimage"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-const maxPostMediaCount = 4
+const (
+	maxPostMediaCount         = 4
+	postMediaManifestMaxBytes = 32 << 10
+)
 
 type createPostMediaRequest struct {
 	Type string `json:"type"`
@@ -21,14 +27,20 @@ type createPostMediaRequest struct {
 }
 
 type validatedPostMedia struct {
-	MediaType string
-	PublicURL string
-	ObjectKey string
+	MediaType       string
+	PublicURL       string
+	LargeURL        string
+	Width           int
+	Height          int
+	MediumObjectKey string
 }
 
 type postMediaResponse struct {
 	Type     string `json:"type"`
 	URL      string `json:"url"`
+	LargeURL string `json:"large_url"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
 	Position int    `json:"position"`
 }
 
@@ -38,43 +50,66 @@ var (
 	errPostMediaStorageUnavailable = errors.New("post media storage is unavailable")
 )
 
-// parsePostMediaObjectURL accepts only the canonical URL returned by the
-// post-media upload endpoint. It deliberately parses path segments instead
-// of using a prefix check so user 1234 cannot match user 123.
-func parsePostMediaObjectURL(viewerID uint, rawURL string) (string, error) {
+type parsedUserPostMedia struct {
+	MediaID           string
+	MediumObjectKey   string
+	ManifestObjectKey string
+}
+
+// parsePostMediaObjectURL accepts only the canonical Medium URL returned by
+// the V1 post-media upload endpoint. It deliberately parses path segments
+// instead of using a prefix check so user 1234 cannot match user 123.
+func parsePostMediaObjectURL(viewerID uint, rawURL string) (parsedUserPostMedia, error) {
 	if viewerID == 0 || rawURL == "" || strings.ContainsAny(rawURL, "\r\n") || strings.ContainsAny(rawURL, "?#") {
-		return "", errInvalidPostMedia
+		return parsedUserPostMedia{}, errInvalidPostMedia
 	}
 	parts := strings.Split(rawURL, "/")
-	if len(parts) != 6 || parts[0] != "" || parts[1] != "api" || parts[2] != "files" || parts[3] != "post-media" {
-		return "", errInvalidPostMedia
+	if len(parts) != 9 || parts[0] != "" || parts[1] != "api" || parts[2] != "files" || parts[3] != "post-media" || parts[4] != "users" || parts[5] != "v1" {
+		return parsedUserPostMedia{}, errInvalidPostMedia
 	}
-	ownerID, err := strconv.ParseUint(parts[4], 10, 64)
-	if err != nil || ownerID != uint64(viewerID) || parts[4] == "" || strconv.FormatUint(ownerID, 10) != parts[4] {
-		return "", errInvalidPostMedia
+	ownerID, err := parseCanonicalPostMediaOwnerID(parts[6])
+	if err != nil || ownerID != uint64(viewerID) {
+		return parsedUserPostMedia{}, errInvalidPostMedia
 	}
-
-	filename := parts[5]
-	dot := strings.LastIndexByte(filename, '.')
-	if dot <= 0 || dot == len(filename)-1 {
-		return "", errInvalidPostMedia
+	mediaID := parts[7]
+	if !isCanonicalPostMediaUUID(mediaID) {
+		return parsedUserPostMedia{}, errInvalidPostMedia
 	}
-	base, extension := filename[:dot], filename[dot:]
-	parsedUUID, err := uuid.Parse(base)
-	if err != nil || parsedUUID.String() != base {
-		return "", errInvalidPostMedia
-	}
-	switch extension {
-	case ".jpg", ".png", ".webp":
-	default:
-		return "", errInvalidPostMedia
+	if parts[8] != "medium.jpg" && parts[8] != "medium.png" {
+		return parsedUserPostMedia{}, errInvalidPostMedia
 	}
 
-	objectKey := strings.Join(parts[3:], "/")
-	if postFileURL(objectKey) != rawURL {
-		return "", errInvalidPostMedia
+	mediumObjectKey := strings.Join(parts[3:], "/")
+	manifestObjectKey, err := postmedia.BuildUserV1ManifestObjectKey(viewerID, mediaID)
+	if err != nil || postmedia.PublicURL(mediumObjectKey) != rawURL {
+		return parsedUserPostMedia{}, errInvalidPostMedia
 	}
-	return objectKey, nil
+	return parsedUserPostMedia{
+		MediaID:           mediaID,
+		MediumObjectKey:   mediumObjectKey,
+		ManifestObjectKey: manifestObjectKey,
+	}, nil
+}
+
+func parseCanonicalPostMediaOwnerID(value string) (uint64, error) {
+	ownerID, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || ownerID == 0 || strconv.FormatUint(ownerID, 10) != value {
+		return 0, errInvalidPostMedia
+	}
+	return ownerID, nil
+}
+
+func isCanonicalPostMediaUUID(value string) bool {
+	parsed, err := uuidParse(value)
+	return err == nil && parsed == value
+}
+
+func uuidParse(value string) (string, error) {
+	parsed, err := uuid.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	return parsed.String(), nil
 }
 
 func validatePostMediaRequests(ctx context.Context, viewerID uint, items []createPostMediaRequest) ([]validatedPostMedia, error) {
@@ -91,11 +126,22 @@ func validatePostMediaRequests(ctx context.Context, viewerID uint, items []creat
 			return nil, errInvalidPostMedia
 		}
 		seenURLs[item.URL] = struct{}{}
-		objectKey, err := parsePostMediaObjectURL(viewerID, item.URL)
+		parsed, err := parsePostMediaObjectURL(viewerID, item.URL)
 		if err != nil {
 			return nil, err
 		}
-		if err := statStoredObject(ctx, objectKey); err != nil {
+		manifestBody, err := readStoredObject(ctx, parsed.ManifestObjectKey, postMediaManifestMaxBytes)
+		if err != nil {
+			return nil, classifyPostMediaStorageReadError(err)
+		}
+		var manifest postmedia.Manifest
+		if err := json.Unmarshal(manifestBody, &manifest); err != nil {
+			return nil, errInvalidPostMedia
+		}
+		if err := validatePostMediaManifest(viewerID, item.URL, parsed, manifest); err != nil {
+			return nil, err
+		}
+		if err := statStoredObject(ctx, parsed.MediumObjectKey); err != nil {
 			if errors.Is(err, errPostMediaObjectUnavailable) {
 				return nil, err
 			}
@@ -104,15 +150,83 @@ func validatePostMediaRequests(ctx context.Context, viewerID uint, items []creat
 			}
 			return nil, fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
 		}
-		validated = append(validated, validatedPostMedia{MediaType: item.Type, PublicURL: item.URL, ObjectKey: objectKey})
+		if err := statStoredObject(ctx, manifest.Large.ObjectKey); err != nil {
+			if errors.Is(err, errPostMediaObjectUnavailable) {
+				return nil, err
+			}
+			if errors.Is(err, errPostMediaStorageUnavailable) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
+		}
+		validated = append(validated, validatedPostMedia{
+			MediaType:       item.Type,
+			PublicURL:       item.URL,
+			LargeURL:        postmedia.PublicURL(manifest.Large.ObjectKey),
+			Width:           manifest.Medium.Width,
+			Height:          manifest.Medium.Height,
+			MediumObjectKey: parsed.MediumObjectKey,
+		})
 	}
 	return validated, nil
+}
+
+func classifyPostMediaStorageReadError(err error) error {
+	switch {
+	case errors.Is(err, errInvalidPostMedia), errors.Is(err, errPostMediaObjectUnavailable), errors.Is(err, errPostMediaStorageUnavailable):
+		return err
+	default:
+		return fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
+	}
+}
+
+func validatePostMediaManifest(viewerID uint, mediumURL string, parsed parsedUserPostMedia, manifest postmedia.Manifest) error {
+	if manifest.Version != 1 || manifest.OwnerID != viewerID || manifest.MediaID != parsed.MediaID {
+		return errInvalidPostMedia
+	}
+	originalExtension := postmedia.ObjectExtension(manifest.OriginalObjectKey)
+	mediumExtension := postmedia.ObjectExtension(manifest.Medium.ObjectKey)
+	if originalExtension == "" || mediumExtension == "" {
+		return errInvalidPostMedia
+	}
+	expected, err := postmedia.BuildUserV1ObjectPaths(viewerID, parsed.MediaID, originalExtension, mediumExtension)
+	if err != nil || manifest.OriginalObjectKey != expected.OriginalObjectKey || manifest.Medium.ObjectKey != expected.MediumObjectKey || manifest.Large.ObjectKey != expected.LargeObjectKey || expected.ManifestObjectKey != parsed.ManifestObjectKey {
+		return errInvalidPostMedia
+	}
+	if manifest.Medium.ObjectKey != parsed.MediumObjectKey || postmedia.PublicURL(manifest.Medium.ObjectKey) != mediumURL {
+		return errInvalidPostMedia
+	}
+	if err := validatePostMediaVariant(manifest.Medium, postmediaimage.MediumMaxSide); err != nil {
+		return err
+	}
+	if err := validatePostMediaVariant(manifest.Large, postmediaimage.LargeMaxSide); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePostMediaVariant(variant postmedia.VariantManifest, maxSide int) error {
+	extension := postmedia.ObjectExtension(variant.ObjectKey)
+	if extension == "" || postmedia.ContentTypeForExtension(extension) != variant.ContentType || variant.Width <= 0 || variant.Height <= 0 || variant.Width > maxSide || variant.Height > maxSide || max(variant.Width, variant.Height) > maxSide {
+		return errInvalidPostMedia
+	}
+	return nil
+}
+
+func max(first, second int) int {
+	if first > second {
+		return first
+	}
+	return second
 }
 
 func postMediaResponsesFromValidated(items []validatedPostMedia) []postMediaResponse {
 	responses := make([]postMediaResponse, 0, len(items))
 	for position, item := range items {
-		responses = append(responses, postMediaResponse{Type: item.MediaType, URL: item.PublicURL, Position: position})
+		responses = append(responses, postMediaResponse{
+			Type: item.MediaType, URL: item.PublicURL, LargeURL: item.LargeURL,
+			Width: item.Width, Height: item.Height, Position: position,
+		})
 	}
 	return responses
 }
@@ -146,7 +260,8 @@ func loadPostMediaByPostIDsFromDB(db *gorm.DB, postIDs []uint) (map[uint][]postM
 	}
 	for _, row := range rows {
 		mediaByPostID[row.PostID] = append(mediaByPostID[row.PostID], postMediaResponse{
-			Type: row.MediaType, URL: row.URL, Position: row.Position,
+			Type: row.MediaType, URL: row.URL, LargeURL: row.LargeURL,
+			Width: row.Width, Height: row.Height, Position: row.Position,
 		})
 	}
 	return mediaByPostID, nil

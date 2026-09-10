@@ -24,7 +24,7 @@ const basePost = (): FeedPost => ({
   },
   content: 'A warm post',
   language: 'und',
-  media: [{ type: 'image', url: '/cover-a.png', position: 0 }],
+  media: [{ type: 'image', url: '/cover-a.png', large_url: '/cover-a-large.png', width: 1200, height: 800, position: 0 }],
   createdAt: '2026-08-26T00:00:00.000Z',
   likeCount: 10,
   replyCount: 2,
@@ -72,7 +72,7 @@ describe('postDetailHandoff store', () => {
     expect(store.pending?.post).toMatchObject({
       id: 42,
       content: 'A warm post',
-      media: [{ type: 'image', url: '/cover-a.png', position: 0 }],
+      media: [{ type: 'image', url: '/cover-a.png', large_url: '/cover-a-large.png', width: 1200, height: 800, position: 0 }],
       likeCount: 10,
       author: {
         username: 'reader',
@@ -87,7 +87,7 @@ describe('postDetailHandoff store', () => {
     expect(store.consume(42)).toMatchObject({
       id: 42,
       content: 'A warm post',
-      media: [{ url: '/cover-a.png', position: 0 }],
+      media: [{ url: '/cover-a.png', large_url: '/cover-a-large.png', width: 1200, height: 800, position: 0 }],
     });
     expect(store.consume(42)).toBeNull();
     expect(store.pending).toBeNull();

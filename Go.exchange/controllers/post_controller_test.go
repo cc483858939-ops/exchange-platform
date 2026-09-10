@@ -69,13 +69,24 @@ func TestCreatePostValidatesAndReturnsOrderedMedia(t *testing.T) {
 	stubCreatePostAuthor(t)
 	stubPostCreatePersistence(t, nil, 44)
 	originalStat := statStoredObject
-	t.Cleanup(func() { statStoredObject = originalStat })
+	originalRead := readStoredObject
+	t.Cleanup(func() {
+		statStoredObject = originalStat
+		readStoredObject = originalRead
+	})
 	statStoredObject = func(context.Context, string) error { return nil }
+	readStoredObject = func(_ context.Context, objectKey string, _ int64) ([]byte, error) {
+		parts := strings.Split(objectKey, "/")
+		if len(parts) != 6 {
+			return nil, errors.New("unexpected manifest key")
+		}
+		return testPostMediaManifestJSONFor(7, parts[4]), nil
+	}
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString(`{"content":"with media","media":[{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440000.jpg"},{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440001.webp"}]}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString(`{"content":"with media","media":[{"type":"image","url":"/api/files/post-media/users/v1/7/550e8400-e29b-41d4-a716-446655440000/medium.jpg"},{"type":"image","url":"/api/files/post-media/users/v1/7/550e8400-e29b-41d4-a716-446655440001/medium.jpg"}]}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	createPost(ctx)
 	if recorder.Code != http.StatusCreated {

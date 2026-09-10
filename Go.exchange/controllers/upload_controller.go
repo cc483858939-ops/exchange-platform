@@ -3,6 +3,7 @@ package controllers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"Go.exchange/avatarimage"
 	"Go.exchange/config"
 	"Go.exchange/global"
+	"Go.exchange/postmedia"
+	"Go.exchange/postmediaimage"
 	"Go.exchange/profileavatar"
 
 	"github.com/gin-gonic/gin"
@@ -20,8 +23,8 @@ import (
 )
 
 const (
-	postMediaObjectPrefix     = "post-media/"
-	maxPostMediaImageSize     = 5 << 20
+	postMediaObjectPrefix     = postmedia.UserV1ObjectPrefix
+	maxPostMediaImageSize     = postmediaimage.MaxSourceBytes
 	profileAvatarObjectPrefix = "profile-avatars/"
 	maxProfileAvatarImageSize = 2 << 20
 )
@@ -50,6 +53,35 @@ var getStoredObject = func(ctx context.Context, objectKey string) (*minio.Object
 		return nil, errors.New("storage is not initialized")
 	}
 	return global.MinioClient.GetObject(ctx, config.StorageBucket(), objectKey, minio.GetObjectOptions{})
+}
+
+// readStoredObject is the bounded internal object-reader seam used to load a
+// user upload manifest. Stat happens before the bounded read so a malformed or
+// unexpectedly large object cannot turn into an unbounded allocation.
+var readStoredObject = func(ctx context.Context, objectKey string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, errInvalidPostMedia
+	}
+	object, err := getStoredObject(ctx, objectKey)
+	if err != nil {
+		return nil, classifyStoredObjectError(err)
+	}
+	defer object.Close()
+	info, err := object.Stat()
+	if err != nil {
+		return nil, classifyStoredObjectError(err)
+	}
+	if info.Size < 0 || info.Size > maxBytes {
+		return nil, errInvalidPostMedia
+	}
+	body, err := io.ReadAll(io.LimitReader(object, maxBytes+1))
+	if err != nil {
+		return nil, classifyStoredObjectError(err)
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, errInvalidPostMedia
+	}
+	return body, nil
 }
 
 var statStoredObject = func(ctx context.Context, objectKey string) error {
@@ -94,7 +126,7 @@ func UploadPostMedia(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
 		return
 	}
-	if fileHeader.Size <= 0 || fileHeader.Size > maxPostMediaImageSize {
+	if fileHeader.Size > maxPostMediaImageSize {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
 		return
 	}
@@ -106,27 +138,65 @@ func UploadPostMedia(ctx *gin.Context) {
 	}
 	defer file.Close()
 
-	sniff := make([]byte, 512)
-	n, err := file.Read(sniff)
-	if err != nil && !errors.Is(err, io.EOF) {
+	body, err := io.ReadAll(io.LimitReader(file, int64(postmediaimage.MaxSourceBytes)+1))
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
 		return
 	}
-	contentType, extension, ok := detectSupportedImageType(sniff[:n])
-	if !ok {
+	if len(body) == 0 || len(body) > postmediaimage.MaxSourceBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
+		return
+	}
+	processed, err := postmediaimage.Process(body)
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
 		return
 	}
 
-	objectKey := fmt.Sprintf("%s%d/%s%s", postMediaObjectPrefix, viewerID, uuid.NewString(), extension)
-	reader := io.MultiReader(bytes.NewReader(sniff[:n]), file)
-	if err := putStoredObject(ctx.Request.Context(), objectKey, reader, fileHeader.Size, contentType); err != nil {
+	mediaID := uuid.NewString()
+	paths, err := postmedia.BuildUserV1ObjectPaths(viewerID, mediaID, processed.OriginalExtension, processed.Medium.Extension)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build media object key"})
+		return
+	}
+	requestContext := ctx.Request.Context()
+	if err := putStoredObject(requestContext, paths.OriginalObjectKey, bytes.NewReader(body), int64(len(body)), processed.OriginalContentType); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		return
+	}
+	if err := putStoredObject(requestContext, paths.MediumObjectKey, bytes.NewReader(processed.Medium.Body), int64(len(processed.Medium.Body)), processed.Medium.ContentType); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		return
+	}
+	if err := putStoredObject(requestContext, paths.LargeObjectKey, bytes.NewReader(processed.Large.Body), int64(len(processed.Large.Body)), processed.Large.ContentType); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		return
+	}
+	manifestBody, err := json.Marshal(postmedia.Manifest{
+		Version:           1,
+		OwnerID:           viewerID,
+		MediaID:           mediaID,
+		OriginalObjectKey: paths.OriginalObjectKey,
+		Medium: postmedia.VariantManifest{
+			ObjectKey: paths.MediumObjectKey, ContentType: processed.Medium.ContentType,
+			Width: processed.Medium.Width, Height: processed.Medium.Height,
+		},
+		Large: postmedia.VariantManifest{
+			ObjectKey: paths.LargeObjectKey, ContentType: processed.Large.ContentType,
+			Width: processed.Large.Width, Height: processed.Large.Height,
+		},
+	})
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		return
+	}
+	if err := putStoredObject(requestContext, paths.ManifestObjectKey, bytes.NewReader(manifestBody), int64(len(manifestBody)), "application/json"); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
 		return
 	}
 
 	ctx.JSON(http.StatusOK, postMediaUploadResponse{
-		MediaURL: postFileURL(objectKey),
+		MediaURL: postmedia.PublicURL(paths.MediumObjectKey),
 	})
 }
 
@@ -212,36 +282,31 @@ func GetFile(ctx *gin.Context) {
 }
 
 func fileCacheControl(objectKey string) string {
+	if postmedia.IsPublicObjectKey(objectKey) {
+		return "public, max-age=31536000, immutable"
+	}
 	if strings.HasPrefix(objectKey, profileavatar.UserV1ObjectPrefix) || strings.HasPrefix(objectKey, profileavatar.DevDataV1ObjectPrefix) {
 		return "public, max-age=31536000, immutable"
 	}
 	return "public, max-age=86400"
 }
 
-func detectSupportedImageType(sniff []byte) (string, string, bool) {
-	if len(sniff) >= 12 && string(sniff[0:4]) == "RIFF" && string(sniff[8:12]) == "WEBP" {
-		return "image/webp", ".webp", true
-	}
-
-	switch http.DetectContentType(sniff) {
-	case "image/jpeg":
-		return "image/jpeg", ".jpg", true
-	case "image/png":
-		return "image/png", ".png", true
-	default:
-		return "", "", false
-	}
-}
-
 func postFileURL(objectKey string) string {
-	return fmt.Sprintf("/api/files/%s", objectKey)
+	return postmedia.PublicURL(objectKey)
 }
 
 func isAllowedObjectKey(objectKey string) bool {
 	if strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n") {
 		return false
 	}
-	return strings.HasPrefix(objectKey, postMediaObjectPrefix) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
+	return postmedia.IsPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
+}
+
+func classifyStoredObjectError(err error) error {
+	if isMissingStoredObjectError(err) {
+		return errPostMediaObjectUnavailable
+	}
+	return fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
 }
 
 func isMissingStoredObjectError(err error) bool {

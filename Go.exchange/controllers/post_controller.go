@@ -199,7 +199,8 @@ func persistPostGraph(post *models.Post, userID uint, content string, req create
 		}
 		for position, item := range media {
 			if err := tx.Create(&models.PostMedia{
-				PostID: post.ID, MediaType: item.MediaType, URL: item.PublicURL,
+				PostID: post.ID, MediaType: item.MediaType, URL: item.PublicURL, LargeURL: item.LargeURL,
+				Width: item.Width, Height: item.Height,
 				Position: position, CreatedAt: now,
 			}).Error; err != nil {
 				return err

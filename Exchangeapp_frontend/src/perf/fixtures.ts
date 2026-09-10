@@ -54,7 +54,7 @@ export function createPerfPosts(
       content: contentFor(position, id),
       language: 'und',
       media: hasMedia
-        ? [{ type: 'image', url: mediaDataURI, position: 0 }]
+        ? [{ type: 'image', url: mediaDataURI, large_url: mediaDataURI, width: 1, height: 1, position: 0 }]
         : [],
       createdAt: new Date(baseTimestamp + index * 60_000).toISOString(),
       likeCount: (position * 7) % 97,

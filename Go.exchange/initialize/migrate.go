@@ -222,6 +222,9 @@ func applyPostArticleCleanup(tx *gorm.DB) error {
 
 func applyPostMediaConstraints(tx *gorm.DB) error {
 	statements := []string{
+		"ALTER TABLE post_media ALTER COLUMN large_url SET NOT NULL",
+		"ALTER TABLE post_media ALTER COLUMN width SET NOT NULL",
+		"ALTER TABLE post_media ALTER COLUMN height SET NOT NULL",
 		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS fk_post_media_post",
 		"ALTER TABLE post_media ADD CONSTRAINT fk_post_media_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_type",
@@ -230,6 +233,14 @@ func applyPostMediaConstraints(tx *gorm.DB) error {
 		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_position CHECK (position >= 0 AND position <= 3)",
 		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_url_nonblank",
 		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_url_nonblank CHECK (char_length(trim(url)) > 0)",
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_large_url_nonblank",
+		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_large_url_nonblank CHECK (char_length(trim(large_url)) > 0)",
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_width_positive",
+		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_width_positive CHECK (width > 0)",
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_height_positive",
+		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_height_positive CHECK (height > 0)",
+		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_medium_dimensions",
+		"ALTER TABLE post_media ADD CONSTRAINT chk_post_media_medium_dimensions CHECK (width <= 1200 AND height <= 1200)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_media_post_position ON post_media (post_id, position)",
 	}
 	for _, statement := range statements {

@@ -80,6 +80,26 @@ WHERE table_schema = current_schema()
 	if postMediaTables != 1 {
 		t.Fatalf("post_media table is missing")
 	}
+	var mediaColumns []struct {
+		Name string `gorm:"column:column_name"`
+	}
+	if err := db.Raw(`
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'post_media'
+`).Scan(&mediaColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	mediaColumnSet := make(map[string]struct{}, len(mediaColumns))
+	for _, column := range mediaColumns {
+		mediaColumnSet[column.Name] = struct{}{}
+	}
+	for _, required := range []string{"url", "large_url", "width", "height", "position"} {
+		if _, ok := mediaColumnSet[required]; !ok {
+			t.Fatalf("post_media is missing canonical column %q; columns=%v", required, mediaColumnSet)
+		}
+	}
 
 	var mediaConstraints []struct {
 		Name       string `gorm:"column:conname"`
@@ -98,10 +118,14 @@ WHERE conrelid = 'post_media'::regclass
 		mediaDefinitions[constraint.Name] = strings.ReplaceAll(definition, "\"", "")
 	}
 	for name, requiredParts := range map[string][]string{
-		"fk_post_media_post":          {"foreignkey(post_id)", "referencesposts(id)", "ondeletecascade"},
-		"chk_post_media_type":         {"media_type", "image"},
-		"chk_post_media_position":     {"position>=0", "position<=3"},
-		"chk_post_media_url_nonblank": {"char_length", "trim", "url", ">0"},
+		"fk_post_media_post":                {"foreignkey(post_id)", "referencesposts(id)", "ondeletecascade"},
+		"chk_post_media_type":               {"media_type", "image"},
+		"chk_post_media_position":           {"position>=0", "position<=3"},
+		"chk_post_media_url_nonblank":       {"char_length", "trim", "url", ">0"},
+		"chk_post_media_large_url_nonblank": {"char_length", "trim", "large_url", ">0"},
+		"chk_post_media_width_positive":     {"width>0"},
+		"chk_post_media_height_positive":    {"height>0"},
+		"chk_post_media_medium_dimensions":  {"width<=1200", "height<=1200"},
 	} {
 		definition, ok := mediaDefinitions[name]
 		if !ok {
