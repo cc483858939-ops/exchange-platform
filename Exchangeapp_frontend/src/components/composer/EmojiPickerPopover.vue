@@ -82,7 +82,6 @@ const handleDocumentKeydown = (event: KeyboardEvent) => {
 };
 
 const cleanupGlobalListeners = () => {
-  document.removeEventListener('pointerdown', handleDocumentPointer, true);
   document.removeEventListener('click', handleDocumentPointer, true);
   document.removeEventListener('keydown', handleDocumentKeydown, true);
   window.removeEventListener('resize', positionPopover);
@@ -90,7 +89,6 @@ const cleanupGlobalListeners = () => {
 };
 
 const addGlobalListeners = () => {
-  document.addEventListener('pointerdown', handleDocumentPointer, true);
   document.addEventListener('click', handleDocumentPointer, true);
   document.addEventListener('keydown', handleDocumentKeydown, true);
   window.addEventListener('resize', positionPopover);

@@ -70,10 +70,10 @@ describe('EmojiPickerPopover', () => {
     await flushPromises();
     const picker = document.querySelector('.emoji-picker-popover__mount')
       ?.firstElementChild as HTMLElement | undefined;
-    picker?.dispatchEvent(new Event('pointerdown', { bubbles: true, composed: true }));
+    picker?.dispatchEvent(new Event('click', { bubbles: true, composed: true }));
     expect(wrapper?.emitted('close')).toBeUndefined();
 
-    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    document.body.dispatchEvent(new Event('click', { bubbles: true }));
     expect(wrapper?.emitted('close')).toEqual([['outside']]);
   });
 
