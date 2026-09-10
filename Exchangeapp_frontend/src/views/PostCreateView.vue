@@ -62,6 +62,11 @@
               placeholder="What's happening?"
               :disabled="isSubmitting"
               :aria-describedby="contentError ? 'post-content-error' : undefined"
+              @input="syncContentSelection"
+              @select="syncContentSelection"
+              @click="syncContentSelection"
+              @keyup="syncContentSelection"
+              @focus="syncContentSelection"
             ></textarea>
 
             <PostMediaGrid
@@ -92,6 +97,20 @@
                   @change="handleMediaChange"
                 />
               </label>
+              <button
+                ref="emojiButton"
+                class="composer-tool emoji-picker-trigger"
+                type="button"
+                aria-label="Add emoji"
+                title="Add emoji"
+                aria-haspopup="dialog"
+                :aria-expanded="emojiPickerOpen"
+                :aria-controls="emojiPickerId"
+                :disabled="isSubmitting"
+                @click="toggleEmojiPicker"
+              >
+                <AppIcon name="smile" :size="20" />
+              </button>
               <span
                 v-if="showCharacterCount"
                 class="composer-character-count"
@@ -100,6 +119,15 @@
                 {{ remainingCharacters }}
               </span>
             </div>
+
+            <EmojiPickerPopover
+              :id="emojiPickerId"
+              :open="emojiPickerOpen"
+              :anchor-el="emojiButton"
+              :disabled="isSubmitting"
+              @select="insertEmoji"
+              @close="handleEmojiPickerClose"
+            />
 
             <p
               v-if="contentError"
@@ -143,7 +171,11 @@ import { useProfileSessionStore } from '../store/profileSession';
 import AppIcon from '../components/icons/AppIcon.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
+import EmojiPickerPopover, {
+  type EmojiPickerCloseReason,
+} from '../components/composer/EmojiPickerPopover.vue';
 import type { PostMedia } from '../types/Post';
+import { insertTextAtSelection } from '../utils/textareaInsertion';
 
 type PublishPhase = 'idle' | 'uploading' | 'publishing';
 
@@ -165,7 +197,12 @@ const mediaError = ref('');
 const uploadError = ref('');
 const publishError = ref('');
 const contentInput = ref<HTMLTextAreaElement | null>(null);
+const emojiButton = ref<HTMLButtonElement | null>(null);
+const emojiPickerOpen = ref(false);
+const selectionStart = ref<number | null>(null);
+const selectionEnd = ref<number | null>(null);
 const previewEntries = ref(new Map<string, { file: File; url: string }>());
+const emojiPickerId = 'post-emoji-picker';
 let publishAttemptVersion = 0;
 
 const currentIdentity = computed(() => authStore.currentIdentity);
@@ -203,6 +240,69 @@ const canPublish = computed(() => (
   && Boolean(content.value.trim())
   && contentLength.value <= maxContentLength
 ));
+
+const syncContentSelection = () => {
+  const input = contentInput.value;
+  if (!input) {
+    return;
+  }
+  selectionStart.value = input.selectionStart;
+  selectionEnd.value = input.selectionEnd;
+};
+
+const focusContentInput = async () => {
+  await nextTick();
+  const input = contentInput.value;
+  if (!input || input.disabled) {
+    return;
+  }
+  const start = selectionStart.value ?? input.value.length;
+  const end = selectionEnd.value ?? start;
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(start, end);
+  selectionStart.value = start;
+  selectionEnd.value = end;
+};
+
+const handleEmojiPickerClose = (reason: EmojiPickerCloseReason) => {
+  emojiPickerOpen.value = false;
+  if (reason === 'escape') {
+    void focusContentInput();
+  }
+};
+
+const toggleEmojiPicker = () => {
+  if (isSubmitting.value) {
+    return;
+  }
+  syncContentSelection();
+  emojiPickerOpen.value = !emojiPickerOpen.value;
+};
+
+const insertEmoji = async (emoji: string) => {
+  if (isSubmitting.value) {
+    return;
+  }
+  const result = insertTextAtSelection(
+    content.value,
+    emoji,
+    selectionStart.value,
+    selectionEnd.value,
+  );
+  content.value = result.value;
+  selectionStart.value = result.caret;
+  selectionEnd.value = result.caret;
+  await nextTick();
+  const input = contentInput.value;
+  if (!input || input.disabled) {
+    return;
+  }
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(result.caret, result.caret);
+  selectionStart.value = result.caret;
+  selectionEnd.value = result.caret;
+  resizeContent();
+};
 
 const previewMedia = computed<PostMedia[]>(() => postDraft.media
   .map((item, index) => ({
@@ -356,6 +456,8 @@ const submitPost = async () => {
     return;
   }
 
+  emojiPickerOpen.value = false;
+
   validationAttempted.value = true;
   if (!canPublish.value) {
     return;
@@ -456,6 +558,7 @@ watch(
   currentUserID,
   viewerID => {
     publishAttemptVersion += 1;
+    emojiPickerOpen.value = false;
     postDraft.setViewer(viewerID);
     phase.value = 'idle';
   },
@@ -464,12 +567,19 @@ watch(
 
 watch(() => postDraft.media, syncPreviews, { deep: true, immediate: true });
 
+watch(isSubmitting, submitting => {
+  if (submitting) {
+    emojiPickerOpen.value = false;
+  }
+});
+
 onMounted(() => {
   void nextTick(resizeContent);
 });
 
 onBeforeUnmount(() => {
   publishAttemptVersion += 1;
+  emojiPickerOpen.value = false;
   revokeAllPreviews();
 });
 </script>
@@ -620,7 +730,6 @@ onBeforeUnmount(() => {
   display: flex;
   min-height: 40px;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
 }
 
@@ -643,6 +752,12 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
+.composer-tool:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .composer-tool:focus-within {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
@@ -655,6 +770,7 @@ onBeforeUnmount(() => {
 }
 
 .composer-character-count {
+  margin-left: auto;
   color: var(--color-text-tertiary);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -667,6 +783,10 @@ onBeforeUnmount(() => {
 
 .media-picker {
   position: relative;
+}
+
+.emoji-picker-trigger {
+  appearance: none;
 }
 
 .media-input {

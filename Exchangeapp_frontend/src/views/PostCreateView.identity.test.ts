@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import { nextTick } from 'vue';
+import { defineComponent, h, nextTick } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostCreateView from './PostCreateView.vue';
@@ -82,10 +82,31 @@ const publishedPost = (authorID = 7) => ({
   media: [],
 });
 
+const EmojiPickerStub = defineComponent({
+  name: 'EmojiPickerPopover',
+  props: {
+    id: { type: String, required: true },
+    open: { type: Boolean, required: true },
+    anchorEl: { type: Object, default: null },
+    disabled: { type: Boolean, default: false },
+  },
+  emits: ['select', 'close'],
+  setup(props) {
+    return () => props.open
+      ? h('div', {
+        class: 'emoji-picker-popover-stub',
+        'data-picker-id': props.id,
+      })
+      : null;
+  },
+});
+
 const mountPage = () => mount(PostCreateView, {
+  attachTo: document.body,
   global: {
     stubs: {
       AppIcon: { template: '<span class="icon-stub" />' },
+      EmojiPickerPopover: EmojiPickerStub,
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
@@ -152,6 +173,97 @@ describe('PostCreateView identity and text publishing', () => {
     expect(wrapper.get('.media-picker').attributes('aria-label')).toBe('Add images');
     expect(wrapper.get('.media-picker').text()).not.toContain('Add images');
     expect(wrapper.find('.composer-progress').exists()).toBe(false);
+  });
+
+  it('toggles the emoji picker with an accessible control', async () => {
+    wrapper = mountPage();
+
+    const button = wrapper.get('.emoji-picker-trigger');
+    expect(button.attributes('aria-label')).toBe('Add emoji');
+    expect(button.attributes('title')).toBe('Add emoji');
+    expect(button.attributes('aria-haspopup')).toBe('dialog');
+    expect(button.attributes('aria-expanded')).toBe('false');
+    expect(button.attributes('aria-controls')).toBe('post-emoji-picker');
+
+    await button.trigger('click');
+    expect(button.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('.emoji-picker-popover-stub').attributes('data-picker-id'))
+      .toBe('post-emoji-picker');
+
+    await button.trigger('click');
+    expect(button.attributes('aria-expanded')).toBe('false');
+    expect(wrapper.find('.emoji-picker-popover-stub').exists()).toBe(false);
+  });
+
+  it('inserts an emoji at the saved caret and restores focus', async () => {
+    wrapper = mountPage();
+    const input = wrapper.get('#post-content');
+
+    await input.setValue('hello world');
+    (input.element as HTMLTextAreaElement).setSelectionRange(6, 6);
+    await input.trigger('select');
+    await wrapper.get('.emoji-picker-trigger').trigger('click');
+
+    wrapper.findComponent(EmojiPickerStub).vm.$emit('select', '😂');
+    await flushPromises();
+
+    expect((input.element as HTMLTextAreaElement).value).toBe('hello 😂world');
+    expect(usePostDraftStore().content).toBe('hello 😂world');
+    expect(document.activeElement).toBe(input.element);
+    expect((input.element as HTMLTextAreaElement).selectionStart).toBe(8);
+    expect((input.element as HTMLTextAreaElement).selectionEnd).toBe(8);
+  });
+
+  it('replaces the saved selection and keeps the picker open for another emoji', async () => {
+    wrapper = mountPage();
+    const input = wrapper.get('#post-content');
+    const textarea = input.element as HTMLTextAreaElement;
+
+    await input.setValue('hello bad world');
+    textarea.setSelectionRange(6, 9);
+    await input.trigger('select');
+    await wrapper.get('.emoji-picker-trigger').trigger('click');
+    const picker = wrapper.findComponent(EmojiPickerStub);
+
+    picker.vm.$emit('select', '❤️');
+    await flushPromises();
+    picker.vm.$emit('select', '🔥');
+    await flushPromises();
+
+    expect(textarea.value).toBe('hello ❤️🔥 world');
+    expect(wrapper.get('.emoji-picker-trigger').attributes('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe('hello ❤️🔥'.length);
+    expect(textarea.selectionEnd).toBe('hello ❤️🔥'.length);
+  });
+
+  it('closes on escape and preserves emoji content when publishing', async () => {
+    wrapper = mountPage();
+    const input = wrapper.get('#post-content');
+    await input.setValue('A post 😂');
+    await wrapper.get('.emoji-picker-trigger').trigger('click');
+
+    wrapper.findComponent(EmojiPickerStub).vm.$emit('close', 'escape');
+    await nextTick();
+
+    expect(wrapper.get('.emoji-picker-trigger').attributes('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(input.element);
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(mocks.createPost).toHaveBeenCalledWith({ content: 'A post 😂', media: [] });
+  });
+
+  it('closes and disables the picker while publishing', async () => {
+    mocks.createPost.mockReturnValue(new Promise(() => {}));
+    wrapper = mountPage();
+    await wrapper.get('#post-content').setValue('Pending post');
+    await wrapper.get('form').trigger('submit');
+    await nextTick();
+
+    const button = wrapper.get('.emoji-picker-trigger');
+    expect(button.attributes('disabled')).toBeDefined();
+    expect(button.attributes('aria-expanded')).toBe('false');
   });
 
   it('shows remaining characters only near or beyond the content limit', async () => {

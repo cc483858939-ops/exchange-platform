@@ -2,9 +2,21 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
-import { nextTick } from 'vue';
+import { flushPromises } from '@vue/test-utils';
+import { defineComponent, h, nextTick, ref } from 'vue';
+import { vi } from 'vitest';
 import ReplyComposer from './ReplyComposer.vue';
 import type { PublicAuthor } from '../../types/User';
+
+vi.mock('emoji-picker-element', () => {
+  class Picker extends HTMLElement {
+    constructor() {
+      super();
+    }
+  }
+  customElements.define('emoji-picker', Picker);
+  return { Picker };
+});
 
 const author = (overrides: Partial<PublicAuthor> = {}): PublicAuthor => ({
   id: 7,
@@ -13,6 +25,23 @@ const author = (overrides: Partial<PublicAuthor> = {}): PublicAuthor => ({
   avatar_url: 'https://example.test/alice.jpg',
   ...overrides,
 });
+
+const mountControlledReply = (initialValue: string) => {
+  const modelValue = ref(initialValue);
+  const Host = defineComponent({
+    setup() {
+      return () => h(ReplyComposer, {
+        author: author(),
+        modelValue: modelValue.value,
+        'onUpdate:modelValue': (value: string) => {
+          modelValue.value = value;
+        },
+      });
+    },
+  });
+
+  return { modelValue, wrapper: mount(Host, { attachTo: document.body }) };
+};
 
 describe('ReplyComposer avatar and reply behavior', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
@@ -84,6 +113,100 @@ describe('ReplyComposer avatar and reply behavior', () => {
     expect(wrapper.emitted('update:modelValue')).toEqual([['hello']]);
   });
 
+  it('opens the emoji picker with an accessible toggle', async () => {
+    wrapper = mount(ReplyComposer, { props: { author: author() } });
+
+    const button = wrapper.get('.reply-composer__emoji');
+    expect(button.attributes('aria-label')).toBe('Add emoji');
+    expect(button.attributes('title')).toBe('Add emoji');
+    expect(button.attributes('aria-haspopup')).toBe('dialog');
+    expect(button.attributes('aria-expanded')).toBe('false');
+    expect(button.attributes('aria-controls')).toBe('reply-emoji-picker');
+
+    await button.trigger('click');
+    await flushPromises();
+
+    expect(button.attributes('aria-expanded')).toBe('true');
+    expect(document.getElementById('reply-emoji-picker')).not.toBeNull();
+  });
+
+  it('inserts an emoji at the saved caret and keeps the picker open', async () => {
+    const controlled = mountControlledReply('hello world');
+    wrapper = controlled.wrapper;
+    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement;
+
+    textarea.setSelectionRange(6, 6);
+    await wrapper.get('textarea').trigger('select');
+    await wrapper.get('.reply-composer__emoji').trigger('click');
+    await flushPromises();
+
+    const pickerMount = document.querySelector('.emoji-picker-popover__mount');
+    expect(pickerMount).not.toBeNull();
+    const picker = pickerMount!.firstElementChild as HTMLElement;
+    picker.dispatchEvent(new CustomEvent('emoji-click', {
+      detail: { unicode: '😂' },
+      bubbles: true,
+      composed: true,
+    }));
+    await flushPromises();
+
+    expect(textarea.value).toBe('hello 😂world');
+    expect(controlled.modelValue.value).toBe('hello 😂world');
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(8);
+    expect(textarea.selectionEnd).toBe(8);
+    expect(wrapper.get('.reply-composer__emoji').attributes('aria-expanded')).toBe('true');
+  });
+
+  it('replaces a selection and inserts a second emoji at the new caret', async () => {
+    const controlled = mountControlledReply('hello bad world');
+    wrapper = controlled.wrapper;
+    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement;
+
+    textarea.setSelectionRange(6, 9);
+    await wrapper.get('textarea').trigger('select');
+    await wrapper.get('.reply-composer__emoji').trigger('click');
+    await flushPromises();
+    const pickerMount = document.querySelector('.emoji-picker-popover__mount');
+    expect(pickerMount).not.toBeNull();
+    const picker = pickerMount!.firstElementChild as HTMLElement;
+
+    picker.dispatchEvent(new CustomEvent('emoji-click', {
+      detail: { unicode: '❤️' },
+      bubbles: true,
+      composed: true,
+    }));
+    await flushPromises();
+    expect(controlled.modelValue.value).toBe('hello ❤️ world');
+    picker.dispatchEvent(new CustomEvent('emoji-click', {
+      detail: { unicode: '🔥' },
+      bubbles: true,
+      composed: true,
+    }));
+    await flushPromises();
+
+    expect(textarea.value).toBe('hello ❤️🔥 world');
+    expect(controlled.modelValue.value).toBe('hello ❤️🔥 world');
+    expect(textarea.selectionStart).toBe('hello ❤️🔥'.length);
+    expect(textarea.selectionEnd).toBe('hello ❤️🔥'.length);
+  });
+
+  it('does not open the picker while disabled or submitting', async () => {
+    wrapper = mount(ReplyComposer, {
+      props: { author: author(), disabled: true },
+    });
+
+    const button = wrapper.get('.reply-composer__emoji');
+    expect(button.attributes('disabled')).toBeDefined();
+    await button.trigger('click');
+    expect(document.getElementById('reply-emoji-picker')).toBeNull();
+
+    await wrapper.setProps({ disabled: false, submitting: true });
+    expect(button.attributes('disabled')).toBeDefined();
+    await button.trigger('click');
+    expect(document.getElementById('reply-emoji-picker')).toBeNull();
+  });
+
   it('resizes after an external multiline draft restore', async () => {
     wrapper = mount(ReplyComposer, { props: { author: author(), modelValue: '' } });
     const textarea = wrapper.get('textarea').element as HTMLTextAreaElement;
@@ -118,7 +241,7 @@ describe('ReplyComposer avatar and reply behavior', () => {
 
     expect(wrapper.get('.reply-composer__validation').text())
       .toBe('1001/1000 characters. Please shorten your reply.');
-    expect(wrapper.get('button').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.reply-composer__submit').attributes('disabled')).toBeDefined();
   });
 
   it('keeps clear as an exposed controlled-input command', async () => {
@@ -133,5 +256,3 @@ describe('ReplyComposer avatar and reply behavior', () => {
     expect(wrapper.get('textarea').element.value).toBe('');
   });
 });
-
-

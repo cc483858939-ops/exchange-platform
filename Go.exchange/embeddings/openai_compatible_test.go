@@ -27,6 +27,20 @@ func testEmbedder(t *testing.T, handler http.HandlerFunc) (*OpenAICompatibleEmbe
 	return embedder, server
 }
 
+func TestResolveEmbeddingEndpointForCloudflareWorkersAI(t *testing.T) {
+	endpoint, err := resolveEmbeddingEndpoint(
+		"https://api.cloudflare.com/client/v4/accounts/test-account/ai/v1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "https://api.cloudflare.com/client/v4/accounts/test-account/ai/v1/embeddings"
+	if endpoint != want {
+		t.Fatalf("endpoint=%q want=%q", endpoint, want)
+	}
+}
+
 func TestOpenAICompatibleEmbedderPostsOrderedVectorsAndAuth(t *testing.T) {
 	embedder, server := testEmbedder(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/embeddings" || r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer secret-key" {

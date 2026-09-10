@@ -318,6 +318,26 @@
         stroke-linejoin="round"
       />
     </template>
+
+    <template v-else-if="props.name === 'smile'">
+      <circle
+        cx="12"
+        cy="12"
+        r="8.5"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+      />
+      <circle cx="9" cy="10" r="0.85" fill="currentColor" />
+      <circle cx="15" cy="10" r="0.85" fill="currentColor" />
+      <path
+        d="M8.25 14c.9 1.35 2.15 2.05 3.75 2.05S14.85 15.35 15.75 14"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+    </template>
   </svg>
 </template>
 
@@ -344,7 +364,8 @@ type AppIconName =
   | 'plus'
   | 'camera'
   | 'image'
-  | 'image-off';
+  | 'image-off'
+  | 'smile';
 
 const props = withDefaults(defineProps<{
   name: AppIconName;
