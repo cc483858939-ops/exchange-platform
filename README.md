@@ -1,366 +1,250 @@
-# NexusFeed 个性化内容推荐平台
+# NexusFeed
 
-> Personalized Content Recommendation Platform
+> 基于 Go + Vue 的个性化内容社区，围绕推荐系统、异步事件处理与数据一致性构建。
 
-NexusFeed 是一个面向内容场景的全栈个性化推荐平台，采用 Go + Vue 构建，围绕内容发布、用户行为采集、个性化召回与排序、推荐效果追踪以及异步事件处理，构建完整的 Feed 推荐链路。
+NexusFeed 将内容发布、社交互动、行为采集和个性化推荐串联成完整的产品流程：用户发布短帖或长文，通过关注、点赞、回复和阅读产生反馈，后台将反馈投影为行为数据和兴趣画像，为后续 Feed 请求提供推荐信号。
 
-平台同时提供用户认证、统一 Post（短帖、回复、引用和长文）内容、点赞、Following Feed、用户关系、文件存储和汇率查询等业务能力，并通过 PostgreSQL、Redis、Kafka、MinIO、Prometheus 和 Grafana 构成本地开发与可观测基础设施。
+项目的工程重点是 **Go 后端的推荐链路与状态一致性**，同时提供 Vue 3 前端、容器化开发环境、自动化测试和可观测能力。
 
-当前推荐实现以行为信号、Post embedding 和可配置的确定性规则为基础，核心组合为：
+[技术设计](#技术设计) · [系统架构](#系统架构) · [快速启动](#快速启动) · [测试与验证](#测试与验证) · [项目结构](#项目结构)
 
-```text
-multi-source recall + Equal Reciprocal Rank Fusion + source-independent semantic personalization + rule-based multi-signal ranking + diversity/exploration
-```
+## 项目概览
 
-## 核心能力
+| 方向 | 实现内容 |
+| --- | --- |
+| 个性化推荐 | 四源召回、Equal RRF 候选融合、正负兴趣向量、多信号排序、多样性与探索 |
+| 异步一致性 | Redis Lua 原子操作、版本化点赞快照、事务 Outbox、Debezium CDC、Consumer Inbox 去重 |
+| 内容与社交 | 统一 Post 模型、短帖与长文、回复与引用、转发、关注、通知、游标分页 |
+| 全栈交互 | Feed 与详情页数据衔接、跨页面互动同步、账号身份隔离、阅读行为采集 |
+| 工程基础 | API / Worker 分角色运行、独立迁移、健康检查、Prometheus / Grafana、分层 CI |
 
-### 个性化推荐
+## 产品功能
 
-- **For You Feed**：面向当前用户生成个性化 Post 推荐结果。
-- **Multi-source recall**：使用四类 RRF 融合来源：Semantic、Following、Recent、Trending。Semantic 来源内部采用 recent quota、evergreen quota 和 semantic backfill；融合结果的最大 `SourceCount` 为 4。
-- **正负兴趣信号**：分别构建用户正向兴趣向量与负向兴趣向量；点赞、回复、点击和阅读结果等行为可参与兴趣建模。
-- **Embedding 语义个性化**：使用用户兴趣向量与 Post embedding 的 similarity 计算语义相关性；当 embedding 可比较时，正向 semantic relevance 与召回来源无关，同时支持负向语义信号。
-- **Multi-signal ranking**：综合 positive/negative semantic relevance、interaction/author affinity、following bonus、time-decayed trending 等信号，并使用确定性的 Post ID 作为最终 tie-breaker。
-- **Recency 与选择策略**：Recency 通过 Recent recall、Trending time decay、publication-time tie-breaking 以及 selection/exploration serving policy 表达，而不是独立的 freshness `BaseScore` 组件。
-- **过滤与历史控制**：过滤自身文章、已交互内容、负向兴趣内容和不符合公开范围的内容，并结合已推荐历史进行 fresh/soft-served 控制。
-- **多样性选择**：通过作者窗口、作者多样性、网络内外平衡和 embedding 内容相似度惩罚，降低推荐结果重复。
-- **推荐元数据与追踪**：每次推荐请求生成 request metadata；结果可持久化 `RecommendationResultTrace`，推荐卡片可携带绑定请求、Post、位置和 ranker 上下文的 tracking token。
+- **内容浏览**：For You 推荐流、Following 关注流、个人时间线、帖子详情和回复列表。
+- **内容创作**：发布短帖、长文、回复与引用，支持图片上传、转发和删除。
+- **用户互动**：注册登录、用户搜索、资料编辑、关注关系、点赞历史、通知与已读状态。
+- **语言能力**：按需翻译帖子，使用 Redis 缓存和进程内请求合并减少重复模型调用。
+- **扩展业务**：汇率查询、货币列表与报价。
 
-推荐链路的当前实现说明见本 README 与后端 [Go.exchange README](Go.exchange/README.md)。
+## 技术设计
 
-## 推荐系统架构
+### 1. 推荐：将候选召回、排序与最终选择分开
 
-```mermaid
-flowchart TD
-    A[User Behavior] --> B[Interest / Materialized Profile]
-    B --> C1[Semantic]
-    B --> C2[Following]
-    B --> C3[Recent]
-    B --> C4[Trending]
-    C1 --> D[Equal Reciprocal Rank Fusion]
-    C2 --> D
-    C3 --> D
-    C4 --> D
-    D --> E[Candidate Hydration]
-    E --> F[Rule-based Multi-signal Ranking]
-    F --> G[Diversity / Network Balance / Exploration]
-    G --> H[For You Feed]
-    H --> I[Recommendation Telemetry]
-```
-
-一次 For You 请求会加载用户已有的行为与反馈信号，生成或读取 materialized profile，执行四源召回并通过 Equal RRF 将候选纳入有界 candidate pool，再进行 hydration、rule-based ranking，最后经过 diversity/network/exploration selection 生成结果。
-
-## 推荐反馈闭环
+Feed 需要同时处理兴趣相关性、内容新鲜度、关注关系和重复推荐。项目将这些职责拆成独立阶段，便于定位结果来源和调整策略。
 
 ```mermaid
 flowchart LR
-    A[Content] --> B[Candidate Recall]
-    B --> C[Ranking]
-    C --> D[For You Feed]
-    D --> E[User Interaction]
-    E --> F[Recommendation Events]
-    F --> G[Kafka]
-    G --> H[Validation and Deduplication]
-    H --> I[Metrics and Behavior Projection]
-    I --> J[Future Recommendation Signals]
-    J --> B
+    P[物化兴趣画像] --> R[四源召回]
+    R --> F[Equal RRF 融合]
+    F --> H[补全候选数据]
+    H --> S[多信号规则排序]
+    S --> D[多样性 / 网络平衡 / 探索]
+    D --> O[For You Feed]
 ```
 
-推荐事件通过 Kafka 异步传递给 consumer；consumer 负责事件校验、去重、行为 projection 和指标聚合。click、read_end、not_interested 等可形成后续请求使用的行为事实；feed_dwell 当前主要是原始 telemetry 与 Feed 指标数据，不会立即改变当前请求的排序。
+- **召回**：Semantic、Following、Recent、Trending 四个顶层来源；Semantic 内部分配近期内容与长尾内容配额，并执行补召回。
+- **融合**：Equal RRF 按各来源的名次合并候选，去重后截断为有界候选池。融合分数与来源数量用于候选准入，不进入最终排序的 `BaseScore`。
+- **排序**：基于正负语义相关性、交互与作者亲和度、关注关系、时间衰减热度等信号计算得分。候选只要具有可比较的 embedding，就参与正向语义打分，不受召回来源限制。
+- **选择**：结合作者多样性、内容相似度惩罚、网络内外平衡、探索和已推荐历史控制输出；通过时间与 Post ID 等规则处理同分情况。
 
-## 推荐行为与 Telemetry
+这种拆分使“为什么进入候选池”和“为什么排在前面”可以分别分析。当前实现采用 embedding 与可配置规则；推荐效果仍需通过真实行为数据和离线评估衡量。
 
-推荐接口和前端 tracking 支持以下行为类型：impression、click、read_end、feed_dwell、not_interested。
+### 2. 画像：把重建成本移到后台，并处理并发失效
 
-推荐请求会生成 UUID request ID；signed tracking token 将用户、文章、请求、位置、策略/ranker、token 生命周期以及阅读策略上下文绑定在一起。客户端提交交互事件后，服务端校验 token 与事件字段，再将有效事件作为 Kafka envelope 异步发布。
+推荐请求按用户主键读取物化画像，后台 Worker 根据行为与 embedding 变化重建画像，减少请求阶段反复扫描历史行为的工作。
 
-Telemetry consumer 会校验单条行为、通过 ConsumerInbox 去重，并批量更新推荐指标和紧凑的 PostBehavior projection；当前实现也据此界定 telemetry 校验、去重、行为 projection 与阅读/Feed dwell 测量边界。
+- 画像携带配置哈希、画像版本与 embedding 版本，读取时检查兼容性。
+- 兼容的过期画像仍可用于请求，同时排队重建；缺失或不兼容时采用冷启动路径。
+- Worker 在事务中更新交互状态、正负兴趣向量和作者亲和度。
+- 重建完成后，按 `user_id + dirty_version` 删除本次领取的队列记录。如果重建期间又发生新行为，新版本的失效标记会保留，避免更新被旧任务清除。
 
-## 内容与用户系统
+设计取舍是允许画像短暂滞后，以换取更稳定的请求成本，并通过版本与持久化队列恢复更新。
 
-NexusFeed 仍是完整的 full-stack content application，而不是只展示算法的 Demo：
+### 3. 点赞：Redis 热路径与版本化异步落库
 
-- 用户注册、登录、JWT Token 鉴权和 Refresh Token 刷新
-- 创建 Post、Post 列表、Post 详情和删除 Post
-- 回复的创建、查询和删除
-- 长文封面与用户头像上传
-- 点赞、取消点赞和批量查询 Post 点赞状态
-- Following Feed 与用户 Post 列表
-- 用户资料、用户搜索、关注/取消关注、followers 和 following 列表
-
-### 高并发互动处理
-
-点赞链路采用缓存、异步持久化和数据库投影：
+点赞涉及用户状态、计数和后续推荐信号。项目将交互热路径放在 Redis，并把计数快照与行为事件异步投影到 PostgreSQL。
 
 ```text
-Client
-  ↓
-Redis
-  ↓
-Worker
-  ↓
-PostgreSQL
+点赞 / 取消点赞
+  → Redis Lua：原子更新状态、计数与待同步信息
+  → Relay：领取任务并发布 Kafka 消息
+  → Consumer：去重并更新 PostgreSQL 投影
 ```
 
-- Redis 承担高频点赞状态与请求处理
-- Worker 异步将结果持久化到 PostgreSQL
-- Lua 脚本保证相关 Redis 操作的原子性
-- Worker 支持批量同步和失败重试
+- Lua 脚本将相关 Redis 更新组合为原子操作。
+- Relay 使用任务领取、确认与重新入队机制处理发布失败。
+- 点赞快照携带版本号，数据库仅接受高于 `like_sync_version` 的快照，防止旧消息覆盖新计数。
+- Inbox 去重与数据库投影在同一事务完成；消息处理成功后再提交消费位点。
+- 集成测试覆盖 Redis 到 PostgreSQL 的投影、状态过期恢复、删除清理失败后的修复等场景。
 
-## 其他业务能力
+这里采用最终一致性：Redis 中的即时状态与数据库投影可能存在同步延迟，恢复机制需要与热路径一起设计。
 
-项目同时保留独立的汇率查询模块，作为内容推荐主链路之外的业务能力：
+### 4. 事件：用事务 Outbox、CDC 与 Inbox 衔接业务和消息
 
-- 汇率查询
-- 货币列表查询
-- 汇率报价查询
-- 汇率数据同步任务
+关注、回复等操作需要同时改变业务数据并产生通知事件。项目把业务变更和 Outbox 事件写入同一 PostgreSQL 事务，再由 Debezium 读取变更日志并路由到 Kafka。
+
+```text
+业务事务：写入业务数据 + Outbox
+  → PostgreSQL WAL
+  → Debezium / Kafka Connect
+  → Kafka
+  → Consumer Inbox 去重 + 通知投影事务
+```
+
+事务提交决定业务与待发送事件是否一起生效；消费者使用事件 ID 去重，处理重复投递。通知消费者还包含批处理与死信队列处理。这套设计将数据库内的原子性与消息侧的重试、幂等分开落实。
+
+### 5. 反馈与追踪：让推荐结果能对应到用户行为
+
+推荐请求记录 request metadata 与结果 trace；启用 telemetry 且命中 rollout 时，为结果附带签名 tracking token，绑定用户、Post、请求、位置及策略上下文。
+
+前端采集 `impression`、`click`、`read_end`、`feed_dwell` 和 `not_interested` 等事件。服务端校验后经 Kafka 异步消费，在事务中去重并更新指标及行为投影，供后续推荐使用。`feed_dwell` 主要用于原始遥测和 Feed 指标。
+
+### 6. 全栈体验：关注页面切换和异步响应的正确性
+
+- **Feed 到详情**：传递带用户身份与有效期的 Post 快照，支持详情页使用已有内容，并限制过期或跨账号复用。
+- **跨页面同步**：通过集中同步入口传播点赞、转发、回复数、关注、删除与作者资料变化。
+- **身份边界**：结合账号身份和请求生命周期，处理切换账号、导航及异步返回时的状态更新。
+- **翻译缓存**：缓存键包含内容、源语言与目标语言、模型后端身份及提示词版本；进程内 `singleflight` 合并相同请求，缓存 TTL 加入抖动。
+- **认证**：Ed25519 JWT 访问令牌，配合 Redis 中的 Refresh Token 轮换与复用检测。
+
+## 系统架构
+
+```mermaid
+flowchart TD
+    UI[Vue 3 / TypeScript / Pinia] --> API[Go / Gin API]
+    API --> PG[(PostgreSQL + pgvector)]
+    API --> RD[(Redis)]
+    API --> OBJ[MinIO]
+    API -->|行为遥测| K[Kafka]
+    PG -->|Outbox WAL| CDC[Debezium / Kafka Connect]
+    CDC --> K
+    RD -->|点赞待同步任务| RELAY[Relay Worker]
+    RELAY --> K
+    K --> W[投影 / 通知 / Embedding Workers]
+    W --> PG
+    PG --> PROFILE[画像物化 Worker]
+    PROFILE --> PG
+    API --> MET[Prometheus / Grafana]
+    W --> MET
+```
+
+同一 Go 应用通过 `APP_RUNTIME_ROLE` 拆分为 `api` 与 `worker`；未设置或设为 `all` 时组合运行。数据库迁移由独立任务执行，API 和 Worker 启动时不执行 `AutoMigrate`。
+
+`/healthz` 用于存活检查，`/readyz` 检查数据库、schema 兼容性和 Redis 等就绪条件。API 将 Kafka 异常报告为降级；Worker 另外记录流水线状态、消费提交、失败与积压。指标入口为 `/metrics`。
 
 ## 技术栈
 
-### Backend
-
-- Go 1.25
-- Gin
-- GORM
-- JWT
-
-### Frontend
-
-- Vue 3
-- TypeScript
-- Vite
-- Element Plus
-- Pinia
-
-### Data & Messaging
-
-- PostgreSQL 16 with pgvector
-- Redis
-- Kafka
-- MinIO
-
-### Observability
-
-- Prometheus
-- Grafana
-- Health/readiness endpoints
-- pprof
-
-### Infrastructure
-
-- Docker
-- Docker Compose
-
-## 项目结构
-
-```text
-exchange-platform/
-├── Go.exchange/              # Go + Gin 后端服务
-├── Exchangeapp_frontend/     # Vue 3 + TypeScript 前端应用
-├── docker-compose.yml        # 全栈开发环境编排
-└── README.md
-```
-
-NexusFeed 是当前产品名称；仓库 slug 和部分历史目录仍沿用原有命名。Go.exchange/、Exchangeapp_frontend/、模块路径、API path 和配置 key 均保持现状。
-
-### Backend 目录
-
-```text
-Go.exchange/
-├── cmd/              # 命令入口，包括 migrate 和 JWT key generator
-├── config/           # 配置加载与运行时依赖初始化
-├── consts/           # Redis keys 和 Lua scripts
-├── controllers/      # HTTP handlers
-├── core/             # HTTP server 启动与优雅退出
-├── eventing/         # Kafka 与异步事件发布/消费
-├── global/           # DB、Redis 和 MinIO clients
-├── initialize/       # 应用初始化与 migration runner
-├── metrics/          # Prometheus metrics middleware 和 handler
-├── middlewares/      # JWT auth middleware
-├── models/           # GORM models
-├── observability/    # Prometheus 与 Grafana provisioning
-├── router/           # route registration
-├── tasks/            # background workers
-├── utils/            # JWT 与通用工具
-└── main.go           # API/worker runtime entrypoint
-```
-
-### Frontend 目录
-
-```text
-Exchangeapp_frontend/
-├── src/
-│   ├── views/         # 页面
-│   ├── components/    # 组件
-│   ├── router/        # 前端路由
-│   ├── services/      # API services
-│   └── store/         # 状态管理
-└── package.json
-```
-
-## 运行模式
-
-同一个 Go application 可以通过 APP_RUNTIME_ROLE 运行不同角色：
-
-| Role | 说明 |
+| 层次 | 技术 |
 | --- | --- |
-| api | 只运行 HTTP API |
-| worker | 只运行后台 worker，包括异步投影和事件处理 |
-| 未设置或 all | API 与 worker 在同一进程运行 |
-
-推荐本地 Compose 使用拆分后的 api 与 worker services：
-
-```bash
-APP_RUNTIME_ROLE=api
-```
-
-数据库 migration 与应用启动分离：cmd/migrate 由 Compose 的 migrate one-shot service 执行，API 和 worker 不在启动时执行 AutoMigrate。kafka-init 同样是用于准备 Kafka topics 的 one-shot service；这两个容器成功退出（Exited (0)）是预期状态，api 和 worker 应保持运行。
+| 后端 | Go 1.25、Gin、GORM、JWT / Ed25519 |
+| 前端 | Vue 3、TypeScript、Vite、Pinia、Vue Router、Element Plus / Vant |
+| 数据与存储 | PostgreSQL 16、pgvector、Redis、MinIO |
+| 消息与 CDC | Kafka、kafka-go、Debezium、Kafka Connect |
+| 运行与观测 | Docker Compose、Prometheus、Grafana、pprof |
+| 测试与交付 | Go test / vet、Vitest、Vue Test Utils、GitHub Actions |
 
 ## 快速启动
 
-### 环境要求
+以下命令从仓库根目录执行，面向首次启动的本地开发环境。需要 Docker Compose 和 Go 1.25+；单独开发前端时使用 Node.js 20 与 npm。
 
-- Docker
-- Docker Compose
-- Go 1.25+，仅首次生成本地 JWT key 时需要
-- 如果不使用容器运行前端，需要 Node.js/npm
-
-### 启动完整开发环境
-
-首次启动先在 Go.exchange 目录生成未跟踪的本地 JWT key：
+### 1. 生成本地 JWT 密钥
 
 ```powershell
 cd Go.exchange
 go run ./cmd/gen-jwt-keys --kid local-dev-v1 --out .secrets/jwt
 cd ..
-docker compose up -d
 ```
 
-Docker-only key generation 尚未作为本地流程验证，因此使用 host Go 执行 generator。Go.exchange/.env.example 只是配置参考；从仓库根目录运行 Compose 时不会自动加载它。需要覆盖默认值时，请使用 shell environment、仓库根目录 .env 或显式 --env-file。
-
-默认启动会编排 frontend、api、worker、migration、PostgreSQL、Redis、MinIO、Kafka、Kafka UI、embedding、Prometheus 和 Grafana。若只需要手动执行 migration：
+### 2. 启动应用与依赖
 
 ```powershell
-docker compose run --rm migrate
+docker compose up -d api worker db redis kafka minio frontend
+docker compose ps -a
 ```
 
-### 本地前端开发
+Compose 会按依赖执行 Outbox schema 检查、数据库迁移、Kafka topic 初始化及 CDC 初始化，并启动 Kafka Connect。一次性初始化服务成功退出属于正常状态；API、Worker 和基础服务应持续运行。
 
-```powershell
-cd Exchangeapp_frontend
-npm install
-npm run dev
-```
+配置覆盖使用 shell 环境变量、仓库根目录 `.env` 或 `docker compose --env-file <文件路径>`。`Go.exchange/.env.example` 是参考模板，不会被根目录 Compose 自动加载。复用旧数据库时，应先检查 Outbox schema；旧结构的切换由专用命令与显式确认保护。
 
-## 服务地址
+Embedding 和翻译默认关闭。启用前需配置相应的 `*_ENABLED`、`*_BASE_URL`、`*_MODEL` 及服务所需的 API Key。以上启动命令不启动声明了 GPU 需求的可选 `embedding` 服务；语义推荐需要可用的 embedding 服务与已生成的内容向量。
 
-| 服务 | 地址 |
+### 3. 访问与体验
+
+| 入口 | 地址 |
 | --- | --- |
-| Frontend | http://127.0.0.1:5173 |
-| API | http://127.0.0.1:3000 |
-| API Health | http://127.0.0.1:3000/healthz |
-| API Readiness | http://127.0.0.1:3000/readyz |
-| API Metrics | http://127.0.0.1:3000/metrics |
-| Prometheus | http://127.0.0.1:9090 |
-| Grafana | http://127.0.0.1:3001 |
+| Web 应用 | http://127.0.0.1:5173 |
+| API 存活 / 就绪 | http://127.0.0.1:3000/healthz / http://127.0.0.1:3000/readyz |
+| API 指标 | http://127.0.0.1:3000/metrics |
 | MinIO Console | http://127.0.0.1:9001 |
-| Kafka UI | http://127.0.0.1:8080 |
 
-API 和 worker 在容器内启动 pprof server；当前 Compose 没有将其作为 API/worker 的 host port 发布。
+注册账号后，可以发布帖子、使用另一账号关注和互动，查看 Following、通知与个人时间线，再体验 For You。初始数据库没有足够内容和行为时，个性化效果需要随数据积累观察。
 
-## API 概览
+可选启动观测服务与 Kafka 管理界面：
 
-以下 endpoint 使用当前代码中的 path；品牌名称不会改变 API path。
-
-### 推荐接口
-
-需要认证：
-
-```header
-GET  /api/recommendations/posts
-POST /api/recommendation-events
-POST /api/post-view-events
+```powershell
+docker compose up -d prometheus grafana kafka-ui
 ```
 
-POST /api/recommendation-events 接受 impression、click、read_end、feed_dwell 和 not_interested 事件。GET /api/recommendations/posts 返回 For You 推荐结果，并在 telemetry 配置启用且请求命中 rollout 时附带 tracking metadata。
+对应地址：Prometheus `http://127.0.0.1:9090`、Grafana `http://127.0.0.1:3001`、Kafka UI `http://127.0.0.1:8080`。pprof 在 API / Worker 容器内监听 `6060`，当前未映射到宿主机。
 
-### 内容与社交接口
+## 测试与验证
 
-需要认证：
-
-```header
-POST   /api/posts
-GET    /api/posts/:id
-DELETE /api/posts/:id
-GET    /api/posts/:id/replies
-POST   /api/posts (with reply_to_post_id)
-
-POST   /api/posts/like-states
-GET    /api/posts/:id/like
-PUT    /api/posts/:id/like
-DELETE /api/posts/:id/like
-
-POST   /api/uploads/post-media
-POST   /api/uploads/profile-avatar
-
-GET    /api/users/search
-GET    /api/users/:id
-PATCH  /api/users/:id
-GET    /api/users/:id/timeline?limit=20&cursor=...
-GET    /api/users/:id/follow
-PUT    /api/users/:id/follow
-DELETE /api/users/:id/follow
-GET    /api/users/:id/followers
-GET    /api/users/:id/following
-GET    /api/feed/following?limit=20&cursor=...
-```
-
-`POST /api/uploads/post-media` accepts one JPEG, PNG, or WebP image per multipart request (`image`) and returns a user-scoped `media_url`. A post may reference zero to four uploaded media URLs in request order.
-
-Following 和 profile-timeline endpoints 返回 {"items": [], "next_cursor": null} 形状；cursor 是 opaque cursor。Profile timeline 包含用户发布的顶层帖子和有效转发，按活动时间使用 cursor 分页排序。
-
-### 认证接口
-
-公开接口：
-
-```header
-POST /api/auth/login
-POST /api/auth/register
-POST /api/auth/refresh
-```
-
-### 汇率与文件接口
-
-```header
-GET  /api/exchangeRates
-GET  /api/exchange/currencies
-GET  /api/exchange/quote
-GET  /api/files/*objectKey
-```
-
-其中 POST /api/exchangeRates 是需要认证的汇率数据写入接口。
-
-## 数据与基础设施
-
-- **PostgreSQL**：持久化用户、文章、社交关系、行为 projection、推荐 request/trace 和指标数据；本地 Compose 使用 PostgreSQL 16，并启用 pgvector 支持 embedding 存储与相似度检索。
-- **Redis**：缓存、点赞热路径、异步任务状态和 telemetry 相关限流/去重辅助状态。
-- **Kafka**：承载 recommendation telemetry 和文章 embedding 等异步事件；consumer 负责校验、去重、指标聚合与行为 projection。
-- **MinIO**：保存文章封面、用户头像等对象，并通过 /api/files/*objectKey 提供文件访问。
-- **Prometheus / Grafana**：采集 API、worker、推荐生成、telemetry 和 Kafka consumer 相关指标并提供本地看板。
-- **Docker Compose**：在仓库根目录统一编排 Go.exchange、Exchangeapp_frontend、数据库、消息、存储和观测服务。
-
-数据库 schema 变更由 migration job 独立执行，不在 API 或 worker 启动阶段自动修改结构。
-
-## 开发说明
-
-后端和前端仍使用原有目录与模块路径：
+后端基础检查：
 
 ```powershell
 cd Go.exchange
-cd ../Exchangeapp_frontend
-npm install
-npm run dev
+go test ./... -count=1
+go vet ./...
 ```
 
-推荐系统的当前实现说明见本 README 与 [Go.exchange README](Go.exchange/README.md)。
+前端测试与构建，在仓库根目录另开终端执行：
+
+```powershell
+cd Exchangeapp_frontend
+npm ci
+npm test
+npm run build
+```
+
+Windows PowerShell 如遇 npm 脚本执行策略限制，可使用 `npm.cmd`。
+
+| 验证层级 | 已有验证入口 |
+| --- | --- |
+| 后端单元与静态检查 | 推荐融合与排序、签名追踪、认证、翻译等测试，以及 `go vet` |
+| PostgreSQL / Redis 集成 | 点赞投影、Post 删除身份一致性、回复缓存失效、画像重建与队列竞争 |
+| Kafka 初始化 | Topic 创建的幂等性、必需 topic 与分区数检查 |
+| 前端 | 组件与状态管理测试、身份切换、互动同步、遥测、类型检查及生产构建 |
+| 容器 | 后端生产镜像与前端镜像构建 |
+| 真实 CDC | 独立的 PostgreSQL / Kafka / Debezium 验收测试 |
+
+CI 工作流 将后端基础检查、PostgreSQL / Redis 集成、Kafka 初始化、前端测试构建和容器构建拆成独立任务；集成任务还检查关键用例的实际 `PASS` 标记，避免因缺少依赖而跳过测试。
+
+本地 PostgreSQL / Redis 集成测试需配置 `POSTGRES_TEST_DSN`、`REDIS_TEST_ADDR` 等测试连接，使用独立测试数据库。真实 CDC 验收另需 `RUN_CDC_INTEGRATION=1`、Kafka 与 Connect 配置。缺少相应依赖时，集成测试会跳过；验证结果以实际运行日志为准。
+
+## 项目结构
+
+```text
+./
+├── Go.exchange/
+│   ├── auth/              # 访问令牌与刷新会话
+│   ├── cdc/               # Debezium connector 初始化与验收
+│   ├── cmd/               # 迁移、密钥生成、Kafka / CDC 初始化
+│   ├── controllers/       # HTTP 接口与推荐 serving
+│   ├── eventing/          # 事件协议、Kafka、Outbox / Inbox
+│   ├── likes/             # Redis 点赞状态与 Lua 原子操作
+│   ├── models/            # 业务模型、行为与推荐画像
+│   ├── tasks/             # 异步消费、投影与画像物化
+│   ├── translation/       # 翻译调用、缓存与请求合并
+│   ├── runtimehealth/     # API / Worker 就绪状态
+│   └── observability/     # Prometheus / Grafana 配置
+├── Exchangeapp_frontend/
+│   └── src/
+│       ├── components/    # 内容、用户与通用交互组件
+│       ├── views/         # Feed、详情、个人页与通知等页面
+│       ├── services/      # API 调用、阅读与推荐遥测
+│       └── store/         # 会话、Feed、身份与跨页面状态
+├── .github/workflows/     # 持续集成
+└── docker-compose.yml     # 全栈开发环境
+```
+
+NexusFeed 为项目展示名称，仓库中的 `Go.exchange/`、`Exchangeapp_frontend/` 保留历史命名。
