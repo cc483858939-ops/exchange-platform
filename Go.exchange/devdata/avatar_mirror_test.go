@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
+	"encoding/base64"
 	"errors"
 	"image"
 	"image/color"
@@ -398,14 +398,10 @@ func avatarPNGFixture(t *testing.T) []byte {
 }
 
 func avatarWebPFixture() []byte {
-	chunkPayload := []byte{0x2f, 0, 0, 0, 0}
-	body := make([]byte, 12+8+len(chunkPayload)+1)
-	copy(body[0:4], "RIFF")
-	binary.LittleEndian.PutUint32(body[4:8], uint32(len(body)-8))
-	copy(body[8:12], "WEBP")
-	copy(body[12:16], "VP8L")
-	binary.LittleEndian.PutUint32(body[16:20], uint32(len(chunkPayload)))
-	copy(body[20:], chunkPayload)
+	body, err := base64.StdEncoding.DecodeString("UklGRrIBAABXRUJQVlA4TKUBAAAvSsAYAA8w//M///MfeJAkbXvaSG7m8Q3GfYSBJekwQztm/IcZlgwnmWImn2BK7aFmBtnVir6q//8VOkFE/xm4baTIu8c48ArEo6+B3zFKYln3pqClSCKX0begFTAXFOLXHSyF8cCNcZEG4OywuA4KVVfJCiArU7GAgJI8+lJP/OKMT/fBAjevg1cYB7YVkFuWga2lyPi5I0HFy5YTpWIHg0RZpkniRVW9odHAKOwosWuOGdxIyn2OvaCDvhg/we6TwadPBPbqBV58MsLmMJ8yZnOWk8SRz4N+QoyPL+MnamzMvcE1rHNEr91F9GKZPVUcS9w7PhhH36suB9qPeYb/oLk6cuTiJ0wOK3m5h1cKjW6EVZCYMK7dxcKCBdgP9HkKr9gkAO2P8GKZGWVdIAatQa+1IDpt6qyorVwdy01xdW8Jkfk6xjEXmVQQ+HQdFr6OKhIN34dXWq0+0qr6EJSCeeVLH9+gvGTLyqM65PQ44ihzlTXxQKjKbAvshXgir7Lil9w4L2bvMycmjQcqXaMCO6BlY28i+FOLzbfI1vEqxAhotocAAA==")
+	if err != nil {
+		panic(err)
+	}
 	return body
 }
 

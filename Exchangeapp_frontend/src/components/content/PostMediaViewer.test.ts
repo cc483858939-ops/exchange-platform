@@ -19,12 +19,15 @@ type PendingDecode = { resolve: () => void; reject: () => void };
 
 const decodeModes = new Map<string, DecodeMode>();
 const pendingDecodes = new Map<string, PendingDecode[]>();
+let decodeCalls: string[] = [];
+let rafCallbacks: FrameRequestCallback[] = [];
 
 class ControlledImage {
   decoding = '';
   src = '';
 
   decode() {
+    decodeCalls.push(this.src);
     const mode = decodeModes.get(this.src) ?? 'pending';
     if (mode === 'resolve') {
       return Promise.resolve();
@@ -47,10 +50,12 @@ const mountedViewers: Array<ReturnType<typeof mount>> = [];
 beforeEach(() => {
   decodeModes.clear();
   pendingDecodes.clear();
+  decodeCalls = [];
+  rafCallbacks = [];
   vi.stubGlobal('Image', ControlledImage);
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-    callback(0);
-    return 1;
+    rafCallbacks.push(callback);
+    return rafCallbacks.length;
   });
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
     configurable: true,
@@ -89,6 +94,12 @@ const resolveDecode = (url: string) => {
   const entries = pendingDecodes.get(url) ?? [];
   pendingDecodes.delete(url);
   entries.forEach(entry => entry.resolve());
+};
+
+const flushAnimationFrame = () => {
+  const current = rafCallbacks;
+  rafCallbacks = [];
+  current.forEach(callback => callback(0));
 };
 
 const mountViewer = (count = 3, initialIndex = 0) => {
@@ -212,11 +223,29 @@ describe('PostMediaViewer', () => {
     expect(wrapper.find('.post-media-viewer__counter').exists()).toBe(false);
   });
 
+  it('shows Medium immediately and defers Large preload until the second frame', async () => {
+    const wrapper = mountViewer(1);
+
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/0-medium.jpg');
+    expect(decodeCalls).toEqual([]);
+
+    flushAnimationFrame();
+    await nextTick();
+    expect(decodeCalls).toEqual([]);
+    expect(pendingDecodes.has('/media/0-large.jpg')).toBe(false);
+
+    flushAnimationFrame();
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+    expect(pendingDecodes.has('/media/0-large.jpg')).toBe(true);
+  });
+
   it('starts with Medium and upgrades after Large decode succeeds', async () => {
     setDecodeMode('/media/0-large.jpg', 'resolve');
     const wrapper = mountViewer(1);
 
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/0-medium.jpg');
+    flushAnimationFrame();
+    flushAnimationFrame();
     await nextTick();
     await Promise.resolve();
 
@@ -227,6 +256,8 @@ describe('PostMediaViewer', () => {
     setDecodeMode('/media/0-large.jpg', 'reject');
     const wrapper = mountViewer(1);
 
+    flushAnimationFrame();
+    flushAnimationFrame();
     await nextTick();
     await Promise.resolve();
 
@@ -245,6 +276,8 @@ describe('PostMediaViewer', () => {
   it('shows the next Medium immediately and blocks an old Large race', async () => {
     const wrapper = mountViewer(2);
 
+    flushAnimationFrame();
+    flushAnimationFrame();
     await wrapper.get('[aria-label="Next image"]').trigger('click');
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
 
@@ -253,6 +286,8 @@ describe('PostMediaViewer', () => {
     await Promise.resolve();
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
 
+    flushAnimationFrame();
+    flushAnimationFrame();
     resolveDecode('/media/1-large.jpg');
     await nextTick();
     await Promise.resolve();
@@ -262,6 +297,8 @@ describe('PostMediaViewer', () => {
   it('falls back to Medium if the visible Large later emits an error', async () => {
     setDecodeMode('/media/0-large.jpg', 'resolve');
     const wrapper = mountViewer(1);
+    flushAnimationFrame();
+    flushAnimationFrame();
     await nextTick();
     await Promise.resolve();
 
@@ -269,6 +306,20 @@ describe('PostMediaViewer', () => {
     await wrapper.get('img').trigger('error');
 
     expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+  });
+
+  it('does not start a stale Large preload after navigating before the second frame', async () => {
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
+
+    flushAnimationFrame();
+    expect(decodeCalls).toEqual([]);
+
+    flushAnimationFrame();
+    expect(decodeCalls).toEqual(['/media/1-large.jpg']);
+    expect(decodeCalls).not.toContain('/media/0-large.jpg');
   });
 
   it('shows an accessible placeholder after an image fails and keeps navigation available', async () => {

@@ -155,7 +155,17 @@ const waitForImageLoad = (image: HTMLImageElement) => new Promise<void>((resolve
   image.onerror = () => reject(new Error('large image failed to load'));
 });
 
+const canUpgradeLarge = (media: PostMedia, version: number) => (
+  !closeRequested
+  && version === largeUpgradeVersion
+  && activeMedia.value === media
+);
+
 const preloadLarge = async (media: PostMedia, version: number) => {
+  if (!canUpgradeLarge(media, version)) {
+    return;
+  }
+
   const image = new Image();
   image.decoding = 'async';
   image.src = media.large_url;
@@ -179,13 +189,19 @@ const preloadLarge = async (media: PostMedia, version: number) => {
 };
 
 const queueLargeUpgrade = (media: PostMedia, version: number) => {
-  const callback = () => {
+  const upgrade = () => {
+    if (!canUpgradeLarge(media, version)) {
+      return;
+    }
+
     void preloadLarge(media, version);
   };
   if (typeof window.requestAnimationFrame === 'function') {
-    window.requestAnimationFrame(callback);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(upgrade);
+    });
   } else {
-    window.setTimeout(callback, 0);
+    window.setTimeout(upgrade, 0);
   }
 };
 
