@@ -166,13 +166,27 @@ describe('PostCreateView identity and text publishing', () => {
     expect(back.attributes('aria-label')).toBe('Back');
     expect(back.text()).not.toContain('Back');
     expect(wrapper.get('.composer-header h1').text()).toBe('Post');
-    expect(wrapper.get('.publish-button').attributes('type')).toBe('submit');
-    expect(wrapper.get('.publish-button').attributes('form')).toBe('composer-form');
+    expect(wrapper.get('.composer-header').find('.publish-button').exists()).toBe(false);
     expect(wrapper.find('.composer-input').exists()).toBe(true);
-    expect(wrapper.find('.composer-toolbar').exists()).toBe(true);
+    const toolbar = wrapper.get('.composer-toolbar');
+    expect(toolbar.find('.composer-toolbar__tools .media-picker').exists()).toBe(true);
+    expect(toolbar.find('.composer-toolbar__tools .emoji-picker-trigger').exists()).toBe(true);
+    const publish = toolbar.get('.publish-button');
+    expect(publish.attributes('type')).toBe('submit');
+    expect(publish.attributes('form')).toBeUndefined();
+    expect(publish.attributes('disabled')).toBeDefined();
     expect(wrapper.get('.media-picker').attributes('aria-label')).toBe('Add images');
     expect(wrapper.get('.media-picker').text()).not.toContain('Add images');
     expect(wrapper.find('.composer-progress').exists()).toBe(false);
+  });
+
+  it('enables the toolbar publish action only when content is valid', async () => {
+    wrapper = mountPage();
+    const publish = wrapper.get('.composer-toolbar__actions .publish-button');
+
+    expect(publish.attributes('disabled')).toBeDefined();
+    await wrapper.get('#post-content').setValue('A valid post');
+    expect(publish.attributes('disabled')).toBeUndefined();
   });
 
   it('toggles the emoji picker with an accessible control', async () => {

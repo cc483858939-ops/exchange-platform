@@ -10,15 +10,6 @@
         <AppIcon name="arrow-left" :size="20" />
       </button>
       <h1>Post</h1>
-      <button
-        class="publish-button"
-        type="submit"
-        form="composer-form"
-        :disabled="!canPublish || isSubmitting"
-        :aria-busy="isSubmitting"
-      >
-        {{ publishLabel }}
-      </button>
     </header>
 
     <section
@@ -77,58 +68,6 @@
               @remove="removeMedia"
             />
 
-            <div class="composer-toolbar">
-              <label
-                class="composer-tool media-picker"
-                :class="{ 'composer-tool--disabled': isSubmitting }"
-                :aria-disabled="isSubmitting"
-                aria-label="Add images"
-                title="Add images"
-                for="post-media-input"
-              >
-                <AppIcon name="image" :size="20" />
-                <input
-                  id="post-media-input"
-                  class="media-input"
-                  type="file"
-                  multiple
-                  accept="image/jpeg,image/png,image/webp"
-                  :disabled="isSubmitting"
-                  @change="handleMediaChange"
-                />
-              </label>
-              <button
-                ref="emojiButton"
-                class="composer-tool emoji-picker-trigger"
-                type="button"
-                aria-label="Add emoji"
-                title="Add emoji"
-                aria-haspopup="dialog"
-                :aria-expanded="emojiPickerOpen"
-                :aria-controls="emojiPickerId"
-                :disabled="isSubmitting"
-                @click="toggleEmojiPicker"
-              >
-                <AppIcon name="smile" :size="20" />
-              </button>
-              <span
-                v-if="showCharacterCount"
-                class="composer-character-count"
-                :class="{ 'composer-character-count--over': remainingCharacters < 0 }"
-              >
-                {{ remainingCharacters }}
-              </span>
-            </div>
-
-            <EmojiPickerPopover
-              :id="emojiPickerId"
-              :open="emojiPickerOpen"
-              :anchor-el="emojiButton"
-              :disabled="isSubmitting"
-              @select="insertEmoji"
-              @close="handleEmojiPickerClose"
-            />
-
             <p
               v-if="contentError"
               id="post-content-error"
@@ -140,18 +79,83 @@
             <p v-if="mediaError" class="field-error media-error" role="alert">
               {{ mediaError }}
             </p>
+
+            <div
+              v-if="uploadError || publishError"
+              class="composer-status"
+              role="alert"
+              aria-live="polite"
+            >
+              {{ uploadError || publishError }}
+            </div>
+
+            <div class="composer-toolbar">
+              <div class="composer-toolbar__tools">
+                <label
+                  class="composer-tool media-picker"
+                  :class="{ 'composer-tool--disabled': isSubmitting }"
+                  :aria-disabled="isSubmitting"
+                  aria-label="Add images"
+                  title="Add images"
+                  for="post-media-input"
+                >
+                  <AppIcon name="image" :size="20" />
+                  <input
+                    id="post-media-input"
+                    class="media-input"
+                    type="file"
+                    multiple
+                    accept="image/jpeg,image/png,image/webp"
+                    :disabled="isSubmitting"
+                    @change="handleMediaChange"
+                  />
+                </label>
+                <button
+                  ref="emojiButton"
+                  class="composer-tool emoji-picker-trigger"
+                  type="button"
+                  aria-label="Add emoji"
+                  title="Add emoji"
+                  aria-haspopup="dialog"
+                  :aria-expanded="emojiPickerOpen"
+                  :aria-controls="emojiPickerId"
+                  :disabled="isSubmitting"
+                  @click="toggleEmojiPicker"
+                >
+                  <AppIcon name="smile" :size="20" />
+                </button>
+              </div>
+
+              <div class="composer-toolbar__actions">
+                <span
+                  v-if="showCharacterCount"
+                  class="composer-character-count"
+                  :class="{ 'composer-character-count--over': remainingCharacters < 0 }"
+                >
+                  {{ remainingCharacters }}
+                </span>
+                <button
+                  class="publish-button"
+                  type="submit"
+                  :disabled="!canPublish || isSubmitting"
+                  :aria-busy="isSubmitting"
+                >
+                  {{ publishLabel }}
+                </button>
+              </div>
+            </div>
+
+            <EmojiPickerPopover
+              :id="emojiPickerId"
+              :open="emojiPickerOpen"
+              :anchor-el="emojiButton"
+              :disabled="isSubmitting"
+              @select="insertEmoji"
+              @close="handleEmojiPickerClose"
+            />
           </div>
         </div>
       </section>
-
-      <div
-        v-if="uploadError || publishError"
-        class="composer-status"
-        role="alert"
-        aria-live="polite"
-      >
-        {{ uploadError || publishError }}
-      </div>
 
       <span v-if="isSubmitting" class="sr-only" aria-live="polite">
         {{ publishLabel }}
@@ -596,22 +600,27 @@ onBeforeUnmount(() => {
   top: 0;
   z-index: 12;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
   align-items: center;
-  min-height: 56px;
-  padding: var(--space-2) var(--space-4);
+  min-height: 52px;
+  padding: 0 var(--space-4);
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   backdrop-filter: blur(10px);
 }
 
 .composer-header h1 {
+  grid-column: 2;
+  justify-self: center;
   margin: 0;
   font-size: 18px;
-  font-weight: 800;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .composer-header__back {
+  grid-column: 1;
+  justify-self: start;
   display: grid;
   width: 40px;
   height: 40px;
@@ -632,8 +641,12 @@ onBeforeUnmount(() => {
 }
 
 .publish-button {
-  justify-self: end;
+  display: inline-flex;
+  min-width: 68px;
+  height: 36px;
   min-height: 36px;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: var(--radius-pill);
   padding: 0 var(--space-4);
@@ -641,7 +654,10 @@ onBeforeUnmount(() => {
   color: var(--color-surface);
   cursor: pointer;
   font: inherit;
-  font-weight: 800;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
   transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
@@ -651,8 +667,9 @@ onBeforeUnmount(() => {
 }
 
 .publish-button:disabled {
+  background: color-mix(in srgb, var(--color-accent) 42%, var(--color-surface));
+  color: color-mix(in srgb, var(--color-surface) 90%, transparent);
   cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .composer-form,
@@ -666,7 +683,7 @@ onBeforeUnmount(() => {
 
 .composer-main {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr);
   align-items: start;
   gap: var(--space-3);
 }
@@ -674,10 +691,11 @@ onBeforeUnmount(() => {
 .composer-main__content {
   display: grid;
   min-width: 0;
-  gap: var(--space-3);
+  gap: 0;
 }
 
 .composer-author__avatar {
+  margin-top: 2px;
   display: grid;
   width: 42px;
   height: 42px;
@@ -703,18 +721,29 @@ onBeforeUnmount(() => {
   max-height: 360px;
   border: 0;
   border-radius: 0;
-  padding: 0;
+  outline: none;
+  box-shadow: none;
+  padding: 4px 0 12px;
   background: transparent;
   color: var(--color-text);
   font: inherit;
   font-size: 20px;
-  line-height: 1.45;
+  line-height: 1.4;
   resize: none;
   overflow-y: hidden;
+  appearance: none;
 }
 
 .composer-input::placeholder {
   color: var(--color-text-tertiary);
+  opacity: 1;
+}
+
+.composer-input:focus,
+.composer-input:focus-visible {
+  border: 0;
+  outline: none;
+  box-shadow: none;
 }
 
 .composer-input:disabled {
@@ -728,9 +757,28 @@ onBeforeUnmount(() => {
 
 .composer-toolbar {
   display: flex;
-  min-height: 40px;
   align-items: center;
-  gap: var(--space-3);
+  justify-content: space-between;
+  min-height: 52px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.composer-toolbar__tools,
+.composer-toolbar__actions {
+  display: flex;
+  align-items: center;
+}
+
+.composer-toolbar__tools {
+  gap: 4px;
+}
+
+.composer-toolbar__actions {
+  min-width: 0;
+  gap: 12px;
+  margin-left: auto;
 }
 
 .composer-tool {
@@ -747,7 +795,8 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
-.composer-tool:hover,
+.composer-tool:hover:not(:disabled),
+.composer-tool:focus-visible,
 .composer-tool:focus-within {
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
@@ -770,7 +819,6 @@ onBeforeUnmount(() => {
 }
 
 .composer-character-count {
-  margin-left: auto;
   color: var(--color-text-tertiary);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -800,7 +848,7 @@ onBeforeUnmount(() => {
 
 .content-error,
 .media-error {
-  margin: 0;
+  margin: var(--space-2) 0 0;
   font-size: 13px;
 }
 
@@ -829,7 +877,8 @@ onBeforeUnmount(() => {
 }
 
 .composer-status {
-  padding: 0 var(--space-4) var(--space-3);
+  margin-top: var(--space-2);
+  padding: 0;
   color: var(--color-danger);
   font-size: 14px;
 }
@@ -866,16 +915,33 @@ onBeforeUnmount(() => {
   }
 }
 
+@media (max-width: 600px) {
+  .composer-section {
+    padding-inline: 12px;
+  }
+
+  .composer-main {
+    gap: 10px;
+  }
+}
+
 @media (max-width: 420px) {
   .composer-header,
-  .composer-section,
-  .composer-status,
   .composer-auth-state {
     padding-inline: var(--space-4);
   }
 
+  .composer-section {
+    padding-inline: 12px;
+  }
+
   .composer-header {
     min-height: 54px;
+  }
+
+  .composer-main {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 10px;
   }
 
   .composer-author__avatar {
