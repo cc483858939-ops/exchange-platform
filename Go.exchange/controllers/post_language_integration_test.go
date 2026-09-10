@@ -37,7 +37,7 @@ func TestNativePostLanguagePersistenceIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		ctx, recorder := newReplyIntegrationContext(http.MethodPost, "/api/posts", "", string(body), userID)
-		createPost(ctx, nil)
+		createPost(ctx)
 		if recorder.Code != http.StatusCreated {
 			t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 		}

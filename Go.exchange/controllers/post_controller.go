@@ -13,7 +13,6 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/likes"
-	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/postlanguage"
 	"Go.exchange/recommendation"
@@ -60,13 +59,13 @@ func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
 
 var persistPostGraphFn = persistPostGraph
 
-func NewCreatePostHandler(publisher eventing.BatchPublisher) gin.HandlerFunc {
+func NewCreatePostHandler() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		createPost(ctx, publisher)
+		createPost(ctx)
 	}
 }
 
-func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
+func createPost(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
@@ -139,19 +138,6 @@ func createPost(ctx *gin.Context, publisher eventing.BatchPublisher) {
 		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-	if config.AppConfig != nil && config.AppConfig.Embedding.Enabled {
-		event, eventErr := eventing.NewPostEmbeddingRequestedEnvelope(uuid.NewString(), post.ID, time.Now().UTC())
-		if eventErr != nil {
-			metrics.RecordPostEmbeddingPublishFailure("post_create")
-			log.Printf("[PostEmbedding] create event: %v", eventErr)
-		} else if publisher == nil {
-			metrics.RecordPostEmbeddingPublishFailure("post_create")
-			log.Printf("[PostEmbedding] post create publisher is unavailable for post %d", post.ID)
-		} else if publishErr := publisher.PublishBatch(ctx.Request.Context(), []eventing.Envelope{event}); publishErr != nil {
-			metrics.RecordPostEmbeddingPublishFailure("post_create")
-			log.Printf("[PostEmbedding] publish post %d request: %v", post.ID, publishErr)
-		}
 	}
 	initializePostLikeStateAfterCommit(ctx, post.ID)
 	if post.ReplyToPostID != nil {
@@ -245,6 +231,15 @@ func persistPostGraph(post *models.Post, userID uint, content string, req create
 				return errors.New("reply activity payload is empty")
 			}
 			if err := addConfiguredActivityOutboxEvent(tx, activity); err != nil {
+				return err
+			}
+		}
+		if config.AppConfig != nil && config.AppConfig.Embedding.Enabled {
+			embeddingEvent, err := eventing.NewPostEmbeddingRequestedEnvelope(uuid.NewString(), post.ID, now)
+			if err != nil {
+				return err
+			}
+			if err := addConfiguredPostEmbeddingOutboxEvent(tx, embeddingEvent); err != nil {
 				return err
 			}
 		}

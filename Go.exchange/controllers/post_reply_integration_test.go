@@ -163,7 +163,7 @@ func TestCreateCanonicalReplyIntegration(t *testing.T) {
 		`{"content":"  hello  ","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`,"user_id":999,"author_id":999,"post_id":999}`,
 		fixture.Commenter.ID,
 	)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -187,7 +187,7 @@ func TestCreateCanonicalReplyIntegration(t *testing.T) {
 		t.Fatalf("count after first create=%d", replyPostCount(t, db, fixture.Article.ID))
 	}
 	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"second","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, fixture.Commenter.ID)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("second create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -202,13 +202,13 @@ func TestCreateCanonicalReplyIntegration(t *testing.T) {
 	}
 
 	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"missing user","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, 0)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("missing user status=%d", recorder.Code)
 	}
 
 	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"expired","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, fixture.Commenter.ID)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("reply after post creation status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -540,7 +540,7 @@ func TestCanonicalReplyUsesCurrentUserIdentityIntegration(t *testing.T) {
 	}
 
 	ctx, recorder = newReplyIntegrationContext(http.MethodPost, "/api/posts", strconvUint(fixture.Article.ID), `{"content":"new reply","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`, fixture.Commenter.ID)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("new comment status=%d body=%s", recorder.Code, recorder.Body.String())
 	}

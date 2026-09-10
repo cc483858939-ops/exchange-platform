@@ -111,7 +111,7 @@ func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) 
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", strings.NewReader(`{"content":"quote"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s want 500", recorder.Code, recorder.Body.String())

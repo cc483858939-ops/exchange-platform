@@ -83,7 +83,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.GET("/me/notifications/unread-count", controllers.GetMyUnreadNotificationCount)
 		api.PUT("/me/notifications/:id/read", controllers.MarkMyNotificationRead)
 		api.PUT("/me/notifications/read-all", controllers.MarkMyNotificationsReadAll)
-		api.POST("/posts", controllers.NewCreatePostHandler(publisher))
+		api.POST("/posts", controllers.NewCreatePostHandler())
 		api.POST("/posts/repost-states", controllers.GetPostRepostStates)
 		api.GET("/posts/:id", controllers.GetPostByID)
 		api.POST("/posts/:id/translation", controllers.NewPostTranslationHandler(translationService))

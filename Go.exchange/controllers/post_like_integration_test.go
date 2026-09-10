@@ -225,7 +225,7 @@ func TestCleanupPostLikeIntegrationStateRemovesOwnedRedisMetadata(t *testing.T) 
 func createPostForLikeIntegration(t *testing.T, userID uint, body string) postResponse {
 	t.Helper()
 	ctx, recorder := newReplyIntegrationContext(http.MethodPost, "/api/posts", "", body, userID)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create post status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -248,7 +248,7 @@ func createCanonicalReplyForLikeIntegration(t *testing.T, userID, parentID uint,
 		fmt.Sprintf(`{"content":%q,"reply_to_post_id":%d}`, content, parentID),
 		userID,
 	)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create canonical reply status=%d body=%s", recorder.Code, recorder.Body.String())
 	}

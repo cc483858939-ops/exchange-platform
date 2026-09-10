@@ -87,7 +87,7 @@ func TestReplyCountTransactionRollbackIntegration(t *testing.T) {
 		`{"content":"must roll back","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`,
 		fixture.Commenter.ID,
 	)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -197,7 +197,7 @@ func TestReplyCacheInvalidationIsBestEffortIntegration(t *testing.T) {
 		`{"content":"cache failures are best effort","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`,
 		fixture.Commenter.ID,
 	)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -247,7 +247,7 @@ func TestReplyMutationIsRedisNilSafeIntegration(t *testing.T) {
 		`{"content":"redis nil safe","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`,
 		fixture.Commenter.ID,
 	)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -296,7 +296,7 @@ func TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration(t *test
 		`{"content":"cache-visible reply","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`,
 		fixture.Commenter.ID,
 	)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -373,7 +373,7 @@ func TestCanonicalDeleteReplyDecrementsSoftDeletedParentIntegration(t *testing.T
 		`{"content":"reply under parent tombstone","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`,
 		fixture.Commenter.ID,
 	)
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -423,7 +423,7 @@ func TestCanonicalReplyCreateAndParentDeleteSerializeIntegration(t *testing.T) {
 			`{"content":"racing reply","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`,
 			fixture.Commenter.ID,
 		)
-		createPost(ctx, nil)
+		createPost(ctx)
 		createDone <- recorder
 	}()
 	go func() {

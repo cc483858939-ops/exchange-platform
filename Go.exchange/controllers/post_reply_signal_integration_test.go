@@ -21,7 +21,7 @@ func TestCanonicalReplyPersistsReplyBehaviorIntegration(t *testing.T) {
 			`{"content":"`+content+`","reply_to_post_id":`+strconvUint(fixture.Article.ID)+`}`,
 			fixture.Commenter.ID,
 		)
-		createPost(ctx, nil)
+		createPost(ctx)
 		if recorder.Code != http.StatusCreated {
 			t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
 		}

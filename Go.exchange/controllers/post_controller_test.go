@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"Go.exchange/config"
-	"Go.exchange/eventing"
 	"Go.exchange/models"
 	"bytes"
 	"context"
@@ -49,7 +48,7 @@ func TestCreatePostBuildsPublishedRecord(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	createPost(ctx, nil)
+	createPost(ctx)
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -78,7 +77,7 @@ func TestCreatePostValidatesAndReturnsOrderedMedia(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString(`{"content":"with media","media":[{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440000.jpg"},{"type":"image","url":"/api/files/post-media/7/550e8400-e29b-41d4-a716-446655440001.webp"}]}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -111,7 +110,7 @@ func TestCreatePostRejectsMoreThanFourMediaBeforePersistence(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString(`{"content":"too many","media":[`+items+`]}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusBadRequest || persistCalled {
 		t.Fatalf("status=%d persistCalled=%t body=%s", recorder.Code, persistCalled, recorder.Body.String())
 	}
@@ -128,7 +127,7 @@ func TestCreatePostTrimsTextFields(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"  canonical body  \",\"article\":{\"title\":\"  title  \",\"preview\":\"  summary  \"}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 
 	if recorder.Code != http.StatusCreated || persisted.Content != "canonical body" {
 		t.Fatalf("status=%d article=%#v", recorder.Code, persisted)
@@ -144,7 +143,7 @@ func TestCreatePostPersistsWithoutCover(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated || bytes.Contains(recorder.Body.Bytes(), []byte("\"article\"")) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -165,7 +164,7 @@ func TestCreatePostRejectsWhitespaceOnlyContent(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\" \\t\\n \"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t body=%s", recorder.Code, called, recorder.Body.String())
 	}
@@ -181,7 +180,7 @@ func TestCreatePostAcceptsReplyAtUnicodeRuneLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recorder := executeCreatePostRequest(t, body, nil)
+	recorder := executeCreatePostRequest(t, body)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -209,7 +208,6 @@ func TestCreatePostRejectsReplyAboveUnicodeRuneLimitBeforeSideEffects(t *testing
 		return nil
 	}
 	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true}}
-	publisher := &recommendationTestPublisher{}
 	t.Cleanup(func() {
 		persistPostGraphFn = originalPersist
 		initializePostLikeState = originalInitialize
@@ -222,12 +220,12 @@ func TestCreatePostRejectsReplyAboveUnicodeRuneLimitBeforeSideEffects(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder := executeCreatePostRequest(t, body, publisher)
+	recorder := executeCreatePostRequest(t, body)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if persistCalls != 0 || publisher.calls != 0 || initializeCalls != 0 || invalidateCalls != 0 {
-		t.Fatalf("side effects persist=%d publish=%d initialize=%d invalidate=%d", persistCalls, publisher.calls, initializeCalls, invalidateCalls)
+	if persistCalls != 0 || initializeCalls != 0 || invalidateCalls != 0 {
+		t.Fatalf("side effects persist=%d initialize=%d invalidate=%d", persistCalls, initializeCalls, invalidateCalls)
 	}
 }
 
@@ -249,7 +247,7 @@ func TestCreatePostDoesNotApplyReplyRuneLimitToRoot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			recorder := executeCreatePostRequest(t, body, nil)
+			recorder := executeCreatePostRequest(t, body)
 			if recorder.Code != http.StatusCreated {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 			}
@@ -294,7 +292,6 @@ func TestCreatePostRejectsOversizedAndMalformedJSONBeforeSideEffects(t *testing.
 				return nil
 			}
 			config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true}}
-			publisher := &recommendationTestPublisher{}
 			t.Cleanup(func() {
 				persistPostGraphFn = originalPersist
 				initializePostLikeState = originalInitialize
@@ -302,18 +299,18 @@ func TestCreatePostRejectsOversizedAndMalformedJSONBeforeSideEffects(t *testing.
 				config.AppConfig = originalConfig
 			})
 
-			recorder := executeCreatePostRequest(t, test.body, publisher)
+			recorder := executeCreatePostRequest(t, test.body)
 			if recorder.Code != test.wantStatus {
 				t.Fatalf("status=%d body=%s want=%d", recorder.Code, recorder.Body.String(), test.wantStatus)
 			}
-			if persistCalls != 0 || publisher.calls != 0 || initializeCalls != 0 || invalidateCalls != 0 {
-				t.Fatalf("side effects persist=%d publish=%d initialize=%d invalidate=%d", persistCalls, publisher.calls, initializeCalls, invalidateCalls)
+			if persistCalls != 0 || initializeCalls != 0 || invalidateCalls != 0 {
+				t.Fatalf("side effects persist=%d initialize=%d invalidate=%d", persistCalls, initializeCalls, invalidateCalls)
 			}
 		})
 	}
 }
 
-func executeCreatePostRequest(t *testing.T, body []byte, publisher eventing.BatchPublisher) *httptest.ResponseRecorder {
+func executeCreatePostRequest(t *testing.T, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -321,7 +318,7 @@ func executeCreatePostRequest(t *testing.T, body []byte, publisher eventing.Batc
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	NewCreatePostHandler(publisher)(ctx)
+	NewCreatePostHandler()(ctx)
 	return recorder
 }
 
@@ -340,7 +337,7 @@ func TestCreatePostRejectsMissingUserContext(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -356,7 +353,7 @@ func TestCreatePostIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
 	ctx.Set("user_id", uint(7))
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\",\"author_id\":999,\"author\":{\"id\":999}}"))
 	ctx.Request.Header.Set("Content-Type", "application/json")
-	createPost(ctx, nil)
+	createPost(ctx)
 	if recorder.Code != http.StatusCreated || persisted.AuthorID != 7 {
 		t.Fatalf("status=%d author_id=%d body=%s", recorder.Code, persisted.AuthorID, recorder.Body.String())
 	}
@@ -367,72 +364,5 @@ func TestCreatePostIgnoresSpoofedAuthorAndReturnsPublicAuthor(t *testing.T) {
 	}
 	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"author":{"id":7,"username":"alice","display_name":"Alice Chen","avatar_url":"/api/files/profile-avatars/7/avatar.jpg"}`)) {
 		t.Fatalf("missing public author: %s", recorder.Body.String())
-	}
-}
-
-func TestCreatePostPublishesEmbeddingRequestAfterPersistence(t *testing.T) {
-	stubCreatePostAuthor(t)
-	stubPostCreatePersistence(t, nil, 44)
-	originalConfig := config.AppConfig
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true, Version: "test-version"}}
-	t.Cleanup(func() { config.AppConfig = originalConfig })
-	publisher := &recommendationTestPublisher{}
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	NewCreatePostHandler(publisher)(ctx)
-
-	if recorder.Code != http.StatusCreated || publisher.calls != 1 || len(publisher.events) != 1 {
-		t.Fatalf("status=%d calls=%d events=%d body=%s", recorder.Code, publisher.calls, len(publisher.events), recorder.Body.String())
-	}
-	event := publisher.events[0]
-	if event.Type != eventing.EventTypePostEmbeddingRequested || event.AggregateID != "44" || string(event.Payload) != "{\"post_id\":44}" {
-		t.Fatalf("event=%#v", event)
-	}
-}
-
-func TestCreatePostReturnsCreatedWhenEmbeddingPublishFails(t *testing.T) {
-	stubCreatePostAuthor(t)
-	stubPostCreatePersistence(t, nil, 45)
-	originalConfig := config.AppConfig
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: true}}
-	t.Cleanup(func() { config.AppConfig = originalConfig })
-	publisher := &recommendationTestPublisher{err: errors.New("broker down")}
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	NewCreatePostHandler(publisher)(ctx)
-
-	if recorder.Code != http.StatusCreated || publisher.calls != 1 {
-		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
-	}
-}
-
-func TestCreatePostDoesNotPublishWhenEmbeddingDisabled(t *testing.T) {
-	stubCreatePostAuthor(t)
-	stubPostCreatePersistence(t, nil, 46)
-	originalConfig := config.AppConfig
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Enabled: false}}
-	t.Cleanup(func() { config.AppConfig = originalConfig })
-	publisher := &recommendationTestPublisher{}
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("user_id", uint(7))
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString("{\"content\":\"c\"}"))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	NewCreatePostHandler(publisher)(ctx)
-
-	if recorder.Code != http.StatusCreated || publisher.calls != 0 {
-		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}
 }
