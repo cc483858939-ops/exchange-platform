@@ -254,7 +254,7 @@ onBeforeUnmount(() => {
 
 .like-action:hover:not(:disabled),
 .like-action:focus-visible {
-  background: color-mix(in srgb, var(--color-like) 9%, transparent);
+  background: transparent;
   color: var(--color-like);
 }
 
@@ -277,6 +277,7 @@ onBeforeUnmount(() => {
 }
 
 .like-action__visual {
+  isolation: isolate;
   position: relative;
   display: inline-flex;
   width: 20px;
@@ -285,6 +286,26 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   overflow: visible;
+}
+
+.like-action__visual::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: transparent;
+  content: '';
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  transition: background-color 140ms ease;
+}
+
+.like-action:hover:not(:disabled) .like-action__visual::before,
+.like-action:focus-visible .like-action__visual::before {
+  background: color-mix(in srgb, var(--color-like) 10%, transparent);
 }
 
 .like-action__heart {
@@ -406,6 +427,10 @@ onBeforeUnmount(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .like-action {
+    transition: none;
+  }
+
+  .like-action__visual::before {
     transition: none;
   }
 
