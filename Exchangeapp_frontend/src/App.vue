@@ -58,7 +58,9 @@ const currentViewerID = computed(() => {
 const viewerCacheNamespace = computed(() => getViewerCacheNamespace(currentViewerID.value));
 const rootSurfaceCacheKey = computed(() => getRootSurfaceCacheKey(route, currentViewerID.value));
 const externalProfileCacheKey = computed(() => getExternalProfileCacheKey(route, currentViewerID.value));
-const preserveExternalProfileCache = computed(() => shouldPreserveExternalProfileCache(route));
+const preserveExternalProfileCache = computed(() => (
+  shouldPreserveExternalProfileCache(route, currentViewerID.value)
+));
 
 initializePostViewTelemetry(() => {
   const id = authStore.currentIdentity?.id;

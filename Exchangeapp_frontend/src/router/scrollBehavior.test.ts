@@ -62,12 +62,18 @@ describe('routeScrollBehavior', () => {
     expect(applyScrollBehavior(location(toName, params), location('Home'), savedPosition)).toBe(savedPosition);
   });
 
-  it('lets UserProfile own scroll restoration when returning from PostDetail', () => {
+  it.each([
+    ['Home', {}],
+    ['UserSearch', {}],
+    ['CurrencyExchange', {}],
+    ['Notifications', {}],
+    ['UserProfile', { id: '7' }],
+  ])('lets %s own scroll restoration even when savedPosition exists', (routeName, params) => {
     const savedPosition = { left: 12, top: 2200 };
 
     expect(
       applyScrollBehavior(
-        location('UserProfile', { id: '7' }),
+        location(routeName, params),
         location('PostDetail', { id: '42' }),
         savedPosition,
       ),

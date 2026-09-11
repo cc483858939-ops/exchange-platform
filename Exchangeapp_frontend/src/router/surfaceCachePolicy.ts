@@ -53,12 +53,18 @@ export const getExternalProfileCacheKey = (
 
 export const shouldPreserveExternalProfileCache = (
   route: RouteLocationNormalizedLoaded,
-): boolean => (
-  route.name === 'UserProfile'
-  || route.name === 'PostDetail'
-  || route.name === 'UserFollowing'
-  || route.name === 'UserFollowers'
-);
+  viewerID: number | null,
+): boolean => {
+  if (getExternalProfileCacheKey(route, viewerID) !== null) {
+    return true;
+  }
+
+  return (
+    route.name === 'PostDetail'
+    || route.name === 'UserFollowing'
+    || route.name === 'UserFollowers'
+  );
+};
 
 export const isViewOwnedScrollRoute = (
   route: RouteLocationNormalizedLoaded,

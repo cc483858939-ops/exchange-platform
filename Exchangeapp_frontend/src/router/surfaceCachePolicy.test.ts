@@ -58,12 +58,18 @@ describe('surface cache policy', () => {
   });
 
   it('preserves external profile cache only through the profile return flow', () => {
-    expect(shouldPreserveExternalProfileCache(location('UserProfile', { id: '8' }))).toBe(true);
-    expect(shouldPreserveExternalProfileCache(location('PostDetail', { id: '42' }))).toBe(true);
-    expect(shouldPreserveExternalProfileCache(location('UserFollowing', { id: '8' }))).toBe(true);
-    expect(shouldPreserveExternalProfileCache(location('UserFollowers', { id: '8' }))).toBe(true);
-    expect(shouldPreserveExternalProfileCache(location('Home'))).toBe(false);
-    expect(shouldPreserveExternalProfileCache(location('Search'))).toBe(false);
+    expect(shouldPreserveExternalProfileCache(location('UserProfile', { id: '8' }), 7)).toBe(true);
+    expect(shouldPreserveExternalProfileCache(location('UserProfile', { id: '7' }), 7)).toBe(false);
+    expect(shouldPreserveExternalProfileCache(location('UserProfile', { id: '8' }), null)).toBe(true);
+    expect(shouldPreserveExternalProfileCache(location('UserProfile', { id: '0' }), 7)).toBe(false);
+    expect(shouldPreserveExternalProfileCache(location('UserProfile', { id: 'invalid' }), 7)).toBe(false);
+    expect(shouldPreserveExternalProfileCache(location('PostDetail', { id: '42' }), 7)).toBe(true);
+    expect(shouldPreserveExternalProfileCache(location('UserFollowing', { id: '8' }), 7)).toBe(true);
+    expect(shouldPreserveExternalProfileCache(location('UserFollowers', { id: '8' }), 7)).toBe(true);
+    expect(shouldPreserveExternalProfileCache(location('Home'), 7)).toBe(false);
+    expect(shouldPreserveExternalProfileCache(location('UserSearch'), 7)).toBe(false);
+    expect(shouldPreserveExternalProfileCache(location('CurrencyExchange'), 7)).toBe(false);
+    expect(shouldPreserveExternalProfileCache(location('Notifications'), 7)).toBe(false);
   });
 
   it('uses stable viewer namespaces', () => {

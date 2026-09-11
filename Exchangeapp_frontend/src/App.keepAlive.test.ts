@@ -190,6 +190,36 @@ describe('App root and external surface caches', () => {
     wrapper.unmount();
   });
 
+  it('releases the external Profile cache when entering own Profile', async () => {
+    const { router, wrapper } = await mountApp('/users/8');
+    const firstExternalProfile = wrapper.find('[data-profile-marker]').element;
+
+    await router.push('/users/7');
+    await settle();
+    expect(wrapper.find('[data-profile-marker]').element).not.toBe(firstExternalProfile);
+
+    await router.push('/users/8');
+    await settle();
+
+    expect(wrapper.find('[data-profile-marker]').element).not.toBe(firstExternalProfile);
+    wrapper.unmount();
+  });
+
+  it('keeps an external Profile through UserFollowing', async () => {
+    const { router, wrapper } = await mountApp('/users/8');
+    const originalProfile = wrapper.find('[data-profile-marker]').element;
+
+    await router.push('/users/8/following');
+    await settle();
+    expect(wrapper.find('[data-transient-marker]').exists()).toBe(true);
+
+    await router.push('/users/8');
+    await settle();
+
+    expect(wrapper.find('[data-profile-marker]').element).toBe(originalProfile);
+    wrapper.unmount();
+  });
+
   it('limits the external Profile cache to one entry', async () => {
     const { router, wrapper } = await mountApp('/users/8');
     const firstProfile = wrapper.find('[data-profile-marker]').element;
