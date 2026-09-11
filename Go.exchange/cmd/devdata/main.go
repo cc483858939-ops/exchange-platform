@@ -29,41 +29,13 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: go run ./cmd/devdata <preflight|fetch|refresh|rebuild|verify|verify-avatars> [flags]")
+		return errors.New("usage: go run ./cmd/devdata <fetch|refresh|rebuild|verify|verify-avatars> [flags]")
 	}
 	baseDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
 	}
 	switch args[0] {
-	case "preflight":
-		options, err := parseCommandFlags("preflight", args[1:], stderr, false)
-		if err != nil {
-			return err
-		}
-		registry, err := loadCuratedRegistry(options.registryPath(baseDir))
-		if err != nil {
-			return err
-		}
-		client, err := newLiveSource(options.source)
-		if err != nil {
-			return err
-		}
-		var results []devdata.PreflightResult
-		var preflightErr error
-		if options.source == "rsshub" {
-			results, preflightErr = devdata.PreflightRSSHubSources(context.Background(), client, registry, devdata.ResumableFetchOptions{
-				BatchSize:  options.batchSize,
-				BatchDelay: options.batchDelay,
-				Progress: func(message string) {
-					fmt.Fprintln(stdout, message)
-				},
-			})
-		} else {
-			results, preflightErr = devdata.PreflightSources(context.Background(), client, registry)
-		}
-		_, _ = io.WriteString(stdout, devdata.FormatPreflightResults(results))
-		return preflightErr
 	case "fetch":
 		options, err := parseCommandFlags("fetch", args[1:], stderr, false)
 		if err != nil {

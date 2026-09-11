@@ -89,6 +89,29 @@ func TestParseCommandFlagsRejectsUnknownSourceAdapter(t *testing.T) {
 	}
 }
 
+func TestRunNoArgsUsageOmitsPreflight(t *testing.T) {
+	err := run(nil, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("no-argument invocation unexpectedly succeeded")
+	}
+	message := err.Error()
+	for _, command := range []string{"fetch", "refresh", "rebuild", "verify", "verify-avatars"} {
+		if !strings.Contains(message, command) {
+			t.Fatalf("usage missing %q: %s", command, message)
+		}
+	}
+	if strings.Contains(message, "preflight") {
+		t.Fatalf("usage still advertises removed preflight command: %s", message)
+	}
+}
+
+func TestRunRejectsRemovedPreflightCommandWithoutNetwork(t *testing.T) {
+	err := run([]string{"preflight"}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `unknown devdata command "preflight"`) {
+		t.Fatalf("removed command error=%v", err)
+	}
+}
+
 func TestWriteMediaLocalizationWarningOnlyReportsFailures(t *testing.T) {
 	var output strings.Builder
 	writeMediaLocalizationWarning(&output, 1, 2)

@@ -8,19 +8,9 @@ import (
 	"time"
 )
 
-type PreflightResult struct {
-	RegistryKey   string
-	Handle        string
-	SourceUserID  string
-	Protected     bool
-	ProfileStatus string
-	Error         string
-}
-
-// SnapshotSourceClient is the small source contract needed by the existing
-// preflight and snapshot pipeline. Both the official X API client and the
-// RSSHub adapter implement it, so validation and desired-state sync remain
-// source-agnostic.
+// SnapshotSourceClient is the small source contract needed by the snapshot
+// pipeline. Both the official X API client and the RSSHub adapter implement it,
+// so fetching and desired-state sync remain source-agnostic.
 type SnapshotSourceClient interface {
 	LookupUsers(ctx context.Context, handles []string) (map[string]XUser, error)
 	GetUserPosts(ctx context.Context, sourceUserID, paginationToken string, maxResults int) (XTimelinePage, error)
@@ -35,51 +25,6 @@ func sourceRequestCount(client SnapshotSourceClient) int {
 		return counter.RequestCount()
 	}
 	return 1
-}
-
-var ErrPreflightFailed = errors.New("source preflight failed")
-
-func PreflightSources(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry) ([]PreflightResult, error) {
-	if err := ValidateRegistry(registry); err != nil {
-		return nil, err
-	}
-	if client == nil {
-		return nil, errors.New("source client is not initialized")
-	}
-	accounts := registry.EnabledAccounts()
-	results := make([]PreflightResult, 0, len(accounts))
-	handles := make([]string, 0, len(accounts))
-	for _, account := range accounts {
-		handles = append(handles, account.Handle)
-		results = append(results, PreflightResult{RegistryKey: account.Key, Handle: account.Handle, ProfileStatus: "pending"})
-	}
-	users, lookupErr := client.LookupUsers(ctx, handles)
-	failed := lookupErr != nil
-	for index, account := range accounts {
-		result := &results[index]
-		user, exists := users[strings.ToLower(account.Handle)]
-		if !exists {
-			result.ProfileStatus = "missing"
-			failed = true
-			if lookupErr != nil {
-				result.Error = lookupErr.Error()
-			} else {
-				result.Error = "source user was not returned"
-			}
-			continue
-		}
-		if err := fillPreflightResult(result, account, user); err != nil {
-			failed = true
-			continue
-		}
-		if lookupErr != nil {
-			result.Error = lookupErr.Error()
-		}
-	}
-	if failed {
-		return results, ErrPreflightFailed
-	}
-	return results, nil
 }
 
 func FetchSnapshot(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry, fetchedAt time.Time) (Snapshot, FetchReport, error) {
@@ -223,51 +168,10 @@ func validateSourceUser(account SourceAccount, user XUser) (SnapshotAccount, err
 	}, nil
 }
 
-func fillPreflightResult(result *PreflightResult, account SourceAccount, user XUser) error {
-	result.SourceUserID = strings.TrimSpace(user.ID)
-	if result.SourceUserID == "" || !isValidSourceUserID(result.SourceUserID) {
-		result.ProfileStatus = "invalid_source_user_id"
-		result.Error = "source user ID is missing or invalid"
-		return errors.New(result.Error)
-	}
-	if user.Protected == nil {
-		result.ProfileStatus = "protected_status_unavailable"
-		result.Error = "protected status was not returned"
-		return errors.New(result.Error)
-	}
-	result.Protected = *user.Protected
-	if *user.Protected {
-		result.ProfileStatus = "protected"
-		result.Error = "source account is protected"
-		return errors.New(result.Error)
-	}
-	if strings.TrimSpace(user.Name) == "" || strings.TrimSpace(user.Username) == "" {
-		result.ProfileStatus = "profile_incomplete"
-		result.Error = "name or username was not returned"
-		return errors.New(result.Error)
-	}
-	if !strings.EqualFold(strings.TrimSpace(user.Username), account.Handle) {
-		result.ProfileStatus = "handle_mismatch"
-		result.Error = fmt.Sprintf("resolved username %q does not match registry handle", user.Username)
-		return errors.New(result.Error)
-	}
-	result.ProfileStatus = "ok"
-	return nil
-}
-
 func registryHandles(accounts []SourceAccount) []string {
 	handles := make([]string, 0, len(accounts))
 	for _, account := range accounts {
 		handles = append(handles, account.Handle)
 	}
 	return handles
-}
-
-func FormatPreflightResults(results []PreflightResult) string {
-	var builder strings.Builder
-	builder.WriteString("registry_key\thandle\tsource_user_id\tprotected\tprofile_status\terror\n")
-	for _, result := range results {
-		fmt.Fprintf(&builder, "%s\t%s\t%s\t%t\t%s\t%s\n", result.RegistryKey, result.Handle, result.SourceUserID, result.Protected, result.ProfileStatus, result.Error)
-	}
-	return builder.String()
 }

@@ -293,64 +293,6 @@ func TestFetchRSSHubResumable429PreservesExistingSnapshotAndManualResume(t *test
 	}
 }
 
-func TestPreflightRSSHubSourcesStopsImmediatelyOn429(t *testing.T) {
-	registry := batchTestRegistry(6)
-	client := &checkpointTestSourceClient{
-		rateHandles: map[string]int{"source1": 1},
-		rateAfter:   120 * time.Second,
-	}
-	var waits []time.Duration
-	results, err := PreflightRSSHubSources(context.Background(), client, registry, ResumableFetchOptions{
-		BatchSize:  5,
-		BatchDelay: 9 * time.Second,
-		Wait: func(_ context.Context, delay time.Duration) error {
-			waits = append(waits, delay)
-			return nil
-		},
-	})
-	if !errors.Is(err, ErrPreflightFailed) {
-		t.Fatalf("error=%v", err)
-	}
-	if len(results) != 6 || len(waits) != 0 {
-		t.Fatalf("results=%d waits=%v", len(results), waits)
-	}
-	if results[0].ProfileStatus != "ok" || results[1].ProfileStatus != "rate_limited" {
-		t.Fatalf("rate-limit results=%#v", results[:2])
-	}
-	for index := 2; index < len(results); index++ {
-		if results[index].ProfileStatus != "not_attempted" {
-			t.Fatalf("result[%d]=%#v", index, results[index])
-		}
-	}
-	if got := strings.Join(client.lookupHandles, ","); got != "source0,source1" {
-		t.Fatalf("lookup sequence=%q", got)
-	}
-}
-
-func TestPreflightRSSHubSourcesPacesBatches(t *testing.T) {
-	registry := batchTestRegistry(12)
-	var waits []time.Duration
-	results, err := PreflightRSSHubSources(context.Background(), &checkpointTestSourceClient{}, registry, ResumableFetchOptions{
-		BatchSize:  5,
-		BatchDelay: 7 * time.Second,
-		Wait: func(_ context.Context, delay time.Duration) error {
-			waits = append(waits, delay)
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fmt.Sprint(waits) != fmt.Sprint([]time.Duration{7 * time.Second, 7 * time.Second}) {
-		t.Fatalf("waits=%v", waits)
-	}
-	for index, result := range results {
-		if result.ProfileStatus != "ok" || result.Error != "" {
-			t.Fatalf("result[%d]=%#v", index, result)
-		}
-	}
-}
-
 func TestFetchCheckpointAtomicReadAndFingerprintValidation(t *testing.T) {
 	registry := batchTestRegistry(1)
 	path := filepath.Join(t.TempDir(), "checkpoint.json")

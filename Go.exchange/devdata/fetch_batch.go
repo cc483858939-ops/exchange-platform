@@ -181,80 +181,6 @@ func FetchRSSHubResumable(ctx context.Context, client SnapshotSourceClient, regi
 	return snapshot, report, nil
 }
 
-func PreflightRSSHubSources(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry, options ResumableFetchOptions) ([]PreflightResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ValidateRegistry(registry); err != nil {
-		return nil, err
-	}
-	if client == nil {
-		return nil, errors.New("source client is not initialized")
-	}
-	if err := validateResumableFetchOptions(&options); err != nil {
-		return nil, err
-	}
-	wait := options.Wait
-	if wait == nil {
-		wait = options.Sleeper
-	}
-	if wait == nil {
-		wait = waitContext
-	}
-	accounts := registry.EnabledAccounts()
-	results := make([]PreflightResult, 0, len(accounts))
-	for _, account := range accounts {
-		results = append(results, PreflightResult{RegistryKey: account.Key, Handle: account.Handle, ProfileStatus: "pending"})
-	}
-	failed := false
-	batchTotal := batchCount(len(accounts), options.BatchSize)
-	for batchStart := 0; batchStart < len(accounts); batchStart += options.BatchSize {
-		batchEnd := batchStart + options.BatchSize
-		if batchEnd > len(accounts) {
-			batchEnd = len(accounts)
-		}
-		emitProgress(options.Progress, "RSSHub preflight: batch=%d/%d", batchStart/options.BatchSize+1, batchTotal)
-		for index := batchStart; index < batchEnd; index++ {
-			account := accounts[index]
-			users, lookupErr := client.LookupUsers(ctx, []string{account.Handle})
-			if lookupErr == nil {
-				results[index].Error = ""
-				user, exists := users[strings.ToLower(account.Handle)]
-				if !exists {
-					results[index].ProfileStatus = "missing"
-					results[index].Error = "source user was not returned"
-					failed = true
-				} else if err := fillPreflightResult(&results[index], account, user); err != nil {
-					failed = true
-				}
-				continue
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return results, ctxErr
-			}
-			results[index].ProfileStatus = "missing"
-			results[index].Error = lookupErr.Error()
-			if isRSSHubRateLimitError(lookupErr) {
-				results[index].ProfileStatus = "rate_limited"
-				emitProgress(options.Progress, "WARN: RSSHub rate limited while preflighting %s; stopping preflight", account.Key)
-				markPreflightNotAttempted(results, index+1, fmt.Sprintf("source preflight not attempted after rate limit at %s", account.Key))
-				return results, ErrPreflightFailed
-			}
-			failed = true
-		}
-		if batchEnd < len(accounts) {
-			emitProgress(options.Progress, "Waiting %s before next preflight batch...", options.BatchDelay)
-			if err := waitForDelay(ctx, wait, options.BatchDelay); err != nil {
-				return results, err
-			}
-		}
-	}
-	if failed {
-		return results, ErrPreflightFailed
-	}
-	return results, nil
-}
-
 func validateResumableFetchOptions(options *ResumableFetchOptions) error {
 	if options.BatchSize == 0 {
 		options.BatchSize = DefaultSourceBatchSize
@@ -432,14 +358,5 @@ func checkpointNow(now func() time.Time) time.Time {
 func emitProgress(progress func(string), format string, args ...interface{}) {
 	if progress != nil {
 		progress(fmt.Sprintf(format, args...))
-	}
-}
-
-func markPreflightNotAttempted(results []PreflightResult, start int, message string) {
-	for index := start; index < len(results); index++ {
-		if results[index].ProfileStatus == "pending" {
-			results[index].ProfileStatus = "not_attempted"
-			results[index].Error = message
-		}
 	}
 }
