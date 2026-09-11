@@ -1,6 +1,15 @@
 import type { RouterScrollBehavior } from 'vue-router';
 
 export const routeScrollBehavior: RouterScrollBehavior = (to, from, savedPosition) => {
+  const returningToUserProfileFromPostDetail =
+    to.name === 'UserProfile'
+    && from.name === 'PostDetail'
+    && savedPosition !== null;
+
+  if (returningToUserProfileFromPostDetail) {
+    return false;
+  }
+
   if (savedPosition) {
     return savedPosition;
   }

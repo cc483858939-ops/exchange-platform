@@ -62,6 +62,30 @@ describe('routeScrollBehavior', () => {
     expect(applyScrollBehavior(location(toName, params), location('Home'), savedPosition)).toBe(savedPosition);
   });
 
+  it('lets UserProfile own scroll restoration when returning from PostDetail', () => {
+    const savedPosition = { left: 12, top: 2200 };
+
+    expect(
+      applyScrollBehavior(
+        location('UserProfile', { id: '7' }),
+        location('PostDetail', { id: '42' }),
+        savedPosition,
+      ),
+    ).toBe(false);
+  });
+
+  it('still returns savedPosition when returning from PostDetail to Home', () => {
+    const savedPosition = { left: 0, top: 1500 };
+
+    expect(
+      applyScrollBehavior(
+        location('Home'),
+        location('PostDetail', { id: '42' }),
+        savedPosition,
+      ),
+    ).toBe(savedPosition);
+  });
+
   it.each([
     ['Home', 'Search'],
     ['Search', 'Profile'],

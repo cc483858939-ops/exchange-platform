@@ -510,7 +510,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     }
   });
 
-  it('pauses and resumes the cached Profile without a second component scroll restoration', async () => {
+  it('pauses and resumes the cached Profile and restores its owned scroll position', async () => {
     const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
     const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
     Object.defineProperty(window.navigator, 'userAgent', {
@@ -520,7 +520,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     Object.defineProperty(window, 'scrollY', {
       configurable: true,
       writable: true,
-      value: 1480,
+      value: 0,
     });
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     const profileStore = useProfileSessionStore();
@@ -540,6 +540,13 @@ describe('UserProfileView observer and cursor concurrency', () => {
     try {
       await settle();
       expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 900, behavior: 'auto' });
+
+      Object.defineProperty(window, 'scrollY', {
+        configurable: true,
+        writable: true,
+        value: 1480,
+      });
       const initialObserver = activeObserver();
       expect(initialObserver).toBeDefined();
 
@@ -551,6 +558,12 @@ describe('UserProfileView observer and cursor concurrency', () => {
 
       expect(session.scrollY).toBe(1480);
       expect(initialObserver?.disconnectCount).toBeGreaterThan(0);
+
+      Object.defineProperty(window, 'scrollY', {
+        configurable: true,
+        writable: true,
+        value: 320,
+      });
 
       initialObserver?.trigger();
       session.timelineItems = [...session.timelineItems, profileTimelineItem(2, 7)];
@@ -571,18 +584,11 @@ describe('UserProfileView observer and cursor concurrency', () => {
       expect(resumedObserver).toBeDefined();
       expect(resumedObserver).not.toBe(initialObserver);
       expect(resumedObserver?.observed).toBe(wrapper.find('.profile-feed-sentinel').element);
-      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo).toHaveBeenCalledTimes(2);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 1480, behavior: 'auto' });
+      expect(scrollTo).not.toHaveBeenCalledWith({ top: 320, behavior: 'auto' });
       expect(mocks.getUser).toHaveBeenCalledTimes(userCallsBeforeActivation);
       expect(mocks.getUserTimeline).toHaveBeenCalledTimes(timelineCallsBeforeActivation);
-
-      Object.defineProperty(window, 'scrollY', {
-        configurable: true,
-        writable: true,
-        value: 1234,
-      });
-      mocks.setRouteID('8');
-      await settle();
-      expect(session.scrollY).toBe(1234);
     } finally {
       scrollTo.mockRestore();
       if (userAgentDescriptor) {

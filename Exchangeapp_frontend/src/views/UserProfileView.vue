@@ -524,6 +524,30 @@ const saveCurrentScroll = (targetUserID: number) => {
   }
 };
 
+const restoreCachedProfileScroll = (
+  targetProfileID: number,
+  targetScrollY: number,
+) => {
+  if (
+    !profileViewActive.value
+    || route.name !== 'UserProfile'
+    || numericUserID.value !== targetProfileID
+    || typeof window === 'undefined'
+  ) {
+    return;
+  }
+
+  if (
+    typeof window.scrollTo === 'function'
+    && !window.navigator.userAgent.toLowerCase().includes('jsdom')
+  ) {
+    window.scrollTo({
+      top: targetScrollY,
+      behavior: 'auto',
+    });
+  }
+};
+
 const restoreScrollOnce = async () => {
   const entryVersion = profileEntryVersion;
   if (!profileViewActive.value || restoredEntryVersion === entryVersion) return;
@@ -917,7 +941,17 @@ const activateProfileView = () => {
   profileViewActive.value = true;
 
   const nextProfileRouteID = readProfileRouteID();
-  if (nextProfileRouteID === profileRouteID.value) {
+  const returningToSameProfile =
+    nextProfileRouteID !== ''
+    && nextProfileRouteID === profileRouteID.value;
+  const cachedProfileID = returningToSameProfile
+    ? numericUserID.value
+    : null;
+  const cachedScrollY = cachedProfileID !== null
+    ? activeSession.value?.scrollY ?? null
+    : null;
+
+  if (returningToSameProfile) {
     scrollSavedOnDeactivationForProfileID = null;
   }
 
@@ -927,6 +961,19 @@ const activateProfileView = () => {
     if (!profileViewActive.value) {
       return;
     }
+
+    if (
+      returningToSameProfile
+      && cachedProfileID !== null
+      && cachedScrollY !== null
+    ) {
+      restoreCachedProfileScroll(cachedProfileID, cachedScrollY);
+    }
+
+    if (!profileViewActive.value) {
+      return;
+    }
+
     updateObserver();
   });
 };
