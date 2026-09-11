@@ -4,6 +4,7 @@ import axios from 'axios';
 import { apiBaseUrl } from '../api';
 import { decodeAuthIdentity, normalizeAuthIdentity } from '../utils/authIdentity';
 import type { AuthIdentity } from '../utils/authIdentity';
+import { AuthRequestError } from '../utils/authError';
 
 const authClient = axios.create({
   baseURL: apiBaseUrl,
@@ -23,13 +24,20 @@ type AuthResponse = {
 };
 
 type AuthErrorResponse = {
+  code?: string;
   error?: string;
   message?: string;
 };
 
-const getAuthErrorMessage = (error: unknown, fallback: string) => {
+const toAuthRequestError = (error: unknown, fallback: string): AuthRequestError => {
   const data = (error as { response?: { data?: AuthErrorResponse } }).response?.data;
-  return data?.message || data?.error || fallback;
+  const code = typeof data?.code === 'string' && data.code.trim() ? data.code.trim() : null;
+  const message = typeof data?.message === 'string' && data.message.trim()
+    ? data.message.trim()
+    : typeof data?.error === 'string' && data.error.trim()
+      ? data.error.trim()
+      : fallback;
+  return new AuthRequestError(message, code);
 };
 
 const asAuthorizationHeader = (rawToken: string | null): string | null => {
@@ -102,7 +110,7 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await authClient.post<AuthResponse>('/auth/login', { username, password });
       setTokens(response.data);
     } catch (error) {
-      throw new Error(getAuthErrorMessage(error, '登录失败，请稍后重试'));
+      throw toAuthRequestError(error, '登录失败，请稍后重试');
     }
   };
 
@@ -111,7 +119,7 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await authClient.post<AuthResponse>('/auth/register', { username, password });
       setTokens(response.data);
     } catch (error) {
-      throw new Error(getAuthErrorMessage(error, '注册失败，请稍后重试'));
+      throw toAuthRequestError(error, '注册失败，请稍后重试');
     }
   };
 

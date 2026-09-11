@@ -73,6 +73,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
+import { AuthRequestError } from '../utils/authError';
 import BrandMark from './brand/BrandMark.vue';
 
 const form = ref({
@@ -86,11 +87,10 @@ const authStore = useAuthStore();
 const router = useRouter();
 
 const formatRegisterError = (error: unknown) => {
-  const message = error instanceof Error ? error.message : '';
-  if (message === 'User already exists or database error') {
-    return 'Could not create account. That username may already be in use.';
+  if (error instanceof AuthRequestError && error.code === 'AUTH_USERNAME_UNAVAILABLE') {
+    return 'That username is already in use. Choose another username.';
   }
-  if (message === 'Invalid request data') {
+  if (error instanceof AuthRequestError && error.code === 'AUTH_REQUEST_INVALID') {
     return 'Enter a username and password.';
   }
   return 'Could not create account. Please try again.';

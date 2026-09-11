@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { AuthRequestError } from '../utils/authError';
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -66,6 +67,35 @@ describe('auth store identity persistence', () => {
 
     expect(store.currentIdentity).toEqual(fullIdentity);
     expect(JSON.parse(localStorage.getItem('auth_user') || 'null')).toEqual(fullIdentity);
+  });
+
+  it('preserves the structured username-unavailable error from register', async () => {
+    mocks.post.mockRejectedValueOnce({
+      response: {
+        data: {
+          code: 'AUTH_USERNAME_UNAVAILABLE',
+          message: 'Username is unavailable',
+        },
+      },
+    });
+    const store = useAuthStore();
+
+    const error = await store.register('alice', 'secret123').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AuthRequestError);
+    expect((error as AuthRequestError).code).toBe('AUTH_USERNAME_UNAVAILABLE');
+    expect((error as AuthRequestError).message).toBe('Username is unavailable');
+  });
+
+  it('uses an AuthRequestError with a fallback for register network failures', async () => {
+    mocks.post.mockRejectedValueOnce(new Error('Network Error'));
+    const store = useAuthStore();
+
+    const error = await store.register('alice', 'secret123').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AuthRequestError);
+    expect((error as AuthRequestError).code).toBeNull();
+    expect((error as AuthRequestError).message).toBe('注册失败，请稍后重试');
   });
 
   it('replaces identity state and storage with refresh metadata', async () => {
