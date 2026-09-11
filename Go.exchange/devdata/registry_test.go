@@ -14,21 +14,40 @@ func TestCuratedRegistryHasExactlyTheControlledTwentyAccounts(t *testing.T) {
 	if len(registry.EnabledAccounts()) != 20 {
 		t.Fatalf("enabled accounts=%d, want 20", len(registry.EnabledAccounts()))
 	}
-	for _, key := range []string{"thsottiaux", "MKBHD", "dotey", "laozhouhengmei", "JamesAI", "Svwang1", "wenqiangjp", "visualsofearth1", "CuddlyCutePets", "NASA", "neiltyson"} {
-		if _, ok := registry.AccountByKey(key); !ok {
+	targetKeys := []string{
+		"thsottiaux", "MKBHD", "dotey", "naval", "RayDalio", "ahistoryinart", "japanvistamedia",
+		"visualsofearth1", "SpaceX", "NintendoAmerica", "kasu_ps", "MrBeast", "letterboxd",
+		"historyinmemes", "GordonRamsay", "CuddlyCutePets", "wenqiangjp", "KobeissiLetter", "NASA", "neiltyson",
+	}
+	for _, key := range targetKeys {
+		account, ok := registry.AccountByKey(key)
+		if !ok {
 			t.Fatalf("registry missing %q", key)
 		}
+		if account.Key != key || account.Handle != key || account.Platform != "x" || account.MaxPosts != 40 || !account.Enabled {
+			t.Fatalf("account %q does not match controlled shape: %#v", key, account)
+		}
 	}
-	for _, key := range []string{"F1", "dog_rates"} {
+	for _, key := range []string{"levelsio", "laozhouhengmei", "JamesAI", "Svwang1", "StephenCurry30", "IGN", "billboard", "Reuters"} {
 		if _, ok := registry.AccountByKey(key); ok {
 			t.Fatalf("removed registry key %q is still present", key)
 		}
 	}
-	if account, ok := registry.AccountByKey("visualsofearth1"); !ok || account.Category != "travel_nature" || account.Handle != "visualsofearth1" {
-		t.Fatalf("landscape account=%#v exists=%t", account, ok)
+	categoryAssertions := map[string]string{
+		"naval":           "business_creator",
+		"japanvistamedia": "travel_nature",
+		"SpaceX":          "science",
+		"kasu_ps":         "gaming",
+		"historyinmemes":  "entertainment_creator",
+		"KobeissiLetter":  "news",
+		"visualsofearth1": "travel_nature",
+		"CuddlyCutePets":  "lifestyle_food_humor",
 	}
-	if account, ok := registry.AccountByKey("CuddlyCutePets"); !ok || account.Category != "lifestyle_food_humor" || account.Handle != "CuddlyCutePets" {
-		t.Fatalf("cute animals account=%#v exists=%t", account, ok)
+	for key, wantCategory := range categoryAssertions {
+		account, ok := registry.AccountByKey(key)
+		if !ok || account.Category != wantCategory {
+			t.Fatalf("account %q category=%q exists=%t, want %q", key, account.Category, ok, wantCategory)
+		}
 	}
 	if got := MirrorUsername("MKBHD"); got != "x_MKBHD" {
 		t.Fatalf("mirror username=%q", got)
