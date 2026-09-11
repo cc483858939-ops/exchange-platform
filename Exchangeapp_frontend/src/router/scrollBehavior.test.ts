@@ -74,12 +74,12 @@ describe('routeScrollBehavior', () => {
     ).toBe(false);
   });
 
-  it('still returns savedPosition when returning from PostDetail to Home', () => {
+  it('still returns savedPosition for a transient route when returning from PostDetail', () => {
     const savedPosition = { left: 0, top: 1500 };
 
     expect(
       applyScrollBehavior(
-        location('Home'),
+        location('UserFollowing', { id: '7' }),
         location('PostDetail', { id: '42' }),
         savedPosition,
       ),

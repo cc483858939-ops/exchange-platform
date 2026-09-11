@@ -67,7 +67,7 @@ describe('UserSearchView mutation synchronization', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
-    mocks.route = reactive({ query: { q: 'alice' } });
+    mocks.route = reactive({ name: 'UserSearch', query: { q: 'alice' } });
     mocks.authStore = reactive({
       isAuthenticated: true,
       token: 'Bearer token-a',

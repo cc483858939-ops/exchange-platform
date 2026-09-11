@@ -2,6 +2,7 @@
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defineComponent, h, KeepAlive, nextTick, reactive } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { ElMessage } from 'element-plus';
 import LiveExchangeView from './LiveExchangeView.vue';
@@ -43,6 +44,20 @@ const swappedQuote = {
   convertedAmount: '712.00',
 };
 
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
+const setScrollY = (value: number) => {
+  Object.defineProperty(window, 'scrollY', { configurable: true, value });
+};
+
 const mountExchange = () => mount(LiveExchangeView, {
   global: {
     stubs: {
@@ -77,6 +92,54 @@ const mountExchange = () => mount(LiveExchangeView, {
     },
   },
 });
+
+const mountKeepAliveExchange = () => {
+  const state = reactive({ showExchange: true });
+  const Host = defineComponent({
+    setup() {
+      return () => h(KeepAlive, { max: 1 }, {
+        default: () => (state.showExchange ? h(LiveExchangeView) : null),
+      });
+    },
+  });
+  return {
+    state,
+    wrapper: mount(Host, {
+      global: {
+        stubs: {
+          ElAlert: {
+            props: ['title'],
+            template: '<div class="el-alert"><span v-if="title">{{ title }}</span><slot /></div>',
+          },
+          ElButton: {
+            emits: ['click'],
+            template: '<button type="button" @click="$emit(\'click\', $event)"><slot /></button>',
+          },
+          ElForm: {
+            inheritAttrs: false,
+            template: '<form @submit="$emit(\'submit\', $event)"><slot /></form>',
+          },
+          ElFormItem: {
+            props: ['label'],
+            template: '<label><span class="form-item-label">{{ label }}</span><slot /></label>',
+          },
+          ElInput: {
+            props: ['modelValue', 'placeholder'],
+            emits: ['update:modelValue', 'keyup'],
+            template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          },
+          ElOption: { template: '<option><slot /></option>' },
+          ElSelect: {
+            props: ['modelValue', 'placeholder'],
+            emits: ['update:modelValue'],
+            template: '<span><span v-if="placeholder">{{ placeholder }}</span><select :value="modelValue"><slot /></select></span>',
+          },
+          ElSkeleton: { template: '<div class="el-skeleton" />' },
+        },
+      },
+    }),
+  };
+};
 
 describe('LiveExchangeView', () => {
   let wrapper: VueWrapper | null = null;
@@ -233,5 +296,64 @@ describe('LiveExchangeView', () => {
     await flushPromises();
 
     expect(ElMessage.error).toHaveBeenCalledWith('Could not get a quote. Please try again.');
+  });
+
+  it('saves scroll on deactivation and restores it without reloading currencies', async () => {
+    const mounted = mountKeepAliveExchange();
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    vi.mocked(window.scrollTo).mockClear();
+    setScrollY(900);
+    mounted.state.showExchange = false;
+    await nextTick();
+    setScrollY(300);
+
+    mounted.state.showExchange = true;
+    await flushPromises();
+    await nextTick();
+
+    expect(useExchangeSessionStore().scrollY).toBe(900);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 900, behavior: 'auto' });
+  });
+
+  it('does not restore scroll when currencies finish loading while hidden', async () => {
+    const pending = deferred<{ data: typeof currencies }>();
+    mocks.get.mockReset().mockReturnValueOnce(pending.promise);
+    const mounted = mountKeepAliveExchange();
+    wrapper = mounted.wrapper;
+    await nextTick();
+
+    mounted.state.showExchange = false;
+    await nextTick();
+    setScrollY(300);
+    vi.mocked(window.scrollTo).mockClear();
+    pending.resolve({ data: currencies });
+    await flushPromises();
+    await nextTick();
+
+    expect(window.scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('preserves form and quote state across activation', async () => {
+    const mounted = mountKeepAliveExchange();
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    const store = useExchangeSessionStore();
+    store.form.amount = '123';
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    const cachedQuote = store.quote;
+
+    mounted.state.showExchange = false;
+    await nextTick();
+    mounted.state.showExchange = true;
+    await flushPromises();
+    await nextTick();
+
+    expect(store.form.fromCurrency).toBe('CNY');
+    expect(store.form.toCurrency).toBe('USD');
+    expect(store.form.amount).toBe('123');
+    expect(store.quote).toBe(cachedQuote);
   });
 });

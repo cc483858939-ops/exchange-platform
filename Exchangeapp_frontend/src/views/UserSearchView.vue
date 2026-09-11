@@ -28,7 +28,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  watch,
+} from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -58,6 +67,8 @@ const {
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 let mounted = false;
+const searchViewActive = ref(true);
+let resumeOnActivation = false;
 let searchEntryVersion = 0;
 let restoredEntryVersion = -1;
 
@@ -68,21 +79,75 @@ const currentViewerID = computed(() => {
 });
 const disconnectObserver = () => { observer?.disconnect(); observer = null; };
 const updateObserver = async () => {
+  if (!mounted || !searchViewActive.value) {
+    disconnectObserver();
+    return;
+  }
   await nextTick();
+  if (!mounted || !searchViewActive.value) {
+    return;
+  }
   disconnectObserver();
   if (!query.value || !hasMore.value || loadingMore.value || loadMoreError.value || !sentinelRef.value || !('IntersectionObserver' in window)) return;
-  observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) void searchSession.loadMore(); }, { rootMargin: '240px 0px' });
+  observer = new IntersectionObserver((entries) => {
+    if (searchViewActive.value && entries.some((entry) => entry.isIntersecting)) {
+      void searchSession.loadMore();
+    }
+  }, { rootMargin: '240px 0px' });
   observer.observe(sentinelRef.value);
 };
 const restoreScrollOnce = async () => {
   const entryVersion = searchEntryVersion;
-  if (!mounted || restoredEntryVersion === entryVersion || !query.value || !loaded.value || initialLoading.value) return;
+  if (
+    !mounted
+    || !searchViewActive.value
+    || route.name !== 'UserSearch'
+    || restoredEntryVersion === entryVersion
+    || !query.value
+    || !loaded.value
+    || initialLoading.value
+  ) return;
   await nextTick();
-  if (!mounted || entryVersion !== searchEntryVersion || restoredEntryVersion === entryVersion) return;
+  if (
+    !mounted
+    || !searchViewActive.value
+    || route.name !== 'UserSearch'
+    || entryVersion !== searchEntryVersion
+    || restoredEntryVersion === entryVersion
+  ) return;
   if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
     window.scrollTo({ top: searchSession.scrollY, behavior: 'auto' });
   }
   restoredEntryVersion = entryVersion;
+};
+const restoreCachedSearchScroll = (targetScrollY: number) => {
+  if (
+    !mounted
+    || !searchViewActive.value
+    || route.name !== 'UserSearch'
+    || typeof window === 'undefined'
+    || typeof window.scrollTo !== 'function'
+  ) {
+    return;
+  }
+
+  window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+};
+const syncSearchRouteQuery = (nextQuery: string) => {
+  const changed = nextQuery !== query.value;
+
+  if (changed) {
+    searchEntryVersion += 1;
+    restoredEntryVersion = -1;
+  }
+
+  searchSession.activateQuery(nextQuery);
+
+  if (changed) {
+    void restoreScrollOnce();
+  }
+
+  return changed;
 };
 const submit = async () => {
   const submitted = normalizeSearchQuery(inputValue.value);
@@ -106,9 +171,11 @@ watch(currentViewerID, (nextID) => {
   searchSession.setViewer(nextID);
 }, { immediate: true });
 watch(routeQuery, (nextQuery) => {
-  searchEntryVersion += 1;
-  searchSession.activateQuery(nextQuery);
-  void restoreScrollOnce();
+  if (!searchViewActive.value || route.name !== 'UserSearch') {
+    return;
+  }
+
+  syncSearchRouteQuery(nextQuery);
 }, { immediate: true });
 watch([loaded, initialLoading, initialError], () => { void restoreScrollOnce(); }, { flush: 'post' });
 watch([hasMore, loadingMore, loadMoreError, () => items.value.length], () => { void updateObserver(); }, { flush: 'post' });
@@ -116,9 +183,62 @@ onMounted(() => {
   mounted = true;
   void restoreScrollOnce();
 });
+onDeactivated(() => {
+  if (!searchViewActive.value) {
+    return;
+  }
+
+  if (typeof window !== 'undefined') {
+    searchSession.saveScroll(window.scrollY);
+  }
+
+  searchViewActive.value = false;
+  resumeOnActivation = true;
+  disconnectObserver();
+});
+onActivated(() => {
+  if (!resumeOnActivation) {
+    return;
+  }
+
+  resumeOnActivation = false;
+  searchViewActive.value = true;
+
+  if (route.name !== 'UserSearch') {
+    return;
+  }
+
+  const nextQuery = routeQuery.value;
+  const returningToSameQuery = nextQuery === query.value;
+  const cachedScrollY = returningToSameQuery ? searchSession.scrollY : null;
+
+  if (!returningToSameQuery) {
+    syncSearchRouteQuery(nextQuery);
+  }
+
+  void nextTick(() => {
+    if (
+      !mounted
+      || !searchViewActive.value
+      || route.name !== 'UserSearch'
+    ) {
+      return;
+    }
+
+    if (cachedScrollY !== null) {
+      restoreCachedSearchScroll(cachedScrollY);
+    }
+
+    void updateObserver();
+  });
+});
 onBeforeUnmount(() => {
   mounted = false;
-  if (typeof window !== 'undefined') searchSession.saveScroll(window.scrollY);
+  if (searchViewActive.value && typeof window !== 'undefined') {
+    searchSession.saveScroll(window.scrollY);
+  }
+  searchViewActive.value = false;
+  resumeOnActivation = false;
   disconnectObserver();
 });
 </script>

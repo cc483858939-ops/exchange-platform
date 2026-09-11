@@ -66,7 +66,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import {
   ElAlert,
@@ -96,14 +96,26 @@ const {
   quoteError,
 } = storeToRefs(exchangeSession);
 let mounted = false;
+const exchangeViewActive = ref(true);
+let resumeOnActivation = false;
 let exchangeEntryVersion = 0;
 let restoredEntryVersion = -1;
 
 const restoreScrollOnce = async () => {
   const entryVersion = exchangeEntryVersion;
-  if (!mounted || restoredEntryVersion === entryVersion || !loaded.value) return;
-  await Promise.resolve();
-  if (!mounted || entryVersion !== exchangeEntryVersion || restoredEntryVersion === entryVersion) return;
+  if (
+    !mounted
+    || !exchangeViewActive.value
+    || restoredEntryVersion === entryVersion
+    || !loaded.value
+  ) return;
+  await nextTick();
+  if (
+    !mounted
+    || !exchangeViewActive.value
+    || entryVersion !== exchangeEntryVersion
+    || restoredEntryVersion === entryVersion
+  ) return;
   if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
     window.scrollTo({ top: exchangeSession.scrollY, behavior: 'auto' });
   }
@@ -151,10 +163,50 @@ onMounted(() => {
   void restoreScrollOnce();
 });
 
+onDeactivated(() => {
+  if (!exchangeViewActive.value) {
+    return;
+  }
+
+  if (typeof window !== 'undefined') {
+    exchangeSession.saveScroll(window.scrollY);
+  }
+
+  exchangeViewActive.value = false;
+  resumeOnActivation = true;
+});
+
+onActivated(() => {
+  if (!resumeOnActivation) {
+    return;
+  }
+
+  resumeOnActivation = false;
+  exchangeViewActive.value = true;
+
+  const cachedScrollY = exchangeSession.scrollY;
+  void nextTick(() => {
+    if (
+      !mounted
+      || !exchangeViewActive.value
+      || typeof window === 'undefined'
+      || typeof window.scrollTo !== 'function'
+    ) {
+      return;
+    }
+
+    window.scrollTo({ top: cachedScrollY, behavior: 'auto' });
+  });
+});
+
 onBeforeUnmount(() => {
+  if (exchangeViewActive.value && typeof window !== 'undefined') {
+    exchangeSession.saveScroll(window.scrollY);
+  }
   mounted = false;
+  exchangeViewActive.value = false;
+  resumeOnActivation = false;
   exchangeEntryVersion += 1;
-  if (typeof window !== 'undefined') exchangeSession.saveScroll(window.scrollY);
 });
 </script>
 

@@ -1,12 +1,8 @@
 import type { RouterScrollBehavior } from 'vue-router';
+import { isViewOwnedScrollRoute } from './surfaceCachePolicy';
 
 export const routeScrollBehavior: RouterScrollBehavior = (to, from, savedPosition) => {
-  const returningToUserProfileFromPostDetail =
-    to.name === 'UserProfile'
-    && from.name === 'PostDetail'
-    && savedPosition !== null;
-
-  if (returningToUserProfileFromPostDetail) {
+  if (isViewOwnedScrollRoute(to)) {
     return false;
   }
 

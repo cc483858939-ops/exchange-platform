@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { defineComponent } from 'vue';
+import { defineComponent, reactive } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.vue';
 
 const mocks = vi.hoisted(() => ({
   initializePostViewTelemetry: vi.fn(),
+  authStore: null as any,
 }));
 
 vi.mock('./services/postViewTelemetry', () => ({
@@ -15,14 +16,22 @@ vi.mock('./services/postViewTelemetry', () => ({
 }));
 
 vi.mock('./store/auth', () => ({
-  useAuthStore: () => ({
-    currentIdentity: null,
-  }),
+  useAuthStore: () => mocks.authStore,
 }));
 
 const HomeProbe = defineComponent({
   name: 'HomeView',
   template: '<main data-home-marker><img data-home-image src="/avatar.webp" /></main>',
+});
+
+const ExchangeProbe = defineComponent({
+  name: 'LiveExchangeView',
+  template: '<main data-exchange-marker>Exchange</main>',
+});
+
+const NotificationsProbe = defineComponent({
+  name: 'NotificationsView',
+  template: '<main data-notifications-marker>Notifications</main>',
 });
 
 const PostDetailProbe = defineComponent({
@@ -46,13 +55,23 @@ const SearchProbe = defineComponent({
   template: '<main data-search-marker>Search</main>',
 });
 
+const TransientProbe = defineComponent({
+  name: 'TransientProbe',
+  template: '<main data-transient-marker>Transient</main>',
+});
+
 const createTestRouter = () => createRouter({
   history: createMemoryHistory(),
   routes: [
     { path: '/', name: 'Home', component: HomeProbe, meta: { layout: 'app' } },
+    { path: '/exchange', name: 'CurrencyExchange', component: ExchangeProbe, meta: { layout: 'app' } },
+    { path: '/notifications', name: 'Notifications', component: NotificationsProbe, meta: { layout: 'app' } },
     { path: '/posts/:id', name: 'PostDetail', component: PostDetailProbe, meta: { layout: 'app' } },
     { path: '/users/:id', name: 'UserProfile', component: UserProfileProbe, meta: { layout: 'app' } },
+    { path: '/users/:id/following', name: 'UserFollowing', component: TransientProbe, meta: { layout: 'app' } },
+    { path: '/users/:id/followers', name: 'UserFollowers', component: TransientProbe, meta: { layout: 'app' } },
     { path: '/search', name: 'UserSearch', component: SearchProbe, meta: { layout: 'app' } },
+    { path: '/history', name: 'History', component: TransientProbe, meta: { layout: 'app' } },
   ],
 });
 
@@ -77,48 +96,68 @@ const mountApp = async (initialPath = '/') => {
   return { router, wrapper };
 };
 
-describe('App Home cache scope', () => {
+describe('App root and external surface caches', () => {
   beforeEach(() => {
     mocks.initializePostViewTelemetry.mockClear();
+    mocks.authStore = reactive({
+      isAuthenticated: true,
+      currentIdentity: { id: 7, username: 'viewer-7' },
+    });
   });
 
-  it('preserves the Home DOM identity across PostDetail navigation', async () => {
+  it.each([
+    ['Search', '/search', '[data-search-marker]'],
+    ['Exchange', '/exchange', '[data-exchange-marker]'],
+    ['Notifications', '/notifications', '[data-notifications-marker]'],
+    ['Own Profile', '/users/7', '[data-profile-marker]'],
+  ])('preserves Home DOM identity across Home → %s → Home', async (_label, path, marker) => {
     const { router, wrapper } = await mountApp();
-    const originalMarker = wrapper.find('[data-home-marker]').element;
+    const originalHome = wrapper.find('[data-home-marker]').element;
     const originalImage = wrapper.find('[data-home-image]').element;
 
-    await router.push('/posts/42');
+    await router.push(path);
     await settle();
-    expect(wrapper.find('[data-detail-marker]').exists()).toBe(true);
+    expect(wrapper.find(marker).exists()).toBe(true);
 
     await router.push('/');
     await settle();
 
-    expect(wrapper.find('[data-home-marker]').element).toBe(originalMarker);
+    expect(wrapper.find('[data-home-marker]').element).toBe(originalHome);
     expect(wrapper.find('[data-home-image]').element).toBe(originalImage);
     wrapper.unmount();
   });
 
-  it('does not keep Home cached when navigating through another app route', async () => {
-    const { router, wrapper } = await mountApp();
-    const originalMarker = wrapper.find('[data-home-marker]').element;
-
-    await router.push('/search');
-    await settle();
-    expect(wrapper.find('[data-search-marker]').exists()).toBe(true);
+  it('preserves own Profile DOM identity across Home navigation', async () => {
+    const { router, wrapper } = await mountApp('/users/7');
+    const originalProfile = wrapper.find('[data-profile-marker]').element;
+    const originalPost = wrapper.find('[data-profile-post]').element;
+    const originalImage = wrapper.find('[data-profile-image]').element;
 
     await router.push('/');
     await settle();
+    await router.push('/users/7');
+    await settle();
 
-    expect(wrapper.find('[data-home-marker]').element).not.toBe(originalMarker);
+    expect(wrapper.find('[data-profile-marker]').element).toBe(originalProfile);
+    expect(wrapper.find('[data-profile-post]').element).toBe(originalPost);
+    expect(wrapper.find('[data-profile-image]').element).toBe(originalImage);
     wrapper.unmount();
   });
-});
 
-describe('App return surface cache scope', () => {
-  it('preserves the Profile DOM identity across PostDetail navigation', async () => {
-    const { router, wrapper } = await mountApp('/users/7');
-    const originalMarker = wrapper.find('[data-profile-marker]').element;
+  it('keeps the same Search DOM when only its query changes', async () => {
+    const { router, wrapper } = await mountApp('/search?q=alice');
+    const originalSearch = wrapper.find('[data-search-marker]').element;
+
+    await router.push('/search?q=bob');
+    await settle();
+
+    expect(wrapper.find('[data-search-marker]').element).toBe(originalSearch);
+    wrapper.unmount();
+  });
+
+  it('keeps an external Profile through PostDetail and restores its DOM', async () => {
+    const { router, wrapper } = await mountApp('/users/8');
+    const originalProfile = wrapper.find('[data-profile-marker]').element;
     const originalPost = wrapper.find('[data-profile-post]').element;
     const originalImage = wrapper.find('[data-profile-image]').element;
 
@@ -126,48 +165,104 @@ describe('App return surface cache scope', () => {
     await settle();
     expect(wrapper.find('[data-detail-marker]').exists()).toBe(true);
 
-    await router.push('/users/7');
+    await router.push('/users/8');
     await settle();
 
-    expect(wrapper.find('[data-profile-marker]').element).toBe(originalMarker);
+    expect(wrapper.find('[data-profile-marker]').element).toBe(originalProfile);
     expect(wrapper.find('[data-profile-post]').element).toBe(originalPost);
     expect(wrapper.find('[data-profile-image]').element).toBe(originalImage);
     wrapper.unmount();
   });
 
-  it('does not keep Profile cached when navigating through another app route', async () => {
+  it('separates own and external Profile caches', async () => {
     const { router, wrapper } = await mountApp('/users/7');
-    const originalMarker = wrapper.find('[data-profile-marker]').element;
+    const ownProfile = wrapper.find('[data-profile-marker]').element;
 
-    await router.push('/search');
+    await router.push('/users/8');
     await settle();
-    expect(wrapper.find('[data-search-marker]').exists()).toBe(true);
+    const externalProfile = wrapper.find('[data-profile-marker]').element;
+    expect(externalProfile).not.toBe(ownProfile);
 
     await router.push('/users/7');
     await settle();
 
-    expect(wrapper.find('[data-profile-marker]').element).not.toBe(originalMarker);
+    expect(wrapper.find('[data-profile-marker]').element).toBe(ownProfile);
     wrapper.unmount();
   });
 
-  it('keeps only the active return surface with max one cache entry', async () => {
-    const { router, wrapper } = await mountApp('/');
-    const originalHomeMarker = wrapper.find('[data-home-marker]').element;
+  it('limits the external Profile cache to one entry', async () => {
+    const { router, wrapper } = await mountApp('/users/8');
+    const firstProfile = wrapper.find('[data-profile-marker]').element;
 
-    await router.push('/users/7');
+    await router.push('/users/9');
     await settle();
-    const originalProfileMarker = wrapper.find('[data-profile-marker]').element;
+    expect(wrapper.find('[data-profile-marker]').element).not.toBe(firstProfile);
 
-    await router.push('/posts/42');
-    await settle();
-    await router.push('/users/7');
+    await router.push('/users/8');
     await settle();
 
-    expect(wrapper.find('[data-profile-marker]').element).toBe(originalProfileMarker);
+    expect(wrapper.find('[data-profile-marker]').element).not.toBe(firstProfile);
+    wrapper.unmount();
+  });
+
+  it('releases the external Profile cache on root navigation', async () => {
+    const { router, wrapper } = await mountApp('/users/8');
+    const firstProfile = wrapper.find('[data-profile-marker]').element;
 
     await router.push('/');
     await settle();
-    expect(wrapper.find('[data-home-marker]').element).not.toBe(originalHomeMarker);
+    await router.push('/users/8');
+    await settle();
+
+    expect(wrapper.find('[data-profile-marker]').element).not.toBe(firstProfile);
+    wrapper.unmount();
+  });
+
+  it('destroys root DOM caches when the viewer namespace changes', async () => {
+    const { router, wrapper } = await mountApp();
+    const firstHome = wrapper.find('[data-home-marker]').element;
+
+    await router.push('/search');
+    await settle();
+    mocks.authStore.currentIdentity = { id: 8, username: 'viewer-8' };
+    await settle();
+    await router.push('/');
+    await settle();
+
+    expect(wrapper.find('[data-home-marker]').element).not.toBe(firstHome);
+    wrapper.unmount();
+  });
+
+  it('retains all five root surfaces within the root cache capacity', async () => {
+    const { router, wrapper } = await mountApp('/');
+    const original = new Map([
+      ['Home', wrapper.find('[data-home-marker]').element],
+    ]);
+
+    await router.push('/search');
+    await settle();
+    original.set('Search', wrapper.find('[data-search-marker]').element);
+    await router.push('/exchange');
+    await settle();
+    original.set('Exchange', wrapper.find('[data-exchange-marker]').element);
+    await router.push('/notifications');
+    await settle();
+    original.set('Notifications', wrapper.find('[data-notifications-marker]').element);
+    await router.push('/users/7');
+    await settle();
+    original.set('Profile', wrapper.find('[data-profile-marker]').element);
+
+    for (const [path, selector, key] of [
+      ['/', '[data-home-marker]', 'Home'],
+      ['/search', '[data-search-marker]', 'Search'],
+      ['/exchange', '[data-exchange-marker]', 'Exchange'],
+      ['/notifications', '[data-notifications-marker]', 'Notifications'],
+      ['/users/7', '[data-profile-marker]', 'Profile'],
+    ] as const) {
+      await router.push(path);
+      await settle();
+      expect(wrapper.find(selector).element).toBe(original.get(key));
+    }
     wrapper.unmount();
   });
 });

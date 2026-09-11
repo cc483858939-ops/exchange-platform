@@ -80,7 +80,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  watch,
+} from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
@@ -107,6 +116,8 @@ const sentinel = ref<HTMLElement | null>(null);
 const observerAvailable = ref(typeof IntersectionObserver !== 'undefined');
 let observer: IntersectionObserver | null = null;
 let mounted = false;
+const notificationsViewActive = ref(true);
+let resumeOnActivation = false;
 let notificationEntryVersion = 0;
 let restoredEntryVersion = -1;
 
@@ -123,15 +134,23 @@ const disconnectObserver = () => {
 
 const setupObserver = async () => {
   disconnectObserver();
-  if (!observerAvailable.value || !nextCursor.value || !sentinel.value || notificationStore.listStale || notificationStore.revalidating) {
+  if (!mounted || !notificationsViewActive.value) {
     return;
   }
   await nextTick();
-  if (!sentinel.value) {
+  if (
+    !mounted
+    || !notificationsViewActive.value
+    || !observerAvailable.value
+    || !nextCursor.value
+    || !sentinel.value
+    || notificationStore.listStale
+    || notificationStore.revalidating
+  ) {
     return;
   }
   observer = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) {
+    if (notificationsViewActive.value && entries.some((entry) => entry.isIntersecting)) {
       void notificationStore.loadMore();
     }
   }, { rootMargin: '240px 0px' });
@@ -143,11 +162,22 @@ const loadMore = () => { void notificationStore.loadMore(); };
 
 const restoreScrollOnce = async () => {
   const entryVersion = notificationEntryVersion;
-  if (!mounted || restoredEntryVersion === entryVersion || !loaded.value || loading.value) {
+  if (
+    !mounted
+    || !notificationsViewActive.value
+    || restoredEntryVersion === entryVersion
+    || !loaded.value
+    || loading.value
+  ) {
     return;
   }
   await nextTick();
-  if (!mounted || entryVersion !== notificationEntryVersion || restoredEntryVersion === entryVersion) {
+  if (
+    !mounted
+    || !notificationsViewActive.value
+    || entryVersion !== notificationEntryVersion
+    || restoredEntryVersion === entryVersion
+  ) {
     return;
   }
   if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
@@ -185,7 +215,10 @@ const formatActivityAt = (value: string) => {
 
 watch(currentViewerID, () => {
   notificationEntryVersion += 1;
-  void notificationStore.loadInitial();
+  restoredEntryVersion = -1;
+  if (notificationsViewActive.value) {
+    void notificationStore.loadInitial();
+  }
 }, { immediate: true });
 watch([loaded, loading, error], () => { void restoreScrollOnce(); }, { flush: 'post' });
 watch([
@@ -202,9 +235,56 @@ onMounted(() => {
   void restoreScrollOnce();
 });
 
+onDeactivated(() => {
+  if (!notificationsViewActive.value) {
+    return;
+  }
+
+  if (typeof window !== 'undefined') {
+    notificationStore.saveScroll(window.scrollY);
+  }
+
+  notificationsViewActive.value = false;
+  resumeOnActivation = true;
+  disconnectObserver();
+});
+
+onActivated(() => {
+  if (!resumeOnActivation) {
+    return;
+  }
+
+  resumeOnActivation = false;
+  notificationsViewActive.value = true;
+
+  const cachedScrollY = notificationStore.scrollY;
+  void notificationStore.loadInitial();
+
+  void nextTick(() => {
+    if (!mounted || !notificationsViewActive.value) {
+      return;
+    }
+
+    if (
+      loaded.value
+      && !loading.value
+      && typeof window !== 'undefined'
+      && typeof window.scrollTo === 'function'
+    ) {
+      window.scrollTo({ top: cachedScrollY, behavior: 'auto' });
+    }
+
+    void setupObserver();
+  });
+});
+
 onBeforeUnmount(() => {
+  if (notificationsViewActive.value && typeof window !== 'undefined') {
+    notificationStore.saveScroll(window.scrollY);
+  }
   mounted = false;
-  if (typeof window !== 'undefined') notificationStore.saveScroll(window.scrollY);
+  notificationsViewActive.value = false;
+  resumeOnActivation = false;
   disconnectObserver();
 });
 </script>

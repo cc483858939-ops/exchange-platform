@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
-import { reactive } from 'vue';
+import { defineComponent, h, KeepAlive, nextTick, reactive } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import NotificationsView from './NotificationsView.vue';
 import { useNotificationStore } from '../store/notification';
@@ -71,6 +71,50 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
+class TestIntersectionObserver {
+  static instances: TestIntersectionObserver[] = [];
+  readonly observe = vi.fn();
+  readonly disconnect = vi.fn();
+  private readonly callback: IntersectionObserverCallback;
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+    TestIntersectionObserver.instances.push(this);
+  }
+
+  trigger(isIntersecting = true) {
+    this.callback(
+      [{ isIntersecting } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
+
+const setScrollY = (value: number) => {
+  Object.defineProperty(window, 'scrollY', { configurable: true, value });
+};
+
+const mountKeepAliveView = () => {
+  const state = reactive({ showNotifications: true });
+  const Host = defineComponent({
+    setup() {
+      return () => h(KeepAlive, { max: 1 }, {
+        default: () => (state.showNotifications ? h(NotificationsView) : null),
+      });
+    },
+  });
+  return {
+    state,
+    wrapper: mount(Host, {
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>' },
+        },
+      },
+    }),
+  };
+};
+
 describe('NotificationsView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -86,6 +130,7 @@ describe('NotificationsView', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('does not request notifications while unauthenticated', async () => {
@@ -176,6 +221,93 @@ describe('NotificationsView', () => {
     await request;
     expect(store.listStale).toBe(false);
     expect(store.items.map(item => item.id)).toEqual([2, 1]);
+    wrapper.unmount();
+  });
+
+  it('saves scroll and disconnects the observer on deactivation', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+    TestIntersectionObserver.instances = [];
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: 'cursor-1' });
+    const { state, wrapper } = mountKeepAliveView();
+    const store = useNotificationStore();
+    await flushPromises();
+    await nextTick();
+    expect(TestIntersectionObserver.instances).toHaveLength(1);
+    expect(useNotificationStore().nextCursor).toBe('cursor-1');
+    const initialObserver = TestIntersectionObserver.instances[0];
+
+    setScrollY(1800);
+    state.showNotifications = false;
+    await nextTick();
+
+    expect(store.scrollY).toBe(1800);
+    expect(initialObserver.disconnect).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('does not recreate the observer or restore scroll while hidden', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+    TestIntersectionObserver.instances = [];
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: 'cursor-1' });
+    const { state, wrapper } = mountKeepAliveView();
+    const store = useNotificationStore();
+    await flushPromises();
+    await nextTick();
+    const initialObserver = TestIntersectionObserver.instances[0];
+    state.showNotifications = false;
+    await nextTick();
+    setScrollY(300);
+    vi.mocked(window.scrollTo).mockClear();
+
+    store.items = [...store.items, notification(2)];
+    store.nextCursor = 'cursor-2';
+    await nextTick();
+    initialObserver.trigger();
+
+    expect(TestIntersectionObserver.instances).toHaveLength(1);
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('restores notification scroll and resumes the observer on activation', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+    TestIntersectionObserver.instances = [];
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: 'cursor-1' });
+    const { state, wrapper } = mountKeepAliveView();
+    await flushPromises();
+    await nextTick();
+    expect(TestIntersectionObserver.instances).toHaveLength(1);
+    vi.mocked(window.scrollTo).mockClear();
+    setScrollY(1800);
+    state.showNotifications = false;
+    await nextTick();
+    setScrollY(300);
+
+    state.showNotifications = true;
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+    expect(useNotificationStore().nextCursor).toBe('cursor-1');
+    expect(wrapper.find('.notifications-page__sentinel').exists()).toBe(true);
+    expect(useNotificationStore().listStale).toBe(false);
+    expect(useNotificationStore().revalidating).toBe(false);
+    expect(useNotificationStore().loadingMore).toBe(false);
+    expect(useNotificationStore().loadMoreError).toBeNull();
+
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 1800, behavior: 'auto' });
+    expect(TestIntersectionObserver.instances.length).toBeGreaterThanOrEqual(2);
     wrapper.unmount();
   });
 });
