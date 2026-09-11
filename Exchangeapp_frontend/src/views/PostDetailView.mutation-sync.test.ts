@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
 import PostDetailView from './PostDetailView.vue';
 import type { Post } from '../types/Post';
@@ -173,8 +173,14 @@ const mountDetail = () => mount(PostDetailView, {
 });
 
 describe('PostDetailView mutation synchronization', () => {
+  let originalHistoryState: unknown;
+  let originalHistoryURL = '';
+
   beforeEach(() => {
     vi.clearAllMocks();
+    originalHistoryState = window.history.state;
+    originalHistoryURL = window.location.href;
+    window.history.replaceState({ back: null }, '', originalHistoryURL);
     mocks.getPostById.mockResolvedValue(post);
     mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
     mocks.getPostRepostState.mockResolvedValue({ reposts: 0, reposted: false });
@@ -190,6 +196,10 @@ describe('PostDetailView mutation synchronization', () => {
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.deletePost.mockResolvedValue(undefined);
     mocks.feedStore.markPostDeleted.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    window.history.replaceState(originalHistoryState, '', originalHistoryURL);
   });
 
   it('syncs a successful Detail like but not a failed like', async () => {
@@ -261,6 +271,7 @@ describe('PostDetailView mutation synchronization', () => {
     ['terminal 404', { response: { status: 404 } }],
   ])('syncs Detail deletion before navigation on %s', async (_label, error) => {
     if (error) mocks.deletePost.mockRejectedValueOnce(error);
+    window.history.replaceState({ back: '/history' }, '', window.location.href);
     const mounted = mountDetail();
     await flushPromises();
     await mounted.find('.post-detail__delete').trigger('click');
@@ -273,15 +284,52 @@ describe('PostDetailView mutation synchronization', () => {
 
     expect(mocks.feedStore.markPostDeleted).toHaveBeenCalledWith(42, 7);
     expect(mocks.externalRemoval).toHaveBeenCalledWith(42);
+    expect(mocks.router.back).toHaveBeenCalledTimes(1);
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+    expect(mocks.feedStore.markPostDeleted.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.externalRemoval.mock.invocationCallOrder[0]);
+    expect(mocks.externalRemoval.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.router.back.mock.invocationCallOrder[0]);
+    expect(mounted.find('.test-confirm-dialog').exists()).toBe(false);
+    mounted.unmount();
+  });
+
+  it.each([
+    '/',
+    '/history',
+    '/users/7',
+    '/notifications',
+  ])('returns to the previous app entry after deleting from %s', async back => {
+    window.history.replaceState({ back }, '', window.location.href);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.post-detail__delete').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mocks.router.back).toHaveBeenCalledTimes(1);
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+    expect(mocks.externalRemoval).toHaveBeenCalledTimes(1);
+    expect(mocks.externalRemoval.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.router.back.mock.invocationCallOrder[0]);
+    mounted.unmount();
+  });
+
+  it.each([null, '', '   '])('falls back to Own Profile without a valid back target: %s', async back => {
+    window.history.replaceState({ back }, '', window.location.href);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.find('.post-detail__delete').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mocks.router.back).not.toHaveBeenCalled();
     expect(mocks.router.replace).toHaveBeenCalledWith({
       name: 'UserProfile',
       params: { id: '7' },
     });
-    expect(mocks.feedStore.markPostDeleted.mock.invocationCallOrder[0])
-      .toBeLessThan(mocks.externalRemoval.mock.invocationCallOrder[0]);
-    expect(mocks.externalRemoval.mock.invocationCallOrder[0])
-      .toBeLessThan(mocks.router.replace.mock.invocationCallOrder[0]);
-    expect(mounted.find('.test-confirm-dialog').exists()).toBe(false);
     mounted.unmount();
   });
 
@@ -321,6 +369,7 @@ describe('PostDetailView mutation synchronization', () => {
     expect(mounted.find('.detail-inline-error').exists()).toBe(false);
     expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
     expect(mocks.externalRemoval).not.toHaveBeenCalled();
+    expect(mocks.router.back).not.toHaveBeenCalled();
     expect(mocks.router.replace).not.toHaveBeenCalled();
   });
 
@@ -336,6 +385,8 @@ describe('PostDetailView mutation synchronization', () => {
     expect(mounted.find('.test-confirm-error').text())
       .toBe('You can only delete your own posts.');
     expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
+    expect(mocks.router.back).not.toHaveBeenCalled();
+    expect(mocks.router.replace).not.toHaveBeenCalled();
   });
 
   it('blocks repeated Post deletion requests while the confirmation is busy', async () => {

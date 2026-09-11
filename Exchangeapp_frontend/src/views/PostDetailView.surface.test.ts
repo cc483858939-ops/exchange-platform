@@ -232,9 +232,14 @@ const mountDetail = () => mount(PostDetailView, {
 
 describe('PostDetailView post-first surface', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
+  let originalHistoryState: unknown;
+  let originalHistoryURL = '';
 
   beforeEach(() => {
     vi.clearAllMocks();
+    originalHistoryState = window.history.state;
+    originalHistoryURL = window.location.href;
+    window.history.replaceState({ back: null }, '', originalHistoryURL);
     mocks.route = reactive({
       params: { id: '42' },
       query: {},
@@ -265,6 +270,29 @@ describe('PostDetailView post-first surface', () => {
   afterEach(() => {
     wrapper?.unmount();
     wrapper = null;
+    window.history.replaceState(originalHistoryState, '', originalHistoryURL);
+  });
+
+  it('uses router Back when an in-app history entry exists', async () => {
+    window.history.replaceState({ back: '/history' }, '', window.location.href);
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.detail-header__back').trigger('click');
+
+    expect(mocks.router.back).toHaveBeenCalledTimes(1);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it.each([null, '', '   '])('falls back Home when no valid history entry exists: %s', async back => {
+    window.history.replaceState({ back }, '', window.location.href);
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.detail-header__back').trigger('click');
+
+    expect(mocks.router.back).not.toHaveBeenCalled();
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'Home' });
   });
 
   it('renders one Post heading and a continuous conversation surface', async () => {

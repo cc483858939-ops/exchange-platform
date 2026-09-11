@@ -148,7 +148,7 @@ const requestQuote = async () => {
 
 const swapCurrencies = async () => {
   const shouldRefreshQuote = exchangeSession.swapCurrencies();
-  if (shouldRefreshQuote || !isValidAmount(form.value.amount)) {
+  if (shouldRefreshQuote) {
     await requestQuote();
   }
 };

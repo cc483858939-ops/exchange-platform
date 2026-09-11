@@ -885,6 +885,28 @@ const resetPostState = () => {
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
+const hasHistoryBackTarget = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const historyState = window.history.state as { back?: unknown } | null;
+  return typeof historyState?.back === 'string'
+    && historyState.back.trim().length > 0;
+};
+
+const navigateAfterPostDeletion = (viewerID: number) => {
+  if (hasHistoryBackTarget()) {
+    router.back();
+    return;
+  }
+
+  void router.replace({
+    name: 'UserProfile',
+    params: { id: String(viewerID) },
+  });
+};
+
 const requestDeletePost = () => {
   if (
     !post.value
@@ -946,10 +968,7 @@ const confirmDeletePost = async () => {
     deletePostConfirmOpen.value = false;
     deletePending.value = false;
     deleteError.value = '';
-    void router.replace({
-      name: 'UserProfile',
-      params: { id: String(viewerID) },
-    });
+    navigateAfterPostDeletion(viewerID);
     return true;
   };
 
@@ -1508,8 +1527,7 @@ const retryPost = () => {
 };
 
 const goBack = () => {
-  const historyState = window.history.state as { back?: string | null } | null;
-  if (historyState?.back) {
+  if (hasHistoryBackTarget()) {
     router.back();
     return;
   }

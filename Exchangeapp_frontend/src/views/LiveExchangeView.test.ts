@@ -334,12 +334,15 @@ describe('LiveExchangeView', () => {
     await flushPromises();
     await wrapper.get('input').setValue(amount);
     mocks.get.mockClear();
+    const store = useExchangeSessionStore();
 
     await wrapper.find('.swap-button').trigger('click');
     await flushPromises();
 
     expect(mocks.get).not.toHaveBeenCalled();
-    expect(ElMessage.error).toHaveBeenCalledWith('Enter an amount greater than zero.');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    expect(store.form.fromCurrency).toBe('USD');
+    expect(store.form.toCurrency).toBe('CNY');
   });
 
   it('uses English stale-market copy and warning', async () => {
