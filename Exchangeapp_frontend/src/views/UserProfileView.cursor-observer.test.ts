@@ -303,6 +303,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     FakeIntersectionObserver.instances.length = 0;
     mocks.route.name = 'UserProfile';
     mocks.setRouteID('7');
+    document.title = 'Exchange';
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
     mocks.getUserTimeline.mockResolvedValue({ items: [], next_cursor: null });
@@ -457,6 +458,58 @@ describe('UserProfileView observer and cursor concurrency', () => {
     expect(ensureSession.mock.calls.some(([id]) => id === 9999)).toBe(false);
   });
 
+  it('does not overwrite Profile 7 scroll when PostDetail is followed by Profile 8', async () => {
+    const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
+    const profileStore = useProfileSessionStore();
+    const first = profileStore.ensureSession(7)!;
+    first.user = profile(7);
+    first.profileLoaded = true;
+    first.timelineLoaded = true;
+    first.timelineItems = [profileTimelineItem(1, 7)];
+    first.loadedActivityKeys.add('post:1');
+    first.scrollY = 900;
+
+    const { wrapper, state } = mountKeepAliveProfile();
+    mountedViews.push(wrapper);
+
+    try {
+      await settle();
+      Object.defineProperty(window, 'scrollY', {
+        configurable: true,
+        writable: true,
+        value: 1480,
+      });
+
+      state.showProfile = false;
+      await nextTick();
+      expect(first.scrollY).toBe(1480);
+
+      mocks.route.name = 'PostDetail';
+      mocks.setRouteID('9999');
+      await settle();
+      Object.defineProperty(window, 'scrollY', {
+        configurable: true,
+        writable: true,
+        value: 320,
+      });
+
+      mocks.route.name = 'UserProfile';
+      mocks.setRouteID('8');
+      state.showProfile = true;
+      await settle();
+
+      expect(first.scrollY).toBe(1480);
+      expect(mocks.getUser).toHaveBeenCalledWith('8');
+      expect(wrapper.text()).toContain('User 8');
+    } finally {
+      if (scrollYDescriptor) {
+        Object.defineProperty(window, 'scrollY', scrollYDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'scrollY');
+      }
+    }
+  });
+
   it('pauses and resumes the cached Profile without a second component scroll restoration', async () => {
     const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
     const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
@@ -521,6 +574,15 @@ describe('UserProfileView observer and cursor concurrency', () => {
       expect(scrollTo).toHaveBeenCalledTimes(1);
       expect(mocks.getUser).toHaveBeenCalledTimes(userCallsBeforeActivation);
       expect(mocks.getUserTimeline).toHaveBeenCalledTimes(timelineCallsBeforeActivation);
+
+      Object.defineProperty(window, 'scrollY', {
+        configurable: true,
+        writable: true,
+        value: 1234,
+      });
+      mocks.setRouteID('8');
+      await settle();
+      expect(session.scrollY).toBe(1234);
     } finally {
       scrollTo.mockRestore();
       if (userAgentDescriptor) {
@@ -531,6 +593,38 @@ describe('UserProfileView observer and cursor concurrency', () => {
       } else {
         Reflect.deleteProperty(window, 'scrollY');
       }
+    }
+  });
+
+  it('does not let a hidden Profile overwrite the active Post title', async () => {
+    const profileStore = useProfileSessionStore();
+    const session = profileStore.ensureSession(7)!;
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const { wrapper, state } = mountKeepAliveProfile();
+    mountedViews.push(wrapper);
+
+    try {
+      await settle();
+      expect(document.title).toBe('@user-7 — Exchange');
+
+      state.showProfile = false;
+      await nextTick();
+      mocks.route.name = 'PostDetail';
+      mocks.setRouteID('9999');
+      await settle();
+      document.title = 'Post — Exchange';
+
+      session.user = { ...session.user!, username: 'hidden-user' };
+      await settle();
+      expect(document.title).toBe('Post — Exchange');
+
+      mocks.route.name = 'UserProfile';
+      mocks.setRouteID('7');
+      state.showProfile = true;
+      await settle();
+      expect(document.title).toBe('@hidden-user — Exchange');
+    } finally {
+      scrollTo.mockRestore();
     }
   });
 
@@ -551,7 +645,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     first.user = profile(7);
     first.profileLoaded = true;
     first.timelineLoaded = true;
-    first.scrollY = 400;
+    first.scrollY = 111;
     const second = profileStore.ensureSession(8)!;
     second.user = profile(8);
     second.profileLoaded = true;
@@ -561,7 +655,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     const mounted = mountProfile();
     mountedViews.push(mounted);
     await settle();
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: 400, behavior: 'auto' });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 111, behavior: 'auto' });
 
     mocks.setRouteID('8');
     await settle();

@@ -400,6 +400,7 @@ const readProfileRouteID = () => (
 const profileRouteID = ref(readProfileRouteID());
 const profileViewActive = ref(true);
 let resumeOnActivation = false;
+let scrollSavedOnDeactivationForProfileID: number | null = null;
 
 const userId = computed(() => profileRouteID.value);
 const numericUserID = computed(() => {
@@ -476,7 +477,7 @@ const profilePageTitle = computed(() => {
     : '';
   return username ? `@${username}` : 'Profile';
 });
-usePageTitle(profilePageTitle);
+usePageTitle(profilePageTitle, profileViewActive);
 const joinedLabel = computed(() => {
   const value = user.value?.created_at;
   if (!value) return '';
@@ -892,8 +893,12 @@ const deactivateProfileView = () => {
     return;
   }
 
-  if (numericUserID.value !== null) {
-    saveCurrentScroll(numericUserID.value);
+  const currentProfileID = numericUserID.value;
+  if (currentProfileID !== null) {
+    saveCurrentScroll(currentProfileID);
+    scrollSavedOnDeactivationForProfileID = currentProfileID;
+  } else {
+    scrollSavedOnDeactivationForProfileID = null;
   }
 
   profileViewActive.value = false;
@@ -910,6 +915,11 @@ const activateProfileView = () => {
 
   resumeOnActivation = false;
   profileViewActive.value = true;
+
+  const nextProfileRouteID = readProfileRouteID();
+  if (nextProfileRouteID === profileRouteID.value) {
+    scrollSavedOnDeactivationForProfileID = null;
+  }
 
   syncProfileRouteID();
 
@@ -935,7 +945,14 @@ watch(userId, (nextID, previousID) => {
   profileEntryVersion += 1;
   const previousNumericID = Number(previousID);
   if (Number.isSafeInteger(previousNumericID) && previousNumericID > 0) {
-    saveCurrentScroll(previousNumericID);
+    const previousScrollAlreadySaved =
+      scrollSavedOnDeactivationForProfileID === previousNumericID;
+    if (!previousScrollAlreadySaved) {
+      saveCurrentScroll(previousNumericID);
+    }
+    if (previousScrollAlreadySaved) {
+      scrollSavedOnDeactivationForProfileID = null;
+    }
     profileStore.cancelPendingDeletesForProfile(previousNumericID);
   }
   invalidProfileError.value = '';
@@ -991,6 +1008,7 @@ onBeforeUnmount(() => {
   }
   profileViewActive.value = false;
   resumeOnActivation = false;
+  scrollSavedOnDeactivationForProfileID = null;
   forceCloseEditProfile();
   disconnectObserver();
 });
