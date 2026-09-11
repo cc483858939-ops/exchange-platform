@@ -51,6 +51,17 @@ export const getExternalProfileCacheKey = (
   return `external-profile:${profileID}`;
 };
 
+export const getHistoryReturnCacheKey = (
+  route: RouteLocationNormalizedLoaded,
+  viewerID: number | null,
+): string | null => {
+  if (route.name !== 'History' || viewerID === null) {
+    return null;
+  }
+
+  return `history:${viewerID}`;
+};
+
 export const shouldPreserveExternalProfileCache = (
   route: RouteLocationNormalizedLoaded,
   viewerID: number | null,
@@ -66,6 +77,13 @@ export const shouldPreserveExternalProfileCache = (
   );
 };
 
+export const shouldPreserveHistoryReturnCache = (
+  route: RouteLocationNormalizedLoaded,
+): boolean => (
+  route.name === 'History'
+  || route.name === 'PostDetail'
+);
+
 export const isViewOwnedScrollRoute = (
   route: RouteLocationNormalizedLoaded,
 ): boolean => (
@@ -74,4 +92,5 @@ export const isViewOwnedScrollRoute = (
   || route.name === 'CurrencyExchange'
   || route.name === 'Notifications'
   || route.name === 'UserProfile'
+  || route.name === 'History'
 );

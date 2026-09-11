@@ -44,6 +44,7 @@ vi.mock('../store/sessionSync', () => ({
 }));
 
 vi.mock('vue-router', () => ({
+  useRoute: () => ({ name: 'History' }),
   useRouter: () => mocks.router,
 }));
 

@@ -39,6 +39,17 @@ const PostDetailProbe = defineComponent({
   template: '<main data-detail-marker>Detail</main>',
 });
 
+const HistoryProbe = defineComponent({
+  name: 'HistoryView',
+  template: `
+    <main data-history-marker>
+      <article data-history-post>
+        <img data-history-image src="/history.webp" />
+      </article>
+    </main>
+  `,
+});
+
 const UserProfileProbe = defineComponent({
   name: 'UserProfileView',
   template: `
@@ -71,7 +82,7 @@ const createTestRouter = () => createRouter({
     { path: '/users/:id/following', name: 'UserFollowing', component: TransientProbe, meta: { layout: 'app' } },
     { path: '/users/:id/followers', name: 'UserFollowers', component: TransientProbe, meta: { layout: 'app' } },
     { path: '/search', name: 'UserSearch', component: SearchProbe, meta: { layout: 'app' } },
-    { path: '/history', name: 'History', component: TransientProbe, meta: { layout: 'app' } },
+    { path: '/history', name: 'History', component: HistoryProbe, meta: { layout: 'app' } },
   ],
 });
 
@@ -217,6 +228,53 @@ describe('App root and external surface caches', () => {
     await settle();
 
     expect(wrapper.find('[data-profile-marker]').element).toBe(originalProfile);
+    wrapper.unmount();
+  });
+
+  it('preserves History DOM through PostDetail and restores its presentation', async () => {
+    const { router, wrapper } = await mountApp('/history');
+    const originalHistory = wrapper.find('[data-history-marker]').element;
+    const originalPost = wrapper.find('[data-history-post]').element;
+    const originalImage = wrapper.find('[data-history-image]').element;
+
+    await router.push('/posts/42');
+    await settle();
+    expect(wrapper.find('[data-detail-marker]').exists()).toBe(true);
+
+    await router.push('/history');
+    await settle();
+
+    expect(wrapper.find('[data-history-marker]').element).toBe(originalHistory);
+    expect(wrapper.find('[data-history-post]').element).toBe(originalPost);
+    expect(wrapper.find('[data-history-image]').element).toBe(originalImage);
+    wrapper.unmount();
+  });
+
+  it('releases the History cache when navigating to Home', async () => {
+    const { router, wrapper } = await mountApp('/history');
+    const originalHistory = wrapper.find('[data-history-marker]').element;
+
+    await router.push('/');
+    await settle();
+    await router.push('/history');
+    await settle();
+
+    expect(wrapper.find('[data-history-marker]').element).not.toBe(originalHistory);
+    wrapper.unmount();
+  });
+
+  it('isolates the History cache by viewer namespace', async () => {
+    const { router, wrapper } = await mountApp('/history');
+    const viewerSevenHistory = wrapper.find('[data-history-marker]').element;
+
+    await router.push('/posts/42');
+    await settle();
+    mocks.authStore.currentIdentity = { id: 8, username: 'viewer-8' };
+    await settle();
+    await router.push('/history');
+    await settle();
+
+    expect(wrapper.find('[data-history-marker]').element).not.toBe(viewerSevenHistory);
     wrapper.unmount();
   });
 

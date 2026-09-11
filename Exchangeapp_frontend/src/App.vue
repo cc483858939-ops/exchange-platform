@@ -23,8 +23,19 @@
           :key="externalProfileCacheKey"
         />
       </KeepAlive>
+      <KeepAlive
+        v-if="preserveHistoryReturnCache"
+        :key="`history:${viewerCacheNamespace}`"
+        :max="1"
+      >
+        <component
+          v-if="historyReturnCacheKey"
+          :is="Component"
+          :key="historyReturnCacheKey"
+        />
+      </KeepAlive>
       <component
-        v-if="!rootSurfaceCacheKey && !externalProfileCacheKey"
+        v-if="!rootSurfaceCacheKey && !externalProfileCacheKey && !historyReturnCacheKey"
         :is="Component"
       />
     </AppShell>
@@ -37,9 +48,11 @@ import { useRoute } from 'vue-router';
 import AppShell from './components/layout/AppShell.vue';
 import {
   getExternalProfileCacheKey,
+  getHistoryReturnCacheKey,
   getRootSurfaceCacheKey,
   getViewerCacheNamespace,
   shouldPreserveExternalProfileCache,
+  shouldPreserveHistoryReturnCache,
 } from './router/surfaceCachePolicy';
 import { initializePostViewTelemetry } from './services/postViewTelemetry';
 import { useAuthStore } from './store/auth';
@@ -58,9 +71,11 @@ const currentViewerID = computed(() => {
 const viewerCacheNamespace = computed(() => getViewerCacheNamespace(currentViewerID.value));
 const rootSurfaceCacheKey = computed(() => getRootSurfaceCacheKey(route, currentViewerID.value));
 const externalProfileCacheKey = computed(() => getExternalProfileCacheKey(route, currentViewerID.value));
+const historyReturnCacheKey = computed(() => getHistoryReturnCacheKey(route, currentViewerID.value));
 const preserveExternalProfileCache = computed(() => (
   shouldPreserveExternalProfileCache(route, currentViewerID.value)
 ));
+const preserveHistoryReturnCache = computed(() => shouldPreserveHistoryReturnCache(route));
 
 initializePostViewTelemetry(() => {
   const id = authStore.currentIdentity?.id;

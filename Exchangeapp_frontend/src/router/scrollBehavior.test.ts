@@ -68,6 +68,7 @@ describe('routeScrollBehavior', () => {
     ['CurrencyExchange', {}],
     ['Notifications', {}],
     ['UserProfile', { id: '7' }],
+    ['History', {}],
   ])('lets %s own scroll restoration even when savedPosition exists', (routeName, params) => {
     const savedPosition = { left: 12, top: 2200 };
 

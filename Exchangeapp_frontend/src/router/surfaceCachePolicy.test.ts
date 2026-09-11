@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { RouteLocationNormalizedLoaded } from 'vue-router';
 import {
   getExternalProfileCacheKey,
+  getHistoryReturnCacheKey,
   getRootSurfaceCacheKey,
   getViewerCacheNamespace,
   isViewOwnedScrollRoute,
   shouldPreserveExternalProfileCache,
+  shouldPreserveHistoryReturnCache,
 } from './surfaceCachePolicy';
 
 const location = (
@@ -54,7 +56,13 @@ describe('surface cache policy', () => {
   it('returns no cache component key for transient routes', () => {
     expect(getRootSurfaceCacheKey(location('PostDetail', { id: '42' }), 7)).toBeNull();
     expect(getExternalProfileCacheKey(location('PostDetail', { id: '42' }), 7)).toBeNull();
+    expect(getHistoryReturnCacheKey(location('PostDetail', { id: '42' }), 7)).toBeNull();
     expect(getRootSurfaceCacheKey(location('History'), 7)).toBeNull();
+  });
+
+  it('keys authenticated History return caches by viewer and excludes anonymous users', () => {
+    expect(getHistoryReturnCacheKey(location('History'), 7)).toBe('history:7');
+    expect(getHistoryReturnCacheKey(location('History'), null)).toBeNull();
   });
 
   it('preserves external profile cache only through the profile return flow', () => {
@@ -72,6 +80,19 @@ describe('surface cache policy', () => {
     expect(shouldPreserveExternalProfileCache(location('Notifications'), 7)).toBe(false);
   });
 
+  it('preserves History return cache only through History and PostDetail', () => {
+    expect(shouldPreserveHistoryReturnCache(location('History'))).toBe(true);
+    expect(shouldPreserveHistoryReturnCache(location('PostDetail', { id: '42' }))).toBe(true);
+    expect(shouldPreserveHistoryReturnCache(location('Home'))).toBe(false);
+    expect(shouldPreserveHistoryReturnCache(location('UserSearch'))).toBe(false);
+    expect(shouldPreserveHistoryReturnCache(location('CurrencyExchange'))).toBe(false);
+    expect(shouldPreserveHistoryReturnCache(location('Notifications'))).toBe(false);
+    expect(shouldPreserveHistoryReturnCache(location('UserProfile', { id: '7' }))).toBe(false);
+    expect(shouldPreserveHistoryReturnCache(location('UserFollowing', { id: '8' }))).toBe(false);
+    expect(shouldPreserveHistoryReturnCache(location('UserFollowers', { id: '8' }))).toBe(false);
+    expect(shouldPreserveHistoryReturnCache(location('PostCreate'))).toBe(false);
+  });
+
   it('uses stable viewer namespaces', () => {
     expect(getViewerCacheNamespace(7)).toBe('viewer:7');
     expect(getViewerCacheNamespace(null)).toBe('anonymous');
@@ -83,11 +104,12 @@ describe('surface cache policy', () => {
     'CurrencyExchange',
     'Notifications',
     'UserProfile',
+    'History',
   ])('lets %s own scroll restoration', (name) => {
     expect(isViewOwnedScrollRoute(location(name))).toBe(true);
   });
 
-  it.each(['History', 'PostDetail', 'PostCreate', 'UserFollowing', 'UserFollowers'])
+  it.each(['PostDetail', 'PostCreate', 'UserFollowing', 'UserFollowers'])
     ('leaves %s to router scroll restoration', (name) => {
       expect(isViewOwnedScrollRoute(location(name))).toBe(false);
     });

@@ -83,13 +83,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  watch,
+} from 'vue';
 import { storeToRefs } from 'pinia';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import { useHistorySessionStore } from '../store/historySession';
 
+const route = useRoute();
 const router = useRouter();
 const historySession = useHistorySessionStore();
 const {
@@ -113,6 +123,8 @@ const historySentinelRef = ref<HTMLElement | null>(null);
 const skeletonPosts = [0, 1, 2];
 let observer: IntersectionObserver | null = null;
 let mounted = false;
+const historyViewActive = ref(true);
+let resumeOnActivation = false;
 let entryVersion = 0;
 let restoredEntryVersion = -1;
 
@@ -131,7 +143,25 @@ const disconnectObserver = () => {
 };
 
 const updateObserver = async () => {
+  if (
+    !mounted
+    || !historyViewActive.value
+    || route.name !== 'History'
+  ) {
+    disconnectObserver();
+    return;
+  }
+
   await nextTick();
+  if (
+    !mounted
+    || !historyViewActive.value
+    || route.name !== 'History'
+  ) {
+    disconnectObserver();
+    return;
+  }
+
   disconnectObserver();
   if (
     !historyIntersectionObserverAvailable
@@ -145,7 +175,11 @@ const updateObserver = async () => {
   ) return;
 
   observer = new IntersectionObserver((entries) => {
-    if (entries.some(entry => entry.isIntersecting)) {
+    if (
+      historyViewActive.value
+      && route.name === 'History'
+      && entries.some(entry => entry.isIntersecting)
+    ) {
       void historySession.loadMore();
     }
   }, { rootMargin: '240px 0px' });
@@ -156,6 +190,8 @@ const restoreScrollOnce = async () => {
   const capturedEntryVersion = entryVersion;
   if (
     !mounted
+    || !historyViewActive.value
+    || route.name !== 'History'
     || restoredEntryVersion === capturedEntryVersion
     || !loaded.value
     || initialLoading.value
@@ -163,6 +199,8 @@ const restoreScrollOnce = async () => {
   await nextTick();
   if (
     !mounted
+    || !historyViewActive.value
+    || route.name !== 'History'
     || capturedEntryVersion !== entryVersion
     || restoredEntryVersion === capturedEntryVersion
   ) return;
@@ -173,6 +211,20 @@ const restoreScrollOnce = async () => {
     window.scrollTo({ top: scrollY.value, behavior: 'auto' });
   }
   restoredEntryVersion = capturedEntryVersion;
+};
+
+const restoreCachedHistoryScroll = (targetScrollY: number) => {
+  if (
+    !mounted
+    || !historyViewActive.value
+    || route.name !== 'History'
+    || typeof window === 'undefined'
+    || typeof window.scrollTo !== 'function'
+  ) {
+    return;
+  }
+
+  window.scrollTo({ top: targetScrollY, behavior: 'auto' });
 };
 
 const retryInitial = () => { historySession.retryInitial(); };
@@ -195,7 +247,11 @@ watch(
   (nextViewerID) => {
     entryVersion += 1;
     restoredEntryVersion = -1;
-    if (nextViewerID !== null) {
+    if (
+      nextViewerID !== null
+      && historyViewActive.value
+      && route.name === 'History'
+    ) {
       void historySession.loadInitial();
     }
   },
@@ -211,6 +267,13 @@ watch([nextCursor, loadingMore, loadMoreError, () => historyPosts.value.length, 
 }, { flush: 'post' });
 
 watch([loaded, stale], ([isLoaded, isStale]) => {
+  if (
+    !historyViewActive.value
+    || route.name !== 'History'
+  ) {
+    return;
+  }
+
   if (isLoaded && isStale) {
     void historySession.revalidateHistory();
   }
@@ -221,9 +284,73 @@ onMounted(() => {
   void restoreScrollOnce();
 });
 
+onDeactivated(() => {
+  if (!historyViewActive.value) {
+    return;
+  }
+
+  if (typeof window !== 'undefined') {
+    historySession.saveScroll(window.scrollY);
+  }
+
+  historyViewActive.value = false;
+  resumeOnActivation = true;
+  disconnectObserver();
+});
+
+onActivated(() => {
+  if (!resumeOnActivation) {
+    return;
+  }
+
+  resumeOnActivation = false;
+  historyViewActive.value = true;
+
+  if (route.name !== 'History') {
+    return;
+  }
+
+  const cachedScrollY = historySession.scrollY;
+  const shouldRevalidate = loaded.value && stale.value;
+
+  void nextTick(async () => {
+    if (
+      !mounted
+      || !historyViewActive.value
+      || route.name !== 'History'
+    ) {
+      return;
+    }
+
+    restoreCachedHistoryScroll(cachedScrollY);
+    await updateObserver();
+
+    if (
+      !mounted
+      || !historyViewActive.value
+      || route.name !== 'History'
+    ) {
+      return;
+    }
+
+    if (shouldRevalidate) {
+      void historySession.revalidateHistory();
+    }
+  });
+});
+
 onBeforeUnmount(() => {
+  if (
+    historyViewActive.value
+    && route.name === 'History'
+    && typeof window !== 'undefined'
+  ) {
+    historySession.saveScroll(window.scrollY);
+  }
+
   mounted = false;
-  if (typeof window !== 'undefined') historySession.saveScroll(window.scrollY);
+  historyViewActive.value = false;
+  resumeOnActivation = false;
   disconnectObserver();
 });
 </script>
