@@ -2,7 +2,11 @@
   <RouterView v-slot="{ Component }">
     <component v-if="route.meta.layout === 'auth'" :is="Component" />
     <AppShell v-else>
-      <KeepAlive v-if="preserveHomeCache" include="HomeView" :max="1">
+      <KeepAlive
+        v-if="preserveReturnSurfaceCache"
+        :include="['HomeView', 'UserProfileView']"
+        :max="1"
+      >
         <component :is="Component" />
       </KeepAlive>
       <component v-else :is="Component" />
@@ -19,7 +23,11 @@ import { useAuthStore } from './store/auth';
 
 const route = useRoute();
 const authStore = useAuthStore();
-const preserveHomeCache = computed(() => route.name === 'Home' || route.name === 'PostDetail');
+const preserveReturnSurfaceCache = computed(() => (
+  route.name === 'Home'
+  || route.name === 'UserProfile'
+  || route.name === 'PostDetail'
+));
 
 initializePostViewTelemetry(() => {
   const id = authStore.currentIdentity?.id;

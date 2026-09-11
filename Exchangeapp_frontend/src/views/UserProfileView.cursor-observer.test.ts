@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { nextTick } from 'vue';
+import { defineComponent, h, KeepAlive, nextTick, reactive } from 'vue';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useProfileSessionStore } from '../store/profileSession';
@@ -12,7 +12,7 @@ type Deferred<T> = {
 };
 
 const mocks = vi.hoisted(() => ({
-  route: { params: { id: '7' } },
+  route: { name: 'UserProfile', params: { id: '7' } },
   setRouteID: (_id: string) => {},
   getUser: vi.fn(),
   getUserTimeline: vi.fn(),
@@ -248,6 +248,31 @@ const mountProfile = () => mount(UserProfileView, {
   },
 });
 
+const mountKeepAliveProfile = () => {
+  const state = reactive({ showProfile: true });
+  const Placeholder = defineComponent({
+    name: 'PostDetailView',
+    template: '<div data-placeholder />',
+  });
+  const Host = defineComponent({
+    setup() {
+      return () => h(KeepAlive, { include: 'UserProfileView', max: 1 }, {
+        default: () => (state.showProfile ? h(UserProfileView) : h(Placeholder)),
+      });
+    },
+  });
+  const wrapper = mount(Host, {
+    global: {
+      stubs: {
+        AppIcon: { template: '<span />' },
+        PostCard: PostCardStub,
+        RouterLink: { template: '<a><slot /></a>' },
+      },
+    },
+  });
+  return { wrapper, state };
+};
+
 const activeObserver = () => [...FakeIntersectionObserver.instances]
   .reverse()
   .find((candidate) => candidate.observed !== null && candidate.disconnectCount === 0);
@@ -276,6 +301,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     installFakeIntersectionObserver();
     vi.resetAllMocks();
     FakeIntersectionObserver.instances.length = 0;
+    mocks.route.name = 'UserProfile';
     mocks.setRouteID('7');
     mocks.authStore.currentIdentity.id = 7;
     mocks.getUser.mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
@@ -406,8 +432,106 @@ describe('UserProfileView observer and cursor concurrency', () => {
 
     if (userAgentDescriptor) {
       Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
+    } else {
+      Reflect.deleteProperty(window.navigator, 'userAgent');
     }
     scrollTo.mockRestore();
+  });
+
+  it('keeps the Profile identity when PostDetail reuses the route parameter name', async () => {
+    const profileStore = useProfileSessionStore();
+    const ensureSession = vi.spyOn(profileStore, 'ensureSession');
+    const mounted = mountProfile();
+    mountedViews.push(mounted);
+    await settle();
+
+    expect(mounted.find('h1').text()).toContain('User 7');
+
+    mocks.route.name = 'PostDetail';
+    mocks.setRouteID('9999');
+    await settle();
+
+    expect(mounted.find('h1').text()).toContain('User 7');
+    expect(mocks.getUser).not.toHaveBeenCalledWith('9999');
+    expect(mocks.getUserTimeline).not.toHaveBeenCalledWith('9999', expect.anything());
+    expect(ensureSession.mock.calls.some(([id]) => id === 9999)).toBe(false);
+  });
+
+  it('pauses and resumes the cached Profile without a second component scroll restoration', async () => {
+    const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
+    const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0',
+    });
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      writable: true,
+      value: 1480,
+    });
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const profileStore = useProfileSessionStore();
+    const session = profileStore.ensureSession(7)!;
+    session.user = profile(7);
+    session.profileLoaded = true;
+    session.timelineLoaded = true;
+    session.timelineItems = [profileTimelineItem(1, 7)];
+    session.loadedActivityKeys.add('post:1');
+    session.hasMore = true;
+    session.nextCursor = 'cursor-1';
+    session.scrollY = 900;
+
+    const { wrapper, state } = mountKeepAliveProfile();
+    mountedViews.push(wrapper);
+
+    try {
+      await settle();
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      const initialObserver = activeObserver();
+      expect(initialObserver).toBeDefined();
+
+      state.showProfile = false;
+      await nextTick();
+      mocks.route.name = 'PostDetail';
+      mocks.setRouteID('9999');
+      await settle();
+
+      expect(session.scrollY).toBe(1480);
+      expect(initialObserver?.disconnectCount).toBeGreaterThan(0);
+
+      initialObserver?.trigger();
+      session.timelineItems = [...session.timelineItems, profileTimelineItem(2, 7)];
+      await settle();
+
+      expect(mocks.getUserTimeline).not.toHaveBeenCalledWith('9999', expect.anything());
+      expect(FakeIntersectionObserver.instances).toHaveLength(1);
+      expect(mocks.getUserTimeline).not.toHaveBeenCalledWith('7', { limit: 20, cursor: 'cursor-1' });
+
+      const userCallsBeforeActivation = mocks.getUser.mock.calls.length;
+      const timelineCallsBeforeActivation = mocks.getUserTimeline.mock.calls.length;
+      mocks.route.name = 'UserProfile';
+      mocks.setRouteID('7');
+      state.showProfile = true;
+      await settle();
+
+      const resumedObserver = activeObserver();
+      expect(resumedObserver).toBeDefined();
+      expect(resumedObserver).not.toBe(initialObserver);
+      expect(resumedObserver?.observed).toBe(wrapper.find('.profile-feed-sentinel').element);
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(mocks.getUser).toHaveBeenCalledTimes(userCallsBeforeActivation);
+      expect(mocks.getUserTimeline).toHaveBeenCalledTimes(timelineCallsBeforeActivation);
+    } finally {
+      scrollTo.mockRestore();
+      if (userAgentDescriptor) {
+        Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
+      }
+      if (scrollYDescriptor) {
+        Object.defineProperty(window, 'scrollY', scrollYDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'scrollY');
+      }
+    }
   });
 
   it('saves the previous profile and restores the next profile once on route switch', async () => {
@@ -447,6 +571,8 @@ describe('UserProfileView observer and cursor concurrency', () => {
 
     if (userAgentDescriptor) {
       Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
+    } else {
+      Reflect.deleteProperty(window.navigator, 'userAgent');
     }
     scrollTo.mockRestore();
   });

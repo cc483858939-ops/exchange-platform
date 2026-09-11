@@ -7,7 +7,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
 
 const mocks = vi.hoisted(() => ({
-  route: { params: { id: '7' } },
+  route: { name: 'UserProfile', params: { id: '7' } },
   getUser: vi.fn(),
   getUserTimeline: vi.fn(),
   getUserFollowState: vi.fn(),
@@ -160,7 +160,7 @@ describe('UserProfileView current identity synchronization', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
-    mocks.route = reactive({ params: { id: '7' } });
+    mocks.route = reactive({ name: 'UserProfile', params: { id: '7' } });
     document.title = 'Exchange';
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity.id = 7;

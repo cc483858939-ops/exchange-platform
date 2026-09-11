@@ -7,7 +7,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
 
 const mocks = vi.hoisted(() => ({
-  route: { params: { id: '7' } },
+  route: { name: 'UserProfile', params: { id: '7' } },
   setRouteID: (_id: string) => {},
   getUser: vi.fn(),
   getUserTimeline: vi.fn(),

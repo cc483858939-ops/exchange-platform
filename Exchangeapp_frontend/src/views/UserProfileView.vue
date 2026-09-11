@@ -352,7 +352,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AuthRequiredState from '../components/auth/AuthRequiredState.vue';
 import PostCard from '../components/feed/PostCard.vue';
@@ -366,6 +376,10 @@ import { useAuthStore } from '../store/auth';
 import { useProfileSessionStore, type ProfileSessionCapture } from '../store/profileSession';
 import type { PublicUser } from '../types/User';
 
+defineOptions({
+  name: 'UserProfileView',
+});
+
 const profileDisplayNameLimit = 50;
 const profileBioLimit = 160;
 const profileAvatarMaxBytes = 2 * 1024 * 1024;
@@ -377,7 +391,17 @@ const router = useRouter();
 const authStore = useAuthStore();
 const profileStore = useProfileSessionStore();
 
-const userId = computed(() => String(route.params.id ?? '').trim());
+const readProfileRouteID = () => (
+  route.name === 'UserProfile'
+    ? String(route.params.id ?? '').trim()
+    : ''
+);
+
+const profileRouteID = ref(readProfileRouteID());
+const profileViewActive = ref(true);
+let resumeOnActivation = false;
+
+const userId = computed(() => profileRouteID.value);
 const numericUserID = computed(() => {
   const value = Number(userId.value);
   return Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -386,6 +410,18 @@ const activeSession = computed(() => (
   numericUserID.value === null ? null : profileStore.ensureSession(numericUserID.value)
 ));
 const invalidProfileError = ref('');
+
+const syncProfileRouteID = () => {
+  if (!profileViewActive.value || route.name !== 'UserProfile') {
+    return;
+  }
+
+  const nextID = String(route.params.id ?? '').trim();
+  if (profileRouteID.value === nextID) {
+    return;
+  }
+  profileRouteID.value = nextID;
+};
 
 const user = computed(() => activeSession.value?.user ?? null);
 const profileLoading = computed(() => activeSession.value?.profileLoading ?? false);
@@ -489,7 +525,7 @@ const saveCurrentScroll = (targetUserID: number) => {
 
 const restoreScrollOnce = async () => {
   const entryVersion = profileEntryVersion;
-  if (restoredEntryVersion === entryVersion) return;
+  if (!profileViewActive.value || restoredEntryVersion === entryVersion) return;
 
   const session = activeSession.value;
   const targetUserID = numericUserID.value;
@@ -505,7 +541,8 @@ const restoreScrollOnce = async () => {
 
   await nextTick();
   if (
-    entryVersion !== profileEntryVersion
+    !profileViewActive.value
+    || entryVersion !== profileEntryVersion
     || targetUserID !== numericUserID.value
     || restoredEntryVersion === entryVersion
   ) return;
@@ -779,7 +816,7 @@ const retryInitialTimeline = () => {
 };
 
 const loadMoreTimeline = () => {
-  if (numericUserID.value !== null) {
+  if (profileViewActive.value && numericUserID.value !== null) {
     void profileStore.loadMoreTimeline(numericUserID.value);
   }
 };
@@ -827,7 +864,8 @@ const disconnectObserver = () => {
 const updateObserver = () => {
   disconnectObserver();
   if (
-    !intersectionObserverAvailable
+    !profileViewActive.value
+    || !intersectionObserverAvailable
     || !sentinelRef.value
     || !hasMore.value
     || timelineLoadingMore.value
@@ -839,12 +877,59 @@ const updateObserver = () => {
   }
 
   observer = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) {
+    if (
+      profileViewActive.value
+      && entries.some((entry) => entry.isIntersecting)
+    ) {
       loadMoreTimeline();
     }
   }, { rootMargin: '240px 0px' });
   observer.observe(sentinelRef.value);
 };
+
+const deactivateProfileView = () => {
+  if (!profileViewActive.value) {
+    return;
+  }
+
+  if (numericUserID.value !== null) {
+    saveCurrentScroll(numericUserID.value);
+  }
+
+  profileViewActive.value = false;
+  resumeOnActivation = true;
+
+  forceCloseEditProfile();
+  disconnectObserver();
+};
+
+const activateProfileView = () => {
+  if (!resumeOnActivation) {
+    return;
+  }
+
+  resumeOnActivation = false;
+  profileViewActive.value = true;
+
+  syncProfileRouteID();
+
+  void nextTick(() => {
+    if (!profileViewActive.value) {
+      return;
+    }
+    updateObserver();
+  });
+};
+
+watch(
+  [
+    () => route.name,
+    () => route.params.id,
+  ],
+  () => {
+    syncProfileRouteID();
+  },
+);
 
 watch(userId, (nextID, previousID) => {
   profileEntryVersion += 1;
@@ -897,8 +982,15 @@ onMounted(() => {
   void nextTick(updateObserver);
 });
 
+onDeactivated(deactivateProfileView);
+onActivated(activateProfileView);
+
 onBeforeUnmount(() => {
-  if (numericUserID.value !== null) saveCurrentScroll(numericUserID.value);
+  if (profileViewActive.value && numericUserID.value !== null) {
+    saveCurrentScroll(numericUserID.value);
+  }
+  profileViewActive.value = false;
+  resumeOnActivation = false;
   forceCloseEditProfile();
   disconnectObserver();
 });

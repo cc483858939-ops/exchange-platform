@@ -172,6 +172,7 @@ describe('UserProfileView auth-required state', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.route = reactive({
+      name: 'UserProfile',
       params: { id: '7' },
       fullPath: '/users/7',
     });
