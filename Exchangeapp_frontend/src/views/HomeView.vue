@@ -11,6 +11,7 @@
     <div
       :id="'feed-panel-' + activeTab"
       class="home-feed-panel"
+      ref="feedPanelRef"
       role="tabpanel"
       tabindex="0"
       :aria-labelledby="'feed-tab-' + activeTab"
@@ -205,7 +206,7 @@ import {
   watch,
 } from 'vue';
 import type { ComponentPublicInstance } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -215,6 +216,7 @@ import { getRecommendationTelemetry } from '../services/recommendationTelemetry'
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import { useHomeTimelineStore } from '../store/homeTimeline';
+import type { HomeReturnAnchor } from '../store/homeTimeline';
 import type { RecommendedPost } from '../types/Recommendation';
 import type { FeedPost, FeedTab } from '../types/Feed';
 
@@ -229,6 +231,7 @@ const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token
 
 const skeletonPosts = [0, 1, 2];
 const recommendationCardElements = new Map<number, HTMLElement>();
+const feedPanelRef = ref<HTMLElement | null>(null);
 const forYouSentinelRef = ref<HTMLElement | null>(null);
 const forYouIntersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let forYouObserver: IntersectionObserver | null = null;
@@ -244,6 +247,7 @@ const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
 const homeViewActive = ref(true);
 let resumeOnActivation = false;
+let scrollRestoreVersion = 0;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
 const activeFeedStatus = computed(() => {
@@ -282,20 +286,139 @@ const saveCurrentScroll = (tab: FeedTab) => {
   }
 };
 
-const restoreScroll = (tab: FeedTab) => {
-  void nextTick(() => {
-    const state = tab === 'for-you' ? forYouFeed : followingFeed;
-    if (!state.loaded || typeof window === 'undefined') {
-      return;
-    }
-    if (
-      typeof window.scrollTo === 'function'
-      && !window.navigator.userAgent.toLowerCase().includes('jsdom')
-    ) {
-      window.scrollTo({ top: homeTimeline.scrollY[tab], behavior: 'auto' });
-    }
+const normalizePositivePostId = (value: unknown): number | null => {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const numeric = Number(raw);
+  return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : null;
+};
+
+const scrollToWindow = (top: number) => {
+  if (
+    typeof window === 'undefined'
+    || typeof window.scrollTo !== 'function'
+    || window.navigator.userAgent.toLowerCase().includes('jsdom')
+  ) {
+    return false;
+  }
+  window.scrollTo({ top, behavior: 'auto' });
+  return true;
+};
+
+const nextFrame = () => new Promise<void>((resolve) => {
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    resolve();
+    return;
+  }
+  window.requestAnimationFrame(() => resolve());
+});
+
+const canContinueRestore = (
+  version: number,
+  tab: FeedTab,
+  expectedAnchor?: HomeReturnAnchor | null,
+) => (
+  version === scrollRestoreVersion
+  && homeViewActive.value
+  && activeTab.value === tab
+  && (
+    expectedAnchor === undefined
+    || homeTimeline.returnAnchors?.[tab] === expectedAnchor
+  )
+);
+
+const correctToAnchor = (postId: number, expectedViewportTop: number): boolean => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const card = feedPanelRef.value?.querySelector<HTMLElement>(
+    `[data-feed-post-id="${postId}"]`,
+  );
+  if (!card) {
+    return false;
+  }
+
+  const delta = card.getBoundingClientRect().top - expectedViewportTop;
+  if (Math.abs(delta) <= 1) {
+    return true;
+  }
+
+  scrollToWindow(Math.max(0, window.scrollY + delta));
+  return true;
+};
+
+const restoreScroll = async (tab: FeedTab) => {
+  const version = ++scrollRestoreVersion;
+
+  await nextTick();
+
+  if (!canContinueRestore(version, tab) || typeof window === 'undefined') {
+    return;
+  }
+
+  const state = tab === 'for-you' ? forYouFeed : followingFeed;
+  if (!state.loaded) {
+    return;
+  }
+
+  const anchor = homeTimeline.returnAnchors?.[tab] ?? null;
+  if (!anchor) {
+    scrollToWindow(homeTimeline.scrollY[tab]);
+    return;
+  }
+
+  scrollToWindow(anchor.fallbackScrollY);
+
+  await nextFrame();
+  if (!canContinueRestore(version, tab, anchor)) {
+    return;
+  }
+  correctToAnchor(anchor.postId, anchor.viewportTop);
+
+  await nextFrame();
+  if (!canContinueRestore(version, tab, anchor)) {
+    return;
+  }
+  correctToAnchor(anchor.postId, anchor.viewportTop);
+
+  homeTimeline.setScrollY(tab, window.scrollY);
+  homeTimeline.clearReturnAnchor(tab);
+};
+
+const capturePostDetailReturnAnchor = (postId: number) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const tab = activeTab.value;
+  const currentScrollY = window.scrollY;
+  homeTimeline.setScrollY(tab, currentScrollY);
+
+  const card = feedPanelRef.value?.querySelector<HTMLElement>(
+    `[data-feed-post-id="${postId}"]`,
+  );
+  if (!card) {
+    homeTimeline.clearReturnAnchor(tab);
+    return;
+  }
+
+  homeTimeline.setReturnAnchor(tab, {
+    postId,
+    viewportTop: card.getBoundingClientRect().top,
+    fallbackScrollY: currentScrollY,
   });
 };
+
+onBeforeRouteLeave((to) => {
+  if (to.name !== 'PostDetail') {
+    return;
+  }
+
+  const postId = normalizePositivePostId(to.params.id);
+  if (postId !== null) {
+    capturePostDetailReturnAnchor(postId);
+  }
+});
 
 const selectTab = (tab: FeedTab) => {
   if (activeTab.value === tab) {
@@ -607,10 +730,17 @@ watch(
 );
 
 onDeactivated(() => {
+  scrollRestoreVersion += 1;
   if (!homeViewActive.value) {
     return;
   }
-  saveCurrentScroll(activeTab.value);
+  const tab = activeTab.value;
+  const anchor = homeTimeline.returnAnchors?.[tab] ?? null;
+  if (anchor) {
+    homeTimeline.setScrollY(tab, anchor.fallbackScrollY);
+  } else {
+    saveCurrentScroll(tab);
+  }
   homeViewActive.value = false;
   resumeOnActivation = true;
   disconnectForYouObserver();
@@ -643,8 +773,15 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
+  scrollRestoreVersion += 1;
   if (homeViewActive.value) {
-    saveCurrentScroll(activeTab.value);
+    const tab = activeTab.value;
+    const anchor = homeTimeline.returnAnchors?.[tab] ?? null;
+    if (anchor) {
+      homeTimeline.setScrollY(tab, anchor.fallbackScrollY);
+    } else {
+      saveCurrentScroll(tab);
+    }
     disconnectForYouObserver();
     disconnectFollowingObserver();
     pauseRecommendationObservation();

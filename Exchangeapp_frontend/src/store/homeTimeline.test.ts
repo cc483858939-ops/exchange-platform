@@ -399,12 +399,76 @@ describe('home timeline session store', () => {
 
     store.setActiveTab('following');
     store.setScrollY('following', 742);
+    store.setReturnAnchor('for-you', {
+      postId: 42,
+      viewportTop: 160,
+      fallbackScrollY: 2400,
+    });
+    store.setReturnAnchor('following', {
+      postId: 88,
+      viewportTop: 220,
+      fallbackScrollY: 900,
+    });
     expect(store.activeTab).toBe('following');
     expect(store.scrollY.following).toBe(742);
 
     store.setViewer(8);
     expect(store.activeTab).toBe('for-you');
     expect(store.scrollY.following).toBe(0);
+    expect(store.returnAnchors['for-you']).toBeNull();
+    expect(store.returnAnchors.following).toBeNull();
+  });
+
+  it('keeps return anchors isolated and clears only the requested tab', () => {
+    const store = useHomeTimelineStore();
+    const forYouAnchor = {
+      postId: 42,
+      viewportTop: 160,
+      fallbackScrollY: 2400,
+    };
+    const followingAnchor = {
+      postId: 88,
+      viewportTop: 220,
+      fallbackScrollY: 900,
+    };
+
+    expect(store.setReturnAnchor('for-you', forYouAnchor)).toBe(true);
+    expect(store.setReturnAnchor('following', followingAnchor)).toBe(true);
+    expect(store.returnAnchors['for-you']).toEqual(forYouAnchor);
+    expect(store.returnAnchors.following).toEqual(followingAnchor);
+
+    store.clearReturnAnchor('for-you');
+
+    expect(store.returnAnchors['for-you']).toBeNull();
+    expect(store.returnAnchors.following).toEqual(followingAnchor);
+  });
+
+  it('rejects invalid return anchors without changing existing state', () => {
+    const store = useHomeTimelineStore();
+    const validAnchor = {
+      postId: 42,
+      viewportTop: 160,
+      fallbackScrollY: 2400,
+    };
+    store.setReturnAnchor('for-you', validAnchor);
+
+    expect(store.setReturnAnchor('for-you', {
+      postId: 0,
+      viewportTop: 170,
+      fallbackScrollY: 2500,
+    })).toBe(false);
+    expect(store.setReturnAnchor('for-you', {
+      postId: 43,
+      viewportTop: Number.NaN,
+      fallbackScrollY: 2500,
+    })).toBe(false);
+    expect(store.setReturnAnchor('for-you', {
+      postId: 43,
+      viewportTop: 170,
+      fallbackScrollY: -1,
+    })).toBe(false);
+
+    expect(store.returnAnchors['for-you']).toEqual(validAnchor);
   });
 
   it('dismisses a recommendation without removing the same Post from Following', () => {

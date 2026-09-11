@@ -73,6 +73,7 @@ vi.mock('../services/recommendationAttribution', () => ({
 vi.mock('vue-router', () => ({
   useRoute: () => mocks.route,
   useRouter: () => mocks.router,
+  onBeforeRouteLeave: vi.fn(),
 }));
 
 const author = {
@@ -203,6 +204,8 @@ describe('HomeView For You pagination observer', () => {
       setActiveTab: vi.fn((tab: FeedTab) => {
         mocks.homeTimeline.activeTab = tab;
       }),
+      setReturnAnchor: vi.fn(),
+      clearReturnAnchor: vi.fn(),
       setScrollY: vi.fn(),
       loadForYou: vi.fn().mockResolvedValue(undefined),
       loadMoreForYou: vi.fn().mockResolvedValue(undefined),
@@ -314,6 +317,7 @@ describe('HomeView KeepAlive lifecycle', () => {
     });
     mocks.homeTimeline = reactive({
       activeTab: 'for-you' as FeedTab,
+      returnAnchors: { 'for-you': null, following: null },
       forYou: reactive({
         items: [recommendationItem],
         loading: false,
@@ -344,6 +348,8 @@ describe('HomeView KeepAlive lifecycle', () => {
         mocks.homeTimeline.activeTab = tab;
       }),
       setScrollY: vi.fn(),
+      setReturnAnchor: vi.fn(),
+      clearReturnAnchor: vi.fn(),
       loadForYou: vi.fn().mockResolvedValue(undefined),
       loadMoreForYou: vi.fn().mockResolvedValue(undefined),
       retryForYouLoadMore: vi.fn(),

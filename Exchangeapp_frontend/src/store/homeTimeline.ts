@@ -45,6 +45,12 @@ export type HomeRecommendationItem = {
   post: FeedPost;
 };
 
+export type HomeReturnAnchor = {
+  postId: number;
+  viewportTop: number;
+  fallbackScrollY: number;
+};
+
 export type HomeFeedState<T> = {
   items: T[];
   loading: boolean;
@@ -115,6 +121,10 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     'for-you': 0,
     following: 0,
   });
+  const returnAnchors = reactive<Record<FeedTab, HomeReturnAnchor | null>>({
+    'for-you': null,
+    following: null,
+  });
   const likePendingPostIds = reactive(new Set<number>());
   const repostPendingPostIds = reactive(new Set<number>());
   const pendingDeletePostIds = reactive(new Set<number>());
@@ -184,6 +194,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     activeTab.value = 'for-you';
     scrollY['for-you'] = 0;
     scrollY.following = 0;
+    returnAnchors['for-you'] = null;
+    returnAnchors.following = null;
     resetForYou();
     resetFollowing();
   };
@@ -207,6 +219,25 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const setScrollY = (tab: FeedTab, value: number) => {
     scrollY[tab] = Number.isFinite(value) && value >= 0 ? value : 0;
+  };
+
+  const setReturnAnchor = (tab: FeedTab, anchor: HomeReturnAnchor) => {
+    if (
+      !anchor
+      || !Number.isSafeInteger(anchor.postId)
+      || anchor.postId <= 0
+      || !Number.isFinite(anchor.viewportTop)
+      || !Number.isFinite(anchor.fallbackScrollY)
+      || anchor.fallbackScrollY < 0
+    ) {
+      return false;
+    }
+    returnAnchors[tab] = { ...anchor };
+    return true;
+  };
+
+  const clearReturnAnchor = (tab: FeedTab) => {
+    returnAnchors[tab] = null;
   };
 
   const getLikeMutationVersion = (postId: number) =>
@@ -1172,6 +1203,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou,
     following,
     scrollY,
+    returnAnchors,
     likePendingPostIds,
     repostPendingPostIds,
     pendingDeletePostIds,
@@ -1179,6 +1211,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     setViewer,
     setActiveTab,
     setScrollY,
+    setReturnAnchor,
+    clearReturnAnchor,
     loadForYou,
     loadMoreForYou,
     retryForYouLoadMore,

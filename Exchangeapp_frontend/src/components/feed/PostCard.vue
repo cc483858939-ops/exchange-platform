@@ -1,5 +1,9 @@
 <template>
-  <article ref="postCardRef" class="post-card">
+  <article
+    ref="postCardRef"
+    class="post-card"
+    :data-feed-post-id="post.id"
+  >
     <div class="post-card__header">
       <div class="post-card__author-stack">
         <div v-if="post.repostContext" class="post-card__repost-context">
