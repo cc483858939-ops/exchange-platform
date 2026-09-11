@@ -185,6 +185,7 @@ type PublishPhase = 'idle' | 'uploading' | 'publishing';
 
 const maxContentLength = 10000;
 const maxMediaCount = 4;
+const mediaUploadConcurrency = 2;
 const maxMediaBytes = 5 * 1024 * 1024;
 const maxContentHeight = 360;
 const allowedMediaTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -458,6 +459,62 @@ const isCurrentPublishAttempt = (
   ))
 );
 
+const uploadSelectedMedia = async (
+  selectedMedia: Array<{ id: string; file: File; uploadedURL: string }>,
+  publishAttempt: number,
+  publisherUserID: number,
+  attemptMediaIdentity: Array<{ id: string; file: File }>,
+): Promise<string[] | null> => {
+  const pendingMedia = selectedMedia.filter(item => !item.uploadedURL);
+
+  if (pendingMedia.length > 0) {
+    phase.value = 'uploading';
+  }
+
+  for (let start = 0; start < pendingMedia.length; start += mediaUploadConcurrency) {
+    const batch = pendingMedia.slice(start, start + mediaUploadConcurrency);
+    const results = await Promise.allSettled(batch.map(async item => {
+      const uploadedURL = (await uploadPostMedia(item.file)).trim();
+      if (!uploadedURL) {
+        throw new Error('The media upload returned no URL.');
+      }
+      return uploadedURL;
+    }));
+
+    if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {
+      return null;
+    }
+
+    let batchFailed = false;
+    results.forEach((result, index) => {
+      const item = batch[index];
+      if (result.status === 'fulfilled') {
+        item.uploadedURL = result.value;
+        postDraft.setUploadedURL(item.id, result.value);
+        return;
+      }
+      batchFailed = true;
+    });
+
+    if (batchFailed) {
+      uploadError.value = 'Image upload failed. Your draft was preserved.';
+      return null;
+    }
+  }
+
+  if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {
+    return null;
+  }
+
+  const uploadedURLs = selectedMedia.map(item => item.uploadedURL.trim());
+  if (uploadedURLs.some(url => !url)) {
+    uploadError.value = 'Image upload failed. Your draft was preserved.';
+    return null;
+  }
+
+  return uploadedURLs;
+};
+
 const submitPost = async () => {
   if (isSubmitting.value) {
     return;
@@ -488,33 +545,21 @@ const submitPost = async () => {
   }));
   const draftContent = content.value.trim();
   const attemptMediaIdentity = selectedMedia.map(item => ({ id: item.id, file: item.file }));
-  const uploadedURLs: string[] = [];
 
   uploadError.value = '';
   publishError.value = '';
 
-  for (const item of selectedMedia) {
-    let uploadedURL = item.uploadedURL;
-    if (!uploadedURL) {
-      phase.value = 'uploading';
-      try {
-        uploadedURL = (await uploadPostMedia(item.file)).trim();
-        if (!uploadedURL) {
-          throw new Error('The media upload returned no URL.');
-        }
-        if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {
-          return;
-        }
-        postDraft.setUploadedURL(item.id, uploadedURL);
-      } catch {
-        if (publishAttemptVersion === publishAttempt) {
-          uploadError.value = 'Image upload failed. Your draft was preserved.';
-        }
-        phase.value = 'idle';
-        return;
-      }
+  const uploadedURLs = await uploadSelectedMedia(
+    selectedMedia,
+    publishAttempt,
+    publisherUserID,
+    attemptMediaIdentity,
+  );
+  if (uploadedURLs === null) {
+    if (publishAttemptVersion === publishAttempt) {
+      phase.value = 'idle';
     }
-    uploadedURLs.push(uploadedURL);
+    return;
   }
 
   if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {

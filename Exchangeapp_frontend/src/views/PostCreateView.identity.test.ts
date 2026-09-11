@@ -313,6 +313,7 @@ describe('PostCreateView identity and text publishing', () => {
       content: 'A post from the current identity',
       media: [],
     });
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.feedStore.registerPublishedPost).toHaveBeenCalledWith(
       publishedPost(),
       7,

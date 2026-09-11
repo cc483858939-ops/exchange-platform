@@ -90,6 +90,16 @@ const imageFile = (name: string, type = 'image/png', bytes = 'image-bytes') => (
   new File([bytes], name, { type })
 );
 
+const deferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
 describe('PostCreateView media picker and retry behavior', () => {
   let wrapper: VueWrapper | null = null;
 
@@ -186,6 +196,197 @@ describe('PostCreateView media picker and retry behavior', () => {
 
     expect(usePostDraftStore().media).toHaveLength(0);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:remove-me.png');
+  });
+
+  it('uploads media two at a time and keeps selected order despite completion order', async () => {
+    const files = ['a.png', 'b.png', 'c.png', 'd.png'].map(name => imageFile(name));
+    const requests = new Map(files.map(file => [file.name, deferred<string>()]));
+    let activeUploads = 0;
+    let maxActiveUploads = 0;
+    mocks.uploadPostMedia.mockImplementation((file: File) => {
+      activeUploads += 1;
+      maxActiveUploads = Math.max(maxActiveUploads, activeUploads);
+      const request = requests.get(file.name);
+      if (!request) {
+        throw new Error(`Unexpected upload for ${file.name}.`);
+      }
+      return request.promise.finally(() => {
+        activeUploads -= 1;
+      });
+    });
+    wrapper = mountPage();
+    await selectFiles(wrapper, files);
+    await wrapper.get('#post-content').setValue('Upload four images');
+
+    const submitPromise = wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual(['a.png', 'b.png']);
+    expect(maxActiveUploads).toBe(2);
+
+    requests.get('b.png')!.resolve('/media/b.png');
+    await flushPromises();
+    expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(2);
+
+    requests.get('a.png')!.resolve('/media/a.png');
+    await flushPromises();
+    expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
+      'a.png',
+      'b.png',
+      'c.png',
+      'd.png',
+    ]);
+    expect(maxActiveUploads).toBe(2);
+
+    requests.get('d.png')!.resolve('/media/d.png');
+    await flushPromises();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+
+    requests.get('c.png')!.resolve('/media/c.png');
+    await submitPromise;
+    await flushPromises();
+
+    expect(mocks.createPost).toHaveBeenCalledWith({
+      content: 'Upload four images',
+      media: [
+        { type: 'image', url: '/media/a.png' },
+        { type: 'image', url: '/media/b.png' },
+        { type: 'image', url: '/media/c.png' },
+        { type: 'image', url: '/media/d.png' },
+      ],
+    });
+  });
+
+  it('does not spend upload slots on cached media and preserves selected order', async () => {
+    const files = ['cached.png', 'second.png', 'third.png', 'fourth.png'].map(name => imageFile(name));
+    const uploadOrder: string[] = [];
+    mocks.uploadPostMedia.mockImplementation(async (file: File) => {
+      uploadOrder.push(file.name);
+      return `/media/${file.name}`;
+    });
+    wrapper = mountPage();
+    await selectFiles(wrapper, files);
+    const draft = usePostDraftStore();
+    draft.setUploadedURL(draft.media[0].id, '/media/cached.png');
+    await wrapper.get('#post-content').setValue('Reuse cached media');
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(uploadOrder).toEqual(['second.png', 'third.png', 'fourth.png']);
+    expect(mocks.createPost).toHaveBeenCalledWith({
+      content: 'Reuse cached media',
+      media: [
+        { type: 'image', url: '/media/cached.png' },
+        { type: 'image', url: '/media/second.png' },
+        { type: 'image', url: '/media/third.png' },
+        { type: 'image', url: '/media/fourth.png' },
+      ],
+    });
+  });
+
+  it('stops after a failed batch and retries only pending media', async () => {
+    const files = ['first.png', 'second.png', 'third.png', 'fourth.png'].map(name => imageFile(name));
+    mocks.uploadPostMedia.mockImplementation(async (file: File) => `/media/${file.name}`);
+    mocks.uploadPostMedia.mockResolvedValueOnce('/media/first.png');
+    mocks.uploadPostMedia.mockRejectedValueOnce(new Error('temporary failure'));
+    wrapper = mountPage();
+    await selectFiles(wrapper, files);
+    await wrapper.get('#post-content').setValue('Retry pending images');
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
+      'first.png',
+      'second.png',
+    ]);
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(usePostDraftStore().media.map(item => item.uploadedURL)).toEqual([
+      '/media/first.png',
+      '',
+      '',
+      '',
+    ]);
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
+      'first.png',
+      'second.png',
+      'second.png',
+      'third.png',
+      'fourth.png',
+    ]);
+    expect(mocks.createPost).toHaveBeenCalledWith({
+      content: 'Retry pending images',
+      media: [
+        { type: 'image', url: '/media/first.png' },
+        { type: 'image', url: '/media/second.png' },
+        { type: 'image', url: '/media/third.png' },
+        { type: 'image', url: '/media/fourth.png' },
+      ],
+    });
+  });
+
+  it('preserves sibling successes when an upload returns an empty URL', async () => {
+    const first = imageFile('empty-url.png');
+    const second = imageFile('valid-url.png');
+    mocks.uploadPostMedia
+      .mockResolvedValueOnce('   ')
+      .mockResolvedValueOnce('/media/valid-url.png');
+    wrapper = mountPage();
+    await selectFiles(wrapper, [first, second]);
+    await wrapper.get('#post-content').setValue('Keep the valid upload');
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(usePostDraftStore().media.map(item => item.uploadedURL)).toEqual([
+      '',
+      '/media/valid-url.png',
+    ]);
+    expect(wrapper.get('.composer-status').text()).toContain('Image upload failed');
+  });
+
+  it('invalidates pending uploads when the authenticated account changes', async () => {
+    const files = ['old-a.png', 'old-b.png', 'old-c.png', 'old-d.png'].map(name => imageFile(name));
+    const requests = new Map(files.map(file => [file.name, deferred<string>()]));
+    mocks.uploadPostMedia.mockImplementation((file: File) => {
+      const request = requests.get(file.name);
+      if (!request) {
+        throw new Error(`Unexpected upload for ${file.name}.`);
+      }
+      return request.promise;
+    });
+    wrapper = mountPage();
+    await selectFiles(wrapper, files);
+    await wrapper.get('#post-content').setValue('Old account draft');
+
+    const submitPromise = wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(2);
+
+    mocks.authStore!.currentIdentity = {
+      id: 8,
+      username: 'bob',
+      display_name: 'Bob Jones',
+      avatar_url: '',
+    };
+    await flushPromises();
+    requests.get('old-a.png')!.resolve('/media/old-a.png');
+    requests.get('old-b.png')!.resolve('/media/old-b.png');
+    await submitPromise;
+    await flushPromises();
+
+    expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
+      'old-a.png',
+      'old-b.png',
+    ]);
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(usePostDraftStore().viewerID).toBe(8);
+    expect(usePostDraftStore().media).toHaveLength(0);
   });
 
   it('preserves successful uploads and resumes after a partial upload failure', async () => {
