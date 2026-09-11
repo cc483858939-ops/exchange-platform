@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { reactive, nextTick } from 'vue';
+import { defineComponent, h, KeepAlive, nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedPost, FeedTab } from '../types/Feed';
 
@@ -130,6 +130,35 @@ const mountHomeView = async () => {
   return wrapper;
 };
 
+const mountKeepAliveHomeView = async () => {
+  const module = await import('./HomeView.vue');
+  const state = reactive({ showHome: true });
+  const Placeholder = defineComponent({
+    name: 'PostDetailView',
+    template: '<div data-placeholder />',
+  });
+  const Host = defineComponent({
+    setup() {
+      return () => h(KeepAlive, { include: 'HomeView', max: 1 }, {
+        default: () => (state.showHome ? h(module.default) : h(Placeholder)),
+      });
+    },
+  });
+  const wrapper = mount(Host, {
+    global: {
+      stubs: {
+        FeedTabs: { template: '<div />' },
+        PostCard: { template: '<div />' },
+        AppIcon: { template: '<span />' },
+        MobileHomeHeader: { template: '<div />' },
+        RouterLink: { template: '<a><slot /></a>' },
+      },
+    },
+  });
+  await settle();
+  return { wrapper, state };
+};
+
 describe('HomeView For You pagination observer', () => {
   beforeEach(() => {
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
@@ -187,7 +216,7 @@ describe('HomeView For You pagination observer', () => {
       deletePost: vi.fn().mockResolvedValue(true),
       dismissRecommendation: vi.fn(),
     });
-    mocks.route = reactive({ query: {} });
+    mocks.route = reactive({ name: 'Home', query: {} });
     mocks.router = {
       push: vi.fn().mockResolvedValue(undefined),
       replace: vi.fn().mockResolvedValue(undefined),
@@ -266,6 +295,168 @@ describe('HomeView For You pagination observer', () => {
 
     await button.trigger('click');
     expect(mocks.homeTimeline.loadMoreForYou).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+});
+
+describe('HomeView KeepAlive lifecycle', () => {
+  beforeEach(() => {
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+    FakeIntersectionObserver.instances = [];
+    mocks.authStore = reactive({
+      isAuthenticated: true,
+      currentIdentity: author,
+      token: 'Bearer token',
+    });
+    mocks.feedStore = reactive({
+      recentlyPublishedPosts: [],
+      isPostDeleted: vi.fn().mockReturnValue(false),
+    });
+    mocks.homeTimeline = reactive({
+      activeTab: 'for-you' as FeedTab,
+      forYou: reactive({
+        items: [recommendationItem],
+        loading: false,
+        error: false,
+        loaded: true,
+        loadingMore: false,
+        loadMoreError: false,
+        depleted: false,
+      }),
+      following: reactive({
+        items: [],
+        loading: false,
+        error: false,
+        loaded: true,
+        nextCursor: null,
+        loadingMore: false,
+        loadMoreError: false,
+        stale: false,
+        revalidating: false,
+        revalidateError: false,
+      }),
+      scrollY: { 'for-you': 0, following: 0 },
+      likePendingPostIds: new Set<number>(),
+      repostPendingPostIds: new Set<number>(),
+      pendingDeletePostIds: new Set<number>(),
+      deleteErrors: new Map<number, string>(),
+      setActiveTab: vi.fn((tab: FeedTab) => {
+        mocks.homeTimeline.activeTab = tab;
+      }),
+      setScrollY: vi.fn(),
+      loadForYou: vi.fn().mockResolvedValue(undefined),
+      loadMoreForYou: vi.fn().mockResolvedValue(undefined),
+      retryForYouLoadMore: vi.fn(),
+      loadFollowing: vi.fn().mockResolvedValue(undefined),
+      loadMoreFollowing: vi.fn().mockResolvedValue(undefined),
+      revalidateFollowing: vi.fn().mockResolvedValue(undefined),
+      retryFollowingLoadMore: vi.fn(),
+      toggleLike: vi.fn(),
+      toggleRepost: vi.fn(),
+      deletePost: vi.fn().mockResolvedValue(true),
+      dismissRecommendation: vi.fn(),
+    });
+    mocks.route = reactive({ name: 'Home', query: {} });
+    mocks.router = {
+      push: vi.fn().mockResolvedValue(undefined),
+      replace: vi.fn().mockResolvedValue(undefined),
+    };
+    Object.values(mocks.telemetry).forEach((mock) => mock.mockClear());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('pauses on deactivation, retains card bindings, and restores observers on activation', async () => {
+    const { wrapper, state } = await mountKeepAliveHomeView();
+    const firstObserver = FakeIntersectionObserver.instances[0];
+    mocks.telemetry.resetObservedCards.mockClear();
+    mocks.telemetry.flush.mockClear();
+    mocks.telemetry.observeFeedCard.mockClear();
+
+    state.showHome = false;
+    mocks.route.name = 'PostDetail';
+    await settle();
+
+    expect(firstObserver.disconnect).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.setScrollY).toHaveBeenCalledWith('for-you', expect.any(Number));
+    expect(mocks.telemetry.resetObservedCards).toHaveBeenCalledTimes(1);
+    expect(mocks.telemetry.flush).toHaveBeenCalledWith(false);
+    expect(mocks.telemetry.observeFeedCard).not.toHaveBeenCalled();
+
+    mocks.route.name = 'Home';
+    mocks.route.query = {};
+    state.showHome = true;
+    await settle();
+
+    expect(FakeIntersectionObserver.instances).toHaveLength(2);
+    expect(mocks.telemetry.observeFeedCard).toHaveBeenCalled();
+    wrapper.unmount();
+    expect(firstObserver.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a Following deep link while Home is inactive', async () => {
+    mocks.route.query = { tab: 'following' };
+    const { wrapper, state } = await mountKeepAliveHomeView();
+    expect(mocks.homeTimeline.activeTab).toBe('following');
+
+    state.showHome = false;
+    mocks.route.name = 'PostDetail';
+    mocks.route.query = {};
+    await settle();
+    expect(mocks.homeTimeline.activeTab).toBe('following');
+
+    mocks.route.name = 'Home';
+    mocks.route.query = { tab: 'following' };
+    state.showHome = true;
+    await settle();
+
+    expect(mocks.homeTimeline.activeTab).toBe('following');
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('does not create observers or load pages from hidden Home state changes', async () => {
+    const { wrapper, state } = await mountKeepAliveHomeView();
+    const firstObserver = FakeIntersectionObserver.instances[0];
+    state.showHome = false;
+    mocks.route.name = 'PostDetail';
+    await settle();
+
+    firstObserver.trigger();
+    mocks.homeTimeline.forYou.loadingMore = true;
+    mocks.homeTimeline.forYou.loadingMore = false;
+    await settle();
+
+    expect(mocks.homeTimeline.loadMoreForYou).not.toHaveBeenCalled();
+    expect(FakeIntersectionObserver.instances).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('does not rebind telemetry for hidden item changes, then rebinds on activation', async () => {
+    const { wrapper, state } = await mountKeepAliveHomeView();
+    state.showHome = false;
+    mocks.route.name = 'PostDetail';
+    await settle();
+    mocks.telemetry.observeFeedCard.mockClear();
+    mocks.telemetry.detachFeedCard.mockClear();
+    mocks.telemetry.unobserveFeedCard.mockClear();
+
+    mocks.homeTimeline.forYou.items.push({
+      recommendation: { post: { id: 2 }, score: 0.5 },
+      post: { ...feedPost, id: 2 },
+    });
+    await settle();
+
+    expect(mocks.telemetry.observeFeedCard).not.toHaveBeenCalled();
+    expect(mocks.telemetry.detachFeedCard).not.toHaveBeenCalled();
+    expect(mocks.telemetry.unobserveFeedCard).not.toHaveBeenCalled();
+
+    mocks.route.name = 'Home';
+    state.showHome = true;
+    await settle();
+    expect(mocks.telemetry.observeFeedCard).toHaveBeenCalled();
     wrapper.unmount();
   });
 });

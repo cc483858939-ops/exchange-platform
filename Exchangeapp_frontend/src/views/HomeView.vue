@@ -195,7 +195,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  ref,
+  watch,
+} from 'vue';
 import type { ComponentPublicInstance } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import FeedTabs from '../components/feed/FeedTabs.vue';
@@ -209,6 +217,8 @@ import { useFeedStore } from '../store/feed';
 import { useHomeTimelineStore } from '../store/homeTimeline';
 import type { RecommendedPost } from '../types/Recommendation';
 import type { FeedPost, FeedTab } from '../types/Feed';
+
+defineOptions({ name: 'HomeView' });
 
 const route = useRoute();
 const router = useRouter();
@@ -232,6 +242,8 @@ const likePendingPostIds = homeTimeline.likePendingPostIds;
 const repostPendingPostIds = homeTimeline.repostPendingPostIds;
 const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
+const homeViewActive = ref(true);
+let resumeOnActivation = false;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
 const activeFeedStatus = computed(() => {
@@ -297,16 +309,17 @@ const selectTab = (tab: FeedTab) => {
   });
 };
 
-const normalizeRouteTab = (value: unknown) => {
+const normalizeRouteTab = (value: unknown): FeedTab => {
   const tab: FeedTab = value === 'following' ? 'following' : 'for-you';
   homeTimeline.setActiveTab(tab);
   if (value === undefined || value === 'for-you' || value === 'following') {
-    return;
+    return tab;
   }
   void router.replace({
     name: 'Home',
     query: { tab: 'for-you' },
   });
+  return tab;
 };
 
 const disconnectFollowingObserver = () => {
@@ -320,6 +333,9 @@ const disconnectForYouObserver = () => {
 };
 
 const updateForYouObserver = () => {
+  if (!homeViewActive.value) {
+    return;
+  }
   disconnectForYouObserver();
   if (
     !forYouIntersectionObserverAvailable
@@ -336,7 +352,7 @@ const updateForYouObserver = () => {
   }
 
   forYouObserver = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) {
+    if (homeViewActive.value && entries.some((entry) => entry.isIntersecting)) {
       void homeTimeline.loadMoreForYou();
     }
   }, { rootMargin: '800px 0px' });
@@ -344,6 +360,9 @@ const updateForYouObserver = () => {
 };
 
 const updateFollowingObserver = () => {
+  if (!homeViewActive.value) {
+    return;
+  }
   disconnectFollowingObserver();
   if (
     !followingIntersectionObserverAvailable
@@ -360,7 +379,7 @@ const updateFollowingObserver = () => {
   }
 
   followingObserver = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) {
+    if (homeViewActive.value && entries.some((entry) => entry.isIntersecting)) {
       void homeTimeline.loadMoreFollowing();
     }
   }, { rootMargin: '240px 0px' });
@@ -369,7 +388,7 @@ const updateFollowingObserver = () => {
 
 const bindCurrentRecommendationCards = async () => {
   await nextTick();
-  if (!authStore.isAuthenticated || activeTab.value !== 'for-you') {
+  if (!homeViewActive.value || !authStore.isAuthenticated || activeTab.value !== 'for-you') {
     return;
   }
   visibleForYouItems.value.forEach((item) => {
@@ -380,9 +399,13 @@ const bindCurrentRecommendationCards = async () => {
   });
 };
 
-const resetRecommendationObservation = () => {
+const pauseRecommendationObservation = () => {
   recommendationTelemetry.resetObservedCards();
   void recommendationTelemetry.flush(false);
+};
+
+const resetRecommendationObservation = () => {
+  pauseRecommendationObservation();
   recommendationCardElements.clear();
 };
 
@@ -438,14 +461,19 @@ const bindRecommendationCard = (
 ) => {
   if (element instanceof HTMLElement) {
     recommendationCardElements.set(item.recommendation.post.id, element);
-    recommendationTelemetry.observeFeedCard(element, item.recommendation.post.id, item.recommendation.tracking);
+    if (homeViewActive.value) {
+      recommendationTelemetry.observeFeedCard(element, item.recommendation.post.id, item.recommendation.tracking);
+    }
     return;
   }
 
   recommendationCardElements.delete(item.recommendation.post.id);
+  if (!homeViewActive.value) {
+    return;
+  }
   recommendationTelemetry.detachFeedCard(item.recommendation.post.id, item.recommendation.tracking);
   queueMicrotask(() => {
-    if (recommendationCardElements.has(item.recommendation.post.id)) {
+    if (!homeViewActive.value || recommendationCardElements.has(item.recommendation.post.id)) {
       return;
     }
     const stillRendered = visibleForYouItems.value.some(
@@ -489,11 +517,23 @@ const handleNotInterested = (postId: number) => {
   recommendationCardElements.delete(postId);
 };
 
-watch(() => route.query.tab, normalizeRouteTab, { immediate: true });
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (!homeViewActive.value || route.name !== 'Home') {
+      return;
+    }
+    normalizeRouteTab(tab);
+  },
+  { immediate: true },
+);
 
 watch(
   activeTab,
   (tab, previousTab) => {
+    if (!homeViewActive.value) {
+      return;
+    }
     if (previousTab && previousTab !== tab) {
       saveCurrentScroll(previousTab);
       if (previousTab === 'for-you') {
@@ -520,6 +560,9 @@ watch(
     () => followingFeed.revalidating,
   ],
   () => {
+    if (!homeViewActive.value) {
+      return;
+    }
     void nextTick(updateFollowingObserver);
   },
   { flush: 'post' },
@@ -537,6 +580,9 @@ watch(
     () => authStore.isAuthenticated,
   ],
   () => {
+    if (!homeViewActive.value) {
+      return;
+    }
     void nextTick(updateForYouObserver);
   },
   { flush: 'post', immediate: true },
@@ -553,18 +599,59 @@ watch(
 watch(
   () => authStore.isAuthenticated,
   (isAuthenticated) => {
-    if (isAuthenticated) {
+    if (isAuthenticated && homeViewActive.value) {
       loadActiveFeed();
     }
   },
   { immediate: true },
 );
 
-onBeforeUnmount(() => {
+onDeactivated(() => {
+  if (!homeViewActive.value) {
+    return;
+  }
   saveCurrentScroll(activeTab.value);
+  homeViewActive.value = false;
+  resumeOnActivation = true;
   disconnectForYouObserver();
   disconnectFollowingObserver();
-  resetRecommendationObservation();
+  pauseRecommendationObservation();
+});
+
+onActivated(() => {
+  if (!resumeOnActivation) {
+    return;
+  }
+  resumeOnActivation = false;
+  homeViewActive.value = true;
+
+  const previousTab = activeTab.value;
+  const tab = normalizeRouteTab(route.query.tab);
+  if (previousTab === tab) {
+    loadActiveFeed(tab);
+    restoreScroll(tab);
+  }
+
+  void nextTick(() => {
+    if (!homeViewActive.value) {
+      return;
+    }
+    updateForYouObserver();
+    updateFollowingObserver();
+    void bindCurrentRecommendationCards();
+  });
+});
+
+onBeforeUnmount(() => {
+  if (homeViewActive.value) {
+    saveCurrentScroll(activeTab.value);
+    disconnectForYouObserver();
+    disconnectFollowingObserver();
+    pauseRecommendationObservation();
+  }
+  homeViewActive.value = false;
+  resumeOnActivation = false;
+  recommendationCardElements.clear();
 });
 </script>
 
