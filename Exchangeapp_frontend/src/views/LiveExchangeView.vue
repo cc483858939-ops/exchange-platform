@@ -28,22 +28,22 @@
       <div v-else class="exchange-layout">
         <el-form class="exchange-form" label-position="top" @submit.prevent="requestQuote">
           <div class="currency-grid">
-            <el-form-item label="Currency">
+            <el-form-item label="From currency">
               <el-select v-model="form.fromCurrency" filterable placeholder="Select currency">
                 <el-option v-for="currency in currencies" :key="'from-' + currency" :label="currency" :value="currency" />
               </el-select>
             </el-form-item>
-            <el-button class="swap-button" plain :disabled="!form.fromCurrency || !form.toCurrency" @click="swapCurrencies">Swap</el-button>
-            <el-form-item label="Currency">
+            <el-button class="swap-button" plain native-type="button" :disabled="!form.fromCurrency || !form.toCurrency" @click="swapCurrencies">Swap</el-button>
+            <el-form-item label="To currency">
               <el-select v-model="form.toCurrency" filterable placeholder="Select currency">
                 <el-option v-for="currency in currencies" :key="'to-' + currency" :label="currency" :value="currency" />
               </el-select>
             </el-form-item>
           </div>
-          <el-form-item label="Amount"><el-input v-model="form.amount" inputmode="decimal" placeholder="e.g. 100" @keyup.enter="requestQuote" /></el-form-item>
+          <el-form-item label="Amount"><el-input v-model="form.amount" inputmode="decimal" placeholder="e.g. 100" /></el-form-item>
           <div class="form-actions">
-            <el-button type="primary" :loading="quoting" @click="requestQuote">Get quote</el-button>
-            <el-button :loading="refreshing" @click="loadCurrencies">Refresh rates</el-button>
+            <el-button type="primary" native-type="submit" :loading="quoting">Get quote</el-button>
+            <el-button native-type="button" :loading="refreshing" @click="loadCurrencies">Refresh rates</el-button>
           </div>
         </el-form>
 
@@ -124,12 +124,16 @@ const restoreScrollOnce = async () => {
 
 const loadCurrencies = () => { void exchangeSession.loadCurrencies({ force: true }); };
 
+const isValidAmount = (amount: string) => (
+  /^\d+(\.\d+)?$/.test(amount) && Number(amount) > 0
+);
+
 const requestQuote = async () => {
   if (!form.value.fromCurrency || !form.value.toCurrency) {
     ElMessage.error('Select both currencies.');
     return;
   }
-  if (!/^\d+(\.\d+)?$/.test(form.value.amount) || Number(form.value.amount) <= 0) {
+  if (!isValidAmount(form.value.amount)) {
     ElMessage.error('Enter an amount greater than zero.');
     return;
   }
@@ -144,7 +148,7 @@ const requestQuote = async () => {
 
 const swapCurrencies = async () => {
   const shouldRefreshQuote = exchangeSession.swapCurrencies();
-  if (shouldRefreshQuote) {
+  if (shouldRefreshQuote || !isValidAmount(form.value.amount)) {
     await requestQuote();
   }
 };

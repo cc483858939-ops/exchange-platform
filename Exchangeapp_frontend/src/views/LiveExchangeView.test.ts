@@ -66,8 +66,9 @@ const mountExchange = () => mount(LiveExchangeView, {
         template: '<div class="el-alert"><span v-if="title">{{ title }}</span><slot /></div>',
       },
       ElButton: {
+        props: ['nativeType', 'loading'],
         emits: ['click'],
-        template: '<button type="button" @click="$emit(\'click\', $event)"><slot /></button>',
+        template: '<button :type="nativeType || \'button\'" @click="$emit(\'click\', $event)"><slot /></button>',
       },
       ElForm: {
         inheritAttrs: false,
@@ -80,7 +81,7 @@ const mountExchange = () => mount(LiveExchangeView, {
       ElInput: {
         props: ['modelValue', 'placeholder'],
         emits: ['update:modelValue', 'keyup'],
-        template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+        template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" @keyup="$emit(\'keyup\', $event)" />',
       },
       ElOption: { template: '<option><slot /></option>' },
       ElSelect: {
@@ -112,8 +113,9 @@ const mountKeepAliveExchange = () => {
             template: '<div class="el-alert"><span v-if="title">{{ title }}</span><slot /></div>',
           },
           ElButton: {
+            props: ['nativeType', 'loading'],
             emits: ['click'],
-            template: '<button type="button" @click="$emit(\'click\', $event)"><slot /></button>',
+            template: '<button :type="nativeType || \'button\'" @click="$emit(\'click\', $event)"><slot /></button>',
           },
           ElForm: {
             inheritAttrs: false,
@@ -126,7 +128,7 @@ const mountKeepAliveExchange = () => {
           ElInput: {
             props: ['modelValue', 'placeholder'],
             emits: ['update:modelValue', 'keyup'],
-            template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+            template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" @keyup="$emit(\'keyup\', $event)" />',
           },
           ElOption: { template: '<option><slot /></option>' },
           ElSelect: {
@@ -193,7 +195,8 @@ describe('LiveExchangeView', () => {
     expect(text).toContain('Convert currencies using reference rates with clear source and market-date information.');
     expect(text).toContain('Latest rates');
     expect(text).toContain('Market date 2026-08-25');
-    expect(text).toContain('Currency');
+    expect(text).toContain('From currency');
+    expect(text).toContain('To currency');
     expect(text).toContain('Select currency');
     expect(text).toContain('Swap');
     expect(text).toContain('Amount');
@@ -202,6 +205,80 @@ describe('LiveExchangeView', () => {
     expect(text).toContain('Refresh rates');
     expect(text).toContain('Quote result');
     expect(text).not.toMatch(/[\u4E00-\u9FFF]/);
+  });
+
+  it('uses one form submit path with explicit button semantics', async () => {
+    wrapper = mountExchange();
+    await flushPromises();
+    mocks.get.mockClear();
+
+    expect(wrapper.get('.swap-button').attributes('type')).toBe('button');
+    const actionButtons = wrapper.find('.form-actions').findAll('button');
+    expect(actionButtons[0].attributes('type')).toBe('submit');
+    expect(actionButtons[1].attributes('type')).toBe('button');
+
+    await wrapper.get('input').trigger('keyup.enter');
+    await flushPromises();
+    expect(mocks.get).not.toHaveBeenCalled();
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledWith('/exchange/quote', {
+      params: { from: 'CNY', to: 'USD', amount: '100' },
+    });
+  });
+
+  it('removes an amount-mismatched quote without requesting automatically', async () => {
+    wrapper = mountExchange();
+    await flushPromises();
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.text()).toContain('14.00 USD');
+    mocks.get.mockClear();
+
+    await wrapper.get('input').setValue('200');
+    await nextTick();
+
+    expect(wrapper.text()).not.toContain('14.00 USD');
+    expect(wrapper.text()).toContain('Select two currencies and enter an amount to get a quote.');
+    expect(mocks.get).not.toHaveBeenCalled();
+
+    mocks.get.mockResolvedValueOnce({ data: { ...quote, amount: '200', convertedAmount: '28.00' } });
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledWith('/exchange/quote', {
+      params: { from: 'CNY', to: 'USD', amount: '200' },
+    });
+    expect(wrapper.text()).toContain('28.00 USD');
+    expect(wrapper.text()).not.toContain('14.00 USD');
+  });
+
+  it('removes a currency-mismatched quote and requests only after submit', async () => {
+    wrapper = mountExchange();
+    await flushPromises();
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.text()).toContain('14.00 USD');
+    mocks.get.mockClear();
+    const store = useExchangeSessionStore();
+
+    store.form.fromCurrency = 'EUR';
+    await nextTick();
+    expect(wrapper.text()).not.toContain('14.00 USD');
+    expect(wrapper.text()).toContain('Quote result');
+    expect(mocks.get).not.toHaveBeenCalled();
+
+    mocks.get.mockResolvedValueOnce({ data: { ...quote, from: 'EUR', amount: '100' } });
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledWith('/exchange/quote', {
+      params: { from: 'EUR', to: 'USD', amount: '100' },
+    });
   });
 
   it('reuses the cached currencies and quote when the route is re-entered', async () => {
@@ -234,6 +311,7 @@ describe('LiveExchangeView', () => {
     expect(mocks.get).toHaveBeenNthCalledWith(3, '/exchange/quote', {
       params: { from: 'USD', to: 'CNY', amount: '100' },
     });
+    expect(mocks.get).toHaveBeenCalledTimes(3);
     expect(wrapper.text()).toContain('712.00 CNY');
     expect(ElMessage.error).not.toHaveBeenCalled();
   });

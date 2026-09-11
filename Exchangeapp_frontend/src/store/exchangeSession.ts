@@ -1,4 +1,4 @@
-import { reactive, ref } from 'vue';
+import { reactive, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
 import { isAxiosError } from 'axios';
 import axios from '../axios';
@@ -66,6 +66,25 @@ export const useExchangeSessionStore = defineStore('exchangeSession', () => {
   const scrollY = ref(0);
   const currencyRequestVersion = ref(0);
   const quoteRequestVersion = ref(0);
+
+  const invalidateQuoteForFormChange = () => {
+    quoteRequestVersion.value += 1;
+    quote.value = null;
+    quoteError.value = '';
+    quoting.value = false;
+  };
+
+  watch(
+    () => [
+      form.fromCurrency,
+      form.toCurrency,
+      form.amount,
+    ] as const,
+    () => {
+      invalidateQuoteForFormChange();
+    },
+    { flush: 'sync' },
+  );
 
   const updateFormCurrencies = (available: string[]) => {
     if (!available.includes(form.fromCurrency)) {

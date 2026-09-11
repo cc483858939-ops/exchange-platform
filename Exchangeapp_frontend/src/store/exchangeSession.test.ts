@@ -144,6 +144,62 @@ describe('exchange session store', () => {
     expect(store.quoteError).toContain('quote offline');
   });
 
+  it('invalidates the quote synchronously when the amount changes', () => {
+    const store = useExchangeSessionStore();
+    store.quote = quote('100');
+    store.quoteError = 'Could not get a quote.';
+    store.quoting = true;
+    const previousRequestVersion = store.quoteRequestVersion;
+
+    store.form.amount = '200';
+
+    expect(store.quote).toBeNull();
+    expect(store.quoteError).toBe('');
+    expect(store.quoting).toBe(false);
+    expect(store.quoteRequestVersion).toBe(previousRequestVersion + 1);
+  });
+
+  it('invalidates the quote synchronously when the from currency changes', () => {
+    const store = useExchangeSessionStore();
+    store.quote = quote('100');
+
+    store.form.fromCurrency = 'EUR';
+
+    expect(store.quote).toBeNull();
+  });
+
+  it('invalidates the quote synchronously when the to currency changes', () => {
+    const store = useExchangeSessionStore();
+    store.quote = quote('100');
+
+    store.form.toCurrency = 'EUR';
+
+    expect(store.quote).toBeNull();
+  });
+
+  it('invalidates a pending quote request when the form changes', async () => {
+    const pending = deferred<{ data: ReturnType<typeof quote> }>();
+    mocks.get.mockReturnValueOnce(pending.promise);
+    const store = useExchangeSessionStore();
+    const request = store.requestQuote();
+    const requestVersion = store.quoteRequestVersion;
+
+    expect(store.quoting).toBe(true);
+    store.form.amount = '200';
+
+    expect(store.quote).toBeNull();
+    expect(store.quoteError).toBe('');
+    expect(store.quoting).toBe(false);
+    expect(store.quoteRequestVersion).toBe(requestVersion + 1);
+
+    pending.resolve({ data: quote('100') });
+    const result = await request;
+
+    expect(result).toEqual({ applied: false, success: true, data: quote('100') });
+    expect(store.quote).toBeNull();
+    expect(store.quoting).toBe(false);
+  });
+
   it('uses a frontend-owned quote fallback instead of raw API error copy', async () => {
     mocks.get.mockRejectedValueOnce({
       isAxiosError: true,
@@ -166,7 +222,7 @@ describe('exchange session store', () => {
     expect(store.form.toCurrency).toBe('CNY');
     expect(shouldRefresh).toBe(true);
     expect(mocks.get).not.toHaveBeenCalled();
-    expect(store.quote?.from).toBe('CNY');
+    expect(store.quote).toBeNull();
   });
 
   it('only swaps currencies when no quote exists', () => {
