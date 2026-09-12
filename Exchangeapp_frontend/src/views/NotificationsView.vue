@@ -1,80 +1,85 @@
 <template>
   <section class="notifications-page" aria-labelledby="notifications-title">
-    <header class="notifications-page__header">
-      <div>
-        <p class="notifications-page__eyebrow">INBOX</p>
-        <h1 id="notifications-title">Notifications</h1>
-      </div>
-      <button
-        v-if="hasUnread && !markAllPending"
-        class="notifications-page__mark-all"
-        type="button"
-        @click="markAll"
-      >
-        Mark all as read
-      </button>
-      <span v-else-if="markAllPending" class="notifications-page__pending-label">Updating…</span>
-    </header>
-
-    <div v-if="!authStore.isAuthenticated" class="notifications-page__state">
-      <h2>Log in to view your notifications.</h2>
-      <router-link class="notifications-page__action" :to="{ name: 'Login' }">Log in</router-link>
-    </div>
-    <div v-else-if="loading && items.length === 0" class="notifications-page__state" aria-live="polite">
-      <p>Loading notifications…</p>
-    </div>
-    <div v-else-if="error && items.length === 0" class="notifications-page__state notifications-page__state--error" role="alert">
-      <p>We couldn’t load your notifications.</p>
-      <button class="notifications-page__action" type="button" @click="loadInitial">Try again</button>
-    </div>
-    <div v-else-if="items.length === 0" class="notifications-page__state">
-      <span class="notifications-page__empty-icon" aria-hidden="true">
-        <AppIcon name="notifications" :size="28" />
-      </span>
-      <h2>You’re all caught up.</h2>
-      <p>New likes, replies, and follows will appear here.</p>
-    </div>
-    <div v-else class="notifications-page__list" aria-live="polite">
-      <article
-        v-for="item in items"
-        :key="item.id"
-        class="notification-card"
-        :class="{ 'notification-card--unread': !item.read }"
-      >
-        <button class="notification-card__open" type="button" @click="openNotification(item)">
-          <UserAvatar
-            class="notification-card__avatar"
-            :avatar-url="item.actor.avatar_url"
-            :display-name="item.actor.display_name"
-            :username="item.actor.username"
-            :size="44"
-            decorative
-          />
-          <span class="notification-card__body">
-            <span class="notification-card__title">
-              <strong>{{ item.actor.display_name || item.actor.username }}</strong>
-              {{ notificationCopy(item) }}
-            </span>
-            <span class="notification-card__meta">{{ formatActivityAt(item.activity_at) }}</span>
-          </span>
-          <span v-if="!item.read" class="notification-card__dot" aria-label="Unread" />
-          <span v-if="pendingReadIDs.has(item.id)" class="notification-card__pending" aria-label="Saving">…</span>
+    <div
+      ref="notificationsScrollViewportRef"
+      class="notifications-scroll-viewport"
+    >
+      <header class="notifications-page__header">
+        <div>
+          <p class="notifications-page__eyebrow">INBOX</p>
+          <h1 id="notifications-title">Notifications</h1>
+        </div>
+        <button
+          v-if="hasUnread && !markAllPending"
+          class="notifications-page__mark-all"
+          type="button"
+          @click="markAll"
+        >
+          Mark all as read
         </button>
-      </article>
-      <div ref="sentinel" class="notifications-page__sentinel" aria-hidden="true" />
-      <div v-if="loadingMore" class="notifications-page__load-state" aria-live="polite">Loading more…</div>
-      <div v-if="loadMoreError" class="notifications-page__load-state notifications-page__load-state--error" role="alert">
-        <span>Couldn’t load more notifications.</span>
-        <button class="notifications-page__action" type="button" @click="loadMore">Try again</button>
+        <span v-else-if="markAllPending" class="notifications-page__pending-label">Updating…</span>
+      </header>
+
+      <div v-if="!authStore.isAuthenticated" class="notifications-page__state">
+        <h2>Log in to view your notifications.</h2>
+        <router-link class="notifications-page__action" :to="{ name: 'Login' }">Log in</router-link>
       </div>
-      <button
-        v-if="nextCursor && !observerAvailable && !loadingMore"
-        class="notifications-page__load-more"
-        type="button"
-        @click="loadMore"
-      >
-        Load more
-      </button>
+      <div v-else-if="loading && items.length === 0" class="notifications-page__state" aria-live="polite">
+        <p>Loading notifications…</p>
+      </div>
+      <div v-else-if="error && items.length === 0" class="notifications-page__state notifications-page__state--error" role="alert">
+        <p>We couldn’t load your notifications.</p>
+        <button class="notifications-page__action" type="button" @click="loadInitial">Try again</button>
+      </div>
+      <div v-else-if="items.length === 0" class="notifications-page__state">
+        <span class="notifications-page__empty-icon" aria-hidden="true">
+          <AppIcon name="notifications" :size="28" />
+        </span>
+        <h2>You’re all caught up.</h2>
+        <p>New likes, replies, and follows will appear here.</p>
+      </div>
+      <div v-else class="notifications-page__list" aria-live="polite">
+        <article
+          v-for="item in items"
+          :key="item.id"
+          class="notification-card"
+          :class="{ 'notification-card--unread': !item.read }"
+        >
+          <button class="notification-card__open" type="button" @click="openNotification(item)">
+            <UserAvatar
+              class="notification-card__avatar"
+              :avatar-url="item.actor.avatar_url"
+              :display-name="item.actor.display_name"
+              :username="item.actor.username"
+              :size="44"
+              decorative
+            />
+            <span class="notification-card__body">
+              <span class="notification-card__title">
+                <strong>{{ item.actor.display_name || item.actor.username }}</strong>
+                {{ notificationCopy(item) }}
+              </span>
+              <span class="notification-card__meta">{{ formatActivityAt(item.activity_at) }}</span>
+            </span>
+            <span v-if="!item.read" class="notification-card__dot" aria-label="Unread" />
+            <span v-if="pendingReadIDs.has(item.id)" class="notification-card__pending" aria-label="Saving">…</span>
+          </button>
+        </article>
+        <div ref="sentinel" class="notifications-page__sentinel" aria-hidden="true" />
+        <div v-if="loadingMore" class="notifications-page__load-state" aria-live="polite">Loading more…</div>
+        <div v-if="loadMoreError" class="notifications-page__load-state notifications-page__load-state--error" role="alert">
+          <span>Couldn’t load more notifications.</span>
+          <button class="notifications-page__action" type="button" @click="loadMore">Try again</button>
+        </div>
+        <button
+          v-if="nextCursor && !observerAvailable && !loadingMore"
+          class="notifications-page__load-more"
+          type="button"
+          @click="loadMore"
+        >
+          Load more
+        </button>
+      </div>
     </div>
   </section>
 </template>
@@ -91,7 +96,7 @@ import {
   watch,
 } from 'vue';
 import { storeToRefs } from 'pinia';
-import { useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { useNotificationStore } from '../store/notification';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -113,6 +118,7 @@ const {
   markAllPending,
 } = storeToRefs(notificationStore);
 const sentinel = ref<HTMLElement | null>(null);
+const notificationsScrollViewportRef = ref<HTMLElement | null>(null);
 const observerAvailable = ref(typeof IntersectionObserver !== 'undefined');
 let observer: IntersectionObserver | null = null;
 let mounted = false;
@@ -132,6 +138,15 @@ const disconnectObserver = () => {
   observer = null;
 };
 
+const saveCurrentScroll = () => {
+  const viewport = notificationsScrollViewportRef.value;
+  if (!viewport) {
+    return;
+  }
+
+  notificationStore.saveScrollTop(viewport.scrollTop);
+};
+
 const setupObserver = async () => {
   disconnectObserver();
   if (!mounted || !notificationsViewActive.value) {
@@ -142,6 +157,7 @@ const setupObserver = async () => {
     !mounted
     || !notificationsViewActive.value
     || !observerAvailable.value
+    || !notificationsScrollViewportRef.value
     || !nextCursor.value
     || !sentinel.value
     || notificationStore.listStale
@@ -149,11 +165,15 @@ const setupObserver = async () => {
   ) {
     return;
   }
+  const root = notificationsScrollViewportRef.value;
+  if (!root) {
+    return;
+  }
   observer = new IntersectionObserver((entries) => {
     if (notificationsViewActive.value && entries.some((entry) => entry.isIntersecting)) {
       void notificationStore.loadMore();
     }
-  }, { rootMargin: '240px 0px' });
+  }, { root, rootMargin: '240px 0px' });
   observer.observe(sentinel.value);
 };
 
@@ -180,11 +200,17 @@ const restoreScrollOnce = async () => {
   ) {
     return;
   }
-  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
-    window.scrollTo({ top: notificationStore.scrollY, behavior: 'auto' });
+  const viewport = notificationsScrollViewportRef.value;
+  if (!viewport) {
+    return;
   }
+  viewport.scrollTop = notificationStore.scrollTop;
   restoredEntryVersion = entryVersion;
 };
+
+onBeforeRouteLeave(() => {
+  saveCurrentScroll();
+});
 
 const openNotification = (item: Notification) => {
   void notificationStore.markNotificationRead(item.id).catch(() => undefined);
@@ -240,10 +266,6 @@ onDeactivated(() => {
     return;
   }
 
-  if (typeof window !== 'undefined') {
-    notificationStore.saveScroll(window.scrollY);
-  }
-
   notificationsViewActive.value = false;
   resumeOnActivation = true;
   disconnectObserver();
@@ -257,7 +279,6 @@ onActivated(() => {
   resumeOnActivation = false;
   notificationsViewActive.value = true;
 
-  const cachedScrollY = notificationStore.scrollY;
   void notificationStore.loadInitial();
 
   void nextTick(() => {
@@ -265,22 +286,14 @@ onActivated(() => {
       return;
     }
 
-    if (
-      loaded.value
-      && !loading.value
-      && typeof window !== 'undefined'
-      && typeof window.scrollTo === 'function'
-    ) {
-      window.scrollTo({ top: cachedScrollY, behavior: 'auto' });
-    }
-
+    void restoreScrollOnce();
     void setupObserver();
   });
 });
 
 onBeforeUnmount(() => {
-  if (notificationsViewActive.value && typeof window !== 'undefined') {
-    notificationStore.saveScroll(window.scrollY);
+  if (notificationsViewActive.value) {
+    saveCurrentScroll();
   }
   mounted = false;
   notificationsViewActive.value = false;
@@ -291,9 +304,28 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .notifications-page {
-  min-height: 100vh;
-  min-height: 100dvh;
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.notifications-scroll-viewport {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: clamp(24px, 4vw, 48px) clamp(16px, 4vw, 32px) 72px;
+  overscroll-behavior-y: contain;
+  overflow-anchor: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .notifications-page__header {
@@ -487,7 +519,7 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 520px) {
-  .notifications-page {
+  .notifications-scroll-viewport {
     padding-inline: 14px;
   }
 
@@ -508,14 +540,27 @@ onBeforeUnmount(() => {
 
 @media (max-width: 799px) {
   .notifications-page {
-    min-height: 100vh;
-    min-height: 100dvh;
+    height: calc(
+      100vh
+      - var(--mobile-safe-top)
+      - var(--mobile-bottom-nav-height)
+      - var(--mobile-safe-bottom)
+    );
+    height: calc(
+      100dvh
+      - var(--mobile-safe-top)
+      - var(--mobile-bottom-nav-height)
+      - var(--mobile-safe-bottom)
+    );
+  }
+
+  .notifications-scroll-viewport {
     padding: 0 0 24px;
   }
 
   .notifications-page__header {
     position: sticky;
-    top: var(--mobile-safe-top);
+    top: 0;
     z-index: 20;
     min-height: var(--mobile-topbar-height);
     align-items: center;

@@ -52,7 +52,7 @@ export const useNotificationStore = defineStore('notification', () => {
   const revalidateError = ref<unknown | null>(null);
   const pendingReadIDs = ref(new Set<number>());
   const markAllPending = ref(false);
-  const scrollY = ref(0);
+  const scrollTop = ref(0);
   const listRequestVersion = ref(0);
   const pagingRequestVersion = ref(0);
 
@@ -108,7 +108,7 @@ export const useNotificationStore = defineStore('notification', () => {
     pendingReadIDs.value = new Set();
     markAllPending.value = false;
     markAllSnapshot = null;
-    scrollY.value = 0;
+    scrollTop.value = 0;
   };
 
   const setViewer = (nextViewerID: number | null) => {
@@ -395,10 +395,8 @@ export const useNotificationStore = defineStore('notification', () => {
     }
   };
 
-  const saveScroll = (value: number) => {
-    if (Number.isFinite(value) && value >= 0) {
-      scrollY.value = value;
-    }
+  const saveScrollTop = (value: number) => {
+    scrollTop.value = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
   return {
@@ -420,7 +418,7 @@ export const useNotificationStore = defineStore('notification', () => {
     revalidateError,
     pendingReadIDs,
     markAllPending,
-    scrollY,
+    scrollTop,
     listRequestVersion,
     pagingRequestVersion,
     setViewer,
@@ -435,6 +433,6 @@ export const useNotificationStore = defineStore('notification', () => {
     revalidateNotifications,
     markNotificationRead,
     markAllRead,
-    saveScroll,
+    saveScrollTop,
   };
 });

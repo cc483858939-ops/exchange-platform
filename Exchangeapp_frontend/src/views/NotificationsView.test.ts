@@ -11,6 +11,7 @@ import type { Notification } from '../types/Notification';
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
   router: { push: vi.fn() },
+  routeLeaveGuard: null as (() => void) | null,
   getNotifications: vi.fn(),
   getUnreadNotificationCount: vi.fn(),
   markNotificationRead: vi.fn(),
@@ -29,6 +30,9 @@ vi.mock('../services/notificationService', () => ({
 }));
 
 vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: (guard: () => void) => {
+    mocks.routeLeaveGuard = guard;
+  },
   useRouter: () => mocks.router,
 }));
 
@@ -38,6 +42,16 @@ const notification = (id: number, read = false, avatarURL = ''): Notification =>
   actor: { id: 9, username: 'alice', display_name: 'Alice', avatar_url: avatarURL },
   post_id: 42,
   conversation_id: 42,
+  activity_at: '2026-08-22T12:00:00.000Z',
+  read,
+});
+
+const followedNotification = (id: number, actorID = 9, read = false): Notification => ({
+  id,
+  type: 'user_followed',
+  actor: { id: actorID, username: 'alice', display_name: 'Alice', avatar_url: '' },
+  post_id: null,
+  conversation_id: null,
   activity_at: '2026-08-22T12:00:00.000Z',
   read,
 });
@@ -75,10 +89,14 @@ class TestIntersectionObserver {
   static instances: TestIntersectionObserver[] = [];
   readonly observe = vi.fn();
   readonly disconnect = vi.fn();
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
   private readonly callback: IntersectionObserverCallback;
 
-  constructor(callback: IntersectionObserverCallback) {
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.callback = callback;
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? '';
     TestIntersectionObserver.instances.push(this);
   }
 
@@ -90,7 +108,7 @@ class TestIntersectionObserver {
   }
 }
 
-const setScrollY = (value: number) => {
+const setWindowScrollY = (value: number) => {
   Object.defineProperty(window, 'scrollY', { configurable: true, value });
 };
 
@@ -119,7 +137,7 @@ describe('NotificationsView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
-    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    mocks.routeLeaveGuard = null;
     setAuth(null);
     setNotificationViewer(null);
     mocks.getNotifications.mockResolvedValue({ items: [], next_cursor: null });
@@ -224,7 +242,7 @@ describe('NotificationsView', () => {
     wrapper.unmount();
   });
 
-  it('saves scroll and disconnects the observer on deactivation', async () => {
+  it('saves viewport scrollTop on route leave and disconnects the observer on deactivation', async () => {
     vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
     TestIntersectionObserver.instances = [];
     setAuth(7);
@@ -237,12 +255,16 @@ describe('NotificationsView', () => {
     expect(TestIntersectionObserver.instances).toHaveLength(1);
     expect(useNotificationStore().nextCursor).toBe('cursor-1');
     const initialObserver = TestIntersectionObserver.instances[0];
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
 
-    setScrollY(1800);
+    viewport.scrollTop = 1800;
+    setWindowScrollY(777);
+    mocks.routeLeaveGuard?.();
+    expect(store.scrollTop).toBe(1800);
+
     state.showNotifications = false;
     await nextTick();
 
-    expect(store.scrollY).toBe(1800);
     expect(initialObserver.disconnect).toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -260,8 +282,6 @@ describe('NotificationsView', () => {
     const initialObserver = TestIntersectionObserver.instances[0];
     state.showNotifications = false;
     await nextTick();
-    setScrollY(300);
-    vi.mocked(window.scrollTo).mockClear();
 
     store.items = [...store.items, notification(2)];
     store.nextCursor = 'cursor-2';
@@ -270,31 +290,35 @@ describe('NotificationsView', () => {
 
     expect(TestIntersectionObserver.instances).toHaveLength(1);
     expect(mocks.getNotifications).toHaveBeenCalledTimes(1);
-    expect(window.scrollTo).not.toHaveBeenCalled();
+    expect(store.scrollTop).toBe(0);
     wrapper.unmount();
   });
 
-  it('restores notification scroll and resumes the observer on activation', async () => {
+  it('preserves the cached viewport and never restores the global window on activation', async () => {
     vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
     TestIntersectionObserver.instances = [];
     setAuth(7);
     setNotificationViewer(7);
     mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: 'cursor-1' });
     const { state, wrapper } = mountKeepAliveView();
+    const store = useNotificationStore();
     await flushPromises();
     await nextTick();
     expect(TestIntersectionObserver.instances).toHaveLength(1);
-    vi.mocked(window.scrollTo).mockClear();
-    setScrollY(1800);
+    const originalViewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    originalViewport.scrollTop = 1800;
+    mocks.routeLeaveGuard?.();
+    expect(store.scrollTop).toBe(1800);
+
     state.showNotifications = false;
     await nextTick();
-    setScrollY(300);
+    setWindowScrollY(1200);
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
 
     state.showNotifications = true;
     await flushPromises();
     await nextTick();
     await flushPromises();
-    await nextTick();
     await nextTick();
     await nextTick();
     await nextTick();
@@ -306,8 +330,90 @@ describe('NotificationsView', () => {
     expect(useNotificationStore().loadingMore).toBe(false);
     expect(useNotificationStore().loadMoreError).toBeNull();
 
-    expect(window.scrollTo).toHaveBeenCalledWith({ top: 1800, behavior: 'auto' });
+    const restoredViewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    expect(restoredViewport).toBe(originalViewport);
+    expect(restoredViewport.scrollTop).toBe(1800);
+    expect(scrollTo).not.toHaveBeenCalled();
     expect(TestIntersectionObserver.instances.length).toBeGreaterThanOrEqual(2);
+    wrapper.unmount();
+  });
+
+  it('uses the internal viewport as the pagination observer root', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+    TestIntersectionObserver.instances = [];
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: 'cursor-1' });
+    const wrapper = mountView();
+    await flushPromises();
+    await nextTick();
+
+    const viewport = wrapper.get('.notifications-scroll-viewport').element;
+    const observer = TestIntersectionObserver.instances[0];
+    expect(observer.root).toBe(viewport);
+    expect(observer.rootMargin).toBe('240px 0px');
+    wrapper.unmount();
+  });
+
+  it('keeps the internal scroll position when notification data revalidates', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: 'cursor-old' });
+    const store = useNotificationStore();
+    const wrapper = mountView();
+    await flushPromises();
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 820;
+
+    mocks.getUnreadNotificationCount.mockResolvedValueOnce(2);
+    await store.refreshUnreadCount();
+    const revalidation = deferred<{ items: Notification[]; next_cursor: string | null }>();
+    mocks.getNotifications.mockReturnValueOnce(revalidation.promise);
+    const request = store.revalidateNotifications();
+    revalidation.resolve({ items: [notification(2)], next_cursor: 'cursor-new' });
+    await request;
+    await nextTick();
+
+    expect(viewport.scrollTop).toBe(820);
+    wrapper.unmount();
+  });
+
+  it('saves the post notification position before navigating to PostDetail', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: null });
+    const store = useNotificationStore();
+    const wrapper = mountView();
+    await flushPromises();
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1400;
+
+    await wrapper.find('.notification-card__open').trigger('click');
+    mocks.routeLeaveGuard?.();
+
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'PostDetail', params: { id: '42' } });
+    expect(store.scrollTop).toBe(1400);
+    wrapper.unmount();
+  });
+
+  it('navigates user-followed notifications to UserProfile and saves the position', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({
+      items: [followedNotification(2, 9)],
+      next_cursor: null,
+    });
+    const store = useNotificationStore();
+    const wrapper = mountView();
+    await flushPromises();
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 980;
+
+    await wrapper.find('.notification-card__open').trigger('click');
+    mocks.routeLeaveGuard?.();
+
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'UserProfile', params: { id: '9' } });
+    expect(store.scrollTop).toBe(980);
     wrapper.unmount();
   });
 });

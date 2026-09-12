@@ -67,13 +67,25 @@ describe('notification store', () => {
     mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: null });
     await store.loadInitial();
     store.setUnreadCount(4);
-    store.saveScroll(320);
+    store.saveScrollTop(320);
     const generation = store.viewerGeneration;
     expect(store.setViewer(7)).toBe(false);
     expect(store.viewerGeneration).toBe(generation);
     expect(store.unreadCount).toBe(4);
     expect(store.items.map(item => item.id)).toEqual([1]);
-    expect(store.scrollY).toBe(320);
+    expect(store.scrollTop).toBe(320);
+  });
+
+  it('saves valid scrollTop values and normalizes invalid values', () => {
+    const store = useNotificationStore();
+
+    store.saveScrollTop(640);
+    expect(store.scrollTop).toBe(640);
+
+    for (const value of [-1, NaN, Infinity]) {
+      store.saveScrollTop(value);
+      expect(store.scrollTop).toBe(0);
+    }
   });
 
   it('clears the list and ignores late unread/list responses after a viewer switch', async () => {
@@ -85,7 +97,7 @@ describe('notification store', () => {
     store.setViewer(7);
     const unreadRequest = store.refreshUnreadCount();
     const listRequest = store.loadInitial();
-    store.saveScroll(100);
+    store.saveScrollTop(100);
     store.setViewer(8);
     unread.resolve(12);
     page.resolve({ items: [notification(1)], next_cursor: null });
@@ -95,7 +107,7 @@ describe('notification store', () => {
     expect(store.unreadCount).toBe(0);
     expect(store.items).toEqual([]);
     expect(store.loaded).toBe(false);
-    expect(store.scrollY).toBe(0);
+    expect(store.scrollTop).toBe(0);
   });
 
   it('coalesces same-generation unread requests and marks a loaded list stale on increase', async () => {

@@ -65,7 +65,6 @@ describe('routeScrollBehavior', () => {
   it.each([
     ['UserSearch', {}],
     ['CurrencyExchange', {}],
-    ['Notifications', {}],
   ])('lets %s own scroll restoration even when savedPosition exists', (routeName, params) => {
     const savedPosition = { left: 12, top: 2200 };
 
@@ -114,6 +113,21 @@ describe('routeScrollBehavior', () => {
     ).toEqual({ left: 0, top: 0 });
   });
 
+  it.each([
+    ['PostDetail', { id: '42' }],
+    ['UserProfile', { id: '7' }],
+  ])('resets the global window position when entering Notifications from %s', (fromName, fromParams) => {
+    const savedPosition = { left: 0, top: 1700 };
+
+    expect(
+      applyScrollBehavior(
+        location('Notifications'),
+        location(fromName, fromParams),
+        savedPosition,
+      ),
+    ).toEqual({ left: 0, top: 0 });
+  });
+
   it('still returns savedPosition for a transient route when returning from PostDetail', () => {
     const savedPosition = { left: 0, top: 1500 };
 
@@ -129,7 +143,6 @@ describe('routeScrollBehavior', () => {
   it.each([
     ['Home', 'Search'],
     ['Search', 'Profile'],
-    ['Profile', 'Notifications'],
     ['Home', 'CurrencyExchange'],
   ])('does not mutate scroll for unrelated navigation from %s to %s', (fromName, toName) => {
     expect(applyScrollBehavior(location(toName), location(fromName))).toBe(false);
