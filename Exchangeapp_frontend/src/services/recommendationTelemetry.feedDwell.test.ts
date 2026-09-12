@@ -608,10 +608,11 @@ describe('RecommendationTelemetryClient Feed dwell', () => {
     })]);
   });
 
-  it('throttles scroll and resize reconciliation through one RAF', () => {
+  it('throttles window and inner feed viewport reconciliation through one RAF', () => {
     const telemetry = createClient();
 
     window.dispatchEvent(new Event('scroll'));
+    telemetry.notifyViewportChange();
     window.dispatchEvent(new Event('scroll'));
     window.dispatchEvent(new Event('resize'));
 

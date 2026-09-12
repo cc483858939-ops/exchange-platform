@@ -12,6 +12,7 @@
       :id="'feed-panel-' + activeTab"
       class="home-feed-panel"
       ref="feedPanelRef"
+      @scroll.passive="handleFeedScroll"
       role="tabpanel"
       tabindex="0"
       :aria-labelledby="'feed-tab-' + activeTab"
@@ -216,7 +217,6 @@ import { getRecommendationTelemetry } from '../services/recommendationTelemetry'
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import { useHomeTimelineStore } from '../store/homeTimeline';
-import type { HomeReturnAnchor } from '../store/homeTimeline';
 import type { RecommendedPost } from '../types/Recommendation';
 import type { FeedPost, FeedTab } from '../types/Feed';
 
@@ -247,7 +247,6 @@ const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
 const homeViewActive = ref(true);
 let resumeOnActivation = false;
-let scrollRestoreVersion = 0;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
 const activeFeedStatus = computed(() => {
@@ -281,143 +280,41 @@ const canDeletePost = (post: FeedPost) =>
   && post.author.id === currentViewerID();
 
 const saveCurrentScroll = (tab: FeedTab) => {
-  if (typeof window !== 'undefined') {
-    homeTimeline.setScrollY(tab, window.scrollY);
-  }
-};
-
-const normalizePositivePostId = (value: unknown): number | null => {
-  const raw = Array.isArray(value) ? value[0] : value;
-  const numeric = Number(raw);
-  return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : null;
-};
-
-const scrollToWindow = (top: number) => {
-  if (
-    typeof window === 'undefined'
-    || typeof window.scrollTo !== 'function'
-    || window.navigator.userAgent.toLowerCase().includes('jsdom')
-  ) {
-    return false;
-  }
-  window.scrollTo({ top, behavior: 'auto' });
-  return true;
-};
-
-const nextFrame = () => new Promise<void>((resolve) => {
-  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
-    resolve();
+  const panel = feedPanelRef.value;
+  if (!panel) {
     return;
   }
-  window.requestAnimationFrame(() => resolve());
-});
 
-const canContinueRestore = (
-  version: number,
-  tab: FeedTab,
-  expectedAnchor?: HomeReturnAnchor | null,
-) => (
-  version === scrollRestoreVersion
-  && homeViewActive.value
-  && activeTab.value === tab
-  && (
-    expectedAnchor === undefined
-    || homeTimeline.returnAnchors?.[tab] === expectedAnchor
-  )
-);
-
-const correctToAnchor = (postId: number, expectedViewportTop: number): boolean => {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  const card = feedPanelRef.value?.querySelector<HTMLElement>(
-    `[data-feed-post-id="${postId}"]`,
-  );
-  if (!card) {
-    return false;
-  }
-
-  const delta = card.getBoundingClientRect().top - expectedViewportTop;
-  if (Math.abs(delta) <= 1) {
-    return true;
-  }
-
-  scrollToWindow(Math.max(0, window.scrollY + delta));
-  return true;
+  homeTimeline.setScrollTop(tab, panel.scrollTop);
 };
 
 const restoreScroll = async (tab: FeedTab) => {
-  const version = ++scrollRestoreVersion;
-
   await nextTick();
 
-  if (!canContinueRestore(version, tab) || typeof window === 'undefined') {
+  if (!homeViewActive.value || activeTab.value !== tab) {
     return;
   }
 
-  const state = tab === 'for-you' ? forYouFeed : followingFeed;
-  if (!state.loaded) {
+  const panel = feedPanelRef.value;
+  if (!panel) {
     return;
   }
 
-  const anchor = homeTimeline.returnAnchors?.[tab] ?? null;
-  if (!anchor) {
-    scrollToWindow(homeTimeline.scrollY[tab]);
-    return;
+  const target = homeTimeline.scrollTop[tab];
+  if (Math.abs(panel.scrollTop - target) > 1) {
+    panel.scrollTop = target;
   }
-
-  scrollToWindow(anchor.fallbackScrollY);
-
-  await nextFrame();
-  if (!canContinueRestore(version, tab, anchor)) {
-    return;
-  }
-  correctToAnchor(anchor.postId, anchor.viewportTop);
-
-  await nextFrame();
-  if (!canContinueRestore(version, tab, anchor)) {
-    return;
-  }
-  correctToAnchor(anchor.postId, anchor.viewportTop);
-
-  homeTimeline.setScrollY(tab, window.scrollY);
-  homeTimeline.clearReturnAnchor(tab);
 };
 
-const capturePostDetailReturnAnchor = (postId: number) => {
-  if (typeof window === 'undefined') {
+const handleFeedScroll = () => {
+  if (!homeViewActive.value) {
     return;
   }
-
-  const tab = activeTab.value;
-  const currentScrollY = window.scrollY;
-  homeTimeline.setScrollY(tab, currentScrollY);
-
-  const card = feedPanelRef.value?.querySelector<HTMLElement>(
-    `[data-feed-post-id="${postId}"]`,
-  );
-  if (!card) {
-    homeTimeline.clearReturnAnchor(tab);
-    return;
-  }
-
-  homeTimeline.setReturnAnchor(tab, {
-    postId,
-    viewportTop: card.getBoundingClientRect().top,
-    fallbackScrollY: currentScrollY,
-  });
+  recommendationTelemetry.notifyViewportChange();
 };
 
-onBeforeRouteLeave((to) => {
-  if (to.name !== 'PostDetail') {
-    return;
-  }
-
-  const postId = normalizePositivePostId(to.params.id);
-  if (postId !== null) {
-    capturePostDetailReturnAnchor(postId);
-  }
+onBeforeRouteLeave(() => {
+  saveCurrentScroll(activeTab.value);
 });
 
 const selectTab = (tab: FeedTab) => {
@@ -460,6 +357,10 @@ const updateForYouObserver = () => {
     return;
   }
   disconnectForYouObserver();
+  const root = feedPanelRef.value;
+  if (!root) {
+    return;
+  }
   if (
     !forYouIntersectionObserverAvailable
     || activeTab.value !== 'for-you'
@@ -478,7 +379,7 @@ const updateForYouObserver = () => {
     if (homeViewActive.value && entries.some((entry) => entry.isIntersecting)) {
       void homeTimeline.loadMoreForYou();
     }
-  }, { rootMargin: '800px 0px' });
+  }, { root, rootMargin: '800px 0px' });
   forYouObserver.observe(forYouSentinelRef.value);
 };
 
@@ -487,6 +388,10 @@ const updateFollowingObserver = () => {
     return;
   }
   disconnectFollowingObserver();
+  const root = feedPanelRef.value;
+  if (!root) {
+    return;
+  }
   if (
     !followingIntersectionObserverAvailable
     || activeTab.value !== 'following'
@@ -505,7 +410,7 @@ const updateFollowingObserver = () => {
     if (homeViewActive.value && entries.some((entry) => entry.isIntersecting)) {
       void homeTimeline.loadMoreFollowing();
     }
-  }, { rootMargin: '240px 0px' });
+  }, { root, rootMargin: '240px 0px' });
   followingObserver.observe(followingSentinelRef.value);
 };
 
@@ -730,16 +635,8 @@ watch(
 );
 
 onDeactivated(() => {
-  scrollRestoreVersion += 1;
   if (!homeViewActive.value) {
     return;
-  }
-  const tab = activeTab.value;
-  const anchor = homeTimeline.returnAnchors?.[tab] ?? null;
-  if (anchor) {
-    homeTimeline.setScrollY(tab, anchor.fallbackScrollY);
-  } else {
-    saveCurrentScroll(tab);
   }
   homeViewActive.value = false;
   resumeOnActivation = true;
@@ -759,7 +656,7 @@ onActivated(() => {
   const tab = normalizeRouteTab(route.query.tab);
   if (previousTab === tab) {
     loadActiveFeed(tab);
-    restoreScroll(tab);
+    void restoreScroll(tab);
   }
 
   void nextTick(() => {
@@ -773,15 +670,9 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
-  scrollRestoreVersion += 1;
   if (homeViewActive.value) {
     const tab = activeTab.value;
-    const anchor = homeTimeline.returnAnchors?.[tab] ?? null;
-    if (anchor) {
-      homeTimeline.setScrollY(tab, anchor.fallbackScrollY);
-    } else {
-      saveCurrentScroll(tab);
-    }
+    saveCurrentScroll(tab);
     disconnectForYouObserver();
     disconnectFollowingObserver();
     pauseRecommendationObservation();
@@ -794,16 +685,21 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .home-view {
-  min-height: 100vh;
-  min-height: 100dvh;
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--color-surface);
   color: var(--color-text);
 }
 
 .home-feed-header {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 20;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   backdrop-filter: blur(10px);
@@ -831,7 +727,17 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.home-feed-panel,
+.home-feed-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  overflow-anchor: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .feed-list {
   min-width: 0;
 }
@@ -969,8 +875,23 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 799px) {
+  .home-view {
+    height: calc(
+      100vh
+      - var(--mobile-safe-top)
+      - var(--mobile-bottom-nav-height)
+      - var(--mobile-safe-bottom)
+    );
+
+    height: calc(
+      100dvh
+      - var(--mobile-safe-top)
+      - var(--mobile-bottom-nav-height)
+      - var(--mobile-safe-bottom)
+    );
+  }
+
   .home-feed-header {
-    top: var(--mobile-safe-top);
     padding: 0;
   }
 

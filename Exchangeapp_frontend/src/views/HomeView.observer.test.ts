@@ -15,11 +15,13 @@ class FakeIntersectionObserver {
   readonly disconnect = vi.fn(() => {
     this.observed.clear();
   });
+  readonly root: Element | Document | null;
   readonly rootMargin: string;
   private readonly callback: IntersectionObserverCallback;
 
   constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.callback = callback;
+    this.root = options?.root || null;
     this.rootMargin = options?.rootMargin || '';
     FakeIntersectionObserver.instances.push(this);
   }
@@ -47,6 +49,7 @@ const mocks = vi.hoisted(() => ({
     unobserveFeedCard: vi.fn(),
     recordClick: vi.fn(),
     recordNotInterested: vi.fn(),
+    notifyViewportChange: vi.fn(),
   },
 }));
 
@@ -196,7 +199,7 @@ describe('HomeView For You pagination observer', () => {
         revalidating: false,
         revalidateError: false,
       }),
-      scrollY: { 'for-you': 0, following: 0 },
+      scrollTop: { 'for-you': 0, following: 0 },
       likePendingPostIds: new Set<number>(),
       repostPendingPostIds: new Set<number>(),
       pendingDeletePostIds: new Set<number>(),
@@ -204,9 +207,7 @@ describe('HomeView For You pagination observer', () => {
       setActiveTab: vi.fn((tab: FeedTab) => {
         mocks.homeTimeline.activeTab = tab;
       }),
-      setReturnAnchor: vi.fn(),
-      clearReturnAnchor: vi.fn(),
-      setScrollY: vi.fn(),
+      setScrollTop: vi.fn(),
       loadForYou: vi.fn().mockResolvedValue(undefined),
       loadMoreForYou: vi.fn().mockResolvedValue(undefined),
       retryForYouLoadMore: vi.fn(),
@@ -236,6 +237,7 @@ describe('HomeView For You pagination observer', () => {
 
     expect(FakeIntersectionObserver.instances).toHaveLength(1);
     const observer = FakeIntersectionObserver.instances[0];
+    expect(observer.root).toBe(wrapper.get('.home-feed-panel').element);
     expect(observer.rootMargin).toBe('800px 0px');
     expect(observer.observed.size).toBe(1);
 
@@ -300,6 +302,21 @@ describe('HomeView For You pagination observer', () => {
     expect(mocks.homeTimeline.loadMoreForYou).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
+
+  it('uses the Home feed panel as the root for Following pagination', async () => {
+    const wrapper = await mountHomeView();
+    mocks.homeTimeline.following.items = [feedPost];
+    mocks.homeTimeline.following.nextCursor = 'next-cursor';
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+
+    const observer = FakeIntersectionObserver.instances.at(-1);
+    expect(observer).toBeDefined();
+    expect(observer?.root).toBe(wrapper.get('.home-feed-panel').element);
+    expect(observer?.rootMargin).toBe('240px 0px');
+
+    wrapper.unmount();
+  });
 });
 
 describe('HomeView KeepAlive lifecycle', () => {
@@ -317,7 +334,6 @@ describe('HomeView KeepAlive lifecycle', () => {
     });
     mocks.homeTimeline = reactive({
       activeTab: 'for-you' as FeedTab,
-      returnAnchors: { 'for-you': null, following: null },
       forYou: reactive({
         items: [recommendationItem],
         loading: false,
@@ -339,7 +355,7 @@ describe('HomeView KeepAlive lifecycle', () => {
         revalidating: false,
         revalidateError: false,
       }),
-      scrollY: { 'for-you': 0, following: 0 },
+      scrollTop: { 'for-you': 0, following: 0 },
       likePendingPostIds: new Set<number>(),
       repostPendingPostIds: new Set<number>(),
       pendingDeletePostIds: new Set<number>(),
@@ -347,9 +363,7 @@ describe('HomeView KeepAlive lifecycle', () => {
       setActiveTab: vi.fn((tab: FeedTab) => {
         mocks.homeTimeline.activeTab = tab;
       }),
-      setScrollY: vi.fn(),
-      setReturnAnchor: vi.fn(),
-      clearReturnAnchor: vi.fn(),
+      setScrollTop: vi.fn(),
       loadForYou: vi.fn().mockResolvedValue(undefined),
       loadMoreForYou: vi.fn().mockResolvedValue(undefined),
       retryForYouLoadMore: vi.fn(),
@@ -386,7 +400,7 @@ describe('HomeView KeepAlive lifecycle', () => {
     await settle();
 
     expect(firstObserver.disconnect).toHaveBeenCalledTimes(1);
-    expect(mocks.homeTimeline.setScrollY).toHaveBeenCalledWith('for-you', expect.any(Number));
+    expect(mocks.homeTimeline.setScrollTop).not.toHaveBeenCalled();
     expect(mocks.telemetry.resetObservedCards).toHaveBeenCalledTimes(1);
     expect(mocks.telemetry.flush).toHaveBeenCalledWith(false);
     expect(mocks.telemetry.observeFeedCard).not.toHaveBeenCalled();

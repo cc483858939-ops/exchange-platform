@@ -137,9 +137,6 @@ describe('PostCard View metric and telemetry lifecycle', () => {
   it('renders a navigable compact View metric with the analytics icon and destination', async () => {
     const post = basePost();
     const wrapper = mountPostCard(post);
-
-    expect(wrapper.element.getAttribute('data-feed-post-id')).toBe('42');
-
     const views = wrapper.findAllComponents(RouterLinkStub)
       .find(link => link.classes().includes('post-card__views'));
 

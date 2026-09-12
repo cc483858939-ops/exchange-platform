@@ -394,81 +394,34 @@ describe('home timeline session store', () => {
     expect(store.forYou.loaded).toBe(false);
   });
 
-  it('keeps tab and scroll state in memory, then clears both for a new viewer', () => {
+  it('keeps independent tab scrollTop values, then clears both for a new viewer', () => {
     const store = useHomeTimelineStore();
 
     store.setActiveTab('following');
-    store.setScrollY('following', 742);
-    store.setReturnAnchor('for-you', {
-      postId: 42,
-      viewportTop: 160,
-      fallbackScrollY: 2400,
-    });
-    store.setReturnAnchor('following', {
-      postId: 88,
-      viewportTop: 220,
-      fallbackScrollY: 900,
-    });
+    store.setScrollTop('for-you', 2400);
+    store.setScrollTop('following', 900);
     expect(store.activeTab).toBe('following');
-    expect(store.scrollY.following).toBe(742);
+    expect(store.scrollTop['for-you']).toBe(2400);
+    expect(store.scrollTop.following).toBe(900);
 
     store.setViewer(8);
     expect(store.activeTab).toBe('for-you');
-    expect(store.scrollY.following).toBe(0);
-    expect(store.returnAnchors['for-you']).toBeNull();
-    expect(store.returnAnchors.following).toBeNull();
+    expect(store.scrollTop['for-you']).toBe(0);
+    expect(store.scrollTop.following).toBe(0);
   });
 
-  it('keeps return anchors isolated and clears only the requested tab', () => {
+  it('normalizes invalid scrollTop values to zero', () => {
     const store = useHomeTimelineStore();
-    const forYouAnchor = {
-      postId: 42,
-      viewportTop: 160,
-      fallbackScrollY: 2400,
-    };
-    const followingAnchor = {
-      postId: 88,
-      viewportTop: 220,
-      fallbackScrollY: 900,
-    };
+    store.setScrollTop('for-you', 2400);
 
-    expect(store.setReturnAnchor('for-you', forYouAnchor)).toBe(true);
-    expect(store.setReturnAnchor('following', followingAnchor)).toBe(true);
-    expect(store.returnAnchors['for-you']).toEqual(forYouAnchor);
-    expect(store.returnAnchors.following).toEqual(followingAnchor);
+    store.setScrollTop('for-you', -100);
+    expect(store.scrollTop['for-you']).toBe(0);
 
-    store.clearReturnAnchor('for-you');
+    store.setScrollTop('for-you', Number.NaN);
+    expect(store.scrollTop['for-you']).toBe(0);
 
-    expect(store.returnAnchors['for-you']).toBeNull();
-    expect(store.returnAnchors.following).toEqual(followingAnchor);
-  });
-
-  it('rejects invalid return anchors without changing existing state', () => {
-    const store = useHomeTimelineStore();
-    const validAnchor = {
-      postId: 42,
-      viewportTop: 160,
-      fallbackScrollY: 2400,
-    };
-    store.setReturnAnchor('for-you', validAnchor);
-
-    expect(store.setReturnAnchor('for-you', {
-      postId: 0,
-      viewportTop: 170,
-      fallbackScrollY: 2500,
-    })).toBe(false);
-    expect(store.setReturnAnchor('for-you', {
-      postId: 43,
-      viewportTop: Number.NaN,
-      fallbackScrollY: 2500,
-    })).toBe(false);
-    expect(store.setReturnAnchor('for-you', {
-      postId: 43,
-      viewportTop: 170,
-      fallbackScrollY: -1,
-    })).toBe(false);
-
-    expect(store.returnAnchors['for-you']).toEqual(validAnchor);
+    store.setScrollTop('for-you', Number.POSITIVE_INFINITY);
+    expect(store.scrollTop['for-you']).toBe(0);
   });
 
   it('dismisses a recommendation without removing the same Post from Following', () => {

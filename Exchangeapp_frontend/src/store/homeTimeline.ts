@@ -45,12 +45,6 @@ export type HomeRecommendationItem = {
   post: FeedPost;
 };
 
-export type HomeReturnAnchor = {
-  postId: number;
-  viewportTop: number;
-  fallbackScrollY: number;
-};
-
 export type HomeFeedState<T> = {
   items: T[];
   loading: boolean;
@@ -117,13 +111,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     revalidating: false,
     revalidateError: false,
   });
-  const scrollY = reactive<Record<FeedTab, number>>({
+  const scrollTop = reactive<Record<FeedTab, number>>({
     'for-you': 0,
     following: 0,
-  });
-  const returnAnchors = reactive<Record<FeedTab, HomeReturnAnchor | null>>({
-    'for-you': null,
-    following: null,
   });
   const likePendingPostIds = reactive(new Set<number>());
   const repostPendingPostIds = reactive(new Set<number>());
@@ -192,10 +182,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     pendingDeletePostIds.clear();
     deleteErrors.clear();
     activeTab.value = 'for-you';
-    scrollY['for-you'] = 0;
-    scrollY.following = 0;
-    returnAnchors['for-you'] = null;
-    returnAnchors.following = null;
+    scrollTop['for-you'] = 0;
+    scrollTop.following = 0;
     resetForYou();
     resetFollowing();
   };
@@ -217,27 +205,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     activeTab.value = tab;
   };
 
-  const setScrollY = (tab: FeedTab, value: number) => {
-    scrollY[tab] = Number.isFinite(value) && value >= 0 ? value : 0;
-  };
-
-  const setReturnAnchor = (tab: FeedTab, anchor: HomeReturnAnchor) => {
-    if (
-      !anchor
-      || !Number.isSafeInteger(anchor.postId)
-      || anchor.postId <= 0
-      || !Number.isFinite(anchor.viewportTop)
-      || !Number.isFinite(anchor.fallbackScrollY)
-      || anchor.fallbackScrollY < 0
-    ) {
-      return false;
-    }
-    returnAnchors[tab] = { ...anchor };
-    return true;
-  };
-
-  const clearReturnAnchor = (tab: FeedTab) => {
-    returnAnchors[tab] = null;
+  const setScrollTop = (tab: FeedTab, value: number) => {
+    scrollTop[tab] = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
   const getLikeMutationVersion = (postId: number) =>
@@ -1202,17 +1171,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     activeTab,
     forYou,
     following,
-    scrollY,
-    returnAnchors,
+    scrollTop,
     likePendingPostIds,
     repostPendingPostIds,
     pendingDeletePostIds,
     deleteErrors,
     setViewer,
     setActiveTab,
-    setScrollY,
-    setReturnAnchor,
-    clearReturnAnchor,
+    setScrollTop,
     loadForYou,
     loadMoreForYou,
     retryForYouLoadMore,

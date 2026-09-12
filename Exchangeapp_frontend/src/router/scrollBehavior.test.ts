@@ -63,7 +63,6 @@ describe('routeScrollBehavior', () => {
   });
 
   it.each([
-    ['Home', {}],
     ['UserSearch', {}],
     ['CurrencyExchange', {}],
     ['Notifications', {}],
@@ -79,6 +78,18 @@ describe('routeScrollBehavior', () => {
         savedPosition,
       ),
     ).toBe(false);
+  });
+
+  it('resets the global window position when entering Home', () => {
+    const savedPosition = { left: 12, top: 2200 };
+
+    expect(
+      applyScrollBehavior(
+        location('Home'),
+        location('PostDetail', { id: '42' }),
+        savedPosition,
+      ),
+    ).toEqual({ left: 0, top: 0 });
   });
 
   it('still returns savedPosition for a transient route when returning from PostDetail', () => {

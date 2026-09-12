@@ -180,6 +180,10 @@ export class RecommendationTelemetryClient {
     this.stopped = true;
   }
 
+  notifyViewportChange() {
+    this.scheduleFeedDwellReconciliation();
+  }
+
   resetObservedCards(finalize = true) {
     if (finalize) {
       this.finalizeAllFeedDwells();
@@ -510,7 +514,7 @@ export class RecommendationTelemetryClient {
   };
 
   private handleViewportChange = () => {
-    this.scheduleFeedDwellReconciliation();
+    this.notifyViewportChange();
   };
 
   private handlePageHide = () => {
