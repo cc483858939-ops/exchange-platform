@@ -53,6 +53,7 @@ vi.mock('vue-router', async () => {
     route.params.id = id;
   };
   return {
+    onBeforeRouteLeave: vi.fn(),
     useRoute: () => route,
     useRouter: () => mocks.router,
   };
@@ -89,11 +90,15 @@ class FakeIntersectionObserver {
   static instances: FakeIntersectionObserver[] = [];
 
   readonly callback: IntersectionObserverCallback;
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
   observed: Element | null = null;
   disconnectCount = 0;
 
-  constructor(callback: IntersectionObserverCallback) {
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.callback = callback;
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? '';
     FakeIntersectionObserver.instances.push(this);
   }
 
@@ -330,6 +335,8 @@ describe('UserProfileView observer and cursor concurrency', () => {
     const initialObserver = activeObserver();
     expect(initialObserver).toBeDefined();
     expect(initialObserver?.observed).toBe(mounted.find('.profile-feed-sentinel').element);
+    expect(initialObserver?.root).toBe(mounted.find('.profile-scroll-viewport').element);
+    expect(initialObserver?.rootMargin).toBe('240px 0px');
 
     await mounted.find('.post-card__delete').trigger('click');
     await settle();
@@ -402,12 +409,6 @@ describe('UserProfileView observer and cursor concurrency', () => {
   });
 
   it('restores cached scroll once and never rewinds it during pagination changes', async () => {
-    const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
-    Object.defineProperty(window.navigator, 'userAgent', {
-      configurable: true,
-      value: 'Mozilla/5.0',
-    });
-    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     const profileStore = useProfileSessionStore();
     const session = profileStore.ensureSession(7)!;
     session.user = profile(7);
@@ -417,26 +418,20 @@ describe('UserProfileView observer and cursor concurrency', () => {
     session.loadedActivityKeys.add('post:1');
     session.hasMore = true;
     session.nextCursor = 'cursor-1';
-    session.scrollY = 500;
+    session.scrollTop = 500;
 
     const mounted = mountProfile();
     mountedViews.push(mounted);
     await settle();
-    expect(scrollTo).toHaveBeenCalledTimes(1);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'auto' });
+    const viewport = mounted.get('.profile-scroll-viewport').element as HTMLElement;
+    expect(viewport.scrollTop).toBe(500);
 
+    viewport.scrollTop = 800;
     session.timelineLoadingMore = true;
     session.timelineItems = [...session.timelineItems, profileTimelineItem(2, 7)];
     session.timelineLoadingMore = false;
     await settle();
-    expect(scrollTo).toHaveBeenCalledTimes(1);
-
-    if (userAgentDescriptor) {
-      Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
-    } else {
-      Reflect.deleteProperty(window.navigator, 'userAgent');
-    }
-    scrollTo.mockRestore();
+    expect(viewport.scrollTop).toBe(800);
   });
 
   it('keeps the Profile identity when PostDetail reuses the route parameter name', async () => {
@@ -459,7 +454,6 @@ describe('UserProfileView observer and cursor concurrency', () => {
   });
 
   it('does not overwrite Profile 7 scroll when PostDetail is followed by Profile 8', async () => {
-    const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
     const profileStore = useProfileSessionStore();
     const first = profileStore.ensureSession(7)!;
     first.user = profile(7);
@@ -467,61 +461,33 @@ describe('UserProfileView observer and cursor concurrency', () => {
     first.timelineLoaded = true;
     first.timelineItems = [profileTimelineItem(1, 7)];
     first.loadedActivityKeys.add('post:1');
-    first.scrollY = 900;
+    first.scrollTop = 900;
 
     const { wrapper, state } = mountKeepAliveProfile();
     mountedViews.push(wrapper);
 
-    try {
-      await settle();
-      Object.defineProperty(window, 'scrollY', {
-        configurable: true,
-        writable: true,
-        value: 1480,
-      });
+    await settle();
+    const viewport = wrapper.find('.profile-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1480;
 
-      state.showProfile = false;
-      await nextTick();
-      expect(first.scrollY).toBe(1480);
+    state.showProfile = false;
+    await nextTick();
 
-      mocks.route.name = 'PostDetail';
-      mocks.setRouteID('9999');
-      await settle();
-      Object.defineProperty(window, 'scrollY', {
-        configurable: true,
-        writable: true,
-        value: 320,
-      });
+    mocks.route.name = 'PostDetail';
+    mocks.setRouteID('9999');
+    await settle();
 
-      mocks.route.name = 'UserProfile';
-      mocks.setRouteID('8');
-      state.showProfile = true;
-      await settle();
+    mocks.route.name = 'UserProfile';
+    mocks.setRouteID('8');
+    state.showProfile = true;
+    await settle();
 
-      expect(first.scrollY).toBe(1480);
-      expect(mocks.getUser).toHaveBeenCalledWith('8');
-      expect(wrapper.text()).toContain('User 8');
-    } finally {
-      if (scrollYDescriptor) {
-        Object.defineProperty(window, 'scrollY', scrollYDescriptor);
-      } else {
-        Reflect.deleteProperty(window, 'scrollY');
-      }
-    }
+    expect(first.scrollTop).toBe(1480);
+    expect(mocks.getUser).toHaveBeenCalledWith('8');
+    expect(wrapper.text()).toContain('User 8');
   });
 
   it('pauses and resumes the cached Profile and restores its owned scroll position', async () => {
-    const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
-    const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
-    Object.defineProperty(window.navigator, 'userAgent', {
-      configurable: true,
-      value: 'Mozilla/5.0',
-    });
-    Object.defineProperty(window, 'scrollY', {
-      configurable: true,
-      writable: true,
-      value: 0,
-    });
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     const profileStore = useProfileSessionStore();
     const session = profileStore.ensureSession(7)!;
@@ -532,74 +498,45 @@ describe('UserProfileView observer and cursor concurrency', () => {
     session.loadedActivityKeys.add('post:1');
     session.hasMore = true;
     session.nextCursor = 'cursor-1';
-    session.scrollY = 900;
+    session.scrollTop = 900;
 
     const { wrapper, state } = mountKeepAliveProfile();
     mountedViews.push(wrapper);
 
-    try {
-      await settle();
-      expect(scrollTo).toHaveBeenCalledTimes(1);
-      expect(scrollTo).toHaveBeenCalledWith({ top: 900, behavior: 'auto' });
+    await settle();
+    const originalViewport = wrapper.find('.profile-scroll-viewport').element as HTMLElement;
+    expect(originalViewport.scrollTop).toBe(900);
+    originalViewport.scrollTop = 1480;
+    const initialObserver = activeObserver();
+    expect(initialObserver).toBeDefined();
 
-      Object.defineProperty(window, 'scrollY', {
-        configurable: true,
-        writable: true,
-        value: 1480,
-      });
-      const initialObserver = activeObserver();
-      expect(initialObserver).toBeDefined();
+    state.showProfile = false;
+    await nextTick();
+    mocks.route.name = 'PostDetail';
+    mocks.setRouteID('9999');
+    await settle();
 
-      state.showProfile = false;
-      await nextTick();
-      mocks.route.name = 'PostDetail';
-      mocks.setRouteID('9999');
-      await settle();
+    expect(session.scrollTop).toBe(900);
+    expect(initialObserver?.disconnectCount).toBeGreaterThan(0);
 
-      expect(session.scrollY).toBe(1480);
-      expect(initialObserver?.disconnectCount).toBeGreaterThan(0);
+    const userCallsBeforeActivation = mocks.getUser.mock.calls.length;
+    const timelineCallsBeforeActivation = mocks.getUserTimeline.mock.calls.length;
+    mocks.route.name = 'UserProfile';
+    mocks.setRouteID('7');
+    state.showProfile = true;
+    await settle();
 
-      Object.defineProperty(window, 'scrollY', {
-        configurable: true,
-        writable: true,
-        value: 320,
-      });
-
-      initialObserver?.trigger();
-      session.timelineItems = [...session.timelineItems, profileTimelineItem(2, 7)];
-      await settle();
-
-      expect(mocks.getUserTimeline).not.toHaveBeenCalledWith('9999', expect.anything());
-      expect(FakeIntersectionObserver.instances).toHaveLength(1);
-      expect(mocks.getUserTimeline).not.toHaveBeenCalledWith('7', { limit: 20, cursor: 'cursor-1' });
-
-      const userCallsBeforeActivation = mocks.getUser.mock.calls.length;
-      const timelineCallsBeforeActivation = mocks.getUserTimeline.mock.calls.length;
-      mocks.route.name = 'UserProfile';
-      mocks.setRouteID('7');
-      state.showProfile = true;
-      await settle();
-
-      const resumedObserver = activeObserver();
-      expect(resumedObserver).toBeDefined();
-      expect(resumedObserver).not.toBe(initialObserver);
-      expect(resumedObserver?.observed).toBe(wrapper.find('.profile-feed-sentinel').element);
-      expect(scrollTo).toHaveBeenCalledTimes(2);
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 1480, behavior: 'auto' });
-      expect(scrollTo).not.toHaveBeenCalledWith({ top: 320, behavior: 'auto' });
-      expect(mocks.getUser).toHaveBeenCalledTimes(userCallsBeforeActivation);
-      expect(mocks.getUserTimeline).toHaveBeenCalledTimes(timelineCallsBeforeActivation);
-    } finally {
-      scrollTo.mockRestore();
-      if (userAgentDescriptor) {
-        Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
-      }
-      if (scrollYDescriptor) {
-        Object.defineProperty(window, 'scrollY', scrollYDescriptor);
-      } else {
-        Reflect.deleteProperty(window, 'scrollY');
-      }
-    }
+    const resumedViewport = wrapper.find('.profile-scroll-viewport').element as HTMLElement;
+    const resumedObserver = activeObserver();
+    expect(resumedObserver).toBeDefined();
+    expect(resumedObserver).not.toBe(initialObserver);
+    expect(resumedObserver?.observed).toBe(wrapper.find('.profile-feed-sentinel').element);
+    expect(resumedViewport).toBe(originalViewport);
+    expect(resumedViewport.scrollTop).toBe(1480);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(mocks.getUser).toHaveBeenCalledTimes(userCallsBeforeActivation);
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(timelineCallsBeforeActivation);
+    scrollTo.mockRestore();
   });
 
   it('does not let a hidden Profile overwrite the active Post title', async () => {
@@ -635,45 +572,31 @@ describe('UserProfileView observer and cursor concurrency', () => {
   });
 
   it('saves the previous profile and restores the next profile once on route switch', async () => {
-    const userAgentDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
-    Object.defineProperty(window.navigator, 'userAgent', {
-      configurable: true,
-      value: 'Mozilla/5.0',
-    });
-    Object.defineProperty(window, 'scrollY', {
-      configurable: true,
-      writable: true,
-      value: 400,
-    });
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     const profileStore = useProfileSessionStore();
     const first = profileStore.ensureSession(7)!;
     first.user = profile(7);
     first.profileLoaded = true;
     first.timelineLoaded = true;
-    first.scrollY = 111;
+    first.scrollTop = 111;
     const second = profileStore.ensureSession(8)!;
     second.user = profile(8);
     second.profileLoaded = true;
     second.timelineLoaded = true;
-    second.scrollY = 900;
+    second.scrollTop = 900;
 
     const mounted = mountProfile();
     mountedViews.push(mounted);
     await settle();
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: 111, behavior: 'auto' });
+    const viewport = mounted.get('.profile-scroll-viewport').element as HTMLElement;
+    expect(viewport.scrollTop).toBe(111);
+    viewport.scrollTop = 400;
 
     mocks.setRouteID('8');
     await settle();
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: 900, behavior: 'auto' });
-    expect(scrollTo).toHaveBeenCalledTimes(2);
-    expect(first.scrollY).toBe(400);
-
-    if (userAgentDescriptor) {
-      Object.defineProperty(window.navigator, 'userAgent', userAgentDescriptor);
-    } else {
-      Reflect.deleteProperty(window.navigator, 'userAgent');
-    }
+    expect(viewport.scrollTop).toBe(900);
+    expect(first.scrollTop).toBe(400);
+    expect(scrollTo).not.toHaveBeenCalled();
     scrollTo.mockRestore();
   });
 });

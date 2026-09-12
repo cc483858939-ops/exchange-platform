@@ -48,6 +48,7 @@ vi.mock('vue-router', async () => {
     route.params.id = id;
   };
   return {
+    onBeforeRouteLeave: vi.fn(),
     useRoute: () => route,
     useRouter: () => mocks.router,
   };

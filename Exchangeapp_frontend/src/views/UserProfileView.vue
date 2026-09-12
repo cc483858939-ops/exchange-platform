@@ -16,6 +16,10 @@
       <MobileAccountMenu v-if="isOwnProfile" />
     </header>
 
+    <div
+      ref="profileScrollViewportRef"
+      class="profile-scroll-viewport"
+    >
     <section
       v-if="invalidProfileError"
       class="profile-state profile-state--page"
@@ -232,6 +236,7 @@
         </div>
       </section>
     </template>
+    </div>
   </main>
 
   <dialog
@@ -363,7 +368,7 @@ import {
   ref,
   watch,
 } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthRequiredState from '../components/auth/AuthRequiredState.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -400,7 +405,6 @@ const readProfileRouteID = () => (
 const profileRouteID = ref(readProfileRouteID());
 const profileViewActive = ref(true);
 let resumeOnActivation = false;
-let scrollSavedOnDeactivationForProfileID: number | null = null;
 
 const userId = computed(() => profileRouteID.value);
 const numericUserID = computed(() => {
@@ -446,6 +450,7 @@ const repostPendingPostIds = profileStore.repostPendingPostIds;
 const pendingDeletePostIds = profileStore.pendingDeletePostIds;
 const deleteErrors = profileStore.deleteErrors;
 
+const profileScrollViewportRef = ref<HTMLElement | null>(null);
 const sentinelRef = ref<HTMLElement | null>(null);
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let observer: IntersectionObserver | null = null;
@@ -519,33 +524,12 @@ const canDeletePost = (post: { author: { id: number } }) =>
   && post.author.id === currentViewerID.value;
 
 const saveCurrentScroll = (targetUserID: number) => {
-  if (typeof window !== 'undefined') {
-    profileStore.setScrollY(targetUserID, window.scrollY);
-  }
-};
-
-const restoreCachedProfileScroll = (
-  targetProfileID: number,
-  targetScrollY: number,
-) => {
-  if (
-    !profileViewActive.value
-    || route.name !== 'UserProfile'
-    || numericUserID.value !== targetProfileID
-    || typeof window === 'undefined'
-  ) {
+  const viewport = profileScrollViewportRef.value;
+  if (!viewport) {
     return;
   }
 
-  if (
-    typeof window.scrollTo === 'function'
-    && !window.navigator.userAgent.toLowerCase().includes('jsdom')
-  ) {
-    window.scrollTo({
-      top: targetScrollY,
-      behavior: 'auto',
-    });
-  }
+  profileStore.setScrollTop(targetUserID, viewport.scrollTop);
 };
 
 const restoreScrollOnce = async () => {
@@ -561,7 +545,6 @@ const restoreScrollOnce = async () => {
     || targetUserID === null
     || !session.profileLoaded
     || (!session.timelineLoaded && session.timelineInitialLoading)
-    || typeof window === 'undefined'
   ) return;
 
   await nextTick();
@@ -572,14 +555,21 @@ const restoreScrollOnce = async () => {
     || restoredEntryVersion === entryVersion
   ) return;
 
-  if (
-    typeof window.scrollTo === 'function'
-    && !window.navigator.userAgent.toLowerCase().includes('jsdom')
-  ) {
-    window.scrollTo({ top: session.scrollY, behavior: 'auto' });
+  const viewport = profileScrollViewportRef.value;
+  if (!viewport) {
+    return;
   }
+
+  viewport.scrollTop = session.scrollTop;
   restoredEntryVersion = entryVersion;
 };
+
+onBeforeRouteLeave(() => {
+  const profileID = numericUserID.value;
+  if (profileID !== null) {
+    saveCurrentScroll(profileID);
+  }
+});
 
 const retryFollowState = () => {
   if (numericUserID.value !== null && currentViewerID.value !== null) {
@@ -891,6 +881,7 @@ const updateObserver = () => {
   if (
     !profileViewActive.value
     || !intersectionObserverAvailable
+    || !profileScrollViewportRef.value
     || !sentinelRef.value
     || !hasMore.value
     || timelineLoadingMore.value
@@ -901,6 +892,7 @@ const updateObserver = () => {
     return;
   }
 
+  const root = profileScrollViewportRef.value;
   observer = new IntersectionObserver((entries) => {
     if (
       profileViewActive.value
@@ -908,21 +900,13 @@ const updateObserver = () => {
     ) {
       loadMoreTimeline();
     }
-  }, { rootMargin: '240px 0px' });
+  }, { root, rootMargin: '240px 0px' });
   observer.observe(sentinelRef.value);
 };
 
 const deactivateProfileView = () => {
   if (!profileViewActive.value) {
     return;
-  }
-
-  const currentProfileID = numericUserID.value;
-  if (currentProfileID !== null) {
-    saveCurrentScroll(currentProfileID);
-    scrollSavedOnDeactivationForProfileID = currentProfileID;
-  } else {
-    scrollSavedOnDeactivationForProfileID = null;
   }
 
   profileViewActive.value = false;
@@ -940,21 +924,6 @@ const activateProfileView = () => {
   resumeOnActivation = false;
   profileViewActive.value = true;
 
-  const nextProfileRouteID = readProfileRouteID();
-  const returningToSameProfile =
-    nextProfileRouteID !== ''
-    && nextProfileRouteID === profileRouteID.value;
-  const cachedProfileID = returningToSameProfile
-    ? numericUserID.value
-    : null;
-  const cachedScrollY = cachedProfileID !== null
-    ? activeSession.value?.scrollY ?? null
-    : null;
-
-  if (returningToSameProfile) {
-    scrollSavedOnDeactivationForProfileID = null;
-  }
-
   syncProfileRouteID();
 
   void nextTick(() => {
@@ -962,18 +931,7 @@ const activateProfileView = () => {
       return;
     }
 
-    if (
-      returningToSameProfile
-      && cachedProfileID !== null
-      && cachedScrollY !== null
-    ) {
-      restoreCachedProfileScroll(cachedProfileID, cachedScrollY);
-    }
-
-    if (!profileViewActive.value) {
-      return;
-    }
-
+    void restoreScrollOnce();
     updateObserver();
   });
 };
@@ -992,14 +950,7 @@ watch(userId, (nextID, previousID) => {
   profileEntryVersion += 1;
   const previousNumericID = Number(previousID);
   if (Number.isSafeInteger(previousNumericID) && previousNumericID > 0) {
-    const previousScrollAlreadySaved =
-      scrollSavedOnDeactivationForProfileID === previousNumericID;
-    if (!previousScrollAlreadySaved) {
-      saveCurrentScroll(previousNumericID);
-    }
-    if (previousScrollAlreadySaved) {
-      scrollSavedOnDeactivationForProfileID = null;
-    }
+    saveCurrentScroll(previousNumericID);
     profileStore.cancelPendingDeletesForProfile(previousNumericID);
   }
   invalidProfileError.value = '';
@@ -1055,7 +1006,6 @@ onBeforeUnmount(() => {
   }
   profileViewActive.value = false;
   resumeOnActivation = false;
-  scrollSavedOnDeactivationForProfileID = null;
   forceCloseEditProfile();
   disconnectObserver();
 });
@@ -1063,17 +1013,22 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .profile-view {
-  min-height: 100vh;
-  min-height: 100dvh;
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   color: var(--color-text);
   background: var(--color-surface);
 }
 
 .profile-header {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 12;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
@@ -1082,6 +1037,17 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   backdrop-filter: blur(10px);
+}
+
+.profile-scroll-viewport {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  overflow-anchor: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .profile-header__back {
@@ -1466,8 +1432,19 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 799px) {
-  .profile-header {
-    top: var(--mobile-safe-top);
+  .profile-view {
+    height: calc(
+      100vh
+      - var(--mobile-safe-top)
+      - var(--mobile-bottom-nav-height)
+      - var(--mobile-safe-bottom)
+    );
+    height: calc(
+      100dvh
+      - var(--mobile-safe-top)
+      - var(--mobile-bottom-nav-height)
+      - var(--mobile-safe-bottom)
+    );
   }
 }
 

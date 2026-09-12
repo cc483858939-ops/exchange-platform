@@ -199,7 +199,7 @@ describe('profile session store', () => {
     const own = store.ensureSession(7)!;
     own.user = profile(7);
     own.profileLoaded = true;
-    store.setScrollY(7, 321);
+    store.setScrollTop(7, 321);
 
     for (let id = 1; id <= 9; id += 1) {
       store.ensureSession(id);
@@ -208,7 +208,22 @@ describe('profile session store', () => {
     expect(store.sessions.size).toBe(8);
     expect(store.sessions.has(7)).toBe(true);
     expect(store.sessions.has(1)).toBe(false);
-    expect(store.ensureSession(7)?.scrollY).toBe(321);
+    expect(store.ensureSession(7)?.scrollTop).toBe(321);
+  });
+
+  it('validates scrollTop values and isolates each profile session', () => {
+    const store = useProfileSessionStore();
+
+    store.setScrollTop(7, 1200);
+    store.setScrollTop(8, 400);
+    expect(store.ensureSession(7)?.scrollTop).toBe(1200);
+    expect(store.ensureSession(8)?.scrollTop).toBe(400);
+
+    for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      store.setScrollTop(7, value);
+      expect(store.ensureSession(7)?.scrollTop).toBe(0);
+    }
+    expect(store.ensureSession(8)?.scrollTop).toBe(400);
   });
 
   it('clears viewer-owned sessions and ignores a late profile response', async () => {

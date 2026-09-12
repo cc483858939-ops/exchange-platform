@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: vi.fn(),
   useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));

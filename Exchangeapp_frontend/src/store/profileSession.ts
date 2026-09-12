@@ -64,7 +64,7 @@ export type ProfileSessionEntry = {
   followError: string;
   followPending: boolean;
   followActionError: string;
-  scrollY: number;
+  scrollTop: number;
   lastAccessedAt: number;
   loadedActivityKeys: Set<string>;
   removedPostIDs: Set<number>;
@@ -168,7 +168,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     followError: '',
     followPending: false,
     followActionError: '',
-    scrollY: 0,
+    scrollTop: 0,
     lastAccessedAt: nextAccessTime(),
     loadedActivityKeys: new Set<string>(),
     removedPostIDs: new Set<number>(),
@@ -1216,9 +1216,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return true;
   };
 
-  const setScrollY = (rawUserID: unknown, value: number) => {
+  const setScrollTop = (rawUserID: unknown, value: number) => {
     const session = ensureSession(rawUserID);
-    if (session) session.scrollY = Number.isFinite(value) && value >= 0 ? value : 0;
+    if (session) session.scrollTop = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
   registerProfileSessionSync({
@@ -1277,7 +1277,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     replaceAuthorIdentityEverywhereLocal,
     updateUser,
     registerPublishedTimelinePost,
-    setScrollY,
+    setScrollTop,
     cancelPendingDeletesForProfile,
   };
 });
