@@ -60,7 +60,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   const stale = ref(false);
   const revalidating = ref(false);
   const revalidateError = ref('');
-  const scrollY = ref(0);
+  const scrollTop = ref(0);
   const requestVersion = ref(0);
   const pagingVersion = ref(0);
   const likeHydrationGeneration = ref(0);
@@ -119,7 +119,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     stale.value = false;
     revalidating.value = false;
     revalidateError.value = '';
-    scrollY.value = 0;
+    scrollTop.value = 0;
     loadedPostIDs.clear();
     removedSnapshots.clear();
     deletedPostIDs.clear();
@@ -860,10 +860,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return applied;
   };
 
-  const saveScroll = (value: number) => {
-    if (Number.isFinite(value) && value >= 0) {
-      scrollY.value = value;
-    }
+  const saveScrollTop = (value: number) => {
+    scrollTop.value = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
   registerHistorySessionSync({
@@ -895,7 +893,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     stale,
     revalidating,
     revalidateError,
-    scrollY,
+    scrollTop,
     requestVersion,
     pagingVersion,
     likeHydrationGeneration,
@@ -918,6 +916,6 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     applyReplyCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
-    saveScroll,
+    saveScrollTop,
   };
 });

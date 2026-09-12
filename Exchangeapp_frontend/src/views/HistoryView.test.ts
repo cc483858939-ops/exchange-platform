@@ -11,6 +11,7 @@ import { postToFeedPost } from '../utils/feedPost';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
+  routeLeaveGuard: null as (() => void) | null,
   router: {
     back: vi.fn(),
     push: vi.fn(),
@@ -44,6 +45,9 @@ vi.mock('../store/sessionSync', () => ({
 }));
 
 vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: (guard: () => void) => {
+    mocks.routeLeaveGuard = guard;
+  },
   useRoute: () => ({ name: 'History' }),
   useRouter: () => mocks.router,
 }));
@@ -125,14 +129,14 @@ const deferred = <T>() => {
 
 describe('HistoryView', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    setActivePinia(createPinia());
-    mocks.historySync = null;
-    setAuth(null);
+  vi.clearAllMocks();
+  setActivePinia(createPinia());
+  mocks.historySync = null;
+  mocks.routeLeaveGuard = null;
+  setAuth(null);
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.unlikePost.mockResolvedValue({ likes: 0, liked: false });
-    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     setWindowScrollY(0);
   });
 
@@ -499,14 +503,14 @@ describe('HistoryView', () => {
     historySession.items = [postToFeedPost(post(1))];
     historySession.loaded = true;
     historySession.initialLoading = false;
-    historySession.scrollY = 640;
-
-    const scrollTo = window.scrollTo as ReturnType<typeof vi.fn>;
+    historySession.scrollTop = 640;
     const wrapper = mountHistory();
     await flushPromises();
 
-    expect(scrollTo).toHaveBeenCalledTimes(1);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 640, behavior: 'auto' });
+    const viewport = wrapper.get('.history-scroll-viewport').element as HTMLElement;
+    expect(viewport.scrollTop).toBe(640);
+
+    viewport.scrollTop = 820;
 
     historySession.items = [...historySession.items, postToFeedPost(post(2))];
     historySession.nextCursor = 'cursor-2';
@@ -524,7 +528,7 @@ describe('HistoryView', () => {
     historySession.stale = true;
     await flushPromises();
 
-    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(viewport.scrollTop).toBe(820);
     wrapper.unmount();
   });
 
@@ -534,22 +538,40 @@ describe('HistoryView', () => {
     historySession.items = [postToFeedPost(post(1))];
     historySession.loaded = true;
     historySession.initialLoading = false;
-    historySession.scrollY = 640;
-
-    const scrollTo = window.scrollTo as ReturnType<typeof vi.fn>;
+    historySession.scrollTop = 640;
     const firstWrapper = mountHistory();
     await flushPromises();
-    expect(scrollTo).toHaveBeenCalledTimes(1);
 
-    setWindowScrollY(880);
+    const firstViewport = firstWrapper.get('.history-scroll-viewport').element as HTMLElement;
+    firstViewport.scrollTop = 880;
     firstWrapper.unmount();
-    scrollTo.mockClear();
 
     const secondWrapper = mountHistory();
     await flushPromises();
 
-    expect(scrollTo).toHaveBeenCalledTimes(1);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 880, behavior: 'auto' });
+    const secondViewport = secondWrapper.get('.history-scroll-viewport').element as HTMLElement;
+    expect(historySession.scrollTop).toBe(880);
+    expect(secondViewport.scrollTop).toBe(880);
     secondWrapper.unmount();
+  });
+
+  it('saves the internal viewport on route leave and ignores window scroll', async () => {
+    setAuth(7);
+    const historySession = useHistorySessionStore();
+    historySession.items = [postToFeedPost(post(1))];
+    historySession.loaded = true;
+    historySession.initialLoading = false;
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    const viewport = wrapper.get('.history-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1450;
+    setWindowScrollY(777);
+
+    expect(mocks.routeLeaveGuard).toBeTypeOf('function');
+    mocks.routeLeaveGuard?.();
+
+    expect(historySession.scrollTop).toBe(1450);
+    wrapper.unmount();
   });
 });

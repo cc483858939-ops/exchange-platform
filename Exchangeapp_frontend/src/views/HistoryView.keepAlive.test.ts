@@ -8,6 +8,7 @@ let HistoryView: any;
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
+  routeLeaveGuard: null as (() => void) | null,
   historyStore: null as any,
   router: {
     back: vi.fn(),
@@ -18,6 +19,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: (guard: () => void) => {
+    mocks.routeLeaveGuard = guard;
+  },
   useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));
@@ -31,6 +35,9 @@ const previousIntersectionObserver = (globalThis as any).IntersectionObserver;
 class TestIntersectionObserver {
   private readonly callback: IntersectionObserverCallback;
 
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
+
   readonly observe = vi.fn((_target: Element) => {
     mocks.events.push('observe');
   });
@@ -39,8 +46,10 @@ class TestIntersectionObserver {
     mocks.events.push('disconnect');
   });
 
-  constructor(callback: IntersectionObserverCallback) {
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.callback = callback;
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? '';
     mocks.observerInstances.push(this);
   }
 
@@ -69,7 +78,7 @@ const createHistoryStore = () => {
     loadMoreError: ref(''),
     stale: ref(false),
     revalidating: ref(false),
-    scrollY: ref(900),
+    scrollTop: ref(900),
     pendingUnlikePostIDs: ref(new Set<number>()),
     repostPendingPostIDs: ref(new Set<number>()),
     mutationErrors: ref(new Map<number, string>()),
@@ -80,8 +89,8 @@ const createHistoryStore = () => {
     revalidateHistory: vi.fn(),
     toggleUnlike: vi.fn(),
     toggleRepost: vi.fn(),
-    saveScroll: vi.fn((value: number) => {
-      store.scrollY = value;
+    saveScrollTop: vi.fn((value: number) => {
+      store.scrollTop = value;
     }),
   });
   return store;
@@ -120,6 +129,7 @@ const mountHarness = () => {
 };
 
 const deactivateHistory = async (showHistory: { value: boolean }) => {
+  mocks.routeLeaveGuard?.();
   mocks.route.name = 'PostDetail';
   showHistory.value = false;
   await settle();
@@ -144,12 +154,10 @@ describe('HistoryView KeepAlive lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.route = reactive({ name: 'History' });
+    mocks.routeLeaveGuard = null;
     mocks.historyStore = createHistoryStore();
     mocks.observerInstances.length = 0;
     mocks.events.length = 0;
-    vi.spyOn(window, 'scrollTo').mockImplementation(() => {
-      mocks.events.push('scrollTo');
-    });
     setWindowScrollY(0);
   });
 
@@ -171,36 +179,41 @@ describe('HistoryView KeepAlive lifecycle', () => {
     });
   });
 
-  it('preserves the same History DOM and restores cached scroll before observer resume', async () => {
+  it('preserves the same History DOM and resumes its internal scroll observer', async () => {
     const historyStore = mocks.historyStore;
     const { showHistory, wrapper } = mountHarness();
     await settle();
 
     const originalHistory = wrapper.find('.history-view').element;
     const originalPost = wrapper.find('.history-card').element;
+    const originalViewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+    originalViewport.scrollTop = 1600;
     historyStore.nextCursor = 'cursor-2';
     await settle();
     expect(mocks.observerInstances).toHaveLength(1);
 
     const originalObserver = mocks.observerInstances[0] as TestIntersectionObserver;
-    setWindowScrollY(1800);
+    expect(originalObserver.root).toBe(originalViewport);
+    expect(originalObserver.rootMargin).toBe('240px 0px');
+    setWindowScrollY(777);
     await deactivateHistory(showHistory);
 
-    expect(historyStore.saveScroll).toHaveBeenLastCalledWith(1800);
-    expect(historyStore.scrollY).toBe(1800);
+    expect(historyStore.saveScrollTop).toHaveBeenLastCalledWith(1600);
+    expect(historyStore.scrollTop).toBe(1600);
     expect(originalObserver.disconnect).toHaveBeenCalledTimes(1);
 
-    setWindowScrollY(300);
-    mocks.events.length = 0;
-    (window.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    setWindowScrollY(1200);
     await reactivateHistory(showHistory);
 
     expect(wrapper.find('.history-view').element).toBe(originalHistory);
     expect(wrapper.find('.history-card').element).toBe(originalPost);
-    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 1800, behavior: 'auto' });
-    expect(window.scrollTo).not.toHaveBeenCalledWith({ top: 300, behavior: 'auto' });
-    expect(mocks.events.indexOf('scrollTo')).toBeGreaterThanOrEqual(0);
-    expect(mocks.events.indexOf('observe')).toBeGreaterThan(mocks.events.indexOf('scrollTo'));
+    const restoredViewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+    expect(restoredViewport).toBe(originalViewport);
+    expect(restoredViewport.scrollTop).toBe(1600);
+    expect(mocks.observerInstances).toHaveLength(2);
+    const resumedObserver = mocks.observerInstances[1] as TestIntersectionObserver;
+    expect(resumedObserver.root).toBe(originalViewport);
+    expect(resumedObserver.rootMargin).toBe('240px 0px');
     wrapper.unmount();
   });
 
@@ -213,19 +226,19 @@ describe('HistoryView KeepAlive lifecycle', () => {
     const { showHistory, wrapper } = mountHarness();
     await settle();
 
-    setWindowScrollY(1800);
+    const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1800;
+    setWindowScrollY(777);
     await deactivateHistory(showHistory);
-    expect(historyStore.scrollY).toBe(1800);
+    expect(historyStore.scrollTop).toBe(1800);
 
-    setWindowScrollY(300);
-    (window.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    setWindowScrollY(1200);
     historyStore.loaded = true;
     historyStore.initialLoading = false;
     historyStore.items = [{ id: 2, content: 'Loaded while hidden' }];
     await settle();
 
-    expect(window.scrollTo).not.toHaveBeenCalled();
-    expect(historyStore.scrollY).toBe(1800);
+    expect(historyStore.scrollTop).toBe(1800);
     wrapper.unmount();
   });
 
@@ -261,7 +274,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
     wrapper.unmount();
   });
 
-  it('resumes stale revalidation only after cached scroll restoration', async () => {
+  it('resumes stale revalidation without resetting the cached viewport position', async () => {
     const historyStore = mocks.historyStore;
     historyStore.revalidateHistory.mockImplementation(() => {
       mocks.events.push('revalidate');
@@ -269,20 +282,20 @@ describe('HistoryView KeepAlive lifecycle', () => {
     const { showHistory, wrapper } = mountHarness();
     await settle();
 
-    setWindowScrollY(1800);
+    const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1800;
+    setWindowScrollY(777);
     await deactivateHistory(showHistory);
     historyStore.stale = true;
     await settle();
     expect(historyStore.revalidateHistory).not.toHaveBeenCalled();
 
-    setWindowScrollY(300);
-    mocks.events.length = 0;
-    (window.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    setWindowScrollY(1200);
     await reactivateHistory(showHistory);
 
-    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 1800, behavior: 'auto' });
+    expect(wrapper.find('.history-scroll-viewport').element).toBe(viewport);
+    expect(viewport.scrollTop).toBe(1800);
     expect(historyStore.revalidateHistory).toHaveBeenCalledTimes(1);
-    expect(mocks.events.indexOf('scrollTo')).toBeLessThan(mocks.events.indexOf('revalidate'));
     wrapper.unmount();
   });
 
@@ -291,13 +304,14 @@ describe('HistoryView KeepAlive lifecycle', () => {
     const { showHistory, wrapper } = mountHarness();
     await settle();
 
-    setWindowScrollY(1800);
+    const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1800;
     await deactivateHistory(showHistory);
     setWindowScrollY(300);
     wrapper.unmount();
 
-    expect(historyStore.saveScroll).toHaveBeenCalledTimes(1);
-    expect(historyStore.saveScroll).toHaveBeenCalledWith(1800);
-    expect(historyStore.scrollY).toBe(1800);
+    expect(historyStore.saveScrollTop).toHaveBeenCalledTimes(1);
+    expect(historyStore.saveScrollTop).toHaveBeenCalledWith(1800);
+    expect(historyStore.scrollTop).toBe(1800);
   });
 });

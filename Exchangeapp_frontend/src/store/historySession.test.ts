@@ -120,6 +120,29 @@ describe('historySession store', () => {
     vi.restoreAllMocks();
   });
 
+  it('stores internal scrollTop and normalizes invalid values', () => {
+    const store = createStore();
+
+    store.saveScrollTop(640);
+    expect(store.scrollTop).toBe(640);
+
+    store.saveScrollTop(-1);
+    expect(store.scrollTop).toBe(0);
+    store.saveScrollTop(Number.NaN);
+    expect(store.scrollTop).toBe(0);
+    store.saveScrollTop(Number.POSITIVE_INFINITY);
+    expect(store.scrollTop).toBe(0);
+  });
+
+  it('clears internal scrollTop when the viewer changes', () => {
+    const store = createStore(7);
+
+    store.saveScrollTop(640);
+    store.setViewer(8);
+
+    expect(store.scrollTop).toBe(0);
+  });
+
   it('keeps one loaded page across clean re-entry and token refresh', async () => {
     const store = createStore();
     mocks.getLikedHistory.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
