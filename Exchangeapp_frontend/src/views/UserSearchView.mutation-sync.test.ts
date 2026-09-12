@@ -9,6 +9,7 @@ import { useSearchSessionStore } from '../store/searchSession';
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
+  routeLeaveGuard: null as (() => void) | null,
   authStore: null as any,
   router: { push: vi.fn() },
   searchUsers: vi.fn(),
@@ -18,6 +19,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: (guard: () => void) => {
+    mocks.routeLeaveGuard = guard;
+  },
   useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));
@@ -66,7 +70,7 @@ describe('UserSearchView mutation synchronization', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
-    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    mocks.routeLeaveGuard = null;
     mocks.route = reactive({ name: 'UserSearch', query: { q: 'alice' } });
     mocks.authStore = reactive({
       isAuthenticated: true,

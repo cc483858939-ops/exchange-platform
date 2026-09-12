@@ -63,6 +63,18 @@ describe('search session store', () => {
     expect(mocks.searchUsers).toHaveBeenCalledTimes(1);
   });
 
+  it('saves valid scrollTop values and normalizes invalid values', () => {
+    const store = useSearchSessionStore();
+
+    store.saveScrollTop(640);
+    expect(store.scrollTop).toBe(640);
+
+    for (const value of [-1, NaN, Infinity]) {
+      store.saveScrollTop(value);
+      expect(store.scrollTop).toBe(0);
+    }
+  });
+
   it('registers a local sink that updates a cached row without refetching', async () => {
     mocks.searchUsers.mockResolvedValueOnce({ items: [item(8, false)], has_more: false });
     const store = useSearchSessionStore();
@@ -109,13 +121,13 @@ describe('search session store', () => {
     store.setViewer(7);
     store.activateQuery('alice');
     await vi.waitFor(() => expect(store.loaded).toBe(true));
-    store.saveScroll(360);
+    store.saveScrollTop(360);
     const mutation = store.toggleFollow(8);
     const before = {
       query: store.query,
       nextOffset: store.nextOffset,
       hasMore: store.hasMore,
-      scrollY: store.scrollY,
+      scrollTop: store.scrollTop,
       pageGeneration: store.pageGeneration,
       paginationRequestVersion: store.paginationRequestVersion,
       pending: store.pendingMutationIDs.has(8),
@@ -134,7 +146,7 @@ describe('search session store', () => {
       query: store.query,
       nextOffset: store.nextOffset,
       hasMore: store.hasMore,
-      scrollY: store.scrollY,
+      scrollTop: store.scrollTop,
       pageGeneration: store.pageGeneration,
       paginationRequestVersion: store.paginationRequestVersion,
       pending: store.pendingMutationIDs.has(8),
@@ -152,6 +164,7 @@ describe('search session store', () => {
     const store = useSearchSessionStore();
     store.setViewer(7);
     store.activateQuery('alice');
+    store.saveScrollTop(900);
     store.activateQuery('bob');
 
     second.resolve({ items: [item(9)], has_more: false });
@@ -161,6 +174,7 @@ describe('search session store', () => {
 
     expect(store.query).toBe('bob');
     expect(store.items.map(entry => entry.user.id)).toEqual([9]);
+    expect(store.scrollTop).toBe(0);
   });
 
   it('clears the page and ignores a late response when the viewer changes', async () => {
@@ -169,7 +183,7 @@ describe('search session store', () => {
     const store = useSearchSessionStore();
     store.setViewer(7);
     store.activateQuery('alice');
-    store.saveScroll(480);
+    store.saveScrollTop(480);
     store.setViewer(8);
     pending.resolve({ items: [item(8)], has_more: false });
     await Promise.resolve();
@@ -177,7 +191,7 @@ describe('search session store', () => {
     expect(store.viewerID).toBe(8);
     expect(store.items).toEqual([]);
     expect(store.loaded).toBe(false);
-    expect(store.scrollY).toBe(0);
+    expect(store.scrollTop).toBe(0);
   });
 
   it('deduplicates cursor pages and advances the offset by the response size', async () => {

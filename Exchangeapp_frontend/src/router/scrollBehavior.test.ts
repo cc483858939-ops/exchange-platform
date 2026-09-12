@@ -63,7 +63,6 @@ describe('routeScrollBehavior', () => {
   });
 
   it.each([
-    ['UserSearch', {}],
     ['CurrencyExchange', {}],
   ])('lets %s own scroll restoration even when savedPosition exists', (routeName, params) => {
     const savedPosition = { left: 12, top: 2200 };
@@ -108,6 +107,21 @@ describe('routeScrollBehavior', () => {
       applyScrollBehavior(
         location('History'),
         location('PostDetail', { id: '42' }),
+        savedPosition,
+      ),
+    ).toEqual({ left: 0, top: 0 });
+  });
+
+  it.each([
+    ['UserProfile', { id: '7' }],
+    ['Home', {}],
+  ])('resets the global window position when entering UserSearch from %s', (fromName, fromParams) => {
+    const savedPosition = { left: 0, top: 1700 };
+
+    expect(
+      applyScrollBehavior(
+        location('UserSearch'),
+        location(fromName, fromParams),
         savedPosition,
       ),
     ).toEqual({ left: 0, top: 0 });

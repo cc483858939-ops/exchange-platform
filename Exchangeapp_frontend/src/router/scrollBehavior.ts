@@ -7,6 +7,7 @@ export const routeScrollBehavior: RouterScrollBehavior = (to, from, savedPositio
     || to.name === 'UserProfile'
     || to.name === 'History'
     || to.name === 'Notifications'
+    || to.name === 'UserSearch'
   ) {
     return {
       left: 0,

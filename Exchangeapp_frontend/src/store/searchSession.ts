@@ -37,7 +37,7 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
   const hasMore = ref(false);
   const loadingMore = ref(false);
   const loadMoreError = ref('');
-  const scrollY = ref(0);
+  const scrollTop = ref(0);
   const pageGeneration = ref(0);
   const paginationRequestVersion = ref(0);
   const pendingMutationIDs = ref(new Set<number>());
@@ -57,7 +57,7 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     hasMore.value = false;
     loadingMore.value = false;
     loadMoreError.value = '';
-    scrollY.value = 0;
+    scrollTop.value = 0;
     loadedUserIDs.clear();
   };
 
@@ -312,10 +312,8 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     return true;
   };
 
-  const saveScroll = (value: number) => {
-    if (Number.isFinite(value) && value >= 0) {
-      scrollY.value = value;
-    }
+  const saveScrollTop = (value: number) => {
+    scrollTop.value = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
   registerSearchSessionSync({ applyExternalFollowStateLocal });
@@ -332,7 +330,7 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     hasMore,
     loadingMore,
     loadMoreError,
-    scrollY,
+    scrollTop,
     pageGeneration,
     paginationRequestVersion,
     pendingMutationIDs,
@@ -346,6 +344,6 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     loadMore,
     toggleFollow,
     applyExternalFollowStateLocal,
-    saveScroll,
+    saveScrollTop,
   };
 });

@@ -11,12 +11,16 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   authStore: null as any,
   router: { push: vi.fn() },
+  routeLeaveGuard: null as (() => void) | null,
   searchUsers: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
 }));
 
 vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: (guard: () => void) => {
+    mocks.routeLeaveGuard = guard;
+  },
   useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));
@@ -45,10 +49,14 @@ class TestIntersectionObserver {
   static instances: TestIntersectionObserver[] = [];
   readonly observe = vi.fn();
   readonly disconnect = vi.fn();
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
   private readonly callback: IntersectionObserverCallback;
 
-  constructor(callback: IntersectionObserverCallback) {
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.callback = callback;
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? '';
     TestIntersectionObserver.instances.push(this);
   }
 
@@ -60,7 +68,7 @@ class TestIntersectionObserver {
   }
 }
 
-const setScrollY = (value: number) => {
+const setWindowScrollY = (value: number) => {
   Object.defineProperty(window, 'scrollY', { configurable: true, value });
 };
 
@@ -96,10 +104,10 @@ describe('UserSearchView KeepAlive lifecycle', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    mocks.routeLeaveGuard = null;
     TestIntersectionObserver.instances = [];
     vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
-    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
-    setScrollY(0);
+    setWindowScrollY(0);
     mocks.route = reactive({ name: 'UserSearch', query: { q: 'alice' } });
     mocks.authStore = reactive({
       isAuthenticated: true,
@@ -162,50 +170,63 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     });
     mocks.searchUsers.mockReturnValueOnce(pending);
     const { state, wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
     await nextTick();
+    viewport.scrollTop = 640;
+    mocks.routeLeaveGuard?.();
 
     state.showSearch = false;
     await nextTick();
     mocks.route.name = 'UserProfile';
     mocks.route.query = {};
-    setScrollY(250);
-    vi.mocked(window.scrollTo).mockClear();
     resolveSearch({ items: [], has_more: false });
     await settle();
 
-    expect(window.scrollTo).not.toHaveBeenCalled();
+    expect(searchSession.scrollTop).toBe(640);
+    expect(viewport.scrollTop).toBe(640);
     wrapper.unmount();
   });
 
-  it('restores the saved scroll position when reactivated for the same query', async () => {
+  it('preserves the same-query viewport across UserProfile and ignores global scroll', async () => {
     const { state, wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
     await settle();
-    vi.mocked(window.scrollTo).mockClear();
-    setScrollY(1400);
+    const originalViewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    originalViewport.scrollTop = 1400;
+    setWindowScrollY(777);
+    mocks.routeLeaveGuard?.();
+    expect(searchSession.scrollTop).toBe(1400);
+
     state.showSearch = false;
     await nextTick();
-    setScrollY(250);
     mocks.route.name = 'UserProfile';
     mocks.route.query = {};
     await nextTick();
 
+    setWindowScrollY(1200);
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
     mocks.route.name = 'UserSearch';
     mocks.route.query = { q: 'alice' };
     state.showSearch = true;
     await settle();
 
-    expect(window.scrollTo).toHaveBeenCalledWith({ top: 1400, behavior: 'auto' });
+    const restoredViewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    expect(restoredViewport).toBe(originalViewport);
+    expect(restoredViewport.scrollTop).toBe(1400);
+    expect(scrollTo).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
-  it('starts a new query session without restoring the previous query scroll', async () => {
+  it('starts a new query session at the top without restoring the previous query scroll', async () => {
     const { state, wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
     await settle();
-    vi.mocked(window.scrollTo).mockClear();
-    setScrollY(1400);
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1400;
+    mocks.routeLeaveGuard?.();
     state.showSearch = false;
     await nextTick();
-    setScrollY(250);
     mocks.route.name = 'UserProfile';
     mocks.route.query = {};
     await nextTick();
@@ -216,9 +237,86 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     state.showSearch = true;
     await settle();
 
-    expect(useSearchSessionStore().query).toBe('bob');
+    expect(searchSession.query).toBe('bob');
+    expect(searchSession.scrollTop).toBe(0);
+    expect((wrapper.get('.search-scroll-viewport').element as HTMLElement).scrollTop).toBe(0);
     expect(mocks.searchUsers).toHaveBeenLastCalledWith({ q: 'bob', limit: 20, offset: 0 });
-    expect(window.scrollTo).not.toHaveBeenCalledWith({ top: 1400, behavior: 'auto' });
     wrapper.unmount();
+  });
+
+  it('uses the internal viewport as the pagination observer root', async () => {
+    mocks.searchUsers.mockResolvedValueOnce({
+      items: [{ user: user(8), following: false }],
+      has_more: true,
+    });
+    const { wrapper } = mountKeepAliveSearch();
+    await settle();
+
+    const viewport = wrapper.get('.search-scroll-viewport').element;
+    const observer = TestIntersectionObserver.instances[0];
+    expect(observer.root).toBe(viewport);
+    expect(observer.rootMargin).toBe('240px 0px');
+    wrapper.unmount();
+  });
+
+  it('does not rewind the viewport when pagination state changes', async () => {
+    mocks.searchUsers.mockResolvedValueOnce({
+      items: [{ user: user(8), following: false }],
+      has_more: true,
+    });
+    const { wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    searchSession.saveScrollTop(500);
+    viewport.scrollTop = 500;
+    viewport.scrollTop = 820;
+    searchSession.items = [...searchSession.items, { user: user(9), following: false }];
+    searchSession.hasMore = true;
+    searchSession.loadingMore = true;
+    await nextTick();
+    searchSession.loadingMore = false;
+    await nextTick();
+
+    expect(viewport.scrollTop).toBe(820);
+    wrapper.unmount();
+  });
+
+  it('resets the viewport and session when the search is cleared', async () => {
+    const { wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 900;
+    searchSession.saveScrollTop(900);
+
+    await wrapper.get('.search-view__clear').trigger('click');
+    mocks.route.query = {};
+    await nextTick();
+
+    expect(searchSession.query).toBe('');
+    expect(searchSession.scrollTop).toBe(0);
+    expect(viewport.scrollTop).toBe(0);
+    expect(wrapper.text()).toContain('Search for people by name or @username.');
+    wrapper.unmount();
+  });
+
+  it('restores scrollTop from the store after a view remount', async () => {
+    const first = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+    const firstViewport = first.wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    firstViewport.scrollTop = 640;
+    mocks.routeLeaveGuard?.();
+    first.wrapper.unmount();
+
+    const second = mountKeepAliveSearch();
+    await settle();
+
+    expect(second.wrapper.get('.search-scroll-viewport').element).not.toBe(firstViewport);
+    expect((second.wrapper.get('.search-scroll-viewport').element as HTMLElement).scrollTop).toBe(640);
+    expect(searchSession.scrollTop).toBe(640);
+    second.wrapper.unmount();
   });
 });
