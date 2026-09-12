@@ -280,11 +280,14 @@ func applyPostSchemaConstraints(tx *gorm.DB) error {
 		"ALTER TABLE posts ADD CONSTRAINT chk_posts_view_count_nonnegative CHECK (view_count >= 0)",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_like_sync_version_nonnegative",
 		"ALTER TABLE posts ADD CONSTRAINT chk_posts_like_sync_version_nonnegative CHECK (like_sync_version >= 0)",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_client_publish_identity",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_client_publish_identity CHECK ((client_publish_id IS NULL AND client_publish_fingerprint IS NULL) OR (client_publish_id IS NOT NULL AND client_publish_fingerprint IS NOT NULL AND char_length(client_publish_fingerprint) = 64))",
 		"CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts (author_id, created_at DESC, id DESC) WHERE deleted_at IS NULL",
 		"CREATE INDEX IF NOT EXISTS idx_posts_reply_to_created ON posts (reply_to_post_id, created_at DESC, id DESC) WHERE deleted_at IS NULL",
 		"CREATE INDEX IF NOT EXISTS idx_posts_conversation_created ON posts (conversation_id, created_at DESC, id DESC) WHERE deleted_at IS NULL",
 		"CREATE INDEX IF NOT EXISTS idx_posts_quote ON posts (quote_post_id) WHERE quote_post_id IS NOT NULL",
 		"CREATE INDEX IF NOT EXISTS idx_posts_deleted_at ON posts (deleted_at)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_posts_author_client_publish_id ON posts (author_id, client_publish_id) WHERE client_publish_id IS NOT NULL",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {

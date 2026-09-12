@@ -100,6 +100,36 @@ func TestSetupRouterRegistersProfileTimelineRoute(t *testing.T) {
 	}
 }
 
+func TestSetupRouterAllowsIdempotencyKeyForPostCreation(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodOptions, "/api/posts", nil)
+	request.Header.Set("Origin", "https://app.example.test")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "Idempotency-Key, Content-Type")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(response.Header().Get("Access-Control-Allow-Headers")), "idempotency-key") {
+		t.Fatalf("allow headers=%q", response.Header().Get("Access-Control-Allow-Headers"))
+	}
+	normalRequest := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	normalRequest.Header.Set("Origin", "https://app.example.test")
+	normalResponse := httptest.NewRecorder()
+	engine.ServeHTTP(normalResponse, normalRequest)
+	if normalResponse.Code != http.StatusOK {
+		t.Fatalf("normal status=%d body=%s", normalResponse.Code, normalResponse.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(normalResponse.Header().Get("Access-Control-Expose-Headers")), "idempotency-replayed") {
+		t.Fatalf("expose headers=%q", normalResponse.Header().Get("Access-Control-Expose-Headers"))
+	}
+}
+
 func newClientIPTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

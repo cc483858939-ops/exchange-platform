@@ -28,6 +28,9 @@ type createPostRequest struct {
 	ReplyToPostID *uint                    `json:"reply_to_post_id"`
 	QuotePostID   *uint                    `json:"quote_post_id"`
 	Media         []createPostMediaRequest `json:"media"`
+
+	ClientPublishID          *uuid.UUID `json:"-"`
+	ClientPublishFingerprint *string    `json:"-"`
 }
 
 const (
@@ -71,6 +74,14 @@ func createPost(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
+	clientPublishID, hasClientPublishID, err := parseClientPublishKey(ctx)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":  invalidClientPublishCode,
+			"error": errInvalidClientPublishKey.Error(),
+		})
+		return
+	}
 
 	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, createPostRequestMaxBytes)
 
@@ -107,6 +118,25 @@ func createPost(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "a post cannot be both a reply and a quote"})
 		return
 	}
+	var clientPublishFingerprint string
+	if hasClientPublishID {
+		clientPublishFingerprint, err = createPostPayloadFingerprint(content, req)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		req.ClientPublishID = clientPublishID
+		req.ClientPublishFingerprint = &clientPublishFingerprint
+		existing, lookupErr := loadClientPublishPostFn(userID, *clientPublishID)
+		if lookupErr == nil {
+			respondToExistingClientPublish(ctx, existing, clientPublishFingerprint, now)
+			return
+		}
+		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": lookupErr.Error()})
+			return
+		}
+	}
 	author, err := loadPostAuthorForCreate(userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -132,6 +162,13 @@ func createPost(ctx *gin.Context) {
 	var post models.Post
 	err = persistPostGraphFn(&post, userID, content, req, media, now)
 	if err != nil {
+		if hasClientPublishID && isClientPublishUniqueViolation(err) {
+			existing, lookupErr := loadClientPublishPostFn(userID, *clientPublishID)
+			if lookupErr == nil {
+				respondToExistingClientPublish(ctx, existing, clientPublishFingerprint, now)
+				return
+			}
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "reply or quote target unavailable"})
 			return
@@ -152,13 +189,8 @@ func createPost(ctx *gin.Context) {
 		DisplayName: author.DisplayName,
 		AvatarURL:   author.AvatarURL,
 	}
-	response, err := postResponseFromModel(post)
+	response, err := buildPostCreateResponse(post, postMediaResponsesFromValidated(media), now)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	response.Media = postMediaResponsesFromValidated(media)
-	if err := hydratePostResponseReferences(&response, now); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -174,6 +206,7 @@ func persistPostGraph(post *models.Post, userID uint, content string, req create
 		*post = models.Post{
 			AuthorID: userID, Content: content, Language: postlanguage.Detect(content), ReplyToPostID: req.ReplyToPostID,
 			QuotePostID: req.QuotePostID, Visibility: "public",
+			ClientPublishID: req.ClientPublishID, ClientPublishFingerprint: req.ClientPublishFingerprint,
 		}
 		if req.ReplyToPostID != nil {
 			var parent models.Post

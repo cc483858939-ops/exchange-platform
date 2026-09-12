@@ -80,14 +80,9 @@
               {{ mediaError }}
             </p>
 
-            <div
-              v-if="uploadError || publishError"
-              class="composer-status"
-              role="alert"
-              aria-live="polite"
-            >
-              {{ uploadError || publishError }}
-            </div>
+            <p v-if="publishError" class="field-error composer-validation-error" role="alert">
+              {{ publishError }}
+            </p>
 
             <div class="composer-toolbar">
               <div class="composer-toolbar__tools">
@@ -167,11 +162,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { createPost, uploadPostMedia } from '../services/postService';
 import { useAuthStore } from '../store/auth';
 import { usePostDraftStore } from '../store/postDraft';
-import { useFeedStore } from '../store/feed';
-import { useProfileSessionStore } from '../store/profileSession';
+import { usePostPublishStore } from '../store/postPublish';
 import AppIcon from '../components/icons/AppIcon.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
@@ -181,11 +174,8 @@ import EmojiPickerPopover, {
 import type { PostMedia } from '../types/Post';
 import { insertTextAtSelection } from '../utils/textareaInsertion';
 
-type PublishPhase = 'idle' | 'uploading' | 'publishing';
-
 const maxContentLength = 10000;
 const maxMediaCount = 4;
-const mediaUploadConcurrency = 2;
 const maxMediaBytes = 5 * 1024 * 1024;
 const maxContentHeight = 360;
 const allowedMediaTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -193,13 +183,10 @@ const allowedMediaTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const router = useRouter();
 const authStore = useAuthStore();
 const postDraft = usePostDraftStore();
-const feedStore = useFeedStore();
-const profileSessionStore = useProfileSessionStore();
+const postPublishStore = usePostPublishStore();
 
-const phase = ref<PublishPhase>('idle');
 const validationAttempted = ref(false);
 const mediaError = ref('');
-const uploadError = ref('');
 const publishError = ref('');
 const contentInput = ref<HTMLTextAreaElement | null>(null);
 const emojiButton = ref<HTMLButtonElement | null>(null);
@@ -208,11 +195,15 @@ const selectionStart = ref<number | null>(null);
 const selectionEnd = ref<number | null>(null);
 const previewEntries = ref(new Map<string, { file: File; url: string }>());
 const emojiPickerId = 'post-emoji-picker';
-let publishAttemptVersion = 0;
 
 const currentIdentity = computed(() => authStore.currentIdentity);
 const currentUserID = computed(() => (
   authStore.isAuthenticated ? currentIdentity.value?.id ?? null : null
+));
+const currentPublishOperation = computed(() => (
+  postDraft.publishOperationID
+    ? postPublishStore.getOperation(postDraft.publishOperationID) || null
+    : null
 ));
 const content = computed({
   get: () => postDraft.content,
@@ -221,12 +212,15 @@ const content = computed({
 const contentLength = computed(() => Array.from(content.value.trim()).length);
 const remainingCharacters = computed(() => maxContentLength - contentLength.value);
 const showCharacterCount = computed(() => remainingCharacters.value <= 1000);
-const isSubmitting = computed(() => phase.value !== 'idle');
+const isSubmitting = computed(() => (
+  currentPublishOperation.value?.phase === 'uploading'
+  || currentPublishOperation.value?.phase === 'publishing'
+));
 const publishLabel = computed(() => {
-  if (phase.value === 'uploading') {
+  if (currentPublishOperation.value?.phase === 'uploading') {
     return 'Uploading...';
   }
-  if (phase.value === 'publishing') {
+  if (currentPublishOperation.value?.phase === 'publishing') {
     return 'Posting...';
   }
   return 'Post';
@@ -402,7 +396,6 @@ const handleMediaChange = (event: Event) => {
   mediaError.value = overflow
     ? 'You can attach up to 4 images.'
     : firstError;
-  uploadError.value = '';
   publishError.value = '';
   input.value = '';
 };
@@ -416,7 +409,6 @@ const removeMedia = (index: number) => {
     postDraft.removeMedia(item.id);
   }
   mediaError.value = '';
-  uploadError.value = '';
   publishError.value = '';
 };
 
@@ -443,78 +435,6 @@ const goBack = () => {
   goHome();
 };
 
-const isCurrentPublishAttempt = (
-  attemptVersion: number,
-  publisherUserID: number,
-  selectedMedia: Array<{ id: string; file: File }>,
-) => (
-  publishAttemptVersion === attemptVersion
-  && authStore.isAuthenticated
-  && authStore.currentIdentity?.id === publisherUserID
-  && postDraft.viewerID === publisherUserID
-  && postDraft.media.length === selectedMedia.length
-  && selectedMedia.every((item, index) => (
-    postDraft.media[index]?.id === item.id
-    && postDraft.media[index]?.file === item.file
-  ))
-);
-
-const uploadSelectedMedia = async (
-  selectedMedia: Array<{ id: string; file: File; uploadedURL: string }>,
-  publishAttempt: number,
-  publisherUserID: number,
-  attemptMediaIdentity: Array<{ id: string; file: File }>,
-): Promise<string[] | null> => {
-  const pendingMedia = selectedMedia.filter(item => !item.uploadedURL);
-
-  if (pendingMedia.length > 0) {
-    phase.value = 'uploading';
-  }
-
-  for (let start = 0; start < pendingMedia.length; start += mediaUploadConcurrency) {
-    const batch = pendingMedia.slice(start, start + mediaUploadConcurrency);
-    const results = await Promise.allSettled(batch.map(async item => {
-      const uploadedURL = (await uploadPostMedia(item.file)).trim();
-      if (!uploadedURL) {
-        throw new Error('The media upload returned no URL.');
-      }
-      return uploadedURL;
-    }));
-
-    if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {
-      return null;
-    }
-
-    let batchFailed = false;
-    results.forEach((result, index) => {
-      const item = batch[index];
-      if (result.status === 'fulfilled') {
-        item.uploadedURL = result.value;
-        postDraft.setUploadedURL(item.id, result.value);
-        return;
-      }
-      batchFailed = true;
-    });
-
-    if (batchFailed) {
-      uploadError.value = 'Image upload failed. Your draft was preserved.';
-      return null;
-    }
-  }
-
-  if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {
-    return null;
-  }
-
-  const uploadedURLs = selectedMedia.map(item => item.uploadedURL.trim());
-  if (uploadedURLs.some(url => !url)) {
-    uploadError.value = 'Image upload failed. Your draft was preserved.';
-    return null;
-  }
-
-  return uploadedURLs;
-};
-
 const submitPost = async () => {
   if (isSubmitting.value) {
     return;
@@ -536,69 +456,20 @@ const submitPost = async () => {
     publishError.value = 'Your account could not be verified. Your draft was preserved.';
     return;
   }
-
-  const publishAttempt = ++publishAttemptVersion;
-  const selectedMedia = postDraft.media.map(item => ({
-    id: item.id,
-    file: item.file,
-    uploadedURL: item.uploadedURL.trim(),
-  }));
-  const draftContent = content.value.trim();
-  const attemptMediaIdentity = selectedMedia.map(item => ({ id: item.id, file: item.file }));
-
-  uploadError.value = '';
   publishError.value = '';
 
-  const uploadedURLs = await uploadSelectedMedia(
-    selectedMedia,
-    publishAttempt,
-    publisherUserID,
-    attemptMediaIdentity,
-  );
-  if (uploadedURLs === null) {
-    if (publishAttemptVersion === publishAttempt) {
-      phase.value = 'idle';
-    }
+  const operation = postPublishStore.startOrRetryDraft();
+  if (!operation) {
+    publishError.value = 'Your account could not be verified. Your draft was preserved.';
     return;
   }
-
-  if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {
-    publishError.value = 'Your account changed while posting. No post was created, and your draft was preserved.';
-    return;
-  }
-
-  phase.value = 'publishing';
   try {
-    const post = await createPost({
-      content: draftContent,
-      media: uploadedURLs.map(url => ({ type: 'image' as const, url })),
-    });
-    if (!isCurrentPublishAttempt(publishAttempt, publisherUserID, attemptMediaIdentity)) {
-      return;
-    }
-    if (post.author?.id !== publisherUserID) {
-      publishError.value = 'The post was saved, but your account changed during posting. It was not added to this Home feed.';
-      return;
-    }
-
-    if (!feedStore.registerPublishedPost(post, publisherUserID)) {
-      publishError.value = 'The post was posted, but Home could not update for this account. Your draft was preserved.';
-      return;
-    }
-    profileSessionStore.registerPublishedTimelinePost(post, publisherUserID);
-    authStore.syncCurrentIdentityProfile(post.author);
-    postDraft.clear();
-
     await router.replace({
       name: 'Home',
       query: { tab: 'for-you' },
     });
   } catch {
-    publishError.value = 'Post could not be posted. Try again.';
-  } finally {
-    if (publishAttemptVersion === publishAttempt) {
-      phase.value = 'idle';
-    }
+    // Navigation failure must not cancel the background publish operation.
   }
 };
 
@@ -609,10 +480,8 @@ watch(content, () => {
 watch(
   currentUserID,
   viewerID => {
-    publishAttemptVersion += 1;
     emojiPickerOpen.value = false;
     postDraft.setViewer(viewerID);
-    phase.value = 'idle';
   },
   { immediate: true },
 );
@@ -630,7 +499,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  publishAttemptVersion += 1;
   emojiPickerOpen.value = false;
   revokeAllPreviews();
 });
@@ -922,13 +790,6 @@ onBeforeUnmount(() => {
 .composer-action:focus-within {
   border-color: var(--color-accent);
   color: var(--color-accent);
-}
-
-.composer-status {
-  margin-top: var(--space-2);
-  padding: 0;
-  color: var(--color-danger);
-  font-size: 14px;
 }
 
 .composer-auth-state {

@@ -17,14 +17,14 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-const RequiredSchemaVersion int64 = 6
+const RequiredSchemaVersion int64 = 7
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 6
+	PublishedSchemaCurrentVersion     int64 = 7
 	PublishedSchemaCompatibilityFloor int64 = 4
 )
 
@@ -109,6 +109,7 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"chk_posts_reply_count_nonnegative",
 			"chk_posts_view_count_nonnegative",
 			"chk_posts_like_sync_version_nonnegative",
+			"chk_posts_client_publish_identity",
 		},
 		Indexes: []string{
 			"idx_posts_author_created",
@@ -116,6 +117,7 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"idx_posts_conversation_created",
 			"idx_posts_quote",
 			"idx_posts_deleted_at",
+			"uidx_posts_author_client_publish_id",
 		},
 	},
 	{

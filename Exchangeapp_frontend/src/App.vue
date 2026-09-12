@@ -2,6 +2,7 @@
   <RouterView v-slot="{ Component }">
     <component v-if="route.meta.layout === 'auth'" :is="Component" />
     <AppShell v-else>
+      <PostPublishStatus />
       <KeepAlive
         :key="`root:${viewerCacheNamespace}`"
         :max="5"
@@ -46,6 +47,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import AppShell from './components/layout/AppShell.vue';
+import PostPublishStatus from './components/composer/PostPublishStatus.vue';
 import {
   getExternalProfileCacheKey,
   getHistoryReturnCacheKey,

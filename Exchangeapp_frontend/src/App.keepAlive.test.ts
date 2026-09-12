@@ -19,6 +19,13 @@ vi.mock('./store/auth', () => ({
   useAuthStore: () => mocks.authStore,
 }));
 
+vi.mock('./components/composer/PostPublishStatus.vue', () => ({
+  default: {
+    name: 'PostPublishStatus',
+    template: '<div data-post-publish-status />',
+  },
+}));
+
 const HomeProbe = defineComponent({
   name: 'HomeView',
   template: '<main data-home-marker><img data-home-image src="/avatar.webp" /></main>',

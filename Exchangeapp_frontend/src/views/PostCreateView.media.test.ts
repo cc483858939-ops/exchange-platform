@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostCreateView from './PostCreateView.vue';
 import { usePostDraftStore } from '../store/postDraft';
+import { usePostPublishStore } from '../store/postPublish';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as {
@@ -245,15 +246,18 @@ describe('PostCreateView media picker and retry behavior', () => {
     await submitPromise;
     await flushPromises();
 
-    expect(mocks.createPost).toHaveBeenCalledWith({
-      content: 'Upload four images',
-      media: [
-        { type: 'image', url: '/media/a.png' },
-        { type: 'image', url: '/media/b.png' },
-        { type: 'image', url: '/media/c.png' },
-        { type: 'image', url: '/media/d.png' },
-      ],
-    });
+    expect(mocks.createPost).toHaveBeenCalledWith(
+      {
+        content: 'Upload four images',
+        media: [
+          { type: 'image', url: '/media/a.png' },
+          { type: 'image', url: '/media/b.png' },
+          { type: 'image', url: '/media/c.png' },
+          { type: 'image', url: '/media/d.png' },
+        ],
+      },
+      { idempotencyKey: expect.any(String) },
+    );
   });
 
   it('does not spend upload slots on cached media and preserves selected order', async () => {
@@ -273,18 +277,21 @@ describe('PostCreateView media picker and retry behavior', () => {
     await flushPromises();
 
     expect(uploadOrder).toEqual(['second.png', 'third.png', 'fourth.png']);
-    expect(mocks.createPost).toHaveBeenCalledWith({
-      content: 'Reuse cached media',
-      media: [
-        { type: 'image', url: '/media/cached.png' },
-        { type: 'image', url: '/media/second.png' },
-        { type: 'image', url: '/media/third.png' },
-        { type: 'image', url: '/media/fourth.png' },
-      ],
-    });
+    expect(mocks.createPost).toHaveBeenCalledWith(
+      {
+        content: 'Reuse cached media',
+        media: [
+          { type: 'image', url: '/media/cached.png' },
+          { type: 'image', url: '/media/second.png' },
+          { type: 'image', url: '/media/third.png' },
+          { type: 'image', url: '/media/fourth.png' },
+        ],
+      },
+      { idempotencyKey: expect.any(String) },
+    );
   });
 
-  it('stops after a failed batch and retries only pending media', async () => {
+  it('preserves successful uploads and retries only media still pending', async () => {
     const files = ['first.png', 'second.png', 'third.png', 'fourth.png'].map(name => imageFile(name));
     mocks.uploadPostMedia.mockImplementation(async (file: File) => `/media/${file.name}`);
     mocks.uploadPostMedia.mockResolvedValueOnce('/media/first.png');
@@ -307,8 +314,13 @@ describe('PostCreateView media picker and retry behavior', () => {
       '',
       '',
     ]);
+    await vi.waitFor(() => {
+      expect(usePostPublishStore().latestOperation?.phase).toBe('failed');
+    });
 
-    await wrapper.get('form').trigger('submit');
+    const operation = usePostPublishStore().latestOperation;
+    expect(operation).not.toBeNull();
+    expect(usePostPublishStore().retry(operation!.id)).toBe(true);
     await flushPromises();
 
     expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
@@ -318,15 +330,18 @@ describe('PostCreateView media picker and retry behavior', () => {
       'third.png',
       'fourth.png',
     ]);
-    expect(mocks.createPost).toHaveBeenCalledWith({
-      content: 'Retry pending images',
-      media: [
-        { type: 'image', url: '/media/first.png' },
-        { type: 'image', url: '/media/second.png' },
-        { type: 'image', url: '/media/third.png' },
-        { type: 'image', url: '/media/fourth.png' },
-      ],
-    });
+    expect(mocks.createPost).toHaveBeenCalledWith(
+      {
+        content: 'Retry pending images',
+        media: [
+          { type: 'image', url: '/media/first.png' },
+          { type: 'image', url: '/media/second.png' },
+          { type: 'image', url: '/media/third.png' },
+          { type: 'image', url: '/media/fourth.png' },
+        ],
+      },
+      { idempotencyKey: expect.any(String) },
+    );
   });
 
   it('preserves sibling successes when an upload returns an empty URL', async () => {
@@ -347,10 +362,12 @@ describe('PostCreateView media picker and retry behavior', () => {
       '',
       '/media/valid-url.png',
     ]);
-    expect(wrapper.get('.composer-status').text()).toContain('Image upload failed');
+    const publishStore = usePostPublishStore();
+    expect(publishStore.latestOperation?.phase).toBe('failed');
+    expect(publishStore.latestOperation?.error).toContain('Couldn’t confirm this post');
   });
 
-  it('invalidates pending uploads when the authenticated account changes', async () => {
+  it('keeps the background operation running when the authenticated account changes', async () => {
     const files = ['old-a.png', 'old-b.png', 'old-c.png', 'old-d.png'].map(name => imageFile(name));
     const requests = new Map(files.map(file => [file.name, deferred<string>()]));
     mocks.uploadPostMedia.mockImplementation((file: File) => {
@@ -377,14 +394,32 @@ describe('PostCreateView media picker and retry behavior', () => {
     await flushPromises();
     requests.get('old-a.png')!.resolve('/media/old-a.png');
     requests.get('old-b.png')!.resolve('/media/old-b.png');
+    await flushPromises();
+    requests.get('old-c.png')!.resolve('/media/old-c.png');
+    requests.get('old-d.png')!.resolve('/media/old-d.png');
     await submitPromise;
     await flushPromises();
 
     expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
       'old-a.png',
       'old-b.png',
+      'old-c.png',
+      'old-d.png',
     ]);
-    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(mocks.createPost).toHaveBeenCalledWith(
+      {
+        content: 'Old account draft',
+        media: [
+          { type: 'image', url: '/media/old-a.png' },
+          { type: 'image', url: '/media/old-b.png' },
+          { type: 'image', url: '/media/old-c.png' },
+          { type: 'image', url: '/media/old-d.png' },
+        ],
+      },
+      { idempotencyKey: expect.any(String) },
+    );
+    expect(mocks.feedStore.registerPublishedPost).not.toHaveBeenCalled();
+    expect(mocks.profileSessionStore.registerPublishedTimelinePost).not.toHaveBeenCalled();
     expect(usePostDraftStore().viewerID).toBe(8);
     expect(usePostDraftStore().media).toHaveLength(0);
   });
@@ -407,20 +442,28 @@ describe('PostCreateView media picker and retry behavior', () => {
     expect(usePostDraftStore().media[0].uploadedURL)
       .toBe('/api/files/post-media/7/first.jpg');
     expect(usePostDraftStore().media[1].uploadedURL).toBe('');
-    expect(wrapper.get('.composer-status').text()).toContain('Image upload failed');
+    expect(usePostPublishStore().latestOperation?.phase).toBe('failed');
+    await vi.waitFor(() => {
+      expect(usePostPublishStore().latestOperation?.phase).toBe('failed');
+    });
 
-    await wrapper.get('form').trigger('submit');
+    const operation = usePostPublishStore().latestOperation;
+    expect(operation).not.toBeNull();
+    expect(usePostPublishStore().retry(operation!.id)).toBe(true);
     await flushPromises();
 
     expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(3);
     expect(mocks.uploadPostMedia).toHaveBeenLastCalledWith(second);
-    expect(mocks.createPost).toHaveBeenCalledWith({
-      content: 'Retry this post',
-      media: [
-        { type: 'image', url: '/api/files/post-media/7/first.jpg' },
-        { type: 'image', url: '/api/files/post-media/7/second.jpg' },
-      ],
-    });
+    expect(mocks.createPost).toHaveBeenCalledWith(
+      {
+        content: 'Retry this post',
+        media: [
+          { type: 'image', url: '/api/files/post-media/7/first.jpg' },
+          { type: 'image', url: '/api/files/post-media/7/second.jpg' },
+        ],
+      },
+      { idempotencyKey: expect.any(String) },
+    );
   });
 
   it('reuses uploaded URLs when createPost fails and is retried', async () => {
@@ -434,11 +477,16 @@ describe('PostCreateView media picker and retry behavior', () => {
 
     await wrapper.get('form').trigger('submit');
     await flushPromises();
+    await vi.waitFor(() => {
+      expect(usePostPublishStore().latestOperation?.phase).toBe('failed');
+    });
     expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
     expect(usePostDraftStore().media[0].uploadedURL).toBe('/media/retry.png');
     expect(usePostDraftStore().content).toBe('Retry create');
 
-    await wrapper.get('form').trigger('submit');
+    const operation = usePostPublishStore().latestOperation;
+    expect(operation).not.toBeNull();
+    expect(usePostPublishStore().retry(operation!.id)).toBe(true);
     await flushPromises();
     expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
     expect(mocks.createPost).toHaveBeenCalledTimes(2);

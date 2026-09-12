@@ -33,8 +33,8 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length", "Retry-After"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key"},
+		ExposeHeaders:    []string{"Content-Length", "Retry-After", "Idempotency-Replayed"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))

@@ -34,6 +34,40 @@ describe('postDraft store', () => {
     expect(store.media.find(item => item.id === firstID)?.uploadedURL).toBe('');
   });
 
+  it('binds and clears a publish operation only for its viewer', () => {
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    store.setContent('Draft');
+    expect(store.bindPublishOperation('publish-1')).toBe(true);
+    store.setUploadedURL('missing', '/media/missing.png');
+    expect(store.publishOperationID).toBe('publish-1');
+    expect(store.clearIfBoundTo('publish-1', 8)).toBe(false);
+    expect(store.publishOperationID).toBe('publish-1');
+    expect(store.clearIfBoundTo('other', 7)).toBe(false);
+    expect(store.clearIfBoundTo('publish-1', 7)).toBe(true);
+    expect(store.publishOperationID).toBeNull();
+    expect(store.content).toBe('');
+  });
+
+  it('clears a publish binding on real draft edits but not uploaded URL hydration', () => {
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    store.setContent('Draft');
+    const mediaID = store.addMedia(file());
+    store.bindPublishOperation('publish-2');
+
+    store.setUploadedURL(mediaID, '/media/one.png');
+    expect(store.publishOperationID).toBe('publish-2');
+    store.setContent('Draft');
+    expect(store.publishOperationID).toBe('publish-2');
+    store.setContent('Edited draft');
+    expect(store.publishOperationID).toBeNull();
+
+    store.bindPublishOperation('publish-3');
+    store.removeMedia(mediaID);
+    expect(store.publishOperationID).toBeNull();
+  });
+
   it('removes one media item without using its array index as identity', () => {
     const store = usePostDraftStore();
     store.setViewer(7);
@@ -56,5 +90,6 @@ describe('postDraft store', () => {
     expect(store.content).toBe('');
     expect(store.media).toEqual([]);
     expect(store.dirty).toBe(false);
+    expect(store.publishOperationID).toBeNull();
   });
 });

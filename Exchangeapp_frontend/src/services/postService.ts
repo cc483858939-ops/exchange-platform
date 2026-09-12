@@ -15,6 +15,10 @@ export type CreatePostPayload = {
   media?: CreatePostMediaPayload[];
 };
 
+export type CreatePostOptions = {
+  idempotencyKey?: string;
+};
+
 export type TimelineQuery = {
   limit?: number;
   cursor?: string;
@@ -55,8 +59,16 @@ export async function deletePost(postID: number | string): Promise<void> {
   await apiClient.delete('/posts/' + id);
 }
 
-export async function createPost(payload: CreatePostPayload): Promise<Post> {
-  const response = await apiClient.post<Post>('/posts', payload);
+export async function createPost(
+  payload: CreatePostPayload,
+  options: CreatePostOptions = {},
+): Promise<Post> {
+  const idempotencyKey = options.idempotencyKey?.trim();
+  const response = idempotencyKey
+    ? await apiClient.post<Post>('/posts', payload, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
+    : await apiClient.post<Post>('/posts', payload);
   return response.data;
 }
 

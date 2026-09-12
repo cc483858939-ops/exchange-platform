@@ -6,6 +6,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostCreateView from './PostCreateView.vue';
 import { usePostDraftStore } from '../store/postDraft';
+import { usePostPublishStore } from '../store/postPublish';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as {
@@ -111,6 +112,14 @@ const mountPage = () => mount(PostCreateView, {
     },
   },
 });
+
+const deferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
 
 describe('PostCreateView identity and text publishing', () => {
   let wrapper: VueWrapper | null = null;
@@ -265,7 +274,10 @@ describe('PostCreateView identity and text publishing', () => {
 
     await wrapper.get('form').trigger('submit');
     await flushPromises();
-    expect(mocks.createPost).toHaveBeenCalledWith({ content: 'A post 😂', media: [] });
+    expect(mocks.createPost).toHaveBeenCalledWith(
+      { content: 'A post 😂', media: [] },
+      { idempotencyKey: expect.any(String) },
+    );
   });
 
   it('closes and disables the picker while publishing', async () => {
@@ -309,10 +321,13 @@ describe('PostCreateView identity and text publishing', () => {
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
-    expect(mocks.createPost).toHaveBeenCalledWith({
-      content: 'A post from the current identity',
-      media: [],
-    });
+    expect(mocks.createPost).toHaveBeenCalledWith(
+      {
+        content: 'A post from the current identity',
+        media: [],
+      },
+      { idempotencyKey: expect.any(String) },
+    );
     expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.feedStore.registerPublishedPost).toHaveBeenCalledWith(
       publishedPost(),
@@ -327,6 +342,33 @@ describe('PostCreateView identity and text publishing', () => {
       query: { tab: 'for-you' },
     });
     expect(usePostDraftStore().dirty).toBe(false);
+  });
+
+  it('keeps the publish operation alive after the composer unmounts', async () => {
+    const request = deferred<ReturnType<typeof publishedPost>>();
+    mocks.createPost.mockReturnValue(request.promise);
+    wrapper = mountPage();
+    await wrapper.get('#post-content').setValue('Survive composer unmount');
+
+    await wrapper.get('form').trigger('submit');
+    const operation = usePostPublishStore().latestOperation;
+    expect(operation?.phase).toBe('publishing');
+    expect(mocks.router.replace).toHaveBeenCalledWith({
+      name: 'Home',
+      query: { tab: 'for-you' },
+    });
+
+    wrapper.unmount();
+    wrapper = null;
+    request.resolve(publishedPost());
+    await flushPromises();
+
+    expect(operation?.phase).toBe('succeeded');
+    expect(mocks.feedStore.registerPublishedPost).toHaveBeenCalledWith(publishedPost(), 7);
+    expect(mocks.profileSessionStore.registerPublishedTimelinePost)
+      .toHaveBeenCalledWith(publishedPost(), 7);
+    expect(usePostDraftStore().content).toBe('');
+    expect(usePostDraftStore().publishOperationID).toBeNull();
   });
 
   it('does not render the composer while logged out', () => {

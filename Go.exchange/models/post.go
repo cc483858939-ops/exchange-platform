@@ -1,6 +1,9 @@
 package models
 
-import "gorm.io/gorm"
+import (
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
 
 // Post is the canonical content root. Replies, quotes, and short posts all
 // share this table.
@@ -12,6 +15,11 @@ type Post struct {
 
 	Content  string `json:"content" gorm:"type:text;not null"`
 	Language string `json:"language" gorm:"size:8;not null;default:und"`
+
+	// ClientPublishID and ClientPublishFingerprint are internal write-side
+	// identity fields used to make a client publish operation replay-safe.
+	ClientPublishID          *uuid.UUID `json:"-" gorm:"type:uuid"`
+	ClientPublishFingerprint *string    `json:"-" gorm:"type:char(64)"`
 
 	ReplyToPostID *uint `json:"reply_to_post_id"`
 	ReplyToPost   *Post `json:"-" gorm:"foreignKey:ReplyToPostID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`

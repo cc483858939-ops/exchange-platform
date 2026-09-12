@@ -46,6 +46,7 @@ WHERE table_schema = current_schema()
 	for _, required := range []string{
 		"author_id", "content", "reply_to_post_id", "quote_post_id", "conversation_id",
 		"visibility", "like_count", "reply_count", "view_count", "like_sync_version",
+		"client_publish_id", "client_publish_fingerprint",
 	} {
 		if _, ok := columnSet[required]; !ok {
 			t.Fatalf("posts is missing canonical column %q; columns=%v", required, columnSet)
@@ -197,6 +198,13 @@ WHERE conrelid = 'posts'::regclass
 			t.Fatalf("missing Post graph constraint %q", name)
 		}
 	}
+	if definition, ok := constraintDefinitions["chk_posts_client_publish_identity"]; !ok ||
+		!strings.Contains(definition, "client_publish_idisnull") ||
+		!strings.Contains(definition, "client_publish_fingerprintisnull") ||
+		!strings.Contains(definition, "char_length") ||
+		!strings.Contains(definition, "=64") {
+		t.Fatalf("missing or invalid client publish identity constraint: %q", definition)
+	}
 	for name, column := range map[string]string{
 		"chk_posts_like_count_nonnegative":        "like_count>=0",
 		"chk_posts_reply_count_nonnegative":       "reply_count>=0",
@@ -226,15 +234,19 @@ WHERE schemaname = current_schema()
 		indexDefinitions[index.Name] = strings.ToLower(strings.Join(strings.Fields(index.Definition), ""))
 	}
 	indexRequirements := map[string][]string{
-		"idx_posts_author_created":       {"author_id", "created_atdesc", "iddesc"},
-		"idx_posts_reply_to_created":     {"reply_to_post_id", "created_atdesc", "iddesc"},
-		"idx_posts_conversation_created": {"conversation_id", "created_atdesc", "iddesc"},
-		"idx_posts_quote":                {"quote_post_id"},
+		"idx_posts_author_created":            {"author_id", "created_atdesc", "iddesc"},
+		"idx_posts_reply_to_created":          {"reply_to_post_id", "created_atdesc", "iddesc"},
+		"idx_posts_conversation_created":      {"conversation_id", "created_atdesc", "iddesc"},
+		"idx_posts_quote":                     {"quote_post_id"},
+		"uidx_posts_author_client_publish_id": {"unique", "author_id", "client_publish_id"},
 	}
 	for name, requiredParts := range indexRequirements {
 		definition, ok := indexDefinitions[name]
 		if !ok {
 			t.Fatalf("missing Post graph index %q", name)
+		}
+		if name == "uidx_posts_author_client_publish_id" && strings.Contains(definition, "deleted_at") {
+			t.Fatalf("client publish unique index must not be scoped by deleted_at: %q", definition)
 		}
 		for _, part := range requiredParts {
 			if !strings.Contains(definition, part) {

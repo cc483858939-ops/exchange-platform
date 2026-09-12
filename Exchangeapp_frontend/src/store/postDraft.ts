@@ -28,11 +28,13 @@ export const usePostDraftStore = defineStore('postDraft', () => {
   const content = ref('');
   const media = ref<DraftPostMedia[]>([]);
   const dirty = ref(false);
+  const publishOperationID = ref<string | null>(null);
 
   const clear = () => {
     content.value = '';
     media.value = [];
     dirty.value = false;
+    publishOperationID.value = null;
   };
 
   const setViewer = (nextViewerID: number | null) => {
@@ -47,6 +49,9 @@ export const usePostDraftStore = defineStore('postDraft', () => {
   };
 
   const setContent = (value: string) => {
+    if (content.value !== value) {
+      publishOperationID.value = null;
+    }
     content.value = value;
     dirty.value = true;
   };
@@ -59,6 +64,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     };
     media.value = [...media.value, item];
     dirty.value = true;
+    publishOperationID.value = null;
     return item.id;
   };
 
@@ -69,6 +75,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     }
     media.value = next;
     dirty.value = true;
+    publishOperationID.value = null;
     return true;
   };
 
@@ -81,16 +88,41 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     return true;
   };
 
+  const bindPublishOperation = (operationID: string) => {
+    const normalized = operationID.trim();
+    if (!normalized) {
+      return false;
+    }
+    publishOperationID.value = normalized;
+    return true;
+  };
+
+  const clearIfBoundTo = (operationID: string, expectedViewerID: number): boolean => {
+    const normalizedViewerID = normalizeViewerID(expectedViewerID);
+    if (
+      publishOperationID.value !== operationID
+      || normalizedViewerID === null
+      || normalizedViewerID !== viewerID.value
+    ) {
+      return false;
+    }
+    clear();
+    return true;
+  };
+
   return {
     viewerID,
     content,
     media,
     dirty,
+    publishOperationID,
     clear,
     setViewer,
     setContent,
     addMedia,
     removeMedia,
     setUploadedURL,
+    bindPublishOperation,
+    clearIfBoundTo,
   };
 });
