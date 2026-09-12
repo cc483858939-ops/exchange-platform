@@ -84,6 +84,15 @@
               {{ publishError }}
             </p>
 
+            <p
+              v-if="publishBlocked"
+              id="publish-blocked-message"
+              class="publish-blocked-message"
+              role="status"
+            >
+              Another post is still sending. Wait for it to finish or retry it before posting this draft.
+            </p>
+
             <div class="composer-toolbar">
               <div class="composer-toolbar__tools">
                 <label
@@ -132,7 +141,8 @@
                 <button
                   class="publish-button"
                   type="submit"
-                  :disabled="!canPublish || isSubmitting"
+                  :disabled="!canPublish || isSubmitting || publishBlocked"
+                  :aria-describedby="publishBlocked ? 'publish-blocked-message' : undefined"
                   :aria-busy="isSubmitting"
                 >
                   {{ publishLabel }}
@@ -195,6 +205,7 @@ const selectionStart = ref<number | null>(null);
 const selectionEnd = ref<number | null>(null);
 const previewEntries = ref(new Map<string, { file: File; url: string }>());
 const emojiPickerId = 'post-emoji-picker';
+const publishBlockedMessage = 'Another post is still sending. Wait for it to finish or retry it before posting this draft.';
 
 const currentIdentity = computed(() => authStore.currentIdentity);
 const currentUserID = computed(() => (
@@ -225,6 +236,16 @@ const publishLabel = computed(() => {
   }
   return 'Post';
 });
+const publishBlocked = computed(() => {
+  const viewerID = currentUserID.value;
+  if (typeof viewerID !== 'number' || viewerID <= 0) {
+    return false;
+  }
+  return postPublishStore.isDraftBlockedByAnotherPublish(
+    viewerID,
+    postDraft.publishOperationID,
+  );
+});
 const contentError = computed(() => {
   if (contentLength.value > maxContentLength) {
     return 'Post must be ' + maxContentLength + ' characters or fewer.';
@@ -238,6 +259,7 @@ const canPublish = computed(() => (
   authStore.isAuthenticated
   && Boolean(content.value.trim())
   && contentLength.value <= maxContentLength
+  && !publishBlocked.value
 ));
 
 const syncContentSelection = () => {
@@ -444,6 +466,9 @@ const submitPost = async () => {
 
   validationAttempted.value = true;
   if (!canPublish.value) {
+    if (publishBlocked.value) {
+      publishError.value = publishBlockedMessage;
+    }
     return;
   }
 
@@ -458,9 +483,13 @@ const submitPost = async () => {
   }
   publishError.value = '';
 
-  const operation = postPublishStore.startOrRetryDraft();
-  if (!operation) {
+  const result = postPublishStore.startOrRetryDraft();
+  if (result.status === 'rejected') {
     publishError.value = 'Your account could not be verified. Your draft was preserved.';
+    return;
+  }
+  if (result.status === 'blocked') {
+    publishError.value = publishBlockedMessage;
     return;
   }
   try {
@@ -763,9 +792,14 @@ onBeforeUnmount(() => {
 }
 
 .content-error,
-.media-error {
+.media-error,
+.publish-blocked-message {
   margin: var(--space-2) 0 0;
   font-size: 13px;
+}
+
+.publish-blocked-message {
+  color: var(--color-text-secondary);
 }
 
 .composer-action {

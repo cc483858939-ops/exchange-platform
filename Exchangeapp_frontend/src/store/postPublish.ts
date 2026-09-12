@@ -30,6 +30,20 @@ export type PublishOperation = {
   post: Post | null;
 };
 
+export type StartPublishResult =
+  | {
+    status: 'accepted';
+    operation: PublishOperation;
+  }
+  | {
+    status: 'blocked';
+    reason: 'another_publish_in_flight';
+  }
+  | {
+    status: 'rejected';
+    reason: 'unauthenticated';
+  };
+
 const mediaUploadConcurrency = 2;
 const publishFailureMessage = 'Couldn’t confirm this post. Retry safely.';
 
@@ -91,6 +105,24 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const isInFlight = (operation: PublishOperation) => (
     operation.phase === 'uploading' || operation.phase === 'publishing'
   );
+
+  const findInFlightForViewer = (viewerID: number) => (
+    operations.value.find(operation => (
+      operation.publisherUserID === viewerID && isInFlight(operation)
+    ))
+  );
+
+  const isDraftBlockedByAnotherPublish = (
+    viewerID: number,
+    boundOperationID: string | null | undefined = null,
+  ) => {
+    const normalizedViewerID = normalizeViewerID(viewerID);
+    if (normalizedViewerID === null) {
+      return false;
+    }
+    const inFlight = findInFlightForViewer(normalizedViewerID);
+    return Boolean(inFlight && inFlight.id !== boundOperationID);
+  };
 
   const draftMatchesOperation = (operation: PublishOperation) => (
     postDraft.viewerID === operation.publisherUserID
@@ -209,6 +241,14 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     ) {
       return false;
     }
+    const conflictingInFlight = operations.value.find(candidate => (
+      candidate.id !== operation.id
+      && candidate.publisherUserID === operation.publisherUserID
+      && isInFlight(candidate)
+    ));
+    if (conflictingInFlight) {
+      return false;
+    }
     operation.error = '';
     operation.phase = operation.media.some(media => !media.uploadedURL)
       ? 'uploading'
@@ -217,10 +257,10 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     return true;
   };
 
-  const startOrRetryDraft = (): PublishOperation | null => {
+  const startOrRetryDraft = (): StartPublishResult => {
     const publisherUserID = currentViewerID();
     if (publisherUserID === null) {
-      return null;
+      return { status: 'rejected', reason: 'unauthenticated' };
     }
 
     const boundOperation = getOperation(postDraft.publishOperationID);
@@ -230,16 +270,22 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       && draftMatchesOperation(boundOperation)
     ) {
       if (boundOperation.phase === 'failed') {
-        retry(boundOperation.id);
+        if (!retry(boundOperation.id)) {
+          return { status: 'blocked', reason: 'another_publish_in_flight' };
+        }
+        return { status: 'accepted', operation: boundOperation };
+      } else if (boundOperation.phase === 'succeeded') {
+        // A successful operation normally clears its draft binding. Treat a
+        // stale binding as unbound so it cannot be reported as a new submit.
+        // The next accepted operation will replace the stale binding.
+      } else {
+        return { status: 'accepted', operation: boundOperation };
       }
-      return boundOperation;
     }
 
-    const existingInFlight = operations.value.find(operation => (
-      operation.publisherUserID === publisherUserID && isInFlight(operation)
-    ));
+    const existingInFlight = findInFlightForViewer(publisherUserID);
     if (existingInFlight) {
-      return existingInFlight;
+      return { status: 'blocked', reason: 'another_publish_in_flight' };
     }
 
     const operation: PublishOperation = {
@@ -259,13 +305,14 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     postDraft.bindPublishOperation(operation.id);
     operations.value.push(operation);
     void runOperation(operation);
-    return operation;
+    return { status: 'accepted', operation };
   };
 
   return {
     operations,
     latestOperation,
     getOperation,
+    isDraftBlockedByAnotherPublish,
     startOrRetryDraft,
     retry,
   };

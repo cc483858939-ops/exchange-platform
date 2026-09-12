@@ -104,14 +104,19 @@ describe('postPublish store', () => {
     draft.setContent('A background post');
     const store = usePostPublishStore();
 
-    const operation = store.startOrRetryDraft();
-    expect(operation?.phase).toBe('publishing');
-    expect(draft.publishOperationID).toBe(operation?.id);
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') {
+      throw new Error('publish was not accepted');
+    }
+    const operation = result.operation;
+    expect(operation.phase).toBe('publishing');
+    expect(draft.publishOperationID).toBe(operation.id);
 
     await flushPromises();
     expect(mocks.createPost).toHaveBeenCalledWith(
       { content: 'A background post', media: [] },
-      { idempotencyKey: operation?.id },
+      { idempotencyKey: operation.id },
     );
     expect(operation?.phase).toBe('succeeded');
     expect(draft.publishOperationID).toBeNull();
@@ -129,8 +134,16 @@ describe('postPublish store', () => {
     const store = usePostPublishStore();
 
     const first = store.startOrRetryDraft();
+    expect(first.status).toBe('accepted');
+    if (first.status !== 'accepted') {
+      throw new Error('first publish was not accepted');
+    }
     const second = store.startOrRetryDraft();
-    expect(second?.id).toBe(first?.id);
+    expect(second.status).toBe('accepted');
+    if (second.status !== 'accepted') {
+      throw new Error('second submit was not accepted');
+    }
+    expect(second.operation.id).toBe(first.operation.id);
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
 
     request.resolve(publishedPost());
@@ -145,23 +158,32 @@ describe('postPublish store', () => {
     draft.setContent('Retry me');
     const store = usePostPublishStore();
 
-    const first = store.startOrRetryDraft();
+    const firstResult = store.startOrRetryDraft();
+    expect(firstResult.status).toBe('accepted');
+    if (firstResult.status !== 'accepted') {
+      throw new Error('first publish was not accepted');
+    }
+    const first = firstResult.operation;
     await flushPromises();
-    expect(first?.phase).toBe('failed');
-    expect(draft.publishOperationID).toBe(first?.id);
+    expect(first.phase).toBe('failed');
+    expect(draft.publishOperationID).toBe(first.id);
 
-    const retry = store.startOrRetryDraft();
+    const retryResult = store.startOrRetryDraft();
     await flushPromises();
-    expect(retry?.id).toBe(first?.id);
+    expect(retryResult.status).toBe('accepted');
+    if (retryResult.status !== 'accepted') {
+      throw new Error('retry was not accepted');
+    }
+    expect(retryResult.operation.id).toBe(first.id);
     expect(mocks.createPost).toHaveBeenNthCalledWith(
       1,
       { content: 'Retry me', media: [] },
-      { idempotencyKey: first?.id },
+      { idempotencyKey: first.id },
     );
     expect(mocks.createPost).toHaveBeenNthCalledWith(
       2,
       { content: 'Retry me', media: [] },
-      { idempotencyKey: first?.id },
+      { idempotencyKey: first.id },
     );
     expect(draft.publishOperationID).toBeNull();
   });
@@ -174,16 +196,25 @@ describe('postPublish store', () => {
     draft.setContent('Original');
     const store = usePostPublishStore();
 
-    const first = store.startOrRetryDraft();
+    const firstResult = store.startOrRetryDraft();
+    expect(firstResult.status).toBe('accepted');
+    if (firstResult.status !== 'accepted') {
+      throw new Error('first publish was not accepted');
+    }
+    const first = firstResult.operation;
     await flushPromises();
     draft.setContent('Edited');
-    const second = store.startOrRetryDraft();
+    const secondResult = store.startOrRetryDraft();
     await flushPromises();
 
-    expect(second?.id).not.toBe(first?.id);
+    expect(secondResult.status).toBe('accepted');
+    if (secondResult.status !== 'accepted') {
+      throw new Error('edited publish was not accepted');
+    }
+    expect(secondResult.operation.id).not.toBe(first.id);
     expect(mocks.createPost).toHaveBeenLastCalledWith(
       { content: 'Edited', media: [] },
-      { idempotencyKey: second?.id },
+      { idempotencyKey: secondResult.operation.id },
     );
   });
 
@@ -193,7 +224,12 @@ describe('postPublish store', () => {
     const draft = usePostDraftStore();
     draft.setContent('Old content');
     const store = usePostPublishStore();
-    const operation = store.startOrRetryDraft();
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') {
+      throw new Error('publish was not accepted');
+    }
+    const operation = result.operation;
 
     draft.setContent('New draft');
     request.resolve(publishedPost());
@@ -210,7 +246,12 @@ describe('postPublish store', () => {
     const draft = usePostDraftStore();
     draft.setContent('Account A post');
     const store = usePostPublishStore();
-    const operation = store.startOrRetryDraft();
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') {
+      throw new Error('publish was not accepted');
+    }
+    const operation = result.operation;
 
     mocks.authStore.currentIdentity = { id: 8, username: 'bob', display_name: 'Bob', avatar_url: '' };
     draft.setViewer(8);
@@ -237,7 +278,12 @@ describe('postPublish store', () => {
     const secondID = draft.addMedia(file('second.png'));
     const store = usePostPublishStore();
 
-    const operation = store.startOrRetryDraft();
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') {
+      throw new Error('publish was not accepted');
+    }
+    const operation = result.operation;
     await flushPromises();
     expect(operation?.phase).toBe('failed');
     expect(draft.media.find(item => item.id === firstID)?.uploadedURL).toBe('');
@@ -256,5 +302,128 @@ describe('postPublish store', () => {
       },
       { idempotencyKey: operation?.id },
     );
+  });
+
+  it('does not accept a new draft while another operation is in flight', async () => {
+    const retryRequest = deferred<Post>();
+    mocks.createPost.mockRejectedValueOnce(new Error('initial failure'));
+    mocks.createPost.mockReturnValue(retryRequest.promise);
+    const draft = usePostDraftStore();
+    draft.setContent('Post A');
+    const store = usePostPublishStore();
+
+    const firstResult = store.startOrRetryDraft();
+    expect(firstResult.status).toBe('accepted');
+    if (firstResult.status !== 'accepted') {
+      throw new Error('first publish was not accepted');
+    }
+    const first = firstResult.operation;
+    await flushPromises();
+    expect(first.phase).toBe('failed');
+
+    draft.setContent('Post B');
+    expect(store.retry(first.id)).toBe(true);
+    expect(first.phase).toBe('publishing');
+    expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
+    expect(store.isDraftBlockedByAnotherPublish(7, draft.publishOperationID)).toBe(true);
+
+    const blocked = store.startOrRetryDraft();
+    expect(blocked).toEqual({
+      status: 'blocked',
+      reason: 'another_publish_in_flight',
+    });
+    expect(draft.content).toBe('Post B');
+    expect(draft.publishOperationID).toBeNull();
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+    expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
+
+    retryRequest.resolve(publishedPost());
+    await flushPromises();
+    expect(first.phase).toBe('succeeded');
+    expect(store.isDraftBlockedByAnotherPublish(7, draft.publishOperationID)).toBe(false);
+
+    const secondResult = store.startOrRetryDraft();
+    expect(secondResult.status).toBe('accepted');
+    if (secondResult.status !== 'accepted') {
+      throw new Error('second publish was not accepted');
+    }
+    expect(secondResult.operation.id).not.toBe(first.id);
+    expect(mocks.createPost).toHaveBeenCalledTimes(3);
+    expect(mocks.randomUUID).toHaveBeenCalledTimes(2);
+    expect(mocks.createPost).toHaveBeenNthCalledWith(
+      3,
+      { content: 'Post B', media: [] },
+      { idempotencyKey: secondResult.operation.id },
+    );
+    await flushPromises();
+  });
+
+  it('allows a new draft when the previous operation is only failed', async () => {
+    mocks.createPost.mockRejectedValueOnce(new Error('initial failure'));
+    const draft = usePostDraftStore();
+    draft.setContent('Post A');
+    const store = usePostPublishStore();
+
+    const firstResult = store.startOrRetryDraft();
+    expect(firstResult.status).toBe('accepted');
+    if (firstResult.status !== 'accepted') {
+      throw new Error('first publish was not accepted');
+    }
+    const first = firstResult.operation;
+    await flushPromises();
+    expect(first.phase).toBe('failed');
+
+    draft.setContent('Post B');
+    const secondResult = store.startOrRetryDraft();
+    expect(secondResult.status).toBe('accepted');
+    if (secondResult.status !== 'accepted') {
+      throw new Error('second publish was not accepted');
+    }
+    expect(secondResult.operation.id).not.toBe(first.id);
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+    await flushPromises();
+  });
+
+  it('does not retry a failed operation alongside a different active operation', async () => {
+    const secondRequest = deferred<Post>();
+    mocks.createPost.mockRejectedValueOnce(new Error('initial failure'));
+    mocks.createPost.mockReturnValue(secondRequest.promise);
+    const draft = usePostDraftStore();
+    draft.setContent('Post A');
+    const store = usePostPublishStore();
+
+    const firstResult = store.startOrRetryDraft();
+    expect(firstResult.status).toBe('accepted');
+    if (firstResult.status !== 'accepted') {
+      throw new Error('first publish was not accepted');
+    }
+    const first = firstResult.operation;
+    await flushPromises();
+    expect(first.phase).toBe('failed');
+
+    draft.setContent('Post B');
+    const secondResult = store.startOrRetryDraft();
+    expect(secondResult.status).toBe('accepted');
+    if (secondResult.status !== 'accepted') {
+      throw new Error('second publish was not accepted');
+    }
+    const second = secondResult.operation;
+    expect(second.phase).toBe('publishing');
+
+    expect(store.retry(first.id)).toBe(false);
+    expect(first.phase).toBe('failed');
+    expect(second.phase).toBe('publishing');
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+
+    secondRequest.resolve(publishedPost());
+    await flushPromises();
+  });
+
+  it('returns rejected when no authenticated viewer is available', () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    const result = usePostPublishStore().startOrRetryDraft();
+
+    expect(result).toEqual({ status: 'rejected', reason: 'unauthenticated' });
   });
 });

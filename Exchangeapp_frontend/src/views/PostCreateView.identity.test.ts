@@ -371,6 +371,72 @@ describe('PostCreateView identity and text publishing', () => {
     expect(usePostDraftStore().publishOperationID).toBeNull();
   });
 
+  it('keeps a new draft in the composer while another post is sending', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Post B');
+    const publishStore = usePostPublishStore();
+    publishStore.operations.push({
+      id: 'publish-a',
+      publisherUserID: 7,
+      content: 'Post A',
+      media: [],
+      phase: 'publishing',
+      error: '',
+      startedAt: Date.now(),
+      post: null,
+    });
+
+    wrapper = mountPage();
+    await nextTick();
+
+    const button = wrapper.get('.publish-button');
+    expect(button.attributes('disabled')).toBeDefined();
+    expect(button.attributes('aria-describedby')).toBe('publish-blocked-message');
+    expect(wrapper.get('.publish-blocked-message').text())
+      .toContain('Another post is still sending.');
+    expect(wrapper.get('#post-content').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('#post-media-input').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('.emoji-picker-trigger').attributes('disabled')).toBeUndefined();
+
+    await wrapper.get('form').trigger('submit');
+    await nextTick();
+
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(draft.content).toBe('Post B');
+    expect(draft.publishOperationID).toBeNull();
+    expect(wrapper.get('.composer-validation-error').text())
+      .toContain('Another post is still sending.');
+  });
+
+  it('reactively enables the draft after the foreign operation becomes terminal', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Post B');
+    const publishStore = usePostPublishStore();
+    const foreignOperation = {
+      id: 'publish-a',
+      publisherUserID: 7,
+      content: 'Post A',
+      media: [],
+      phase: 'publishing' as const,
+      error: '',
+      startedAt: Date.now(),
+      post: null,
+    };
+    publishStore.operations.push(foreignOperation);
+
+    wrapper = mountPage();
+    await nextTick();
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
+
+    publishStore.operations[0]!.phase = 'succeeded';
+    await nextTick();
+
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('.publish-blocked-message').exists()).toBe(false);
+    expect(wrapper.get('#post-content').attributes('disabled')).toBeUndefined();
+  });
+
   it('does not render the composer while logged out', () => {
     mocks.authStore!.isAuthenticated = false;
     mocks.authStore!.currentIdentity = null;
