@@ -100,6 +100,7 @@ const makeHomeTimeline = () => {
   });
   const timeline: any = reactive({
     activeTab: 'for-you' as FeedTab,
+    homeReselectVersion: 0,
     forYou: reactive({
       items: [{ recommendation: { post: { id: 42 }, score: 1 }, post: makePost(42) }],
       loading: false,
@@ -132,6 +133,7 @@ const makeHomeTimeline = () => {
     setScrollTop: vi.fn((tab: FeedTab, value: number) => {
       scrollTop[tab] = value;
     }),
+    requestHomeReselect: vi.fn(),
     loadForYou: vi.fn().mockResolvedValue(undefined),
     loadMoreForYou: vi.fn().mockResolvedValue(undefined),
     retryForYouLoadMore: vi.fn(),
@@ -149,6 +151,7 @@ const makeHomeTimeline = () => {
 
 const originalScrollY = Object.getOwnPropertyDescriptor(window, 'scrollY');
 const originalScrollTo = Object.getOwnPropertyDescriptor(window, 'scrollTo');
+const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia');
 
 let windowScrollY = 0;
 const scrollToMock = vi.fn();
@@ -177,6 +180,25 @@ const restoreProperty = (
   } else {
     Reflect.deleteProperty(target, property);
   }
+};
+
+const installMatchMedia = (matches: boolean) => {
+  const matchMedia = vi.fn((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: matchMedia,
+  });
+  return matchMedia;
 };
 
 const settle = async () => {
@@ -253,6 +275,7 @@ describe('HomeView scroll viewport ownership', () => {
     wrapper = null;
     restoreProperty(window, 'scrollY', originalScrollY);
     restoreProperty(window, 'scrollTo', originalScrollTo);
+    restoreProperty(window, 'matchMedia', originalMatchMedia);
     document.body.innerHTML = '';
   });
 
@@ -345,6 +368,150 @@ describe('HomeView scroll viewport ownership', () => {
     await wrapper.get('.home-feed-panel').trigger('scroll');
 
     expect(mocks.telemetry.notifyViewportChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('scrolls a deep For You panel to the top without refreshing', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    panel.scrollTop = 2400;
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.homeTimeline.loadFollowing.mockClear();
+    mocks.homeTimeline.setScrollTop.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(panelScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.homeTimeline.setScrollTop).toHaveBeenCalledWith('for-you', 0);
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalledWith(true);
+    expect(scrollToMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes For You when Home is reselected at the top', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    panel.scrollTop = 0;
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.homeTimeline.loadFollowing.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalledWith(true);
+    expect(panelScrollTo).not.toHaveBeenCalled();
+  });
+
+  it('uses the eight-pixel threshold for Home reselect', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    mocks.homeTimeline.loadForYou.mockClear();
+
+    panel.scrollTop = 8;
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(panelScrollTo).not.toHaveBeenCalled();
+
+    mocks.homeTimeline.loadForYou.mockClear();
+    panel.scrollTop = 9;
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+    expect(panelScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+  });
+
+  it('refreshes only the active Following feed when reselected at the top', async () => {
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    panel.scrollTop = 0;
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.homeTimeline.loadFollowing.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(mocks.homeTimeline.loadFollowing).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadFollowing).toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.activeTab).toBe('following');
+    expect(panelScrollTo).not.toHaveBeenCalled();
+  });
+
+  it('suppresses a For You refresh while that feed is already loading', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    panel.scrollTop = 0;
+    mocks.homeTimeline.forYou.loading = true;
+    mocks.homeTimeline.loadForYou.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+  });
+
+  it('suppresses a Following refresh while it is revalidating', async () => {
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    panel.scrollTop = 0;
+    mocks.homeTimeline.following.revalidating = true;
+    mocks.homeTimeline.loadFollowing.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalledWith(true);
+  });
+
+  it('uses auto panel scrolling when reduced motion is preferred', async () => {
+    installMatchMedia(true);
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    panel.scrollTop = 1000;
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(panelScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
   });
 
   it('saves panel scrollTop when Home is destroyed', async () => {

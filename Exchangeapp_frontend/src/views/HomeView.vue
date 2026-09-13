@@ -246,6 +246,7 @@ const repostPendingPostIds = homeTimeline.repostPendingPostIds;
 const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
 const homeViewActive = ref(true);
+const HOME_RESELECT_TOP_THRESHOLD_PX = 8;
 let resumeOnActivation = false;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
@@ -483,6 +484,55 @@ const retryActiveFeed = () => {
   }
 };
 
+const prefersReducedMotion = () => typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const refreshActiveFeed = async () => {
+  if (!authStore.isAuthenticated) {
+    return;
+  }
+
+  if (activeTab.value === 'for-you') {
+    if (forYouFeed.loading || forYouFeed.loadingMore) {
+      return;
+    }
+    await loadForYou(true);
+    return;
+  }
+
+  if (
+    followingFeed.loading
+    || followingFeed.loadingMore
+    || followingFeed.revalidating
+  ) {
+    return;
+  }
+  await loadFollowing(true);
+};
+
+const handleHomeReselect = async () => {
+  if (!homeViewActive.value || route.name !== 'Home') {
+    return;
+  }
+
+  const panel = feedPanelRef.value;
+  if (!panel) {
+    return;
+  }
+
+  if (panel.scrollTop > HOME_RESELECT_TOP_THRESHOLD_PX) {
+    panel.scrollTo({
+      top: 0,
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
+    homeTimeline.setScrollTop(activeTab.value, 0);
+    return;
+  }
+
+  await refreshActiveFeed();
+};
+
 const bindRecommendationCard = (
   element: Element | ComponentPublicInstance | null,
   item: { recommendation: RecommendedPost },
@@ -575,6 +625,13 @@ watch(
     restoreScroll(tab);
   },
   { immediate: true },
+);
+
+watch(
+  () => homeTimeline.homeReselectVersion,
+  () => {
+    void handleHomeReselect();
+  },
 );
 
 watch(

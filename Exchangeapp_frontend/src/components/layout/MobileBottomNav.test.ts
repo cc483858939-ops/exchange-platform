@@ -18,7 +18,10 @@ type RouteState = {
 const mocks = vi.hoisted(() => ({
   authStore: null as AuthState | null,
   route: null as RouteState | null,
-  homeTimeline: { activeTab: 'for-you' as 'for-you' | 'following' },
+  homeTimeline: {
+    activeTab: 'for-you' as 'for-you' | 'following',
+    requestHomeReselect: vi.fn(),
+  },
   searchSession: { query: '' },
 }));
 
@@ -86,6 +89,7 @@ describe('MobileBottomNav', () => {
   beforeEach(() => {
     setState(true);
     mocks.homeTimeline.activeTab = 'for-you';
+    mocks.homeTimeline.requestHomeReselect.mockClear();
     mocks.searchSession.query = '';
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     Object.defineProperty(window, 'matchMedia', {
@@ -157,13 +161,13 @@ describe('MobileBottomNav', () => {
     expect(search.attributes('data-route-query-q')).toBe('alice');
   });
 
-  it('reselects the active Home root to the top without changing For You', () => {
+  it('signals an active Home reselect without scrolling the window or changing For You', () => {
     const wrapper = mountNav();
     const event = dispatchClick(wrapper, 0);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(window.scrollTo).toHaveBeenCalledTimes(1);
-    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).not.toHaveBeenCalled();
     expect(mocks.homeTimeline.activeTab).toBe('for-you');
   });
 
@@ -173,7 +177,8 @@ describe('MobileBottomNav', () => {
     const event = dispatchClick(wrapper, 0);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).not.toHaveBeenCalled();
     expect(mocks.homeTimeline.activeTab).toBe('following');
     expect(wrapper.find('.mobile-bottom-nav__item').attributes('data-route-query-tab')).toBe('following');
   });
@@ -252,15 +257,16 @@ describe('MobileBottomNav', () => {
     const event = dispatchClick(wrapper, 0, init);
 
     expect(event.defaultPrevented).toBe(false);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
     expect(window.scrollTo).not.toHaveBeenCalled();
   });
 
-  it('uses auto scrolling when reduced motion is preferred', () => {
-    setState(true, 'Home');
+  it('uses auto scrolling for non-Home reselects when reduced motion is preferred', () => {
+    setState(true, 'UserSearch');
     const matchMedia = window.matchMedia as unknown as ReturnType<typeof vi.fn>;
     matchMedia.mockImplementation((query: string) => ({ matches: query.includes('prefers-reduced-motion') }));
     const wrapper = mountNav();
-    const event = dispatchClick(wrapper, 0);
+    const event = dispatchClick(wrapper, 1);
 
     expect(event.defaultPrevented).toBe(true);
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });

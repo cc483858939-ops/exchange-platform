@@ -410,6 +410,17 @@ describe('home timeline session store', () => {
     expect(store.scrollTop.following).toBe(0);
   });
 
+  it('increments the Home reselect intent without resetting it for a new viewer', () => {
+    const store = useHomeTimelineStore();
+    const before = store.homeReselectVersion;
+
+    store.requestHomeReselect();
+
+    expect(store.homeReselectVersion).toBe(before + 1);
+    store.setViewer(8);
+    expect(store.homeReselectVersion).toBe(before + 1);
+  });
+
   it('normalizes invalid scrollTop values to zero', () => {
     const store = useHomeTimelineStore();
     store.setScrollTop('for-you', 2400);

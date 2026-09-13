@@ -168,6 +168,10 @@ const handleNavigationClick = (event: MouseEvent, item: NavigationItem) => {
   }
 
   event.preventDefault();
+  if (item.routeName === 'Home' && route.name === 'Home') {
+    homeTimeline.requestHomeReselect();
+    return;
+  }
   scrollToTop();
 };
 

@@ -178,6 +178,7 @@ describe('HomeView For You pagination observer', () => {
     });
     mocks.homeTimeline = reactive({
       activeTab: 'for-you' as FeedTab,
+      homeReselectVersion: 0,
       forYou: reactive({
         items: [recommendationItem],
         loading: false,
@@ -208,6 +209,7 @@ describe('HomeView For You pagination observer', () => {
         mocks.homeTimeline.activeTab = tab;
       }),
       setScrollTop: vi.fn(),
+      requestHomeReselect: vi.fn(),
       loadForYou: vi.fn().mockResolvedValue(undefined),
       loadMoreForYou: vi.fn().mockResolvedValue(undefined),
       retryForYouLoadMore: vi.fn(),
@@ -334,6 +336,7 @@ describe('HomeView KeepAlive lifecycle', () => {
     });
     mocks.homeTimeline = reactive({
       activeTab: 'for-you' as FeedTab,
+      homeReselectVersion: 0,
       forYou: reactive({
         items: [recommendationItem],
         loading: false,
@@ -364,6 +367,7 @@ describe('HomeView KeepAlive lifecycle', () => {
         mocks.homeTimeline.activeTab = tab;
       }),
       setScrollTop: vi.fn(),
+      requestHomeReselect: vi.fn(),
       loadForYou: vi.fn().mockResolvedValue(undefined),
       loadMoreForYou: vi.fn().mockResolvedValue(undefined),
       retryForYouLoadMore: vi.fn(),

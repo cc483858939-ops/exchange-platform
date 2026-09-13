@@ -115,6 +115,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     'for-you': 0,
     following: 0,
   });
+  const homeReselectVersion = ref(0);
   const likePendingPostIds = reactive(new Set<number>());
   const repostPendingPostIds = reactive(new Set<number>());
   const pendingDeletePostIds = reactive(new Set<number>());
@@ -207,6 +208,10 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const setScrollTop = (tab: FeedTab, value: number) => {
     scrollTop[tab] = Number.isFinite(value) && value >= 0 ? value : 0;
+  };
+
+  const requestHomeReselect = () => {
+    homeReselectVersion.value += 1;
   };
 
   const getLikeMutationVersion = (postId: number) =>
@@ -1172,6 +1177,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou,
     following,
     scrollTop,
+    homeReselectVersion,
     likePendingPostIds,
     repostPendingPostIds,
     pendingDeletePostIds,
@@ -1179,6 +1185,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     setViewer,
     setActiveTab,
     setScrollTop,
+    requestHomeReselect,
     loadForYou,
     loadMoreForYou,
     retryForYouLoadMore,
