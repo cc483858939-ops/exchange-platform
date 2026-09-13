@@ -85,6 +85,7 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useLogout } from '../../composables/useLogout';
 import { useHomeTimelineStore } from '../../store/homeTimeline';
+import { useNotificationStore } from '../../store/notification';
 import BrandMark from '../brand/BrandMark.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
@@ -95,6 +96,7 @@ withDefaults(defineProps<{ notificationBadge?: string | null }>(), {
 const { authStore, handleLogout } = useLogout();
 const route = useRoute();
 const homeTimeline = useHomeTimelineStore();
+const notificationStore = useNotificationStore();
 const currentProfileID = computed(() => {
   const id = authStore.currentIdentity?.id;
 
@@ -134,6 +136,12 @@ const handleNavigationClick = (
   item: typeof navigation[number],
 ) => {
   if (!isStandardActivation(event)) {
+    return;
+  }
+
+  if (item.name === 'Notifications' && route.name === 'Notifications') {
+    event.preventDefault();
+    notificationStore.requestNotificationReselect();
     return;
   }
 

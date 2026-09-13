@@ -103,6 +103,8 @@ import AppIcon from '../components/icons/AppIcon.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
 import type { Notification } from '../types/Notification';
 
+const NOTIFICATIONS_RESELECT_TOP_THRESHOLD_PX = 8;
+
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
 const router = useRouter();
@@ -180,6 +182,36 @@ const setupObserver = async () => {
 const loadInitial = () => { void notificationStore.loadInitial(true); };
 const loadMore = () => { void notificationStore.loadMore(); };
 
+const prefersReducedMotion = () => typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const handleNotificationReselect = async () => {
+  if (!notificationsViewActive.value) {
+    return;
+  }
+
+  const viewport = notificationsScrollViewportRef.value;
+  if (!viewport) {
+    return;
+  }
+
+  if (viewport.scrollTop > NOTIFICATIONS_RESELECT_TOP_THRESHOLD_PX) {
+    viewport.scrollTo({
+      top: 0,
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
+    notificationStore.saveScrollTop(0);
+    return;
+  }
+
+  if (!authStore.isAuthenticated) {
+    return;
+  }
+
+  await notificationStore.refreshNotifications();
+};
+
 const restoreScrollOnce = async () => {
   const entryVersion = notificationEntryVersion;
   if (
@@ -246,6 +278,12 @@ watch(currentViewerID, () => {
     void notificationStore.loadInitial();
   }
 }, { immediate: true });
+watch(
+  () => notificationStore.notificationReselectVersion,
+  () => {
+    void handleNotificationReselect();
+  },
+);
 watch([loaded, loading, error], () => { void restoreScrollOnce(); }, { flush: 'post' });
 watch([
   nextCursor,

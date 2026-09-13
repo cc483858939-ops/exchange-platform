@@ -112,6 +112,12 @@ const setWindowScrollY = (value: number) => {
   Object.defineProperty(window, 'scrollY', { configurable: true, value });
 };
 
+const stubViewportScrollTo = (viewport: HTMLElement) => {
+  const scrollTo = vi.fn();
+  Object.defineProperty(viewport, 'scrollTo', { configurable: true, value: scrollTo });
+  return scrollTo;
+};
+
 const mountKeepAliveView = () => {
   const state = reactive({ showNotifications: true });
   const Host = defineComponent({
@@ -375,6 +381,93 @@ describe('NotificationsView', () => {
     await nextTick();
 
     expect(viewport.scrollTop).toBe(820);
+    wrapper.unmount();
+  });
+
+  it('reselects a deep viewport to the top without refreshing notifications', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: null });
+    const store = useNotificationStore();
+    const wrapper = mountView();
+    await flushPromises();
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    const windowScrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    const refresh = vi.spyOn(store, 'refreshNotifications').mockResolvedValue(undefined);
+
+    viewport.scrollTop = 1800;
+    store.requestNotificationReselect();
+    await flushPromises();
+
+    expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(store.scrollTop).toBe(0);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(windowScrollTo).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('refreshes the list when the viewport is already at the top', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: null });
+    const store = useNotificationStore();
+    const wrapper = mountView();
+    await flushPromises();
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    const refresh = vi.spyOn(store, 'refreshNotifications').mockResolvedValue(undefined);
+
+    viewport.scrollTop = 0;
+    store.requestNotificationReselect();
+    await flushPromises();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(viewportScrollTo).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('uses the 8px boundary for notification reselection', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: null });
+    const store = useNotificationStore();
+    const wrapper = mountView();
+    await flushPromises();
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    const refresh = vi.spyOn(store, 'refreshNotifications').mockResolvedValue(undefined);
+
+    viewport.scrollTop = 8;
+    store.requestNotificationReselect();
+    await flushPromises();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(viewportScrollTo).not.toHaveBeenCalled();
+
+    viewport.scrollTop = 9;
+    store.requestNotificationReselect();
+    await flushPromises();
+    expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('uses auto scrolling for a deep reselection when reduced motion is preferred', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: null });
+    const store = useNotificationStore();
+    const wrapper = mountView();
+    await flushPromises();
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+
+    viewport.scrollTop = 900;
+    store.requestNotificationReselect();
+    await flushPromises();
+
+    expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
     wrapper.unmount();
   });
 

@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
     activeTab: 'for-you' as 'for-you' | 'following',
     requestHomeReselect: vi.fn(),
   },
+  notificationStore: {
+    requestNotificationReselect: vi.fn(),
+  },
   searchSession: { query: '' },
 }));
 
@@ -31,6 +34,10 @@ vi.mock('../../store/auth', () => ({
 
 vi.mock('../../store/homeTimeline', () => ({
   useHomeTimelineStore: () => mocks.homeTimeline,
+}));
+
+vi.mock('../../store/notification', () => ({
+  useNotificationStore: () => mocks.notificationStore,
 }));
 
 vi.mock('../../store/searchSession', () => ({
@@ -90,6 +97,7 @@ describe('MobileBottomNav', () => {
     setState(true);
     mocks.homeTimeline.activeTab = 'for-you';
     mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.notificationStore.requestNotificationReselect.mockClear();
     mocks.searchSession.query = '';
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     Object.defineProperty(window, 'matchMedia', {
@@ -195,10 +203,9 @@ describe('MobileBottomNav', () => {
     expect(wrapper.findAll('.mobile-bottom-nav__item')[1].attributes('data-route-query-q')).toBe('alice');
   });
 
-  it.each([
-    ['CurrencyExchange', 2],
-    ['Notifications', 3],
-  ])('reselects the %s root to the top', (routeName, index) => {
+  it('reselects CurrencyExchange to the top', () => {
+    const routeName = 'CurrencyExchange';
+    const index = 2;
     setState(true, routeName);
     const wrapper = mountNav();
     const event = dispatchClick(wrapper, index);
@@ -206,6 +213,16 @@ describe('MobileBottomNav', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(window.scrollTo).toHaveBeenCalledTimes(1);
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+  });
+
+  it('signals an active Notifications reselect without scrolling the window', () => {
+    setState(true, 'Notifications');
+    const wrapper = mountNav();
+    const event = dispatchClick(wrapper, 3);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.notificationStore.requestNotificationReselect).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).not.toHaveBeenCalled();
   });
 
   it('reselects the own Profile root to the top', () => {

@@ -88,6 +88,18 @@ describe('notification store', () => {
     }
   });
 
+  it('increments the notification reselect intent without resetting it on viewer changes', () => {
+    const store = useNotificationStore();
+
+    expect(store.notificationReselectVersion).toBe(0);
+    store.requestNotificationReselect();
+    store.setViewer(7);
+    store.requestNotificationReselect();
+    store.setViewer(8);
+
+    expect(store.notificationReselectVersion).toBe(2);
+  });
+
   it('clears the list and ignores late unread/list responses after a viewer switch', async () => {
     const unread = deferred<number>();
     const page = deferred<{ items: Notification[]; next_cursor: string | null }>();
@@ -155,6 +167,32 @@ describe('notification store', () => {
     expect(store.revalidating).toBe(false);
   });
 
+  it('force revalidates a loaded list even when it is not stale and preserves cached items while pending', async () => {
+    mocks.getNotifications.mockResolvedValueOnce({
+      items: [notification(1), notification(2)],
+      next_cursor: 'cursor-old',
+    });
+    const store = useNotificationStore();
+    store.setViewer(7);
+    await store.loadInitial();
+
+    const revalidation = deferred<{ items: Notification[]; next_cursor: string | null }>();
+    mocks.getNotifications.mockReturnValueOnce(revalidation.promise);
+    const request = store.revalidateNotifications(true);
+
+    expect(store.revalidating).toBe(true);
+    expect(store.items.map(item => item.id)).toEqual([1, 2]);
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(2);
+
+    revalidation.resolve({ items: [notification(3), notification(1, true)], next_cursor: 'cursor-new' });
+    await request;
+
+    expect(store.items.map(item => item.id)).toEqual([3, 1, 2]);
+    expect(store.nextCursor).toBe('cursor-new');
+    expect(store.listStale).toBe(false);
+    expect(store.revalidating).toBe(false);
+  });
+
   it('keeps cached items and the stale marker when revalidation fails', async () => {
     mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: null });
     mocks.getUnreadNotificationCount.mockResolvedValueOnce(2);
@@ -169,6 +207,74 @@ describe('notification store', () => {
     expect(store.listStale).toBe(true);
     expect(store.revalidateError).toBeInstanceOf(Error);
     expect(store.revalidating).toBe(false);
+  });
+
+  it('refreshes unread count before the first-page list and continues when unread refresh fails', async () => {
+    mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: null });
+    const store = useNotificationStore();
+    store.setViewer(7);
+    await store.loadInitial();
+
+    const calls: string[] = [];
+    mocks.getUnreadNotificationCount.mockImplementationOnce(async () => {
+      calls.push('unread');
+      throw new Error('badge offline');
+    });
+    mocks.getNotifications.mockImplementationOnce(async () => {
+      calls.push('list');
+      return { items: [notification(2)], next_cursor: 'cursor-new' };
+    });
+
+    await store.refreshNotifications();
+
+    expect(calls).toEqual(['unread', 'list']);
+    expect(store.items.map(item => item.id)).toEqual([2, 1]);
+    expect(store.nextCursor).toBe('cursor-new');
+    expect(store.listStale).toBe(false);
+  });
+
+  it('coalesces concurrent explicit refreshes into one first-page request', async () => {
+    mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: null });
+    const unread = deferred<number>();
+    const revalidation = deferred<{ items: Notification[]; next_cursor: string | null }>();
+    const store = useNotificationStore();
+    store.setViewer(7);
+    await store.loadInitial();
+    mocks.getUnreadNotificationCount.mockReturnValueOnce(unread.promise);
+    mocks.getNotifications.mockReturnValueOnce(revalidation.promise);
+
+    const first = store.refreshNotifications();
+    const second = store.refreshNotifications();
+    expect(mocks.getUnreadNotificationCount).toHaveBeenCalledTimes(1);
+
+    unread.resolve(0);
+    await vi.waitFor(() => {
+      expect(mocks.getNotifications).toHaveBeenCalledTimes(2);
+    });
+
+    revalidation.resolve({ items: [notification(2)], next_cursor: null });
+    await Promise.all([first, second]);
+
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(2);
+    expect(store.items.map(item => item.id)).toEqual([2, 1]);
+  });
+
+  it('does not revalidate a new viewer after an explicit refresh started for the previous viewer', async () => {
+    mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: null });
+    const unread = deferred<number>();
+    const store = useNotificationStore();
+    store.setViewer(7);
+    await store.loadInitial();
+    mocks.getUnreadNotificationCount.mockReturnValueOnce(unread.promise);
+
+    const request = store.refreshNotifications();
+    store.setViewer(8);
+    unread.resolve(4);
+    await request;
+
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(1);
+    expect(store.viewerID).toBe(8);
+    expect(store.items).toEqual([]);
   });
 
   it('optimistically reads and rolls back failed mark-all mutations', async () => {

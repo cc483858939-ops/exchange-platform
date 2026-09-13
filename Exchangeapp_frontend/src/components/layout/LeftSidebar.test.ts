@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   handleLogout: vi.fn(),
   route: null as any,
   homeTimeline: null as any,
+  notificationStore: null as any,
 }));
 
 vi.mock('../../composables/useLogout', () => ({
@@ -22,6 +23,10 @@ vi.mock('vue-router', () => ({
 
 vi.mock('../../store/homeTimeline', () => ({
   useHomeTimelineStore: () => mocks.homeTimeline,
+}));
+
+vi.mock('../../store/notification', () => ({
+  useNotificationStore: () => mocks.notificationStore,
 }));
 
 const routerLinkStub = {
@@ -67,6 +72,9 @@ describe('LeftSidebar navigation', () => {
     mocks.homeTimeline = reactive({
       activeTab: 'for-you' as 'for-you' | 'following',
       requestHomeReselect: vi.fn(),
+    });
+    mocks.notificationStore = reactive({
+      requestNotificationReselect: vi.fn(),
     });
   });
 
@@ -140,6 +148,46 @@ describe('LeftSidebar navigation', () => {
     expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
     expect(home.attributes('data-route-name')).toBe('Home');
     expect(home.attributes('data-route-query-tab')).toBe('following');
+  });
+
+  it('reselects active Notifications through the notification intent', () => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
+    mocks.route.name = 'Notifications';
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Notifications');
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.notificationStore.requestNotificationReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+  });
+
+  it('navigates to Notifications from another route without reselecting', () => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
+    mocks.route.name = 'Home';
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Notifications');
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Meta', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['Shift', { shiftKey: true }],
+    ['Alt', { altKey: true }],
+    ['middle', { button: 1 }],
+  ])('preserves %s-click semantics for active Notifications', (_label, init) => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
+    mocks.route.name = 'Notifications';
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Notifications', init);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
   });
 
   it('uses the canonical Home destination for the For You tab', () => {

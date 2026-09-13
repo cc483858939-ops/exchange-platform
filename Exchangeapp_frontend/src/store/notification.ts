@@ -53,6 +53,7 @@ export const useNotificationStore = defineStore('notification', () => {
   const pendingReadIDs = ref(new Set<number>());
   const markAllPending = ref(false);
   const scrollTop = ref(0);
+  const notificationReselectVersion = ref(0);
   const listRequestVersion = ref(0);
   const pagingRequestVersion = ref(0);
 
@@ -125,6 +126,10 @@ export const useNotificationStore = defineStore('notification', () => {
     unreadError.value = null;
     resetListSession();
     return true;
+  };
+
+  const requestNotificationReselect = () => {
+    notificationReselectVersion.value += 1;
   };
 
   const markListStale = () => {
@@ -265,16 +270,19 @@ export const useNotificationStore = defineStore('notification', () => {
     }
   };
 
-  const revalidateNotifications = async () => {
+  const revalidateNotifications = async (force = false) => {
     const capture = captureViewer();
     if (
       !capture
       || !loaded.value
-      || !listStale.value
+      || (!listStale.value && !force)
       || revalidating.value
       || pendingReadIDs.value.size > 0
       || markAllPending.value
     ) {
+      return;
+    }
+    if (force && (loading.value || loadingMore.value)) {
       return;
     }
 
@@ -314,6 +322,33 @@ export const useNotificationStore = defineStore('notification', () => {
         revalidating.value = false;
       }
     }
+  };
+
+  const refreshNotifications = async () => {
+    const capture = captureViewer();
+    if (
+      !capture
+      || loading.value
+      || loadingMore.value
+      || revalidating.value
+      || pendingReadIDs.value.size > 0
+      || markAllPending.value
+    ) {
+      return;
+    }
+
+    await refreshUnreadCount(capture).catch(() => undefined);
+
+    if (!isCurrentViewer(capture)) {
+      return;
+    }
+
+    if (!loaded.value) {
+      await loadInitial();
+      return;
+    }
+
+    await revalidateNotifications(true);
   };
 
   const settleRevalidationIfNeeded = () => {
@@ -419,9 +454,11 @@ export const useNotificationStore = defineStore('notification', () => {
     pendingReadIDs,
     markAllPending,
     scrollTop,
+    notificationReselectVersion,
     listRequestVersion,
     pagingRequestVersion,
     setViewer,
+    requestNotificationReselect,
     captureViewer,
     isCurrentViewer,
     setUnreadCount,
@@ -431,6 +468,7 @@ export const useNotificationStore = defineStore('notification', () => {
     loadInitial,
     loadMore,
     revalidateNotifications,
+    refreshNotifications,
     markNotificationRead,
     markAllRead,
     saveScrollTop,
