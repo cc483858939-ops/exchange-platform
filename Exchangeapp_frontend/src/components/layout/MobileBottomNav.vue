@@ -15,8 +15,13 @@
         :aria-current="isItemActive(item) ? 'page' : undefined"
         @click.capture="handleNavigationClick($event, item)"
       >
-        <span class="mobile-bottom-nav__icon">
-          <AppIcon :name="item.icon" :size="27" :filled="isItemActive(item)" />
+        <span
+          class="mobile-bottom-nav__icon"
+          :class="{
+            'mobile-bottom-nav__icon--active': isItemActive(item),
+          }"
+        >
+          <AppIcon :name="item.icon" :size="item.iconSize" />
           <span
             v-if="item.routeName === 'Notifications' && notificationBadge"
             class="mobile-bottom-nav__badge"
@@ -43,6 +48,7 @@ type NavigationItem = {
   label: string;
   routeName: string;
   icon: 'home' | 'search' | 'exchange' | 'notifications' | 'profile';
+  iconSize: number;
   to: { name: string; params?: { id: string }; query?: { tab?: 'following'; q?: string } };
 };
 
@@ -78,21 +84,22 @@ const searchDestination = computed<NavigationItem['to']>(() => (
 const navigationItems = computed<NavigationItem[]>(() => {
   if (!authStore.isAuthenticated) {
     return [
-      { label: 'Home', routeName: 'Home', icon: 'home', to: homeDestination.value },
-      { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', to: { name: 'CurrencyExchange' } },
-      { label: 'Log in', routeName: 'Login', icon: 'profile', to: { name: 'Login' } },
+      { label: 'Home', routeName: 'Home', icon: 'home', iconSize: 25, to: homeDestination.value },
+      { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', iconSize: 26, to: { name: 'CurrencyExchange' } },
+      { label: 'Log in', routeName: 'Login', icon: 'profile', iconSize: 25, to: { name: 'Login' } },
     ];
   }
 
   return [
-    { label: 'Home', routeName: 'Home', icon: 'home', to: homeDestination.value },
-    { label: 'Search', routeName: 'UserSearch', icon: 'search', to: searchDestination.value },
-    { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', to: { name: 'CurrencyExchange' } },
-    { label: 'Notifications', routeName: 'Notifications', icon: 'notifications', to: { name: 'Notifications' } },
+    { label: 'Home', routeName: 'Home', icon: 'home', iconSize: 25, to: homeDestination.value },
+    { label: 'Search', routeName: 'UserSearch', icon: 'search', iconSize: 27, to: searchDestination.value },
+    { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', iconSize: 26, to: { name: 'CurrencyExchange' } },
+    { label: 'Notifications', routeName: 'Notifications', icon: 'notifications', iconSize: 26, to: { name: 'Notifications' } },
     {
       label: 'Profile',
       routeName: 'UserProfile',
       icon: 'profile',
+      iconSize: 25,
       to: {
         name: 'UserProfile',
         params: { id: currentProfileID.value || '' },
@@ -258,9 +265,17 @@ const notificationBadge = computed(() => props.notificationBadge);
   .mobile-bottom-nav__icon {
     position: relative;
     display: inline-grid;
-    width: 27px;
-    height: 27px;
+    width: 42px;
+    height: 32px;
     place-items: center;
+    border-radius: var(--radius-pill);
+    color: var(--color-text-secondary);
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+  }
+
+  .mobile-bottom-nav__icon--active {
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    color: var(--color-accent);
   }
 
   .mobile-bottom-nav__label {
@@ -278,7 +293,7 @@ const notificationBadge = computed(() => props.notificationBadge);
   .mobile-bottom-nav__badge {
     position: absolute;
     top: -4px;
-    right: -9px;
+    right: -4px;
     min-width: 16px;
     max-width: 30px;
     height: 16px;
@@ -297,7 +312,8 @@ const notificationBadge = computed(() => props.notificationBadge);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mobile-bottom-nav__item {
+  .mobile-bottom-nav__item,
+  .mobile-bottom-nav__icon {
     transition: none;
   }
 }

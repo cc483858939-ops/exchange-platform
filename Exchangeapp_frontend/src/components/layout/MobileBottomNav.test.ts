@@ -61,7 +61,10 @@ const mountNav = (notificationBadge: string | null = null) => mount(MobileBottom
   global: {
     stubs: {
       RouterLink: routerLinkStub,
-      AppIcon: { props: ['name'], template: '<span class="test-icon" :data-icon="name" />' },
+      AppIcon: {
+        props: ['name', 'size', 'filled'],
+        template: '<span class="test-icon" :data-icon="name" :data-size="size" :data-filled="filled ? \'true\' : \'false\'" />',
+      },
     },
   },
 });
@@ -171,6 +174,58 @@ describe('MobileBottomNav', () => {
 
     expect(search.attributes('data-route-name')).toBe('UserSearch');
     expect(search.attributes('data-route-query-q')).toBe('alice');
+  });
+
+  it('uses the optical icon sizes for authenticated navigation', () => {
+    const wrapper = mountNav();
+
+    expect(wrapper.findAll('.test-icon').map(icon => Number(icon.attributes('data-size')))).toEqual([
+      25,
+      27,
+      26,
+      26,
+      25,
+    ]);
+  });
+
+  it('uses the shared outline treatment for every authenticated icon', () => {
+    for (const [routeName, params] of [
+      ['Home', {}],
+      ['UserSearch', {}],
+      ['CurrencyExchange', {}],
+      ['Notifications', {}],
+      ['UserProfile', { id: '123' }],
+    ] as const) {
+      setState(true, routeName, params);
+      const wrapper = mountNav();
+
+      expect(wrapper.findAll('.test-icon').every(icon => icon.attributes('data-filled') !== 'true')).toBe(true);
+    }
+  });
+
+  it('marks exactly one active icon capsule and keeps the other icons inactive', () => {
+    setState(true, 'UserSearch');
+    const wrapper = mountNav();
+    const links = wrapper.findAll('.mobile-bottom-nav__item');
+
+    expect(wrapper.findAll('.mobile-bottom-nav__icon--active')).toHaveLength(1);
+    expect(links[1].find('.mobile-bottom-nav__icon').classes()).toContain('mobile-bottom-nav__icon--active');
+    expect(links[0].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
+    expect(links[2].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
+    expect(links[3].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
+    expect(links[4].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
+  });
+
+  it('keeps anonymous navigation at three items with the matching optical sizes and capsule', () => {
+    setState(false, 'Home');
+    const wrapper = mountNav();
+    const icons = wrapper.findAll('.test-icon');
+
+    expect(wrapper.findAll('.mobile-bottom-nav__item')).toHaveLength(3);
+    expect(icons.map(icon => Number(icon.attributes('data-size')))).toEqual([25, 26, 25]);
+    expect(wrapper.findAll('.mobile-bottom-nav__icon--active')).toHaveLength(1);
+    expect(wrapper.findAll('.mobile-bottom-nav__item')[0].find('.mobile-bottom-nav__icon').classes())
+      .toContain('mobile-bottom-nav__icon--active');
   });
 
   it('signals an active Home reselect without scrolling the window or changing For You', () => {
@@ -313,6 +368,7 @@ describe('MobileBottomNav', () => {
     const wrapper = mountNav('4');
     expect(wrapper.findAll('.mobile-bottom-nav__badge')).toHaveLength(1);
     expect(wrapper.find('.mobile-bottom-nav__badge').text()).toBe('4');
+    expect(wrapper.find('.mobile-bottom-nav__badge').element.parentElement?.classList.contains('mobile-bottom-nav__icon')).toBe(true);
 
     await wrapper.setProps({ notificationBadge: null });
     expect(wrapper.find('.mobile-bottom-nav__badge').exists()).toBe(false);
@@ -334,6 +390,9 @@ describe('MobileBottomNav', () => {
 
     expect(links[activeIndex].attributes('aria-current')).toBe('page');
     expect(links.filter(link => link.attributes('aria-current') === 'page')).toHaveLength(1);
+    expect(wrapper.findAll('.mobile-bottom-nav__icon--active')).toHaveLength(1);
+    expect(links[activeIndex].find('.mobile-bottom-nav__icon').classes())
+      .toContain('mobile-bottom-nav__icon--active');
   });
 
   it('does not mark another user profile active', () => {
