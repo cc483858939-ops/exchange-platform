@@ -2,7 +2,13 @@
   <div
     v-if="media.length > 0"
     class="post-media-grid"
-    :class="`post-media-grid--count-${visibleMedia.length}`"
+    :class="[
+      `post-media-grid--count-${visibleMedia.length}`,
+      {
+        'post-media-grid--single-sized': hasSizedSingleMedia,
+      },
+    ]"
+    :style="singleMediaStyle"
     role="group"
     aria-label="Post images"
   >
@@ -90,8 +96,52 @@ const emit = defineEmits<{
   open: [index: number];
 }>();
 
+const SINGLE_MEDIA_MAX_WIDTH_PX = 520;
+const SINGLE_MEDIA_MAX_HEIGHT_PX = 640;
+
 const visibleMedia = computed(() => props.media.slice(0, 4));
 const failedURLs = ref(new Set<string>());
+
+const hasSizedSingleMedia = computed(() => {
+  const item = visibleMedia.value[0];
+
+  return (
+    !props.removable
+    && visibleMedia.value.length === 1
+    && Boolean(item)
+    && item.width > 0
+    && item.height > 0
+  );
+});
+
+const calculateSingleMediaWidth = (width: number, height: number) => Math.min(
+  width,
+  SINGLE_MEDIA_MAX_WIDTH_PX,
+  SINGLE_MEDIA_MAX_HEIGHT_PX * (width / height),
+);
+
+const singleMediaStyle = computed(() => {
+  if (!hasSizedSingleMedia.value) {
+    return undefined;
+  }
+
+  const item = visibleMedia.value[0];
+  if (!item) {
+    return undefined;
+  }
+
+  const displayWidth = Math.max(
+    1,
+    Math.round(
+      calculateSingleMediaWidth(item.width, item.height),
+    ),
+  );
+
+  return {
+    '--post-media-single-width': `${displayWidth}px`,
+    '--post-media-single-aspect-ratio': `${item.width} / ${item.height}`,
+  };
+});
 
 const markFailed = (url: string) => {
   failedURLs.value = new Set([...failedURLs.value, url]);
@@ -154,6 +204,16 @@ const openImageLabel = (index: number) => (
   height: auto;
 }
 
+.post-media-grid--single-sized {
+  width: min(100%, var(--post-media-single-width));
+  aspect-ratio: var(--post-media-single-aspect-ratio);
+}
+
+.post-media-grid--single-sized .post-media-grid__open {
+  width: 100%;
+  height: 100%;
+}
+
 .post-media-grid__open:focus-visible {
   position: relative;
   z-index: 1;
@@ -184,6 +244,14 @@ const openImageLabel = (index: number) => (
   height: auto;
   max-height: 640px;
   object-fit: contain;
+}
+
+.post-media-grid--single-sized .post-media-grid__image {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
 }
 
 .post-media-grid__placeholder {

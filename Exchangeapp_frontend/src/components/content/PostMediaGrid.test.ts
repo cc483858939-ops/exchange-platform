@@ -63,6 +63,72 @@ describe('PostMediaGrid', () => {
       .not.toContain('post-media-grid__image--single');
   });
 
+  it.each([
+    { label: 'landscape', width: 1200, height: 800, expectedWidth: '520px' },
+    { label: '4:5 portrait', width: 800, height: 1000, expectedWidth: '512px' },
+    { label: '9:16 portrait', width: 900, height: 1600, expectedWidth: '360px' },
+    { label: 'small source', width: 300, height: 200, expectedWidth: '300px' },
+  ])('sizes a known-dimension $label image without upscaling', ({ width, height, expectedWidth }) => {
+    const wrapper = mount(PostMediaGrid, {
+      props: {
+        media: [{
+          type: 'image',
+          url: '/single.jpg',
+          large_url: '/single-large.jpg',
+          width,
+          height,
+          position: 0,
+        }],
+      },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+
+    const grid = wrapper.get('.post-media-grid');
+    const gridElement = grid.element as HTMLElement;
+    expect(grid.classes()).toContain('post-media-grid--single-sized');
+    expect(gridElement.style.getPropertyValue('--post-media-single-width'))
+      .toBe(expectedWidth);
+    expect(gridElement.style.getPropertyValue('--post-media-single-aspect-ratio'))
+      .toBe(`${width} / ${height}`);
+  });
+
+  it('does not apply sized-single presentation to a removable preview', () => {
+    const wrapper = mountGrid(1, true);
+    const grid = wrapper.get('.post-media-grid');
+    const gridElement = grid.element as HTMLElement;
+
+    expect(grid.classes()).not.toContain('post-media-grid--single-sized');
+    expect(gridElement.style.getPropertyValue('--post-media-single-width')).toBe('');
+  });
+
+  it('keeps the single-image fallback when dimensions are unknown', () => {
+    const wrapper = mount(PostMediaGrid, {
+      props: {
+        media: [{
+          type: 'image',
+          url: '/preview.jpg',
+          large_url: '/preview.jpg',
+          width: 0,
+          height: 0,
+          position: 0,
+        }],
+      },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+
+    const grid = wrapper.get('.post-media-grid');
+    const gridElement = grid.element as HTMLElement;
+    expect(grid.classes()).not.toContain('post-media-grid--single-sized');
+    expect(gridElement.style.getPropertyValue('--post-media-single-width')).toBe('');
+  });
+
+  it.each([2, 3, 4])('does not apply sized-single presentation to %i images', count => {
+    const wrapper = mountGrid(count);
+
+    expect(wrapper.get('.post-media-grid').classes())
+      .not.toContain('post-media-grid--single-sized');
+  });
+
   it('uses async decoding and known dimensions for server media', () => {
     const wrapper = mountGrid(1);
     const image = wrapper.get('img');
