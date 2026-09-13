@@ -17,9 +17,10 @@
         :class="{
           'left-sidebar__link--compact-only': item.compactOnly,
         }"
-        :to="{ name: item.name }"
+        :to="navigationDestination(item)"
         :aria-label="item.label"
         :title="item.label"
+        @click.capture="handleNavigationClick($event, item)"
       >
         <AppIcon :name="item.icon" :size="26" />
         <span class="left-sidebar__label">{{ item.label }}</span>
@@ -81,7 +82,9 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useRoute } from 'vue-router';
 import { useLogout } from '../../composables/useLogout';
+import { useHomeTimelineStore } from '../../store/homeTimeline';
 import BrandMark from '../brand/BrandMark.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
@@ -90,6 +93,8 @@ withDefaults(defineProps<{ notificationBadge?: string | null }>(), {
 });
 
 const { authStore, handleLogout } = useLogout();
+const route = useRoute();
+const homeTimeline = useHomeTimelineStore();
 const currentProfileID = computed(() => {
   const id = authStore.currentIdentity?.id;
 
@@ -104,7 +109,41 @@ const navigation = [
   { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, compactOnly: true, authOnly: false },
 ];
 
+const homeDestination = computed(() => (
+  homeTimeline.activeTab === 'following'
+    ? { name: 'Home', query: { tab: 'following' } }
+    : { name: 'Home' }
+));
+
+const navigationDestination = (item: typeof navigation[number]) => (
+  item.name === 'Home'
+    ? homeDestination.value
+    : { name: item.name }
+);
+
 const visibleNavigation = computed(() => navigation.filter((item) => !item.authOnly || authStore.isAuthenticated));
+
+const isStandardActivation = (event: MouseEvent) => event.button === 0
+  && !event.metaKey
+  && !event.ctrlKey
+  && !event.shiftKey
+  && !event.altKey;
+
+const handleNavigationClick = (
+  event: MouseEvent,
+  item: typeof navigation[number],
+) => {
+  if (!isStandardActivation(event)) {
+    return;
+  }
+
+  if (item.name !== 'Home' || route.name !== 'Home') {
+    return;
+  }
+
+  event.preventDefault();
+  homeTimeline.requestHomeReselect();
+};
 
 </script>
 
