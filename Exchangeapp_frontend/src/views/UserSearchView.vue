@@ -50,6 +50,8 @@ import UserRow from '../components/users/UserRow.vue';
 import { useAuthStore } from '../store/auth';
 import { normalizeSearchQuery, useSearchSessionStore } from '../store/searchSession';
 
+const SEARCH_RESELECT_TOP_THRESHOLD_PX = 8;
+
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
@@ -155,6 +157,28 @@ const resetViewportScroll = () => {
     viewport.scrollTop = 0;
   }
 };
+const prefersReducedMotion = () => typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const handleSearchReselect = () => {
+  if (
+    !searchViewActive.value
+    || route.name !== 'UserSearch'
+  ) {
+    return;
+  }
+
+  const viewport = searchScrollViewportRef.value;
+  if (!viewport || viewport.scrollTop <= SEARCH_RESELECT_TOP_THRESHOLD_PX) {
+    return;
+  }
+
+  viewport.scrollTo({
+    top: 0,
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  });
+  searchSession.saveScrollTop(0);
+};
 const syncSearchRouteQuery = (nextQuery: string) => {
   const changed = nextQuery !== query.value;
 
@@ -207,6 +231,12 @@ watch(routeQuery, (nextQuery) => {
 
   syncSearchRouteQuery(nextQuery);
 }, { immediate: true });
+watch(
+  () => searchSession.searchReselectVersion,
+  () => {
+    handleSearchReselect();
+  },
+);
 watch([loaded, initialLoading, initialError], () => { void restoreScrollOnce(); }, { flush: 'post' });
 watch([hasMore, loadingMore, loadMoreError, () => items.value.length], () => { void updateObserver(); }, { flush: 'post' });
 onMounted(() => {

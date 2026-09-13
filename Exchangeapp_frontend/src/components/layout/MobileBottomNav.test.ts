@@ -25,7 +25,10 @@ const mocks = vi.hoisted(() => ({
   notificationStore: {
     requestNotificationReselect: vi.fn(),
   },
-  searchSession: { query: '' },
+  searchSession: {
+    query: '',
+    requestSearchReselect: vi.fn(),
+  },
 }));
 
 vi.mock('../../store/auth', () => ({
@@ -99,6 +102,7 @@ describe('MobileBottomNav', () => {
     mocks.homeTimeline.requestHomeReselect.mockClear();
     mocks.notificationStore.requestNotificationReselect.mockClear();
     mocks.searchSession.query = '';
+    mocks.searchSession.requestSearchReselect.mockClear();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -191,16 +195,31 @@ describe('MobileBottomNav', () => {
     expect(wrapper.find('.mobile-bottom-nav__item').attributes('data-route-query-tab')).toBe('following');
   });
 
-  it('reselects Search without changing the active query', () => {
+  it('signals an active Search reselect without scrolling the window or changing the query', () => {
     setState(true, 'UserSearch');
     mocks.searchSession.query = 'alice';
     const wrapper = mountNav();
     const event = dispatchClick(wrapper, 1);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.searchSession.requestSearchReselect).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).not.toHaveBeenCalled();
     expect(mocks.searchSession.query).toBe('alice');
     expect(wrapper.findAll('.mobile-bottom-nav__item')[1].attributes('data-route-query-q')).toBe('alice');
+  });
+
+  it.each([
+    ['Meta', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['middle', { button: 1 }],
+  ])('preserves %s-click link behavior on an active Search', (_label, init) => {
+    setState(true, 'UserSearch');
+    const wrapper = mountNav();
+    const event = dispatchClick(wrapper, 1, init);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
+    expect(window.scrollTo).not.toHaveBeenCalled();
   });
 
   it('reselects CurrencyExchange to the top', () => {
@@ -278,12 +297,12 @@ describe('MobileBottomNav', () => {
     expect(window.scrollTo).not.toHaveBeenCalled();
   });
 
-  it('uses auto scrolling for non-Home reselects when reduced motion is preferred', () => {
-    setState(true, 'UserSearch');
+  it('uses auto scrolling for non-Search reselects when reduced motion is preferred', () => {
+    setState(true, 'CurrencyExchange');
     const matchMedia = window.matchMedia as unknown as ReturnType<typeof vi.fn>;
     matchMedia.mockImplementation((query: string) => ({ matches: query.includes('prefers-reduced-motion') }));
     const wrapper = mountNav();
-    const event = dispatchClick(wrapper, 1);
+    const event = dispatchClick(wrapper, 2);
 
     expect(event.defaultPrevented).toBe(true);
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });

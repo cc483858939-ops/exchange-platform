@@ -170,6 +170,10 @@ const handleNavigationClick = (event: MouseEvent, item: NavigationItem) => {
   }
 
   event.preventDefault();
+  if (item.routeName === 'UserSearch' && route.name === 'UserSearch') {
+    searchSession.requestSearchReselect();
+    return;
+  }
   if (item.routeName === 'Notifications' && route.name === 'Notifications') {
     notificationStore.requestNotificationReselect();
     return;

@@ -38,6 +38,7 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
   const loadingMore = ref(false);
   const loadMoreError = ref('');
   const scrollTop = ref(0);
+  const searchReselectVersion = ref(0);
   const pageGeneration = ref(0);
   const paginationRequestVersion = ref(0);
   const pendingMutationIDs = ref(new Set<number>());
@@ -76,6 +77,10 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     mutationVersions.value.clear();
     mutationSequence.value += 1;
     return true;
+  };
+
+  const requestSearchReselect = () => {
+    searchReselectVersion.value += 1;
   };
 
   const appendPage = (page: UserConnectionPage) => {
@@ -331,6 +336,7 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     loadingMore,
     loadMoreError,
     scrollTop,
+    searchReselectVersion,
     pageGeneration,
     paginationRequestVersion,
     pendingMutationIDs,
@@ -338,6 +344,7 @@ export const useSearchSessionStore = defineStore('searchSession', () => {
     mutationVersions,
     mutationSequence,
     setViewer,
+    requestSearchReselect,
     activateQuery,
     loadInitial,
     reload,

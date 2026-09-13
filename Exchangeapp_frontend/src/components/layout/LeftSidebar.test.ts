@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   homeTimeline: null as any,
   notificationStore: null as any,
+  searchSession: null as any,
 }));
 
 vi.mock('../../composables/useLogout', () => ({
@@ -27,6 +28,10 @@ vi.mock('../../store/homeTimeline', () => ({
 
 vi.mock('../../store/notification', () => ({
   useNotificationStore: () => mocks.notificationStore,
+}));
+
+vi.mock('../../store/searchSession', () => ({
+  useSearchSessionStore: () => mocks.searchSession,
 }));
 
 const routerLinkStub = {
@@ -75,6 +80,9 @@ describe('LeftSidebar navigation', () => {
     });
     mocks.notificationStore = reactive({
       requestNotificationReselect: vi.fn(),
+    });
+    mocks.searchSession = reactive({
+      requestSearchReselect: vi.fn(),
     });
   });
 
@@ -171,6 +179,47 @@ describe('LeftSidebar navigation', () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+  });
+
+  it('reselects active Search through the search intent', () => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
+    mocks.route.name = 'UserSearch';
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Search');
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.searchSession.requestSearchReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+  });
+
+  it('navigates to Search from another route without reselecting', () => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
+    mocks.route.name = 'Home';
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Search');
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Meta', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['Shift', { shiftKey: true }],
+    ['Alt', { altKey: true }],
+    ['middle', { button: 1 }],
+  ])('preserves %s-click semantics for active Search', (_label, init) => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
+    mocks.route.name = 'UserSearch';
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Search', init);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
   });
 
   it.each([

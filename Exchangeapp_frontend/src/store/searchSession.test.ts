@@ -75,6 +75,18 @@ describe('search session store', () => {
     }
   });
 
+  it('increments the Search reselect intent without resetting it on viewer changes', () => {
+    const store = useSearchSessionStore();
+
+    expect(store.searchReselectVersion).toBe(0);
+    store.requestSearchReselect();
+    store.setViewer(7);
+    store.requestSearchReselect();
+    store.setViewer(8);
+
+    expect(store.searchReselectVersion).toBe(2);
+  });
+
   it('registers a local sink that updates a cached row without refetching', async () => {
     mocks.searchUsers.mockResolvedValueOnce({ items: [item(8, false)], has_more: false });
     const store = useSearchSessionStore();

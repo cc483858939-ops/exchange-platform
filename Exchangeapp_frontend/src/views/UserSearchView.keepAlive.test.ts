@@ -72,6 +72,12 @@ const setWindowScrollY = (value: number) => {
   Object.defineProperty(window, 'scrollY', { configurable: true, value });
 };
 
+const stubViewportScrollTo = (viewport: HTMLElement) => {
+  const scrollTo = vi.fn();
+  Object.defineProperty(viewport, 'scrollTo', { configurable: true, value: scrollTo });
+  return scrollTo;
+};
+
 const mountKeepAliveSearch = () => {
   const state = reactive({ showSearch: true });
   const Host = defineComponent({
@@ -215,6 +221,107 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     expect(restoredViewport).toBe(originalViewport);
     expect(restoredViewport.scrollTop).toBe(1400);
     expect(scrollTo).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('reselects a deep Search viewport without reloading or changing the query', async () => {
+    const { wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    const reload = vi.spyOn(searchSession, 'reload');
+    const requestCount = mocks.searchUsers.mock.calls.length;
+
+    viewport.scrollTop = 1800;
+    searchSession.requestSearchReselect();
+    await settle();
+
+    expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(searchSession.scrollTop).toBe(0);
+    expect(searchSession.query).toBe('alice');
+    expect(searchSession.inputValue).toBe('alice');
+    expect(reload).not.toHaveBeenCalled();
+    expect(mocks.searchUsers).toHaveBeenCalledTimes(requestCount);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('does nothing when the Search viewport is already at the top', async () => {
+    const { wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    const reload = vi.spyOn(searchSession, 'reload');
+    const requestCount = mocks.searchUsers.mock.calls.length;
+
+    viewport.scrollTop = 0;
+    searchSession.requestSearchReselect();
+    await settle();
+
+    expect(viewportScrollTo).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    expect(mocks.searchUsers).toHaveBeenCalledTimes(requestCount);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('uses the 8px Search reselect threshold without issuing a search request', async () => {
+    const { wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    const requestCount = mocks.searchUsers.mock.calls.length;
+
+    viewport.scrollTop = 8;
+    searchSession.requestSearchReselect();
+    await settle();
+    expect(viewportScrollTo).not.toHaveBeenCalled();
+
+    viewport.scrollTop = 9;
+    searchSession.requestSearchReselect();
+    await settle();
+    expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.searchUsers).toHaveBeenCalledTimes(requestCount);
+    wrapper.unmount();
+  });
+
+  it('uses the real viewport position for rapid Search reselection during smooth scrolling', async () => {
+    const { wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+
+    viewport.scrollTop = 1800;
+    searchSession.requestSearchReselect();
+    await settle();
+    expect(searchSession.scrollTop).toBe(0);
+
+    viewport.scrollTop = 900;
+    searchSession.requestSearchReselect();
+    await settle();
+
+    expect(viewportScrollTo).toHaveBeenCalledTimes(2);
+    expect(viewportScrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+    wrapper.unmount();
+  });
+
+  it('uses auto scrolling for a deep Search reselect when reduced motion is preferred', async () => {
+    const { wrapper } = mountKeepAliveSearch();
+    const searchSession = useSearchSessionStore();
+    await settle();
+    const viewport = wrapper.get('.search-scroll-viewport').element as HTMLElement;
+    const viewportScrollTo = stubViewportScrollTo(viewport);
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+
+    viewport.scrollTop = 900;
+    searchSession.requestSearchReselect();
+    await settle();
+
+    expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
     wrapper.unmount();
   });
 
