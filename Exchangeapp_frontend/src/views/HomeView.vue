@@ -4,7 +4,11 @@
       <MobileHomeHeader />
       <div class="home-feed-header__content">
         <h1>Home</h1>
-        <FeedTabs :active-tab="activeTab" @select="selectTab" />
+        <FeedTabs
+          :active-tab="activeTab"
+          @select="selectTab"
+          @reselect="reselectTab"
+        />
       </div>
     </header>
 
@@ -328,6 +332,14 @@ const selectTab = (tab: FeedTab) => {
     name: 'Home',
     query: tab === 'following' ? { tab } : {},
   });
+};
+
+const reselectTab = (tab: FeedTab) => {
+  if (tab !== activeTab.value) {
+    return;
+  }
+
+  homeTimeline.requestHomeReselect();
 };
 
 const normalizeRouteTab = (value: unknown): FeedTab => {

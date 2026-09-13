@@ -133,7 +133,9 @@ const makeHomeTimeline = () => {
     setScrollTop: vi.fn((tab: FeedTab, value: number) => {
       scrollTop[tab] = value;
     }),
-    requestHomeReselect: vi.fn(),
+    requestHomeReselect: vi.fn(() => {
+      timeline.homeReselectVersion += 1;
+    }),
     loadForYou: vi.fn().mockResolvedValue(undefined),
     loadMoreForYou: vi.fn().mockResolvedValue(undefined),
     retryForYouLoadMore: vi.fn(),
@@ -210,7 +212,6 @@ const settle = async () => {
 const mountHome = () => mount(HomeView, {
   global: {
     stubs: {
-      FeedTabs: { template: '<div />' },
       PostCard: PostCardStub,
       AppIcon: { template: '<span />' },
       MobileHomeHeader: { template: '<div />' },
@@ -235,7 +236,6 @@ const mountKeepAliveHome = () => {
   const wrapper = mount(Host, {
     global: {
       stubs: {
-        FeedTabs: { template: '<div />' },
         PostCard: PostCardStub,
         AppIcon: { template: '<span />' },
         MobileHomeHeader: { template: '<div />' },
@@ -368,6 +368,154 @@ describe('HomeView scroll viewport ownership', () => {
     await wrapper.get('.home-feed-panel').trigger('scroll');
 
     expect(mocks.telemetry.notifyViewportChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes an active For You click through the shared reselect pipeline', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    panel.scrollTop = 2400;
+    mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.homeTimeline.setActiveTab.mockClear();
+    mocks.router.push.mockClear();
+
+    await wrapper.get('[data-feed-tab="for-you"]').trigger('click');
+    await settle();
+
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(panelScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.setActiveTab).not.toHaveBeenCalled();
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it('refreshes For You through the shared reselect pipeline when at the top', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    panel.scrollTop = 0;
+    mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.router.push.mockClear();
+
+    await wrapper.get('[data-feed-tab="for-you"]').trigger('click');
+    await settle();
+
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it('routes an active Following click through the shared reselect pipeline', async () => {
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.activeTab = 'following';
+    mocks.route.query = { tab: 'following' };
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    panel.scrollTop = 1800;
+    mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.homeTimeline.loadFollowing.mockClear();
+    mocks.homeTimeline.setActiveTab.mockClear();
+    mocks.router.push.mockClear();
+
+    await wrapper.get('[data-feed-tab="following"]').trigger('click');
+    await settle();
+
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(panelScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.activeTab).toBe('following');
+    expect(mocks.homeTimeline.setActiveTab).not.toHaveBeenCalled();
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it('refreshes Following through the shared reselect pipeline when at the top', async () => {
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.activeTab = 'following';
+    mocks.route.query = { tab: 'following' };
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    panel.scrollTop = 0;
+    mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.homeTimeline.loadFollowing.mockClear();
+    mocks.router.push.mockClear();
+
+    await wrapper.get('[data-feed-tab="following"]').trigger('click');
+    await settle();
+
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadFollowing).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadFollowing).toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+    expect(mocks.route.query).toEqual({ tab: 'following' });
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it('switches tabs with select without reselecting and preserves each scrollTop', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    panel.scrollTop = 2200;
+    mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.homeTimeline.setActiveTab.mockClear();
+    mocks.homeTimeline.setScrollTop.mockClear();
+    mocks.homeTimeline.loadFollowing.mockClear();
+    mocks.router.push.mockClear();
+
+    await wrapper.get('[data-feed-tab="following"]').trigger('click');
+    await settle();
+
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.setScrollTop).toHaveBeenCalledWith('for-you', 2200);
+    expect(mocks.homeTimeline.setActiveTab).toHaveBeenCalledWith('following');
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'Home',
+      query: { tab: 'following' },
+    });
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalledWith(true);
+    expect(panel.scrollTop).toBe(900);
+
+    mocks.homeTimeline.setScrollTop.mockClear();
+    mocks.homeTimeline.setActiveTab.mockClear();
+    mocks.router.push.mockClear();
+    await wrapper.get('[data-feed-tab="for-you"]').trigger('click');
+    await settle();
+
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.setScrollTop).toHaveBeenCalledWith('following', 900);
+    expect(mocks.homeTimeline.setActiveTab).toHaveBeenCalledWith('for-you');
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'Home', query: {} });
+    expect(panel.scrollTop).toBe(2200);
+  });
+
+  it('keeps same-tab keyboard selection as select without reselecting', async () => {
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.router.push.mockClear();
+
+    await wrapper.get('[data-feed-tab="for-you"]').trigger('keydown', { key: 'Home' });
+    await settle();
+
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+    expect(mocks.router.push).not.toHaveBeenCalled();
   });
 
   it('scrolls a deep For You panel to the top without refreshing', async () => {

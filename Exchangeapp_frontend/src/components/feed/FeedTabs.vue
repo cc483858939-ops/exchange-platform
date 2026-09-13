@@ -12,7 +12,7 @@
       :aria-controls="'feed-panel-' + tab.value"
       :tabindex="activeTab === tab.value ? 0 : -1"
       :data-feed-tab="tab.value"
-      @click="selectTab(tab.value)"
+      @click="activateTab(tab.value)"
       @keydown="handleKeydown($event, index)"
     >
       {{ tab.label }}
@@ -24,12 +24,13 @@
 import { nextTick } from 'vue';
 import type { FeedTab } from '../../types/Feed';
 
-defineProps<{
+const props = defineProps<{
   activeTab: FeedTab;
 }>();
 
 const emit = defineEmits<{
   select: [tab: FeedTab];
+  reselect: [tab: FeedTab];
 }>();
 
 const tabs: Array<{ value: FeedTab; label: string }> = [
@@ -37,7 +38,12 @@ const tabs: Array<{ value: FeedTab; label: string }> = [
   { value: 'following', label: 'Following' },
 ];
 
-const selectTab = (tab: FeedTab) => {
+const activateTab = (tab: FeedTab) => {
+  if (props.activeTab === tab) {
+    emit('reselect', tab);
+    return;
+  }
+
   emit('select', tab);
 };
 
