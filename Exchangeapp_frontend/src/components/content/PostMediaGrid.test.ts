@@ -32,6 +32,23 @@ describe('PostMediaGrid', () => {
 
     expect(wrapper.find(`.post-media-grid--count-${count}`).exists()).toBe(true);
     expect(wrapper.findAll('.post-media-grid__item')).toHaveLength(count);
+    expect(wrapper.findAll('.post-media-grid__item--featured')).toHaveLength(count === 3 ? 1 : 0);
+    if (count === 3) {
+      expect(wrapper.findAll('.post-media-grid__item')[0].classes())
+        .toContain('post-media-grid__item--featured');
+    }
+  });
+
+  it('updates the featured item as media is removed from the composer', async () => {
+    const wrapper = mountGrid(4, true);
+    const firstItem = wrapper.findAll('.post-media-grid__item')[0].element;
+
+    await wrapper.setProps({ media: media(3) });
+    expect(wrapper.get('.post-media-grid__item--featured').element).toBe(firstItem);
+
+    await wrapper.setProps({ media: media(2) });
+    expect(wrapper.findAll('.post-media-grid__item')[0].element).toBe(firstItem);
+    expect(wrapper.findAll('.post-media-grid__item--featured')).toHaveLength(0);
   });
 
   it('exposes the intrinsic-ratio presentation state for a single image', () => {

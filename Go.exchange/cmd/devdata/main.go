@@ -139,32 +139,40 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		var postMediaStore devdata.AvatarObjectStore
+		var mirrorStore devdata.AvatarObjectStore
 		storageClient, storageErr := config.NewStorageClient()
 		if storageErr != nil {
-			fmt.Fprintln(stderr, "WARN: post media storage unavailable; existing PostMedia rows will be preserved for unresolved images")
+			fmt.Fprintln(stderr, "WARN: mirror storage unavailable; existing avatars and PostMedia rows will be preserved for unresolved images")
 		} else {
-			postMediaStore, storageErr = devdata.NewMinioAvatarObjectStore(storageClient)
+			mirrorStore, storageErr = devdata.NewMinioAvatarObjectStore(storageClient)
 			if storageErr != nil {
-				fmt.Fprintln(stderr, "WARN: post media storage adapter unavailable; existing PostMedia rows will be preserved for unresolved images")
+				fmt.Fprintln(stderr, "WARN: mirror storage adapter unavailable; existing avatars and PostMedia rows will be preserved for unresolved images")
 			}
 		}
+		var avatarFetcher devdata.AvatarFetcher
 		var postMediaFetcher devdata.PostMediaFetcher
-		if postMediaStore != nil {
+		if mirrorStore != nil {
+			avatarFetcher = devdata.NewAvatarDownloader()
 			postMediaFetcher = devdata.NewPostMediaDownloader()
 		}
-		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(context.Background(), registry, snapshot, postMediaFetcher, postMediaStore)
+		avatarResolutions, avatarReport, err := devdata.PrepareAvatarMirrors(context.Background(), registry, snapshot, avatarFetcher, mirrorStore)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Avatars: attempted=%d uploaded=%d reused=%d failed=%d\n", avatarReport.Attempted, avatarReport.Uploaded, avatarReport.Reused, avatarReport.Failed)
+		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(context.Background(), registry, snapshot, postMediaFetcher, mirrorStore)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
 		if err := syncAndVerify(stdout, stderr, registry, snapshot, devdata.SyncOptions{
+			AvatarResolutions:                    avatarResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
 		}); err != nil {
 			return err
 		}
-		writeMediaLocalizationWarning(stderr, 0, postMediaReport.Failed)
+		writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
 		return nil
 	case "verify":
 		options, err := parseCommandFlags("verify", args[1:], stderr, false)

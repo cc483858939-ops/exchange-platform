@@ -10,6 +10,11 @@
       v-for="(item, index) in visibleMedia"
       :key="`${item.url}-${item.position}-${index}`"
       class="post-media-grid__item"
+      :class="{
+        'post-media-grid__item--featured':
+          visibleMedia.length === 3
+          && index === 0,
+      }"
     >
       <button
         v-if="interactive && !failedURLs.has(item.url)"
@@ -156,8 +161,9 @@ const openImageLabel = (index: number) => (
   outline-offset: -2px;
 }
 
-.post-media-grid--count-3 .post-media-grid__item:first-child {
+.post-media-grid--count-3 .post-media-grid__item--featured {
   grid-row: span 2;
+  aspect-ratio: auto;
 }
 
 .post-media-grid__image,
@@ -188,8 +194,8 @@ const openImageLabel = (index: number) => (
 }
 
 .post-media-grid--count-2 .post-media-grid__item,
-.post-media-grid--count-3 .post-media-grid__item,
-.post-media-grid--count-4 .post-media-grid__item {
+.post-media-grid--count-4 .post-media-grid__item,
+.post-media-grid--count-3 .post-media-grid__item:not(.post-media-grid__item--featured) {
   aspect-ratio: 1;
 }
 
