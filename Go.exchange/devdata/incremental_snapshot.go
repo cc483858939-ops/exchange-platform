@@ -13,7 +13,12 @@ import (
 	"time"
 )
 
-var ErrIncrementalSnapshotConflict = errors.New("incremental snapshot changed during refresh; retry")
+var ErrIncrementalSnapshotChanged = errors.New("rolling snapshot changed during incremental refresh")
+
+// ErrIncrementalSnapshotConflict is retained as a compatibility alias for
+// callers that used the original name before the conflict decision was
+// centralized in WriteIncrementalSnapshotIfUnchanged.
+var ErrIncrementalSnapshotConflict = ErrIncrementalSnapshotChanged
 
 // ReadIncrementalBaseline loads the complete rolling snapshot and returns the
 // fingerprint of the exact bytes that were decoded. A partial, stale, or
@@ -48,6 +53,21 @@ func SnapshotFingerprint(path string) (string, error) {
 	}
 	digest := hasher.Sum(nil)
 	return hex.EncodeToString(digest), nil
+}
+
+// WriteIncrementalSnapshotIfUnchanged writes snapshot only when the rolling
+// baseline still has the fingerprint observed before the incremental fetch.
+// The fingerprint check intentionally remains a small check-then-rename
+// window; callers coordinate normal DevData mutations with the shared DB lock.
+func WriteIncrementalSnapshotIfUnchanged(path string, expectedFingerprint string, snapshot Snapshot, registry SourceRegistry) error {
+	currentFingerprint, err := SnapshotFingerprint(path)
+	if err != nil {
+		return fmt.Errorf("read incremental snapshot fingerprint: %w", err)
+	}
+	if currentFingerprint != expectedFingerprint {
+		return ErrIncrementalSnapshotChanged
+	}
+	return WriteSnapshotAtomic(path, snapshot, registry)
 }
 
 func sha256Hex(raw []byte) string {

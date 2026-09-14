@@ -39,10 +39,55 @@ go run ./cmd/devdata refresh --source=rsshub --allow-destructive --reset-checkpo
 
 ## 暂停、恢复和定期校准
 
-暂停 scheduler 不会改变快照。长时间暂停后，建议先运行一次完整 `refresh`，再
-恢复每小时的四分片任务。增量刷新只会新增或更新选中账号的帖子、资料和未解析的
-媒体，不会根据短源窗口推断删除，也不会退休未出现在本轮窗口中的历史帖子。
+暂停 scheduler 不会改变快照。短暂停顿通常可以直接恢复增量任务；长时间或
+不确定时长的暂停，建议先运行一次完整 `refresh`，再恢复每小时的四分片任务。
+源可见性受每个账号最多 60 条的窗口限制，不能承诺增量任务无限补齐暂停期间的
+历史帖子。增量刷新只会新增或更新选中账号的帖子、资料和未解析的媒体，不会
+根据短源窗口推断删除，也不会退休未出现在本轮窗口中的历史帖子。
 
-完整 refresh、rebuild 和 refresh-incremental 共用 PostgreSQL session advisory
-lock；增量任务发现另一个 DevData mutation 正在运行时会安全跳过，下一小时再由
-scheduler 重试。
+## Production scheduling
+
+推荐把两个命令看成不同的运维职责：
+
+- `refresh-incremental` 负责 freshness。每小时运行一次、每次一个分片，
+  因此每个账号约每 4 小时刷新一次。
+- `refresh` 负责 reconciliation / cleanup、修复 source/account drift，
+  并更新完整的恢复基线。建议每天运行一次：
+
+```powershell
+go run ./cmd/devdata refresh --source=rsshub --allow-destructive
+```
+
+普通的每日 full refresh 不要求 `--reset-checkpoint`；只有 operator 明确
+要丢弃已有的可恢复 checkpoint 时才使用它。增量刷新是 non-destructive：
+某个帖子没有出现在本次有限 source window 中，不会让它退休。长期只运行
+增量任务会使 DB mirror history 持续累积，所以 full refresh 是推荐的定期
+对账，而不是每次增量刷新正确性的前置条件。
+
+`refresh`、`rebuild` 和 `refresh-incremental` 共用 PostgreSQL mutation
+advisory lock。full refresh 或 rebuild 正在运行时，增量任务可以安全跳过
+本次 invocation；下一小时的 scheduler 会继续，不需要 operator 手工恢复。
+
+## Persistent snapshot requirement
+
+`.devdata/x_latest.json` 不是临时 cache，而是增量连续性状态以及完整的
+rebuild/recovery snapshot。运行 scheduled incremental 的环境必须保证它能
+跨越进程重启、scheduler 重启以及 container 重启或重建而保留。
+
+支持的部署模型是：
+
+- 单 scheduler host 加持久化本地文件系统；或
+- 多个 scheduler runner 共同使用同一个共享持久化文件系统。
+
+如果 `refresh-incremental` 在 container 中运行，必须把 `.devdata` 挂载到
+持久化 volume；不能依赖 container-local ephemeral storage 保存
+`x_latest.json`。每次 scheduler invocation 都新建 ephemeral container、且
+只把 `.devdata` 放在该 container 内的部署是不安全的，因为下一次 invocation
+会丢失完整 baseline。
+
+## Standalone fetch
+
+`fetch` 保持 DB-independent，适合手工 operator 操作、快照生成、debug 和
+recovery workflow。不要故意把 standalone `fetch` 与 scheduled
+`refresh-incremental` 并发安排；fetch 不参与 PostgreSQL mutation lock，
+这种并发会增加快照 writer 的 check-to-rename race 风险。

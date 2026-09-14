@@ -1,6 +1,8 @@
 package devdata
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +127,66 @@ func TestReadIncrementalBaselineAndFingerprintUseExactSnapshotBytes(t *testing.T
 	}
 	if _, _, err := ReadIncrementalBaseline(path, registry); err == nil || !strings.Contains(err.Error(), "valid full baseline snapshot") {
 		t.Fatalf("invalid baseline error=%v", err)
+	}
+}
+
+func TestWriteIncrementalSnapshotIfUnchangedRejectsReplacedBaseline(t *testing.T) {
+	registry := testRegistry()
+	path := filepath.Join(t.TempDir(), "x_latest.json")
+	baseline := testSnapshot("baseline source Post")
+	if err := WriteSnapshotAtomic(path, baseline, registry); err != nil {
+		t.Fatal(err)
+	}
+	baselineFingerprint, err := SnapshotFingerprint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	externalSnapshot := testSnapshot("external newer source Post")
+	if err := WriteSnapshotAtomic(path, externalSnapshot, registry); err != nil {
+		t.Fatal(err)
+	}
+	externalBytes := readFileBytes(t, path)
+	staleIncrementalSnapshot := testSnapshot("stale incremental source Post")
+
+	err = WriteIncrementalSnapshotIfUnchanged(path, baselineFingerprint, staleIncrementalSnapshot, registry)
+	if !errors.Is(err, ErrIncrementalSnapshotChanged) {
+		t.Fatalf("stale write error=%v", err)
+	}
+	if got := readFileBytes(t, path); !bytes.Equal(got, externalBytes) {
+		t.Fatalf("external snapshot was overwritten: got=%q want=%q", got, externalBytes)
+	}
+	loaded, err := ReadSnapshot(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Posts[0].Text != externalSnapshot.Posts[0].Text {
+		t.Fatalf("loaded snapshot text=%q want=%q", loaded.Posts[0].Text, externalSnapshot.Posts[0].Text)
+	}
+}
+
+func TestWriteIncrementalSnapshotIfUnchangedWritesWhenBaselineMatches(t *testing.T) {
+	registry := testRegistry()
+	path := filepath.Join(t.TempDir(), "x_latest.json")
+	baseline := testSnapshot("baseline source Post")
+	if err := WriteSnapshotAtomic(path, baseline, registry); err != nil {
+		t.Fatal(err)
+	}
+	baselineFingerprint, err := SnapshotFingerprint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextSnapshot := testSnapshot("next incremental source Post")
+
+	if err := WriteIncrementalSnapshotIfUnchanged(path, baselineFingerprint, nextSnapshot, registry); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadSnapshot(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Posts[0].Text != nextSnapshot.Posts[0].Text {
+		t.Fatalf("loaded snapshot text=%q want=%q", loaded.Posts[0].Text, nextSnapshot.Posts[0].Text)
 	}
 }
 

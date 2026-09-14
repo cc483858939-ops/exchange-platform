@@ -544,15 +544,11 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 	if err != nil {
 		return err
 	}
-	currentFingerprint, err := devdata.SnapshotFingerprint(snapshotPath)
-	if err != nil {
-		return err
-	}
-	if currentFingerprint != baselineFingerprint {
-		fmt.Fprintln(stderr, "Incremental refresh aborted: rolling snapshot changed during this run; retry against the new baseline")
-		return devdata.ErrIncrementalSnapshotConflict
-	}
-	if err := devdata.WriteSnapshotAtomic(snapshotPath, nextSnapshot, registry); err != nil {
+	if err := devdata.WriteIncrementalSnapshotIfUnchanged(snapshotPath, baselineFingerprint, nextSnapshot, registry); err != nil {
+		if errors.Is(err, devdata.ErrIncrementalSnapshotChanged) {
+			fmt.Fprintln(stderr, "Incremental refresh aborted: rolling snapshot changed during this run; retry against the new baseline")
+			return err
+		}
 		return fmt.Errorf("write incremental snapshot: %w", err)
 	}
 	writeIncrementalSummary(stdout, shard, fetchReport, result, avatarReport, postMediaReport, nextSnapshot)
