@@ -166,9 +166,7 @@ func TestStoreScanUsersReturnsAllMembersInBoundedBatchesIntegration(t *testing.T
 			t.Fatal(err)
 		}
 		for _, userID := range batch {
-			if _, duplicate := seen[userID]; duplicate {
-				t.Fatalf("user %d returned more than once", userID)
-			}
+			// SSCAN may return a member more than once while traversing a Set.
 			seen[userID] = struct{}{}
 		}
 		cursor = next

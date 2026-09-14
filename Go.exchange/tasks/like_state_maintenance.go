@@ -169,7 +169,7 @@ func verifyIdleLikeStates(ctx context.Context, store *likes.Store, db *gorm.DB, 
 			}
 			continue
 		}
-		membershipEqual, err := verifyLikeMembership(ctx, db, store, postID, baseline.Count)
+		membershipEqual, err := verifyLikeMembership(ctx, db, store, postID)
 		if err != nil {
 			return err
 		}
@@ -295,18 +295,19 @@ func validateLikeStateMaintenanceBaseline(baseline likeStateMaintenanceBaseline)
 	return nil
 }
 
-func verifyLikeMembership(ctx context.Context, db *gorm.DB, store *likes.Store, postID uint, expectedCount int64) (bool, error) {
+func verifyLikeMembership(ctx context.Context, db *gorm.DB, store *likes.Store, postID uint) (bool, error) {
 	if db == nil {
 		return false, errors.New("database is not initialized")
 	}
 	if store == nil {
 		return false, errors.New("like state store is not initialized")
 	}
-	if postID == 0 || expectedCount < 0 {
+	if postID == 0 {
 		return false, errors.New("invalid Like membership verification arguments")
 	}
+	// Count equality is checked before this walk. Do not derive it from SSCAN
+	// results because a cursor iteration may return duplicate members.
 	var cursor uint64
-	var scannedCount int64
 	for {
 		userIDs, nextCursor, err := store.ScanUsers(ctx, postID, cursor, likeStateMaintenanceMemberScanBatch)
 		if err != nil {
@@ -329,13 +330,9 @@ func verifyLikeMembership(ctx context.Context, db *gorm.DB, store *likes.Store, 
 				}
 			}
 		}
-		scannedCount += int64(len(userIDs))
-		if scannedCount > expectedCount {
-			return false, nil
-		}
 		cursor = nextCursor
 		if cursor == 0 {
-			return scannedCount == expectedCount, nil
+			return true, nil
 		}
 	}
 }

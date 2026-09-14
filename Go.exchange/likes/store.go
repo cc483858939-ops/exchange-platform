@@ -446,8 +446,8 @@ func (s *Store) ScanUsers(ctx context.Context, postID uint, cursor uint64, count
 	if err != nil {
 		return nil, 0, err
 	}
-	userIDs, ok := parseUserIDs(members)
-	if !ok {
+	userIDs, err := parseScannedUserIDs(members)
+	if err != nil {
 		return nil, 0, errors.New("invalid Redis Like user ID")
 	}
 	return userIDs, next, nil
@@ -673,6 +673,28 @@ func parseUserIDs(values []string) ([]uint, bool) {
 	}
 	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
 	return userIDs, true
+}
+
+// parseScannedUserIDs tolerates valid duplicate members within one SSCAN response.
+// SSCAN may repeat members while a cursor iteration traverses a Set, so this
+// parser must not reuse parseUserIDs' strict duplicate rejection.
+func parseScannedUserIDs(values []string) ([]uint, error) {
+	userIDs := make([]uint, 0, len(values))
+	seen := make(map[uint]struct{}, len(values))
+	for _, value := range values {
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || parsed == 0 || uint64(uint(parsed)) != parsed {
+			return nil, fmt.Errorf("invalid Redis Like user ID %q", value)
+		}
+		userID := uint(parsed)
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
+		userIDs = append(userIDs, userID)
+	}
+	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
+	return userIDs, nil
 }
 
 func normalizeUserIDs(userIDs []uint) ([]uint, bool) {
