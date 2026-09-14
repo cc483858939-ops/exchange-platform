@@ -3,7 +3,7 @@
   "fetched_at": "2026-01-02T00:00:00Z",
   "accounts": [
     {"registry_key": "thsottiaux", "source_user_id": "1001", "handle": "thsottiaux", "name": "Test thsottiaux", "description": "TEST ONLY", "profile_image_url": "", "category": "technology_ai"},
-    {"registry_key": "MKBHD", "source_user_id": "1002", "handle": "MKBHD", "name": "Test MKBHD", "description": "TEST ONLY", "profile_image_url": "", "category": "technology_ai"},
+    {"registry_key": "sugales_noah", "source_user_id": "1002", "handle": "sugales_noah", "name": "Test sugales_noah", "description": "TEST ONLY", "profile_image_url": "", "category": "entertainment_creator"},
     {"registry_key": "dotey", "source_user_id": "1003", "handle": "dotey", "name": "Test dotey", "description": "TEST ONLY", "profile_image_url": "", "category": "technology_ai"},
     {"registry_key": "naval", "source_user_id": "1004", "handle": "naval", "name": "Test naval", "description": "TEST ONLY", "profile_image_url": "", "category": "business_creator"},
     {"registry_key": "RayDalio", "source_user_id": "1005", "handle": "RayDalio", "name": "Test RayDalio", "description": "TEST ONLY", "profile_image_url": "", "category": "business_creator"},
@@ -25,7 +25,7 @@
   ],
   "posts": [
     {"registry_key": "thsottiaux", "source_post_id": "2001", "source_url": "https://x.com/thsottiaux/status/2001", "text": "TEST ONLY source post thsottiaux", "created_at": "2026-01-01T00:00:00Z", "language": "en", "possibly_sensitive": false, "has_media": false, "source_metrics": {"source_like_count": 0, "source_reply_count": 0, "source_repost_count": 0, "source_quote_count": 0}},
-    {"registry_key": "MKBHD", "source_post_id": "2002", "source_url": "https://x.com/MKBHD/status/2002", "text": "TEST ONLY source post MKBHD", "created_at": "2026-01-01T00:00:00Z", "language": "en", "possibly_sensitive": false, "has_media": false, "source_metrics": {"source_like_count": 0, "source_reply_count": 0, "source_repost_count": 0, "source_quote_count": 0}},
+    {"registry_key": "sugales_noah", "source_post_id": "2002", "source_url": "https://x.com/sugales_noah/status/2002", "text": "TEST ONLY source post sugales_noah", "created_at": "2026-01-01T00:00:00Z", "language": "en", "possibly_sensitive": false, "has_media": false, "source_metrics": {"source_like_count": 0, "source_reply_count": 0, "source_repost_count": 0, "source_quote_count": 0}},
     {"registry_key": "dotey", "source_post_id": "2003", "source_url": "https://x.com/dotey/status/2003", "text": "TEST ONLY source post dotey", "created_at": "2026-01-01T00:00:00Z", "language": "en", "possibly_sensitive": false, "has_media": false, "source_metrics": {"source_like_count": 0, "source_reply_count": 0, "source_repost_count": 0, "source_quote_count": 0}},
     {"registry_key": "naval", "source_post_id": "2004", "source_url": "https://x.com/naval/status/2004", "text": "TEST ONLY source post naval", "created_at": "2026-01-01T00:00:00Z", "language": "en", "possibly_sensitive": false, "has_media": false, "source_metrics": {"source_like_count": 0, "source_reply_count": 0, "source_repost_count": 0, "source_quote_count": 0}},
     {"registry_key": "RayDalio", "source_post_id": "2005", "source_url": "https://x.com/RayDalio/status/2005", "text": "TEST ONLY source post RayDalio", "created_at": "2026-01-01T00:00:00Z", "language": "en", "possibly_sensitive": false, "has_media": false, "source_metrics": {"source_like_count": 0, "source_reply_count": 0, "source_repost_count": 0, "source_quote_count": 0}},

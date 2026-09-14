@@ -15,7 +15,7 @@ func TestCuratedRegistryHasExactlyTheControlledTwentyAccounts(t *testing.T) {
 		t.Fatalf("enabled accounts=%d, want 20", len(registry.EnabledAccounts()))
 	}
 	targetKeys := []string{
-		"thsottiaux", "MKBHD", "dotey", "naval", "RayDalio", "ahistoryinart", "japanvistamedia",
+		"thsottiaux", "sugales_noah", "dotey", "naval", "RayDalio", "ahistoryinart", "japanvistamedia",
 		"visualsofearth1", "SpaceX", "NintendoAmerica", "kasu_ps", "MrBeast", "letterboxd",
 		"historyinmemes", "GordonRamsay", "CuddlyCutePets", "wenqiangjp", "KobeissiLetter", "NASA", "neiltyson",
 	}
@@ -28,13 +28,14 @@ func TestCuratedRegistryHasExactlyTheControlledTwentyAccounts(t *testing.T) {
 			t.Fatalf("account %q does not match controlled shape: %#v", key, account)
 		}
 	}
-	for _, key := range []string{"levelsio", "laozhouhengmei", "JamesAI", "Svwang1", "StephenCurry30", "IGN", "billboard", "Reuters"} {
+	for _, key := range []string{"MKBHD", "levelsio", "laozhouhengmei", "JamesAI", "Svwang1", "StephenCurry30", "IGN", "billboard", "Reuters"} {
 		if _, ok := registry.AccountByKey(key); ok {
 			t.Fatalf("removed registry key %q is still present", key)
 		}
 	}
 	categoryAssertions := map[string]string{
 		"naval":           "business_creator",
+		"sugales_noah":    "entertainment_creator",
 		"japanvistamedia": "travel_nature",
 		"SpaceX":          "science",
 		"kasu_ps":         "gaming",
@@ -49,7 +50,7 @@ func TestCuratedRegistryHasExactlyTheControlledTwentyAccounts(t *testing.T) {
 			t.Fatalf("account %q category=%q exists=%t, want %q", key, account.Category, ok, wantCategory)
 		}
 	}
-	if got := MirrorUsername("MKBHD"); got != "x_MKBHD" {
+	if got := MirrorUsername("sugales_noah"); got != "x_sugales_noah" {
 		t.Fatalf("mirror username=%q", got)
 	}
 }

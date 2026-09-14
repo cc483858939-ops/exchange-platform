@@ -44,7 +44,7 @@ var xHandlePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
 
 var curatedV1Accounts = map[string]SourceAccount{
 	"thsottiaux":      {Key: "thsottiaux", Platform: "x", Handle: "thsottiaux", Category: "technology_ai"},
-	"MKBHD":           {Key: "MKBHD", Platform: "x", Handle: "MKBHD", Category: "technology_ai"},
+	"sugales_noah":    {Key: "sugales_noah", Platform: "x", Handle: "sugales_noah", Category: "entertainment_creator"},
 	"dotey":           {Key: "dotey", Platform: "x", Handle: "dotey", Category: "technology_ai"},
 	"naval":           {Key: "naval", Platform: "x", Handle: "naval", Category: "business_creator"},
 	"RayDalio":        {Key: "RayDalio", Platform: "x", Handle: "RayDalio", Category: "business_creator"},

@@ -3,7 +3,7 @@
   "default_max_posts": 40,
   "accounts": [
     {"key": "thsottiaux", "platform": "x", "handle": "thsottiaux", "category": "technology_ai", "max_posts": 40, "enabled": true},
-    {"key": "MKBHD", "platform": "x", "handle": "MKBHD", "category": "technology_ai", "max_posts": 40, "enabled": true},
+    {"key": "sugales_noah", "platform": "x", "handle": "sugales_noah", "category": "entertainment_creator", "max_posts": 40, "enabled": true},
     {"key": "dotey", "platform": "x", "handle": "dotey", "category": "technology_ai", "max_posts": 40, "enabled": true},
     {"key": "naval", "platform": "x", "handle": "naval", "category": "business_creator", "max_posts": 40, "enabled": true},
     {"key": "RayDalio", "platform": "x", "handle": "RayDalio", "category": "business_creator", "max_posts": 40, "enabled": true},
