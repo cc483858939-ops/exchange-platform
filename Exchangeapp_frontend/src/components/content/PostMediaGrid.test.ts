@@ -2,6 +2,7 @@
 
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
+import type { PostMedia } from '../../types/Post';
 import PostMediaGrid from './PostMediaGrid.vue';
 
 const media = (count: number) => Array.from({ length: count }, (_, index) => ({
@@ -12,6 +13,16 @@ const media = (count: number) => Array.from({ length: count }, (_, index) => ({
   height: 800,
   position: index,
 }));
+
+const singleMedia = (overrides: Partial<PostMedia> = {}): PostMedia => ({
+  type: 'image',
+  url: '/medium.jpg',
+  large_url: '/large.jpg',
+  width: 960,
+  height: 1200,
+  position: 0,
+  ...overrides,
+});
 
 const mountGrid = (count: number, removable = false, interactive = false) => mount(PostMediaGrid, {
   props: {
@@ -61,6 +72,87 @@ describe('PostMediaGrid', () => {
     const multiWrapper = mountGrid(2);
     expect(multiWrapper.findAll('img')[0].classes())
       .not.toContain('post-media-grid__image--single');
+  });
+
+  it('keeps Medium as src and exposes a density srcset for a read-only single image', () => {
+    const wrapper = mount(PostMediaGrid, {
+      props: { media: [singleMedia()] },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+    const image = wrapper.get('img');
+
+    expect(image.attributes('src')).toBe('/medium.jpg');
+    expect(image.attributes('srcset')).toBe('/medium.jpg 1x, /large.jpg 2x');
+    expect(image.attributes('width')).toBe('960');
+    expect(image.attributes('height')).toBe('1200');
+    expect(image.attributes('loading')).toBe('lazy');
+    expect(image.attributes('decoding')).toBe('async');
+  });
+
+  it('keeps responsive delivery and open interaction for an interactive single image', async () => {
+    const wrapper = mount(PostMediaGrid, {
+      props: { media: [singleMedia()], interactive: true },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+    const image = wrapper.get('.post-media-grid__open img');
+
+    expect(image.attributes('src')).toBe('/medium.jpg');
+    expect(image.attributes('srcset')).toBe('/medium.jpg 1x, /large.jpg 2x');
+
+    await wrapper.get('.post-media-grid__open').trigger('click');
+    expect(wrapper.emitted('open')).toEqual([[0]]);
+  });
+
+  it('excludes responsive delivery from a removable single-image preview', async () => {
+    const wrapper = mount(PostMediaGrid, {
+      props: { media: [singleMedia()], removable: true },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+    const image = wrapper.get('img');
+
+    expect(image.attributes('src')).toBe('/medium.jpg');
+    expect(image.attributes('srcset')).toBeUndefined();
+
+    await wrapper.get('.post-media-grid__remove').trigger('click');
+    expect(wrapper.emitted('remove')).toEqual([[0]]);
+  });
+
+  it.each([2, 3, 4])('keeps %i-image delivery Medium-only', count => {
+    const wrapper = mountGrid(count);
+
+    expect(wrapper.findAll('img').every(image => image.attributes('srcset') === undefined)).toBe(true);
+    expect(wrapper.findAll('.post-media-grid__item--featured')).toHaveLength(count === 3 ? 1 : 0);
+  });
+
+  it.each([
+    { label: 'empty', largeURL: '' },
+    { label: 'whitespace-only', largeURL: '   ' },
+    { label: 'same URL', largeURL: '/medium.jpg' },
+  ])('does not emit a srcset for a $label large URL', ({ largeURL }) => {
+    const wrapper = mount(PostMediaGrid, {
+      props: { media: [singleMedia({ large_url: largeURL })] },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+
+    expect(wrapper.get('img').attributes('src')).toBe('/medium.jpg');
+    expect(wrapper.get('img').attributes('srcset')).toBeUndefined();
+  });
+
+  it('falls back from a failed Large candidate to Medium before showing a placeholder', async () => {
+    const wrapper = mount(PostMediaGrid, {
+      props: { media: [singleMedia()] },
+      global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
+    });
+
+    await wrapper.get('img').trigger('error');
+    expect(wrapper.get('img').attributes('src')).toBe('/medium.jpg');
+    expect(wrapper.get('img').attributes('srcset')).toBeUndefined();
+    expect(wrapper.find('[role="img"]').exists()).toBe(false);
+
+    await wrapper.get('img').trigger('error');
+    expect(wrapper.find('img').exists()).toBe(false);
+    expect(wrapper.get('[role="img"]').attributes('aria-label'))
+      .toBe('Post image 1 unavailable');
   });
 
   it.each([
@@ -149,6 +241,7 @@ describe('PostMediaGrid', () => {
 
     expect(wrapper.get('img').attributes('width')).toBeUndefined();
     expect(wrapper.get('img').attributes('height')).toBeUndefined();
+    expect(wrapper.get('img').attributes('srcset')).toBeUndefined();
   });
 
   it('keeps image-open controls disabled by default', () => {
@@ -193,8 +286,9 @@ describe('PostMediaGrid', () => {
     expect(composerWrapper.emitted('remove')).toEqual([[1]]);
   });
 
-  it('shows an accessible placeholder when an image fails', async () => {
+  it('shows an accessible placeholder after both responsive and Medium images fail', async () => {
     const wrapper = mountGrid(1);
+    await wrapper.get('img').trigger('error');
     await wrapper.get('img').trigger('error');
 
     expect(wrapper.find('img').exists()).toBe(false);
