@@ -144,6 +144,58 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	}
 }
 
+func TestStoreScanUsersReturnsAllMembersInBoundedBatchesIntegration(t *testing.T) {
+	client, store, postID := openRecoverableStoreIntegration(t)
+	const totalMembers = 2500
+	members := make([]interface{}, 0, totalMembers)
+	want := make(map[uint]struct{}, totalMembers)
+	for index := 1; index <= totalMembers; index++ {
+		userID := uint(index)
+		members = append(members, strconv.FormatUint(uint64(userID), 10))
+		want[userID] = struct{}{}
+	}
+	if err := client.SAdd(UsersKey(postID), members...).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(map[uint]struct{}, totalMembers)
+	var cursor uint64
+	for {
+		batch, next, err := store.ScanUsers(t.Context(), postID, cursor, 128)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, userID := range batch {
+			if _, duplicate := seen[userID]; duplicate {
+				t.Fatalf("user %d returned more than once", userID)
+			}
+			seen[userID] = struct{}{}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("scanned users=%d want=%d", len(seen), len(want))
+	}
+	for userID := range want {
+		if _, ok := seen[userID]; !ok {
+			t.Fatalf("user %d was not scanned", userID)
+		}
+	}
+}
+
+func TestStoreScanUsersRejectsInvalidMemberIntegration(t *testing.T) {
+	client, store, postID := openRecoverableStoreIntegration(t)
+	if err := client.SAdd(UsersKey(postID), "not-a-user-id").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ScanUsers(t.Context(), postID, 0, 128); err == nil {
+		t.Fatal("invalid Redis Like user ID was silently accepted")
+	}
+}
+
 func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 	addr := os.Getenv("REDIS_TEST_ADDR")
 	if addr == "" {

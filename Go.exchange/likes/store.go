@@ -94,6 +94,12 @@ func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
 	return state, nil
 }
 
+// LoadSummary reads only the aggregate Redis Like state required by
+// maintenance. It deliberately does not load the users Set members.
+func (s *Store) LoadSummary(ctx context.Context, postID uint) (State, error) {
+	return s.Get(ctx, 0, postID)
+}
+
 func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[uint]State, []uint, error) {
 	if s == nil || s.client == nil {
 		return nil, nil, errors.New("redis is not initialized")
@@ -419,6 +425,32 @@ func (s *Store) ScanRegistry(ctx context.Context, cursor uint64, count int) ([]u
 		postIDs = append(postIDs, uint(postID))
 	}
 	return postIDs, next, nil
+}
+
+const defaultScanUsersCount int64 = 1024
+
+// ScanUsers returns one bounded SSCAN batch from a Post's Like users Set.
+// COUNT is a Redis hint, so callers must continue until the returned cursor
+// reaches zero and must not assume a fixed number of members per call.
+func (s *Store) ScanUsers(ctx context.Context, postID uint, cursor uint64, count int64) ([]uint, uint64, error) {
+	if s == nil || s.client == nil {
+		return nil, 0, errors.New("redis is not initialized")
+	}
+	if postID == 0 {
+		return nil, 0, errors.New("invalid post id")
+	}
+	if count <= 0 {
+		count = defaultScanUsersCount
+	}
+	members, next, err := s.client.WithContext(ctx).SScan(UsersKey(postID), cursor, "", count).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	userIDs, ok := parseUserIDs(members)
+	if !ok {
+		return nil, 0, errors.New("invalid Redis Like user ID")
+	}
+	return userIDs, next, nil
 }
 
 func (s *Store) LoadExpiryCandidates(ctx context.Context, cutoff time.Time, batch int) ([]uint, error) {
