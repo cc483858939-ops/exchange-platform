@@ -29,7 +29,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: go run ./cmd/devdata <fetch|refresh|rebuild|verify|verify-avatars> [flags]")
+		return errors.New("usage: go run ./cmd/devdata <fetch|refresh|refresh-incremental|rebuild|verify|verify-avatars> [flags]")
 	}
 	baseDir, err := os.Getwd()
 	if err != nil {
@@ -64,6 +64,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		db, err := initDatabase()
+		if err != nil {
+			return err
+		}
+		lock, err := devdata.AcquireDevDataMutationLock(context.Background(), db)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if releaseErr := lock.Release(context.Background()); releaseErr != nil {
+				fmt.Fprintf(stderr, "WARN: release DevData mutation lock: %v\n", releaseErr)
+			}
+		}()
 		registry, err := loadCuratedRegistry(options.registryPath(baseDir))
 		if err != nil {
 			return err
@@ -80,10 +93,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 			writeFetchReportSummary(stdout, report)
 		} else {
 			writeFetchReport(stdout, report, options.snapshotPath(baseDir))
-		}
-		db, err := initDatabase()
-		if err != nil {
-			return err
 		}
 		redisClient := bestEffortRedis(stderr)
 		if redisClient != nil {
@@ -126,11 +135,30 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
 		return nil
+	case "refresh-incremental":
+		options, err := parseCommandFlags("refresh-incremental", args[1:], stderr, false)
+		if err != nil {
+			return err
+		}
+		return runIncrementalRefresh(context.Background(), baseDir, options, stdout, stderr)
 	case "rebuild":
 		options, err := parseCommandFlags("rebuild", args[1:], stderr, true)
 		if err != nil {
 			return err
 		}
+		db, err := initDatabase()
+		if err != nil {
+			return err
+		}
+		lock, err := devdata.AcquireDevDataMutationLock(context.Background(), db)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if releaseErr := lock.Release(context.Background()); releaseErr != nil {
+				fmt.Fprintf(stderr, "WARN: release DevData mutation lock: %v\n", releaseErr)
+			}
+		}()
 		registry, err := loadCuratedRegistry(options.registryPath(baseDir))
 		if err != nil {
 			return err
@@ -165,7 +193,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
-		if err := syncAndVerify(stdout, stderr, registry, snapshot, devdata.SyncOptions{
+		redisClient := bestEffortRedis(stderr)
+		if redisClient != nil {
+			defer redisClient.Close()
+		}
+		if err := syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
 			AvatarResolutions:                    avatarResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
@@ -232,6 +264,8 @@ type commandOptions struct {
 	source           string
 	profile          string
 	allowDestructive bool
+	shard            string
+	fetchCount       int
 	registry         string
 	snapshot         string
 	checkpoint       string
@@ -276,6 +310,13 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 		batchSize:  batchSize,
 		batchDelay: batchDelay,
 	}
+	if command == "refresh-incremental" {
+		options.fetchCount, err = fetchIntEnv("DEVDATA_INCREMENTAL_FETCH_COUNT", devdata.DefaultRSSHubIncrementalFetchCount)
+		if err != nil {
+			return commandOptions{}, err
+		}
+		options.shard = "auto"
+	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&options.source, "source", options.source, "source adapter (x or rsshub)")
@@ -287,6 +328,10 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	flags.BoolVar(&options.resetCheckpoint, "reset-checkpoint", false, "remove the existing fetch checkpoint before fetching")
 	flags.IntVar(&options.batchSize, "batch-size", options.batchSize, "RSSHub accounts per sequential batch")
 	flags.DurationVar(&options.batchDelay, "batch-delay", options.batchDelay, "delay between RSSHub batches")
+	if command == "refresh-incremental" {
+		flags.StringVar(&options.shard, "shard", options.shard, "incremental shard (auto or 0-3)")
+		flags.IntVar(&options.fetchCount, "fetch-count", options.fetchCount, "incremental source window (5-60)")
+	}
 	if err := flags.Parse(args); err != nil {
 		return commandOptions{}, err
 	}
@@ -299,6 +344,20 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	}
 	if destructive && !options.allowDestructive {
 		return commandOptions{}, fmt.Errorf("%s requires --allow-destructive", command)
+	}
+	if command == "refresh-incremental" {
+		if options.allowDestructive {
+			return commandOptions{}, errors.New("refresh-incremental does not support --allow-destructive")
+		}
+		if options.resetCheckpoint {
+			return commandOptions{}, errors.New("refresh-incremental does not support --reset-checkpoint")
+		}
+		if options.fetchCount < 5 || options.fetchCount > devdata.DefaultRSSHubFullFetchCount {
+			return commandOptions{}, fmt.Errorf("--fetch-count must be between 5 and %d", devdata.DefaultRSSHubFullFetchCount)
+		}
+		if _, err := devdata.ParseIncrementalShard(options.shard, time.Now().UTC()); err != nil {
+			return commandOptions{}, fmt.Errorf("--shard: %w", err)
+		}
 	}
 	if options.batchSize < 1 {
 		return commandOptions{}, errors.New("--batch-size must be at least 1")
@@ -365,6 +424,7 @@ func fetchSnapshotForCommand(ctx context.Context, client devdata.SnapshotSourceC
 		return devdata.FetchRSSHubResumable(ctx, client, registry, devdata.ResumableFetchOptions{
 			BatchSize:       options.batchSize,
 			BatchDelay:      options.batchDelay,
+			FetchCount:      devdata.DefaultRSSHubFullFetchCount,
 			CheckpointPath:  options.checkpointPath(baseDir),
 			SnapshotPath:    options.snapshotPath(baseDir),
 			ResetCheckpoint: options.resetCheckpoint,
@@ -381,6 +441,130 @@ func fetchSnapshotForCommand(ctx context.Context, client devdata.SnapshotSourceC
 		return devdata.Snapshot{}, report, err
 	}
 	return snapshot, report, nil
+}
+
+func runIncrementalRefresh(ctx context.Context, baseDir string, options commandOptions, stdout, stderr io.Writer) error {
+	db, err := initDatabase()
+	if err != nil {
+		return err
+	}
+	lock, acquired, err := devdata.TryAcquireDevDataMutationLock(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		_, _ = io.WriteString(stdout, "Incremental refresh skipped: another DevData mirror mutation is active\n")
+		return nil
+	}
+	defer func() {
+		if releaseErr := lock.Release(context.Background()); releaseErr != nil {
+			fmt.Fprintf(stderr, "WARN: release DevData mutation lock: %v\n", releaseErr)
+		}
+	}()
+
+	registry, err := loadCuratedRegistry(options.registryPath(baseDir))
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	shard, err := devdata.ParseIncrementalShard(options.shard, now)
+	if err != nil {
+		return fmt.Errorf("--shard: %w", err)
+	}
+	selected, err := devdata.SelectIncrementalShardAccounts(registry, shard)
+	if err != nil {
+		return err
+	}
+	selectedKeys := make([]string, 0, len(selected))
+	for _, account := range selected {
+		selectedKeys = append(selectedKeys, account.Key)
+	}
+	snapshotPath := options.snapshotPath(baseDir)
+	baseline, baselineFingerprint, err := devdata.ReadIncrementalBaseline(snapshotPath, registry)
+	if err != nil {
+		return err
+	}
+	client, err := newLiveSource(options.source)
+	if err != nil {
+		return err
+	}
+	batch, fetchReport, err := devdata.FetchIncrementalBatchWithOptions(ctx, client, registry, baseline, devdata.IncrementalFetchOptions{
+		Shard:      shard,
+		FetchCount: options.fetchCount,
+		FetchedAt:  now,
+		Progress: func(message string) {
+			fmt.Fprintln(stdout, message)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := devdata.ValidateIncrementalBatch(batch, registry); err != nil {
+		return err
+	}
+	nextSnapshot, err := devdata.MergeIncrementalSnapshot(baseline, batch, registry, now)
+	if err != nil {
+		return err
+	}
+
+	redisClient := bestEffortRedis(stderr)
+	if redisClient != nil {
+		defer redisClient.Close()
+	}
+	var mirrorStore devdata.AvatarObjectStore
+	storageClient, storageErr := config.NewStorageClient()
+	if storageErr != nil {
+		fmt.Fprintln(stderr, "WARN: mirror storage unavailable; incremental avatar and PostMedia localization will be skipped")
+	} else {
+		mirrorStore, storageErr = devdata.NewMinioAvatarObjectStore(storageClient)
+		if storageErr != nil {
+			fmt.Fprintln(stderr, "WARN: mirror storage adapter unavailable; incremental avatar and PostMedia localization will be skipped")
+		}
+	}
+	var avatarFetcher devdata.AvatarFetcher
+	var postMediaFetcher devdata.PostMediaFetcher
+	if mirrorStore != nil {
+		avatarFetcher = devdata.NewAvatarDownloader()
+		postMediaFetcher = devdata.NewPostMediaDownloader()
+	}
+	avatarSnapshot := devdata.Snapshot{Version: devdata.DefaultSnapshotVersion, FetchedAt: batch.FetchedAt, Accounts: batch.Accounts}
+	avatarResolutions, avatarReport, err := devdata.PrepareAvatarMirrorsForKeys(ctx, registry, avatarSnapshot, selectedKeys, avatarFetcher, mirrorStore)
+	if err != nil {
+		return err
+	}
+	postMediaResolutions, postMediaReport, err := devdata.PrepareIncrementalPostMediaMirrors(ctx, db, registry, batch, postMediaFetcher, mirrorStore)
+	if err != nil {
+		return err
+	}
+	result, err := devdata.SyncIncremental(ctx, db, registry, batch, redisClient, now, devdata.SyncOptions{
+		AvatarResolutions:                    avatarResolutions,
+		PostMediaResolutions:                 postMediaResolutions,
+		PreserveExistingAvatarWhenUnresolved: true,
+	})
+	if err != nil {
+		return err
+	}
+	currentFingerprint, err := devdata.SnapshotFingerprint(snapshotPath)
+	if err != nil {
+		return err
+	}
+	if currentFingerprint != baselineFingerprint {
+		fmt.Fprintln(stderr, "Incremental refresh aborted: rolling snapshot changed during this run; retry against the new baseline")
+		return devdata.ErrIncrementalSnapshotConflict
+	}
+	if err := devdata.WriteSnapshotAtomic(snapshotPath, nextSnapshot, registry); err != nil {
+		return fmt.Errorf("write incremental snapshot: %w", err)
+	}
+	writeIncrementalSummary(stdout, shard, fetchReport, result, avatarReport, postMediaReport, nextSnapshot)
+	writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
+	return nil
+}
+
+func writeIncrementalSummary(stdout io.Writer, shard int, fetchReport devdata.IncrementalFetchReport, syncResult devdata.SyncResult, avatarReport devdata.AvatarMirrorReport, postMediaReport devdata.PostMediaMirrorReport, snapshot devdata.Snapshot) {
+	fmt.Fprintf(stdout, "Incremental refresh: shard=%d/%d accounts=%d account_refresh_interval≈4h fetch_count=%d escalated_to_60=%d coverage_window_exhausted=%d\n", shard, devdata.IncrementalShardCount, fetchReport.Accounts, fetchReport.FetchCount, fetchReport.EscalatedToFull, fetchReport.CoverageWindowExhausted)
+	fmt.Fprintf(stdout, "Source: requests=%d posts_returned=%d scanned=%d eligible=%d\n", fetchReport.APIRequests, fetchReport.SourcePostsReturned, fetchReport.SourcePostsScanned, fetchReport.EligibleSelected)
+	fmt.Fprintf(stdout, "Sync: new_posts=%d existing_posts=%d reactivated=%d media_uploaded=%d media_reused=%d avatars_uploaded=%d avatars_reused=%d\n", syncResult.Inserted, syncResult.Kept, syncResult.Reactivated, postMediaReport.Uploaded, postMediaReport.Reused, avatarReport.Uploaded, avatarReport.Reused)
+	fmt.Fprintf(stdout, "Snapshot: accounts=%d posts=%d\n", len(snapshot.Accounts), len(snapshot.Posts))
 }
 
 func initDatabase() (*gorm.DB, error) {

@@ -41,6 +41,7 @@ type FetchWaiter func(context.Context, time.Duration) error
 type ResumableFetchOptions struct {
 	BatchSize       int
 	BatchDelay      time.Duration
+	FetchCount      int
 	CheckpointPath  string
 	SnapshotPath    string
 	ResetCheckpoint bool
@@ -120,7 +121,7 @@ func FetchRSSHubResumable(ctx context.Context, client SnapshotSourceClient, regi
 		emitProgress(options.Progress, "RSSHub fetch: completed=%d pending=%d batch=%d/%d", len(checkpoint.Completed), len(accounts)-len(checkpoint.Completed), batchNumber, batchCount)
 		for _, account := range pending[batchStart:batchEnd] {
 			beforeRequests, hasCounter := requestCountValue(client)
-			data, fetchErr := FetchSnapshotAccount(ctx, client, account)
+			data, fetchErr := fetchSnapshotAccountAtCount(ctx, client, account, options.FetchCount, false)
 			afterRequests, _ := requestCountValue(client)
 			runRequests += accountRequestDelta(beforeRequests, afterRequests, hasCounter, data, fetchErr)
 			if fetchErr == nil {
@@ -190,6 +191,12 @@ func validateResumableFetchOptions(options *ResumableFetchOptions) error {
 	}
 	if options.BatchDelay < 0 {
 		return errors.New("batch-delay must be non-negative")
+	}
+	if options.FetchCount == 0 {
+		options.FetchCount = DefaultRSSHubFullFetchCount
+	}
+	if options.FetchCount < 5 || options.FetchCount > DefaultRSSHubFullFetchCount {
+		return fmt.Errorf("fetch-count must be between 5 and %d", DefaultRSSHubFullFetchCount)
 	}
 	return nil
 }

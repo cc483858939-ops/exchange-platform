@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,8 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/models"
 	"Go.exchange/postmedia"
 	"Go.exchange/postmediaimage"
+
+	"gorm.io/gorm"
 )
 
 const (
@@ -206,12 +210,77 @@ func PreparePostMediaMirrors(ctx context.Context, registry SourceRegistry, snaps
 	if err := ValidateSnapshot(snapshot, registry); err != nil {
 		return nil, PostMediaMirrorReport{}, err
 	}
+	return preparePostMediaMirrorsForPosts(ctx, snapshot.Posts, downloader, store)
+}
+
+// PrepareIncrementalPostMediaMirrors limits download and object work to new
+// posts or existing mappings whose required gallery is incomplete. The
+// complete rolling snapshot is intentionally not walked here.
+func PrepareIncrementalPostMediaMirrors(ctx context.Context, db *gorm.DB, registry SourceRegistry, batch IncrementalBatch, downloader PostMediaFetcher, store AvatarObjectStore) (map[SourcePostKey][]PostMediaResolution, PostMediaMirrorReport, error) {
+	if err := ValidateIncrementalBatch(batch, registry); err != nil {
+		return nil, PostMediaMirrorReport{}, err
+	}
+	if db == nil {
+		return nil, PostMediaMirrorReport{}, errors.New("database is not initialized")
+	}
+	if err := ValidateMetadataSchema(ctx, db); err != nil {
+		return nil, PostMediaMirrorReport{}, err
+	}
+	postsWithMedia := make([]SnapshotPost, 0, len(batch.Posts))
+	sourceIDs := make([]string, 0, len(batch.Posts))
+	for _, post := range batch.Posts {
+		if len(post.Media) == 0 {
+			continue
+		}
+		postsWithMedia = append(postsWithMedia, post)
+		sourceIDs = append(sourceIDs, post.SourcePostID)
+	}
+	if len(postsWithMedia) == 0 {
+		return preparePostMediaMirrorsForPosts(ctx, nil, downloader, store)
+	}
+	var mappings []models.DevDataMirrorPost
+	if err := db.WithContext(ctx).Where("platform = ? AND source_post_id IN ?", "x", sourceIDs).Find(&mappings).Error; err != nil {
+		return nil, PostMediaMirrorReport{}, fmt.Errorf("load incremental Post media mappings: %w", err)
+	}
+	mappingsBySource := make(map[string]models.DevDataMirrorPost, len(mappings))
+	postIDs := make([]uint, 0, len(mappings))
+	for _, mapping := range mappings {
+		if mapping.LocalPostID == 0 {
+			return nil, PostMediaMirrorReport{}, fmt.Errorf("DevData mirror mapping %d has no local Post", mapping.ID)
+		}
+		mappingsBySource[mapping.SourcePostID] = mapping
+		postIDs = append(postIDs, mapping.LocalPostID)
+	}
+	mediaCounts := make(map[uint]int64, len(postIDs))
+	if len(postIDs) > 0 {
+		var rows []struct {
+			PostID uint
+			Count  int64
+		}
+		if err := db.WithContext(ctx).Table("post_media").Select("post_id, COUNT(*) AS count").Where("post_id IN ?", postIDs).Group("post_id").Scan(&rows).Error; err != nil {
+			return nil, PostMediaMirrorReport{}, fmt.Errorf("count incremental Post media: %w", err)
+		}
+		for _, row := range rows {
+			mediaCounts[row.PostID] = row.Count
+		}
+	}
+	candidates := make([]SnapshotPost, 0, len(postsWithMedia))
+	for _, post := range postsWithMedia {
+		mapping, exists := mappingsBySource[post.SourcePostID]
+		if !exists || mediaCounts[mapping.LocalPostID] != int64(len(post.Media)) {
+			candidates = append(candidates, post)
+		}
+	}
+	return preparePostMediaMirrorsForPosts(ctx, candidates, downloader, store)
+}
+
+func preparePostMediaMirrorsForPosts(ctx context.Context, posts []SnapshotPost, downloader PostMediaFetcher, store AvatarObjectStore) (map[SourcePostKey][]PostMediaResolution, PostMediaMirrorReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	resolutions := make(map[SourcePostKey][]PostMediaResolution)
 	report := PostMediaMirrorReport{}
-	for _, post := range snapshot.Posts {
+	for _, post := range posts {
 		if len(post.Media) == 0 {
 			continue
 		}

@@ -153,6 +153,32 @@ func TestRSSHubClientMapsFeedToExistingSourceContract(t *testing.T) {
 	}
 }
 
+func TestRSSHubClientUsesExplicitFetchWindowCounts(t *testing.T) {
+	paths := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		writer.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(writer, rssHubTestFeed)
+	}))
+	defer server.Close()
+	client, err := NewRSSHubClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.LookupUsersWithFetchCount(context.Background(), []string{"MKBHD"}, DefaultRSSHubIncrementalFetchCount); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetUserPosts(context.Background(), "rsshub:mkbhd", "", DefaultRSSHubIncrementalFetchCount); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || !strings.Contains(paths[0], "/count=20&") {
+		t.Fatalf("paths=%v", paths)
+	}
+	if got := rssHubUserRouteParams(DefaultRSSHubFullFetchCount); !strings.Contains(got, "count=60") {
+		t.Fatalf("full route=%q", got)
+	}
+}
+
 func TestRSSHubClientStopsLookupBatchAfterFirstError(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

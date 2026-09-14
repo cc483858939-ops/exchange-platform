@@ -20,6 +20,10 @@ type sourceRequestCounter interface {
 	RequestCount() int
 }
 
+type sourceUserLookupWithFetchCount interface {
+	LookupUsersWithFetchCount(ctx context.Context, handles []string, fetchCount int) (map[string]XUser, error)
+}
+
 func sourceRequestCount(client SnapshotSourceClient) int {
 	if counter, ok := client.(sourceRequestCounter); ok && counter.RequestCount() > 0 {
 		return counter.RequestCount()
@@ -80,41 +84,67 @@ func FetchSnapshot(ctx context.Context, client SnapshotSourceClient, registry So
 // FetchSnapshotAccount fetches and validates one configured account. It is the
 // independently checkpointable unit used by the RSSHub batch runner.
 func FetchSnapshotAccount(ctx context.Context, client SnapshotSourceClient, account SourceAccount) (FetchAccountData, error) {
+	return fetchSnapshotAccountAtCount(ctx, client, account, 100, false)
+}
+
+// FetchSnapshotAccountWithFetchCount fetches one source window for an account.
+// It is used by incremental refresh, where the returned window must remain
+// bounded so the caller can decide whether a larger fallback is necessary.
+func FetchSnapshotAccountWithFetchCount(ctx context.Context, client SnapshotSourceClient, account SourceAccount, fetchCount int) (FetchAccountData, []XPost, error) {
+	return fetchSnapshotAccountAtCountWithRaw(ctx, client, account, fetchCount, true)
+}
+
+func fetchSnapshotAccountAtCount(ctx context.Context, client SnapshotSourceClient, account SourceAccount, fetchCount int, onePage bool) (FetchAccountData, error) {
+	data, _, err := fetchSnapshotAccountAtCountWithRaw(ctx, client, account, fetchCount, onePage)
+	return data, err
+}
+
+func fetchSnapshotAccountAtCountWithRaw(ctx context.Context, client SnapshotSourceClient, account SourceAccount, fetchCount int, onePage bool) (FetchAccountData, []XPost, error) {
 	if client == nil {
-		return FetchAccountData{}, errors.New("source client is not initialized")
+		return FetchAccountData{}, nil, errors.New("source client is not initialized")
 	}
-	users, err := client.LookupUsers(ctx, []string{account.Handle})
+	users, err := lookupSourceUsers(ctx, client, []string{account.Handle}, fetchCount)
 	if err != nil {
-		return FetchAccountData{}, fmt.Errorf("lookup source account %q: %w", account.Key, err)
+		return FetchAccountData{}, nil, fmt.Errorf("lookup source account %q: %w", account.Key, err)
 	}
 	user, exists := users[strings.ToLower(account.Handle)]
 	if !exists {
-		return FetchAccountData{}, fmt.Errorf("source account %q was not returned by source", account.Key)
+		return FetchAccountData{}, nil, fmt.Errorf("source account %q was not returned by source", account.Key)
 	}
-	data, err := fetchSnapshotAccountWithUser(ctx, client, account, user)
+	data, rawPosts, err := fetchSnapshotAccountWithUserAtCount(ctx, client, account, user, fetchCount, onePage)
 	if err != nil {
-		return FetchAccountData{}, err
+		return FetchAccountData{}, nil, err
 	}
 	data.Report.APIRequests++
-	return data, nil
+	return data, rawPosts, nil
 }
 
 func fetchSnapshotAccountWithUser(ctx context.Context, client SnapshotSourceClient, account SourceAccount, user XUser) (FetchAccountData, error) {
+	data, _, err := fetchSnapshotAccountWithUserAtCount(ctx, client, account, user, 100, false)
+	return data, err
+}
+
+func fetchSnapshotAccountWithUserAtCount(ctx context.Context, client SnapshotSourceClient, account SourceAccount, user XUser, fetchCount int, onePage bool) (FetchAccountData, []XPost, error) {
 	snapshotAccount, err := validateSourceUser(account, user)
 	if err != nil {
-		return FetchAccountData{}, err
+		return FetchAccountData{}, nil, err
+	}
+	if fetchCount < 1 {
+		return FetchAccountData{}, nil, errors.New("source fetch count must be positive")
 	}
 	accountReport := FetchAccountReport{RegistryKey: account.Key}
 	selected := make([]SnapshotPost, 0, account.MaxPosts)
+	rawPosts := make([]XPost, 0, fetchCount)
 	resolvedAccount := account
 	resolvedAccount.Handle = snapshotAccount.Handle
 	nextToken := ""
 	for accountReport.SourcePostsScanned < DefaultMaxScanned && len(selected) < account.MaxPosts {
-		page, pageErr := client.GetUserPosts(ctx, user.ID, nextToken, 100)
+		page, pageErr := client.GetUserPosts(ctx, user.ID, nextToken, fetchCount)
 		accountReport.APIRequests++
 		if pageErr != nil {
-			return FetchAccountData{}, fmt.Errorf("fetch source Posts for %q: %w", account.Key, pageErr)
+			return FetchAccountData{}, nil, fmt.Errorf("fetch source Posts for %q: %w", account.Key, pageErr)
 		}
+		rawPosts = append(rawPosts, page.Posts...)
 		for _, post := range page.Posts {
 			if accountReport.SourcePostsScanned >= DefaultMaxScanned {
 				break
@@ -132,13 +162,23 @@ func fetchSnapshotAccountWithUser(ctx context.Context, client SnapshotSourceClie
 		if len(selected) >= account.MaxPosts || strings.TrimSpace(page.NextToken) == "" {
 			break
 		}
+		if onePage {
+			break
+		}
 		if page.NextToken == nextToken {
-			return FetchAccountData{}, fmt.Errorf("source pagination token did not advance for %q", account.Key)
+			return FetchAccountData{}, nil, fmt.Errorf("source pagination token did not advance for %q", account.Key)
 		}
 		nextToken = page.NextToken
 	}
 	accountReport.EligibleSelected = len(selected)
-	return FetchAccountData{Account: snapshotAccount, Posts: selected, Report: accountReport}, nil
+	return FetchAccountData{Account: snapshotAccount, Posts: selected, Report: accountReport}, rawPosts, nil
+}
+
+func lookupSourceUsers(ctx context.Context, client SnapshotSourceClient, handles []string, fetchCount int) (map[string]XUser, error) {
+	if countAware, ok := client.(sourceUserLookupWithFetchCount); ok {
+		return countAware.LookupUsersWithFetchCount(ctx, handles, fetchCount)
+	}
+	return client.LookupUsers(ctx, handles)
 }
 
 func validateSourceUser(account SourceAccount, user XUser) (SnapshotAccount, error) {

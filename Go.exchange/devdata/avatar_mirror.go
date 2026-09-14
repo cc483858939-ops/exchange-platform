@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -378,18 +379,37 @@ func PrepareAvatarMirrors(ctx context.Context, registry SourceRegistry, snapshot
 	if err := ValidateSnapshot(snapshot, registry); err != nil {
 		return nil, AvatarMirrorReport{}, err
 	}
+	return prepareAvatarMirrorsForAccounts(ctx, registry, snapshot, registry.EnabledAccounts(), downloader, store)
+}
+
+// PrepareAvatarMirrorsForKeys is the scoped counterpart used by incremental
+// refresh. It never walks or downloads avatars for non-selected accounts.
+func PrepareAvatarMirrorsForKeys(ctx context.Context, registry SourceRegistry, snapshot Snapshot, keys []string, downloader AvatarFetcher, store AvatarObjectStore) (map[string]AvatarResolution, AvatarMirrorReport, error) {
+	if err := ValidateRegistry(registry); err != nil {
+		return nil, AvatarMirrorReport{}, err
+	}
+	selected, err := sourceAccountsForKeys(registry, keys)
+	if err != nil {
+		return nil, AvatarMirrorReport{}, err
+	}
+	return prepareAvatarMirrorsForAccounts(ctx, registry, snapshot, selected, downloader, store)
+}
+
+func prepareAvatarMirrorsForAccounts(ctx context.Context, registry SourceRegistry, snapshot Snapshot, configuredAccounts []SourceAccount, downloader AvatarFetcher, store AvatarObjectStore) (map[string]AvatarResolution, AvatarMirrorReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	accounts := registry.EnabledAccounts()
-	report := AvatarMirrorReport{Attempted: len(accounts)}
-	resolutions := make(map[string]AvatarResolution, len(accounts))
+	report := AvatarMirrorReport{Attempted: len(configuredAccounts)}
+	resolutions := make(map[string]AvatarResolution, len(configuredAccounts))
 	accountsByKey := make(map[string]SnapshotAccount, len(snapshot.Accounts))
 	for _, account := range snapshot.Accounts {
 		accountsByKey[account.RegistryKey] = account
 	}
-	for _, configured := range accounts {
-		source := accountsByKey[configured.Key]
+	for _, configured := range configuredAccounts {
+		source, exists := accountsByKey[configured.Key]
+		if !exists {
+			return nil, AvatarMirrorReport{}, fmt.Errorf("snapshot is missing avatar account %q", configured.Key)
+		}
 		if downloader == nil || store == nil || strings.TrimSpace(source.ProfileImageURL) == "" {
 			report.Failed++
 			continue
@@ -432,6 +452,28 @@ func PrepareAvatarMirrors(ctx context.Context, registry SourceRegistry, snapshot
 		}
 	}
 	return resolutions, report, nil
+}
+
+func sourceAccountsForKeys(registry SourceRegistry, keys []string) ([]SourceAccount, error) {
+	seen := make(map[string]struct{}, len(keys))
+	selected := make([]SourceAccount, 0, len(keys))
+	for _, rawKey := range keys {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			return nil, errors.New("selected account key is required")
+		}
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("selected account %q is duplicated", key)
+		}
+		seen[key] = struct{}{}
+		account, exists := registry.AccountByKey(key)
+		if !exists || !account.Enabled {
+			return nil, fmt.Errorf("selected account %q is unknown or disabled", key)
+		}
+		selected = append(selected, account)
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i].Key < selected[j].Key })
+	return selected, nil
 }
 
 type minioAvatarObjectStore struct {

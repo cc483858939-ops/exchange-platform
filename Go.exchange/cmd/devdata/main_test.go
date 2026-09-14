@@ -95,13 +95,46 @@ func TestRunNoArgsUsageOmitsPreflight(t *testing.T) {
 		t.Fatal("no-argument invocation unexpectedly succeeded")
 	}
 	message := err.Error()
-	for _, command := range []string{"fetch", "refresh", "rebuild", "verify", "verify-avatars"} {
+	for _, command := range []string{"fetch", "refresh", "refresh-incremental", "rebuild", "verify", "verify-avatars"} {
 		if !strings.Contains(message, command) {
 			t.Fatalf("usage missing %q: %s", command, message)
 		}
 	}
 	if strings.Contains(message, "preflight") {
 		t.Fatalf("usage still advertises removed preflight command: %s", message)
+	}
+}
+
+func TestParseIncrementalCommandFlagsEnvironmentAndCLIPrecedence(t *testing.T) {
+	t.Setenv("DEVDATA_INCREMENTAL_FETCH_COUNT", "37")
+	options, err := parseCommandFlags("refresh-incremental", nil, io.Discard, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.fetchCount != 37 || options.shard != "auto" {
+		t.Fatalf("options=%#v", options)
+	}
+	options, err = parseCommandFlags("refresh-incremental", []string{"--fetch-count=60", "--shard=2"}, io.Discard, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.fetchCount != 60 || options.shard != "2" {
+		t.Fatalf("CLI options=%#v", options)
+	}
+}
+
+func TestParseIncrementalCommandFlagsRejectsUnsafeOrInvalidOptions(t *testing.T) {
+	t.Setenv("DEVDATA_INCREMENTAL_FETCH_COUNT", "20")
+	for _, args := range [][]string{
+		{"--allow-destructive"},
+		{"--reset-checkpoint"},
+		{"--fetch-count=4"},
+		{"--fetch-count=61"},
+		{"--shard=4"},
+	} {
+		if _, err := parseCommandFlags("refresh-incremental", args, io.Discard, false); err == nil {
+			t.Fatalf("args=%v unexpectedly accepted", args)
+		}
 	}
 }
 

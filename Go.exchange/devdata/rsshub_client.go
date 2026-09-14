@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	DefaultRSSHubBaseURL        = "http://127.0.0.1:1200"
-	defaultRSSHubRequestTimeout = 60 * time.Second
-	maxRSSHubResponseBytes      = 16 << 20
-	rssHubSourceUserPrefix      = "rsshub:"
-	rssHubUserRouteParams       = "/count=60&includeReplies=false&includeRts=false&strict=true"
-	rssHubAttributionSuffix     = " - Powered by RSSHub"
+	DefaultRSSHubBaseURL               = "http://127.0.0.1:1200"
+	DefaultRSSHubFullFetchCount        = 60
+	DefaultRSSHubIncrementalFetchCount = 20
+	defaultRSSHubRequestTimeout        = 60 * time.Second
+	maxRSSHubResponseBytes             = 16 << 20
+	rssHubSourceUserPrefix             = "rsshub:"
+	rssHubAttributionSuffix            = " - Powered by RSSHub"
 )
 
 var (
@@ -62,8 +63,9 @@ func (e *RSSHubHTTPError) Error() string {
 }
 
 type rssHubFeed struct {
-	user  XUser
-	posts []XPost
+	user       XUser
+	posts      []XPost
+	fetchCount int
 }
 
 type rssHubDocument struct {
@@ -150,6 +152,18 @@ func (c *RSSHubClient) RequestCount() int {
 }
 
 func (c *RSSHubClient) LookupUsers(ctx context.Context, handles []string) (map[string]XUser, error) {
+	return c.lookupUsersWithFetchCount(ctx, handles, DefaultRSSHubFullFetchCount)
+}
+
+// LookupUsersWithFetchCount is the count-aware lookup used by incremental
+// fetches. Keeping the count on the cached feed prevents the profile lookup
+// from silently populating a full-size feed before GetUserPosts applies the
+// incremental window.
+func (c *RSSHubClient) LookupUsersWithFetchCount(ctx context.Context, handles []string, fetchCount int) (map[string]XUser, error) {
+	return c.lookupUsersWithFetchCount(ctx, handles, fetchCount)
+}
+
+func (c *RSSHubClient) lookupUsersWithFetchCount(ctx context.Context, handles []string, fetchCount int) (map[string]XUser, error) {
 	if c == nil || c.httpClient == nil || c.baseURL == nil {
 		return nil, errors.New("RSSHub client is not initialized")
 	}
@@ -162,7 +176,7 @@ func (c *RSSHubClient) LookupUsers(ctx context.Context, handles []string) (map[s
 		if !xHandlePattern.MatchString(handle) {
 			return users, fmt.Errorf("invalid X handle %q", handle)
 		}
-		feed, err := c.fetchFeed(ctx, handle, true)
+		feed, err := c.fetchFeed(ctx, handle, true, fetchCount)
 		if err != nil {
 			return users, fmt.Errorf("fetch RSSHub feed for %q: %w", handle, err)
 		}
@@ -182,7 +196,8 @@ func (c *RSSHubClient) GetUserPosts(ctx context.Context, sourceUserID, paginatio
 	if !ok {
 		return XTimelinePage{}, errors.New("invalid RSSHub source user ID")
 	}
-	feed, err := c.fetchFeed(ctx, handle, false)
+	fetchCount := normalizeRSSHubFetchCount(maxResults)
+	feed, err := c.fetchFeed(ctx, handle, false, fetchCount)
 	if err != nil {
 		return XTimelinePage{}, fmt.Errorf("fetch RSSHub feed for %q: %w", handle, err)
 	}
@@ -193,13 +208,14 @@ func (c *RSSHubClient) GetUserPosts(ctx context.Context, sourceUserID, paginatio
 	return XTimelinePage{Posts: posts, ResultCount: len(posts)}, nil
 }
 
-func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefresh bool) (rssHubFeed, error) {
+func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefresh bool, fetchCount int) (rssHubFeed, error) {
 	key := strings.ToLower(strings.TrimSpace(handle))
+	fetchCount = normalizeRSSHubFetchCount(fetchCount)
 	if !forceRefresh {
 		c.mu.Lock()
 		feed, ok := c.feeds[key]
 		c.mu.Unlock()
-		if ok {
+		if ok && feed.fetchCount == fetchCount {
 			return feed, nil
 		}
 	}
@@ -207,7 +223,7 @@ func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefres
 		ctx = context.Background()
 	}
 	endpoint := *c.baseURL
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/twitter/user/" + url.PathEscape(handle) + rssHubUserRouteParams
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/twitter/user/" + url.PathEscape(handle) + rssHubUserRouteParams(fetchCount)
 	endpoint.RawQuery = ""
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -239,10 +255,22 @@ func (c *RSSHubClient) fetchFeed(ctx context.Context, handle string, forceRefres
 	if err != nil {
 		return rssHubFeed{}, err
 	}
+	feed.fetchCount = fetchCount
 	c.mu.Lock()
 	c.feeds[key] = feed
 	c.mu.Unlock()
 	return feed, nil
+}
+
+func normalizeRSSHubFetchCount(fetchCount int) int {
+	if fetchCount < 5 || fetchCount > DefaultRSSHubFullFetchCount {
+		return DefaultRSSHubFullFetchCount
+	}
+	return fetchCount
+}
+
+func rssHubUserRouteParams(fetchCount int) string {
+	return fmt.Sprintf("/count=%d&includeReplies=false&includeRts=false&strict=true", normalizeRSSHubFetchCount(fetchCount))
 }
 
 func parseRetryAfter(raw string, now time.Time) time.Duration {
