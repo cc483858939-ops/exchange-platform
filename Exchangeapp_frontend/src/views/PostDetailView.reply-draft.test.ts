@@ -157,6 +157,15 @@ const warmPost = (id = 42): FeedPost => ({
   repostStatus: 'ready',
 });
 
+const viewerMedia = [{
+  type: 'image' as const,
+  url: '/post.png',
+  large_url: '/post-large.png',
+  width: 1200,
+  height: 800,
+  position: 0,
+}];
+
 const reply = (id: number, postID = 42): Post => ({
   id,
   created_at: '2026-08-27T13:42:00.000Z',
@@ -193,6 +202,29 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
+const observerRecords: Array<{ callback: IntersectionObserverCallback; disconnected: boolean }> = [];
+
+class TestIntersectionObserver {
+  private readonly record: { callback: IntersectionObserverCallback; disconnected: boolean };
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.record = { callback, disconnected: false };
+    observerRecords.push(this.record);
+  }
+
+  observe() {}
+
+  unobserve() {}
+
+  disconnect() {
+    this.record.disconnected = true;
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+}
+
 let pinia: Pinia;
 let scrollIntoViewMock: ReturnType<typeof vi.fn>;
 
@@ -222,7 +254,10 @@ const mountDetail = () => mount(PostDetailView, {
         emits: ['close'],
         template: '<div class="test-media-viewer" :data-desktop-context="String(desktopContext)"><slot name="context" /><button class="test-close-media-viewer" type="button" @click="$emit(\'close\')">Close</button></div>',
       },
-      ReplyList: { template: '<div class="test-comments" />' },
+      ReplyItem: {
+        props: ['reply'],
+        template: '<article class="test-reply-item" :data-reply-id="String(reply.id)">{{ reply.content }}</article>',
+      },
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
@@ -265,7 +300,7 @@ describe('PostDetailView persistent reply drafts', () => {
     mocks.consumeHandoff.mockReturnValue(null);
     mocks.getPostById.mockImplementation((id: string) => Promise.resolve(post(Number(id))));
     mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
-    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getPostReplies.mockReset().mockResolvedValue({ items: [], next_cursor: null });
     mocks.createPostReply.mockReset();
     mocks.deletePost.mockResolvedValue(undefined);
     mocks.consumeAttribution.mockReturnValue(null);
@@ -276,6 +311,8 @@ describe('PostDetailView persistent reply drafts', () => {
     wrapper?.unmount();
     wrapper = null;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    observerRecords.splice(0);
   });
 
   it('restores a draft after leaving and returning to the same post', async () => {
@@ -527,16 +564,7 @@ describe('PostDetailView persistent reply drafts', () => {
   });
 
   it('reuses the draft and focuses the context composer from the desktop media rail', async () => {
-    mocks.getPostById.mockResolvedValueOnce(post(42, {
-      media: [{
-        type: 'image',
-        url: '/post.png',
-        large_url: '/post-large.png',
-        width: 1200,
-        height: 800,
-        position: 0,
-      }],
-    }));
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
     wrapper = mountDetail();
     await flushPromises();
 
@@ -553,5 +581,132 @@ describe('PostDetailView persistent reply drafts', () => {
     await nextTick();
 
     expect(document.activeElement).toBe(wrapper.findAll('.reply-composer__textarea')[1].element);
+  });
+
+  it('synchronizes edits from the overlay composer back to the underlying draft', async () => {
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.reply-composer__textarea').setValue('draft A');
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await nextTick();
+
+    const textareas = wrapper.findAll('.reply-composer__textarea');
+    await textareas[1].setValue('draft from viewer');
+
+    expect(draftStore().getDraft(42)).toBe('draft from viewer');
+
+    await wrapper.get('.test-close-media-viewer').trigger('click');
+    await nextTick();
+
+    expect(textareaValue(wrapper)).toBe('draft from viewer');
+  });
+
+  it('submits an overlay reply once and updates the shared replies and count', async () => {
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
+    mocks.createPostReply.mockResolvedValueOnce(reply(101));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await nextTick();
+    await wrapper.findAll('.post-media-context .reply-composer__textarea')[0].setValue('  media reply  ');
+    await wrapper.get('.post-media-context .reply-composer').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
+    expect(mocks.createPostReply).toHaveBeenCalledWith('42', 'media reply');
+    expect(mocks.externalReplyCount).toHaveBeenCalledTimes(1);
+    expect(mocks.externalReplyCount).toHaveBeenCalledWith({ postId: 42, replyCount: 1 });
+    expect(draftStore().getDraft(42)).toBe('');
+    expect(wrapper.get('.post-media-context .post-detail__reply').text()).toBe('1');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
+    expect(wrapper.findAll('.test-reply-item')).toHaveLength(2);
+    expect(wrapper.findAll('.test-reply-item').every(item => item.attributes('data-reply-id') === '101'))
+      .toBe(true);
+    expect(wrapper.findAll('.reply-composer__textarea').every(textarea => (
+      (textarea.element as HTMLTextAreaElement).value === ''
+    ))).toBe(true);
+    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
+  });
+
+  it('blocks a second overlay submit while the first reply request is pending', async () => {
+    const request = deferred<Post>();
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
+    mocks.createPostReply.mockReturnValueOnce(request.promise);
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await nextTick();
+    const overlayForm = wrapper.get('.post-media-context .reply-composer');
+    await wrapper.get('.post-media-context .reply-composer__textarea').setValue('pending reply');
+    await overlayForm.trigger('submit');
+    await nextTick();
+    await overlayForm.trigger('submit');
+
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
+
+    request.resolve(reply(102));
+    await flushPromises();
+  });
+
+  it('preserves an overlay draft on reply failure and retries through the same path', async () => {
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
+    mocks.createPostReply
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(reply(103));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await nextTick();
+    await wrapper.get('.post-media-context .reply-composer__textarea').setValue('retry from viewer');
+    await wrapper.get('.post-media-context .reply-composer').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
+    expect(draftStore().getDraft(42)).toBe('retry from viewer');
+    expect(wrapper.get('.post-media-context .reply-error').text())
+      .toBe('Reply failed. Please try again.');
+    expect(wrapper.get('.post-media-context .post-detail__reply').text()).toBe('0');
+    expect(wrapper.find('.test-reply-item').exists()).toBe(false);
+    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
+
+    await wrapper.get('.post-media-context .reply-composer').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(2);
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'retry from viewer');
+    expect(draftStore().getDraft(42)).toBe('');
+    expect(wrapper.get('.post-media-context .post-detail__reply').text()).toBe('1');
+    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
+  });
+
+  it('routes overlay manual Load more through PostDetail without a second observer', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
+    mocks.getPostReplies
+      .mockReset()
+      .mockResolvedValueOnce({ items: [], next_cursor: 'next-page' })
+      .mockResolvedValueOnce({ items: [reply(202)], next_cursor: null });
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await nextTick();
+
+    expect(observerRecords).toHaveLength(1);
+    await wrapper.get('.post-media-context .reply-list__load-more').trigger('click');
+    await flushPromises();
+
+    expect(mocks.getPostReplies).toHaveBeenCalledTimes(2);
+    expect(mocks.getPostReplies).toHaveBeenNthCalledWith(2, '42', {
+      limit: 20,
+      cursor: 'next-page',
+    });
+    expect(observerRecords).toHaveLength(1);
+    expect(wrapper.findAll('.test-reply-item')).toHaveLength(2);
   });
 });

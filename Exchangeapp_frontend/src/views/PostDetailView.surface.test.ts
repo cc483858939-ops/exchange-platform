@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   likePost: vi.fn(),
   unlikePost: vi.fn(),
+  repostPost: vi.fn(),
+  undoRepostPost: vi.fn(),
   getPostReplies: vi.fn(),
   createPostReply: vi.fn(),
   deletePostReply: vi.fn(),
@@ -44,6 +46,7 @@ const mocks = vi.hoisted(() => ({
     enqueue: vi.fn(),
   },
   composerFocus: vi.fn(),
+  markOwnProfileTimelineStale: vi.fn(),
 }));
 
 vi.mock('vue-router', () => ({
@@ -83,8 +86,8 @@ vi.mock('../services/likeService', () => ({
 
 vi.mock('../services/repostService', () => ({
   getPostRepostState: mocks.getPostRepostState,
-  repostPost: vi.fn(),
-  undoRepostPost: vi.fn(),
+  repostPost: mocks.repostPost,
+  undoRepostPost: mocks.undoRepostPost,
 }));
 
 vi.mock('../services/replyService', () => ({
@@ -109,6 +112,7 @@ vi.mock('../services/postViewTelemetry', () => ({
 vi.mock('../store/sessionSync', () => ({
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
+  markOwnProfileTimelineStale: mocks.markOwnProfileTimelineStale,
   syncExternalPostRemoval: vi.fn(),
   syncExternalReplyCount: mocks.syncExternalReplyCount,
 }));
@@ -175,6 +179,15 @@ const reply = (overrides: Partial<Post> = {}): Post => canonicalPost({
   ...overrides,
 });
 
+const viewerMedia = [{
+  type: 'image' as const,
+  url: '/viewer.png',
+  large_url: '/viewer-large.png',
+  width: 1200,
+  height: 800,
+  position: 0,
+}];
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -201,7 +214,12 @@ const mountDetail = () => mount(PostDetailView, {
       LikeAction: {
         props: ['liked', 'count', 'disabled', 'loading', 'pending', 'ariaLabel', 'variant'],
         emits: ['toggle'],
-        template: '<button class="test-like-action" type="button">{{ count }}</button>',
+        template: '<button class="test-like-action" type="button" :disabled="disabled || loading || pending" :data-liked="String(liked)" :data-count="String(count)" :aria-label="ariaLabel" @click="$emit(\'toggle\')">{{ count }}</button>',
+      },
+      RepostAction: {
+        props: ['reposted', 'count', 'disabled', 'loading', 'pending', 'ariaLabel', 'variant'],
+        emits: ['toggle'],
+        template: '<button class="test-repost-action" type="button" :disabled="disabled || loading || pending" :data-reposted="String(reposted)" :data-count="String(count)" :aria-label="ariaLabel" @click="$emit(\'toggle\')">{{ count }}</button>',
       },
       ReplyComposer: {
         methods: {
@@ -260,6 +278,12 @@ describe('PostDetailView post-first surface', () => {
     mocks.getPostById.mockResolvedValue(canonicalPost());
     mocks.translatePost.mockReset();
     mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 11 });
+    mocks.likePost.mockReset();
+    mocks.unlikePost.mockReset();
+    mocks.getPostRepostState.mockReset().mockResolvedValue({ reposts: 0, reposted: false });
+    mocks.repostPost.mockReset();
+    mocks.undoRepostPost.mockReset();
+    mocks.markOwnProfileTimelineStale.mockReset();
     mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.composerFocus.mockResolvedValue(true);
@@ -584,6 +608,131 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.get('.test-media-viewer').attributes('data-index')).toBe('1');
     expect(wrapper.get('.test-media-viewer').attributes('data-media'))
       .toBe('/reply-1.png,/reply-2.png');
+  });
+
+  it('keeps the underlying PostDetail mounted without scrolling when the viewer opens and closes', async () => {
+    const scrollToMock = vi.fn();
+    const originalScrollTo = window.scrollTo;
+    Object.defineProperty(window, 'scrollTo', {
+      configurable: true,
+      value: scrollToMock,
+    });
+
+    try {
+      mocks.getPostById.mockResolvedValueOnce(canonicalPost({ media: viewerMedia }));
+      wrapper = mountDetail();
+      await flushPromises();
+
+      expect(wrapper.find('.post-detail').exists()).toBe(true);
+      await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+      expect(wrapper.find('.post-detail').exists()).toBe(true);
+      expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
+
+      await wrapper.get('.test-close-media-viewer').trigger('click');
+      expect(wrapper.find('.post-detail').exists()).toBe(true);
+      expect(wrapper.find('.test-media-viewer').exists()).toBe(false);
+      expect(scrollToMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, 'scrollTo', {
+        configurable: true,
+        value: originalScrollTo,
+      });
+    }
+  });
+
+  it('routes overlay Like through the shared PostDetail mutation state', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ media: viewerMedia }));
+    mocks.likePost.mockResolvedValueOnce({ liked: true, likes: 12 });
+
+    wrapper = mountDetail();
+    await flushPromises();
+    await nextTick();
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+
+    await wrapper.get('.post-media-context .test-like-action').trigger('click');
+    await flushPromises();
+
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
+    expect(mocks.likePost).toHaveBeenCalledWith('42');
+    expect(wrapper.get('.post-media-context .test-like-action').attributes('data-liked'))
+      .toBe('true');
+    expect(wrapper.get('.post-media-context .test-like-action').text()).toBe('12');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .test-like-action').attributes('data-liked'))
+      .toBe('true');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .test-like-action').text())
+      .toBe('12');
+    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
+  });
+
+  it('keeps shared Like state and the Viewer open when the overlay mutation fails', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ media: viewerMedia }));
+    mocks.likePost.mockRejectedValueOnce(new Error('offline'));
+
+    wrapper = mountDetail();
+    await flushPromises();
+    await nextTick();
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+
+    await wrapper.get('.post-media-context .test-like-action').trigger('click');
+    await flushPromises();
+
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('.post-media-context .test-like-action').attributes('data-liked'))
+      .toBe('false');
+    expect(wrapper.get('.post-media-context .test-like-action').text()).toBe('11');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .test-like-action').attributes('data-liked'))
+      .toBe('false');
+    expect(wrapper.get('.post-media-context .detail-inline-error').text())
+      .toBe('Like failed. Please try again.');
+    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
+  });
+
+  it('routes overlay Repost through the shared PostDetail mutation state', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ media: viewerMedia }));
+    mocks.repostPost.mockResolvedValueOnce({ reposted: true, reposts: 1 });
+
+    wrapper = mountDetail();
+    await flushPromises();
+    await nextTick();
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+
+    await wrapper.get('.post-media-context .test-repost-action').trigger('click');
+    await flushPromises();
+    await nextTick();
+
+    expect(mocks.repostPost).toHaveBeenCalledTimes(1);
+    expect(mocks.repostPost).toHaveBeenCalledWith('42');
+    expect(wrapper.get('.post-media-context .test-repost-action').attributes('data-reposted'))
+      .toBe('true');
+    expect(wrapper.get('.post-media-context .test-repost-action').text()).toBe('1');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .test-repost-action').attributes('data-reposted'))
+      .toBe('true');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .test-repost-action').text())
+      .toBe('1');
+    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
+  });
+
+  it('keeps shared Repost state and the Viewer open when the overlay mutation fails', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ media: viewerMedia }));
+    mocks.repostPost.mockRejectedValueOnce(new Error('offline'));
+
+    wrapper = mountDetail();
+    await flushPromises();
+    await nextTick();
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+
+    await wrapper.get('.post-media-context .test-repost-action').trigger('click');
+    await flushPromises();
+
+    expect(mocks.repostPost).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('.post-media-context .test-repost-action').attributes('data-reposted'))
+      .toBe('false');
+    expect(wrapper.get('.post-media-context .test-repost-action').text()).toBe('0');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .test-repost-action').attributes('data-reposted'))
+      .toBe('false');
+    expect(wrapper.get('.post-media-context .detail-inline-error').text())
+      .toBe('Could not update repost. Please try again.');
+    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
   });
 
   it('opens confirmation without deleting and lets Cancel leave the reply unchanged', async () => {
