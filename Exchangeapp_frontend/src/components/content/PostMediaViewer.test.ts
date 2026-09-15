@@ -143,8 +143,41 @@ describe('PostMediaViewer', () => {
 
     expect(wrapper.get('.post-media-viewer__image').classes())
       .toContain('post-media-viewer__image');
+    expect(wrapper.get('.post-media-viewer__image').attributes('draggable')).toBe('false');
     expect(wrapper.get('.post-media-viewer__image-frame').attributes('aria-label'))
       .toBe('Post image');
+  });
+
+  it('closes when the image frame itself is clicked', async () => {
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('.post-media-viewer__image-frame').trigger('click');
+
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  it('closes when the stage itself is clicked', async () => {
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('.post-media-viewer__stage').trigger('click');
+
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  it('closes when the outer surface itself is clicked', async () => {
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('.post-media-viewer__surface').trigger('click');
+
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  it('does not close when the image itself is clicked', async () => {
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('.post-media-viewer__image').trigger('click');
+
+    expect(wrapper.emitted('close')).toBeUndefined();
   });
 
   it('moves with bounded previous and next controls', async () => {
@@ -157,6 +190,7 @@ describe('PostMediaViewer', () => {
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
     await wrapper.get('[aria-label="Next image"]').trigger('click');
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/2-medium.jpg');
+    expect(wrapper.emitted('close')).toBeUndefined();
   });
 
   it('disables navigation at the first and last image', () => {
@@ -255,22 +289,74 @@ describe('PostMediaViewer', () => {
   it('keeps Medium when Large decode fails', async () => {
     setDecodeMode('/media/0-large.jpg', 'reject');
     const wrapper = mountViewer(1);
+    const frame = wrapper.get('.post-media-viewer__image-frame').element;
 
     flushAnimationFrame();
     flushAnimationFrame();
     await nextTick();
     await Promise.resolve();
 
-    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/0-medium.jpg');
+    const image = wrapper.get('.post-media-viewer__image');
+    expect(image.attributes('src')).toBe('/media/0-medium.jpg');
+    expect(image.element.parentElement).toBe(frame);
   });
 
   it('shows the existing placeholder only when Medium fails', async () => {
     const wrapper = mountViewer(1);
 
     await wrapper.get('img').trigger('error');
+    await wrapper.get('[role="img"]').trigger('click');
 
     expect(wrapper.find('img').exists()).toBe(false);
     expect(wrapper.get('[role="img"]').text()).toContain('Image unavailable');
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('does not close when the counter is clicked', async () => {
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('.post-media-viewer__counter').trigger('click');
+
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('navigates on horizontal swipe without closing after the browser click', async () => {
+    const wrapper = mountViewer(2);
+    const stage = wrapper.get('.post-media-viewer__stage');
+
+    await stage.trigger('pointerdown', { clientX: 200, clientY: 100 });
+    await stage.trigger('pointerup', { clientX: 120, clientY: 105 });
+    await stage.trigger('click');
+
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('suppresses backdrop close for a small drag', async () => {
+    const wrapper = mountViewer(2);
+    const stage = wrapper.get('.post-media-viewer__stage');
+
+    await stage.trigger('pointerdown', { clientX: 100, clientY: 100 });
+    await stage.trigger('pointerup', { clientX: 115, clientY: 103 });
+    await stage.trigger('click');
+
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/0-medium.jpg');
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('allows an independent backdrop click after a previous drag', async () => {
+    const wrapper = mountViewer(1);
+    const stage = wrapper.get('.post-media-viewer__stage');
+    const surface = wrapper.get('.post-media-viewer__surface');
+
+    await stage.trigger('pointerdown', { clientX: 100, clientY: 100 });
+    await stage.trigger('pointerup', { clientX: 115, clientY: 103 });
+    await stage.trigger('click');
+    await surface.trigger('pointerdown', { clientX: 20, clientY: 20 });
+    await surface.trigger('pointerup', { clientX: 20, clientY: 20 });
+    await surface.trigger('click');
+
+    expect(wrapper.emitted('close')).toHaveLength(1);
   });
 
   it('shows the next Medium immediately and blocks an old Large race', async () => {

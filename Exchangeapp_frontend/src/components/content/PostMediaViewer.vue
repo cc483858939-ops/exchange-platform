@@ -11,6 +11,7 @@
       @pointerdown="handlePointerDown"
       @pointerup="handlePointerUp"
       @pointercancel="resetPointer"
+      @click="handleViewerClick"
     >
       <button
         ref="closeButtonRef"
@@ -22,7 +23,10 @@
         <AppIcon name="close" :size="20" />
       </button>
 
-      <div class="post-media-viewer__stage">
+      <div
+        ref="stageRef"
+        class="post-media-viewer__stage"
+      >
         <button
           v-if="hasMultipleMedia"
           class="post-media-viewer__nav post-media-viewer__nav--previous"
@@ -34,7 +38,11 @@
           <AppIcon name="arrow-left" :size="22" />
         </button>
 
-        <div class="post-media-viewer__image-frame" :aria-label="imagePositionLabel">
+        <div
+          ref="imageFrameRef"
+          class="post-media-viewer__image-frame"
+          :aria-label="imagePositionLabel"
+        >
           <img
             v-if="activeMedia && !failedMediumURLs.has(activeMedia.url)"
             class="post-media-viewer__image"
@@ -42,6 +50,7 @@
             :alt="imageAlt"
             loading="eager"
             decoding="async"
+            draggable="false"
             @error="handleImageError"
           />
           <div
@@ -94,6 +103,8 @@ const emit = defineEmits<{
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const closeButtonRef = ref<HTMLButtonElement | null>(null);
+const stageRef = ref<HTMLElement | null>(null);
+const imageFrameRef = ref<HTMLElement | null>(null);
 const visibleMedia = computed(() => props.media.slice(0, 4));
 
 const clampIndex = (index: number, length: number) => {
@@ -121,6 +132,7 @@ const imagePositionLabel = computed(() => (
     : 'Post image'
 ));
 let closeRequested = false;
+let suppressNextViewerClick = false;
 
 const requestClose = () => {
   if (closeRequested) {
@@ -236,8 +248,10 @@ const handleKeydown = (event: KeyboardEvent) => {
 };
 
 let pointerStart: { x: number; y: number } | null = null;
+const VIEWER_CLICK_DRAG_THRESHOLD_PX = 8;
 
 const handlePointerDown = (event: PointerEvent) => {
+  suppressNextViewerClick = false;
   pointerStart = { x: event.clientX, y: event.clientY };
 };
 
@@ -249,12 +263,18 @@ const handlePointerUp = (event: PointerEvent) => {
   const start = pointerStart;
   resetPointer();
 
-  if (!start || !hasMultipleMedia.value) {
+  if (!start) {
     return;
   }
 
   const deltaX = event.clientX - start.x;
   const deltaY = event.clientY - start.y;
+  if (Math.hypot(deltaX, deltaY) > VIEWER_CLICK_DRAG_THRESHOLD_PX) {
+    suppressNextViewerClick = true;
+  }
+  if (!hasMultipleMedia.value) {
+    return;
+  }
   if (Math.abs(deltaX) < 50 || Math.abs(deltaX) <= Math.abs(deltaY)) {
     return;
   }
@@ -263,6 +283,26 @@ const handlePointerUp = (event: PointerEvent) => {
     showNext();
   } else {
     showPrevious();
+  }
+};
+
+const handleViewerClick = (event: MouseEvent) => {
+  if (closeRequested) {
+    return;
+  }
+
+  if (suppressNextViewerClick) {
+    suppressNextViewerClick = false;
+    return;
+  }
+
+  const target = event.target;
+  if (
+    target === event.currentTarget
+    || target === stageRef.value
+    || target === imageFrameRef.value
+  ) {
+    requestClose();
   }
 };
 
@@ -355,6 +395,8 @@ onBeforeUnmount(() => {
   color: var(--color-surface);
   overflow: hidden;
   overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .post-media-viewer::backdrop {
