@@ -512,6 +512,81 @@ describe('home timeline session store', () => {
     expect(mocks.feedStore!.markPostDeleted).toHaveBeenCalledWith(4, 7);
   });
 
+  it('optimistically toggles Like and settles a successful mutation', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    post.likeCount = 8;
+    store.following.items = [post];
+    mocks.likePost.mockResolvedValue({ likes: 9, liked: true });
+
+    const request = store.toggleLike(4);
+    expect(post.likeCount).toBe(9);
+    expect(post.liked).toBe(true);
+    expect(store.likePendingPostIds.has(4)).toBe(true);
+    expect(await request).toBe('succeeded');
+    expect(post.likeCount).toBe(9);
+    expect(post.liked).toBe(true);
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+  });
+
+  it('rolls back a failed Like mutation and reports failed', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    post.likeCount = 8;
+    store.following.items = [post];
+    mocks.likePost.mockRejectedValue(new Error('like failed'));
+
+    const request = store.toggleLike(4);
+    expect(post.likeCount).toBe(9);
+    expect(post.liked).toBe(true);
+    expect(await request).toBe('failed');
+    expect(post.likeCount).toBe(8);
+    expect(post.liked).toBe(false);
+    expect(post.likeStatus).toBe('ready');
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+  });
+
+  it('rolls back a failed Unlike mutation to the previous liked state and count', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    post.likeCount = 8;
+    post.liked = true;
+    store.following.items = [post];
+    mocks.unlikePost.mockRejectedValue(new Error('unlike failed'));
+
+    const request = store.toggleLike(4);
+    expect(post.likeCount).toBe(7);
+    expect(post.liked).toBe(false);
+    expect(await request).toBe('failed');
+    expect(post.likeCount).toBe(8);
+    expect(post.liked).toBe(true);
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+  });
+
+  it('preserves Like 503 unavailable semantics while reporting failed', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    post.likeCount = 8;
+    store.following.items = [post];
+    mocks.likePost.mockRejectedValue({ response: { status: 503 } });
+
+    expect(await store.toggleLike(4)).toBe('failed');
+    expect(post.likeCount).toBe(8);
+    expect(post.liked).toBe(false);
+    expect(post.likeStatus).toBe('unavailable');
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+  });
+
+  it('ignores a Like mutation that is not ready', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    post.likeStatus = 'unknown';
+    store.following.items = [post];
+
+    expect(await store.toggleLike(4)).toBe('ignored');
+    expect(mocks.likePost).not.toHaveBeenCalled();
+  });
+
   it('batch-hydrates Repost state without changing For You membership', async () => {
     mocks.getPostRecommendations.mockResolvedValue(recommendationPage([recommendation(1), recommendation(2)]));
     mocks.getPostRepostStates.mockResolvedValue({
@@ -545,13 +620,46 @@ describe('home timeline session store', () => {
     expect(post.repostCount).toBe(9);
     expect(post.reposted).toBe(true);
     expect(store.repostPendingPostIds.has(4)).toBe(true);
-    expect(await request).toBe(true);
+    expect(await request).toBe('succeeded');
     expect(post.repostCount).toBe(9);
     expect(post.reposted).toBe(true);
     expect(store.repostPendingPostIds.has(4)).toBe(false);
   });
 
-  it('rolls back a failed Repost mutation and ignores a stale response', async () => {
+  it('rolls back a failed Repost mutation and reports failed', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    post.repostCount = 8;
+    store.following.items = [post];
+    mocks.repostPost.mockRejectedValue(new Error('repost failed'));
+
+    const request = store.toggleRepost(4);
+    expect(post.repostCount).toBe(9);
+    expect(post.reposted).toBe(true);
+    expect(await request).toBe('failed');
+    expect(post.repostCount).toBe(8);
+    expect(post.reposted).toBe(false);
+    expect(store.repostPendingPostIds.has(4)).toBe(false);
+  });
+
+  it('rolls back a failed Undo Repost mutation to the previous reposted state and count', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    post.repostCount = 8;
+    post.reposted = true;
+    store.following.items = [post];
+    mocks.undoRepostPost.mockRejectedValue(new Error('undo repost failed'));
+
+    const request = store.toggleRepost(4);
+    expect(post.repostCount).toBe(7);
+    expect(post.reposted).toBe(false);
+    expect(await request).toBe('failed');
+    expect(post.repostCount).toBe(8);
+    expect(post.reposted).toBe(true);
+    expect(store.repostPendingPostIds.has(4)).toBe(false);
+  });
+
+  it('ignores a stale Repost response after external state wins', async () => {
     const store = useHomeTimelineStore();
     const post = feedPostFixture(4, 7);
     post.repostCount = 8;
@@ -569,7 +677,7 @@ describe('home timeline session store', () => {
       status: 'ready',
     });
     pending.resolve({ reposts: 9, reposted: true });
-    expect(await request).toBe(false);
+    expect(await request).toBe('ignored');
     expect(post.repostCount).toBe(12);
     expect(post.reposted).toBe(true);
     expect(store.repostPendingPostIds.has(4)).toBe(false);
@@ -632,7 +740,7 @@ describe('home timeline session store', () => {
     expect(store.following.items[0].liked).toBe(true);
 
     resolveLike({ likes: 3, liked: true });
-    await localMutation;
+    expect(await localMutation).toBe('ignored');
     expect(store.following.items[0].likeCount).toBe(8);
   });
 

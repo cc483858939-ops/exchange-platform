@@ -5,6 +5,8 @@ import { defineComponent, h, KeepAlive, nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedPost, FeedTab } from '../types/Feed';
 
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+
 class FakeIntersectionObserver {
   static instances: FakeIntersectionObserver[] = [];
 

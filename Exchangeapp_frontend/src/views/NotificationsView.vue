@@ -96,6 +96,8 @@ import {
   watch,
 } from 'vue';
 import { storeToRefs } from 'pinia';
+import { ElMessage } from 'element-plus';
+import 'element-plus/es/components/message/style/css';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { useNotificationStore } from '../store/notification';
@@ -245,7 +247,9 @@ onBeforeRouteLeave(() => {
 });
 
 const openNotification = (item: Notification) => {
-  void notificationStore.markNotificationRead(item.id).catch(() => undefined);
+  void notificationStore.markNotificationRead(item.id).catch(() => {
+    ElMessage.error('Couldn’t mark this notification as read. Try again.');
+  });
   if (item.type === 'user_followed') {
     void router.push({ name: 'UserProfile', params: { id: String(item.actor.id) } });
   } else if (item.post_id !== null) {
@@ -253,7 +257,11 @@ const openNotification = (item: Notification) => {
   }
 };
 
-const markAll = () => { void notificationStore.markAllRead().catch(() => undefined); };
+const markAll = () => {
+  void notificationStore.markAllRead().catch(() => {
+    ElMessage.error('Couldn’t mark notifications as read. Try again.');
+  });
+};
 
 const notificationCopy = (item: Notification) => {
   switch (item.type) {

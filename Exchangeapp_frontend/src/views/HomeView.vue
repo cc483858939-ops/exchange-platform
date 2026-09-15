@@ -210,6 +210,8 @@ import {
   ref,
   watch,
 } from 'vue';
+import { ElMessage } from 'element-plus';
+import 'element-plus/es/components/message/style/css';
 import type { ComponentPublicInstance } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import FeedTabs from '../components/feed/FeedTabs.vue';
@@ -580,12 +582,18 @@ const handleRecommendationClick = (recommendation: RecommendedPost) => {
   recommendationTelemetry.recordClick(recommendation.post.id, recommendation.tracking);
 };
 
-const handleLikeToggle = (postId: number) => {
-  void homeTimeline.toggleLike(postId);
+const handleLikeToggle = async (postId: number) => {
+  const result = await homeTimeline.toggleLike(postId);
+  if (result === 'failed') {
+    ElMessage.error('Couldn’t update your like. Try again.');
+  }
 };
 
-const handleRepostToggle = (postId: number) => {
-  void homeTimeline.toggleRepost(postId);
+const handleRepostToggle = async (postId: number) => {
+  const result = await homeTimeline.toggleRepost(postId);
+  if (result === 'failed') {
+    ElMessage.error('Couldn’t update your repost. Try again.');
+  }
 };
 
 const handleDeletePost = async (postId: number) => {

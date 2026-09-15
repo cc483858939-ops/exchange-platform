@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
 import router from './index';
 import { routeScrollBehavior } from './scrollBehavior';
 

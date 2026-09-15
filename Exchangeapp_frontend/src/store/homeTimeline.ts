@@ -45,6 +45,8 @@ export type HomeRecommendationItem = {
   post: FeedPost;
 };
 
+export type HomeEngagementMutationResult = 'succeeded' | 'failed' | 'ignored';
+
 export type HomeFeedState<T> = {
   items: T[];
   loading: boolean;
@@ -884,10 +886,10 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
-  const toggleLike = async (postId: number) => {
+  const toggleLike = async (postId: number): Promise<HomeEngagementMutationResult> => {
     const post = findPost(postId);
     if (!post || post.likeStatus !== 'ready' || likePendingPostIds.has(postId)) {
-      return;
+      return 'ignored';
     }
 
     const previousLiked = post.liked;
@@ -915,7 +917,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       const result = previousLiked
         ? await unlikePost(postId)
         : await likePost(postId);
-      if (!isCurrent()) return;
+      if (!isCurrent()) return 'ignored';
       const settledVersion = bumpLikeMutationVersion(postId);
       applyLikeStateUpdate({
         postId,
@@ -924,8 +926,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         status: 'ready',
       }, settledVersion);
       likePendingPostIds.delete(postId);
+      return 'succeeded';
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return 'ignored';
       const settledVersion = bumpLikeMutationVersion(postId);
       applyLikeStateUpdate({
         postId,
@@ -942,13 +945,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         }, settledVersion);
       }
       likePendingPostIds.delete(postId);
+      return 'failed';
     }
   };
 
-  const toggleRepost = async (postId: number) => {
+  const toggleRepost = async (postId: number): Promise<HomeEngagementMutationResult> => {
     const post = findPost(postId);
     if (!post || post.repostStatus !== 'ready' || repostPendingPostIds.has(postId)) {
-      return false;
+      return 'ignored';
     }
 
     const previousReposted = post.reposted;
@@ -976,7 +980,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       const result = previousReposted
         ? await undoRepostPost(postId)
         : await repostPost(postId);
-      if (!isCurrent()) return false;
+      if (!isCurrent()) return 'ignored';
       const settledVersion = bumpRepostMutationVersion(postId);
       applyRepostStateUpdate({
         postId,
@@ -986,9 +990,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       }, settledVersion);
       repostPendingPostIds.delete(postId);
       markOwnProfileTimelineStale();
-      return true;
+      return 'succeeded';
     } catch {
-      if (!isCurrent()) return false;
+      if (!isCurrent()) return 'ignored';
       const settledVersion = bumpRepostMutationVersion(postId);
       applyRepostStateUpdate({
         postId,
@@ -997,7 +1001,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         status: 'ready',
       }, settledVersion);
       repostPendingPostIds.delete(postId);
-      return false;
+      return 'failed';
     }
   };
 

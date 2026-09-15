@@ -10,6 +10,8 @@ import {
 } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedPost, FeedTab } from '../types/Feed';
+
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
 import HomeView from './HomeView.vue';
 
 const mocks = vi.hoisted(() => ({

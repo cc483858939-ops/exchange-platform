@@ -5,8 +5,11 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { defineComponent, h, KeepAlive, nextTick, reactive } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import NotificationsView from './NotificationsView.vue';
+import { ElMessage } from 'element-plus';
 import { useNotificationStore } from '../store/notification';
 import type { Notification } from '../types/Notification';
+
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
 
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
@@ -150,6 +153,7 @@ describe('NotificationsView', () => {
     mocks.getUnreadNotificationCount.mockResolvedValue(0);
     mocks.markNotificationRead.mockResolvedValue(undefined);
     mocks.markAllNotificationsRead.mockResolvedValue(undefined);
+    vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: vi.fn() }));
   });
 
   afterEach(() => {
@@ -189,6 +193,7 @@ describe('NotificationsView', () => {
     mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: null });
     const pending = deferred<void>();
     mocks.markNotificationRead.mockReturnValueOnce(pending.promise);
+    mocks.getUnreadNotificationCount.mockResolvedValue(1);
     const store = useNotificationStore();
     store.setUnreadCount(1);
     const wrapper = mountView();
@@ -202,7 +207,84 @@ describe('NotificationsView', () => {
     pending.reject(new Error('read failed'));
     await flushPromises();
     expect(wrapper.find('.notification-card--unread').exists()).toBe(true);
+    expect(store.unreadCount).toBe(1);
     expect(mocks.getUnreadNotificationCount).toHaveBeenCalled();
+    expect(ElMessage.error).toHaveBeenCalledTimes(1);
+    expect(ElMessage.error).toHaveBeenCalledWith('Couldn’t mark this notification as read. Try again.');
+    wrapper.unmount();
+  });
+
+  it('marks one notification read successfully without showing an error', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [notification(1)], next_cursor: null });
+    mocks.getUnreadNotificationCount.mockResolvedValueOnce(0);
+    const store = useNotificationStore();
+    store.setUnreadCount(1);
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper.find('.notification-card__open').trigger('click');
+    await flushPromises();
+
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'PostDetail', params: { id: '42' } });
+    expect(store.items[0].read).toBe(true);
+    expect(store.unreadCount).toBe(0);
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('rolls back Mark all as read and shows one explicit error on failure', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({
+      items: [notification(1), notification(2)],
+      next_cursor: null,
+    });
+    mocks.getUnreadNotificationCount.mockResolvedValue(2);
+    const pending = deferred<void>();
+    mocks.markAllNotificationsRead.mockReturnValueOnce(pending.promise);
+    const store = useNotificationStore();
+    store.setUnreadCount(2);
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper.get('.notifications-page__mark-all').trigger('click');
+    expect(store.items.every(item => item.read)).toBe(true);
+    expect(store.markAllPending).toBe(true);
+
+    pending.reject(new Error('mark all failed'));
+    await flushPromises();
+    expect(store.items.map(item => item.read)).toEqual([false, false]);
+    expect(store.unreadCount).toBe(2);
+    expect(store.markAllPending).toBe(false);
+    expect(wrapper.find('.notifications-page__mark-all').exists()).toBe(true);
+    expect(ElMessage.error).toHaveBeenCalledTimes(1);
+    expect(ElMessage.error).toHaveBeenCalledWith('Couldn’t mark notifications as read. Try again.');
+    wrapper.unmount();
+  });
+
+  it('keeps Mark all as read successful without showing an error', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({
+      items: [notification(1), notification(2)],
+      next_cursor: null,
+    });
+    mocks.getUnreadNotificationCount.mockResolvedValueOnce(0);
+    const store = useNotificationStore();
+    store.setUnreadCount(2);
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper.get('.notifications-page__mark-all').trigger('click');
+    await flushPromises();
+
+    expect(store.items.every(item => item.read)).toBe(true);
+    expect(store.unreadCount).toBe(0);
+    expect(store.markAllPending).toBe(false);
+    expect(wrapper.find('.notifications-page__mark-all').exists()).toBe(false);
+    expect(ElMessage.error).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
