@@ -52,12 +52,15 @@ type postEmbeddingTestEmbedder struct {
 }
 
 type postEmbeddingTestStore struct {
-	post         models.Post
-	postErr      error
-	embedding    models.PostEmbedding
-	embeddingErr error
-	upsertErr    error
-	upserted     []models.PostEmbedding
+	post          models.Post
+	postErr       error
+	embedding     models.PostEmbedding
+	embeddingErr  error
+	writeOutcome  postEmbeddingWriteOutcome
+	writeOutcomes []postEmbeddingWriteOutcome
+	writeErr      error
+	writeCalls    int
+	upserted      []models.PostEmbedding
 }
 
 func (s *postEmbeddingTestStore) GetPost(context.Context, uint) (models.Post, error) {
@@ -74,12 +77,20 @@ func (s *postEmbeddingTestStore) GetEmbedding(context.Context, uint) (models.Pos
 	return s.embedding, nil
 }
 
-func (s *postEmbeddingTestStore) UpsertEmbedding(_ context.Context, embedding models.PostEmbedding) error {
-	if s.upsertErr != nil {
-		return s.upsertErr
+func (s *postEmbeddingTestStore) CommitEmbeddingIfCurrent(_ context.Context, embedding models.PostEmbedding, _ time.Time) (postEmbeddingWriteOutcome, error) {
+	s.writeCalls++
+	if s.writeErr != nil {
+		return postEmbeddingWriteCommitted, s.writeErr
 	}
-	s.upserted = append(s.upserted, embedding)
-	return nil
+	outcome := s.writeOutcome
+	if len(s.writeOutcomes) > 0 {
+		outcome = s.writeOutcomes[0]
+		s.writeOutcomes = s.writeOutcomes[1:]
+	}
+	if outcome == postEmbeddingWriteCommitted {
+		s.upserted = append(s.upserted, embedding)
+	}
+	return outcome, nil
 }
 
 func newPostEmbeddingTestStore() *postEmbeddingTestStore {
@@ -202,8 +213,8 @@ func TestPostEmbeddingConsumerGeneratesMissingProjection(t *testing.T) {
 	if err == nil || reader.commitCalls != 1 {
 		t.Fatalf("err=%v commits=%d", err, reader.commitCalls)
 	}
-	if embedder.calls != 1 || len(store.upserted) != 1 {
-		t.Fatalf("provider_calls=%d upserts=%d", embedder.calls, len(store.upserted))
+	if embedder.calls != 1 || store.writeCalls != 1 || len(store.upserted) != 1 {
+		t.Fatalf("provider_calls=%d write_calls=%d upserts=%d", embedder.calls, store.writeCalls, len(store.upserted))
 	}
 	got := store.upserted[0]
 	if got.PostID != 42 || got.Version != "v1" || got.Model != "test-model" || got.Dimensions != 2 ||
@@ -241,7 +252,7 @@ func TestPostEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T) {
 			store.embedding = models.PostEmbedding{PostID: 42, Version: test.version, ContentHash: test.hash}
 			embedder := &postEmbeddingTestEmbedder{}
 			reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
-			if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || len(store.upserted) != 1 {
+			if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || store.writeCalls != 1 || len(store.upserted) != 1 {
 				t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 			}
 		})
@@ -258,6 +269,46 @@ func TestPostEmbeddingConsumerCommitsMissingPosts(t *testing.T) {
 			t.Fatalf("err=%v commits=%d provider=%d upserts=%d", err, reader.commitCalls, embedder.calls, len(store.upserted))
 		}
 	})
+}
+
+func TestPostEmbeddingConsumerDoesNotCommitStaleResult(t *testing.T) {
+	store := newPostEmbeddingTestStore()
+	store.writeOutcome = postEmbeddingWriteStaleContent
+	embedder := &postEmbeddingTestEmbedder{}
+	reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
+	if !errors.Is(err, errPostEmbeddingSourceChanged) || reader.commitCalls != 0 || embedder.calls != 1 || store.writeCalls != 1 || len(store.upserted) != 0 {
+		t.Fatalf("err=%v commits=%d provider=%d writes=%d upserts=%d", err, reader.commitCalls, embedder.calls, store.writeCalls, len(store.upserted))
+	}
+}
+
+func TestPostEmbeddingConsumerRedeliversStaleResultAndCommitsLatestContent(t *testing.T) {
+	store := newPostEmbeddingTestStore()
+	store.writeOutcome = postEmbeddingWriteStaleContent
+	embedder := &postEmbeddingTestEmbedder{}
+	reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
+	if !errors.Is(err, errPostEmbeddingSourceChanged) || reader.commitCalls != 0 {
+		t.Fatalf("first err=%v commits=%d", err, reader.commitCalls)
+	}
+
+	store.post.Content = "Body v2"
+	store.writeOutcome = postEmbeddingWriteCommitted
+	reader, err = consumePostEmbeddingTestMessage(t, store, embedder, nil)
+	if err == nil || reader.commitCalls != 1 || embedder.calls != 2 || store.writeCalls != 2 || len(store.upserted) != 1 {
+		t.Fatalf("second err=%v commits=%d provider=%d writes=%d upserts=%d", err, reader.commitCalls, embedder.calls, store.writeCalls, len(store.upserted))
+	}
+	if got, want := store.upserted[0].ContentHash, embeddings.PostEmbeddingContentHash("Body v2"); got != want {
+		t.Fatalf("content_hash=%q want=%q", got, want)
+	}
+}
+
+func TestPostEmbeddingConsumerCommitsWhenPostDisappearsAfterProviderCall(t *testing.T) {
+	store := newPostEmbeddingTestStore()
+	store.writeOutcome = postEmbeddingWritePostMissing
+	embedder := &postEmbeddingTestEmbedder{}
+	reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
+	if err == nil || reader.commitCalls != 1 || embedder.calls != 1 || store.writeCalls != 1 || len(store.upserted) != 0 {
+		t.Fatalf("err=%v commits=%d provider=%d writes=%d upserts=%d", err, reader.commitCalls, embedder.calls, store.writeCalls, len(store.upserted))
+	}
 }
 
 func TestPostEmbeddingConsumerProviderRetryFailuresDoNotCommit(t *testing.T) {
@@ -318,10 +369,10 @@ func TestPostEmbeddingConsumerDBReadAndUpsertFailuresDoNotCommit(t *testing.T) {
 	})
 	t.Run("upsert", func(t *testing.T) {
 		store := newPostEmbeddingTestStore()
-		store.upsertErr = errors.New("upsert failed")
+		store.writeErr = errors.New("conditional write failed")
 		embedder := &postEmbeddingTestEmbedder{}
 		reader, err := consumePostEmbeddingTestMessage(t, store, embedder, nil)
-		if err == nil || reader.commitCalls != 0 || embedder.calls != 1 {
+		if err == nil || reader.commitCalls != 0 || embedder.calls != 1 || store.writeCalls != 1 {
 			t.Fatalf("err=%v commits=%d provider=%d", err, reader.commitCalls, embedder.calls)
 		}
 	})

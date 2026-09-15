@@ -81,7 +81,7 @@ func init() {
 		runtimeReadiness, runtimeReadinessTransitions, runtimeReadinessLastSuccess, runtimeReadinessLastEvaluation,
 		workerPipelineHealthy, workerPipelineConsecutiveFailures, workerPipelineLastSuccess, workerPipelineBacklog, workerPipelineBacklogStalled,
 	)
-	for _, result := range []string{"generated", "up_to_date", "post_missing", "post_unavailable", "invalid_event", "provider_non_retryable"} {
+	for _, result := range []string{"generated", "up_to_date", "post_missing", "post_missing_after_embed", "stale_content_discarded", "post_unavailable", "invalid_event", "provider_non_retryable"} {
 		postEmbeddingEvents.WithLabelValues(result)
 	}
 	for _, stage := range []string{"decode", "db_read", "provider", "db_upsert", "kafka_commit"} {

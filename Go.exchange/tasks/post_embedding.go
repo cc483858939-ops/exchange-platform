@@ -35,14 +35,20 @@ type postEmbeddingMessageReader interface {
 	Close() error
 }
 
+type postEmbeddingWriteOutcome uint8
+
+const (
+	postEmbeddingWriteCommitted postEmbeddingWriteOutcome = iota
+	postEmbeddingWriteStaleContent
+	postEmbeddingWritePostMissing
+)
+
+var errPostEmbeddingSourceChanged = errors.New("post content changed during embedding generation")
+
 type postEmbeddingStore interface {
 	GetPost(context.Context, uint) (models.Post, error)
 	GetEmbedding(context.Context, uint) (models.PostEmbedding, error)
-	UpsertEmbedding(context.Context, models.PostEmbedding) error
-}
-
-type atomicPostEmbeddingStore interface {
-	UpsertEmbeddingAndInvalidateProfiles(context.Context, models.PostEmbedding, time.Time) error
+	CommitEmbeddingIfCurrent(context.Context, models.PostEmbedding, time.Time) (postEmbeddingWriteOutcome, error)
 }
 
 type gormPostEmbeddingStore struct {
@@ -67,28 +73,32 @@ func (s gormPostEmbeddingStore) GetEmbedding(ctx context.Context, postID uint) (
 	return embedding, err
 }
 
-func (s gormPostEmbeddingStore) UpsertEmbedding(ctx context.Context, embedding models.PostEmbedding) error {
+// CommitEmbeddingIfCurrent validates the canonical post while holding its row
+// lock, then commits the embedding and authoritative user fan-out in one
+// transaction. The provider call happens before this method, so the post row
+// is not locked during external network work.
+func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, embedding models.PostEmbedding, now time.Time) (postEmbeddingWriteOutcome, error) {
 	if s.db == nil {
-		return errors.New("database is not initialized")
+		return postEmbeddingWriteCommitted, errors.New("database is not initialized")
 	}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "post_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"version": embedding.Version, "model": embedding.Model, "dimensions": embedding.Dimensions,
-			"embedding": embedding.Embedding, "content_hash": embedding.ContentHash, "updated_at": embedding.UpdatedAt,
-		}),
-	}).Create(&embedding).Error
-}
-
-// UpsertEmbeddingAndInvalidateProfiles commits the active embedding and its
-// authoritative user fan-out in one transaction. The fan-out intentionally
-// reads source behavior and reaction tables because the canonical state table
-// may not exist yet for a first interaction.
-func (s gormPostEmbeddingStore) UpsertEmbeddingAndInvalidateProfiles(ctx context.Context, embedding models.PostEmbedding, now time.Time) error {
-	if s.db == nil {
-		return errors.New("database is not initialized")
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	outcome := postEmbeddingWriteCommitted
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var currentPost models.Post
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id", "content").
+			Where("id = ? AND deleted_at IS NULL", embedding.PostID).
+			First(&currentPost).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			outcome = postEmbeddingWritePostMissing
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if currentHash := embeddings.PostEmbeddingContentHash(currentPost.Content); currentHash != embedding.ContentHash {
+			outcome = postEmbeddingWriteStaleContent
+			return nil
+		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "post_id"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
@@ -105,8 +115,13 @@ UNION
 SELECT user_id FROM post_reaction WHERE post_id = ?`, embedding.PostID, embedding.PostID).Scan(&users).Error; err != nil {
 			return err
 		}
-		return recommendation.InvalidateProfiles(tx, users, "post_embedding_changed", now)
+		if err := recommendation.InvalidateProfiles(tx, users, "post_embedding_changed", now); err != nil {
+			return err
+		}
+		outcome = postEmbeddingWriteCommitted
+		return nil
 	})
+	return outcome, err
 }
 
 var newPostEmbedder = func(cfg config.EmbeddingConfig) (embeddings.Embedder, error) {
@@ -175,6 +190,10 @@ func runPostEmbeddingConsumer(ctx context.Context) {
 	}()
 	store := gormPostEmbeddingStore{db: global.Db}
 	if err := consumePostEmbeddingMessages(ctx, reader, embedder, store, activeVersion); err != nil && ctx.Err() == nil {
+		if errors.Is(err, errPostEmbeddingSourceChanged) {
+			log.Printf("[PostEmbedding] source changed during embedding; leaving Kafka message uncommitted for redelivery")
+			return
+		}
 		PipelineFailure(PipelinePostEmbedding, "projection_failed", 0)
 		log.Printf("[PostEmbedding] consume: %v", err)
 	}
@@ -286,18 +305,25 @@ func processPostEmbeddingMessage(ctx context.Context, message kafka.Message, emb
 		Dimensions: dimensions, Embedding: vector, ContentHash: contentHash,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	var upsertErr error
-	if atomicStore, ok := store.(atomicPostEmbeddingStore); ok {
-		upsertErr = atomicStore.UpsertEmbeddingAndInvalidateProfiles(ctx, embedding, now)
-	} else {
-		upsertErr = store.UpsertEmbedding(ctx, embedding)
-	}
-	if upsertErr != nil {
+	outcome, err := store.CommitEmbeddingIfCurrent(ctx, embedding, now)
+	if err != nil {
 		metrics.RecordPostEmbeddingFailure("db_upsert")
-		return upsertErr
+		return err
 	}
-	metrics.RecordPostEmbeddingEvent("generated")
-	return nil
+	switch outcome {
+	case postEmbeddingWriteCommitted:
+		metrics.RecordPostEmbeddingEvent("generated")
+		return nil
+	case postEmbeddingWriteStaleContent:
+		metrics.RecordPostEmbeddingEvent("stale_content_discarded")
+		return errPostEmbeddingSourceChanged
+	case postEmbeddingWritePostMissing:
+		metrics.RecordPostEmbeddingEvent("post_missing_after_embed")
+		return nil
+	default:
+		metrics.RecordPostEmbeddingFailure("db_upsert")
+		return fmt.Errorf("unknown post embedding write outcome %d", outcome)
+	}
 }
 
 func decodePostEmbeddingRequest(raw []byte) (uint, error) {
