@@ -217,6 +217,11 @@ const mountDetail = () => mount(PostDetailView, {
         emits: ['toggle'],
         template: '<button class="test-like" type="button" @click="$emit(\'toggle\')">{{ count }}</button>',
       },
+      PostMediaViewer: {
+        props: ['media', 'initialIndex', 'desktopContext'],
+        emits: ['close'],
+        template: '<div class="test-media-viewer" :data-desktop-context="String(desktopContext)"><slot name="context" /><button class="test-close-media-viewer" type="button" @click="$emit(\'close\')">Close</button></div>',
+      },
       ReplyList: { template: '<div class="test-comments" />' },
       RouterLink: { template: '<a><slot /></a>' },
     },
@@ -519,5 +524,34 @@ describe('PostDetailView persistent reply drafts', () => {
     expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(wrapper.get('.reply-composer__textarea').element);
     expect(textareaValue(wrapper)).toBe('existing draft');
+  });
+
+  it('reuses the draft and focuses the context composer from the desktop media rail', async () => {
+    mocks.getPostById.mockResolvedValueOnce(post(42, {
+      media: [{
+        type: 'image',
+        url: '/post.png',
+        large_url: '/post-large.png',
+        width: 1200,
+        height: 800,
+        position: 0,
+      }],
+    }));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.reply-composer__textarea').setValue('shared draft');
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await nextTick();
+
+    expect(wrapper.get('.test-media-viewer').attributes('data-desktop-context')).toBe('true');
+    expect(wrapper.findAll('.reply-composer__textarea')).toHaveLength(2);
+    expect((wrapper.findAll('.reply-composer__textarea')[1].element as HTMLTextAreaElement).value)
+      .toBe('shared draft');
+
+    await wrapper.find('.test-media-viewer .post-detail__reply').trigger('click');
+    await nextTick();
+
+    expect(document.activeElement).toBe(wrapper.findAll('.reply-composer__textarea')[1].element);
   });
 });

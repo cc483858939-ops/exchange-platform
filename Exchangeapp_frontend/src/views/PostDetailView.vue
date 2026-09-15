@@ -262,8 +262,191 @@
       v-if="mediaViewer"
       :media="mediaViewer.media"
       :initial-index="mediaViewer.index"
+      :desktop-context="true"
       @close="closeMediaViewer"
-    />
+    >
+      <template #context>
+        <div v-if="detailPresentation" class="post-media-context">
+          <div class="post-detail__author-row">
+            <AuthorIdentity
+              :author="detailPresentation.author"
+              variant="post"
+              avatar-loading="eager"
+            />
+          </div>
+
+          <div
+            class="post-detail__body"
+            :class="{ 'post-detail__body--loading': detailPresentation.kind === 'warm' }"
+            :aria-busy="detailPresentation.kind === 'warm' ? 'true' : undefined"
+          >
+            <LinkifiedText :text="detailPresentation.body" />
+          </div>
+
+          <aside
+            v-if="detailReference"
+            class="post-detail__reference"
+            aria-label="Referenced post"
+          >
+            <RouterLink
+              v-if="detailReferenceDestination"
+              class="post-detail__reference-label post-detail__reference-link"
+              :to="detailReferenceDestination"
+            >
+              {{ detailReferenceLabel }}
+            </RouterLink>
+            <span v-else class="post-detail__reference-label">{{ detailReferenceLabel }}</span>
+            <template v-if="detailReference.deleted">
+              <p class="post-detail__reference-tombstone">{{ detailReferenceMessage }}</p>
+            </template>
+            <template v-else>
+              <AuthorIdentity
+                v-if="detailReferenceAuthor"
+                :author="detailReferenceAuthor"
+                variant="compact"
+              />
+              <p class="post-detail__reference-content">
+                <LinkifiedText
+                  :text="detailReferenceContent"
+                  :to="detailReferenceDestination"
+                />
+              </p>
+            </template>
+          </aside>
+
+          <div class="post-detail__meta">
+            <span v-if="detailPostTimestamp">{{ detailPostTimestamp }}</span>
+            <span
+              class="post-detail__views"
+              :aria-label="postViewsLabel"
+              :title="postViewsLabel"
+            >
+              {{ formattedViews }} Views
+            </span>
+          </div>
+
+          <div class="post-detail__engagement" aria-label="Post engagement">
+            <template v-if="detailPresentation.kind === 'post'">
+              <button
+                class="post-detail__metric post-detail__reply"
+                type="button"
+                :aria-label="detailReplyLabel"
+                @click="focusMediaContextReplyComposer"
+              >
+                <AppIcon name="reply" :size="18" />
+                <span>{{ replyCount }}</span>
+              </button>
+
+              <RepostAction
+                :key="postId"
+                :reposted="reposted"
+                :count="repostCount"
+                :disabled="!authStore.isAuthenticated || repostStateUnavailable"
+                :loading="repostStateLoading"
+                :pending="repostSubmitting"
+                :ariaLabel="detailRepostLabel"
+                variant="detail"
+                @toggle="toggleRepost"
+              />
+              <LikeAction
+                :key="postId"
+                :liked="liked"
+                :count="likeCount"
+                :disabled="!authStore.isAuthenticated"
+                :loading="likeStateLoading"
+                :pending="likeSubmitting"
+                :ariaLabel="detailLikeLabel"
+                variant="detail"
+                @toggle="toggleLike"
+              />
+            </template>
+            <template v-else>
+              <span
+                class="post-detail__metric post-detail__reply"
+                :aria-label="presentationReplyLabel"
+                :title="presentationReplyLabel"
+              >
+                <AppIcon name="reply" :size="18" />
+                <span>{{ detailPresentation.replyCount }}</span>
+              </span>
+              <span
+                class="post-detail__metric post-detail__repost"
+                :aria-label="presentationRepostLabel"
+                :title="presentationRepostLabel"
+              >
+                <AppIcon name="repost" :size="18" />
+                <span>{{ detailPresentation.repostCount }}</span>
+              </span>
+              <span
+                class="post-detail__metric post-detail__like"
+                :aria-label="presentationLikeLabel"
+                :title="presentationLikeLabel"
+              >
+                <AppIcon name="heart" :size="18" />
+                <span>{{ detailPresentation.likeCount }}</span>
+              </span>
+            </template>
+          </div>
+
+          <p
+            v-if="detailPresentation.kind === 'post' && likeError"
+            class="detail-inline-error"
+            role="status"
+          >{{ likeError }}</p>
+          <p
+            v-if="detailPresentation.kind === 'post' && repostError"
+            class="detail-inline-error"
+            role="status"
+          >{{ repostError }}</p>
+
+          <template v-if="detailPresentation.kind === 'post'">
+            <ReplyComposer
+              :key="postId"
+              ref="mediaContextComposerRef"
+              :author="replyComposerAuthor"
+              v-model="replyDraftContent"
+              :submitting="replySubmitting"
+              @submit="handleCreateReply"
+            />
+
+            <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
+
+            <div v-if="repliesInitialLoading" class="replies-state" aria-live="polite">
+              Loading replies...
+            </div>
+            <div v-else-if="repliesError" class="replies-state replies-state--error" role="alert">
+              <p>Replies could not be loaded.</p>
+              <span>{{ repliesError }}</span>
+              <button type="button" @click="retryInitialReplies">Retry</button>
+            </div>
+            <ReplyList
+              v-else
+              :key="postId"
+              :replies="replies"
+              :current-identity="null"
+              :deleting-reply-id="deletingReplyId"
+              :has-next="Boolean(nextCursor)"
+              :loading-more="repliesLoadingMore"
+              :load-more-error="repliesLoadMoreError"
+              :auto-load="false"
+              @load-more="loadMoreReplies"
+              @retry="retryLoadMoreReplies"
+              @open-media="openMediaViewer"
+            />
+          </template>
+
+          <div
+            v-else
+            class="detail-warm-loading"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="detail-loading__spinner" aria-hidden="true"></span>
+            <span class="sr-only">Loading full post</span>
+          </div>
+        </div>
+      </template>
+    </PostMediaViewer>
 
     <ConfirmDialog
       v-if="deletePostConfirmOpen"
@@ -388,6 +571,7 @@ const deletingReplyId = ref<number | null>(null);
 const deleteReplyCandidateId = ref<number | null>(null);
 const replyDeleteError = ref('');
 const composerRef = ref<InstanceType<typeof ReplyComposer> | null>(null);
+const mediaContextComposerRef = ref<InstanceType<typeof ReplyComposer> | null>(null);
 const replyCount = ref(0);
 const viewCount = ref(0);
 
@@ -685,6 +869,14 @@ const focusReplyComposer = async () => {
   }
 
   await composerRef.value?.focus();
+};
+
+const focusMediaContextReplyComposer = async () => {
+  if (!post.value || !authStore.isAuthenticated) {
+    return;
+  }
+
+  await mediaContextComposerRef.value?.focus();
 };
 
 const postViewTelemetry = getPostViewTelemetry();
@@ -1659,6 +1851,19 @@ onBeforeUnmount(() => {
 .post-detail,
 .post-conversation {
   padding: var(--space-5);
+}
+
+.post-media-context {
+  min-height: 100%;
+  padding: var(--space-6) var(--space-5) var(--space-8);
+}
+
+.post-media-context .post-detail__body {
+  font-size: 15px;
+}
+
+.post-media-context .post-detail__metric {
+  padding-inline: var(--space-2);
 }
 
 .post-detail {

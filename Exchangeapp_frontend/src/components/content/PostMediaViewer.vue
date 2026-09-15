@@ -8,14 +8,19 @@
   >
     <div
       class="post-media-viewer__surface"
-      @pointerdown="handlePointerDown"
-      @pointerup="handlePointerUp"
-      @pointercancel="resetPointer"
-      @click="handleViewerClick"
+      :class="{ 'post-media-viewer__surface--split': desktopSplitActive }"
     >
+      <section
+        class="post-media-viewer__media-pane"
+        @pointerdown="handlePointerDown"
+        @pointerup="handlePointerUp"
+        @pointercancel="resetPointer"
+        @click="handleViewerClick"
+      >
       <button
         ref="closeButtonRef"
         class="post-media-viewer__close"
+        :class="{ 'post-media-viewer__close--split': desktopSplitActive }"
         type="button"
         aria-label="Close image viewer"
         @click="requestClose"
@@ -83,6 +88,15 @@
       >
         {{ currentIndex + 1 }} / {{ visibleMedia.length }}
       </output>
+      </section>
+
+      <aside
+        v-if="desktopSplitActive"
+        class="post-media-viewer__context"
+        aria-label="Post conversation"
+      >
+        <slot name="context" />
+      </aside>
     </div>
   </dialog>
 </template>
@@ -92,10 +106,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { PostMedia } from '../../types/Post';
 import AppIcon from '../icons/AppIcon.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   media: PostMedia[];
   initialIndex: number;
-}>();
+  desktopContext?: boolean;
+}>(), {
+  desktopContext: false,
+});
 
 const emit = defineEmits<{
   close: [];
@@ -105,6 +122,47 @@ const dialogRef = ref<HTMLDialogElement | null>(null);
 const closeButtonRef = ref<HTMLButtonElement | null>(null);
 const stageRef = ref<HTMLElement | null>(null);
 const imageFrameRef = ref<HTMLElement | null>(null);
+const desktopSplitActive = ref(false);
+const DESKTOP_CONTEXT_QUERY = '(min-width: 1100px)';
+let desktopMediaQuery: MediaQueryList | null = null;
+
+const handleDesktopMediaQueryChange = (event: MediaQueryListEvent) => {
+  desktopSplitActive.value = props.desktopContext && event.matches;
+};
+
+const stopDesktopSplitTracking = () => {
+  if (!desktopMediaQuery) {
+    return;
+  }
+
+  if (typeof desktopMediaQuery.removeEventListener === 'function') {
+    desktopMediaQuery.removeEventListener('change', handleDesktopMediaQueryChange);
+  } else {
+    desktopMediaQuery.removeListener(handleDesktopMediaQueryChange);
+  }
+  desktopMediaQuery = null;
+};
+
+const startDesktopSplitTracking = () => {
+  stopDesktopSplitTracking();
+
+  if (
+    !props.desktopContext
+    || typeof window === 'undefined'
+    || typeof window.matchMedia !== 'function'
+  ) {
+    desktopSplitActive.value = false;
+    return;
+  }
+
+  desktopMediaQuery = window.matchMedia(DESKTOP_CONTEXT_QUERY);
+  desktopSplitActive.value = desktopMediaQuery.matches;
+  if (typeof desktopMediaQuery.addEventListener === 'function') {
+    desktopMediaQuery.addEventListener('change', handleDesktopMediaQueryChange);
+  } else {
+    desktopMediaQuery.addListener(handleDesktopMediaQueryChange);
+  }
+};
 const visibleMedia = computed(() => props.media.slice(0, 4));
 
 const clampIndex = (index: number, length: number) => {
@@ -338,7 +396,17 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => props.desktopContext,
+  () => {
+    if (dialogRef.value) {
+      startDesktopSplitTracking();
+    }
+  },
+);
+
 onMounted(async () => {
+  startDesktopSplitTracking();
   const dialog = dialogRef.value;
   if (!dialog) {
     return;
@@ -364,6 +432,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   closeRequested = true;
   largeUpgradeVersion += 1;
+  stopDesktopSplitTracking();
   window.removeEventListener('keydown', handleKeydown);
   const dialog = dialogRef.value;
   if (!dialog) {
@@ -408,9 +477,41 @@ onBeforeUnmount(() => {
   display: block;
   width: 100%;
   height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.post-media-viewer__surface--split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 28vw, 420px);
+}
+
+.post-media-viewer__media-pane {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
     max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   box-sizing: border-box;
+  background: rgb(8 10 15 / 96%);
+}
+
+.post-media-viewer__context {
+  height: 100dvh;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-sizing: border-box;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .post-media-viewer__stage {
@@ -481,6 +582,11 @@ onBeforeUnmount(() => {
 .post-media-viewer__close {
   top: max(12px, env(safe-area-inset-top));
   right: max(12px, env(safe-area-inset-right));
+}
+
+.post-media-viewer__close--split {
+  right: auto;
+  left: max(12px, env(safe-area-inset-left));
 }
 
 .post-media-viewer__nav {

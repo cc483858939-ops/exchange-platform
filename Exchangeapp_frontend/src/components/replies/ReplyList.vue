@@ -40,14 +40,17 @@ import type { Post } from '../../types/Post';
 import type { AuthIdentity } from '../../utils/authIdentity';
 import ReplyItem from './ReplyItem.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   replies: Post[];
   currentIdentity: AuthIdentity | null;
   deletingReplyId: number | null;
   hasNext: boolean;
   loadingMore: boolean;
   loadMoreError: string;
-}>();
+  autoLoad?: boolean;
+}>(), {
+  autoLoad: true,
+});
 
 const emit = defineEmits<{
   loadMore: [];
@@ -72,6 +75,7 @@ const connectObserver = () => {
   disconnectObserver();
 
   if (
+    !props.autoLoad ||
     !props.hasNext ||
     props.loadingMore ||
     props.loadMoreError ||
@@ -92,7 +96,7 @@ const connectObserver = () => {
 };
 
 watch(
-  [() => props.hasNext, () => props.loadingMore, () => props.loadMoreError],
+  [() => props.autoLoad, () => props.hasNext, () => props.loadingMore, () => props.loadMoreError],
   () => {
     void nextTick(connectObserver);
   },

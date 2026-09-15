@@ -221,9 +221,9 @@ const mountDetail = () => mount(PostDetailView, {
         template: '<div class="test-confirm-dialog" role="dialog"><h2>{{ title }}</h2><p>{{ description }}</p><p v-if="error" class="test-confirm-error" role="alert">{{ error }}</p><button class="test-confirm-cancel" type="button" :disabled="busy" @click="$emit(\'cancel\')">{{ cancelLabel }}</button><button class="test-confirm-delete" type="button" :disabled="busy" @click="$emit(\'confirm\')">{{ busy ? \'Deleting…\' : confirmLabel }}</button></div>',
       },
       PostMediaViewer: {
-        props: ['media', 'initialIndex'],
+        props: ['media', 'initialIndex', 'desktopContext'],
         emits: ['close'],
-        template: '<div class="test-media-viewer" :data-index="String(initialIndex)" :data-media="media.map(item => item.url).join(\',\')"><button class="test-close-media-viewer" type="button" @click="$emit(\'close\')">Close</button></div>',
+        template: '<div class="test-media-viewer" :data-index="String(initialIndex)" :data-media="media.map(item => item.url).join(\',\')" :data-desktop-context="String(desktopContext)"><div v-if="desktopContext" class="test-media-context"><slot name="context" /></div><button class="test-close-media-viewer" type="button" @click="$emit(\'close\')">Close</button></div>',
       },
       RouterLink: RouterLinkStub,
     },
@@ -568,6 +568,10 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.get('.test-media-viewer').attributes('data-index')).toBe('1');
     expect(wrapper.get('.test-media-viewer').attributes('data-media'))
       .toBe('/primary-1.png,/primary-2.png');
+    expect(wrapper.get('.test-media-viewer').attributes('data-desktop-context')).toBe('true');
+    expect(wrapper.get('.test-media-context').text()).toContain('Full post body');
+    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostReplies).toHaveBeenCalledTimes(1);
 
     await wrapper.get('.test-close-media-viewer').trigger('click');
     await wrapper.findAll('.post-detail__reference .post-media-grid__open')[2].trigger('click');
