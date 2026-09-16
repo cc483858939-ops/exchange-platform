@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getPostRepostStates: vi.fn(),
   repostPost: vi.fn(),
   undoRepostPost: vi.fn(),
+  beginBookmarkStateMutation: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -38,6 +39,7 @@ vi.mock('../services/repostService', () => ({
   undoRepostPost: mocks.undoRepostPost,
 }));
 vi.mock('./sessionSync', () => ({
+  beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
   registerBookmarksSessionSync: vi.fn(),
   syncExternalPostBookmarkState: vi.fn(),
   syncExternalPostLikeState: vi.fn(),
@@ -81,6 +83,14 @@ const createStore = () => {
 const settle = async () => {
   await flushPromises();
   await flushPromises();
+};
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 };
 
 describe('bookmarksSession store', () => {
@@ -177,5 +187,27 @@ describe('bookmarksSession store', () => {
 
     expect(store.removePostLocal(1)).toBe(true);
     expect(store.items).toHaveLength(0);
+  });
+
+  it('begins the shared bookmark fence before optimistic removal settles', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostBookmarkStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, bookmarked: true }],
+      unavailable_post_ids: [],
+    });
+    const store = createStore();
+    await store.loadInitial();
+    await settle();
+
+    const pending = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.unbookmarkPost.mockReturnValueOnce(pending.promise);
+    const request = store.toggleBookmark(1);
+
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledTimes(1);
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(1);
+    expect(store.items).toHaveLength(0);
+
+    pending.resolve({ post_id: 1, bookmarked: false });
+    expect(await request).toBe(true);
   });
 });

@@ -35,6 +35,7 @@ import {
   syncExternalPostBookmarkState,
   syncExternalPostLikeState,
   syncExternalPostRepostState,
+  beginBookmarkStateMutation,
 } from './sessionSync';
 
 const pageSize = 20;
@@ -536,6 +537,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const post = findPost(postID);
     if (!post || post.bookmarkStatus !== 'ready' || bookmarkPendingPostIDs.has(postID)) return false;
     const previousBookmarked = post.bookmarked;
+    beginBookmarkStateMutation(postID);
     const version = bumpVersion(bookmarkMutationVersions, postID);
     const generation = bookmarkGeneration;
     const capturedViewerID = viewerID.value;

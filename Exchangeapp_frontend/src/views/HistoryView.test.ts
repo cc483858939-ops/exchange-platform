@@ -37,6 +37,7 @@ vi.mock('../services/likeService', () => ({
 }));
 
 vi.mock('../store/sessionSync', () => ({
+  beginBookmarkStateMutation: vi.fn(),
   registerHistorySessionSync: vi.fn((sync: any) => { mocks.historySync = sync; }),
   syncExternalPostLikeState: vi.fn((update: any) => {
     mocks.externalLike(update);

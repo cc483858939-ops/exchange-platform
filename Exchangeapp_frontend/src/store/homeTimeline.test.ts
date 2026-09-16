@@ -3,6 +3,10 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedPost } from '../types/Feed';
+import {
+  captureBookmarkStateSyncVersion,
+  syncHydratedPostBookmarkState,
+} from './sessionSync';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as {
@@ -958,6 +962,28 @@ describe('home timeline session store', () => {
     expect(store.following.loadingMore).toBe(false);
     expect(store.following.items).toHaveLength(0);
     expect(store.following.stale).toBe(true);
+  });
+
+  it('advances the shared bookmark fence before a Home mutation settles', async () => {
+    const store = useHomeTimelineStore();
+    const feedPost = feedPostFixture(4001, 7);
+    store.following.items = [feedPost];
+    const capturedVersion = captureBookmarkStateSyncVersion(4001);
+    const pending = deferred<{ bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(pending.promise);
+
+    const request = store.toggleBookmark(4001);
+
+    expect(mocks.bookmarkPost).toHaveBeenCalledWith(4001);
+    expect(feedPost.bookmarked).toBe(true);
+    expect(syncHydratedPostBookmarkState({
+      postId: 4001,
+      bookmarked: false,
+      status: 'ready',
+    }, capturedVersion)).toBe(false);
+
+    pending.resolve({ bookmarked: true });
+    expect(await request).toBe('succeeded');
   });
 });
 

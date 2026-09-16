@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   bookmarkPost: vi.fn(),
   unbookmarkPost: vi.fn(),
   historySync: null as any,
+  beginBookmarkStateMutation: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -32,6 +33,7 @@ vi.mock('../services/repostService', () => ({
   undoRepostPost: mocks.undoRepostPost,
 }));
 vi.mock('./sessionSync', () => ({
+  beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
   registerHistorySessionSync: vi.fn((sync: any) => { mocks.historySync = sync; }),
   syncExternalPostLikeState: vi.fn((update: any) => {
     mocks.historySync?.applyExternalLikeStateLocal(update);
@@ -463,5 +465,23 @@ describe('historySession store', () => {
     store.applyExternalLikeStateLocal({ postId: 1, likes: 10, liked: true, status: 'ready' });
     expect(store.items[0].replyCount).toBe(9);
     expect(store.items[0].author.username).toBe('renamed');
+  });
+
+  it('begins the shared bookmark fence before a History mutation settles', async () => {
+    const store = createStore();
+    await loadReady(store, [4]);
+    store.items[0].bookmarkStatus = 'ready';
+    store.items[0].bookmarked = false;
+    const pending = deferred<{ bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(pending.promise);
+
+    const request = store.toggleBookmark(4);
+
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledTimes(1);
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(4);
+    expect(store.items[0].bookmarked).toBe(true);
+
+    pending.resolve({ bookmarked: true });
+    expect(await request).toBe(true);
   });
 });

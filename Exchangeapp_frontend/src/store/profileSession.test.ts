@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimelineItem } from '../services/postService';
 import type { FeedPost } from '../types/Feed';
 import type { ProfileTimelineItem } from './profileSession';
-import { registerHomeTimelineSync } from './sessionSync';
+import {
+  captureBookmarkStateSyncVersion,
+  registerHomeTimelineSync,
+  syncHydratedPostBookmarkState,
+} from './sessionSync';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as {
@@ -19,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     markPostDeleted: ReturnType<typeof vi.fn>;
     replaceAuthorIdentity: ReturnType<typeof vi.fn>;
     applyLikeStateUpdate: ReturnType<typeof vi.fn>;
+    applyBookmarkStateUpdate: ReturnType<typeof vi.fn>;
   } | null,
   getUser: vi.fn(),
   getUserTimeline: vi.fn(),
@@ -168,6 +173,7 @@ describe('profile session store', () => {
       replaceAuthorIdentity: vi.fn(),
       applyLikeStateUpdate: vi.fn(),
       applyRepostStateUpdate: vi.fn(),
+      applyBookmarkStateUpdate: vi.fn(),
     });
     mocks.getUser.mockReset().mockImplementation((id: string) => Promise.resolve(profile(Number(id))));
     mocks.getUserTimeline.mockReset().mockResolvedValue({ items: [], next_cursor: null });
@@ -859,5 +865,45 @@ describe('profile session store', () => {
     store.registerPublishedTimelinePost(post(9, 7), 7);
     expect(store.getSession(7)?.timelineItems[0].post.id).toBe(9);
     expect(store.getSession(7)?.timelineLoaded).toBe(false);
+  });
+
+  it('advances the shared bookmark fence before a Profile mutation settles', async () => {
+    const store = useProfileSessionStore();
+    const feedPost: FeedPost = {
+      id: 4002,
+      author: author(7),
+      content: 'Post 4002',
+      language: 'und',
+      media: [],
+      createdAt: '2026-08-24T00:00:00.000Z',
+      likeCount: 0,
+      replyCount: 0,
+      viewCount: 0,
+      liked: false,
+      likeStatus: 'ready',
+      repostCount: 0,
+      reposted: false,
+      repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
+    };
+    const session = store.ensureSession(7)!;
+    session.timelineItems = [profileTimelineItem(feedPost)];
+    const capturedVersion = captureBookmarkStateSyncVersion(4002);
+    const pending = deferred<{ bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(pending.promise);
+
+    const request = store.toggleBookmark(4002, 7);
+
+    expect(mocks.bookmarkPost).toHaveBeenCalledWith(4002);
+    expect(feedPost.bookmarked).toBe(true);
+    expect(syncHydratedPostBookmarkState({
+      postId: 4002,
+      bookmarked: false,
+      status: 'ready',
+    }, capturedVersion)).toBe(false);
+
+    pending.resolve({ bookmarked: true });
+    expect(await request).toBe(true);
   });
 });

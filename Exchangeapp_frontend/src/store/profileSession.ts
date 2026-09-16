@@ -50,6 +50,7 @@ import {
   syncProfileLikeState,
   syncProfileRepostState,
   syncProfileBookmarkState,
+  beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
@@ -1130,6 +1131,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     ) return false;
 
     const previousBookmarked = post.bookmarked;
+    beginBookmarkStateMutation(postId);
     const mutationVersion = bumpBookmarkMutationVersion(postId);
     const capturedBookmarkGeneration = bookmarkGeneration;
     const capturedViewerGeneration = viewerGeneration.value;

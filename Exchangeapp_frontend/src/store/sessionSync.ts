@@ -92,6 +92,10 @@ export const captureBookmarkStateSyncVersion = (postID: number) => (
   getBookmarkStateSyncVersion(postID)
 );
 
+export const beginBookmarkStateMutation = (postID: number) => {
+  bumpBookmarkStateSyncVersion(postID);
+};
+
 export const registerHomeTimelineSync = (sync: HomeTimelineSync) => {
   homeTimelineSync = sync;
 };

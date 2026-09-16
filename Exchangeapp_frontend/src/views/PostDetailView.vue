@@ -556,6 +556,7 @@ import {
   registerPostDetailSessionSync,
   syncExternalPostRemoval,
   syncExternalReplyCount,
+  beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
 } from '../store/sessionSync';
 import type { Post } from '../types/Post';
@@ -1497,6 +1498,8 @@ const toggleBookmark = async () => {
 
   const detailVersion = detailRequestVersion;
   const id = postId.value;
+  const normalizedPostID = Number(id);
+  beginBookmarkStateMutation(normalizedPostID);
   const mutationVersion = ++bookmarkMutationVersion;
   const previousBookmarked = bookmarked.value;
   bookmarkSubmitting.value = true;
@@ -1511,7 +1514,7 @@ const toggleBookmark = async () => {
     bookmarked.value = response.bookmarked;
     bookmarkStateUnavailable.value = false;
     syncExternalPostBookmarkState({
-      postId: Number(id),
+      postId: normalizedPostID,
       bookmarked: response.bookmarked,
       status: 'ready',
     });
@@ -1570,6 +1573,7 @@ const toggleReplyBookmark = async (replyID: number) => {
   const reply = replies.value.find(candidate => candidate.id === replyID);
   if (!reply) return;
   const previousBookmarked = state.bookmarked;
+  beginBookmarkStateMutation(replyID);
   replyBookmarkError.value = '';
   const mutationVersion = (replyBookmarkMutationVersions.get(replyID) ?? 0) + 1;
   replyBookmarkMutationVersions.set(replyID, mutationVersion);

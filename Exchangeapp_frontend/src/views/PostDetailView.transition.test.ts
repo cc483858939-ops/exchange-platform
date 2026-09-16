@@ -100,6 +100,7 @@ vi.mock('../services/postViewTelemetry', () => ({
 }));
 
 vi.mock('../store/sessionSync', () => ({
+  beginBookmarkStateMutation: vi.fn(),
   registerPostDetailSessionSync: vi.fn(),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),

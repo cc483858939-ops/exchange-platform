@@ -42,9 +42,11 @@ const mocks = vi.hoisted(() => ({
     markPostDeleted: vi.fn(),
   },
   externalLike: vi.fn(),
+  externalBookmark: vi.fn(),
   externalRepost: vi.fn(),
   externalRemoval: vi.fn(),
   externalReplyCount: vi.fn(),
+  beginBookmarkStateMutation: vi.fn(),
   detailSync: null as { applyExternalBookmarkStateLocal: (update: unknown) => boolean } | null,
 }));
 
@@ -62,10 +64,12 @@ vi.mock('../store/postDetailHandoff', () => ({
   usePostDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
 }));
 vi.mock('../store/sessionSync', () => ({
+  beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
   registerPostDetailSessionSync: vi.fn((sync: typeof mocks.detailSync) => {
     mocks.detailSync = sync;
   }),
   syncExternalPostLikeState: mocks.externalLike,
+  syncExternalPostBookmarkState: mocks.externalBookmark,
   syncExternalPostRepostState: mocks.externalRepost,
   markOwnProfileTimelineStale: vi.fn(),
   syncExternalPostRemoval: mocks.externalRemoval,
@@ -260,6 +264,29 @@ describe('PostDetailView mutation synchronization', () => {
     failed.unmount();
   });
 
+  it('begins the shared fence before a main Post bookmark request settles', async () => {
+    const mutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(mutation.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+    await mounted.vm.$nextTick();
+
+    const bookmark = mounted.get('.post-detail__bookmark');
+    await bookmark.trigger('click');
+
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledTimes(1);
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(42);
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-busy')).toBe('true');
+
+    mutation.resolve({ post_id: 42, bookmarked: true });
+    await flushPromises();
+
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-busy')).toBeUndefined();
+    mounted.unmount();
+  });
+
   it('optimistically toggles Detail Repost, settles from server state, and syncs cached surfaces', async () => {
     mocks.getPostRepostState.mockResolvedValueOnce({ reposts: 8, reposted: false });
     mocks.repostPost.mockResolvedValueOnce({ reposts: 9, reposted: true });
@@ -365,6 +392,9 @@ describe('PostDetailView mutation synchronization', () => {
     await mounted.vm.$nextTick();
     mocks.bookmarkPost.mockReturnValueOnce(mutation.promise);
     await mounted.get('[data-id="9"]').trigger('click');
+
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledTimes(1);
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(9);
 
     hydration.resolve({
       items: [{ post_id: 9, bookmarked: false }],

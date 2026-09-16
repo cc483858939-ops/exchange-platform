@@ -13,6 +13,7 @@ import {
   registerSearchSessionSync,
   registerBookmarksSessionSync,
   captureBookmarkStateSyncVersion,
+  beginBookmarkStateMutation,
   syncExternalPostLikeState,
   syncExternalPostRepostState,
   syncExternalPostBookmarkState,
@@ -161,6 +162,20 @@ describe('sessionSync external mutation sinks', () => {
       status: 'ready',
     }, capturedVersion)).toBe(false);
     expect(bookmarks.applyExternalBookmarkStateLocal).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates an older bookmark hydration as soon as a mutation begins', () => {
+    const { bookmarks } = registerSinks();
+    const capturedVersion = captureBookmarkStateSyncVersion(42001);
+
+    beginBookmarkStateMutation(42001);
+
+    expect(syncHydratedPostBookmarkState({
+      postId: 42001,
+      bookmarked: false,
+      status: 'ready',
+    }, capturedVersion)).toBe(false);
+    expect(bookmarks.applyExternalBookmarkStateLocal).not.toHaveBeenCalled();
   });
 
   it('sends external removals to Home and Profile exactly once', () => {

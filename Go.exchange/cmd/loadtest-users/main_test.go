@@ -136,7 +136,15 @@ func TestProvisionSyntheticUsersIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ordinary := models.User{Username: ordinaryUsername, Password: "ordinary-old", DisplayName: "Do not touch"}
+	ordinaryPasswordHash, err := utils.HashPassword("ordinary-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary := models.User{
+		Username:    ordinaryUsername,
+		Password:    ordinaryPasswordHash,
+		DisplayName: "Do not touch",
+	}
 	if err := db.Create(&ordinary).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +169,9 @@ func TestProvisionSyntheticUsersIntegration(t *testing.T) {
 	if err := db.Where("username = ?", ordinaryUsername).First(&unchanged).Error; err != nil {
 		t.Fatal(err)
 	}
-	if unchanged.DisplayName != ordinary.DisplayName || !utils.CheckPassword("ordinary-old", unchanged.Password) {
+	if unchanged.DisplayName != ordinary.DisplayName ||
+		unchanged.Password != ordinary.Password ||
+		!utils.CheckPassword("ordinary-old", unchanged.Password) {
 		t.Fatalf("ordinary user was changed=%+v", unchanged)
 	}
 }

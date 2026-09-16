@@ -45,6 +45,7 @@ import {
   syncHomeLikeState,
   syncHomeRepostState,
   syncHomeBookmarkState,
+  beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
@@ -1172,6 +1173,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
 
     const previousBookmarked = post.bookmarked;
+    beginBookmarkStateMutation(postId);
     const mutationVersion = bumpBookmarkMutationVersion(postId);
     const capturedBookmarkGeneration = bookmarkGeneration;
     const capturedAuthGeneration = authGeneration;

@@ -36,6 +36,7 @@ import {
   syncExternalPostLikeState,
   syncExternalPostRepostState,
   syncHistoryBookmarkState,
+  beginBookmarkStateMutation,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
 
@@ -883,6 +884,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     ) return false;
 
     const previousBookmarked = post.bookmarked;
+    beginBookmarkStateMutation(postID);
     const mutationVersion = bumpBookmarkMutationVersion(postID);
     const capturedBookmarkGeneration = bookmarkGeneration;
     const capturedViewerGeneration = viewerGeneration.value;
