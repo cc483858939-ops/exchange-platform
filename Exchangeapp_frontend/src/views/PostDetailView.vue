@@ -152,6 +152,18 @@
               variant="detail"
               @toggle="toggleLike"
             />
+            <button
+              class="post-detail__metric post-detail__bookmark"
+              :class="{ 'post-detail__bookmark--active': bookmarked }"
+              type="button"
+              :disabled="!authStore.isAuthenticated || bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
+              :aria-busy="bookmarkStateLoading || bookmarkSubmitting ? 'true' : undefined"
+              :aria-pressed="bookmarked"
+              :aria-label="detailBookmarkLabel"
+              @click="toggleBookmark"
+            >
+              <AppIcon name="bookmark" :size="20" :filled="bookmarked" />
+            </button>
           </template>
           <template v-else>
             <span
@@ -191,6 +203,11 @@
           class="detail-inline-error"
           role="status"
         >{{ repostError }}</p>
+        <p
+          v-if="detailPresentation.kind === 'post' && bookmarkError"
+          class="detail-inline-error"
+          role="status"
+        >{{ bookmarkError }}</p>
 
         <div
           v-if="detailPresentation.kind === 'warm'"
@@ -218,6 +235,9 @@
         />
 
         <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
+        <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
+          {{ replyBookmarkError }}
+        </p>
 
         <div v-if="repliesInitialLoading" class="replies-state" aria-live="polite">
           Loading replies...
@@ -236,9 +256,12 @@
           :has-next="Boolean(nextCursor)"
           :loading-more="repliesLoadingMore"
           :load-more-error="repliesLoadMoreError"
+          :bookmark-states="replyBookmarkStates"
+          :bookmark-pending-ids="replyBookmarkPendingIDs"
           @load-more="loadMoreReplies"
           @retry="retryLoadMoreReplies"
           @request-delete="requestDeleteReply"
+          @toggle-bookmark="toggleReplyBookmark"
           @open-media="openMediaViewer"
         />
       </section>
@@ -359,6 +382,18 @@
                 variant="detail"
                 @toggle="toggleLike"
               />
+              <button
+                class="post-detail__metric post-detail__bookmark"
+                :class="{ 'post-detail__bookmark--active': bookmarked }"
+                type="button"
+                :disabled="!authStore.isAuthenticated || bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
+                :aria-busy="bookmarkStateLoading || bookmarkSubmitting ? 'true' : undefined"
+                :aria-pressed="bookmarked"
+                :aria-label="detailBookmarkLabel"
+                @click="toggleBookmark"
+              >
+                <AppIcon name="bookmark" :size="20" :filled="bookmarked" />
+              </button>
             </template>
             <template v-else>
               <span
@@ -398,6 +433,11 @@
             class="detail-inline-error"
             role="status"
           >{{ repostError }}</p>
+          <p
+            v-if="detailPresentation.kind === 'post' && bookmarkError"
+            class="detail-inline-error"
+            role="status"
+          >{{ bookmarkError }}</p>
 
           <template v-if="detailPresentation.kind === 'post'">
             <ReplyComposer
@@ -410,6 +450,9 @@
             />
 
             <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
+            <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
+              {{ replyBookmarkError }}
+            </p>
 
             <div v-if="repliesInitialLoading" class="replies-state" aria-live="polite">
               Loading replies...
@@ -427,10 +470,13 @@
               :deleting-reply-id="deletingReplyId"
               :has-next="Boolean(nextCursor)"
               :loading-more="repliesLoadingMore"
-              :load-more-error="repliesLoadMoreError"
-              :auto-load="false"
-              @load-more="loadMoreReplies"
+          :load-more-error="repliesLoadMoreError"
+          :auto-load="false"
+          :bookmark-states="replyBookmarkStates"
+          :bookmark-pending-ids="replyBookmarkPendingIDs"
+          @load-more="loadMoreReplies"
               @retry="retryLoadMoreReplies"
+              @toggle-bookmark="toggleReplyBookmark"
               @open-media="openMediaViewer"
             />
           </template>
@@ -477,7 +523,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 import LinkifiedText from '../components/content/LinkifiedText.vue';
@@ -492,6 +538,7 @@ import ReplyList from '../components/replies/ReplyList.vue';
 import { createPostReply, deletePostReply, getPostReplies } from '../services/replyService';
 import { deletePost, getPostById } from '../services/postService';
 import { getPostLikeState, likePost, unlikePost } from '../services/likeService';
+import { bookmarkPost, getPostBookmarkStates, unbookmarkPost } from '../services/bookmarkService';
 import { getPostRepostState, repostPost, undoRepostPost } from '../services/repostService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
@@ -505,12 +552,14 @@ import { useReplyDraftStore } from '../store/replyDraft';
 import {
   syncExternalPostLikeState,
   syncExternalPostRepostState,
+  syncExternalPostBookmarkState,
+  registerPostDetailSessionSync,
   syncExternalPostRemoval,
   syncExternalReplyCount,
   markOwnProfileTimelineStale,
 } from '../store/sessionSync';
 import type { Post } from '../types/Post';
-import type { FeedPost } from '../types/Feed';
+import type { FeedBookmarkStateUpdate, FeedBookmarkStatus, FeedPost } from '../types/Feed';
 import type { RecommendationTracking } from '../types/Recommendation';
 import type { PublicAuthor } from '../types/User';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
@@ -558,6 +607,11 @@ const repostStateLoading = ref(false);
 const repostSubmitting = ref(false);
 const repostError = ref('');
 const repostStateUnavailable = ref(false);
+const bookmarked = ref(false);
+const bookmarkStateLoading = ref(false);
+const bookmarkSubmitting = ref(false);
+const bookmarkError = ref('');
+const bookmarkStateUnavailable = ref(false);
 
 const replies = ref<Post[]>([]);
 const nextCursor = ref<string | null>(null);
@@ -574,6 +628,11 @@ const composerRef = ref<InstanceType<typeof ReplyComposer> | null>(null);
 const mediaContextComposerRef = ref<InstanceType<typeof ReplyComposer> | null>(null);
 const replyCount = ref(0);
 const viewCount = ref(0);
+const replyBookmarkStates = reactive<Record<number, { bookmarked: boolean; status: FeedBookmarkStatus }>>({});
+const replyBookmarkPendingIDs = reactive(new Set<number>());
+const replyBookmarkError = ref('');
+let replyBookmarkRequestVersion = 0;
+const replyBookmarkMutationVersions = new Map<number, number>();
 
 type MediaViewerState = {
   media: Post['media'];
@@ -588,6 +647,8 @@ let likeRequestVersion = 0;
 let likeMutationVersion = 0;
 let repostRequestVersion = 0;
 let repostMutationVersion = 0;
+let bookmarkRequestVersion = 0;
+let bookmarkMutationVersion = 0;
 let repliesRequestVersion = 0;
 let replyDeleteRequestVersion = 0;
 let replyIntentTask: Promise<void> | null = null;
@@ -908,6 +969,10 @@ const detailRepostLabel = computed(() => {
     ? 'Undo repost, ' + count
     : 'Repost post, ' + count;
 });
+const detailBookmarkLabel = computed(() => {
+  if (bookmarkStateUnavailable.value) return 'Bookmark unavailable';
+  return bookmarked.value ? 'Remove bookmark' : 'Bookmark post';
+});
 const canDeletePost = computed(() => Boolean(
   post.value
   && authStore.isAuthenticated
@@ -1045,8 +1110,19 @@ const resetRepostState = () => {
   repostStateUnavailable.value = false;
 };
 
+const resetBookmarkState = () => {
+  bookmarkRequestVersion += 1;
+  bookmarkMutationVersion += 1;
+  bookmarked.value = false;
+  bookmarkStateLoading.value = false;
+  bookmarkSubmitting.value = false;
+  bookmarkError.value = '';
+  bookmarkStateUnavailable.value = false;
+};
+
 const resetRepliesState = () => {
   repliesRequestVersion += 1;
+  replyBookmarkRequestVersion += 1;
   replyDeleteRequestVersion += 1;
   replies.value = [];
   nextCursor.value = null;
@@ -1056,10 +1132,16 @@ const resetRepliesState = () => {
   repliesLoadMoreError.value = '';
   replySubmitting.value = false;
   replyError.value = '';
+  replyBookmarkError.value = '';
   deletingReplyId.value = null;
   deleteReplyCandidateId.value = null;
   replyDeleteError.value = '';
   replyCount.value = 0;
+  replyBookmarkPendingIDs.clear();
+  replyBookmarkMutationVersions.clear();
+  Object.keys(replyBookmarkStates).forEach((replyID) => {
+    delete replyBookmarkStates[Number(replyID)];
+  });
 };
 
 const resetPostState = () => {
@@ -1267,6 +1349,43 @@ const loadRepostState = async (id: string, detailVersion: number) => {
   }
 };
 
+const loadBookmarkState = async (id: string, detailVersion: number) => {
+  if (!authStore.isAuthenticated) return;
+  const requestVersion = ++bookmarkRequestVersion;
+  const mutationVersionAtStart = bookmarkMutationVersion;
+  bookmarkStateLoading.value = true;
+  bookmarkError.value = '';
+  bookmarkStateUnavailable.value = false;
+  try {
+    const response = await getPostBookmarkStates([Number(id)]);
+    if (
+      detailVersion !== detailRequestVersion
+      || requestVersion !== bookmarkRequestVersion
+      || mutationVersionAtStart !== bookmarkMutationVersion
+    ) return;
+    const item = response.items.find(candidate => candidate.post_id === Number(id));
+    if (item) {
+      bookmarked.value = item.bookmarked;
+      return;
+    }
+    bookmarkStateUnavailable.value = true;
+    bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
+  } catch {
+    if (
+      detailVersion === detailRequestVersion
+      && requestVersion === bookmarkRequestVersion
+      && mutationVersionAtStart === bookmarkMutationVersion
+    ) {
+      bookmarkStateUnavailable.value = true;
+      bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && requestVersion === bookmarkRequestVersion) {
+      bookmarkStateLoading.value = false;
+    }
+  }
+};
+
 const toggleLike = async () => {
   if (
     !post.value ||
@@ -1367,6 +1486,148 @@ const toggleRepost = async () => {
   }
 };
 
+const toggleBookmark = async () => {
+  if (
+    !post.value
+    || !authStore.isAuthenticated
+    || bookmarkStateLoading.value
+    || bookmarkSubmitting.value
+    || bookmarkStateUnavailable.value
+  ) return;
+
+  const detailVersion = detailRequestVersion;
+  const id = postId.value;
+  const mutationVersion = ++bookmarkMutationVersion;
+  const previousBookmarked = bookmarked.value;
+  bookmarkSubmitting.value = true;
+  bookmarkError.value = '';
+  bookmarked.value = !previousBookmarked;
+
+  try {
+    const response = previousBookmarked
+      ? await unbookmarkPost(id)
+      : await bookmarkPost(id);
+    if (detailVersion !== detailRequestVersion || mutationVersion !== bookmarkMutationVersion) return;
+    bookmarked.value = response.bookmarked;
+    bookmarkStateUnavailable.value = false;
+    syncExternalPostBookmarkState({
+      postId: Number(id),
+      bookmarked: response.bookmarked,
+      status: 'ready',
+    });
+  } catch {
+    if (detailVersion === detailRequestVersion && mutationVersion === bookmarkMutationVersion) {
+      bookmarked.value = previousBookmarked;
+      bookmarkError.value = 'Could not update bookmark. Please try again.';
+    }
+  } finally {
+    if (detailVersion === detailRequestVersion && mutationVersion === bookmarkMutationVersion) {
+      bookmarkSubmitting.value = false;
+    }
+  }
+};
+
+const hydrateReplyBookmarkStates = async (replyItems: Post[], detailVersion: number) => {
+  if (!authStore.isAuthenticated || replyItems.length === 0) return;
+  const postIDs = Array.from(new Set(replyItems.map(reply => reply.id)));
+  const requestVersion = ++replyBookmarkRequestVersion;
+  try {
+    const response = await getPostBookmarkStates(postIDs);
+    if (detailVersion !== detailRequestVersion || requestVersion !== replyBookmarkRequestVersion) return;
+    const readyIDs = new Set<number>();
+    response.items.forEach((item) => {
+      readyIDs.add(item.post_id);
+      replyBookmarkStates[item.post_id] = {
+        bookmarked: item.bookmarked,
+        status: 'ready',
+      };
+    });
+    response.unavailable_post_ids.forEach((replyID) => {
+      if (readyIDs.has(replyID)) return;
+      replyBookmarkStates[replyID] = { bookmarked: false, status: 'unavailable' };
+    });
+  } catch {
+    if (detailVersion !== detailRequestVersion || requestVersion !== replyBookmarkRequestVersion) return;
+    postIDs.forEach((replyID) => {
+      replyBookmarkStates[replyID] = { bookmarked: false, status: 'unavailable' };
+    });
+  }
+};
+
+const toggleReplyBookmark = async (replyID: number) => {
+  if (!authStore.isAuthenticated || replyBookmarkPendingIDs.has(replyID)) return;
+  const state = replyBookmarkStates[replyID];
+  if (!state || state.status !== 'ready') return;
+  const reply = replies.value.find(candidate => candidate.id === replyID);
+  if (!reply) return;
+  const previousBookmarked = state.bookmarked;
+  replyBookmarkError.value = '';
+  const mutationVersion = (replyBookmarkMutationVersions.get(replyID) ?? 0) + 1;
+  replyBookmarkMutationVersions.set(replyID, mutationVersion);
+  const capturedDetailVersion = detailRequestVersion;
+  replyBookmarkPendingIDs.add(replyID);
+  state.bookmarked = !previousBookmarked;
+  const isCurrent = () => (
+    capturedDetailVersion === detailRequestVersion
+    && replyBookmarkMutationVersions.get(replyID) === mutationVersion
+    && replyBookmarkPendingIDs.has(replyID)
+  );
+  try {
+    const response = previousBookmarked
+      ? await unbookmarkPost(replyID)
+      : await bookmarkPost(replyID);
+    if (!isCurrent()) return;
+    replyBookmarkMutationVersions.set(replyID, mutationVersion + 1);
+    state.bookmarked = response.bookmarked;
+    replyBookmarkPendingIDs.delete(replyID);
+    syncExternalPostBookmarkState({
+      postId: replyID,
+      bookmarked: response.bookmarked,
+      status: 'ready',
+    });
+  } catch {
+    if (!isCurrent()) return;
+    replyBookmarkMutationVersions.set(replyID, mutationVersion + 1);
+    state.bookmarked = previousBookmarked;
+    replyBookmarkPendingIDs.delete(replyID);
+    replyBookmarkError.value = 'Could not update bookmark. Please try again.';
+  }
+};
+
+const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
+  let applied = false;
+  if (post.value?.id === update.postId) {
+    bookmarkMutationVersion += 1;
+    bookmarkSubmitting.value = false;
+    if (update.status === 'ready') {
+      bookmarked.value = update.bookmarked;
+      bookmarkStateUnavailable.value = false;
+      bookmarkError.value = '';
+    } else if (update.status === 'unavailable') {
+      bookmarkStateUnavailable.value = true;
+      bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
+    }
+    applied = true;
+  }
+
+  const replyState = replyBookmarkStates[update.postId];
+  if (replyState) {
+    const nextVersion = (replyBookmarkMutationVersions.get(update.postId) ?? 0) + 1;
+    replyBookmarkMutationVersions.set(update.postId, nextVersion);
+    replyBookmarkPendingIDs.delete(update.postId);
+    if (update.status === 'ready') {
+      replyState.bookmarked = update.bookmarked;
+      replyState.status = 'ready';
+    } else if (update.status === 'unavailable') {
+      replyState.bookmarked = false;
+      replyState.status = 'unavailable';
+    }
+    applied = true;
+  }
+
+  return applied;
+};
+
 const loadInitialReplies = async (id: string, detailVersion: number) => {
   const requestVersion = ++repliesRequestVersion;
   repliesInitialLoading.value = true;
@@ -1384,6 +1645,7 @@ const loadInitialReplies = async (id: string, detailVersion: number) => {
 
     replies.value = mergeReplies(replies.value.concat(page.items));
     nextCursor.value = page.next_cursor || null;
+    void hydrateReplyBookmarkStates(page.items, detailVersion);
   } catch {
     if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
       repliesError.value = 'The replies could not be loaded.';
@@ -1420,6 +1682,7 @@ const loadMoreReplies = async () => {
 
     replies.value = mergeReplies(replies.value.concat(page.items));
     nextCursor.value = page.next_cursor || null;
+    void hydrateReplyBookmarkStates(page.items, detailVersion);
   } catch {
     if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
       repliesLoadMoreError.value = 'Could not load more replies.';
@@ -1468,6 +1731,7 @@ const handleCreateReply = async (content: string) => {
     }
 
     replies.value = mergeReplies([created].concat(replies.value));
+    void hydrateReplyBookmarkStates([created], detailVersion);
     repliesError.value = '';
     replyCount.value = clampCount(replyCount.value + 1);
     syncExternalReplyCount({
@@ -1650,6 +1914,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
   resetPostState();
   resetLikeState();
   resetRepostState();
+  resetBookmarkState();
   resetRepliesState();
   handoffPost.value = null;
 
@@ -1695,6 +1960,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     }
     void loadLikeState(id, detailVersion);
     void loadRepostState(id, detailVersion);
+    void loadBookmarkState(id, detailVersion);
     void loadInitialReplies(id, detailVersion);
   } catch (error) {
     if (detailVersion === detailRequestVersion) {
@@ -1773,6 +2039,7 @@ onBeforeRouteLeave(to => {
 });
 
 onMounted(() => {
+  registerPostDetailSessionSync({ applyExternalBookmarkStateLocal });
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('scroll', handleReadScroll, { passive: true });
   window.addEventListener('resize', updateReadGeometry);
@@ -1780,6 +2047,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  registerPostDetailSessionSync(null);
   finishRead('route_leave');
   void recommendationTelemetry.flush(false);
   disconnectReadGeometryObserver();
@@ -2090,6 +2358,15 @@ onBeforeUnmount(() => {
 
 .post-detail__engagement > button.post-detail__metric:active {
   transform: scale(0.97);
+}
+
+.post-detail__bookmark--active {
+  color: var(--color-accent);
+}
+
+.post-detail__bookmark:disabled {
+  cursor: default;
+  opacity: 0.64;
 }
 
 .detail-inline-error,

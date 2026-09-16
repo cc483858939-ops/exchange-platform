@@ -11,7 +11,10 @@
         :reply="reply"
         :can-delete="Boolean(currentIdentity && currentIdentity.id === reply.author.id)"
         :deleting="deletingReplyId === reply.id"
+        :bookmark-state="bookmarkStates[reply.id]"
+        :bookmark-pending="bookmarkPendingIDs.has(reply.id)"
         @request-delete="emit('requestDelete', $event)"
+        @toggle-bookmark="emit('toggleBookmark', $event)"
         @open-media="handleOpenMedia"
       />
     </template>
@@ -37,6 +40,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Post } from '../../types/Post';
+import type { FeedBookmarkStatus } from '../../types/Feed';
 import type { AuthIdentity } from '../../utils/authIdentity';
 import ReplyItem from './ReplyItem.vue';
 
@@ -48,14 +52,19 @@ const props = withDefaults(defineProps<{
   loadingMore: boolean;
   loadMoreError: string;
   autoLoad?: boolean;
+  bookmarkStates?: Record<number, { bookmarked: boolean; status: FeedBookmarkStatus }>;
+  bookmarkPendingIDs?: Set<number>;
 }>(), {
   autoLoad: true,
+  bookmarkStates: () => ({}),
+  bookmarkPendingIDs: () => new Set<number>(),
 });
 
 const emit = defineEmits<{
   loadMore: [];
   retry: [];
   requestDelete: [replyID: number];
+  toggleBookmark: [replyID: number];
   openMedia: [media: Post['media'], index: number];
 }>();
 

@@ -10,6 +10,11 @@ import {
 import { getPostRecommendations } from '../services/recommendationService';
 import { getPostLikeStates, likePost, unlikePost } from '../services/likeService';
 import {
+  bookmarkPost,
+  getPostBookmarkStates,
+  unbookmarkPost,
+} from '../services/bookmarkService';
+import {
   getPostRepostStates,
   repostPost,
   undoRepostPost,
@@ -18,6 +23,7 @@ import type { UserFollowState } from '../services/userService';
 import type { RecommendedPost } from '../types/Recommendation';
 import type {
   FeedLikeStateUpdate,
+  FeedBookmarkStateUpdate,
   FeedPost,
   FeedRepostStateUpdate,
   FeedTab,
@@ -25,8 +31,10 @@ import type {
 import type { PublicAuthor } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
+  applyFeedBookmarkStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
@@ -36,6 +44,7 @@ import {
   syncHomeAuthorIdentity,
   syncHomeLikeState,
   syncHomeRepostState,
+  syncHomeBookmarkState,
   markOwnProfileTimelineStale,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
@@ -120,6 +129,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const homeReselectVersion = ref(0);
   const likePendingPostIds = reactive(new Set<number>());
   const repostPendingPostIds = reactive(new Set<number>());
+  const bookmarkPendingPostIds = reactive(new Set<number>());
   const pendingDeletePostIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
 
@@ -127,6 +137,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const forYouLoadedPostIds = new Set<number>();
   const likeMutationVersions = new Map<number, number>();
   const repostMutationVersions = new Map<number, number>();
+  const bookmarkMutationVersions = new Map<number, number>();
   let authGeneration = 0;
   let forYouRequestVersion = 0;
   let forYouPagingVersion = 0;
@@ -135,6 +146,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   let followingPagingVersion = 0;
   let likeGeneration = 0;
   let repostGeneration = 0;
+  let bookmarkGeneration = 0;
 
   const clearLikeWork = () => {
     likeGeneration += 1;
@@ -146,6 +158,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     repostGeneration += 1;
     repostPendingPostIds.clear();
     repostMutationVersions.clear();
+  };
+
+  const clearBookmarkWork = () => {
+    bookmarkGeneration += 1;
+    bookmarkPendingPostIds.clear();
+    bookmarkMutationVersions.clear();
   };
 
   const resetForYou = () => {
@@ -182,6 +200,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     authGeneration += 1;
     clearLikeWork();
     clearRepostWork();
+    clearBookmarkWork();
     pendingDeletePostIds.clear();
     deleteErrors.clear();
     activeTab.value = 'for-you';
@@ -231,6 +250,15 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const bumpRepostMutationVersion = (postId: number) => {
     const next = getRepostMutationVersion(postId) + 1;
     repostMutationVersions.set(postId, next);
+    return next;
+  };
+
+  const getBookmarkMutationVersion = (postId: number) =>
+    bookmarkMutationVersions.get(postId) ?? 0;
+
+  const bumpBookmarkMutationVersion = (postId: number) => {
+    const next = getBookmarkMutationVersion(postId) + 1;
+    bookmarkMutationVersions.set(postId, next);
     return next;
   };
 
@@ -303,6 +331,29 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     return applyRepostStateUpdateLocal(update);
   };
 
+  const applyBookmarkStateUpdateLocal = (
+    update: FeedBookmarkStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    if (
+      expectedVersion !== undefined
+      && getBookmarkMutationVersion(update.postId) !== expectedVersion
+    ) {
+      return false;
+    }
+    let applied = false;
+    forEachHomePost(update.postId, (post) => {
+      applied = applyFeedBookmarkStateUpdate(post, update) || applied;
+    });
+    return applied;
+  };
+
+  const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
+    bumpBookmarkMutationVersion(update.postId);
+    bookmarkPendingPostIds.delete(update.postId);
+    return applyBookmarkStateUpdateLocal(update);
+  };
+
   const applyReplyCountUpdateLocal = (update: PostReplyCountUpdate) => {
     const replyCount = normalizeReplyCount(update.replyCount);
     if (replyCount === null) return false;
@@ -356,6 +407,18 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       return false;
     }
     syncHomeRepostState(update);
+    return applied;
+  };
+
+  const applyBookmarkStateUpdate = (
+    update: FeedBookmarkStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    const applied = applyBookmarkStateUpdateLocal(update, expectedVersion);
+    if (expectedVersion !== undefined && !applied) {
+      return false;
+    }
+    syncHomeBookmarkState(update);
     return applied;
   };
 
@@ -501,6 +564,69 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
+  const markBookmarkUnavailableLocal = (
+    postIds: number[],
+    versions: Map<number, number>,
+  ) => {
+    postIds.forEach((postId) => {
+      const capturedVersion = versions.get(postId);
+      if (
+        capturedVersion === undefined
+        || getBookmarkMutationVersion(postId) !== capturedVersion
+      ) return;
+      forEachHomePost(postId, (post) => {
+        if (post.bookmarkStatus === 'unknown') setFeedPostBookmarkUnavailable(post);
+      });
+    });
+  };
+
+  const hydrateBookmarkStates = async (
+    postIds: number[],
+    isCurrent: () => boolean,
+  ) => {
+    const uniqueIDs = Array.from(new Set(postIds));
+    if (uniqueIDs.length === 0) return;
+    const versions = new Map(uniqueIDs.map((id) => [id, getBookmarkMutationVersion(id)]));
+    const capturedBookmarkGeneration = bookmarkGeneration;
+    try {
+      const response = await getPostBookmarkStates(uniqueIDs);
+      if (!isCurrent() || capturedBookmarkGeneration !== bookmarkGeneration) return;
+      const readyIDs = new Set<number>();
+      response.items.forEach((item) => {
+        const capturedVersion = versions.get(item.post_id);
+        if (
+          capturedVersion === undefined
+          || getBookmarkMutationVersion(item.post_id) !== capturedVersion
+          || !findPost(item.post_id)
+        ) return;
+        readyIDs.add(item.post_id);
+        applyBookmarkStateUpdateLocal({
+          postId: item.post_id,
+          bookmarked: item.bookmarked,
+          status: 'ready',
+        }, capturedVersion);
+      });
+      response.unavailable_post_ids.forEach((postId) => {
+        const capturedVersion = versions.get(postId);
+        if (
+          readyIDs.has(postId)
+          || capturedVersion === undefined
+          || getBookmarkMutationVersion(postId) !== capturedVersion
+          || !findPost(postId)
+        ) return;
+        applyBookmarkStateUpdateLocal({
+          postId,
+          bookmarked: false,
+          status: 'unavailable',
+        }, capturedVersion);
+      });
+    } catch {
+      if (isCurrent() && capturedBookmarkGeneration === bookmarkGeneration) {
+        markBookmarkUnavailableLocal(uniqueIDs, versions);
+      }
+    }
+  };
+
   const appendFollowingPosts = (activities: TimelineItem[]) => {
     const newPosts = activities
       .filter((activity) => {
@@ -621,6 +747,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         () => currentForYouRequest(version, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
       );
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      void hydrateBookmarkStates(
+        newItems.map(({ post }) => post.id),
+        () => currentForYouRequest(version, generation, capturedViewerID)
+          && bookmarkGeneration === capturedBookmarkGeneration,
+      );
     } catch {
       if (currentForYouRequest(version, generation, capturedViewerID)) {
         forYou.error = true;
@@ -681,6 +813,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         () => currentForYouRequest(requestVersion, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
       );
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      void hydrateBookmarkStates(
+        newItems.map(({ post }) => post.id),
+        () => currentForYouRequest(requestVersion, generation, capturedViewerID)
+          && bookmarkGeneration === capturedBookmarkGeneration,
+      );
     } catch {
       if (currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
         forYou.loadMoreError = true;
@@ -732,6 +870,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         newPosts.map((post) => post.id),
         () => currentFollowingRequest(version, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
+      );
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      void hydrateBookmarkStates(
+        newPosts.map((post) => post.id),
+        () => currentFollowingRequest(version, generation, capturedViewerID)
+          && bookmarkGeneration === capturedBookmarkGeneration,
       );
     } catch {
       if (currentFollowingRequest(version, generation, capturedViewerID)) {
@@ -790,6 +934,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         newPosts.map((post) => post.id),
         () => currentFollowingRequest(requestVersion, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
+      );
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      void hydrateBookmarkStates(
+        newPosts.map((post) => post.id),
+        () => currentFollowingRequest(requestVersion, generation, capturedViewerID)
+          && bookmarkGeneration === capturedBookmarkGeneration,
       );
     } catch {
       if (currentFollowingPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
@@ -872,6 +1022,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         freshPosts.map(post => post.id),
         () => currentFollowingRequest(version, generation, capturedViewerID)
           && repostGeneration === capturedRepostGeneration,
+      );
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      void hydrateBookmarkStates(
+        freshPosts.map(post => post.id),
+        () => currentFollowingRequest(version, generation, capturedViewerID)
+          && bookmarkGeneration === capturedBookmarkGeneration,
       );
     } catch {
       if (currentFollowingRefresh(version, generation, pagingVersion, capturedViewerID)) {
@@ -1005,6 +1161,61 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
+  const toggleBookmark = async (postId: number): Promise<HomeEngagementMutationResult> => {
+    const post = findPost(postId);
+    if (
+      !post
+      || post.bookmarkStatus !== 'ready'
+      || bookmarkPendingPostIds.has(postId)
+    ) {
+      return 'ignored';
+    }
+
+    const previousBookmarked = post.bookmarked;
+    const mutationVersion = bumpBookmarkMutationVersion(postId);
+    const capturedBookmarkGeneration = bookmarkGeneration;
+    const capturedAuthGeneration = authGeneration;
+    const capturedViewerID = viewerID.value;
+    bookmarkPendingPostIds.add(postId);
+    applyBookmarkStateUpdateLocal({
+      postId,
+      bookmarked: !previousBookmarked,
+      status: 'ready',
+    }, mutationVersion);
+
+    const isCurrent = () =>
+      isAuthenticatedForViewer(capturedViewerID)
+      && authGeneration === capturedAuthGeneration
+      && bookmarkGeneration === capturedBookmarkGeneration
+      && getBookmarkMutationVersion(postId) === mutationVersion
+      && bookmarkPendingPostIds.has(postId);
+
+    try {
+      const result = previousBookmarked
+        ? await unbookmarkPost(postId)
+        : await bookmarkPost(postId);
+      if (!isCurrent()) return 'ignored';
+      const settledVersion = bumpBookmarkMutationVersion(postId);
+      applyBookmarkStateUpdate({
+        postId,
+        bookmarked: result.bookmarked,
+        status: 'ready',
+      }, settledVersion);
+      bookmarkPendingPostIds.delete(postId);
+      return 'succeeded';
+    } catch {
+      if (!isCurrent()) return 'ignored';
+      const settledVersion = bumpBookmarkMutationVersion(postId);
+      applyBookmarkStateUpdateLocal({
+        postId,
+        bookmarked: previousBookmarked,
+        status: 'ready',
+      }, settledVersion);
+      bookmarkPendingPostIds.delete(postId);
+      return 'failed';
+    }
+  };
+
   const removePostLocal = (postId: number) => {
     following.items = following.items.filter((post) => post.id !== postId);
     forYou.items = forYou.items.filter((item) => item.post.id !== postId);
@@ -1013,6 +1224,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     likeMutationVersions.delete(postId);
     repostPendingPostIds.delete(postId);
     repostMutationVersions.delete(postId);
+    bookmarkPendingPostIds.delete(postId);
+    bookmarkMutationVersions.delete(postId);
     pendingDeletePostIds.delete(postId);
     deleteErrors.delete(postId);
   };
@@ -1127,6 +1340,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
+    applyBookmarkStateUpdateLocal,
+    applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
     reconcileFollowStateLocal,
     removePostLocal,
@@ -1171,6 +1386,17 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
           && repostGeneration === capturedRepostGeneration,
         );
       }
+      const bookmarkIDs = feedStore.recentlyPublishedPosts
+        .filter((post) => post.bookmarkStatus === 'unknown')
+        .map((post) => post.id);
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      if (bookmarkIDs.length > 0) {
+        void hydrateBookmarkStates(bookmarkIDs, () =>
+          isAuthenticatedForViewer(capturedViewerID)
+          && authGeneration === capturedAuthGeneration
+          && bookmarkGeneration === capturedBookmarkGeneration,
+        );
+      }
     },
     { immediate: true },
   );
@@ -1184,6 +1410,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     homeReselectVersion,
     likePendingPostIds,
     repostPendingPostIds,
+    bookmarkPendingPostIds,
     pendingDeletePostIds,
     deleteErrors,
     setViewer,
@@ -1199,12 +1426,15 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     retryFollowingLoadMore,
     toggleLike,
     toggleRepost,
+    toggleBookmark,
     findPost,
     applyLikeStateUpdate,
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
+    applyBookmarkStateUpdateLocal,
+    applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
     reconcileFollowStateLocal,
     dismissRecommendation,

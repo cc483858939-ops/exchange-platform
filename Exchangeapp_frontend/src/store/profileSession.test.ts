@@ -31,6 +31,9 @@ const mocks = vi.hoisted(() => ({
   getPostRepostStates: vi.fn(),
   repostPost: vi.fn(),
   undoRepostPost: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
+  bookmarkPost: vi.fn(),
+  unbookmarkPost: vi.fn(),
   deletePost: vi.fn(),
 }));
 
@@ -64,6 +67,12 @@ vi.mock('../services/repostService', () => ({
   getPostRepostStates: mocks.getPostRepostStates,
   repostPost: mocks.repostPost,
   undoRepostPost: mocks.undoRepostPost,
+}));
+
+vi.mock('../services/bookmarkService', () => ({
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
+  bookmarkPost: mocks.bookmarkPost,
+  unbookmarkPost: mocks.unbookmarkPost,
 }));
 
 import { useProfileSessionStore } from './profileSession';
@@ -170,12 +179,15 @@ describe('profile session store', () => {
     });
     mocks.getPostLikeStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostRepostStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.getPostBookmarkStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.followUser.mockReset();
     mocks.unfollowUser.mockReset();
     mocks.likePost.mockReset();
     mocks.unlikePost.mockReset();
     mocks.repostPost.mockReset();
     mocks.undoRepostPost.mockReset();
+    mocks.bookmarkPost.mockReset();
+    mocks.unbookmarkPost.mockReset();
     mocks.deletePost.mockReset().mockResolvedValue(undefined);
   });
 
@@ -527,6 +539,8 @@ describe('profile session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     })];
 
     const localMutation = store.toggleLike(4, 7);
@@ -610,6 +624,8 @@ describe('profile session store', () => {
       repostCount: 8,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     };
     session.timelineItems = [profileTimelineItem(post)];
     mocks.repostPost.mockRejectedValue(new Error('offline'));
@@ -640,6 +656,8 @@ describe('profile session store', () => {
       repostCount: 1,
       reposted: true,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     };
     const reposted: FeedPost = {
       ...authored,
@@ -681,6 +699,8 @@ describe('profile session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     };
     session.timelineItems = [profileTimelineItem(feedPost, 'post', 4, 8)];
     session.timelineLoaded = true;
@@ -710,6 +730,8 @@ describe('profile session store', () => {
       repostCount: 8,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     })];
 
     expect(store.applyExternalRepostStateLocal({
@@ -787,6 +809,8 @@ describe('profile session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready' as const,
+      bookmarked: false,
+      bookmarkStatus: 'ready' as const,
     };
     first.timelineItems = [profileTimelineItem({ ...post })];
     second.timelineItems = [profileTimelineItem({ ...post })];
@@ -815,6 +839,8 @@ describe('profile session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     })];
     second.timelineItems = [profileTimelineItem({ ...first.timelineItems[0].post })];
     store.applyLikeStateUpdateEverywhere({ postId: 4, likes: 2, liked: true, status: 'ready' });

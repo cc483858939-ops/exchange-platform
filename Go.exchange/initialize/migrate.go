@@ -42,6 +42,7 @@ func RunMigrations() error {
 			&models.Post{},
 			&models.PostMedia{},
 			&models.PostRepost{},
+			&models.PostBookmark{},
 			&models.PostEmbedding{},
 			&models.OutboxEvent{},
 			&models.Notification{},
@@ -79,6 +80,9 @@ func RunMigrations() error {
 			return err
 		}
 		if err := applyPostRepostConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyPostBookmarkConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyRecommendationMetricsConstraints(tx); err != nil {
@@ -391,6 +395,22 @@ func applyPostRepostConstraints(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply post repost constraint: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyPostBookmarkConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE post_bookmarks DROP CONSTRAINT IF EXISTS fk_post_bookmarks_user",
+		"ALTER TABLE post_bookmarks ADD CONSTRAINT fk_post_bookmarks_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE post_bookmarks DROP CONSTRAINT IF EXISTS fk_post_bookmarks_post",
+		"ALTER TABLE post_bookmarks ADD CONSTRAINT fk_post_bookmarks_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"CREATE INDEX IF NOT EXISTS idx_post_bookmarks_user_created ON post_bookmarks (user_id, created_at DESC, post_id ASC)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply post bookmark constraint: %w", err)
 		}
 	}
 	return nil

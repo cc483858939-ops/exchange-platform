@@ -110,6 +110,7 @@ vi.mock('../services/postViewTelemetry', () => ({
 }));
 
 vi.mock('../store/sessionSync', () => ({
+  registerPostDetailSessionSync: vi.fn(),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
   markOwnProfileTimelineStale: mocks.markOwnProfileTimelineStale,
@@ -164,6 +165,8 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
   ...overrides,
 });
 

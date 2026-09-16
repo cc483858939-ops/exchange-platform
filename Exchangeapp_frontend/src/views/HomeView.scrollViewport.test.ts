@@ -83,6 +83,8 @@ const makePost = (id: number): FeedPost => ({
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
 });
 
 const PostCardStub = defineComponent({
@@ -127,6 +129,7 @@ const makeHomeTimeline = () => {
     scrollTop,
     likePendingPostIds: new Set<number>(),
     repostPendingPostIds: new Set<number>(),
+    bookmarkPendingPostIds: new Set<number>(),
     pendingDeletePostIds: new Set<number>(),
     deleteErrors: new Map<number, string>(),
     setActiveTab: vi.fn((tab: FeedTab) => {

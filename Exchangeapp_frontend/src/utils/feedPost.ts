@@ -1,6 +1,11 @@
 import type { Post } from '../types/Post';
 import type { PublicAuthor } from '../types/User';
-import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
+import type {
+  FeedBookmarkStateUpdate,
+  FeedLikeStateUpdate,
+  FeedPost,
+  FeedRepostStateUpdate,
+} from '../types/Feed';
 
 const safeLikeCount = (likes: number, fallback = 0) =>
   Number.isFinite(likes) ? Math.max(0, likes) : Math.max(0, fallback);
@@ -34,6 +39,8 @@ export function postToFeedPost(
     repostCount: 0,
     reposted: false,
     repostStatus: 'unknown',
+    bookmarked: false,
+    bookmarkStatus: 'unknown',
     ...(context.repostActor ? { repostContext: { actor: context.repostActor } } : {}),
   };
 }
@@ -88,6 +95,38 @@ export function applyFeedRepostStateUpdate(post: FeedPost, update: FeedRepostSta
     setFeedPostRepostUnavailable(post);
   } else {
     post.repostStatus = 'unknown';
+  }
+  return true;
+}
+
+export function setFeedPostBookmarkReady(
+  post: FeedPost,
+  bookmarked: boolean,
+): FeedPost {
+  post.bookmarked = bookmarked;
+  post.bookmarkStatus = 'ready';
+  return post;
+}
+
+export function setFeedPostBookmarkUnavailable(post: FeedPost): FeedPost {
+  post.bookmarkStatus = 'unavailable';
+  return post;
+}
+
+export function applyFeedBookmarkStateUpdate(
+  post: FeedPost,
+  update: FeedBookmarkStateUpdate,
+): boolean {
+  if (post.id !== update.postId) {
+    return false;
+  }
+
+  if (update.status === 'ready') {
+    setFeedPostBookmarkReady(post, update.bookmarked);
+  } else if (update.status === 'unavailable') {
+    setFeedPostBookmarkUnavailable(post);
+  } else {
+    post.bookmarkStatus = 'unknown';
   }
   return true;
 }

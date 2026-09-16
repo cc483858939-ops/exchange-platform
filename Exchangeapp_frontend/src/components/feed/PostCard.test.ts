@@ -60,6 +60,8 @@ const basePost = (): FeedPost => ({
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
 });
 
 describe('PostCard View metric and telemetry lifecycle', () => {
@@ -532,11 +534,31 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       'post-card__metric post-card__reply',
       'repost-action repost-action--compact repost-action--reposted',
       'stub-like-action',
+      'post-card__metric post-card__bookmark',
       'post-card__metric post-card__views',
     ]);
 
     await repostAction.trigger('click');
     expect(wrapper.emitted('toggleRepost')).toEqual([[42]]);
+  });
+
+  it('renders bookmark state and forwards bookmark activation with accessible state', async () => {
+    const wrapper = mountPostCard({ ...basePost(), bookmarked: true });
+    const bookmark = wrapper.get('.post-card__bookmark');
+
+    expect(bookmark.classes()).toContain('post-card__bookmark--active');
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-label')).toBe('Remove bookmark');
+    expect(bookmark.attributes('disabled')).toBeUndefined();
+
+    await bookmark.trigger('click');
+    expect(wrapper.emitted('toggleBookmark')).toEqual([[42]]);
+
+    await wrapper.setProps({
+      post: { ...basePost(), bookmarkStatus: 'unknown' },
+    });
+    expect(wrapper.get('.post-card__bookmark').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.post-card__bookmark').attributes('aria-busy')).toBe('true');
   });
 
   it('renders active and tombstoned bounded references', async () => {

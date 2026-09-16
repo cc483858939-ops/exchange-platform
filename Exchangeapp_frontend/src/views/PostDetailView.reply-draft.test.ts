@@ -102,6 +102,7 @@ vi.mock('../services/postViewTelemetry', () => ({
 }));
 
 vi.mock('../store/sessionSync', () => ({
+  registerPostDetailSessionSync: vi.fn(),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
   syncExternalPostRemoval: mocks.externalRemoval,
@@ -155,6 +156,8 @@ const warmPost = (id = 42): FeedPost => ({
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
 });
 
 const viewerMedia = [{

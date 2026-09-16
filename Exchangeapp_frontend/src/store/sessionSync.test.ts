@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { FeedLikeStateUpdate } from '../types/Feed';
+import type { FeedBookmarkStateUpdate, FeedLikeStateUpdate } from '../types/Feed';
 import type { UserFollowState } from '../services/userService';
 import {
   registerHomeTimelineSync,
@@ -7,7 +7,9 @@ import {
   registerHistorySessionSync,
   registerProfileSessionSync,
   registerSearchSessionSync,
+  registerBookmarksSessionSync,
   syncExternalPostLikeState,
+  syncExternalPostBookmarkState,
   syncExternalPostRemoval,
   syncExternalReplyCount,
   syncExternalFollowState,
@@ -25,6 +27,12 @@ const likeUpdate: FeedLikeStateUpdate = {
   status: 'ready',
 };
 
+const bookmarkUpdate: FeedBookmarkStateUpdate = {
+  postId: 42,
+  bookmarked: true,
+  status: 'ready',
+};
+
 const followState: UserFollowState = {
   user_id: 8,
   following: false,
@@ -38,6 +46,8 @@ const registerSinks = () => {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyRepostStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
+    applyBookmarkStateUpdateLocal: vi.fn().mockReturnValue(true),
+    applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
     reconcileFollowStateLocal: vi.fn().mockReturnValue(true),
     removePostLocal: vi.fn(),
@@ -48,6 +58,8 @@ const registerSinks = () => {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyRepostStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
+    applyBookmarkStateUpdateLocal: vi.fn().mockReturnValue(true),
+    applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateEverywhereLocal: vi.fn().mockReturnValue(true),
     applyExternalFollowStateLocal: vi.fn().mockReturnValue(true),
     removePostEverywhereLocal: vi.fn(),
@@ -59,6 +71,7 @@ const registerSinks = () => {
   const history = {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
+    applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
     removePostLocal: vi.fn(),
     replaceAuthorIdentityLocal: vi.fn(),
@@ -67,12 +80,16 @@ const registerSinks = () => {
     applyExternalFollowStateLocal: vi.fn().mockReturnValue(true),
     replaceUserIdentityLocal: vi.fn().mockReturnValue(true),
   };
+  const bookmarks = {
+    applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
+  };
   registerHomeTimelineSync(home);
   registerProfileSessionSync(profile);
   registerSearchSessionSync(search);
   registerHistorySessionSync(history);
   registerConnectionsSessionSync(connections);
-  return { home, profile, search, history, connections };
+  registerBookmarksSessionSync(bookmarks);
+  return { home, profile, search, history, connections, bookmarks };
 };
 
 describe('sessionSync external mutation sinks', () => {
@@ -87,6 +104,17 @@ describe('sessionSync external mutation sinks', () => {
     expect(profile.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
     expect(history.applyExternalLikeStateLocal).toHaveBeenCalledOnce();
     expect(history.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+  });
+
+  it('fans out external bookmark state to every live post surface', () => {
+    const { home, profile, history, bookmarks } = registerSinks();
+
+    syncExternalPostBookmarkState(bookmarkUpdate);
+
+    expect(home.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(profile.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(history.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(bookmarks.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
   });
 
   it('sends external removals to Home and Profile exactly once', () => {

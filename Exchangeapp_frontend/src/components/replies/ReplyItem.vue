@@ -14,6 +14,21 @@
         >
           <AppIcon name="trash" :size="16" />
         </button>
+        <button
+          class="reply-item__bookmark"
+          type="button"
+          :disabled="bookmarkStatus !== 'ready' || bookmarkPending"
+          :aria-busy="bookmarkPending || bookmarkStatus === 'unknown' ? 'true' : undefined"
+          :aria-pressed="bookmarkStatus === 'ready' ? bookmarkState.bookmarked : false"
+          :aria-label="bookmarkLabel"
+          @click.stop="emit('toggleBookmark', reply.id)"
+        >
+          <AppIcon
+            name="bookmark"
+            :size="16"
+            :filled="bookmarkStatus === 'ready' && bookmarkState.bookmarked"
+          />
+        </button>
       </div>
     </div>
     <div class="reply-item__content">
@@ -30,7 +45,9 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { Post } from '../../types/Post';
+import type { FeedBookmarkStatus } from '../../types/Feed';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import LinkifiedText from '../content/LinkifiedText.vue';
 import PostMediaGrid from '../content/PostMediaGrid.vue';
@@ -40,12 +57,27 @@ const props = defineProps<{
   reply: Post;
   canDelete: boolean;
   deleting: boolean;
+  bookmarkState?: { bookmarked: boolean; status: FeedBookmarkStatus };
+  bookmarkPending?: boolean;
 }>();
 
 const emit = defineEmits<{
   requestDelete: [replyID: number];
+  toggleBookmark: [replyID: number];
   openMedia: [media: Post['media'], index: number];
 }>();
+
+const bookmarkState = computed(() => props.bookmarkState ?? {
+  bookmarked: false,
+  status: 'unknown' as const,
+});
+const bookmarkStatus = computed(() => bookmarkState.value.status);
+const bookmarkPending = computed(() => props.bookmarkPending ?? false);
+const bookmarkLabel = computed(() => (
+  bookmarkStatus.value === 'unavailable'
+    ? 'Bookmark unavailable'
+    : bookmarkState.value.bookmarked ? 'Remove bookmark' : 'Bookmark reply'
+));
 
 const handleOpenMedia = (index: number) => {
   emit('openMedia', props.reply.media, index);
@@ -83,6 +115,29 @@ const handleOpenMedia = (index: number) => {
   background: transparent;
   color: var(--color-text-tertiary);
   cursor: pointer;
+}
+
+.reply-item__bookmark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.reply-item__bookmark:hover:not(:disabled),
+.reply-item__bookmark:focus-visible {
+  background: var(--color-surface-subtle);
+  color: var(--color-accent);
+}
+
+.reply-item__bookmark:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .reply-item__delete:hover:not(:disabled),

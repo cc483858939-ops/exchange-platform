@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   getPostRepostStates: vi.fn(),
   repostPost: vi.fn(),
   undoRepostPost: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
+  bookmarkPost: vi.fn(),
+  unbookmarkPost: vi.fn(),
   historySync: null as any,
 }));
 
@@ -36,7 +39,15 @@ vi.mock('./sessionSync', () => ({
   syncExternalPostRepostState: vi.fn((update: any) => {
     mocks.historySync?.applyExternalRepostStateLocal(update);
   }),
+  syncHistoryBookmarkState: vi.fn((update: any) => {
+    mocks.historySync?.applyExternalBookmarkStateLocal?.(update);
+  }),
   markOwnProfileTimelineStale: vi.fn(),
+}));
+vi.mock('../services/bookmarkService', () => ({
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
+  bookmarkPost: mocks.bookmarkPost,
+  unbookmarkPost: mocks.unbookmarkPost,
 }));
 
 const post = (id: number, authorID = 9): Post => ({
@@ -111,9 +122,12 @@ describe('historySession store', () => {
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostRepostStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.unlikePost.mockResolvedValue({ likes: 3, liked: false });
     mocks.repostPost.mockReset();
     mocks.undoRepostPost.mockReset();
+    mocks.bookmarkPost.mockReset();
+    mocks.unbookmarkPost.mockReset();
   });
 
   afterEach(() => {

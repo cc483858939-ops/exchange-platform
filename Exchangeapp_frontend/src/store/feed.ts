@@ -2,9 +2,19 @@ import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import type { Post } from '../types/Post';
-import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
+import type {
+  FeedBookmarkStateUpdate,
+  FeedLikeStateUpdate,
+  FeedPost,
+  FeedRepostStateUpdate,
+} from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
-import { applyFeedLikeStateUpdate, applyFeedRepostStateUpdate, postToFeedPost } from '../utils/feedPost';
+import {
+  applyFeedBookmarkStateUpdate,
+  applyFeedLikeStateUpdate,
+  applyFeedRepostStateUpdate,
+  postToFeedPost,
+} from '../utils/feedPost';
 
 const maxRecentlyPublishedPosts = 5;
 
@@ -120,6 +130,14 @@ export const useFeedStore = defineStore('feed', () => {
     return applied;
   };
 
+  const applyBookmarkStateUpdate = (update: FeedBookmarkStateUpdate) => {
+    let applied = false;
+    recentlyPublishedPosts.value.forEach((post) => {
+      applied = applyFeedBookmarkStateUpdate(post, update) || applied;
+    });
+    return applied;
+  };
+
   watch(
     () => authStore.currentIdentity?.id,
     (nextViewerID) => {
@@ -140,6 +158,7 @@ export const useFeedStore = defineStore('feed', () => {
     replaceAuthorIdentity,
     applyLikeStateUpdate,
     applyRepostStateUpdate,
+    applyBookmarkStateUpdate,
     clearRecentlyPublishedPosts,
   };
 });

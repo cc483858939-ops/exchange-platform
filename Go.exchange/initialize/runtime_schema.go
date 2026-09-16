@@ -17,14 +17,14 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-const RequiredSchemaVersion int64 = 7
+const RequiredSchemaVersion int64 = 8
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 7
+	PublishedSchemaCurrentVersion     int64 = 8
 	PublishedSchemaCompatibilityFloor int64 = 4
 )
 
@@ -156,6 +156,16 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		},
 	},
 	{
+		Table: "post_bookmarks",
+		Constraints: []string{
+			"fk_post_bookmarks_user",
+			"fk_post_bookmarks_post",
+		},
+		Indexes: []string{
+			"idx_post_bookmarks_user_created",
+		},
+	},
+	{
 		Table: "post_embeddings",
 		Constraints: []string{
 			"fk_post_embeddings_post",
@@ -184,6 +194,7 @@ var apiSchemaModels = []interface{}{
 	&models.Post{},
 	&models.PostMedia{},
 	&models.PostRepost{},
+	&models.PostBookmark{},
 	&models.PostReaction{},
 	&models.Notification{},
 	&models.RecommendationRequest{},

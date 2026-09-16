@@ -17,17 +17,29 @@ import {
 } from '../services/userService';
 import { getPostLikeStates, likePost, unlikePost } from '../services/likeService';
 import {
+  bookmarkPost,
+  getPostBookmarkStates,
+  unbookmarkPost,
+} from '../services/bookmarkService';
+import {
   getPostRepostStates,
   repostPost,
   undoRepostPost,
 } from '../services/repostService';
 import type { Post } from '../types/Post';
-import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
+import type {
+  FeedBookmarkStateUpdate,
+  FeedLikeStateUpdate,
+  FeedPost,
+  FeedRepostStateUpdate,
+} from '../types/Feed';
 import type { PublicAuthor, PublicUser } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
+  applyFeedBookmarkStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
@@ -37,6 +49,7 @@ import {
   syncProfileAuthorIdentity,
   syncProfileLikeState,
   syncProfileRepostState,
+  syncProfileBookmarkState,
   markOwnProfileTimelineStale,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
@@ -131,14 +144,17 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const sessions = reactive(new Map<number, ProfileSessionEntry>());
   const likePendingPostIds = reactive(new Set<number>());
   const repostPendingPostIds = reactive(new Set<number>());
+  const bookmarkPendingPostIds = reactive(new Set<number>());
   const pendingDeletePostIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
   const deleteTargetProfileIDs = new Map<number, number>();
   const deleteMutationVersions = new Map<number, number>();
   const likeMutationVersions = new Map<number, number>();
   const repostMutationVersions = new Map<number, number>();
+  const bookmarkMutationVersions = new Map<number, number>();
   let likeGeneration = 0;
   let repostGeneration = 0;
+  let bookmarkGeneration = 0;
   let accessClock = 0;
 
   const nextAccessTime = () => {
@@ -225,6 +241,12 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     repostMutationVersions.clear();
   };
 
+  const clearBookmarkWork = () => {
+    bookmarkGeneration += 1;
+    bookmarkPendingPostIds.clear();
+    bookmarkMutationVersions.clear();
+  };
+
   const setViewer = (rawViewerID: unknown) => {
     const nextViewerID = normalizeID(rawViewerID);
     if (nextViewerID === viewerID.value) return false;
@@ -233,6 +255,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     sessions.clear();
     clearLikeWork();
     clearRepostWork();
+    clearBookmarkWork();
     pendingDeletePostIds.clear();
     deleteErrors.clear();
     deleteTargetProfileIDs.clear();
@@ -338,6 +361,36 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return applyRepostStateUpdateLocal(update);
   };
 
+  const getBookmarkMutationVersion = (postId: number) =>
+    bookmarkMutationVersions.get(postId) ?? 0;
+
+  const bumpBookmarkMutationVersion = (postId: number) => {
+    const next = getBookmarkMutationVersion(postId) + 1;
+    bookmarkMutationVersions.set(postId, next);
+    return next;
+  };
+
+  const applyBookmarkStateUpdateLocal = (
+    update: FeedBookmarkStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    if (
+      expectedVersion !== undefined
+      && getBookmarkMutationVersion(update.postId) !== expectedVersion
+    ) return false;
+    let applied = false;
+    forEachProfilePost(update.postId, (post) => {
+      applied = applyFeedBookmarkStateUpdate(post, update) || applied;
+    });
+    return applied;
+  };
+
+  const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
+    bumpBookmarkMutationVersion(update.postId);
+    bookmarkPendingPostIds.delete(update.postId);
+    return applyBookmarkStateUpdateLocal(update);
+  };
+
   const markOwnProfileTimelineStaleLocal = () => {
     const ownUserID = viewerID.value;
     if (ownUserID === null) return false;
@@ -417,6 +470,17 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
     feedStore.applyRepostStateUpdate(update);
     syncProfileRepostState(update);
+    return applied;
+  };
+
+  const applyBookmarkStateUpdateEverywhere = (
+    update: FeedBookmarkStateUpdate,
+    expectedVersion?: number,
+  ) => {
+    const applied = applyBookmarkStateUpdateLocal(update, expectedVersion);
+    if (expectedVersion !== undefined && !applied) return false;
+    feedStore.applyBookmarkStateUpdate(update);
+    syncProfileBookmarkState(update);
     return applied;
   };
 
@@ -549,6 +613,66 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
+  const markBookmarkUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+    postIds.forEach((postId) => {
+      const capturedVersion = versions.get(postId);
+      if (
+        capturedVersion === undefined
+        || getBookmarkMutationVersion(postId) !== capturedVersion
+      ) return;
+      forEachProfilePost(postId, (post) => {
+        if (post.bookmarkStatus === 'unknown') setFeedPostBookmarkUnavailable(post);
+      });
+    });
+  };
+
+  const hydrateBookmarkStates = async (
+    postIds: number[],
+    isCurrent: () => boolean,
+  ) => {
+    const uniqueIDs = Array.from(new Set(postIds));
+    if (uniqueIDs.length === 0) return;
+    const versions = new Map(uniqueIDs.map((id) => [id, getBookmarkMutationVersion(id)]));
+    const capturedBookmarkGeneration = bookmarkGeneration;
+    try {
+      const response = await getPostBookmarkStates(uniqueIDs);
+      if (!isCurrent() || capturedBookmarkGeneration !== bookmarkGeneration) return;
+      const readyIDs = new Set<number>();
+      response.items.forEach((item) => {
+        const capturedVersion = versions.get(item.post_id);
+        if (
+          capturedVersion === undefined
+          || getBookmarkMutationVersion(item.post_id) !== capturedVersion
+          || !findPost(item.post_id)
+        ) return;
+        readyIDs.add(item.post_id);
+        applyBookmarkStateUpdateEverywhere({
+          postId: item.post_id,
+          bookmarked: item.bookmarked,
+          status: 'ready',
+        }, capturedVersion);
+      });
+      response.unavailable_post_ids.forEach((postId) => {
+        const capturedVersion = versions.get(postId);
+        if (
+          readyIDs.has(postId)
+          || capturedVersion === undefined
+          || getBookmarkMutationVersion(postId) !== capturedVersion
+          || !findPost(postId)
+        ) return;
+        applyBookmarkStateUpdateEverywhere({
+          postId,
+          bookmarked: false,
+          status: 'unavailable',
+        }, capturedVersion);
+      });
+    } catch {
+      if (isCurrent() && capturedBookmarkGeneration === bookmarkGeneration) {
+        markBookmarkUnavailableLocal(uniqueIDs, versions);
+      }
+    }
+  };
+
   const appendTimelineItems = (session: ProfileSessionEntry, activities: TimelineItem[]) => {
     const newItems: ProfileTimelineItem[] = [];
     activities.forEach((activity) => {
@@ -653,6 +777,17 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
           capturedViewerGeneration,
         ),
       );
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      void hydrateBookmarkStates(
+        newItems.map((item) => item.post.id),
+        () => currentTimelineSession(
+          userID,
+          session,
+          capturedTimelineGeneration,
+          capturedViewerID,
+          capturedViewerGeneration,
+        ) && bookmarkGeneration === capturedBookmarkGeneration,
+      );
     } catch (error) {
       if (currentTimelineRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
         session.timelineInitialError = getErrorStatus(error) === 404
@@ -724,6 +859,17 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
           capturedViewerID,
           capturedViewerGeneration,
         ),
+      );
+      const capturedBookmarkGeneration = bookmarkGeneration;
+      void hydrateBookmarkStates(
+        newItems.map((item) => item.post.id),
+        () => currentTimelineSession(
+          userID,
+          session,
+          capturedTimelineGeneration,
+          capturedViewerID,
+          capturedViewerGeneration,
+        ) && bookmarkGeneration === capturedBookmarkGeneration,
       );
     } catch (error) {
       if (currentTimelineRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
@@ -972,6 +1118,63 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
+  const toggleBookmark = async (postId: number, rawUserID?: unknown) => {
+    const post = findPost(postId, rawUserID);
+    const capturedViewerID = viewerID.value;
+    if (
+      !post
+      || post.bookmarkStatus !== 'ready'
+      || capturedViewerID === null
+      || bookmarkPendingPostIds.has(postId)
+      || !authStore.isAuthenticated
+    ) return false;
+
+    const previousBookmarked = post.bookmarked;
+    const mutationVersion = bumpBookmarkMutationVersion(postId);
+    const capturedBookmarkGeneration = bookmarkGeneration;
+    const capturedViewerGeneration = viewerGeneration.value;
+    bookmarkPendingPostIds.add(postId);
+    applyBookmarkStateUpdateEverywhere({
+      postId,
+      bookmarked: !previousBookmarked,
+      status: 'ready',
+    }, mutationVersion);
+
+    const isCurrent = () => (
+      authStore.isAuthenticated
+      && viewerID.value === capturedViewerID
+      && viewerGeneration.value === capturedViewerGeneration
+      && bookmarkGeneration === capturedBookmarkGeneration
+      && getBookmarkMutationVersion(postId) === mutationVersion
+      && bookmarkPendingPostIds.has(postId)
+    );
+
+    try {
+      const response = previousBookmarked
+        ? await unbookmarkPost(postId)
+        : await bookmarkPost(postId);
+      if (!isCurrent()) return false;
+      const settledVersion = bumpBookmarkMutationVersion(postId);
+      applyBookmarkStateUpdateEverywhere({
+        postId,
+        bookmarked: response.bookmarked,
+        status: 'ready',
+      }, settledVersion);
+      bookmarkPendingPostIds.delete(postId);
+      return true;
+    } catch {
+      if (!isCurrent()) return false;
+      const settledVersion = bumpBookmarkMutationVersion(postId);
+      applyBookmarkStateUpdateEverywhere({
+        postId,
+        bookmarked: previousBookmarked,
+        status: 'ready',
+      }, settledVersion);
+      bookmarkPendingPostIds.delete(postId);
+      return false;
+    }
+  };
+
   const removePostEverywhereLocal = (postId: number) => {
     sessions.forEach((session) => {
       const removedFromSession = session.timelineItems.some((item) => item.post.id === postId);
@@ -988,6 +1191,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     likeMutationVersions.delete(postId);
     repostPendingPostIds.delete(postId);
     bumpRepostMutationVersion(postId);
+    bookmarkPendingPostIds.delete(postId);
+    bumpBookmarkMutationVersion(postId);
     pendingDeletePostIds.delete(postId);
     deleteErrors.delete(postId);
     deleteTargetProfileIDs.delete(postId);
@@ -1226,6 +1431,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
+    applyBookmarkStateUpdateLocal,
+    applyExternalBookmarkStateLocal,
     applyReplyCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
     markOwnProfileTimelineStale: markOwnProfileTimelineStaleLocal,
@@ -1248,6 +1455,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     maxProfileSessions,
     likePendingPostIds,
     repostPendingPostIds,
+    bookmarkPendingPostIds,
     pendingDeletePostIds,
     deleteErrors,
     setViewer,
@@ -1263,12 +1471,15 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     toggleFollow,
     toggleLike,
     toggleRepost,
+    toggleBookmark,
     deletePost,
     applyLikeStateUpdateEverywhere,
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
     applyRepostStateUpdateLocal,
     applyExternalRepostStateLocal,
+    applyBookmarkStateUpdateLocal,
+    applyExternalBookmarkStateLocal,
     applyReplyCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
     removePostEverywhere,

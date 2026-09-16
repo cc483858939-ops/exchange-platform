@@ -81,6 +81,7 @@ const createHistoryStore = () => {
     scrollTop: ref(900),
     pendingUnlikePostIDs: ref(new Set<number>()),
     repostPendingPostIDs: ref(new Set<number>()),
+    bookmarkPendingPostIDs: ref(new Set<number>()),
     mutationErrors: ref(new Map<number, string>()),
     loadInitial: vi.fn(),
     loadMore: vi.fn(),

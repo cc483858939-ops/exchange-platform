@@ -216,6 +216,8 @@ const profileTimelineItem = (id: number, authorID: number) => ({
     repostCount: 0,
     reposted: false,
     repostStatus: 'ready' as const,
+    bookmarked: false,
+    bookmarkStatus: 'ready' as const,
   },
 });
 

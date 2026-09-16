@@ -3,18 +3,30 @@ import { reactive, ref, watch } from 'vue';
 import { getLikedHistory } from '../services/historyService';
 import { getPostLikeStates, unlikePost } from '../services/likeService';
 import {
+  bookmarkPost,
+  getPostBookmarkStates,
+  unbookmarkPost,
+} from '../services/bookmarkService';
+import {
   getPostRepostStates,
   repostPost,
   undoRepostPost,
 } from '../services/repostService';
 import type { Post } from '../types/Post';
-import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
+import type {
+  FeedBookmarkStateUpdate,
+  FeedLikeStateUpdate,
+  FeedPost,
+  FeedRepostStateUpdate,
+} from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
+  applyFeedBookmarkStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
   setFeedPostLikeUnavailable,
+  setFeedPostBookmarkUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import { useAuthStore } from './auth';
@@ -23,6 +35,7 @@ import {
   markOwnProfileTimelineStale,
   syncExternalPostLikeState,
   syncExternalPostRepostState,
+  syncHistoryBookmarkState,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
 
@@ -65,8 +78,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   const pagingVersion = ref(0);
   const likeHydrationGeneration = ref(0);
   const repostHydrationGeneration = ref(0);
+  const bookmarkHydrationGeneration = ref(0);
   const pendingUnlikePostIDs = ref(new Set<number>());
   const repostPendingPostIDs = ref(new Set<number>());
+  const bookmarkPendingPostIDs = ref(new Set<number>());
   const mutationErrors = ref(new Map<number, string>());
 
   const loadedPostIDs = new Set<number>();
@@ -74,8 +89,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   const deletedPostIDs = new Set<number>();
   const likeMutationVersions = reactive(new Map<number, number>());
   const repostMutationVersions = reactive(new Map<number, number>());
+  const bookmarkMutationVersions = reactive(new Map<number, number>());
   let freshnessVersion = 0;
   let repostGeneration = 0;
+  let bookmarkGeneration = 0;
 
   const getLikeMutationVersion = (postID: number) =>
     likeMutationVersions.get(postID) ?? 0;
@@ -95,6 +112,15 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return version;
   };
 
+  const getBookmarkMutationVersion = (postID: number) =>
+    bookmarkMutationVersions.get(postID) ?? 0;
+
+  const bumpBookmarkMutationVersion = (postID: number) => {
+    const version = getBookmarkMutationVersion(postID) + 1;
+    bookmarkMutationVersions.set(postID, version);
+    return version;
+  };
+
   const clearMutationState = () => {
     pendingUnlikePostIDs.value.clear();
     mutationErrors.value.clear();
@@ -102,6 +128,9 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     repostPendingPostIDs.value.clear();
     repostMutationVersions.clear();
     repostGeneration += 1;
+    bookmarkPendingPostIDs.value.clear();
+    bookmarkMutationVersions.clear();
+    bookmarkGeneration += 1;
   };
 
   const clearPageState = () => {
@@ -109,6 +138,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     pagingVersion.value += 1;
     likeHydrationGeneration.value += 1;
     repostHydrationGeneration.value += 1;
+    bookmarkHydrationGeneration.value += 1;
     items.value = [];
     loaded.value = false;
     initialLoading.value = false;
@@ -394,6 +424,79 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     }
   };
 
+  const markBookmarkUnavailableLocal = (posts: FeedPost[], versions: Map<number, number>) => {
+    posts.forEach((post) => {
+      const capturedVersion = versions.get(post.id);
+      if (
+        capturedVersion === undefined
+        || getBookmarkMutationVersion(post.id) !== capturedVersion
+      ) return;
+      const currentPost = findPost(post.id);
+      if (currentPost && currentPost.bookmarkStatus === 'unknown') {
+        setFeedPostBookmarkUnavailable(currentPost);
+      }
+    });
+  };
+
+  const hydrateBookmarkStates = async (
+    posts: FeedPost[],
+    capturedRequestVersion: number,
+    capturedViewerID: number,
+    capturedGeneration: number,
+  ) => {
+    const postIDs = Array.from(new Set(posts.map(post => post.id)));
+    if (postIDs.length === 0) return;
+
+    const hydrationGeneration = bookmarkHydrationGeneration.value;
+    const capturedBookmarkGeneration = bookmarkGeneration;
+    const capturedMutationVersions = new Map(
+      postIDs.map(postID => [postID, getBookmarkMutationVersion(postID)]),
+    );
+    const current = () => (
+      isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
+      && hydrationGeneration === bookmarkHydrationGeneration.value
+      && capturedBookmarkGeneration === bookmarkGeneration
+    );
+
+    try {
+      const response = await getPostBookmarkStates(postIDs);
+      if (!current()) return;
+      const readyIDs = new Set<number>();
+      (response.items ?? []).forEach((item) => {
+        const capturedVersion = capturedMutationVersions.get(item.post_id);
+        const post = findPost(item.post_id);
+        if (
+          capturedVersion === undefined
+          || getBookmarkMutationVersion(item.post_id) !== capturedVersion
+          || !post
+        ) return;
+        readyIDs.add(item.post_id);
+        applyFeedBookmarkStateUpdate(post, {
+          postId: item.post_id,
+          bookmarked: item.bookmarked,
+          status: 'ready',
+        });
+      });
+      (response.unavailable_post_ids ?? []).forEach((postID) => {
+        const capturedVersion = capturedMutationVersions.get(postID);
+        const post = findPost(postID);
+        if (
+          readyIDs.has(postID)
+          || capturedVersion === undefined
+          || getBookmarkMutationVersion(postID) !== capturedVersion
+          || !post
+        ) return;
+        applyFeedBookmarkStateUpdate(post, {
+          postId: postID,
+          bookmarked: false,
+          status: 'unavailable',
+        });
+      });
+    } catch {
+      if (current()) markBookmarkUnavailableLocal(posts, capturedMutationVersions);
+    }
+  };
+
   const loadInitial = async (force = false) => {
     const capturedViewerID = viewerID.value;
     if (capturedViewerID === null || !authStore.isAuthenticated) {
@@ -436,6 +539,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         capturedGeneration,
       );
       void hydrateRepostStates(
+        newPosts,
+        capturedRequestVersion,
+        capturedViewerID,
+        capturedGeneration,
+      );
+      void hydrateBookmarkStates(
         newPosts,
         capturedRequestVersion,
         capturedViewerID,
@@ -492,6 +601,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         capturedGeneration,
       );
       void hydrateRepostStates(
+        newPosts,
+        capturedRequestVersion,
+        capturedViewerID,
+        capturedGeneration,
+      );
+      void hydrateBookmarkStates(
         newPosts,
         capturedRequestVersion,
         capturedViewerID,
@@ -566,6 +681,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
                 repostStatus: oldPost.repostStatus,
               }
               : {}),
+            ...(oldPost.bookmarkStatus !== 'unknown'
+              ? {
+                bookmarked: oldPost.bookmarked,
+                bookmarkStatus: oldPost.bookmarkStatus,
+              }
+              : {}),
           }
           : freshPost);
       });
@@ -590,6 +711,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       );
       void hydrateRepostStates(
         freshPosts.filter(post => post.repostStatus === 'unknown'),
+        capturedRequestVersion,
+        capturedViewerID,
+        capturedGeneration,
+      );
+      void hydrateBookmarkStates(
+        freshPosts.filter(post => post.bookmarkStatus === 'unknown'),
         capturedRequestVersion,
         capturedViewerID,
         capturedGeneration,
@@ -744,6 +871,69 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     }
   };
 
+  const toggleBookmark = async (postID: number) => {
+    const post = findPost(postID);
+    const capturedViewerID = viewerID.value;
+    if (
+      !post
+      || post.bookmarkStatus !== 'ready'
+      || capturedViewerID === null
+      || !authStore.isAuthenticated
+      || bookmarkPendingPostIDs.value.has(postID)
+    ) return false;
+
+    const previousBookmarked = post.bookmarked;
+    const mutationVersion = bumpBookmarkMutationVersion(postID);
+    const capturedBookmarkGeneration = bookmarkGeneration;
+    const capturedViewerGeneration = viewerGeneration.value;
+    bookmarkPendingPostIDs.value.add(postID);
+    mutationErrors.value.delete(postID);
+    applyFeedBookmarkStateUpdate(post, {
+      postId: postID,
+      bookmarked: !previousBookmarked,
+      status: 'ready',
+    });
+
+    const isCurrentMutation = () => (
+      isCurrentViewer(capturedViewerID, capturedViewerGeneration)
+      && bookmarkGeneration === capturedBookmarkGeneration
+      && getBookmarkMutationVersion(postID) === mutationVersion
+      && bookmarkPendingPostIDs.value.has(postID)
+    );
+
+    try {
+      const response = previousBookmarked
+        ? await unbookmarkPost(postID)
+        : await bookmarkPost(postID);
+      if (!isCurrentMutation()) return false;
+      bumpBookmarkMutationVersion(postID);
+      applyFeedBookmarkStateUpdate(post, {
+        postId: postID,
+        bookmarked: response.bookmarked,
+        status: 'ready',
+      });
+      bookmarkPendingPostIDs.value.delete(postID);
+      mutationErrors.value.delete(postID);
+      syncHistoryBookmarkState({
+        postId: postID,
+        bookmarked: response.bookmarked,
+        status: 'ready',
+      });
+      return true;
+    } catch {
+      if (!isCurrentMutation()) return false;
+      bumpBookmarkMutationVersion(postID);
+      applyFeedBookmarkStateUpdate(post, {
+        postId: postID,
+        bookmarked: previousBookmarked,
+        status: 'ready',
+      });
+      bookmarkPendingPostIDs.value.delete(postID);
+      mutationErrors.value.set(postID, 'Could not update bookmark.');
+      return false;
+    }
+  };
+
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
     if (deletedPostIDs.has(update.postId)) {
       removedSnapshots.delete(update.postId);
@@ -798,6 +988,17 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return false;
   };
 
+  const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
+    if (deletedPostIDs.has(update.postId)) return false;
+    bumpBookmarkMutationVersion(update.postId);
+    bookmarkPendingPostIDs.value.delete(update.postId);
+    const post = findPost(update.postId);
+    if (post) return applyFeedBookmarkStateUpdate(post, update);
+    const snapshot = removedSnapshots.get(update.postId);
+    if (snapshot) return applyFeedBookmarkStateUpdate(snapshot.post, update);
+    return false;
+  };
+
   const applyReplyCountUpdateLocal = (update: PostReplyCountUpdate) => {
     const replyCount = normalizeCount(update.replyCount);
     if (replyCount === null) {
@@ -825,9 +1026,11 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     removedSnapshots.delete(postID);
     pendingUnlikePostIDs.value.delete(postID);
     repostPendingPostIDs.value.delete(postID);
+    bookmarkPendingPostIDs.value.delete(postID);
     mutationErrors.value.delete(postID);
     bumpLikeMutationVersion(postID);
     bumpRepostMutationVersion(postID);
+    bumpBookmarkMutationVersion(postID);
     return hadItem;
   };
 
@@ -867,6 +1070,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   registerHistorySessionSync({
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
+    applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
@@ -898,10 +1102,13 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     pagingVersion,
     likeHydrationGeneration,
     repostHydrationGeneration,
+    bookmarkHydrationGeneration,
     pendingUnlikePostIDs,
     repostPendingPostIDs,
+    bookmarkPendingPostIDs,
     likeMutationVersions,
     repostMutationVersions,
+    bookmarkMutationVersions,
     mutationErrors,
     setViewer,
     loadInitial,
@@ -911,8 +1118,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     revalidateHistory,
     toggleUnlike,
     toggleRepost,
+    toggleBookmark,
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
+    applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,

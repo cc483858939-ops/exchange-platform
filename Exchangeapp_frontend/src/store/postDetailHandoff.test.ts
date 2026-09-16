@@ -34,6 +34,8 @@ const basePost = (): FeedPost => ({
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
 });
 
 const setAuth = (id: number | null) => {

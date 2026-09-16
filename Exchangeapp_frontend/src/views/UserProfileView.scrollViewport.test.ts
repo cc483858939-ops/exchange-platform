@@ -56,6 +56,7 @@ vi.mock('../store/feed', () => ({
 
 vi.mock('../store/sessionSync', () => ({
   registerProfileSessionSync: vi.fn(),
+  registerBookmarksSessionSync: vi.fn(),
   syncProfilePostRemoval: vi.fn(),
   syncProfileAuthorIdentity: vi.fn(),
   syncProfileLikeState: vi.fn(),

@@ -7,6 +7,8 @@ export type FeedLikeStatus = 'unknown' | 'ready' | 'unavailable';
 
 export type FeedRepostStatus = 'unknown' | 'ready' | 'unavailable';
 
+export type FeedBookmarkStatus = 'unknown' | 'ready' | 'unavailable';
+
 export interface FeedRepostContext {
   actor: PublicAuthor;
 }
@@ -28,6 +30,8 @@ export interface FeedPost {
   repostCount: number;
   reposted: boolean;
   repostStatus: FeedRepostStatus;
+  bookmarked: boolean;
+  bookmarkStatus: FeedBookmarkStatus;
   repostContext?: FeedRepostContext;
 }
 
@@ -43,4 +47,10 @@ export interface FeedRepostStateUpdate {
   reposts: number;
   reposted: boolean;
   status: FeedRepostStatus;
+}
+
+export interface FeedBookmarkStateUpdate {
+  postId: number;
+  bookmarked: boolean;
+  status: FeedBookmarkStatus;
 }

@@ -103,6 +103,8 @@ const feedPost: FeedPost = {
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
 };
 
 const recommendationItem = {
@@ -205,6 +207,7 @@ describe('HomeView For You pagination observer', () => {
       scrollTop: { 'for-you': 0, following: 0 },
       likePendingPostIds: new Set<number>(),
       repostPendingPostIds: new Set<number>(),
+      bookmarkPendingPostIds: new Set<number>(),
       pendingDeletePostIds: new Set<number>(),
       deleteErrors: new Map<number, string>(),
       setActiveTab: vi.fn((tab: FeedTab) => {
@@ -363,6 +366,7 @@ describe('HomeView KeepAlive lifecycle', () => {
       scrollTop: { 'for-you': 0, following: 0 },
       likePendingPostIds: new Set<number>(),
       repostPendingPostIds: new Set<number>(),
+      bookmarkPendingPostIds: new Set<number>(),
       pendingDeletePostIds: new Set<number>(),
       deleteErrors: new Map<number, string>(),
       setActiveTab: vi.fn((tab: FeedTab) => {
@@ -379,6 +383,7 @@ describe('HomeView KeepAlive lifecycle', () => {
       retryFollowingLoadMore: vi.fn(),
       toggleLike: vi.fn(),
       toggleRepost: vi.fn(),
+      toggleBookmark: vi.fn(),
       deletePost: vi.fn().mockResolvedValue(true),
       dismissRecommendation: vi.fn(),
     });

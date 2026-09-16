@@ -65,6 +65,8 @@ export function createPerfPosts(
       repostCount: (position * 3) % 19,
       reposted: position % 11 === 0,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
       repostContext: hasRepostContext
         ? { actor: { ...fixtureAuthors[(index + 1) % fixtureAuthors.length] } }
         : undefined,

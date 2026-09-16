@@ -62,6 +62,10 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 		"POST /api/uploads/profile-avatar",
 		"DELETE /api/posts/:id",
 		"GET /api/posts/:id/replies",
+		"GET /api/me/bookmarks",
+		"POST /api/posts/bookmark-states",
+		"PUT /api/posts/:id/bookmark",
+		"DELETE /api/posts/:id/bookmark",
 	} {
 		if _, ok := routes[route]; !ok {
 			t.Fatalf("missing canonical route %q", route)

@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   getPostRepostStates: vi.fn(),
   repostPost: vi.fn(),
   undoRepostPost: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
+  bookmarkPost: vi.fn(),
+  unbookmarkPost: vi.fn(),
   deletePost: vi.fn(),
 }));
 
@@ -56,6 +59,12 @@ vi.mock('../services/repostService', () => ({
   getPostRepostStates: mocks.getPostRepostStates,
   repostPost: mocks.repostPost,
   undoRepostPost: mocks.undoRepostPost,
+}));
+
+vi.mock('../services/bookmarkService', () => ({
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
+  bookmarkPost: mocks.bookmarkPost,
+  unbookmarkPost: mocks.unbookmarkPost,
 }));
 
 import { useHomeTimelineStore } from './homeTimeline';
@@ -151,6 +160,9 @@ describe('home timeline session store', () => {
     mocks.getPostRepostStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.repostPost.mockReset();
     mocks.undoRepostPost.mockReset();
+    mocks.getPostBookmarkStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.bookmarkPost.mockReset();
+    mocks.unbookmarkPost.mockReset();
     mocks.deletePost.mockReset().mockResolvedValue(undefined);
   });
 
@@ -452,6 +464,8 @@ describe('home timeline session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     };
     store.forYou.items = [{ recommendation: recommendation(4), post: { ...followingPost } }];
     store.following.items = [followingPost];
@@ -480,6 +494,8 @@ describe('home timeline session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     }];
     store.following.items = [{
       id: 4,
@@ -496,6 +512,8 @@ describe('home timeline session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     }];
     store.forYou.items = [
       { recommendation: recommendation(4), post: { ...store.following.items[0] } },
@@ -724,6 +742,8 @@ describe('home timeline session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     }];
 
     const localMutation = store.toggleLike(4);
@@ -761,6 +781,8 @@ describe('home timeline session store', () => {
       repostCount: 0,
       reposted: false,
       repostStatus: 'ready',
+      bookmarked: false,
+      bookmarkStatus: 'ready',
     };
     mocks.feedStore!.recentlyPublishedPosts = [{ ...post }];
     store.following.items = [{ ...post }];
@@ -954,4 +976,6 @@ const feedPostFixture = (id: number, authorID: number): FeedPost => ({
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
 });

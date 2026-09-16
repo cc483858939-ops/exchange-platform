@@ -53,8 +53,10 @@
             :track-view="false"
             :like-pending="likePendingPostIDs.has(post.id)"
             :repost-pending="repostPendingPostIDs.has(post.id)"
+            :bookmark-pending="bookmarkPendingPostIDs.has(post.id)"
             @toggle-like="handleLikeToggle"
             @toggle-repost="handleRepostToggle"
+            @toggle-bookmark="handleBookmarkToggle"
           />
 
           <div
@@ -121,6 +123,7 @@ const {
   scrollTop,
   pendingUnlikePostIDs: likePendingPostIDs,
   repostPendingPostIDs,
+  bookmarkPendingPostIDs,
   mutationErrors,
 } = storeToRefs(historySession);
 const historyIntersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
@@ -239,6 +242,7 @@ const retryLoadMore = () => { historySession.retryLoadMore(); };
 const loadMore = () => { void historySession.loadMore(); };
 const handleLikeToggle = (postID: number) => { void historySession.toggleUnlike(postID); };
 const handleRepostToggle = (postID: number) => { void historySession.toggleRepost(postID); };
+const handleBookmarkToggle = (postID: number) => { void historySession.toggleBookmark(postID); };
 
 const goBack = () => {
   const historyState = window.history.state as { back?: string | null } | null;

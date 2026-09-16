@@ -196,6 +196,22 @@
         variant="compact"
         @toggle="handleLikeActivation"
       />
+      <button
+        class="post-card__metric post-card__bookmark"
+        :class="{ 'post-card__bookmark--active': post.bookmarkStatus === 'ready' && post.bookmarked }"
+        type="button"
+        :disabled="bookmarkUnavailable || bookmarkLoading || bookmarkPending"
+        :aria-busy="bookmarkLoading || bookmarkPending ? 'true' : undefined"
+        :aria-pressed="post.bookmarkStatus === 'ready' ? post.bookmarked : false"
+        :aria-label="bookmarkLabel"
+        @click.stop="handleBookmarkActivation"
+      >
+        <AppIcon
+          name="bookmark"
+          :size="18"
+          :filled="post.bookmarkStatus === 'ready' && post.bookmarked"
+        />
+      </button>
       <RouterLink
         class="post-card__metric post-card__views"
         :to="{
@@ -252,6 +268,7 @@ const props = withDefaults(defineProps<{
   trackView?: boolean;
   likePending?: boolean;
   repostPending?: boolean;
+  bookmarkPending?: boolean;
   showNotInterested?: boolean;
   showDelete?: boolean;
   deletePending?: boolean;
@@ -260,6 +277,7 @@ const props = withDefaults(defineProps<{
   trackView: true,
   likePending: false,
   repostPending: false,
+  bookmarkPending: false,
   showNotInterested: false,
   showDelete: false,
   deletePending: false,
@@ -270,6 +288,7 @@ const emit = defineEmits<{
   postClick: [post: FeedPost];
   toggleLike: [postId: number];
   toggleRepost: [postId: number];
+  toggleBookmark: [postId: number];
   notInterested: [postId: number];
   deletePost: [postId: number];
 }>();
@@ -301,6 +320,8 @@ const likeLoading = computed(() => props.post.likeStatus === 'unknown');
 const likeUnavailable = computed(() => props.post.likeStatus === 'unavailable');
 const repostLoading = computed(() => props.post.repostStatus === 'unknown');
 const repostUnavailable = computed(() => props.post.repostStatus === 'unavailable');
+const bookmarkLoading = computed(() => props.post.bookmarkStatus === 'unknown');
+const bookmarkUnavailable = computed(() => props.post.bookmarkStatus === 'unavailable');
 const translationAvailable = computed(() => isPostTranslationAvailable(
   props.post.language,
   translationTargetLanguage,
@@ -365,6 +386,14 @@ const handleRepostActivation = () => {
   emit('toggleRepost', props.post.id);
 };
 
+const handleBookmarkActivation = () => {
+  if (props.post.bookmarkStatus !== 'ready' || props.bookmarkPending) {
+    return;
+  }
+
+  emit('toggleBookmark', props.post.id);
+};
+
 const actorLabel = (author: FeedPost['author']) => (
   author.display_name?.trim()
   || (author.username?.trim() ? '@' + author.username.trim() : '')
@@ -407,6 +436,15 @@ const replyLabel = computed(() => {
   const countLabel = String(props.post.replyCount)
     + (props.post.replyCount === 1 ? ' reply' : ' replies');
   return 'Reply to post, ' + countLabel;
+});
+
+const bookmarkLabel = computed(() => {
+  if (bookmarkUnavailable.value) {
+    return 'Bookmark unavailable';
+  }
+  return props.post.bookmarkStatus === 'ready' && props.post.bookmarked
+    ? 'Remove bookmark'
+    : 'Bookmark post';
 });
 
 const compactViewCount = computed(() => formatCompactEngagementCount(props.post.viewCount));
@@ -973,7 +1011,8 @@ const repostLabel = computed(() => {
 }
 
 .post-card__reply,
-.post-card__views {
+.post-card__views,
+.post-card__bookmark {
   min-width: 40px;
   min-height: 40px;
   margin: -8px 0;
@@ -982,7 +1021,8 @@ const repostLabel = computed(() => {
 }
 
 .post-card__reply,
-.post-card__views {
+.post-card__views,
+.post-card__bookmark {
   color: inherit;
   text-decoration: none;
   transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
@@ -1079,6 +1119,8 @@ const repostLabel = computed(() => {
 .post-card__reply:focus-visible,
 .post-card__views:hover,
 .post-card__views:focus-visible,
+.post-card__bookmark:hover:not(:disabled),
+.post-card__bookmark:focus-visible,
 .post-card__more-button:hover,
 .post-card__more-button:focus-visible {
   background: var(--color-surface-subtle);
@@ -1087,12 +1129,14 @@ const repostLabel = computed(() => {
 
 .post-card__reply:active,
 .post-card__views:active,
+.post-card__bookmark:active,
 .post-card__more-button:active {
   transform: scale(0.97);
 }
 
 .post-card__reply .app-icon,
-.post-card__views .app-icon {
+.post-card__views .app-icon,
+.post-card__bookmark .app-icon {
   width: 18px;
   height: 18px;
 }
@@ -1100,6 +1144,23 @@ const repostLabel = computed(() => {
 .post-card__more-button .app-icon {
   width: 20px;
   height: 20px;
+}
+
+.post-card__bookmark {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.post-card__bookmark:disabled {
+  cursor: default;
+  opacity: 0.64;
+}
+
+.post-card__bookmark--active {
+  color: var(--color-accent);
 }
 
 @media (max-width: 420px) {
@@ -1125,6 +1186,7 @@ const repostLabel = computed(() => {
 @media (prefers-reduced-motion: reduce) {
   .post-card__reply,
   .post-card__views,
+  .post-card__bookmark,
   .post-card__more-button {
     transition: none;
   }

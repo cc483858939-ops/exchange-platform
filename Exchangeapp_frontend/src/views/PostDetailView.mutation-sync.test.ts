@@ -56,6 +56,7 @@ vi.mock('../store/postDetailHandoff', () => ({
   usePostDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
 }));
 vi.mock('../store/sessionSync', () => ({
+  registerPostDetailSessionSync: vi.fn(),
   syncExternalPostLikeState: mocks.externalLike,
   syncExternalPostRepostState: mocks.externalRepost,
   markOwnProfileTimelineStale: vi.fn(),

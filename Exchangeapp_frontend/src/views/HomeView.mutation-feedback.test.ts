@@ -72,6 +72,8 @@ const post: FeedPost = {
   repostCount: 0,
   reposted: false,
   repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
 };
 
 const settle = async () => {
@@ -145,6 +147,7 @@ describe('HomeView engagement mutation feedback', () => {
       scrollTop: { 'for-you': 0, following: 0 },
       likePendingPostIds: new Set<number>(),
       repostPendingPostIds: new Set<number>(),
+      bookmarkPendingPostIds: new Set<number>(),
       pendingDeletePostIds: new Set<number>(),
       deleteErrors: new Map<number, string>(),
       setActiveTab: vi.fn((tab: FeedTab) => { mocks.homeTimeline.activeTab = tab; }),

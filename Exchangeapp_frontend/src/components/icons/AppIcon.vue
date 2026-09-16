@@ -319,6 +319,17 @@
       />
     </template>
 
+    <template v-else-if="props.name === 'bookmark'">
+      <path
+        d="M6 4.25A1.75 1.75 0 0 1 7.75 2.5h8.5A1.75 1.75 0 0 1 18 4.25v17l-6-3.75-6 3.75v-17Z"
+        :fill="props.filled ? 'currentColor' : 'none'"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </template>
+
     <template v-else-if="props.name === 'smile'">
       <circle
         cx="12"
@@ -354,6 +365,7 @@ type AppIconName =
   | 'reply'
   | 'repost'
   | 'heart'
+  | 'bookmark'
   | 'more'
   | 'link'
   | 'analytics'

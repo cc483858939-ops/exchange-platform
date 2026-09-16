@@ -74,11 +74,13 @@
           :post="post"
           :like-pending="likePendingPostIds.has(post.id)"
           :repost-pending="repostPendingPostIds.has(post.id)"
+          :bookmark-pending="bookmarkPendingPostIds.has(post.id)"
           :show-delete="canDeletePost(post)"
           :delete-pending="pendingDeletePostIds.has(post.id)"
           :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
           @toggle-repost="handleRepostToggle"
+          @toggle-bookmark="handleBookmarkToggle"
           @delete-post="handleDeletePost"
         />
 
@@ -110,6 +112,7 @@
             :post="item.post"
             :like-pending="likePendingPostIds.has(item.post.id)"
             :repost-pending="repostPendingPostIds.has(item.post.id)"
+            :bookmark-pending="bookmarkPendingPostIds.has(item.post.id)"
             :show-not-interested="true"
             :show-delete="canDeletePost(item.post)"
             :delete-pending="pendingDeletePostIds.has(item.post.id)"
@@ -117,6 +120,7 @@
             @post-click="handleRecommendationClick(item.recommendation)"
             @toggle-like="handleLikeToggle"
             @toggle-repost="handleRepostToggle"
+            @toggle-bookmark="handleBookmarkToggle"
             @not-interested="handleNotInterested"
             @delete-post="handleDeletePost"
           />
@@ -153,11 +157,13 @@
           :post="post"
           :like-pending="likePendingPostIds.has(post.id)"
           :repost-pending="repostPendingPostIds.has(post.id)"
+          :bookmark-pending="bookmarkPendingPostIds.has(post.id)"
           :show-delete="canDeletePost(post)"
           :delete-pending="pendingDeletePostIds.has(post.id)"
           :delete-error="deleteErrors.get(post.id) || ''"
           @toggle-like="handleLikeToggle"
           @toggle-repost="handleRepostToggle"
+          @toggle-bookmark="handleBookmarkToggle"
           @delete-post="handleDeletePost"
         />
 
@@ -249,6 +255,7 @@ const forYouFeed = homeTimeline.forYou;
 const followingFeed = homeTimeline.following;
 const likePendingPostIds = homeTimeline.likePendingPostIds;
 const repostPendingPostIds = homeTimeline.repostPendingPostIds;
+const bookmarkPendingPostIds = homeTimeline.bookmarkPendingPostIds;
 const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
 const homeViewActive = ref(true);
@@ -593,6 +600,13 @@ const handleRepostToggle = async (postId: number) => {
   const result = await homeTimeline.toggleRepost(postId);
   if (result === 'failed') {
     ElMessage.error('Couldn’t update your repost. Try again.');
+  }
+};
+
+const handleBookmarkToggle = async (postId: number) => {
+  const result = await homeTimeline.toggleBookmark(postId);
+  if (result === 'failed') {
+    ElMessage.error('Couldn’t update your bookmark. Try again.');
   }
 };
 
