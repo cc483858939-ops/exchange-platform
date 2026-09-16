@@ -1,5 +1,5 @@
 <template>
-  <Teleport to="body">
+  <Teleport :to="teleportTarget">
     <section
       v-if="open && !disabled"
       :id="id"
@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import localEmojiDataSource from 'emoji-picker-element-data/en/emojibase/data.json?url';
 
 export type EmojiPickerCloseReason = 'escape' | 'outside';
@@ -52,6 +52,11 @@ const popoverStyle = ref<Record<string, string>>({});
 const isLoading = ref(false);
 const loadError = ref('');
 let lifecycleToken = 0;
+
+// A modal dialog makes content outside its top-layer subtree inert, so keep the picker inside it.
+const teleportTarget = computed<HTMLElement | string>(() => (
+  props.anchorEl?.closest('dialog') as HTMLElement | null ?? 'body'
+));
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 

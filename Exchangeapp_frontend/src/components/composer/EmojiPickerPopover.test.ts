@@ -17,10 +17,13 @@ vi.mock('emoji-picker-element', () => {
 describe('EmojiPickerPopover', () => {
   let wrapper: VueWrapper | null = null;
   let anchor: HTMLButtonElement | null = null;
+  let dialog: HTMLDialogElement | null = null;
 
   afterEach(() => {
     wrapper?.unmount();
     wrapper = null;
+    dialog?.remove();
+    dialog = null;
     anchor?.remove();
     anchor = null;
     document.querySelectorAll('.emoji-picker-popover__panel').forEach(element => element.remove());
@@ -46,6 +49,63 @@ describe('EmojiPickerPopover', () => {
     });
     return wrapper;
   };
+
+  it('teleports a non-modal picker to document.body', async () => {
+    mountPicker();
+    await flushPromises();
+
+    const panel = document.getElementById('test-emoji-picker');
+    expect(panel).not.toBeNull();
+    expect(panel?.parentElement).toBe(document.body);
+  });
+
+  it('teleports into the nearest dialog and preserves modal interaction boundaries', async () => {
+    dialog = document.createElement('dialog');
+    anchor = document.createElement('button');
+    const outside = document.createElement('button');
+    dialog.append(anchor, outside);
+    document.body.append(dialog);
+    vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue({
+      x: 40,
+      y: 96,
+      top: 96,
+      bottom: 132,
+      left: 40,
+      right: 76,
+      width: 36,
+      height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    wrapper = mount(EmojiPickerPopover, {
+      attachTo: document.body,
+      props: { id: 'test-emoji-picker', open: true, anchorEl: anchor },
+    });
+    await flushPromises();
+
+    const panel = document.getElementById('test-emoji-picker');
+    expect(panel).not.toBeNull();
+    expect(panel?.parentElement).toBe(dialog);
+
+    const pickerMount = document.querySelector('.emoji-picker-popover__mount');
+    const picker = pickerMount?.firstElementChild as HTMLElement | undefined;
+    expect(picker).toBeDefined();
+    anchor.dispatchEvent(new Event('click', { bubbles: true, composed: true }));
+    expect(wrapper?.emitted('close')).toBeUndefined();
+    picker?.dispatchEvent(new Event('click', { bubbles: true, composed: true }));
+    expect(wrapper?.emitted('close')).toBeUndefined();
+    picker?.dispatchEvent(new CustomEvent('emoji-click', {
+      detail: { unicode: '😂' },
+      bubbles: true,
+      composed: true,
+    }));
+
+    expect(wrapper?.emitted('select')).toEqual([['😂']]);
+    expect(wrapper?.emitted('close')).toBeUndefined();
+    expect(document.getElementById('test-emoji-picker')).toBe(panel);
+
+    outside.dispatchEvent(new Event('click', { bubbles: true, composed: true }));
+    expect(wrapper?.emitted('close')).toEqual([['outside']]);
+  });
 
   it('lazily mounts the picker and forwards selected emoji without closing', async () => {
     mountPicker();
