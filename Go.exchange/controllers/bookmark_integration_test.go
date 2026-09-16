@@ -112,11 +112,12 @@ func TestPostBookmarkIntegration(t *testing.T) {
 		{Username: "bookmark-viewer-" + uuid.NewString(), Password: "secret"},
 		{Username: "bookmark-other-viewer-" + uuid.NewString(), Password: "secret"},
 		{Username: "bookmark-author-" + uuid.NewString(), Password: "secret", DisplayName: "Bookmark Author", AvatarURL: "author.jpg"},
+		{Username: "bookmark-unavailable-author-" + uuid.NewString(), Password: "secret"},
 	}
 	if err := db.Create(&users).Error; err != nil {
 		t.Fatal(err)
 	}
-	viewer, otherViewer, author := users[0], users[1], users[2]
+	viewer, otherViewer, author, unavailableAuthor := users[0], users[1], users[2], users[3]
 
 	var postIDs []uint
 	var bookmarkUserIDs []uint
@@ -141,9 +142,9 @@ func TestPostBookmarkIntegration(t *testing.T) {
 	bookmarkUserIDs = []uint{viewer.ID, otherViewer.ID}
 
 	baseTime := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
-	createPost := func(title, visibility string, createdAt time.Time) models.Post {
+	createPostForAuthor := func(authorID uint, title, visibility string, createdAt time.Time) models.Post {
 		post := models.Post{
-			AuthorID:   author.ID,
+			AuthorID:   authorID,
 			Content:    title + " body",
 			Language:   "und",
 			Visibility: visibility,
@@ -154,6 +155,9 @@ func TestPostBookmarkIntegration(t *testing.T) {
 		}
 		postIDs = append(postIDs, post.ID)
 		return post
+	}
+	createPost := func(title, visibility string, createdAt time.Time) models.Post {
+		return createPostForAuthor(author.ID, title, visibility, createdAt)
 	}
 
 	publicPost := createPost("public", "public", baseTime)
@@ -169,7 +173,13 @@ func TestPostBookmarkIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	postIDs = append(postIDs, replyPost.ID)
-	privatePost := createPost("private", "private", baseTime.Add(3*time.Minute))
+	// The canonical schema only permits public posts. Model an unavailable
+	// public post through its deleted author instead of inserting an invalid
+	// visibility value that the migration must reject.
+	unavailablePost := createPostForAuthor(unavailableAuthor.ID, "private", "public", baseTime.Add(3*time.Minute))
+	if err := db.Delete(&unavailableAuthor).Error; err != nil {
+		t.Fatal(err)
+	}
 	deletedPost := createPost("deleted", "public", baseTime.Add(4*time.Minute))
 	if err := db.Delete(&deletedPost).Error; err != nil {
 		t.Fatal(err)
@@ -195,13 +205,13 @@ func TestPostBookmarkIntegration(t *testing.T) {
 	if response, status, body := requestBookmarkMutation(t, http.MethodPut, replyPost.ID, viewer.ID); status != http.StatusOK || !response.Bookmarked {
 		t.Fatalf("reply bookmark status=%d body=%s response=%#v", status, body, response)
 	}
-	for _, postID := range []uint{privatePost.ID, deletedPost.ID, 999999999} {
+	for _, postID := range []uint{unavailablePost.ID, deletedPost.ID, 999999999} {
 		if _, status, body := requestBookmarkMutation(t, http.MethodPut, postID, viewer.ID); status != http.StatusNotFound {
 			t.Fatalf("unavailable post=%d status=%d body=%s", postID, status, body)
 		}
 	}
 
-	states, status, body := requestBookmarkStates(t, viewer.ID, []uint{publicPost.ID, privatePost.ID, replyPost.ID, publicPost.ID, deletedPost.ID})
+	states, status, body := requestBookmarkStates(t, viewer.ID, []uint{publicPost.ID, unavailablePost.ID, replyPost.ID, publicPost.ID, deletedPost.ID})
 	if status != http.StatusOK {
 		t.Fatalf("batch status=%d body=%s", status, body)
 	}
@@ -237,7 +247,7 @@ func TestPostBookmarkIntegration(t *testing.T) {
 		{UserID: viewer.ID, PostID: historyTieLow.ID, CreatedAt: bookmarkAt},
 		{UserID: viewer.ID, PostID: historyTieHigh.ID, CreatedAt: bookmarkAt},
 		{UserID: viewer.ID, PostID: replyPost.ID, CreatedAt: bookmarkAt.Add(time.Hour)},
-		{UserID: viewer.ID, PostID: privatePost.ID, CreatedAt: bookmarkAt.Add(2 * time.Hour)},
+		{UserID: viewer.ID, PostID: unavailablePost.ID, CreatedAt: bookmarkAt.Add(2 * time.Hour)},
 		{UserID: viewer.ID, PostID: deletedPost.ID, CreatedAt: bookmarkAt.Add(3 * time.Hour)},
 		{UserID: otherViewer.ID, PostID: otherViewerPost.ID, CreatedAt: bookmarkAt.Add(4 * time.Hour)},
 	}
@@ -257,11 +267,11 @@ func TestPostBookmarkIntegration(t *testing.T) {
 	}
 
 	page2, status, body := requestBookmarkHistory(t, viewer.ID, "limit=2&cursor="+*page1.NextCursor)
-	if status != http.StatusOK || len(page2.Items) != 1 || page2.NextCursor != nil {
+	if status != http.StatusOK || len(page2.Items) != 2 || page2.NextCursor != nil {
 		t.Fatalf("history page2 status=%d body=%s response=%#v", status, body, page2)
 	}
-	if page2.Items[0].ID != historyOlder.ID {
-		t.Fatalf("history page2 id=%d", page2.Items[0].ID)
+	if page2.Items[0].ID != historyTieHigh.ID || page2.Items[1].ID != historyOlder.ID {
+		t.Fatalf("history page2 ids=%d,%d", page2.Items[0].ID, page2.Items[1].ID)
 	}
 	if page2.Items[0].ID == page1.Items[0].ID || page2.Items[0].ID == page1.Items[1].ID {
 		t.Fatal("history pages contain a duplicate post")

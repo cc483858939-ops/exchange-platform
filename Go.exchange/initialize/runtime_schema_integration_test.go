@@ -88,6 +88,9 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := applyPostRepostConstraints(tx); err != nil {
 		t.Fatalf("apply PostRepost constraints: %v", err)
 	}
+	if err := applyPostBookmarkConstraints(tx); err != nil {
+		t.Fatalf("apply PostBookmark constraints: %v", err)
+	}
 	if err := applyPostReactionConstraints(tx); err != nil {
 		t.Fatalf("apply PostReaction constraints: %v", err)
 	}

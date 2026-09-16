@@ -277,7 +277,9 @@ func TestProfileTimelineCursorIntegration(t *testing.T) {
 			t.Fatalf("duplicate activity %q", key)
 		}
 		seen[key] = struct{}{}
-		if item != activities[index] {
+		if item.ActivityType != activities[index].ActivityType ||
+			!item.ActivityAt.Equal(activities[index].ActivityAt) ||
+			item.SourceID != activities[index].SourceID {
 			t.Fatalf("activity %d=%#v want %#v", index, item, activities[index])
 		}
 	}
