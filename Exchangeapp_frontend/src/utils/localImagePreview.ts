@@ -20,6 +20,20 @@ const defaultMaxSide = 1024;
 const previewQuality = 0.82;
 const disposedMessage = 'Image preview preparation was cancelled.';
 
+export class WorkerUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkerUnavailableError';
+  }
+}
+
+export class WorkerPreviewJobError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkerPreviewJobError';
+  }
+}
+
 export const calculatePreviewDimensions = (
   sourceWidth: number,
   sourceHeight: number,
@@ -252,16 +266,24 @@ export const createLocalImagePreviewGenerator = (
           });
           return;
         }
-        reject(new Error(response.message || 'The worker could not prepare the image preview.'));
+        if (response.type === 'error') {
+          reject(new WorkerPreviewJobError(
+            response.message || 'The worker could not prepare this image preview.',
+          ));
+          return;
+        }
+        reject(new WorkerUnavailableError('The image preview worker returned an invalid response.'));
       };
       currentWorker.onerror = event => {
-        fail(new Error(event.message || 'The image preview worker failed.'));
+        fail(new WorkerUnavailableError(event.message || 'The image preview worker failed.'));
       };
 
       try {
         currentWorker.postMessage({ jobID, file, maxSide });
       } catch (error) {
-        fail(error);
+        fail(new WorkerUnavailableError(
+          error instanceof Error ? error.message : 'The image preview worker could not receive the job.',
+        ));
       }
     },
   );
@@ -279,9 +301,8 @@ export const createLocalImagePreviewGenerator = (
         if (disposed) {
           throw new Error(disposedMessage);
         }
-        disableWorker();
-        if (error instanceof Error && error.message === disposedMessage) {
-          throw error;
+        if (!(error instanceof WorkerPreviewJobError)) {
+          disableWorker();
         }
       }
     }

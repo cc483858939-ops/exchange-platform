@@ -519,13 +519,19 @@ const drainPreviewQueue = async () => {
       if (!item) {
         continue;
       }
-      if (queuedPreviewFiles.get(item.id) === item.file) {
-        queuedPreviewFiles.delete(item.id);
-      }
       if (!isCurrentPreview(item.id, item.file)) {
+        if (queuedPreviewFiles.get(item.id) === item.file) {
+          queuedPreviewFiles.delete(item.id);
+        }
         continue;
       }
-      await preparePreview(item.id, item.file);
+      try {
+        await preparePreview(item.id, item.file);
+      } finally {
+        if (queuedPreviewFiles.get(item.id) === item.file) {
+          queuedPreviewFiles.delete(item.id);
+        }
+      }
     }
   } finally {
     previewQueueRunning = false;

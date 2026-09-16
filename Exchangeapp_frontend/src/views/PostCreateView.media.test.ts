@@ -292,6 +292,59 @@ describe('PostCreateView media picker and retry behavior', () => {
       .toEqual(['blob:preview-1', 'blob:preview-2']);
   });
 
+  it('keeps an active preview owned when another draft media item is added', async () => {
+    const first = imageFile('active-first.png');
+    const second = imageFile('queued-second.png');
+    const firstRequest = deferred<{
+      blob: Blob;
+      width: number;
+      height: number;
+    }>();
+    const secondRequest = deferred<{
+      blob: Blob;
+      width: number;
+      height: number;
+    }>();
+    let active = 0;
+    let maxActive = 0;
+    mocks.previewGenerator.generate.mockImplementation((file: File) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      const request = file === first ? firstRequest : secondRequest;
+      return request.promise.finally(() => {
+        active -= 1;
+      });
+    });
+    wrapper = mountPage();
+    await selectFiles(wrapper, [first], false);
+    await flushPromises();
+    expect(mocks.previewGenerator.generate).toHaveBeenCalledWith(first);
+
+    await selectFiles(wrapper, [second], false);
+    await flushPromises();
+    expect(mocks.previewGenerator.generate.mock.calls.filter(([file]) => file === first))
+      .toHaveLength(1);
+    expect(mocks.previewGenerator.generate.mock.calls.filter(([file]) => file === second))
+      .toHaveLength(0);
+    expect(maxActive).toBe(1);
+
+    firstRequest.resolve({
+      blob: new Blob(['first-preview'], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    });
+    await flushPromises();
+    expect(mocks.previewGenerator.generate).toHaveBeenCalledWith(second);
+    expect(maxActive).toBe(1);
+
+    secondRequest.resolve({
+      blob: new Blob(['second-preview'], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    });
+    await flushPromises();
+  });
+
   it('does not reinsert a removed image after a stale preview completes', async () => {
     const request = deferred<{
       blob: Blob;
