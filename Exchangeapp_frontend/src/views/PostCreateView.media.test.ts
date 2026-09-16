@@ -22,6 +22,11 @@ const mocks = vi.hoisted(() => ({
   profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
   uploadPostMedia: vi.fn(),
+  previewGenerator: {
+    generate: vi.fn(),
+    dispose: vi.fn(),
+  },
+  createLocalImagePreviewGenerator: vi.fn(),
 }));
 
 vi.mock('vue-router', () => ({
@@ -56,6 +61,10 @@ vi.mock('../services/postService', () => ({
   uploadPostMedia: mocks.uploadPostMedia,
 }));
 
+vi.mock('../utils/localImagePreview', () => ({
+  createLocalImagePreviewGenerator: mocks.createLocalImagePreviewGenerator,
+}));
+
 const publishedPost = () => ({
   id: 101,
   author: {
@@ -77,13 +86,16 @@ const mountPage = () => mount(PostCreateView, {
   },
 });
 
-const selectFiles = async (wrapper: VueWrapper, files: File[]) => {
+const selectFiles = async (wrapper: VueWrapper, files: File[], settle = true) => {
   const input = wrapper.get('#post-media-input');
   Object.defineProperty(input.element, 'files', {
     configurable: true,
     value: files,
   });
   await input.trigger('change');
+  if (settle) {
+    await flushPromises();
+  }
   return input;
 };
 
@@ -103,14 +115,29 @@ const deferred = <T,>() => {
 
 describe('PostCreateView media picker and retry behavior', () => {
   let wrapper: VueWrapper | null = null;
+  let previewURLCounter = 0;
 
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
-    vi.stubGlobal('URL', {
-      createObjectURL: vi.fn((file: File) => `blob:${file.name}`),
-      revokeObjectURL: vi.fn(),
+    previewURLCounter = 0;
+    mocks.createLocalImagePreviewGenerator.mockReturnValue(mocks.previewGenerator);
+    mocks.previewGenerator.generate.mockImplementation(async (file: File) => ({
+      blob: new Blob([file.name], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    }));
+    const nativeURL = globalThis.URL;
+    class TestURL extends nativeURL {}
+    Object.defineProperty(TestURL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => `blob:preview-${++previewURLCounter}`),
     });
+    Object.defineProperty(TestURL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.stubGlobal('URL', TestURL);
     mocks.authStore!.isAuthenticated = true;
     mocks.authStore!.currentIdentity = {
       id: 7,
@@ -141,6 +168,10 @@ describe('PostCreateView media picker and retry behavior', () => {
     await selectFiles(wrapper, files);
 
     expect(usePostDraftStore().media.map(item => item.file)).toEqual(files);
+    expect(usePostDraftStore().media[0].file).toBe(files[0]);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(4);
+    expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(URL.createObjectURL).not.toHaveBeenCalledWith(files[0]);
     expect(wrapper.find('.post-media-grid--count-4').exists()).toBe(true);
     expect(wrapper.findAll('.post-media-grid__remove')).toHaveLength(4);
     expect(wrapper.get('.post-media-grid__remove').attributes('aria-label')).toBe('Remove image 1');
@@ -192,11 +223,180 @@ describe('PostCreateView media picker and retry behavior', () => {
   it('removes media by stable identity and revokes its preview URL', async () => {
     wrapper = mountPage();
     await selectFiles(wrapper, [imageFile('remove-me.png')]);
+    const previewURL = wrapper.get('.post-media-grid__image').attributes('src');
 
     await wrapper.get('.post-media-grid__remove').trigger('click');
 
     expect(usePostDraftStore().media).toHaveLength(0);
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:remove-me.png');
+    expect(previewURL).toBe('blob:preview-1');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(previewURL);
+  });
+
+  it('passes the generated preview dimensions to PostMediaGrid', async () => {
+    mocks.previewGenerator.generate.mockResolvedValueOnce({
+      blob: new Blob(['portrait'], { type: 'image/webp' }),
+      width: 768,
+      height: 1024,
+    });
+    wrapper = mountPage();
+    await selectFiles(wrapper, [imageFile('portrait.png')]);
+
+    const image = wrapper.get('.post-media-grid__image');
+    expect(image.attributes('width')).toBe('768');
+    expect(image.attributes('height')).toBe('1024');
+  });
+
+  it('prepares selected images sequentially and preserves selection order', async () => {
+    const files = [imageFile('first.png'), imageFile('second.png')];
+    const requests = files.map(() => deferred<{
+      blob: Blob;
+      width: number;
+      height: number;
+    }>());
+    let active = 0;
+    let maxActive = 0;
+    mocks.previewGenerator.generate.mockImplementation((file: File) => {
+      const index = files.indexOf(file);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      return requests[index].promise.finally(() => {
+        active -= 1;
+      });
+    });
+    wrapper = mountPage();
+    await selectFiles(wrapper, files, false);
+    await flushPromises();
+
+    expect(mocks.previewGenerator.generate).toHaveBeenCalledTimes(1);
+    expect(mocks.previewGenerator.generate).toHaveBeenCalledWith(files[0]);
+    expect(maxActive).toBe(1);
+
+    requests[0].resolve({
+      blob: new Blob(['first-preview'], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    });
+    await flushPromises();
+    expect(mocks.previewGenerator.generate).toHaveBeenCalledTimes(2);
+    expect(mocks.previewGenerator.generate).toHaveBeenLastCalledWith(files[1]);
+    expect(maxActive).toBe(1);
+
+    requests[1].resolve({
+      blob: new Blob(['second-preview'], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    });
+    await flushPromises();
+
+    expect(wrapper.findAll('.post-media-grid__image').map(image => image.attributes('src')))
+      .toEqual(['blob:preview-1', 'blob:preview-2']);
+  });
+
+  it('does not reinsert a removed image after a stale preview completes', async () => {
+    const request = deferred<{
+      blob: Blob;
+      width: number;
+      height: number;
+    }>();
+    mocks.previewGenerator.generate.mockReturnValueOnce(request.promise);
+    wrapper = mountPage();
+    await selectFiles(wrapper, [imageFile('stale.png')], false);
+    await flushPromises();
+
+    await wrapper.get('.composer-media-preparation__remove').trigger('click');
+    request.resolve({
+      blob: new Blob(['stale-preview'], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    });
+    await flushPromises();
+
+    expect(usePostDraftStore().media).toHaveLength(0);
+    expect(wrapper.find('.post-media-grid').exists()).toBe(false);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('revokes a derivative URL if the draft becomes stale during URL creation', async () => {
+    const file = imageFile('stale-url.png');
+    const request = deferred<{
+      blob: Blob;
+      width: number;
+      height: number;
+    }>();
+    const draft = usePostDraftStore();
+    let removeDuringCreate = false;
+    vi.mocked(URL.createObjectURL).mockImplementation(() => {
+      const url = `blob:preview-${++previewURLCounter}`;
+      if (removeDuringCreate && draft.media[0]) {
+        draft.removeMedia(draft.media[0].id);
+      }
+      return url;
+    });
+    mocks.previewGenerator.generate.mockReturnValueOnce(request.promise);
+    wrapper = mountPage();
+    await selectFiles(wrapper, [file], false);
+    await flushPromises();
+
+    removeDuringCreate = true;
+    request.resolve({
+      blob: new Blob(['stale-url-preview'], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    });
+    await flushPromises();
+
+    expect(usePostDraftStore().media).toHaveLength(0);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview-1');
+  });
+
+  it('disposes preview work and ignores late results after unmount', async () => {
+    const first = imageFile('prepared.png');
+    const second = imageFile('pending.png');
+    const pending = deferred<{
+      blob: Blob;
+      width: number;
+      height: number;
+    }>();
+    mocks.previewGenerator.generate
+      .mockResolvedValueOnce({
+        blob: new Blob(['prepared-preview'], { type: 'image/webp' }),
+        width: 800,
+        height: 600,
+      })
+      .mockReturnValueOnce(pending.promise);
+    wrapper = mountPage();
+    await selectFiles(wrapper, [first, second], false);
+    await flushPromises();
+    await flushPromises();
+    expect(mocks.previewGenerator.generate).toHaveBeenCalledTimes(2);
+    expect(wrapper.findAll('.post-media-grid__image')).toHaveLength(1);
+
+    wrapper.unmount();
+    expect(mocks.previewGenerator.dispose).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview-1');
+
+    pending.resolve({
+      blob: new Blob(['late-preview'], { type: 'image/webp' }),
+      width: 800,
+      height: 600,
+    });
+    await flushPromises();
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a failed preview, blocks publishing, and clears the block when removed', async () => {
+    mocks.previewGenerator.generate.mockRejectedValueOnce(new Error('decode failed'));
+    wrapper = mountPage();
+    await selectFiles(wrapper, [imageFile('broken.png')]);
+    await wrapper.get('#post-content').setValue('A post with a broken preview');
+
+    expect(wrapper.get('.composer-media-preparation__item').text())
+      .toContain('Could not prepare this image preview');
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
+
+    await wrapper.get('.composer-media-preparation__remove').trigger('click');
+    expect(usePostDraftStore().media).toHaveLength(0);
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeUndefined();
   });
 
   it('uploads media two at a time and keeps selected order despite completion order', async () => {

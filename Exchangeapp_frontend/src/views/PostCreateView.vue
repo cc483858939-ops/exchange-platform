@@ -68,6 +68,40 @@
               @remove="removeMedia"
             />
 
+            <div
+              v-if="previewPreparationItems.length > 0"
+              class="composer-media-preparation"
+            >
+              <p
+                v-if="previewPreparationPendingCount > 0"
+                class="composer-media-preparation__status"
+                aria-live="polite"
+              >
+                {{ previewPreparationPendingCount === 1
+                  ? 'Preparing image...'
+                  : `Preparing ${previewPreparationPendingCount} images...` }}
+              </p>
+              <ul class="composer-media-preparation__list">
+                <li
+                  v-for="item in previewPreparationItems"
+                  :key="item.id"
+                  class="composer-media-preparation__item"
+                >
+                  <span>
+                    {{ item.status === 'error' ? item.error : 'Preparing image...' }}
+                  </span>
+                  <button
+                    type="button"
+                    class="composer-media-preparation__remove"
+                    :disabled="isSubmitting"
+                    @click="removeMediaByID(item.id)"
+                  >
+                    Remove image {{ item.index + 1 }}
+                  </button>
+                </li>
+              </ul>
+            </div>
+
             <p
               v-if="contentError"
               id="post-content-error"
@@ -182,6 +216,10 @@ import EmojiPickerPopover, {
   type EmojiPickerCloseReason,
 } from '../components/composer/EmojiPickerPopover.vue';
 import type { PostMedia } from '../types/Post';
+import {
+  createLocalImagePreviewGenerator,
+  type LocalImagePreviewGenerator,
+} from '../utils/localImagePreview';
 import { insertTextAtSelection } from '../utils/textareaInsertion';
 
 const maxContentLength = 10000;
@@ -203,9 +241,31 @@ const emojiButton = ref<HTMLButtonElement | null>(null);
 const emojiPickerOpen = ref(false);
 const selectionStart = ref<number | null>(null);
 const selectionEnd = ref<number | null>(null);
-const previewEntries = ref(new Map<string, { file: File; url: string }>());
+type PreviewEntry = {
+  file: File;
+  url: string;
+  width: number;
+  height: number;
+};
+
+type PreviewState = {
+  file: File;
+  status: 'pending' | 'ready' | 'error';
+  error?: string;
+};
+
+const previewEntries = ref(new Map<string, PreviewEntry>());
+const previewStates = ref(new Map<string, PreviewState>());
+const previewGenerator: LocalImagePreviewGenerator = createLocalImagePreviewGenerator({
+  maxSide: 1024,
+});
+let previewLifecycleActive = true;
+let previewQueueRunning = false;
+const previewQueue: Array<{ id: string; file: File }> = [];
+const queuedPreviewFiles = new Map<string, File>();
 const emojiPickerId = 'post-emoji-picker';
 const publishBlockedMessage = 'Another post is still sending. Wait for it to finish or retry it before posting this draft.';
+const previewPreparationFailureMessage = 'Could not prepare this image preview. Remove the image and try again.';
 
 const currentIdentity = computed(() => authStore.currentIdentity);
 const currentUserID = computed(() => (
@@ -259,6 +319,7 @@ const canPublish = computed(() => (
   authStore.isAuthenticated
   && Boolean(content.value.trim())
   && contentLength.value <= maxContentLength
+  && !previewPreparationBlocked.value
   && !publishBlocked.value
 ));
 
@@ -326,17 +387,52 @@ const insertEmoji = async (emoji: string) => {
 };
 
 const previewMedia = computed<PostMedia[]>(() => postDraft.media
-  .map((item, index) => ({
-    type: 'image' as const,
-    url: previewEntries.value.get(item.id)?.url || '',
-    large_url: previewEntries.value.get(item.id)?.url || '',
-    width: 0,
-    height: 0,
-    position: index,
-  }))
-  .filter(item => Boolean(item.url)));
+  .map((item, index) => {
+    const entry = previewEntries.value.get(item.id);
+    if (!entry || entry.file !== item.file) {
+      return null;
+    }
+    return {
+      type: 'image' as const,
+      url: entry.url,
+      large_url: entry.url,
+      width: entry.width,
+      height: entry.height,
+      position: index,
+    };
+  })
+  .filter((item): item is PostMedia => item !== null));
 
-const revokePreview = (entry: { file: File; url: string }) => {
+const previewPreparationItems = computed(() => postDraft.media
+  .map((item, index) => {
+    const state = previewStates.value.get(item.id);
+    const entry = previewEntries.value.get(item.id);
+    const sameStateFile = state?.file === item.file;
+    const status = sameStateFile && state?.status === 'error'
+      ? 'error' as const
+      : sameStateFile && state?.status === 'ready' && entry?.file === item.file
+        ? 'ready' as const
+        : 'pending' as const;
+    return {
+      id: item.id,
+      index,
+      status,
+      error: sameStateFile && state?.status === 'error'
+        ? state.error || previewPreparationFailureMessage
+        : undefined,
+    };
+  })
+  .filter(item => item.status !== 'ready'));
+
+const previewPreparationPendingCount = computed(() => previewPreparationItems.value
+  .filter(item => item.status === 'pending').length);
+
+const previewPreparationError = computed(() => previewPreparationItems.value
+  .find(item => item.status === 'error')?.error || '');
+
+const previewPreparationBlocked = computed(() => previewPreparationItems.value.length > 0);
+
+const revokePreview = (entry: Pick<PreviewEntry, 'url'>) => {
   if (
     entry.url
     && typeof URL !== 'undefined'
@@ -346,9 +442,101 @@ const revokePreview = (entry: { file: File; url: string }) => {
   }
 };
 
+const isCurrentPreview = (id: string, file: File) => (
+  previewLifecycleActive
+  && postDraft.media.some(item => item.id === id && item.file === file)
+);
+
+const preparePreview = async (id: string, file: File) => {
+  let createdURL = '';
+  try {
+    const preview = await previewGenerator.generate(file);
+    if (!isCurrentPreview(id, file)) {
+      return;
+    }
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+      throw new Error('This browser cannot create a local image preview.');
+    }
+    createdURL = URL.createObjectURL(preview.blob);
+    if (!isCurrentPreview(id, file)) {
+      revokePreview({ url: createdURL });
+      createdURL = '';
+      return;
+    }
+
+    const previousEntry = previewEntries.value.get(id);
+    if (previousEntry && previousEntry.url !== createdURL) {
+      revokePreview(previousEntry);
+    }
+    const nextEntries = new Map(previewEntries.value);
+    nextEntries.set(id, {
+      file,
+      url: createdURL,
+      width: preview.width,
+      height: preview.height,
+    });
+    previewEntries.value = nextEntries;
+
+    const nextStates = new Map(previewStates.value);
+    nextStates.set(id, { file, status: 'ready' });
+    previewStates.value = nextStates;
+    createdURL = '';
+  } catch {
+    if (!isCurrentPreview(id, file)) {
+      if (createdURL) {
+        revokePreview({ url: createdURL });
+      }
+      return;
+    }
+    if (createdURL) {
+      revokePreview({ url: createdURL });
+    }
+    const nextEntries = new Map(previewEntries.value);
+    const previousEntry = nextEntries.get(id);
+    if (previousEntry && previousEntry.file === file) {
+      revokePreview(previousEntry);
+      nextEntries.delete(id);
+      previewEntries.value = nextEntries;
+    }
+    const nextStates = new Map(previewStates.value);
+    nextStates.set(id, {
+      file,
+      status: 'error',
+      error: previewPreparationFailureMessage,
+    });
+    previewStates.value = nextStates;
+  }
+};
+
+const drainPreviewQueue = async () => {
+  if (previewQueueRunning) {
+    return;
+  }
+  previewQueueRunning = true;
+  try {
+    while (previewQueue.length > 0 && previewLifecycleActive) {
+      const item = previewQueue.shift();
+      if (!item) {
+        continue;
+      }
+      if (queuedPreviewFiles.get(item.id) === item.file) {
+        queuedPreviewFiles.delete(item.id);
+      }
+      if (!isCurrentPreview(item.id, item.file)) {
+        continue;
+      }
+      await preparePreview(item.id, item.file);
+    }
+  } finally {
+    previewQueueRunning = false;
+  }
+};
+
 const syncPreviews = () => {
   const currentItems = new Map(postDraft.media.map(item => [item.id, item]));
   const nextEntries = new Map(previewEntries.value);
+  const nextStates = new Map(previewStates.value);
+  const itemsToPrepare: Array<{ id: string; file: File }> = [];
 
   for (const [id, entry] of nextEntries) {
     const item = currentItems.get(id);
@@ -358,25 +546,36 @@ const syncPreviews = () => {
     }
   }
 
+  for (const [id, state] of nextStates) {
+    const item = currentItems.get(id);
+    if (!item || item.file !== state.file) {
+      nextStates.delete(id);
+    }
+  }
+
   for (const item of postDraft.media) {
-    if (nextEntries.has(item.id)) {
+    const state = nextStates.get(item.id);
+    const entry = nextEntries.get(item.id);
+    if (state?.file === item.file && entry?.file === item.file) {
       continue;
     }
-    const createObjectURL = typeof URL !== 'undefined'
-      && typeof URL.createObjectURL === 'function'
-      ? URL.createObjectURL.bind(URL)
-      : null;
-    if (createObjectURL) {
-      nextEntries.set(item.id, { file: item.file, url: createObjectURL(item.file) });
+    nextStates.set(item.id, { file: item.file, status: 'pending' });
+    if (queuedPreviewFiles.get(item.id) !== item.file) {
+      queuedPreviewFiles.set(item.id, item.file);
+      itemsToPrepare.push({ id: item.id, file: item.file });
     }
   }
 
   previewEntries.value = nextEntries;
+  previewStates.value = nextStates;
+  previewQueue.push(...itemsToPrepare);
+  void drainPreviewQueue();
 };
 
 const revokeAllPreviews = () => {
   previewEntries.value.forEach(revokePreview);
   previewEntries.value = new Map();
+  previewStates.value = new Map();
 };
 
 const validateMediaFile = (file: File) => {
@@ -426,9 +625,23 @@ const removeMedia = (index: number) => {
   if (isSubmitting.value) {
     return;
   }
-  const item = postDraft.media[index];
+  const preview = previewMedia.value[index];
+  const item = typeof preview?.position === 'number'
+    ? postDraft.media[preview.position]
+    : postDraft.media[index];
   if (item) {
     postDraft.removeMedia(item.id);
+  }
+  mediaError.value = '';
+  publishError.value = '';
+};
+
+const removeMediaByID = (id: string) => {
+  if (isSubmitting.value) {
+    return;
+  }
+  if (postDraft.media.some(item => item.id === id)) {
+    postDraft.removeMedia(id);
   }
   mediaError.value = '';
   publishError.value = '';
@@ -468,6 +681,8 @@ const submitPost = async () => {
   if (!canPublish.value) {
     if (publishBlocked.value) {
       publishError.value = publishBlockedMessage;
+    } else if (previewPreparationBlocked.value) {
+      publishError.value = previewPreparationError.value || 'Wait for image previews to finish before posting.';
     }
     return;
   }
@@ -528,7 +743,11 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  previewLifecycleActive = false;
+  previewQueue.length = 0;
+  queuedPreviewFiles.clear();
   emojiPickerOpen.value = false;
+  previewGenerator.dispose();
   revokeAllPreviews();
 });
 </script>
@@ -811,6 +1030,54 @@ onBeforeUnmount(() => {
 .publish-blocked-message {
   margin: var(--space-2) 0 0;
   font-size: 13px;
+}
+
+.composer-media-preparation {
+  display: grid;
+  gap: 6px;
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.composer-media-preparation__status,
+.composer-media-preparation__list {
+  margin: 0;
+}
+
+.composer-media-preparation__list {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-media-preparation__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.composer-media-preparation__item span {
+  min-width: 0;
+}
+
+.composer-media-preparation__remove {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-media-preparation__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .publish-blocked-message {

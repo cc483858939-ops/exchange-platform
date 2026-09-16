@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
+    "check": "npm run typecheck && npm test",
     "preview": "vite preview",
     "perf:build": "vite build --config vite.perf.config.ts",
     "perf:preview": "vite preview --config vite.perf.config.ts"
