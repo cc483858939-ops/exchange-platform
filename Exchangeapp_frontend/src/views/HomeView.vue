@@ -886,11 +886,16 @@ onBeforeUnmount(() => {
   color: var(--color-text);
 }
 
-.home-state__primary:hover,
 .home-state__primary:focus-visible,
-.home-state__secondary:hover,
 .home-state__secondary:focus-visible {
   border-color: var(--color-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .home-state__primary:hover,
+  .home-state__secondary:hover {
+    border-color: var(--color-accent);
+  }
 }
 
 .feed-skeleton {
@@ -1016,9 +1021,14 @@ onBeforeUnmount(() => {
     transition: background-color var(--transition-fast), transform var(--transition-fast);
   }
 
-  .home-compose-fab:hover,
   .home-compose-fab:focus-visible {
     background: var(--color-accent-hover);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .home-compose-fab:hover {
+      background: var(--color-accent-hover);
+    }
   }
 
   .home-compose-fab:active {

@@ -948,13 +948,15 @@ const repostLabel = computed(() => {
   font-weight: 650;
 }
 
-.post-card__translation-action:hover {
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
-}
-
 .post-card__translation-action:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .post-card__translation-action:hover {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
 }
 
 .post-card__translation-action:disabled {
@@ -1078,7 +1080,6 @@ const repostLabel = computed(() => {
   flex: 0 0 18px;
 }
 
-.post-card__menu-item:hover,
 .post-card__menu-item:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-accent);
@@ -1088,7 +1089,6 @@ const repostLabel = computed(() => {
   color: var(--color-danger);
 }
 
-.post-card__menu-item--danger:hover:not(:disabled),
 .post-card__menu-item--danger:focus-visible {
   color: var(--color-danger);
 }
@@ -1115,16 +1115,31 @@ const repostLabel = computed(() => {
   font-size: 12px;
 }
 
-.post-card__reply:hover,
 .post-card__reply:focus-visible,
-.post-card__views:hover,
 .post-card__views:focus-visible,
-.post-card__bookmark:hover:not(:disabled),
 .post-card__bookmark:focus-visible,
-.post-card__more-button:hover,
 .post-card__more-button:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .post-card__menu-item:hover {
+    background: var(--color-surface-subtle);
+    color: var(--color-accent);
+  }
+
+  .post-card__menu-item--danger:hover:not(:disabled) {
+    color: var(--color-danger);
+  }
+
+  .post-card__reply:hover,
+  .post-card__views:hover,
+  .post-card__bookmark:hover:not(:disabled),
+  .post-card__more-button:hover {
+    background: var(--color-surface-subtle);
+    color: var(--color-accent);
+  }
 }
 
 .post-card__reply:active,

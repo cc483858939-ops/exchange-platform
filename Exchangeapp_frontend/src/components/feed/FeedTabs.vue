@@ -98,9 +98,14 @@ const handleKeydown = (event: KeyboardEvent, index: number) => {
   content: '';
 }
 
-.feed-tab:hover,
 .feed-tab:focus-visible {
   color: var(--color-text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .feed-tab:hover {
+    color: var(--color-text);
+  }
 }
 
 .feed-tab--active {

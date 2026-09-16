@@ -252,15 +252,18 @@ onBeforeUnmount(() => {
   color: var(--color-like);
 }
 
-.like-action:hover:not(:disabled),
 .like-action:focus-visible {
   background: transparent;
   color: var(--color-like);
-}
-
-.like-action:focus-visible {
   outline: 2px solid var(--color-like);
   outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .like-action:hover:not(:disabled) {
+    background: transparent;
+    color: var(--color-like);
+  }
 }
 
 .like-action:disabled {
@@ -303,9 +306,10 @@ onBeforeUnmount(() => {
   transition: background-color 140ms ease;
 }
 
-.like-action:hover:not(:disabled) .like-action__visual::before,
-.like-action:focus-visible .like-action__visual::before {
-  background: color-mix(in srgb, var(--color-like) 10%, transparent);
+@media (hover: hover) and (pointer: fine) {
+  .like-action:hover:not(:disabled) .like-action__visual::before {
+    background: color-mix(in srgb, var(--color-like) 10%, transparent);
+  }
 }
 
 .like-action__heart {

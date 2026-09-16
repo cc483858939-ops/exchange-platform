@@ -292,6 +292,7 @@ onBeforeUnmount(() => {
 .connections-sentinel { min-height: 1px; }
 .connections-more { min-height: 64px; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--color-border); }
 .connections-button { min-height: 36px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-4); background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
-.connections-button:hover, .connections-button:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
+.connections-button:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
+@media (hover: hover) and (pointer: fine) { .connections-button:hover { border-color: var(--color-accent); color: var(--color-accent); } }
 @media (max-width: 380px) { .connections-header { padding-inline: var(--space-4); } .connections-tabs a { font-size: 13px; } }
 </style>

@@ -77,12 +77,20 @@ const loginDestination = computed(() => ({
   transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
-.auth-required-state__action:hover,
 .auth-required-state__action:focus-visible {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #fff;
   transform: translateY(-1px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .auth-required-state__action:hover {
+    border-color: var(--color-accent);
+    background: var(--color-accent);
+    color: #fff;
+    transform: translateY(-1px);
+  }
 }
 
 @media (max-width: 420px) {

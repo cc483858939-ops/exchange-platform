@@ -318,11 +318,16 @@ watch(
   cursor: pointer;
 }
 
-.reply-composer__emoji:hover:not(:disabled),
 .reply-composer__emoji:focus-visible:not(:disabled) {
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .reply-composer__emoji:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
 }
 
 .reply-composer__emoji:disabled {
@@ -354,8 +359,10 @@ watch(
   transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
-.reply-composer__submit:hover:not(:disabled) {
-  background: var(--color-accent-hover);
+@media (hover: hover) and (pointer: fine) {
+  .reply-composer__submit:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
 }
 
 .reply-composer__submit:disabled {

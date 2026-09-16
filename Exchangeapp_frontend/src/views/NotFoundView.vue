@@ -71,10 +71,16 @@
   transition: background-color var(--transition-fast), border-color var(--transition-fast);
 }
 
-.not-found__action:hover,
 .not-found__action:focus-visible {
   border-color: var(--color-accent-hover);
   background: var(--color-accent-hover);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .not-found__action:hover {
+    border-color: var(--color-accent-hover);
+    background: var(--color-accent-hover);
+  }
 }
 
 @media (max-width: 799px) {

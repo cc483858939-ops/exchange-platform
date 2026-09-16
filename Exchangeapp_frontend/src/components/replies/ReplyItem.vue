@@ -129,10 +129,16 @@ const handleOpenMedia = (index: number) => {
   cursor: pointer;
 }
 
-.reply-item__bookmark:hover:not(:disabled),
 .reply-item__bookmark:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .reply-item__bookmark:hover:not(:disabled) {
+    background: var(--color-surface-subtle);
+    color: var(--color-accent);
+  }
 }
 
 .reply-item__bookmark:disabled {
@@ -140,10 +146,16 @@ const handleOpenMedia = (index: number) => {
   opacity: 0.55;
 }
 
-.reply-item__delete:hover:not(:disabled),
 .reply-item__delete:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-danger);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .reply-item__delete:hover:not(:disabled) {
+    background: var(--color-surface-subtle);
+    color: var(--color-danger);
+  }
 }
 
 .reply-item__delete:disabled {

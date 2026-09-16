@@ -2112,7 +2112,6 @@ onBeforeUnmount(() => {
   transition: color var(--transition-fast), background-color var(--transition-fast), transform var(--transition-fast);
 }
 
-.detail-header__back:hover,
 .detail-header__back:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-accent);
@@ -2183,7 +2182,6 @@ onBeforeUnmount(() => {
   transition: color var(--transition-fast), background-color var(--transition-fast), transform var(--transition-fast);
 }
 
-.post-detail__delete:hover,
 .post-detail__delete:focus-visible {
   background: color-mix(in srgb, var(--color-danger) 10%, transparent);
   color: var(--color-danger);
@@ -2228,10 +2226,6 @@ onBeforeUnmount(() => {
   font: inherit;
   font-size: 13px;
   font-weight: 650;
-}
-
-.post-detail__translation-action:hover {
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 .post-detail__translation-action:focus-visible {
@@ -2368,10 +2362,30 @@ onBeforeUnmount(() => {
   transition: color var(--transition-fast), background-color var(--transition-fast), transform var(--transition-fast);
 }
 
-.post-detail__engagement > button.post-detail__metric:hover,
 .post-detail__engagement > button.post-detail__metric:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .detail-header__back:hover {
+    background: var(--color-surface-subtle);
+    color: var(--color-accent);
+  }
+
+  .post-detail__delete:hover {
+    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    color: var(--color-danger);
+  }
+
+  .post-detail__translation-action:hover {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
+
+  .post-detail__engagement > button.post-detail__metric:hover {
+    background: var(--color-surface-subtle);
+    color: var(--color-accent);
+  }
 }
 
 .post-detail__engagement > button.post-detail__metric:active {

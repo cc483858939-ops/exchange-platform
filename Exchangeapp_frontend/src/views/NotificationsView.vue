@@ -412,11 +412,13 @@ onBeforeUnmount(() => {
   text-decoration: none;
 }
 
-.notifications-page__mark-all:hover,
-.notifications-page__load-more:hover,
-.notifications-page__action:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
+@media (hover: hover) and (pointer: fine) {
+  .notifications-page__mark-all:hover,
+  .notifications-page__load-more:hover,
+  .notifications-page__action:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
 }
 
 .notifications-page__pending-label,
@@ -474,8 +476,10 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--color-accent) 5%, var(--color-surface));
 }
 
-.notification-card:hover {
-  background: var(--color-surface-subtle);
+@media (hover: hover) and (pointer: fine) {
+  .notification-card:hover {
+    background: var(--color-surface-subtle);
+  }
 }
 
 .notification-card__open {
@@ -635,10 +639,16 @@ onBeforeUnmount(() => {
     font-size: 13px;
   }
 
-  .notifications-page__mark-all:hover,
   .notifications-page__mark-all:focus-visible {
     border-color: transparent;
     color: var(--color-accent-hover);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .notifications-page__mark-all:hover {
+      border-color: transparent;
+      color: var(--color-accent-hover);
+    }
   }
 
   .notifications-page__pending-label {

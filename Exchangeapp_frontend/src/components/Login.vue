@@ -287,8 +287,10 @@ const login = async () => {
   color: #64748b;
 }
 
-.auth-field input:hover:not(:disabled) {
-  border-color: rgba(148, 163, 184, 0.48);
+@media (hover: hover) and (pointer: fine) {
+  .auth-field input:hover:not(:disabled) {
+    border-color: rgba(148, 163, 184, 0.48);
+  }
 }
 
 .auth-field input:focus {
@@ -337,11 +339,13 @@ const login = async () => {
     box-shadow var(--transition-fast);
 }
 
-.auth-submit:hover:not(:disabled) {
-  border-color: var(--color-accent-hover);
-  background: var(--color-accent-hover);
-  box-shadow: 0 8px 22px rgba(29, 155, 240, 0.22);
-  transform: translateY(-1px);
+@media (hover: hover) and (pointer: fine) {
+  .auth-submit:hover:not(:disabled) {
+    border-color: var(--color-accent-hover);
+    background: var(--color-accent-hover);
+    box-shadow: 0 8px 22px rgba(29, 155, 240, 0.22);
+    transform: translateY(-1px);
+  }
 }
 
 .auth-submit:active:not(:disabled) {
@@ -457,8 +461,13 @@ const login = async () => {
     transition: none;
   }
 
-  .auth-submit:hover:not(:disabled),
   .auth-submit:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) and (hover: hover) and (pointer: fine) {
+  .auth-submit:hover:not(:disabled) {
     transform: none;
   }
 }

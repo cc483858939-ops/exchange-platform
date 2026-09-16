@@ -205,14 +205,22 @@ onBeforeUnmount(() => {
   color: #fff;
 }
 
-.confirm-dialog__button--cancel:hover:not(:disabled),
 .confirm-dialog__button--cancel:focus-visible {
   background: var(--color-surface-subtle);
 }
 
-.confirm-dialog__button--confirm:hover:not(:disabled),
 .confirm-dialog__button--confirm:focus-visible {
   filter: brightness(0.94);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .confirm-dialog__button--cancel:hover:not(:disabled) {
+    background: var(--color-surface-subtle);
+  }
+
+  .confirm-dialog__button--confirm:hover:not(:disabled) {
+    filter: brightness(0.94);
+  }
 }
 
 .confirm-dialog__button:focus-visible {

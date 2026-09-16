@@ -315,9 +315,14 @@ const openImageLabel = (index: number) => (
   cursor: pointer;
 }
 
-.post-media-grid__remove:hover:not(:disabled),
 .post-media-grid__remove:focus-visible {
   background: var(--color-danger);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .post-media-grid__remove:hover:not(:disabled) {
+    background: var(--color-danger);
+  }
 }
 
 .post-media-grid__remove:disabled {

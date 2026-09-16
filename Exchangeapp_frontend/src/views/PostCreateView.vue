@@ -580,9 +580,14 @@ onBeforeUnmount(() => {
   font-weight: 750;
 }
 
-.composer-header__back:hover,
 .composer-header__back:focus-visible {
   background: var(--color-surface-subtle);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .composer-header__back:hover {
+    background: var(--color-surface-subtle);
+  }
 }
 
 .publish-button {
@@ -606,9 +611,14 @@ onBeforeUnmount(() => {
   transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
-.publish-button:hover:not(:disabled),
 .publish-button:focus-visible:not(:disabled) {
   background: var(--color-accent-hover);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .publish-button:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
 }
 
 .publish-button:disabled {
@@ -740,10 +750,15 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
-.composer-tool:hover:not(:disabled),
 .composer-tool:focus-visible,
 .composer-tool:focus-within {
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .composer-tool:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
 }
 
 .composer-tool:disabled {
@@ -819,11 +834,17 @@ onBeforeUnmount(() => {
   text-decoration: none;
 }
 
-.composer-action:hover,
 .composer-action:focus-visible,
 .composer-action:focus-within {
   border-color: var(--color-accent);
   color: var(--color-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .composer-action:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
 }
 
 .composer-auth-state {

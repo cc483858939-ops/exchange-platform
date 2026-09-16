@@ -84,7 +84,6 @@ const activate = () => {
   color: var(--color-accent);
 }
 
-.repost-action:hover:not(:disabled),
 .repost-action:focus-visible {
   background: color-mix(in srgb, var(--color-accent) 9%, transparent);
   color: var(--color-accent);
@@ -93,6 +92,13 @@ const activate = () => {
 .repost-action:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .repost-action:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+    color: var(--color-accent);
+  }
 }
 
 .repost-action:disabled {

@@ -1299,7 +1299,6 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 
-.profile-header__back:hover,
 .profile-header__back:focus-visible {
   background: var(--color-surface-subtle);
 }
@@ -1446,7 +1445,6 @@ onBeforeUnmount(() => {
   color: var(--color-text);
 }
 
-.profile-follow-button:hover,
 .profile-follow-button:focus-visible {
   border-color: var(--color-text);
 }
@@ -1634,7 +1632,6 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
-.profile-action:hover,
 .profile-action:focus-visible {
   border-color: var(--color-accent);
   color: var(--color-accent);
@@ -1757,7 +1754,6 @@ onBeforeUnmount(() => {
   color: var(--color-surface);
 }
 
-.profile-action--primary:hover,
 .profile-action--primary:focus-visible {
   border-color: var(--color-accent);
   background: var(--color-accent);
@@ -1821,10 +1817,35 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 
-.profile-edit-dialog__close:hover,
 .profile-edit-dialog__close:focus-visible {
   background: var(--color-surface-subtle);
   color: var(--color-text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .profile-header__back:hover {
+    background: var(--color-surface-subtle);
+  }
+
+  .profile-follow-button:hover {
+    border-color: var(--color-text);
+  }
+
+  .profile-action:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+
+  .profile-action--primary:hover {
+    border-color: var(--color-accent);
+    background: var(--color-accent);
+    color: #fff;
+  }
+
+  .profile-edit-dialog__close:hover {
+    background: var(--color-surface-subtle);
+    color: var(--color-text);
+  }
 }
 
 .profile-edit-dialog__close:disabled {

@@ -140,10 +140,16 @@ onBeforeUnmount(() => {
     cursor: pointer;
   }
 
-  .mobile-account-menu__trigger:hover,
   .mobile-account-menu__trigger:focus-visible {
     background: var(--color-surface-subtle);
     color: var(--color-text);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .mobile-account-menu__trigger:hover {
+      background: var(--color-surface-subtle);
+      color: var(--color-text);
+    }
   }
 
   .mobile-account-menu__popover {
@@ -179,10 +185,16 @@ onBeforeUnmount(() => {
     white-space: nowrap;
   }
 
-  .mobile-account-menu__item:hover,
   .mobile-account-menu__item:focus-visible {
     background: var(--color-surface-subtle);
     color: var(--color-accent);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .mobile-account-menu__item:hover {
+      background: var(--color-surface-subtle);
+      color: var(--color-accent);
+    }
   }
 
   .mobile-account-menu__item--logout {

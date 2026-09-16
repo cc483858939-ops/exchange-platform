@@ -603,11 +603,16 @@ onBeforeUnmount(() => {
   transform: translateY(-50%) rotate(180deg);
 }
 
-.post-media-viewer__close:hover,
 .post-media-viewer__close:focus-visible,
-.post-media-viewer__nav:hover:not(:disabled),
 .post-media-viewer__nav:focus-visible {
   background: rgb(255 255 255 / 22%);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .post-media-viewer__close:hover,
+  .post-media-viewer__nav:hover:not(:disabled) {
+    background: rgb(255 255 255 / 22%);
+  }
 }
 
 .post-media-viewer__close:focus-visible,
