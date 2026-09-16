@@ -143,4 +143,39 @@ describe('bookmarksSession store', () => {
     await expect(request).resolves.toBe(true);
     expect(store.items).toHaveLength(0);
   });
+
+  it('applies external presentation, identity, and removal updates to cached bookmarks', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const store = createStore();
+    await store.loadInitial();
+
+    expect(store.applyExternalLikeStateLocal({
+      postId: 1,
+      likes: 8,
+      liked: true,
+      status: 'ready',
+    })).toBe(true);
+    expect(store.items[0].likeCount).toBe(8);
+    expect(store.items[0].liked).toBe(true);
+
+    expect(store.applyExternalRepostStateLocal({
+      postId: 1,
+      reposts: 2,
+      reposted: true,
+      status: 'ready',
+    })).toBe(true);
+    expect(store.items[0].repostCount).toBe(2);
+    expect(store.items[0].reposted).toBe(true);
+
+    expect(store.replaceAuthorIdentityLocal({
+      id: 9,
+      username: 'updated-author',
+      display_name: 'Updated Author',
+      avatar_url: '/avatar-updated.jpg',
+    })).toBe(true);
+    expect(store.items[0].author.display_name).toBe('Updated Author');
+
+    expect(store.removePostLocal(1)).toBe(true);
+    expect(store.items).toHaveLength(0);
+  });
 });

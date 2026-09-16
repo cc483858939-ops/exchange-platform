@@ -1079,11 +1079,26 @@ const selectProfileTab = (tab: 'posts' | 'bookmarks') => {
   if (tab === 'bookmarks' && !isOwnProfile.value) {
     return;
   }
-  void router.replace({
+  const switchingTab = tab !== profileTab.value;
+  if (switchingTab) {
+    const profileID = numericUserID.value;
+    if (profileID !== null) {
+      saveCurrentScroll(profileID);
+    }
+    profileEntryVersion += 1;
+    restoredEntryVersion = -1;
+  }
+
+  const navigation = router.replace({
     name: 'UserProfile',
     params: { id: String(numericUserID.value ?? userId.value) },
     query: { ...(route.query ?? {}), tab },
   });
+  if (switchingTab) {
+    void Promise.resolve(navigation).then(() => nextTick(() => {
+      void restoreScrollOnce();
+    }));
+  }
 };
 
 const deactivateProfileView = () => {

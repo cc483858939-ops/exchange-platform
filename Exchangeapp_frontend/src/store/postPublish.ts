@@ -5,11 +5,16 @@ import {
   uploadPostMedia,
   type CreatePostPayload,
 } from '../services/postService';
+import { getPostBookmarkStates } from '../services/bookmarkService';
 import type { Post } from '../types/Post';
 import { useAuthStore } from './auth';
 import { useFeedStore } from './feed';
 import { usePostDraftStore } from './postDraft';
 import { useProfileSessionStore } from './profileSession';
+import {
+  captureBookmarkStateSyncVersion,
+  syncHydratedPostBookmarkState,
+} from './sessionSync';
 
 export type PublishPhase = 'uploading' | 'publishing' | 'failed' | 'succeeded';
 
@@ -112,6 +117,49 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     ))
   );
 
+  const hydratePublishedPostBookmarkState = async (
+    operation: PublishOperation,
+    post: Post,
+  ) => {
+    const capturedVersion = captureBookmarkStateSyncVersion(post.id);
+    const isCurrent = () => (
+      operation.phase === 'succeeded'
+      && currentViewerID() === operation.publisherUserID
+    );
+
+    try {
+      const response = await getPostBookmarkStates([post.id]);
+      if (!isCurrent()) return;
+      const item = response.items.find(candidate => candidate.post_id === post.id);
+      const update = {
+        postId: post.id,
+        bookmarked: item?.bookmarked ?? false,
+        status: item ? 'ready' : 'unavailable',
+      } as const;
+      if (syncHydratedPostBookmarkState(update, capturedVersion)) {
+        try {
+          feedStore.applyBookmarkStateUpdate(update);
+        } catch {
+          // A local cache failure must not turn a successful publish into an unhandled rejection.
+        }
+      }
+    } catch {
+      if (!isCurrent()) return;
+      const update = {
+        postId: post.id,
+        bookmarked: false,
+        status: 'unavailable',
+      } as const;
+      if (syncHydratedPostBookmarkState(update, capturedVersion)) {
+        try {
+          feedStore.applyBookmarkStateUpdate(update);
+        } catch {
+          // A local cache failure must not turn a successful publish into an unhandled rejection.
+        }
+      }
+    }
+  };
+
   const isDraftBlockedByAnotherPublish = (
     viewerID: number,
     boundOperationID: string | null | undefined = null,
@@ -194,6 +242,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     } catch {
       // Keep the authoritative server result successful.
     }
+    void hydratePublishedPostBookmarkState(operation, post);
     postDraft.clearIfBoundTo(operation.id, operation.publisherUserID);
   };
 

@@ -651,7 +651,13 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     scrollTop.value = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
-  registerBookmarksSessionSync({ applyExternalBookmarkStateLocal });
+  registerBookmarksSessionSync({
+    applyExternalBookmarkStateLocal,
+    applyExternalLikeStateLocal,
+    applyExternalRepostStateLocal,
+    removePostLocal,
+    replaceAuthorIdentityLocal,
+  });
 
   watch(
     () => authStore.isAuthenticated ? authStore.currentIdentity?.id : null,

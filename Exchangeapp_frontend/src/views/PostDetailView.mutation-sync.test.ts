@@ -3,6 +3,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
+import { reactive } from 'vue';
 import PostDetailView from './PostDetailView.vue';
 import type { Post } from '../types/Post';
 
@@ -17,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   createPostReply: vi.fn(),
   deletePostReply: vi.fn(),
   getPostReplies: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
+  bookmarkPost: vi.fn(),
+  unbookmarkPost: vi.fn(),
   getUser: vi.fn(),
   deletePost: vi.fn(),
   consumeAttribution: vi.fn(),
@@ -26,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   },
   postViewTelemetry: { enqueue: vi.fn() },
   router: { back: vi.fn(), push: vi.fn(), replace: vi.fn() },
+  route: { params: { id: '42' }, query: {}, hash: '' },
   routeLeave: vi.fn(),
   authStore: {
     isAuthenticated: true,
@@ -40,10 +45,11 @@ const mocks = vi.hoisted(() => ({
   externalRepost: vi.fn(),
   externalRemoval: vi.fn(),
   externalReplyCount: vi.fn(),
+  detailSync: null as { applyExternalBookmarkStateLocal: (update: unknown) => boolean } | null,
 }));
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { id: '42' }, query: {}, hash: '' }),
+  useRoute: () => mocks.route,
   useRouter: () => mocks.router,
   onBeforeRouteLeave: (guard: (to: { name?: string }) => void) => {
     mocks.routeLeave.mockImplementation(guard);
@@ -56,7 +62,9 @@ vi.mock('../store/postDetailHandoff', () => ({
   usePostDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
 }));
 vi.mock('../store/sessionSync', () => ({
-  registerPostDetailSessionSync: vi.fn(),
+  registerPostDetailSessionSync: vi.fn((sync: typeof mocks.detailSync) => {
+    mocks.detailSync = sync;
+  }),
   syncExternalPostLikeState: mocks.externalLike,
   syncExternalPostRepostState: mocks.externalRepost,
   markOwnProfileTimelineStale: vi.fn(),
@@ -81,6 +89,11 @@ vi.mock('../services/replyService', () => ({
   createPostReply: mocks.createPostReply,
   deletePostReply: mocks.deletePostReply,
   getPostReplies: mocks.getPostReplies,
+}));
+vi.mock('../services/bookmarkService', () => ({
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
+  bookmarkPost: mocks.bookmarkPost,
+  unbookmarkPost: mocks.unbookmarkPost,
 }));
 vi.mock('../services/userService', () => ({ getUser: mocks.getUser }));
 vi.mock('../services/recommendationAttribution', () => ({
@@ -141,6 +154,16 @@ const ownReply = (id: number): Post => ({
   author: { id: 7, username: 'viewer', display_name: 'Viewer', avatar_url: '' },
 });
 
+const deferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
 const mountDetail = () => mount(PostDetailView, {
   attachTo: document.body,
   global: {
@@ -160,9 +183,9 @@ const mountDetail = () => mount(PostDetailView, {
         template: '<button class="test-create-comment" type="button" @click="$emit(\'submit\', \'hello\')">Reply</button>',
       },
       ReplyList: {
-        props: ['replies', 'deletingReplyId'],
-        emits: ['requestDelete'],
-        template: '<button class="test-delete-comment" type="button" :disabled="deletingReplyId !== null" @click="$emit(\'requestDelete\', replies[0]?.id)">Delete reply</button>',
+        props: ['replies', 'deletingReplyId', 'hasNext', 'bookmarkStates'],
+        emits: ['requestDelete', 'load-more', 'toggle-bookmark'],
+        template: '<div><button class="test-delete-comment" type="button" :disabled="deletingReplyId !== null" @click="$emit(\'requestDelete\', replies[0]?.id)">Delete reply</button><button v-if="hasNext" class="test-load-more" type="button" @click="$emit(\'load-more\')">More</button><button v-for="reply in replies" :key="reply.id" class="test-reply-bookmark" type="button" :data-id="reply.id" :data-state="bookmarkStates[reply.id]?.status ?? \'unknown\'" :data-bookmarked="String(bookmarkStates[reply.id]?.bookmarked ?? false)" @click="$emit(\'toggle-bookmark\', reply.id)">{{ bookmarkStates[reply.id]?.status }}:{{ bookmarkStates[reply.id]?.bookmarked }}</button></div>',
       },
       ConfirmDialog: {
         props: ['title', 'description', 'confirmLabel', 'cancelLabel', 'danger', 'busy', 'error'],
@@ -179,6 +202,7 @@ describe('PostDetailView mutation synchronization', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.route = reactive({ params: { id: '42' }, query: {}, hash: '' });
     originalHistoryState = window.history.state;
     originalHistoryURL = window.location.href;
     window.history.replaceState({ back: null }, '', originalHistoryURL);
@@ -186,6 +210,12 @@ describe('PostDetailView mutation synchronization', () => {
     mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
     mocks.getPostRepostState.mockResolvedValue({ reposts: 0, reposted: false });
     mocks.getPostReplies.mockResolvedValue({ items: [reply(9)], next_cursor: null });
+    mocks.getPostBookmarkStates.mockImplementation(async (postIDs: number[]) => ({
+      items: postIDs.map(postID => ({ post_id: postID, bookmarked: false })),
+      unavailable_post_ids: [],
+    }));
+    mocks.bookmarkPost.mockResolvedValue({ post_id: 9, bookmarked: true });
+    mocks.unbookmarkPost.mockResolvedValue({ post_id: 9, bookmarked: false });
     mocks.getUser.mockResolvedValue({
       id: 7,
       username: 'viewer',
@@ -197,6 +227,7 @@ describe('PostDetailView mutation synchronization', () => {
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.deletePost.mockResolvedValue(undefined);
     mocks.feedStore.markPostDeleted.mockReturnValue(true);
+    mocks.detailSync = null;
   });
 
   afterEach(() => {
@@ -264,6 +295,129 @@ describe('PostDetailView mutation synchronization', () => {
     expect(mounted.find('.repost-action').text()).toContain('8');
     expect(mounted.find('.detail-inline-error').text()).toBe('Could not update repost. Please try again.');
     expect(mocks.externalRepost).not.toHaveBeenCalled();
+    mounted.unmount();
+  });
+
+  it('keeps bookmark hydration for concurrent reply pages independent', async () => {
+    const pageOneHydration = deferred<{
+      items: Array<{ post_id: number; bookmarked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const pageTwoHydration = deferred<{
+      items: Array<{ post_id: number; bookmarked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getPostReplies
+      .mockResolvedValueOnce({ items: [reply(9)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [reply(10)], next_cursor: null });
+    mocks.getPostBookmarkStates.mockImplementation((postIDs: number[]) => {
+      if (postIDs.includes(42)) {
+        return Promise.resolve({ items: [{ post_id: 42, bookmarked: false }], unavailable_post_ids: [] });
+      }
+      return postIDs.includes(9) ? pageOneHydration.promise : pageTwoHydration.promise;
+    });
+
+    const mounted = mountDetail();
+    await flushPromises();
+    await mounted.get('.test-load-more').trigger('click');
+    await flushPromises();
+
+    pageTwoHydration.resolve({
+      items: [{ post_id: 10, bookmarked: true }],
+      unavailable_post_ids: [],
+    });
+    await flushPromises();
+
+    expect(mounted.get('[data-id="9"]').attributes('data-state')).toBe('unknown');
+    expect(mounted.get('[data-id="10"]').attributes('data-state')).toBe('ready');
+
+    pageOneHydration.resolve({
+      items: [{ post_id: 9, bookmarked: false }],
+      unavailable_post_ids: [],
+    });
+    await flushPromises();
+
+    expect(mounted.get('[data-id="9"]').attributes('data-state')).toBe('ready');
+    expect(mounted.get('[data-id="9"]').attributes('data-bookmarked')).toBe('false');
+    expect(mounted.get('[data-id="10"]').attributes('data-bookmarked')).toBe('true');
+    mounted.unmount();
+  });
+
+  it('does not let an older reply bookmark hydration overwrite a mutation', async () => {
+    const hydration = deferred<{
+      items: Array<{ post_id: number; bookmarked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const mutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.getPostBookmarkStates.mockImplementation((postIDs: number[]) => (
+      postIDs.includes(42)
+        ? Promise.resolve({ items: [{ post_id: 42, bookmarked: false }], unavailable_post_ids: [] })
+        : hydration.promise
+    ));
+
+    const mounted = mountDetail();
+    await flushPromises();
+    mocks.detailSync?.applyExternalBookmarkStateLocal({
+      postId: 9,
+      bookmarked: false,
+      status: 'ready',
+    });
+    await mounted.vm.$nextTick();
+    mocks.bookmarkPost.mockReturnValueOnce(mutation.promise);
+    await mounted.get('[data-id="9"]').trigger('click');
+
+    hydration.resolve({
+      items: [{ post_id: 9, bookmarked: false }],
+      unavailable_post_ids: [],
+    });
+    await flushPromises();
+    expect(mounted.get('[data-id="9"]').attributes('data-bookmarked')).toBe('true');
+
+    mutation.resolve({ post_id: 9, bookmarked: true });
+    await flushPromises();
+    expect(mounted.get('[data-id="9"]').attributes('data-state')).toBe('ready');
+    expect(mounted.get('[data-id="9"]').attributes('data-bookmarked')).toBe('true');
+    mounted.unmount();
+  });
+
+  it('drops reply bookmark hydration from the previous detail after a route change', async () => {
+    const oldHydration = deferred<{
+      items: Array<{ post_id: number; bookmarked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const nextPost = { ...post, id: 43, conversation_id: 43 };
+    const nextReply = { ...reply(10), conversation_id: 43, reply_to_post_id: 43 };
+    mocks.getPostById
+      .mockResolvedValueOnce(post)
+      .mockResolvedValueOnce(nextPost);
+    mocks.getPostReplies
+      .mockResolvedValueOnce({ items: [reply(9)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [nextReply], next_cursor: null });
+    mocks.getPostBookmarkStates.mockImplementation((postIDs: number[]) => {
+      if (postIDs.includes(9)) return oldHydration.promise;
+      return Promise.resolve({
+        items: postIDs.map(postID => ({ post_id: postID, bookmarked: false })),
+        unavailable_post_ids: [],
+      });
+    });
+
+    const mounted = mountDetail();
+    await flushPromises();
+    expect(mounted.find('[data-id="9"]').exists()).toBe(true);
+
+    mocks.route.params.id = '43';
+    await flushPromises();
+    await flushPromises();
+
+    expect(mounted.get('[data-id="10"]').attributes('data-state')).toBe('ready');
+    oldHydration.resolve({
+      items: [{ post_id: 9, bookmarked: true }],
+      unavailable_post_ids: [],
+    });
+    await flushPromises();
+
+    expect(mounted.find('[data-id="9"]').exists()).toBe(false);
+    expect(mounted.get('[data-id="10"]').attributes('data-bookmarked')).toBe('false');
     mounted.unmount();
   });
 

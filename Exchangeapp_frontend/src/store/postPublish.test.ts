@@ -12,18 +12,26 @@ const mocks = vi.hoisted(() => ({
   authStore: null as any,
   feedStore: {
     registerPublishedPost: vi.fn(),
+    applyBookmarkStateUpdate: vi.fn(),
   },
   profileSessionStore: {
     registerPublishedTimelinePost: vi.fn(),
   },
   createPost: vi.fn(),
   uploadPostMedia: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
   randomUUID: vi.fn(),
+  captureBookmarkStateSyncVersion: vi.fn(),
+  syncHydratedPostBookmarkState: vi.fn(),
 }));
 
 vi.mock('../services/postService', () => ({
   createPost: mocks.createPost,
   uploadPostMedia: mocks.uploadPostMedia,
+}));
+
+vi.mock('../services/bookmarkService', () => ({
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
 }));
 
 vi.mock('./auth', () => ({
@@ -36,6 +44,11 @@ vi.mock('./feed', () => ({
 
 vi.mock('./profileSession', () => ({
   useProfileSessionStore: () => mocks.profileSessionStore,
+}));
+
+vi.mock('./sessionSync', () => ({
+  captureBookmarkStateSyncVersion: mocks.captureBookmarkStateSyncVersion,
+  syncHydratedPostBookmarkState: mocks.syncHydratedPostBookmarkState,
 }));
 
 const operationUUID = (value: number) => (
@@ -94,6 +107,9 @@ describe('postPublish store', () => {
     });
     mocks.createPost.mockResolvedValue(publishedPost());
     mocks.uploadPostMedia.mockImplementation(async (item: File) => `/media/${item.name}`);
+    mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
+    mocks.syncHydratedPostBookmarkState.mockReturnValue(true);
     const draft = usePostDraftStore();
     draft.clear();
     draft.setViewer(7);
@@ -124,6 +140,75 @@ describe('postPublish store', () => {
     expect(mocks.profileSessionStore.registerPublishedTimelinePost)
       .toHaveBeenCalledWith(publishedPost(), 7);
     expect(mocks.authStore.syncCurrentIdentityProfile).toHaveBeenCalledWith(publishedPost().author);
+    expect(mocks.getPostBookmarkStates).toHaveBeenCalledWith([101]);
+    expect(mocks.syncHydratedPostBookmarkState).toHaveBeenCalledWith({
+      postId: 101,
+      bookmarked: false,
+      status: 'unavailable',
+    }, 0);
+    expect(mocks.feedStore.applyBookmarkStateUpdate).toHaveBeenCalledWith({
+      postId: 101,
+      bookmarked: false,
+      status: 'unavailable',
+    });
+  });
+
+  it('hydrates a published post bookmark state without changing the global post default', async () => {
+    mocks.getPostBookmarkStates.mockResolvedValueOnce({
+      items: [{ post_id: 101, bookmarked: false }],
+      unavailable_post_ids: [],
+    });
+    const draft = usePostDraftStore();
+    draft.setContent('Hydrate bookmark state');
+    const store = usePostPublishStore();
+
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    await flushPromises();
+
+    expect(mocks.syncHydratedPostBookmarkState).toHaveBeenCalledWith({
+      postId: 101,
+      bookmarked: false,
+      status: 'ready',
+    }, 0);
+    expect(mocks.feedStore.applyBookmarkStateUpdate).toHaveBeenCalledWith({
+      postId: 101,
+      bookmarked: false,
+      status: 'ready',
+    });
+  });
+
+  it('leaves a published bookmark hydration result fenced after a mutation advances its version', async () => {
+    const hydration = deferred<{ items: Array<{ post_id: number; bookmarked: boolean }>; unavailable_post_ids: number[] }>();
+    let bookmarkVersion = 0;
+    const appliedUpdates: unknown[] = [];
+    mocks.getPostBookmarkStates.mockReturnValueOnce(hydration.promise);
+    mocks.captureBookmarkStateSyncVersion.mockImplementation(() => bookmarkVersion);
+    mocks.syncHydratedPostBookmarkState.mockImplementation((update: unknown, capturedVersion: number) => {
+      if (capturedVersion === bookmarkVersion) {
+        appliedUpdates.push(update);
+        return true;
+      }
+      return false;
+    });
+    const draft = usePostDraftStore();
+    draft.setContent('Fence bookmark hydration');
+    const store = usePostPublishStore();
+
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    await flushPromises();
+    expect(mocks.captureBookmarkStateSyncVersion).toHaveBeenCalledWith(101);
+
+    bookmarkVersion += 1;
+    hydration.resolve({
+      items: [{ post_id: 101, bookmarked: false }],
+      unavailable_post_ids: [],
+    });
+    await flushPromises();
+
+    expect(appliedUpdates).toEqual([]);
+    expect(mocks.feedStore.applyBookmarkStateUpdate).not.toHaveBeenCalled();
   });
 
   it('limits a viewer to one in-flight operation', async () => {

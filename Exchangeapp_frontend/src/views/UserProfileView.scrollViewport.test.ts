@@ -5,6 +5,7 @@ import { defineComponent, h, KeepAlive, nextTick, reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
+import { useBookmarksSessionStore } from '../store/bookmarksSession';
 import { useProfileSessionStore } from '../store/profileSession';
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   router: {
     back: vi.fn(),
     push: vi.fn(),
+    replace: vi.fn(),
   },
   getUser: vi.fn(),
   getUserTimeline: vi.fn(),
@@ -29,6 +31,10 @@ const mocks = vi.hoisted(() => ({
   getPostRepostStates: vi.fn(),
   repostPost: vi.fn(),
   undoRepostPost: vi.fn(),
+  getBookmarks: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
+  bookmarkPost: vi.fn(),
+  unbookmarkPost: vi.fn(),
   feedStore: {
     isPostDeleted: vi.fn(),
     markPostDeleted: vi.fn(),
@@ -89,6 +95,13 @@ vi.mock('../services/repostService', () => ({
   getPostRepostStates: mocks.getPostRepostStates,
   repostPost: mocks.repostPost,
   undoRepostPost: mocks.undoRepostPost,
+}));
+
+vi.mock('../services/bookmarkService', () => ({
+  getBookmarks: mocks.getBookmarks,
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
+  bookmarkPost: mocks.bookmarkPost,
+  unbookmarkPost: mocks.unbookmarkPost,
 }));
 
 const profile = (id: number) => ({
@@ -179,6 +192,7 @@ describe('UserProfileView scroll viewport', () => {
     mocks.route = reactive({
       name: 'UserProfile',
       params: { id: '7' },
+      query: {},
       fullPath: '/users/7',
     });
     mocks.routeLeaveGuard = null;
@@ -195,9 +209,14 @@ describe('UserProfileView scroll viewport', () => {
     });
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostRepostStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.getBookmarks.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.deletePost.mockResolvedValue(undefined);
     mocks.feedStore.isPostDeleted.mockReturnValue(false);
     mocks.feedStore.markPostDeleted.mockReturnValue(true);
+    mocks.router.replace.mockImplementation(async (location: { query?: Record<string, unknown> }) => {
+      mocks.route.query = location.query ?? {};
+    });
   });
 
   it('saves the viewport scrollTop on route leave and ignores window scroll', async () => {
@@ -275,6 +294,54 @@ describe('UserProfileView scroll viewport', () => {
 
     expect(wrapper.get('.profile-scroll-viewport').element.scrollTop).toBe(1800);
     expect(session.scrollTop).toBe(1800);
+    wrapper.unmount();
+  });
+
+  it('keeps independent Posts and Bookmarks scroll positions across tab switches', async () => {
+    const { session } = prepareLoadedSession(7, 1800);
+    const bookmarks = useBookmarksSessionStore();
+    bookmarks.loaded = true;
+    bookmarks.initialLoading = false;
+    bookmarks.nextCursor = null;
+    bookmarks.scrollTop = 500;
+    const wrapper = mountProfile();
+
+    await settle();
+    const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1800;
+
+    await wrapper.findAll('.profile-tab')[1].trigger('click');
+    await settle();
+
+    expect(bookmarks.scrollTop).toBe(500);
+    expect(viewport.scrollTop).toBe(500);
+
+    viewport.scrollTop = 900;
+    await wrapper.findAll('.profile-tab')[0].trigger('click');
+    await settle();
+
+    expect(bookmarks.scrollTop).toBe(900);
+    expect(session.scrollTop).toBe(1800);
+    expect(viewport.scrollTop).toBe(1800);
+    wrapper.unmount();
+  });
+
+  it('normalizes the Bookmarks tab away for another user without loading bookmarks', async () => {
+    mocks.route.params.id = '8';
+    mocks.route.query = { tab: 'bookmarks' };
+    mocks.route.fullPath = '/users/8?tab=bookmarks';
+    mocks.getUser.mockResolvedValue(profile(8));
+    const wrapper = mountProfile();
+
+    await settle();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({
+      name: 'UserProfile',
+      params: { id: '8' },
+      query: { tab: 'posts' },
+    });
+    expect(mocks.getBookmarks).not.toHaveBeenCalled();
+    expect(wrapper.find('.profile-tab--active').text()).toBe('Posts');
     wrapper.unmount();
   });
 });

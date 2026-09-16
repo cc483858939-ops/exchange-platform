@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { FeedBookmarkStateUpdate, FeedLikeStateUpdate } from '../types/Feed';
+import type {
+  FeedBookmarkStateUpdate,
+  FeedLikeStateUpdate,
+  FeedRepostStateUpdate,
+} from '../types/Feed';
 import type { UserFollowState } from '../services/userService';
 import {
   registerHomeTimelineSync,
@@ -8,8 +12,11 @@ import {
   registerProfileSessionSync,
   registerSearchSessionSync,
   registerBookmarksSessionSync,
+  captureBookmarkStateSyncVersion,
   syncExternalPostLikeState,
+  syncExternalPostRepostState,
   syncExternalPostBookmarkState,
+  syncHydratedPostBookmarkState,
   syncExternalPostRemoval,
   syncExternalReplyCount,
   syncExternalFollowState,
@@ -24,6 +31,13 @@ const likeUpdate: FeedLikeStateUpdate = {
   postId: 42,
   likes: 9,
   liked: true,
+  status: 'ready',
+};
+
+const repostUpdate: FeedRepostStateUpdate = {
+  postId: 42,
+  reposts: 4,
+  reposted: true,
   status: 'ready',
 };
 
@@ -82,6 +96,10 @@ const registerSinks = () => {
   };
   const bookmarks = {
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
+    applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
+    applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
+    removePostLocal: vi.fn().mockReturnValue(true),
+    replaceAuthorIdentityLocal: vi.fn().mockReturnValue(true),
   };
   registerHomeTimelineSync(home);
   registerProfileSessionSync(profile);
@@ -94,7 +112,7 @@ const registerSinks = () => {
 
 describe('sessionSync external mutation sinks', () => {
   it('sends external likes to Home and Profile exactly once', () => {
-    const { home, profile, history } = registerSinks();
+    const { home, profile, history, bookmarks } = registerSinks();
 
     syncExternalPostLikeState(likeUpdate);
 
@@ -104,6 +122,20 @@ describe('sessionSync external mutation sinks', () => {
     expect(profile.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
     expect(history.applyExternalLikeStateLocal).toHaveBeenCalledOnce();
     expect(history.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(bookmarks.applyExternalLikeStateLocal).toHaveBeenCalledOnce();
+    expect(bookmarks.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+  });
+
+  it('sends external reposts to Bookmarks as presentation updates', () => {
+    const { home, profile, history, bookmarks } = registerSinks();
+
+    syncExternalPostRepostState(repostUpdate);
+
+    expect(home.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(profile.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(history.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(bookmarks.applyExternalRepostStateLocal).toHaveBeenCalledOnce();
+    expect(bookmarks.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
   });
 
   it('fans out external bookmark state to every live post surface', () => {
@@ -117,8 +149,22 @@ describe('sessionSync external mutation sinks', () => {
     expect(bookmarks.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
   });
 
+  it('rejects a bookmark hydration result after an external mutation advances its fence', () => {
+    const { bookmarks } = registerSinks();
+    const capturedVersion = captureBookmarkStateSyncVersion(42);
+
+    syncExternalPostBookmarkState(bookmarkUpdate);
+
+    expect(syncHydratedPostBookmarkState({
+      postId: 42,
+      bookmarked: false,
+      status: 'ready',
+    }, capturedVersion)).toBe(false);
+    expect(bookmarks.applyExternalBookmarkStateLocal).toHaveBeenCalledTimes(1);
+  });
+
   it('sends external removals to Home and Profile exactly once', () => {
-    const { home, profile, history } = registerSinks();
+    const { home, profile, history, bookmarks } = registerSinks();
 
     syncExternalPostRemoval(42);
 
@@ -128,6 +174,8 @@ describe('sessionSync external mutation sinks', () => {
     expect(profile.removePostEverywhereLocal).toHaveBeenCalledWith(42);
     expect(history.removePostLocal).toHaveBeenCalledOnce();
     expect(history.removePostLocal).toHaveBeenCalledWith(42);
+    expect(bookmarks.removePostLocal).toHaveBeenCalledOnce();
+    expect(bookmarks.removePostLocal).toHaveBeenCalledWith(42);
   });
 
   it('sends absolute comment counts to both caches', () => {
@@ -179,7 +227,7 @@ describe('sessionSync external mutation sinks', () => {
   });
 
   it('fans out home and profile identity updates to History and Connections', () => {
-    const { home, profile, history, connections } = registerSinks();
+    const { home, profile, history, connections, bookmarks } = registerSinks();
     const author = { id: 8, username: 'new-name', display_name: 'New Name', avatar_url: '' };
 
     syncHomeAuthorIdentity(author);
@@ -189,5 +237,7 @@ describe('sessionSync external mutation sinks', () => {
     expect(profile.replaceAuthorIdentityEverywhereLocal).toHaveBeenCalledWith(author);
     expect(history.replaceAuthorIdentityLocal).toHaveBeenCalledTimes(2);
     expect(connections.replaceUserIdentityLocal).toHaveBeenCalledTimes(2);
+    expect(bookmarks.replaceAuthorIdentityLocal).toHaveBeenCalledTimes(2);
+    expect(bookmarks.replaceAuthorIdentityLocal).toHaveBeenCalledWith(author);
   });
 });

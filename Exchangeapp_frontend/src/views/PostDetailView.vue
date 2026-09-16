@@ -631,7 +631,7 @@ const viewCount = ref(0);
 const replyBookmarkStates = reactive<Record<number, { bookmarked: boolean; status: FeedBookmarkStatus }>>({});
 const replyBookmarkPendingIDs = reactive(new Set<number>());
 const replyBookmarkError = ref('');
-let replyBookmarkRequestVersion = 0;
+let replyBookmarkHydrationGeneration = 0;
 const replyBookmarkMutationVersions = new Map<number, number>();
 
 type MediaViewerState = {
@@ -1122,7 +1122,7 @@ const resetBookmarkState = () => {
 
 const resetRepliesState = () => {
   repliesRequestVersion += 1;
-  replyBookmarkRequestVersion += 1;
+  replyBookmarkHydrationGeneration += 1;
   replyDeleteRequestVersion += 1;
   replies.value = [];
   nextCursor.value = null;
@@ -1530,12 +1530,21 @@ const toggleBookmark = async () => {
 const hydrateReplyBookmarkStates = async (replyItems: Post[], detailVersion: number) => {
   if (!authStore.isAuthenticated || replyItems.length === 0) return;
   const postIDs = Array.from(new Set(replyItems.map(reply => reply.id)));
-  const requestVersion = ++replyBookmarkRequestVersion;
+  const hydrationGeneration = replyBookmarkHydrationGeneration;
+  const mutationVersions = new Map(
+    postIDs.map(postID => [postID, replyBookmarkMutationVersions.get(postID) ?? 0]),
+  );
+  const canApply = (replyID: number) => (
+    detailVersion === detailRequestVersion
+    && hydrationGeneration === replyBookmarkHydrationGeneration
+    && replies.value.some(reply => reply.id === replyID)
+    && mutationVersions.get(replyID) === (replyBookmarkMutationVersions.get(replyID) ?? 0)
+  );
   try {
     const response = await getPostBookmarkStates(postIDs);
-    if (detailVersion !== detailRequestVersion || requestVersion !== replyBookmarkRequestVersion) return;
     const readyIDs = new Set<number>();
     response.items.forEach((item) => {
+      if (!canApply(item.post_id)) return;
       readyIDs.add(item.post_id);
       replyBookmarkStates[item.post_id] = {
         bookmarked: item.bookmarked,
@@ -1543,12 +1552,12 @@ const hydrateReplyBookmarkStates = async (replyItems: Post[], detailVersion: num
       };
     });
     response.unavailable_post_ids.forEach((replyID) => {
-      if (readyIDs.has(replyID)) return;
+      if (readyIDs.has(replyID) || !canApply(replyID)) return;
       replyBookmarkStates[replyID] = { bookmarked: false, status: 'unavailable' };
     });
   } catch {
-    if (detailVersion !== detailRequestVersion || requestVersion !== replyBookmarkRequestVersion) return;
     postIDs.forEach((replyID) => {
+      if (!canApply(replyID)) return;
       replyBookmarkStates[replyID] = { bookmarked: false, status: 'unavailable' };
     });
   }
@@ -1610,17 +1619,22 @@ const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
     applied = true;
   }
 
+  const reply = replies.value.find(candidate => candidate.id === update.postId);
   const replyState = replyBookmarkStates[update.postId];
-  if (replyState) {
+  if (replyState || reply) {
     const nextVersion = (replyBookmarkMutationVersions.get(update.postId) ?? 0) + 1;
     replyBookmarkMutationVersions.set(update.postId, nextVersion);
     replyBookmarkPendingIDs.delete(update.postId);
     if (update.status === 'ready') {
-      replyState.bookmarked = update.bookmarked;
-      replyState.status = 'ready';
+      replyBookmarkStates[update.postId] = {
+        bookmarked: update.bookmarked,
+        status: 'ready',
+      };
     } else if (update.status === 'unavailable') {
-      replyState.bookmarked = false;
-      replyState.status = 'unavailable';
+      replyBookmarkStates[update.postId] = {
+        bookmarked: false,
+        status: 'unavailable',
+      };
     }
     applied = true;
   }
@@ -1811,6 +1825,10 @@ const confirmDeleteReply = async () => {
     }
 
     replies.value = replies.value.filter(reply => reply.id !== replyID);
+    delete replyBookmarkStates[replyID];
+    replyBookmarkPendingIDs.delete(replyID);
+    replyBookmarkMutationVersions.delete(replyID);
+    syncExternalPostRemoval(replyID);
     replyCount.value = Math.max(0, replyCount.value - 1);
     syncExternalReplyCount({
       postId: Number(postId.value),
