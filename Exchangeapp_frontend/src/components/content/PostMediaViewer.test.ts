@@ -20,6 +20,7 @@ type PendingDecode = { resolve: () => void; reject: () => void };
 const decodeModes = new Map<string, DecodeMode>();
 const pendingDecodes = new Map<string, PendingDecode[]>();
 let decodeCalls: string[] = [];
+let imageDecodeAvailable = true;
 let createdImages: ControlledImage[] = [];
 type MediaQueryListener = (event: MediaQueryListEvent) => void;
 let mediaQueryState: { matches: boolean; listeners: Set<MediaQueryListener> };
@@ -27,9 +28,17 @@ let mediaQueryState: { matches: boolean; listeners: Set<MediaQueryListener> };
 class ControlledImage {
   decoding = '';
   src = '';
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
 
   constructor() {
     createdImages.push(this);
+    if (!imageDecodeAvailable) {
+      Object.defineProperty(this, 'decode', {
+        configurable: true,
+        value: undefined,
+      });
+    }
   }
 
   removeAttribute(name: string) {
@@ -64,6 +73,7 @@ beforeEach(() => {
   decodeModes.clear();
   pendingDecodes.clear();
   decodeCalls = [];
+  imageDecodeAvailable = true;
   createdImages = [];
   mediaQueryState = { matches: false, listeners: new Set() };
   vi.stubGlobal('Image', ControlledImage);
@@ -143,6 +153,12 @@ const rejectDecode = (url: string) => {
 
 const advanceTimers = async (milliseconds: number) => {
   await vi.advanceTimersByTimeAsync(milliseconds);
+  await nextTick();
+  await Promise.resolve();
+};
+
+const flushAsync = async () => {
+  await Promise.resolve();
   await nextTick();
   await Promise.resolve();
 };
@@ -603,6 +619,133 @@ describe('PostMediaViewer', () => {
     const image = wrapper.get('.post-media-viewer__image');
     expect(image.attributes('src')).toBe('/media/0-medium.jpg');
     expect(image.element.parentElement).toBe(frame);
+  });
+
+  it('settles and cleans the no-decode Large load waiter on success', async () => {
+    vi.useFakeTimers();
+    imageDecodeAvailable = false;
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+
+    const preload = createdImages[0];
+    expect(preload).toBeDefined();
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+    expect(preload.onload).toEqual(expect.any(Function));
+    expect(preload.onerror).toEqual(expect.any(Function));
+
+    const oldLoad = preload.onload;
+    const oldError = preload.onerror;
+    oldLoad?.();
+    oldLoad?.();
+    oldError?.();
+    await flushAsync();
+
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-large.jpg');
+    expect(preload.onload).toBeNull();
+    expect(preload.onerror).toBeNull();
+  });
+
+  it('remembers a genuine no-decode Large failure without retrying it', async () => {
+    vi.useFakeTimers();
+    imageDecodeAvailable = false;
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    const preload = createdImages[0];
+    const oldError = preload.onerror;
+    oldError?.();
+    await flushAsync();
+
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+    expect(preload.onload).toBeNull();
+    expect(preload.onerror).toBeNull();
+
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+    await wrapper.get('[aria-label="Previous image"]').trigger('click');
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+
+    expect(createdImages).toHaveLength(1);
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+  });
+
+  it('cancels a no-decode Large preload and allows it to retry after navigating back', async () => {
+    vi.useFakeTimers();
+    imageDecodeAvailable = false;
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    const canceledPreload = createdImages[0];
+    const oldLoad = canceledPreload.onload;
+    const oldError = canceledPreload.onerror;
+
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+    expect(canceledPreload.src).toBe('');
+    expect(canceledPreload.onload).toBeNull();
+    expect(canceledPreload.onerror).toBeNull();
+
+    oldLoad?.();
+    oldError?.();
+    await flushAsync();
+    expect(wrapper.get('img').attributes('src')).toBe('/media/1-medium.jpg');
+
+    await wrapper.get('[aria-label="Previous image"]').trigger('click');
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+
+    expect(createdImages).toHaveLength(2);
+    expect(createdImages[1].src).toBe('/media/0-large.jpg');
+  });
+
+  it('settles and clears a no-decode Large preload when closed', async () => {
+    vi.useFakeTimers();
+    imageDecodeAvailable = false;
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    const preload = createdImages[0];
+    const oldLoad = preload.onload;
+    const oldError = preload.onerror;
+
+    await wrapper.get('[aria-label="Close image viewer"]').trigger('click');
+    expect(preload.src).toBe('');
+    expect(preload.onload).toBeNull();
+    expect(preload.onerror).toBeNull();
+    oldLoad?.();
+    oldError?.();
+    await advanceTimers(500);
+    await flushAsync();
+
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+    expect(createdImages).toHaveLength(1);
+  });
+
+  it('settles and clears a no-decode Large preload when unmounted', async () => {
+    vi.useFakeTimers();
+    imageDecodeAvailable = false;
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    const preload = createdImages[0];
+    const oldLoad = preload.onload;
+    const oldError = preload.onerror;
+
+    wrapper.unmount();
+    expect(preload.src).toBe('');
+    expect(preload.onload).toBeNull();
+    expect(preload.onerror).toBeNull();
+    oldLoad?.();
+    oldError?.();
+    await advanceTimers(500);
+    await flushAsync();
+
+    expect(createdImages).toHaveLength(1);
   });
 
   it('shows the existing placeholder only when Medium fails', async () => {

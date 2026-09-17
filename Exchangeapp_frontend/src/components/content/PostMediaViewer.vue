@@ -200,6 +200,7 @@ type ActiveLargePreload = {
   media: PostMedia;
   version: number;
   image: HTMLImageElement;
+  cancelWait: (() => void) | null;
 };
 
 let activeLargePreload: ActiveLargePreload | null = null;
@@ -339,8 +340,7 @@ const cancelActiveLargePreload = () => {
     return;
   }
 
-  preload.image.onload = null;
-  preload.image.onerror = null;
+  preload.cancelWait?.();
   if (typeof preload.image.removeAttribute === 'function') {
     preload.image.removeAttribute('src');
   } else {
@@ -522,10 +522,58 @@ const markLargeFailed = (url: string) => {
   failedLargeURLs.value = new Set([...failedLargeURLs.value, url]);
 };
 
-const waitForImageLoad = (image: HTMLImageElement) => new Promise<void>((resolve, reject) => {
-  image.onload = () => resolve();
-  image.onerror = () => reject(new Error('large image failed to load'));
-});
+class LargePreloadCancelledError extends Error {
+  constructor() {
+    super('Large image preload was cancelled.');
+    this.name = 'LargePreloadCancelledError';
+  }
+}
+
+type ImageLoadWaiter = {
+  promise: Promise<void>;
+  cancel: () => void;
+};
+
+const createImageLoadWaiter = (image: HTMLImageElement): ImageLoadWaiter => {
+  let settled = false;
+  let resolvePromise: (() => void) | null = null;
+  let rejectPromise: ((error: Error) => void) | null = null;
+
+  const cleanup = () => {
+    image.onload = null;
+    image.onerror = null;
+  };
+
+  const resolveOnce = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    resolvePromise?.();
+  };
+
+  const rejectOnce = (error: Error) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    rejectPromise?.(error);
+  };
+
+  const promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+    image.onload = resolveOnce;
+    image.onerror = () => rejectOnce(new Error('large image failed to load'));
+  });
+
+  return {
+    promise,
+    cancel: () => rejectOnce(new LargePreloadCancelledError()),
+  };
+};
 
 const canUpgradeLarge = (media: PostMedia, version: number) => (
   !closeRequested
@@ -550,17 +598,27 @@ const preloadLarge = async (media: PostMedia, version: number) => {
 
   const image = new Image();
   image.decoding = 'async';
-  const preload: ActiveLargePreload = { media, version, image };
+  const canDecode = typeof image.decode === 'function';
+  const waiter = canDecode ? null : createImageLoadWaiter(image);
+  const preload: ActiveLargePreload = {
+    media,
+    version,
+    image,
+    cancelWait: waiter?.cancel ?? null,
+  };
   activeLargePreload = preload;
   image.src = media.large_url;
 
   try {
-    if (typeof image.decode === 'function') {
+    if (canDecode) {
       await image.decode();
     } else {
-      await waitForImageLoad(image);
+      await waiter!.promise;
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof LargePreloadCancelledError) {
+      return;
+    }
     if (activeLargePreload === preload && canUpgradeLarge(media, version)) {
       markLargeFailed(media.large_url);
     }
