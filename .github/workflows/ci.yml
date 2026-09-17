@@ -388,5 +388,12 @@ jobs:
       - name: Build backend image
         run: docker build -f Go.exchange/Dockerfile.prod -t goexchange-backend:ci Go.exchange
 
+      - name: Validate production Compose and maintenance scripts
+        run: |
+          docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml config --quiet
+          docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile devdata config --quiet
+          docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile observability config --quiet
+          bash -n scripts/backup-postgres.sh scripts/rebuild-production-data.sh
+
       - name: Build frontend image
         run: docker build -f Exchangeapp_frontend/Dockerfile -t goexchange-frontend:ci Exchangeapp_frontend

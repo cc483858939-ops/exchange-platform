@@ -21,6 +21,10 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	if err != nil {
 		return nil, err
 	}
+	allowedOrigins, err := config.CORSAllowedOrigins()
+	if err != nil {
+		return nil, err
+	}
 
 	router := gin.Default()
 	if err := router.SetTrustedProxies(trustedProxies); err != nil {
@@ -31,7 +35,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	router.TrustedPlatform = ""
 
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key"},
 		ExposeHeaders:    []string{"Content-Length", "Retry-After", "Idempotency-Replayed"},

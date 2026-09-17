@@ -106,6 +106,7 @@ func TestSetupRouterRegistersProfileTimelineRoute(t *testing.T) {
 
 func TestSetupRouterAllowsIdempotencyKeyForPostCreation(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.test")
 	engine, err := SetupRouter(nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)

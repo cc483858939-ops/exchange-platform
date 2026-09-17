@@ -20,7 +20,7 @@ const (
 	DefaultXAPIBaseURL            = "https://api.x.com"
 	DefaultSnapshotRelPath        = ".devdata/x_latest.json"
 	DefaultFetchCheckpointRelPath = ".devdata/x_fetch_checkpoint.json"
-	DefaultRegistryRelPath        = "devdata/testdata/x_sources_v1.json"
+	DefaultRegistryRelPath        = "config/sources/x_sources.json"
 )
 
 // SourceRegistry is repository-controlled configuration. It is deliberately

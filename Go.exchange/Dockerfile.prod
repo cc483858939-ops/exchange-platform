@@ -1,4 +1,9 @@
-FROM golang:1.25.3-bookworm AS builder
+# syntax=docker/dockerfile:1.7
+
+FROM --platform=$BUILDPLATFORM golang:1.25.3-bookworm AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -6,19 +11,27 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/go-exchange ./main.go \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/go-exchange-migrate ./cmd/migrate
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange ./main.go \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-migrate ./cmd/migrate \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-kafka-init ./cmd/kafka-init \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-cdc-init ./cmd/cdc-init \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-outbox-cutover ./cmd/outbox-cutover \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-devdata ./cmd/devdata
 
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY --from=builder /out/go-exchange /app/go-exchange
 COPY --from=builder /out/go-exchange-migrate /app/go-exchange-migrate
+COPY --from=builder /out/go-exchange-kafka-init /app/go-exchange-kafka-init
+COPY --from=builder /out/go-exchange-cdc-init /app/go-exchange-cdc-init
+COPY --from=builder /out/go-exchange-outbox-cutover /app/go-exchange-outbox-cutover
+COPY --from=builder /out/go-exchange-devdata /app/go-exchange-devdata
 COPY config /app/config
 
 EXPOSE 3000

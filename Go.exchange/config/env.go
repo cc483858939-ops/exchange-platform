@@ -123,6 +123,37 @@ func TrustedProxyCIDRs() ([]string, error) {
 	return result, nil
 }
 
+// CORSAllowedOrigins returns the browser origins accepted by the API. An
+// unset value keeps the local development workflow usable; production Compose
+// supplies this value explicitly and rejects wildcard credentials.
+func CORSAllowedOrigins() ([]string, error) {
+	raw, exists := os.LookupEnv("CORS_ALLOWED_ORIGINS")
+	if !exists || strings.TrimSpace(raw) == "" {
+		return []string{"http://localhost:5173", "http://127.0.0.1:5173"}, nil
+	}
+
+	origins := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			continue
+		}
+		if origin == "*" {
+			return nil, errors.New("CORS_ALLOWED_ORIGINS must not contain wildcard origins when credentials are enabled")
+		}
+		if _, duplicate := seen[origin]; duplicate {
+			continue
+		}
+		seen[origin] = struct{}{}
+		origins = append(origins, origin)
+	}
+	if len(origins) == 0 {
+		return nil, errors.New("CORS_ALLOWED_ORIGINS must contain at least one origin")
+	}
+	return origins, nil
+}
+
 func canonicalTrustedProxyCIDR(value string) (string, error) {
 	if strings.Contains(value, "/") {
 		_, network, err := net.ParseCIDR(value)

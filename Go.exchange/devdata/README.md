@@ -3,6 +3,11 @@
 DevData 的完整快照由 `cmd/devdata` 负责生成和同步。增量刷新是一个可选的
 operator/scheduler 命令，不由应用进程自动启动。
 
+默认 registry 路径按运行目录解析：生产镜像从 `/app/config/sources/x_sources.json`
+读取运行时 registry；`devdata/testdata/x_sources_v1.json` 继续作为测试 fixture，
+不会被生产容器默认使用。生产镜像中的命令已经编译为
+`/app/go-exchange-devdata`，其 `.devdata` 目录必须挂载持久化 volume。
+
 ## 首次初始化和完整校准
 
 先启动 PostgreSQL、Redis、MinIO（如需媒体镜像）以及 RSSHub，再从

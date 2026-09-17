@@ -1,0 +1,391 @@
+name: ${COMPOSE_PROJECT_NAME:-exchange-platform}
+
+x-backend-image: &backend-image
+  image: ${BACKEND_IMAGE:-goexchange-backend:local}
+  build:
+    context: ../Go.exchange
+    dockerfile: Dockerfile.prod
+
+x-backend-environment: &backend-environment
+  DATABASE_DSN: "${DATABASE_DSN:?DATABASE_DSN is required}"
+  REDIS_ADDR: "${REDIS_ADDR:-redis:6379}"
+  REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+  REDIS_DB: "${REDIS_DB:-0}"
+  KAFKA_BROKERS: "${KAFKA_BROKERS:-kafka:9092}"
+  CDC_CONNECT_URL: "${CDC_CONNECT_URL:-http://kafka-connect:8083}"
+  CDC_DATABASE_USER: "${CDC_DATABASE_USER:-}"
+  CDC_DATABASE_PASSWORD: "${CDC_DATABASE_PASSWORD:-}"
+  CDC_DATABASE_SSLMODE: "${CDC_DATABASE_SSLMODE:-disable}"
+  CDC_DATABASE_SSLCERT: "${CDC_DATABASE_SSLCERT:-}"
+  CDC_DATABASE_SSLKEY: "${CDC_DATABASE_SSLKEY:-}"
+  CDC_DATABASE_SSLROOTCERT: "${CDC_DATABASE_SSLROOTCERT:-}"
+  MINIO_ENDPOINT: "${MINIO_ENDPOINT:-minio:9000}"
+  MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}"
+  MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}"
+  MINIO_BUCKET: "${MINIO_BUCKET:-go-exchange}"
+  MINIO_USE_SSL: "${MINIO_USE_SSL:-false}"
+  TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:?TRUSTED_PROXY_CIDRS is required}"
+  CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}"
+  APP_PORT: "3000"
+  EMBEDDING_ENABLED: "${EMBEDDING_ENABLED:-false}"
+  EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
+  EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+  EMBEDDING_MODEL: "${EMBEDDING_MODEL:-@cf/baai/bge-m3}"
+  EMBEDDING_VERSION: "${EMBEDDING_VERSION:-post_embedding_v1}"
+  EMBEDDING_TIMEOUT_SECONDS: "${EMBEDDING_TIMEOUT_SECONDS:-10}"
+  TRANSLATION_ENABLED: "${TRANSLATION_ENABLED:-false}"
+  TRANSLATION_BASE_URL: "${TRANSLATION_BASE_URL:-}"
+  TRANSLATION_API_KEY: "${TRANSLATION_API_KEY:-}"
+  TRANSLATION_MODEL: "${TRANSLATION_MODEL:-@cf/google/gemma-4-26b-a4b-it}"
+  TRANSLATION_PROMPT_VERSION: "${TRANSLATION_PROMPT_VERSION:-social_v4}"
+  TRANSLATION_TIMEOUT_SECONDS: "${TRANSLATION_TIMEOUT_SECONDS:-10}"
+  TRANSLATION_CACHE_TTL_HOURS: "${TRANSLATION_CACHE_TTL_HOURS:-168}"
+  TRANSLATION_CACHE_JITTER_HOURS: "${TRANSLATION_CACHE_JITTER_HOURS:-24}"
+  TRANSLATION_MAX_SOURCE_RUNES: "${TRANSLATION_MAX_SOURCE_RUNES:-2000}"
+  TRANSLATION_MAX_COMPLETION_TOKENS: "${TRANSLATION_MAX_COMPLETION_TOKENS:-2048}"
+  AI_API_KEY: "${AI_API_KEY:-}"
+  AI_BASE_URL: "${AI_BASE_URL:-}"
+  RECOMMENDATION_TELEMETRY_ENABLED: "${RECOMMENDATION_TELEMETRY_ENABLED:-true}"
+  RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT: "${RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT:-100}"
+  RECOMMENDATION_TELEMETRY_SIGNING_KEY: "${RECOMMENDATION_TELEMETRY_SIGNING_KEY:?RECOMMENDATION_TELEMETRY_SIGNING_KEY is required}"
+  RECOMMENDATION_TELEMETRY_TOKEN_TTL: "${RECOMMENDATION_TELEMETRY_TOKEN_TTL:-24h}"
+  RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW: "${RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW:-5m}"
+  RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE: "${RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE:-1000}"
+  ARTICLE_VIEW_EVENTS_PER_MINUTE: "${ARTICLE_VIEW_EVENTS_PER_MINUTE:-300}"
+
+x-jwt-environment: &jwt-environment
+  JWT_PRIVATE_KEY_FILE: /run/secrets/jwt/private.pem
+  JWT_VERIFY_KEYS_DIR: /run/secrets/jwt/public
+  JWT_ACTIVE_KID: "${JWT_ACTIVE_KID:?JWT_ACTIVE_KID is required}"
+  JWT_ISSUER: "${JWT_ISSUER:-go.exchange}"
+  JWT_AUDIENCE: "${JWT_AUDIENCE:-go.exchange.api}"
+  JWT_ACCESS_TTL: "${JWT_ACCESS_TTL:-15m}"
+  JWT_REFRESH_IDLE_TTL: "${JWT_REFRESH_IDLE_TTL:-168h}"
+  JWT_REFRESH_ABSOLUTE_TTL: "${JWT_REFRESH_ABSOLUTE_TTL:-720h}"
+  JWT_CLOCK_SKEW: "${JWT_CLOCK_SKEW:-30s}"
+
+x-service-defaults: &service-defaults
+  networks:
+    - private
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    <<: *service-defaults
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    <<: *service-defaults
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    <<: *service-defaults
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}"
+      MINIO_ROOT_PASSWORD: "${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  kafka:
+    image: bitnamilegacy/kafka:4.0.0-debian-12-r10
+    <<: *service-defaults
+    environment:
+      KAFKA_CFG_NODE_ID: "0"
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_KRAFT_CLUSTER_ID: "${KAFKA_KRAFT_CLUSTER_ID:?KAFKA_KRAFT_CLUSTER_ID is required}"
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  outbox-cutover:
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange-outbox-cutover"]
+    environment:
+      DATABASE_DSN: "${DATABASE_DSN:?DATABASE_DSN is required}"
+      OUTBOX_CUTOVER_CONFIRM_PRELAUNCH: "${OUTBOX_CUTOVER_CONFIRM_PRELAUNCH:-false}"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  migrate:
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange-migrate"]
+    environment:
+      DATABASE_DSN: "${DATABASE_DSN:?DATABASE_DSN is required}"
+    depends_on:
+      db:
+        condition: service_healthy
+      outbox-cutover:
+        condition: service_completed_successfully
+    restart: "no"
+
+  kafka-init:
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange-kafka-init"]
+    environment:
+      KAFKA_BROKERS: "${KAFKA_BROKERS:-kafka:9092}"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  kafka-connect:
+    image: quay.io/debezium/connect:3.6.1.Final
+    <<: *service-defaults
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: "${KAFKA_CONNECT_GROUP_ID:-1}"
+      CONFIG_STORAGE_TOPIC: goexchange.connect.configs
+      OFFSET_STORAGE_TOPIC: goexchange.connect.offsets
+      STATUS_STORAGE_TOPIC: goexchange.connect.status
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_PLUGIN_PATH: /kafka/connect,/usr/share/java
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  cdc-init:
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange-cdc-init"]
+    environment:
+      <<: *backend-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-connect:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange"]
+    environment:
+      <<: [*backend-environment, *jwt-environment]
+      APP_RUNTIME_ROLE: api
+    volumes:
+      - "${JWT_PRIVATE_KEY_FILE:?JWT_PRIVATE_KEY_FILE is required}:/run/secrets/jwt/private.pem:ro"
+      - "${JWT_VERIFY_KEYS_DIR:?JWT_VERIFY_KEYS_DIR is required}:/run/secrets/jwt/public:ro"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      cdc-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/readyz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange"]
+    environment:
+      <<: *backend-environment
+      APP_RUNTIME_ROLE: worker
+      WORKER_HEALTH_PORT: "${WORKER_HEALTH_PORT:-8081}"
+      LIKE_BEHAVIOR_BATCH_SIZE: "${LIKE_BEHAVIOR_BATCH_SIZE:-500}"
+      LIKE_BEHAVIOR_CLAIM_LEASE: "${LIKE_BEHAVIOR_CLAIM_LEASE:-30s}"
+      LIKE_BEHAVIOR_FLUSH_INTERVAL: "${LIKE_BEHAVIOR_FLUSH_INTERVAL:-1s}"
+      LIKE_BEHAVIOR_PROJECTION_CONSUMERS: "${LIKE_BEHAVIOR_PROJECTION_CONSUMERS:-6}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      cdc-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/readyz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  devdata:
+    profiles: ["devdata"]
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange-devdata"]
+    command: ["verify"]
+    environment:
+      <<: *backend-environment
+      RSSHUB_BASE_URL: "${RSSHUB_BASE_URL:?RSSHUB_BASE_URL is required for the devdata profile}"
+      RSSHUB_TIMEOUT: "${RSSHUB_TIMEOUT:-60s}"
+      X_API_BASE_URL: "${X_API_BASE_URL:-https://api.x.com}"
+      X_API_TIMEOUT: "${X_API_TIMEOUT:-20s}"
+      X_BEARER_TOKEN: "${X_BEARER_TOKEN:-}"
+      DEVDATA_FETCH_BATCH_SIZE: "${DEVDATA_FETCH_BATCH_SIZE:-3}"
+      DEVDATA_FETCH_BATCH_DELAY: "${DEVDATA_FETCH_BATCH_DELAY:-60s}"
+      DEVDATA_INCREMENTAL_FETCH_COUNT: "${DEVDATA_INCREMENTAL_FETCH_COUNT:-20}"
+    volumes:
+      - devdata-state:/app/.devdata
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: "no"
+
+  caddy:
+    image: caddy:2.8-alpine
+    <<: *service-defaults
+    environment:
+      API_DOMAIN: "${API_DOMAIN:?API_DOMAIN is required}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.5.0
+    <<: *service-defaults
+    volumes:
+      - ../Go.exchange/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../Go.exchange/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:12.1.1
+    <<: *service-defaults
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:?GF_SECURITY_ADMIN_USER is required for observability}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:?GF_SECURITY_ADMIN_PASSWORD is required for observability}"
+    volumes:
+      - ../Go.exchange/observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../Go.exchange/observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../Go.exchange/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  private:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_private
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  postgres-data:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_postgres-data
+  redis-data:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_redis-data
+  kafka-data:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_kafka-data
+  minio-data:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_minio-data
+  devdata-state:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_devdata-state
+  caddy-data:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_caddy-data
+  caddy-config:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_caddy-config
+  prometheus-data:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_prometheus-data
+  grafana-data:
+    name: ${COMPOSE_PROJECT_NAME:-exchange-platform}_grafana-data

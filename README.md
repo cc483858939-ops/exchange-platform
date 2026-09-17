@@ -187,6 +187,131 @@ docker compose up -d prometheus grafana kafka-ui
 
 对应地址：Prometheus `http://127.0.0.1:9090`、Grafana `http://127.0.0.1:3001`、Kafka UI `http://127.0.0.1:8080`。pprof 在 API / Worker 容器内监听 `6060`，当前未映射到宿主机。
 
+## 单 VPS 生产化预备
+
+生产部署的目标拓扑是：前端继续部署在 Cloudflare Pages，单台 Linux VPS 运行
+Caddy、API、Worker、PostgreSQL、Redis、Kafka、Kafka Connect、MinIO 以及一次性
+初始化任务。生产 Compose 与本地开发 Compose 分开；根目录的
+`docker-compose.yml` 仍然只负责本地开发，生产入口是
+`deploy/compose.prod.yml`。本仓库只准备配置、镜像和运维脚本，不在这里执行 VPS
+部署、域名配置或证书申请。
+
+### 配置和 JWT
+
+在 VPS 上执行：
+
+```bash
+cp deploy/.env.example deploy/.env
+```
+
+编辑 `deploy/.env`，至少替换所有 `replace-with-*` 值，并填写真实的
+`API_DOMAIN`、Cloudflare Pages 域名对应的 `CORS_ALLOWED_ORIGINS`、数据库/Redis/
+MinIO 密钥和 `JWT_*` 参数。不要把 `deploy/.env`、JWT 私钥、X/RSSHub token 或
+Workers AI key 放进 Git，也不要通过 `VITE_*` 变量向前端注入服务端密钥。
+
+JWT 私钥与公钥目录由宿主机路径挂载到容器内的
+`/run/secrets/jwt/private.pem` 和 `/run/secrets/jwt/public/`，两个服务只读使用。
+可以在受信任主机上用已有工具生成一套生产密钥：
+
+```bash
+cd Go.exchange
+go run ./cmd/gen-jwt-keys --kid prod-v1 --out /srv/exchange-platform/.secrets/jwt
+cd ..
+```
+
+### 启动顺序和入口
+
+构建并启动生产栈：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml up -d
+```
+
+一次性初始化按以下依赖顺序执行：`outbox-cutover` → `migrate` → `kafka-init` →
+`kafka-connect` → `cdc-init` → API / Worker。已有旧 Outbox schema 时，先备份并检查
+状态；只有确认要执行受保护的 prelaunch cutover 时，才在 `deploy/.env` 中显式设置
+`OUTBOX_CUTOVER_CONFIRM_PRELAUNCH=true`。
+
+前端在 Cloudflare Pages 构建时使用：
+
+```text
+VITE_API_BASE_URL=https://api.example.com/api
+```
+
+生产 Compose 不包含前端服务，也不向宿主机公开数据库、Redis、Kafka、Kafka
+Connect、MinIO 或 API 端口；公网只由 Caddy 暴露 80/443，并将域名流量代理到
+内部 `api:3000`。API 的存活/就绪检查分别是：
+
+```bash
+curl -fsS https://api.example.com/healthz
+curl -fsS https://api.example.com/readyz
+```
+
+### DevData 运维
+
+生产镜像中的 DevData 使用编译后的 `/app/go-exchange-devdata`，运行时 registry 是
+`Go.exchange/config/sources/x_sources.json`；测试 fixture 仍保留在
+`Go.exchange/devdata/testdata/x_sources_v1.json`。`.devdata` 挂载到持久化
+`devdata-state` volume。DevData 服务使用 `devdata` profile，不会随默认生产启动
+自动抓取 RSSHub；执行前先在 `deploy/.env` 配置可访问的 `RSSHUB_BASE_URL` 或 X
+token。
+
+首次完整刷新：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata \
+  refresh --source=rsshub --allow-destructive --reset-checkpoint
+```
+
+日常增量和校准：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata \
+  refresh-incremental --source=rsshub --shard=auto
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata \
+  refresh --source=rsshub --allow-destructive
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata verify
+```
+
+### 备份和受保护重建
+
+PostgreSQL 备份写入被 `.gitignore` 忽略的 `backups/postgres/`：
+
+```bash
+bash scripts/backup-postgres.sh
+```
+
+恢复前先停止写入流量，并将备份导入 `db` 容器；下面示例会清空目标库中的现有
+对象，必须确认目标就是生产数据库：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml exec -T db \
+  sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore --clean --if-exists --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < backups/postgres/goexchange_YYYYMMDDTHHMMSSZ.dump
+```
+
+如果需要重建派生 DevData 状态，脚本要求显式确认：
+
+```bash
+bash scripts/rebuild-production-data.sh RESET-PRODUCTION
+```
+
+该脚本只清理 `.devdata` 快照/checkpoint，并通过现有 guarded refresh 对 DevData
+镜像做 destructive reconciliation；不会自动删除 PostgreSQL、Redis、Kafka 或
+MinIO volume，也不会删除用户上传对象。执行前仍应先做 PostgreSQL 备份，并确认
+当前 RSSHub/X source 配置和速率限制允许重新拉取。
+
+### 当前明确不包含
+
+VPS 防火墙、DNS、Cloudflare Pages 项目设置、真实 JWT/第三方 token、外部 RSSHub
+部署、GHCR 镜像发布、自动 CD、定时任务编排、对象存储生命周期和异地备份仍由
+部署者单独决定。生产 Compose 的可观测服务使用 `observability` profile：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml \
+  --profile observability up -d prometheus grafana
+```
+
 ## 测试与验证
 
 后端基础检查：
@@ -244,5 +369,8 @@ CI 工作流 将后端基础检查、PostgreSQL / Redis 集成、Kafka 初始化
 │       ├── services/      # API 调用、阅读与推荐遥测
 │       └── store/         # 会话、Feed、身份与跨页面状态
 ├── .github/workflows/     # 持续集成
-└── docker-compose.yml     # 全栈开发环境
+├── deploy/                # VPS 生产 Compose、Caddy 与环境模板
+├── scripts/               # 备份和受保护重建脚本
+├── docker-compose.yml     # 全栈开发环境
+└── README.md
 ```

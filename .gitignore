@@ -3,5 +3,11 @@ main
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
 *.tar.gz
 .agent/
+.devdata/
+backups/
+*.dump
+*.sql
