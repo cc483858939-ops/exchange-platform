@@ -481,9 +481,7 @@ onBeforeUnmount(() => {
 
 .bookmarks-view__feed {
   width: 100%;
-  max-width: 600px;
   min-width: 0;
-  margin-inline: auto;
 }
 
 .bookmarks-view__state {
@@ -562,8 +560,7 @@ onBeforeUnmount(() => {
 }
 
 .bookmarks-view__status {
-  max-width: 600px;
-  margin: 0 auto;
+  margin: 0;
   padding: 0 var(--space-5) var(--space-4);
   color: var(--color-danger);
   font-size: 13px;
@@ -662,9 +659,18 @@ onBeforeUnmount(() => {
 }
 
 @media (min-width: 800px) {
+  .bookmarks-view__header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .bookmarks-view__back {
-    visibility: hidden;
-    pointer-events: none;
+    display: none;
+  }
+}
+
+@media (max-width: 799px) {
+  .bookmarks-view__primary {
+    min-height: 44px;
   }
 }
 
