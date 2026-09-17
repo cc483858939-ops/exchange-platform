@@ -20,13 +20,23 @@ type PendingDecode = { resolve: () => void; reject: () => void };
 const decodeModes = new Map<string, DecodeMode>();
 const pendingDecodes = new Map<string, PendingDecode[]>();
 let decodeCalls: string[] = [];
-let rafCallbacks: FrameRequestCallback[] = [];
+let createdImages: ControlledImage[] = [];
 type MediaQueryListener = (event: MediaQueryListEvent) => void;
 let mediaQueryState: { matches: boolean; listeners: Set<MediaQueryListener> };
 
 class ControlledImage {
   decoding = '';
   src = '';
+
+  constructor() {
+    createdImages.push(this);
+  }
+
+  removeAttribute(name: string) {
+    if (name === 'src') {
+      this.src = '';
+    }
+  }
 
   decode() {
     decodeCalls.push(this.src);
@@ -54,13 +64,9 @@ beforeEach(() => {
   decodeModes.clear();
   pendingDecodes.clear();
   decodeCalls = [];
-  rafCallbacks = [];
+  createdImages = [];
   mediaQueryState = { matches: false, listeners: new Set() };
   vi.stubGlobal('Image', ControlledImage);
-  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-    rafCallbacks.push(callback);
-    return rafCallbacks.length;
-  });
   const matchMedia = () => ({
     matches: mediaQueryState.matches,
     media: '(min-width: 1100px)',
@@ -100,6 +106,7 @@ beforeEach(() => {
 
 afterEach(() => {
   mountedViewers.splice(0).forEach(wrapper => wrapper.unmount());
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   if (originalMatchMedia) {
     Object.defineProperty(window, 'matchMedia', originalMatchMedia);
@@ -128,10 +135,16 @@ const resolveDecode = (url: string) => {
   entries.forEach(entry => entry.resolve());
 };
 
-const flushAnimationFrame = () => {
-  const current = rafCallbacks;
-  rafCallbacks = [];
-  current.forEach(callback => callback(0));
+const rejectDecode = (url: string) => {
+  const entries = pendingDecodes.get(url) ?? [];
+  pendingDecodes.delete(url);
+  entries.forEach(entry => entry.reject());
+};
+
+const advanceTimers = async (milliseconds: number) => {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await nextTick();
+  await Promise.resolve();
 };
 
 const setDesktopViewport = async (matches: boolean) => {
@@ -546,44 +559,46 @@ describe('PostMediaViewer', () => {
     expect(wrapper.find('.post-media-viewer__counter').exists()).toBe(false);
   });
 
-  it('shows Medium immediately and defers Large preload until the second frame', async () => {
+  it('shows Medium immediately and waits for Medium load plus dwell before Large preload', async () => {
+    vi.useFakeTimers();
     const wrapper = mountViewer(1);
 
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/0-medium.jpg');
     expect(decodeCalls).toEqual([]);
 
-    flushAnimationFrame();
-    await nextTick();
+    await advanceTimers(300);
     expect(decodeCalls).toEqual([]);
     expect(pendingDecodes.has('/media/0-large.jpg')).toBe(false);
 
-    flushAnimationFrame();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(249);
+    expect(decodeCalls).toEqual([]);
+
+    await advanceTimers(1);
     expect(decodeCalls).toEqual(['/media/0-large.jpg']);
     expect(pendingDecodes.has('/media/0-large.jpg')).toBe(true);
   });
 
   it('starts with Medium and upgrades after Large decode succeeds', async () => {
+    vi.useFakeTimers();
     setDecodeMode('/media/0-large.jpg', 'resolve');
     const wrapper = mountViewer(1);
 
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/0-medium.jpg');
-    flushAnimationFrame();
-    flushAnimationFrame();
-    await nextTick();
-    await Promise.resolve();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
 
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/0-large.jpg');
   });
 
   it('keeps Medium when Large decode fails', async () => {
+    vi.useFakeTimers();
     setDecodeMode('/media/0-large.jpg', 'reject');
     const wrapper = mountViewer(1);
     const frame = wrapper.get('.post-media-viewer__image-frame').element;
 
-    flushAnimationFrame();
-    flushAnimationFrame();
-    await nextTick();
-    await Promise.resolve();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
 
     const image = wrapper.get('.post-media-viewer__image');
     expect(image.attributes('src')).toBe('/media/0-medium.jpg');
@@ -649,10 +664,13 @@ describe('PostMediaViewer', () => {
   });
 
   it('shows the next Medium immediately and blocks an old Large race', async () => {
+    vi.useFakeTimers();
     const wrapper = mountViewer(2);
 
-    flushAnimationFrame();
-    flushAnimationFrame();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+
     await wrapper.get('[aria-label="Next image"]').trigger('click');
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
 
@@ -661,8 +679,8 @@ describe('PostMediaViewer', () => {
     await Promise.resolve();
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
 
-    flushAnimationFrame();
-    flushAnimationFrame();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
     resolveDecode('/media/1-large.jpg');
     await nextTick();
     await Promise.resolve();
@@ -670,12 +688,11 @@ describe('PostMediaViewer', () => {
   });
 
   it('falls back to Medium if the visible Large later emits an error', async () => {
+    vi.useFakeTimers();
     setDecodeMode('/media/0-large.jpg', 'resolve');
     const wrapper = mountViewer(1);
-    flushAnimationFrame();
-    flushAnimationFrame();
-    await nextTick();
-    await Promise.resolve();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
 
     expect(wrapper.get('img').attributes('src')).toBe('/media/0-large.jpg');
     await wrapper.get('img').trigger('error');
@@ -684,10 +701,11 @@ describe('PostMediaViewer', () => {
   });
 
   it('preserves zoom and pan while the same media upgrades from Medium to Large', async () => {
+    vi.useFakeTimers();
     const wrapper = mountViewer(1);
     setStableGeometry(wrapper);
-    flushAnimationFrame();
-    flushAnimationFrame();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
 
     await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
     await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
@@ -705,13 +723,12 @@ describe('PostMediaViewer', () => {
   });
 
   it('preserves zoom and pan when a visible Large image falls back to Medium', async () => {
+    vi.useFakeTimers();
     setDecodeMode('/media/0-large.jpg', 'resolve');
     const wrapper = mountViewer(1);
     setStableGeometry(wrapper);
-    flushAnimationFrame();
-    flushAnimationFrame();
-    await nextTick();
-    await Promise.resolve();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
 
     await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
     await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
@@ -726,18 +743,128 @@ describe('PostMediaViewer', () => {
     expect(imageTransform(wrapper)).toBe(transformBeforeFallback);
   });
 
-  it('does not start a stale Large preload after navigating before the second frame', async () => {
+  it('does not start a stale Large preload after navigating before dwell expires', async () => {
+    vi.useFakeTimers();
     const wrapper = mountViewer(2);
 
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(100);
     await wrapper.get('[aria-label="Next image"]').trigger('click');
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
 
-    flushAnimationFrame();
+    await advanceTimers(500);
     expect(decodeCalls).toEqual([]);
 
-    flushAnimationFrame();
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
     expect(decodeCalls).toEqual(['/media/1-large.jpg']);
     expect(decodeCalls).not.toContain('/media/0-large.jpg');
+  });
+
+  it('only starts Large for the settled image during rapid A to B to C navigation', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountViewer(3);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(50);
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(50);
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+
+    expect(decodeCalls).toEqual(['/media/2-large.jpg']);
+  });
+
+  it('cancels the pending Large upgrade when the viewer is closed', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(100);
+    await wrapper.get('[aria-label="Close image viewer"]').trigger('click');
+    await advanceTimers(500);
+
+    expect(createdImages).toHaveLength(0);
+    expect(decodeCalls).toEqual([]);
+  });
+
+  it('cancels the pending Large upgrade when the viewer is unmounted', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(100);
+    wrapper.unmount();
+    await advanceTimers(500);
+
+    expect(createdImages).toHaveLength(0);
+    expect(decodeCalls).toEqual([]);
+  });
+
+  it('allows a canceled Large preload to retry when navigating back', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+    expect(createdImages).toHaveLength(1);
+
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+    expect(createdImages[0].src).toBe('');
+    rejectDecode('/media/0-large.jpg');
+    await nextTick();
+    await Promise.resolve();
+
+    await wrapper.get('[aria-label="Previous image"]').trigger('click');
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+
+    expect(decodeCalls.filter(url => url === '/media/0-large.jpg')).toHaveLength(2);
+  });
+
+  it('remembers a genuine current Large failure without repeated retries', async () => {
+    vi.useFakeTimers();
+    setDecodeMode('/media/0-large.jpg', 'reject');
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+    await wrapper.get('[aria-label="Previous image"]').trigger('click');
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+  });
+
+  it('accelerates Large loading on zoom intent after Medium is ready', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountViewer(1);
+    setStableGeometry(wrapper);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(100);
+    expect(decodeCalls).toEqual([]);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 300, 150);
+
+    expect(createdImages).toHaveLength(1);
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+
+    await advanceTimers(500);
+    expect(createdImages).toHaveLength(1);
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
   });
 
   it('shows an accessible placeholder after an image fails and keeps navigation available', async () => {

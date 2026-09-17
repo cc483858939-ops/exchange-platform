@@ -192,6 +192,17 @@ const panY = ref(0);
 const imageStyle = computed(() => ({
   transform: `translate3d(${panX.value}px, ${panY.value}px, 0) scale(${zoomScale.value})`,
 }));
+const LARGE_UPGRADE_DWELL_MS = 250;
+let largeUpgradeTimer: number | null = null;
+let mediumReadyVersion: number | null = null;
+
+type ActiveLargePreload = {
+  media: PostMedia;
+  version: number;
+  image: HTMLImageElement;
+};
+
+let activeLargePreload: ActiveLargePreload | null = null;
 const imageAlt = computed(() => (
   hasMultipleMedia.value
     ? `Post image ${currentIndex.value + 1} of ${visibleMedia.value.length}`
@@ -311,6 +322,43 @@ const resetTransform = () => {
   panY.value = 0;
 };
 
+const cancelScheduledLargeUpgrade = () => {
+  if (largeUpgradeTimer === null) {
+    return;
+  }
+  if (typeof window !== 'undefined') {
+    window.clearTimeout(largeUpgradeTimer);
+  }
+  largeUpgradeTimer = null;
+};
+
+const cancelActiveLargePreload = () => {
+  const preload = activeLargePreload;
+  activeLargePreload = null;
+  if (!preload) {
+    return;
+  }
+
+  preload.image.onload = null;
+  preload.image.onerror = null;
+  if (typeof preload.image.removeAttribute === 'function') {
+    preload.image.removeAttribute('src');
+  } else {
+    preload.image.src = '';
+  }
+};
+
+const cancelLargeUpgradeWork = () => {
+  cancelScheduledLargeUpgrade();
+  cancelActiveLargePreload();
+};
+
+const invalidateLargeUpgradeWork = () => {
+  cancelLargeUpgradeWork();
+  largeUpgradeVersion += 1;
+  mediumReadyVersion = null;
+};
+
 const getFrameCenter = () => {
   const frame = imageFrameRef.value;
   if (!frame) {
@@ -403,6 +451,9 @@ const updatePinch = () => {
   const nextPanY = midpoint.y - frameCenter.y - anchoredY * scaleRatio;
 
   setZoomAndPan(nextScale, nextPanX, nextPanY);
+  if (zoomScale.value > MIN_ZOOM) {
+    requestLargeUpgradeForZoomIntent();
+  }
   gestureHadMultiplePointers = true;
   suppressNextViewerClick = true;
 };
@@ -447,6 +498,7 @@ const requestClose = () => {
     return;
   }
   closeRequested = true;
+  invalidateLargeUpgradeWork();
   emit('close');
 };
 
@@ -481,13 +533,25 @@ const canUpgradeLarge = (media: PostMedia, version: number) => (
   && activeMedia.value === media
 );
 
+const canStartLargePreload = (media: PostMedia, version: number) => (
+  canUpgradeLarge(media, version)
+  && mediumReadyVersion === version
+  && resolvedImageURL.value === media.url
+  && Boolean(media.large_url)
+  && media.large_url !== media.url
+  && !failedLargeURLs.value.has(media.large_url)
+  && activeLargePreload === null
+);
+
 const preloadLarge = async (media: PostMedia, version: number) => {
-  if (!canUpgradeLarge(media, version)) {
+  if (!canStartLargePreload(media, version)) {
     return;
   }
 
   const image = new Image();
   image.decoding = 'async';
+  const preload: ActiveLargePreload = { media, version, image };
+  activeLargePreload = preload;
   image.src = media.large_url;
 
   try {
@@ -497,33 +561,62 @@ const preloadLarge = async (media: PostMedia, version: number) => {
       await waitForImageLoad(image);
     }
   } catch {
-    markLargeFailed(media.large_url);
+    if (activeLargePreload === preload && canUpgradeLarge(media, version)) {
+      markLargeFailed(media.large_url);
+    }
     return;
+  } finally {
+    if (activeLargePreload === preload) {
+      activeLargePreload = null;
+    }
   }
 
-  if (version !== largeUpgradeVersion || activeMedia.value !== media) {
+  if (activeLargePreload !== null || !canUpgradeLarge(media, version)) {
     return;
   }
 
   resolvedImageURL.value = media.large_url;
 };
 
-const queueLargeUpgrade = (media: PostMedia, version: number) => {
-  const upgrade = () => {
-    if (!canUpgradeLarge(media, version)) {
-      return;
-    }
-
-    void preloadLarge(media, version);
-  };
-  if (typeof window.requestAnimationFrame === 'function') {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(upgrade);
-    });
-  } else {
-    window.setTimeout(upgrade, 0);
+const scheduleLargeUpgrade = (
+  media: PostMedia,
+  version: number,
+  options: { immediate?: boolean } = {},
+) => {
+  cancelScheduledLargeUpgrade();
+  if (!canStartLargePreload(media, version)) {
+    return;
   }
+
+  if (options.immediate) {
+    void preloadLarge(media, version);
+    return;
+  }
+
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  largeUpgradeTimer = window.setTimeout(() => {
+    largeUpgradeTimer = null;
+    if (canStartLargePreload(media, version)) {
+      void preloadLarge(media, version);
+    }
+  }, LARGE_UPGRADE_DWELL_MS);
 };
+
+function requestLargeUpgradeForZoomIntent() {
+  const media = activeMedia.value;
+  if (
+    zoomScale.value <= MIN_ZOOM
+    || !media
+    || mediumReadyVersion !== largeUpgradeVersion
+  ) {
+    return;
+  }
+
+  scheduleLargeUpgrade(media, largeUpgradeVersion, { immediate: true });
+}
 
 const handleImageError = () => {
   const media = activeMedia.value;
@@ -531,7 +624,9 @@ const handleImageError = () => {
     return;
   }
   if (resolvedImageURL.value === media.large_url && media.large_url !== media.url) {
-    markLargeFailed(media.large_url);
+    if (canUpgradeLarge(media, largeUpgradeVersion)) {
+      markLargeFailed(media.large_url);
+    }
     resolvedImageURL.value = media.url;
     return;
   }
@@ -540,6 +635,13 @@ const handleImageError = () => {
 
 const handleImageLoad = () => {
   clampPan();
+  const media = activeMedia.value;
+  if (!media || resolvedImageURL.value !== media.url) {
+    return;
+  }
+
+  mediumReadyVersion = largeUpgradeVersion;
+  scheduleLargeUpgrade(media, largeUpgradeVersion);
 };
 
 let imageFrameResizeObserver: ResizeObserver | null = null;
@@ -738,26 +840,12 @@ watch(
 watch(
   [activeMedia, currentIndex],
   media => {
+    invalidateLargeUpgradeWork();
     resetGestureBookkeeping();
     resetTransform();
-    largeUpgradeVersion += 1;
-    const version = largeUpgradeVersion;
 
     const nextMedia = media[0];
-    if (!nextMedia) {
-      resolvedImageURL.value = '';
-      return;
-    }
-
-    resolvedImageURL.value = nextMedia.url;
-    if (
-      !nextMedia.large_url
-      || nextMedia.large_url === nextMedia.url
-      || failedLargeURLs.value.has(nextMedia.large_url)
-    ) {
-      return;
-    }
-    queueLargeUpgrade(nextMedia, version);
+    resolvedImageURL.value = nextMedia?.url ?? '';
   },
   { immediate: true },
 );
@@ -798,7 +886,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   closeRequested = true;
-  largeUpgradeVersion += 1;
+  invalidateLargeUpgradeWork();
   stopDesktopSplitTracking();
   stopGeometryTracking();
   resetGestureBookkeeping();
