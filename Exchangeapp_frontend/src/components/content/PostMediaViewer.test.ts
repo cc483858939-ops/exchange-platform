@@ -169,7 +169,58 @@ const mountViewer = (
   return wrapper;
 };
 
+const setStableGeometry = (
+  wrapper: ReturnType<typeof mountViewer>,
+  options: { frameWidth?: number; frameHeight?: number; imageWidth?: number; imageHeight?: number } = {},
+) => {
+  const frameWidth = options.frameWidth ?? 300;
+  const frameHeight = options.frameHeight ?? 300;
+  const imageWidth = options.imageWidth ?? 300;
+  const imageHeight = options.imageHeight ?? 200;
+  const frame = wrapper.get('.post-media-viewer__image-frame').element as HTMLElement;
+  const image = wrapper.get('.post-media-viewer__image').element as HTMLImageElement;
+
+  Object.defineProperty(frame, 'clientWidth', { configurable: true, value: frameWidth });
+  Object.defineProperty(frame, 'clientHeight', { configurable: true, value: frameHeight });
+  Object.defineProperty(frame, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      width: frameWidth,
+      height: frameHeight,
+      top: 0,
+      right: frameWidth,
+      bottom: frameHeight,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  });
+  Object.defineProperty(image, 'offsetWidth', { configurable: true, value: imageWidth });
+  Object.defineProperty(image, 'offsetHeight', { configurable: true, value: imageHeight });
+};
+
+const triggerPointer = (
+  wrapper: ReturnType<typeof mountViewer>,
+  type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel',
+  pointerId: number,
+  clientX: number,
+  clientY: number,
+) => wrapper.get('.post-media-viewer__stage').trigger(type, {
+  pointerId,
+  clientX,
+  clientY,
+});
+
+const imageTransform = (wrapper: ReturnType<typeof mountViewer>) => (
+  wrapper.get('.post-media-viewer__image').attributes('style') ?? ''
+);
+
 describe('PostMediaViewer', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', undefined);
+  });
+
   it('opens the requested initial image', () => {
     const wrapper = mountViewer(3, 1);
 
@@ -345,6 +396,132 @@ describe('PostMediaViewer', () => {
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
   });
 
+  it('supports bounded pinch zoom and returns to the fitted scale', async () => {
+    const wrapper = mountViewer(1);
+    setStableGeometry(wrapper);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 1000, 150);
+
+    expect(imageTransform(wrapper)).toContain('scale(4)');
+    expect(imageTransform(wrapper)).not.toContain('scale(9)');
+
+    await triggerPointer(wrapper, 'pointermove', 2, 200, 150);
+    expect(imageTransform(wrapper)).toContain('scale(1)');
+    expect(imageTransform(wrapper)).toContain('translate3d(0px, 0px, 0)');
+    await triggerPointer(wrapper, 'pointerup', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 100, 150);
+  });
+
+  it('pans a zoomed image within bounds without navigating the carousel', async () => {
+    const wrapper = mountViewer(3, 1);
+    setStableGeometry(wrapper);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointermove', 1, 1000, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 1000, 150);
+
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
+    expect(imageTransform(wrapper)).toContain('translate3d(150px, 0px, 0) scale(2)');
+  });
+
+  it('allows pinch-to-one-finger panning and restores swipe navigation at 1x', async () => {
+    const wrapper = mountViewer(3, 1);
+    setStableGeometry(wrapper);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 1, 50, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 250, 150);
+    await triggerPointer(wrapper, 'pointerup', 2, 250, 150);
+    await triggerPointer(wrapper, 'pointermove', 1, 90, 150);
+    expect(imageTransform(wrapper)).toContain('scale(2)');
+    expect(imageTransform(wrapper)).toContain('translate3d(40px, 0px, 0)');
+    await triggerPointer(wrapper, 'pointerup', 1, 90, 150);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 200, 150);
+    expect(imageTransform(wrapper)).toContain('scale(1)');
+    await triggerPointer(wrapper, 'pointerup', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 100, 150);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 200, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 120, 150);
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/2-medium.jpg');
+  });
+
+  it('resets zoom and pan when carousel navigation changes the active media', async () => {
+    const wrapper = mountViewer(2);
+    setStableGeometry(wrapper);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointermove', 1, 250, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 250, 150);
+    expect(imageTransform(wrapper)).toContain('scale(2)');
+
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
+    expect(imageTransform(wrapper)).toContain('translate3d(0px, 0px, 0) scale(1)');
+  });
+
+  it('suppresses the click that follows a pinch gesture', async () => {
+    const wrapper = mountViewer(1);
+    setStableGeometry(wrapper);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 100, 150);
+    await wrapper.get('.post-media-viewer__stage').trigger('click');
+
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('leaves a usable gesture state after pointer cancellation', async () => {
+    const wrapper = mountViewer(3);
+    setStableGeometry(wrapper);
+    const stage = wrapper.get('.post-media-viewer__stage');
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 1, 120, 150);
+    await triggerPointer(wrapper, 'pointercancel', 1, 120, 150);
+    await stage.trigger('click');
+
+    expect(wrapper.emitted('close')).toBeUndefined();
+    await triggerPointer(wrapper, 'pointerdown', 1, 200, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 120, 150);
+    expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
+  });
+
+  it('re-clamps the zoomed pan after a window resize', async () => {
+    const wrapper = mountViewer(1);
+    setStableGeometry(wrapper);
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointermove', 1, 250, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 250, 150);
+    expect(imageTransform(wrapper)).toContain('translate3d(150px, 0px, 0) scale(2)');
+
+    setStableGeometry(wrapper, { frameWidth: 500 });
+    window.dispatchEvent(new Event('resize'));
+    await nextTick();
+
+    expect(imageTransform(wrapper)).toContain('translate3d(50px, 0px, 0) scale(2)');
+  });
+
   it('emits close from the close button', async () => {
     const wrapper = mountViewer(1);
 
@@ -504,6 +681,49 @@ describe('PostMediaViewer', () => {
     await wrapper.get('img').trigger('error');
 
     expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+  });
+
+  it('preserves zoom and pan while the same media upgrades from Medium to Large', async () => {
+    const wrapper = mountViewer(1);
+    setStableGeometry(wrapper);
+    flushAnimationFrame();
+    flushAnimationFrame();
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 100, 150);
+    const transformBeforeUpgrade = imageTransform(wrapper);
+
+    resolveDecode('/media/0-large.jpg');
+    await nextTick();
+    await Promise.resolve();
+
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-large.jpg');
+    expect(imageTransform(wrapper)).toBe(transformBeforeUpgrade);
+  });
+
+  it('preserves zoom and pan when a visible Large image falls back to Medium', async () => {
+    setDecodeMode('/media/0-large.jpg', 'resolve');
+    const wrapper = mountViewer(1);
+    setStableGeometry(wrapper);
+    flushAnimationFrame();
+    flushAnimationFrame();
+    await nextTick();
+    await Promise.resolve();
+
+    await triggerPointer(wrapper, 'pointerdown', 1, 100, 150);
+    await triggerPointer(wrapper, 'pointerdown', 2, 200, 150);
+    await triggerPointer(wrapper, 'pointermove', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 2, 300, 150);
+    await triggerPointer(wrapper, 'pointerup', 1, 100, 150);
+    const transformBeforeFallback = imageTransform(wrapper);
+
+    await wrapper.get('img').trigger('error');
+
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+    expect(imageTransform(wrapper)).toBe(transformBeforeFallback);
   });
 
   it('does not start a stale Large preload after navigating before the second frame', async () => {
