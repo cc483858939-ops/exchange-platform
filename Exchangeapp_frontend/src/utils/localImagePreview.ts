@@ -239,36 +239,45 @@ export const createLocalImagePreviewGenerator = (
       activeWorkerCleanup = cleanup;
       activeWorkerReject = reject;
       currentWorker.onmessage = event => {
-        const response = event.data as {
-          jobID?: number;
-          type?: 'success' | 'error';
-          blob?: Blob;
-          width?: number;
-          height?: number;
-          message?: string;
+        const response = event.data as unknown;
+        if (!response || typeof response !== 'object') {
+          fail(new WorkerUnavailableError('The image preview worker returned an invalid response.'));
+          return;
+        }
+        const candidate = response as {
+          jobID?: unknown;
+          type?: unknown;
+          blob?: unknown;
+          width?: unknown;
+          height?: unknown;
+          message?: unknown;
         };
-        if (response.jobID !== jobID) {
+        if (candidate.jobID !== jobID) {
+          fail(new WorkerUnavailableError('The image preview worker returned an invalid response.'));
           return;
         }
         cleanup();
         if (
-          response.type === 'success'
-          && response.blob instanceof Blob
-          && typeof response.width === 'number'
-          && typeof response.height === 'number'
-          && response.width > 0
-          && response.height > 0
+          candidate.type === 'success'
+          && typeof Blob !== 'undefined'
+          && candidate.blob instanceof Blob
+          && typeof candidate.width === 'number'
+          && typeof candidate.height === 'number'
+          && Number.isFinite(candidate.width)
+          && Number.isFinite(candidate.height)
+          && candidate.width > 0
+          && candidate.height > 0
         ) {
           resolve({
-            blob: response.blob,
-            width: response.width,
-            height: response.height,
+            blob: candidate.blob,
+            width: candidate.width,
+            height: candidate.height,
           });
           return;
         }
-        if (response.type === 'error') {
+        if (candidate.type === 'error' && typeof candidate.message === 'string') {
           reject(new WorkerPreviewJobError(
-            response.message || 'The worker could not prepare this image preview.',
+            candidate.message || 'The worker could not prepare this image preview.',
           ));
           return;
         }
@@ -296,7 +305,11 @@ export const createLocalImagePreviewGenerator = (
     const currentWorker = getWorker();
     if (currentWorker) {
       try {
-        return await createWorkerPreview(file, currentWorker);
+        const preview = await createWorkerPreview(file, currentWorker);
+        if (disposed) {
+          throw new Error(disposedMessage);
+        }
+        return preview;
       } catch (error) {
         if (disposed) {
           throw new Error(disposedMessage);
