@@ -16,15 +16,6 @@
       <RouterLink
         class="mobile-account-menu__item"
         role="menuitem"
-        :to="{ name: 'Bookmarks' }"
-        @click="closeMenu()"
-      >
-        <AppIcon name="bookmark" :size="18" />
-        <span>Bookmarks</span>
-      </RouterLink>
-      <RouterLink
-        class="mobile-account-menu__item"
-        role="menuitem"
         :to="{ name: 'History' }"
         @click="closeMenu()"
       >

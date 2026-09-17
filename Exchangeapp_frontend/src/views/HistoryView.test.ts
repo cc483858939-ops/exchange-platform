@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import { reactive } from 'vue';
+import { reactive, ref } from 'vue';
 import HistoryView from './HistoryView.vue';
 import { useHistorySessionStore } from '../store/historySession';
 import type { Post } from '../types/Post';
@@ -15,7 +15,10 @@ const mocks = vi.hoisted(() => ({
   router: {
     back: vi.fn(),
     push: vi.fn(),
+    replace: vi.fn(),
   },
+  bookmarksStore: null as any,
+  route: null as any,
   getLikedHistory: vi.fn(),
   getPostLikeStates: vi.fn(),
   unlikePost: vi.fn(),
@@ -36,6 +39,10 @@ vi.mock('../services/likeService', () => ({
   unlikePost: mocks.unlikePost,
 }));
 
+vi.mock('../store/bookmarksSession', () => ({
+  useBookmarksSessionStore: () => mocks.bookmarksStore,
+}));
+
 vi.mock('../store/sessionSync', () => ({
   beginBookmarkStateMutation: vi.fn(),
   registerHistorySessionSync: vi.fn((sync: any) => { mocks.historySync = sync; }),
@@ -49,7 +56,7 @@ vi.mock('vue-router', () => ({
   onBeforeRouteLeave: (guard: () => void) => {
     mocks.routeLeaveGuard = guard;
   },
-  useRoute: () => ({ name: 'History' }),
+  useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));
 
@@ -87,9 +94,36 @@ const setAuth = (id: number | null) => {
   return mocks.authStore;
 };
 
+const createBookmarksStore = () => ({
+  items: ref<Post[]>([]),
+  loaded: ref(false),
+  initialLoading: ref(false),
+  initialError: ref(''),
+  nextCursor: ref<string | null>(null),
+  loadingMore: ref(false),
+  loadMoreError: ref(''),
+  stale: ref(false),
+  revalidating: ref(false),
+  revalidateError: ref(''),
+  scrollTop: ref(0),
+  likePendingPostIDs: ref(new Set<number>()),
+  repostPendingPostIDs: ref(new Set<number>()),
+  bookmarkPendingPostIDs: ref(new Set<number>()),
+  mutationErrors: ref(new Map<number, string>()),
+  loadInitial: vi.fn(),
+  loadMore: vi.fn(),
+  retryInitial: vi.fn(),
+  retryLoadMore: vi.fn(),
+  revalidateBookmarks: vi.fn(),
+  toggleLike: vi.fn(),
+  toggleRepost: vi.fn(),
+  toggleBookmark: vi.fn(),
+  saveScrollTop: vi.fn(),
+});
+
 const postCardStub = {
-  props: ['post', 'trackView', 'likePending'],
-  emits: ['toggleLike'],
+  props: ['post', 'trackView', 'likePending', 'repostPending', 'bookmarkPending'],
+  emits: ['toggleLike', 'toggleRepost', 'toggleBookmark'],
   template: `
     <article
       class="history-post"
@@ -100,6 +134,8 @@ const postCardStub = {
     >
       <span>{{ post.content }}</span>
       <button class="history-post__like" type="button" @click="$emit('toggleLike', post.id)">Unlike</button>
+      <button class="history-post__repost" type="button" @click="$emit('toggleRepost', post.id)">Repost</button>
+      <button class="history-post__bookmark" type="button" @click="$emit('toggleBookmark', post.id)">Bookmark</button>
     </article>
   `,
 };
@@ -108,11 +144,20 @@ const mountHistory = () => mount(HistoryView, {
   global: {
     stubs: {
       PostCard: postCardStub,
+      MobileAccountMenu: { template: '<div class="mobile-account-menu-stub" />' },
       AppIcon: { template: '<span class="test-icon" />' },
-      RouterLink: { template: '<a class="router-link-stub"><slot /></a>' },
+      RouterLink: {
+        props: ['to'],
+        template: '<a class="router-link-stub" :data-return-to="to && to.query && to.query.returnTo"><slot /></a>',
+      },
     },
   },
 });
+
+const setHistoryTab = (tab: 'bookmarks' | 'likes' | string | undefined) => {
+  mocks.route.query = tab === undefined ? {} : { tab };
+  mocks.route.fullPath = tab === undefined ? '/history' : `/history?tab=${tab}`;
+};
 
 const setWindowScrollY = (value: number) => {
   Object.defineProperty(window, 'scrollY', { configurable: true, value });
@@ -130,11 +175,20 @@ const deferred = <T>() => {
 
 describe('HistoryView', () => {
   beforeEach(() => {
-  vi.clearAllMocks();
-  setActivePinia(createPinia());
-  mocks.historySync = null;
-  mocks.routeLeaveGuard = null;
-  setAuth(null);
+    vi.clearAllMocks();
+    setActivePinia(createPinia());
+    mocks.historySync = null;
+    mocks.routeLeaveGuard = null;
+    mocks.route = reactive({
+      name: 'History',
+      query: { tab: 'likes' },
+      fullPath: '/history?tab=likes',
+    });
+    mocks.bookmarksStore = createBookmarksStore();
+    mocks.bookmarksStore.saveScrollTop.mockImplementation((value: number) => {
+      mocks.bookmarksStore.scrollTop.value = value;
+    });
+    setAuth(null);
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.unlikePost.mockResolvedValue({ likes: 0, liked: false });
@@ -146,12 +200,131 @@ describe('HistoryView', () => {
     vi.restoreAllMocks();
   });
 
+  it('uses Bookmarks as the default History tab and loads only the active session', async () => {
+    setAuth(7);
+    setHistoryTab(undefined);
+    mocks.bookmarksStore.loaded.value = true;
+    mocks.bookmarksStore.items.value = [post(42, 'Saved post')];
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    expect(wrapper.get('#history-bookmarks-tab').attributes('aria-selected')).toBe('true');
+    expect(wrapper.get('#history-likes-tab').attributes('aria-selected')).toBe('false');
+    expect(wrapper.find('#history-bookmarks-panel').exists()).toBe(true);
+    expect(wrapper.text()).toContain('Saved post');
+    expect(mocks.bookmarksStore.loadInitial).not.toHaveBeenCalled();
+    expect(mocks.getLikedHistory).not.toHaveBeenCalled();
+  });
+
+  it('normalizes unknown History tab values to Bookmarks without loading Likes', async () => {
+    setAuth(7);
+    setHistoryTab('unexpected');
+    mocks.bookmarksStore.loaded.value = true;
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    expect(wrapper.get('#history-bookmarks-tab').attributes('aria-selected')).toBe('true');
+    expect(wrapper.get('#history-likes-tab').attributes('aria-selected')).toBe('false');
+    expect(mocks.getLikedHistory).not.toHaveBeenCalled();
+  });
+
+  it('switches tabs through router.replace and keeps tab semantics accessible', async () => {
+    setAuth(7);
+    setHistoryTab(undefined);
+    mocks.bookmarksStore.loaded.value = true;
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    const tablist = wrapper.get('[role="tablist"]');
+    expect(tablist.get('[role="tab"]').attributes('aria-controls')).toBe('history-bookmarks-panel');
+    expect(wrapper.findAll('[role="tab"]')).toHaveLength(2);
+    await wrapper.get('#history-likes-tab').trigger('click');
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'History', query: { tab: 'likes' } });
+  });
+
+  it('restores independent scroll positions for Bookmarks and Likes', async () => {
+    setAuth(7);
+    setHistoryTab(undefined);
+    const historySession = useHistorySessionStore();
+    historySession.items = [postToFeedPost(post(2))];
+    historySession.loaded = true;
+    historySession.initialLoading = false;
+    historySession.scrollTop = 400;
+    mocks.bookmarksStore.loaded.value = true;
+    mocks.bookmarksStore.items.value = [post(1)];
+    mocks.bookmarksStore.scrollTop.value = 1200;
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    const viewport = wrapper.get('.history-scroll-viewport').element as HTMLElement;
+    expect(viewport.scrollTop).toBe(1200);
+
+    setHistoryTab('likes');
+    await flushPromises();
+    expect(mocks.bookmarksStore.saveScrollTop).toHaveBeenCalledWith(1200);
+    expect(viewport.scrollTop).toBe(400);
+
+    setHistoryTab(undefined);
+    await flushPromises();
+    expect(viewport.scrollTop).toBe(1200);
+    wrapper.unmount();
+  });
+
+  it('preserves Bookmarks behavior and delegates its mutations to the bookmark session', async () => {
+    setAuth(7);
+    setHistoryTab(undefined);
+    mocks.bookmarksStore.loaded.value = true;
+    mocks.bookmarksStore.items.value = [post(2, 'Second'), post(1, 'First')];
+    mocks.bookmarksStore.likePendingPostIDs.value.add(2);
+    mocks.bookmarksStore.repostPendingPostIDs.value.add(1);
+    mocks.bookmarksStore.bookmarkPendingPostIDs.value.add(2);
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    expect(wrapper.findAll('.history-post').map(card => card.attributes('data-id'))).toEqual(['2', '1']);
+    const cards = wrapper.findAllComponents(postCardStub);
+    expect(cards[0].props('trackView')).toBe(false);
+    expect(cards[0].props('likePending')).toBe(true);
+    expect(cards[0].props('bookmarkPending')).toBe(true);
+    expect(cards[1].props('repostPending')).toBe(true);
+
+    await cards[0].get('.history-post__like').trigger('click');
+    await cards[1].get('.history-post__repost').trigger('click');
+    await cards[0].get('.history-post__bookmark').trigger('click');
+
+    expect(mocks.bookmarksStore.toggleLike).toHaveBeenCalledWith(2);
+    expect(mocks.bookmarksStore.toggleRepost).toHaveBeenCalledWith(1);
+    expect(mocks.bookmarksStore.toggleBookmark).toHaveBeenCalledWith(2);
+  });
+
+  it('keeps bookmark pagination and retry controls scoped to the active tab', async () => {
+    setAuth(7);
+    setHistoryTab(undefined);
+    mocks.bookmarksStore.loaded.value = true;
+    mocks.bookmarksStore.items.value = [post(1)];
+    mocks.bookmarksStore.nextCursor.value = 'cursor-1';
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    await wrapper.get('.history-view__sentinel .history-view__primary').trigger('click');
+    expect(mocks.bookmarksStore.loadMore).toHaveBeenCalledTimes(1);
+    expect(mocks.getLikedHistory).not.toHaveBeenCalled();
+
+    mocks.bookmarksStore.loadMoreError.value = 'Could not load more bookmarks.';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain('Could not load more bookmarks.');
+    await wrapper.get('.history-view__sentinel .history-view__primary').trigger('click');
+    expect(mocks.bookmarksStore.retryLoadMore).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the login state without requesting history or like states when unauthenticated', async () => {
     const wrapper = mountHistory();
     await flushPromises();
 
     expect(wrapper.text()).toContain('Log in to view your history.');
     expect(wrapper.find('.router-link-stub').text()).toBe('Log in');
+    expect(wrapper.find('.router-link-stub').attributes('data-return-to')).toBe('/history?tab=likes');
     expect(mocks.getLikedHistory).not.toHaveBeenCalled();
     expect(mocks.getPostLikeStates).not.toHaveBeenCalled();
   });

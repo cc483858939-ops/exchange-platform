@@ -80,6 +80,8 @@ services:
       - max_replication_slots=4
       - -c
       - max_wal_senders=4
+      - -c
+      - max_slot_wal_keep_size=2GB
     environment:
       POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
@@ -143,6 +145,7 @@ services:
       KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_KRAFT_CLUSTER_ID: "${KAFKA_KRAFT_CLUSTER_ID:?KAFKA_KRAFT_CLUSTER_ID is required}"
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
     volumes:
       - kafka-data:/bitnami/kafka
     healthcheck:
@@ -190,6 +193,7 @@ services:
     image: quay.io/debezium/connect:3.6.1.Final
     <<: *service-defaults
     environment:
+      HEAP_OPTS: "-Xms256m -Xmx512m"
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: "${KAFKA_CONNECT_GROUP_ID:-1}"
       CONFIG_STORAGE_TOPIC: goexchange.connect.configs

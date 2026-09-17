@@ -10,7 +10,6 @@ const UserProfileView = () => import('../views/UserProfileView.vue');
 const UserConnectionsView = () => import('../views/UserConnectionsView.vue');
 const UserSearchView = () => import('../views/UserSearchView.vue');
 const HistoryView = () => import('../views/HistoryView.vue');
-const BookmarksView = () => import('../views/BookmarksView.vue');
 const NotificationsView = () => import('../views/NotificationsView.vue');
 const Login = () => import('../components/Login.vue');
 const Register = () => import('../components/Register.vue');
@@ -43,7 +42,6 @@ const routes: RouteRecordRaw[] = [
   },
   { path: '/search', name: 'UserSearch', component: UserSearchView, meta: { layout: 'app', title: 'Search' } },
   { path: '/history', name: 'History', component: HistoryView, meta: { layout: 'app', title: 'History' } },
-  { path: '/bookmarks', name: 'Bookmarks', component: BookmarksView, meta: { layout: 'app', title: 'Bookmarks' } },
   {
     path: '/notifications',
     name: 'Notifications',

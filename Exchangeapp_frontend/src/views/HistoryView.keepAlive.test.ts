@@ -10,9 +10,11 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   routeLeaveGuard: null as (() => void) | null,
   historyStore: null as any,
+  bookmarksStore: null as any,
   router: {
     back: vi.fn(),
     push: vi.fn(),
+    replace: vi.fn(),
   },
   observerInstances: [] as any[],
   events: [] as string[],
@@ -28,6 +30,10 @@ vi.mock('vue-router', () => ({
 
 vi.mock('../store/historySession', () => ({
   useHistorySessionStore: () => mocks.historyStore,
+}));
+
+vi.mock('../store/bookmarksSession', () => ({
+  useBookmarksSessionStore: () => mocks.bookmarksStore,
 }));
 
 const previousIntersectionObserver = (globalThis as any).IntersectionObserver;
@@ -78,6 +84,7 @@ const createHistoryStore = () => {
     loadMoreError: ref(''),
     stale: ref(false),
     revalidating: ref(false),
+    revalidateError: ref(''),
     scrollTop: ref(900),
     pendingUnlikePostIDs: ref(new Set<number>()),
     repostPendingPostIDs: ref(new Set<number>()),
@@ -90,6 +97,38 @@ const createHistoryStore = () => {
     revalidateHistory: vi.fn(),
     toggleUnlike: vi.fn(),
     toggleRepost: vi.fn(),
+    saveScrollTop: vi.fn((value: number) => {
+      store.scrollTop = value;
+    }),
+  });
+  return store;
+};
+
+const createBookmarksStore = () => {
+  const store = reactive({
+    items: ref([{ id: 2, content: 'Bookmark post' }]),
+    loaded: ref(true),
+    initialLoading: ref(false),
+    initialError: ref(''),
+    nextCursor: ref(null as string | null),
+    loadingMore: ref(false),
+    loadMoreError: ref(''),
+    stale: ref(false),
+    revalidating: ref(false),
+    revalidateError: ref(''),
+    scrollTop: ref(400),
+    likePendingPostIDs: ref(new Set<number>()),
+    repostPendingPostIDs: ref(new Set<number>()),
+    bookmarkPendingPostIDs: ref(new Set<number>()),
+    mutationErrors: ref(new Map<number, string>()),
+    loadInitial: vi.fn(),
+    loadMore: vi.fn(),
+    retryInitial: vi.fn(),
+    retryLoadMore: vi.fn(),
+    revalidateBookmarks: vi.fn(),
+    toggleLike: vi.fn(),
+    toggleRepost: vi.fn(),
+    toggleBookmark: vi.fn(),
     saveScrollTop: vi.fn((value: number) => {
       store.scrollTop = value;
     }),
@@ -121,6 +160,7 @@ const mountHarness = () => {
     global: {
       stubs: {
         AppIcon: { template: '<span class="test-icon" />' },
+        MobileAccountMenu: { template: '<span data-mobile-account-menu />' },
         PostCard: postCardStub,
         RouterLink: { template: '<a><slot /></a>' },
       },
@@ -154,9 +194,14 @@ describe('HistoryView KeepAlive lifecycle', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.route = reactive({ name: 'History' });
+    mocks.route = reactive({
+      name: 'History',
+      query: { tab: 'likes' },
+      fullPath: '/history?tab=likes',
+    });
     mocks.routeLeaveGuard = null;
     mocks.historyStore = createHistoryStore();
+    mocks.bookmarksStore = createBookmarksStore();
     mocks.observerInstances.length = 0;
     mocks.events.length = 0;
     setWindowScrollY(0);
@@ -191,9 +236,10 @@ describe('HistoryView KeepAlive lifecycle', () => {
     originalViewport.scrollTop = 1600;
     historyStore.nextCursor = 'cursor-2';
     await settle();
-    expect(mocks.observerInstances).toHaveLength(1);
+    expect(mocks.observerInstances.filter((instance: TestIntersectionObserver) => !instance.disconnect.mock.calls.length))
+      .toHaveLength(1);
 
-    const originalObserver = mocks.observerInstances[0] as TestIntersectionObserver;
+    const originalObserver = mocks.observerInstances.at(-1) as TestIntersectionObserver;
     expect(originalObserver.root).toBe(originalViewport);
     expect(originalObserver.rootMargin).toBe('240px 0px');
     setWindowScrollY(777);
@@ -211,8 +257,9 @@ describe('HistoryView KeepAlive lifecycle', () => {
     const restoredViewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
     expect(restoredViewport).toBe(originalViewport);
     expect(restoredViewport.scrollTop).toBe(1600);
-    expect(mocks.observerInstances).toHaveLength(2);
-    const resumedObserver = mocks.observerInstances[1] as TestIntersectionObserver;
+    expect(mocks.observerInstances.filter((instance: TestIntersectionObserver) => !instance.disconnect.mock.calls.length))
+      .toHaveLength(1);
+    const resumedObserver = mocks.observerInstances.at(-1) as TestIntersectionObserver;
     expect(resumedObserver.root).toBe(originalViewport);
     expect(resumedObserver.rootMargin).toBe('240px 0px');
     wrapper.unmount();
@@ -314,5 +361,61 @@ describe('HistoryView KeepAlive lifecycle', () => {
     expect(historyStore.saveScrollTop).toHaveBeenCalledTimes(1);
     expect(historyStore.saveScrollTop).toHaveBeenCalledWith(1800);
     expect(historyStore.scrollTop).toBe(1800);
+  });
+
+  it('preserves the Bookmarks tab DOM, scroll, and loaded feed across PostDetail return', async () => {
+    const bookmarksStore = mocks.bookmarksStore;
+    mocks.route.query = {};
+    mocks.route.fullPath = '/history';
+    bookmarksStore.nextCursor = 'bookmark-cursor';
+    const { showHistory, wrapper } = mountHarness();
+    await settle();
+
+    const originalHistory = wrapper.find('.history-view').element;
+    const originalPost = wrapper.find('.history-card').element;
+    const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1400;
+    await deactivateHistory(showHistory);
+    bookmarksStore.loadInitial.mockClear();
+
+    await reactivateHistory(showHistory);
+
+    expect(wrapper.find('.history-view').element).toBe(originalHistory);
+    expect(wrapper.find('.history-card').element).toBe(originalPost);
+    expect(wrapper.find('#history-bookmarks-tab').attributes('aria-selected')).toBe('true');
+    expect(viewport.scrollTop).toBe(1400);
+    expect(bookmarksStore.loadInitial).not.toHaveBeenCalled();
+    expect(mocks.observerInstances.filter((instance: TestIntersectionObserver) => !instance.disconnect.mock.calls.length))
+      .toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('switches the live pagination observer with the active History tab', async () => {
+    const historyStore = mocks.historyStore;
+    const bookmarksStore = mocks.bookmarksStore;
+    mocks.route.query = {};
+    mocks.route.fullPath = '/history';
+    bookmarksStore.nextCursor = 'bookmark-cursor';
+    historyStore.nextCursor = 'likes-cursor';
+    const { wrapper } = mountHarness();
+    await settle();
+
+    const bookmarkObserver = mocks.observerInstances.at(-1) as TestIntersectionObserver;
+    expect(bookmarkObserver.disconnect).not.toHaveBeenCalled();
+    bookmarkObserver.trigger();
+    expect(bookmarksStore.loadMore).toHaveBeenCalledTimes(1);
+    expect(historyStore.loadMore).not.toHaveBeenCalled();
+
+    mocks.route.query = { tab: 'likes' };
+    mocks.route.fullPath = '/history?tab=likes';
+    await settle();
+
+    expect(bookmarkObserver.disconnect).toHaveBeenCalled();
+    const likesObserver = mocks.observerInstances.at(-1) as TestIntersectionObserver;
+    likesObserver.trigger();
+    expect(historyStore.loadMore).toHaveBeenCalledTimes(1);
+    expect(mocks.observerInstances.filter((instance: TestIntersectionObserver) => !instance.disconnect.mock.calls.length))
+      .toHaveLength(1);
+    wrapper.unmount();
   });
 });

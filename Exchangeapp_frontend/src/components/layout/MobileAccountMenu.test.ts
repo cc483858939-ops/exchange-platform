@@ -35,7 +35,7 @@ describe('MobileAccountMenu', () => {
     document.body.innerHTML = '';
   });
 
-  it('starts closed and opens with Bookmarks, History, and Log out actions', async () => {
+  it('starts closed and opens with History and Log out actions', async () => {
     const wrapper = mountMenu();
     const trigger = wrapper.find('.mobile-account-menu__trigger');
 
@@ -44,11 +44,11 @@ describe('MobileAccountMenu', () => {
 
     await trigger.trigger('click');
     expect(wrapper.find('[role="menu"]').exists()).toBe(true);
-    expect(wrapper.text()).toContain('Bookmarks');
+    expect(wrapper.text()).not.toContain('Bookmarks');
     expect(wrapper.text()).toContain('History');
     expect(wrapper.text()).toContain('Log out');
-    expect(wrapper.find('[data-icon="bookmark"]').exists()).toBe(true);
-    expect(wrapper.find('[data-route-name="Bookmarks"]').exists()).toBe(true);
+    expect(wrapper.find('[data-icon="bookmark"]').exists()).toBe(false);
+    expect(wrapper.find('[data-route-name="Bookmarks"]').exists()).toBe(false);
     expect(trigger.attributes('aria-expanded')).toBe('true');
   });
 

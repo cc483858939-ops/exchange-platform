@@ -265,7 +265,7 @@ describe('LeftSidebar navigation', () => {
     expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
   });
 
-  it.each(['Search', 'Notifications', 'Bookmarks', 'History', 'Exchange', 'Profile', 'Post'])(
+  it.each(['Search', 'Notifications', 'History', 'Exchange', 'Profile', 'Post'])(
     'does not intercept the %s navigation item',
     (label) => {
       mocks.authStore.isAuthenticated = true;
@@ -278,7 +278,7 @@ describe('LeftSidebar navigation', () => {
     },
   );
 
-  it('places authenticated Bookmarks before History and both before Profile and Post', async () => {
+  it('places authenticated History before Profile and Post', async () => {
     const wrapper = mountSidebar();
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity = { id: 7, username: 'reader' };
@@ -286,17 +286,14 @@ describe('LeftSidebar navigation', () => {
 
     const labels = wrapper.findAll('.left-sidebar__nav > a').map(link => link.text().trim());
     const searchIndex = labels.indexOf('Search');
-    const bookmarksIndex = labels.indexOf('Bookmarks');
     const historyIndex = labels.indexOf('History');
     const profileIndex = labels.indexOf('Profile');
     const postIndex = labels.indexOf('Post');
-    expect(bookmarksIndex).toBeGreaterThan(searchIndex);
-    expect(bookmarksIndex).toBeLessThan(historyIndex);
     expect(historyIndex).toBeGreaterThan(searchIndex);
     expect(historyIndex).toBeLessThan(profileIndex);
     expect(profileIndex).toBeLessThan(postIndex);
     expect(wrapper.find('[data-icon="history"]').exists()).toBe(true);
-    expect(wrapper.find('[data-icon="bookmark"]').exists()).toBe(true);
+    expect(wrapper.find('[data-icon="bookmark"]').exists()).toBe(false);
   });
 
   it('uses the stronger desktop navigation scale for every authenticated action', async () => {
@@ -310,7 +307,6 @@ describe('LeftSidebar navigation', () => {
     expect(iconSize('home')).toBe('26');
     expect(iconSize('search')).toBe('26');
     expect(iconSize('notifications')).toBe('26');
-    expect(iconSize('bookmark')).toBe('26');
     expect(iconSize('history')).toBe('26');
     expect(iconSize('profile')).toBe('26');
     expect(iconSize('compose')).toBe('24');

@@ -62,6 +62,7 @@ describe('surface cache policy', () => {
 
   it('keys authenticated History return caches by viewer and excludes anonymous users', () => {
     expect(getHistoryReturnCacheKey(location('History'), 7)).toBe('history:7');
+    expect(getHistoryReturnCacheKey(location('History', {}, { tab: 'likes' }), 7)).toBe('history:7');
     expect(getHistoryReturnCacheKey(location('History'), null)).toBeNull();
   });
 
@@ -105,13 +106,16 @@ describe('surface cache policy', () => {
     'Notifications',
     'UserProfile',
     'History',
-    'Bookmarks',
   ])('lets %s own scroll restoration', (name) => {
     expect(isViewOwnedScrollRoute(location(name))).toBe(true);
   });
 
   it.each(['PostDetail', 'PostCreate', 'UserFollowing', 'UserFollowers'])
     ('leaves %s to router scroll restoration', (name) => {
-      expect(isViewOwnedScrollRoute(location(name))).toBe(false);
-    });
+    expect(isViewOwnedScrollRoute(location(name))).toBe(false);
+  });
+
+  it('does not assign scroll ownership to the retired Bookmarks route', () => {
+    expect(isViewOwnedScrollRoute(location('Bookmarks'))).toBe(false);
+  });
 });

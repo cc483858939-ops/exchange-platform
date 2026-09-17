@@ -28,7 +28,6 @@ describe('History route', () => {
       ['UserFollowers', '/users/:id/followers', 'app', 'Followers'],
       ['UserSearch', '/search', 'app', 'Search'],
       ['History', '/history', 'app', 'History'],
-      ['Bookmarks', '/bookmarks', 'app', 'Bookmarks'],
       ['Notifications', '/notifications', 'app', 'Notifications'],
       ['Login', '/login', 'auth', 'Log in'],
       ['Register', '/register', 'auth', 'Sign up'],
@@ -66,6 +65,14 @@ describe('History route', () => {
 
     expect(resolved.name).toBe('NotFound');
     expect(resolved.fullPath).toBe('/definitely-not-a-route');
+  });
+
+  it('leaves the retired Bookmarks URL to the catch-all NotFound route', () => {
+    const resolved = router.resolve('/bookmarks');
+
+    expect(resolved.name).toBe('NotFound');
+    expect(resolved.fullPath).toBe('/bookmarks');
+    expect(router.getRoutes().some(route => route.name === 'Bookmarks')).toBe(false);
   });
 
   it('preserves query and hash when resolving an unknown URL', () => {
