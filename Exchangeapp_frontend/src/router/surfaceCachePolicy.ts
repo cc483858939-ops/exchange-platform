@@ -93,4 +93,5 @@ export const isViewOwnedScrollRoute = (
   || route.name === 'Notifications'
   || route.name === 'UserProfile'
   || route.name === 'History'
+  || route.name === 'Bookmarks'
 );

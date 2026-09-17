@@ -28,6 +28,7 @@ describe('History route', () => {
       ['UserFollowers', '/users/:id/followers', 'app', 'Followers'],
       ['UserSearch', '/search', 'app', 'Search'],
       ['History', '/history', 'app', 'History'],
+      ['Bookmarks', '/bookmarks', 'app', 'Bookmarks'],
       ['Notifications', '/notifications', 'app', 'Notifications'],
       ['Login', '/login', 'auth', 'Log in'],
       ['Register', '/register', 'auth', 'Sign up'],

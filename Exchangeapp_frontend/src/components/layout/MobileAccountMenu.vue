@@ -16,6 +16,15 @@
       <RouterLink
         class="mobile-account-menu__item"
         role="menuitem"
+        :to="{ name: 'Bookmarks' }"
+        @click="closeMenu()"
+      >
+        <AppIcon name="bookmark" :size="18" />
+        <span>Bookmarks</span>
+      </RouterLink>
+      <RouterLink
+        class="mobile-account-menu__item"
+        role="menuitem"
         :to="{ name: 'History' }"
         @click="closeMenu()"
       >
@@ -171,7 +180,7 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 40px;
+    min-height: 44px;
     border: 0;
     border-radius: calc(var(--radius-sm) - 2px);
     padding: 0 var(--space-3);

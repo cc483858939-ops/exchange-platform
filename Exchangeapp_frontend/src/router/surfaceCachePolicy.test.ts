@@ -105,6 +105,7 @@ describe('surface cache policy', () => {
     'Notifications',
     'UserProfile',
     'History',
+    'Bookmarks',
   ])('lets %s own scroll restoration', (name) => {
     expect(isViewOwnedScrollRoute(location(name))).toBe(true);
   });

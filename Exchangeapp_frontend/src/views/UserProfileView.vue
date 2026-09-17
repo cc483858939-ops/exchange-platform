@@ -156,33 +156,11 @@
     </section>
 
     <template v-if="user && canRenderAuthenticatedProfile">
-      <nav class="profile-tabs" aria-label="Profile sections">
-        <button
-          class="profile-tab"
-          :class="{ 'profile-tab--active': profileTab === 'posts' }"
-          type="button"
-          :aria-selected="profileTab === 'posts'"
-          @click="selectProfileTab('posts')"
-        >
-          Posts
-        </button>
-        <button
-          v-if="isOwnProfile"
-          class="profile-tab"
-          :class="{ 'profile-tab--active': profileTab === 'bookmarks' }"
-          type="button"
-          :aria-selected="profileTab === 'bookmarks'"
-          @click="selectProfileTab('bookmarks')"
-        >
-          Bookmarks
-        </button>
-      </nav>
-
       <p v-if="bookmarkMutationError" class="profile-action-error" role="status" aria-live="polite">
         {{ bookmarkMutationError }}
       </p>
 
-      <section v-if="profileTab === 'posts'" class="profile-posts" aria-labelledby="profile-posts-heading">
+      <section class="profile-posts" aria-labelledby="profile-posts-heading">
         <h2 id="profile-posts-heading" class="sr-only">Posts</h2>
 
         <div
@@ -256,65 +234,6 @@
             @click="loadMoreTimeline"
           >
             Load more activity
-          </button>
-        </div>
-      </section>
-
-      <section v-else class="profile-posts" aria-labelledby="profile-bookmarks-heading">
-        <h2 id="profile-bookmarks-heading" class="sr-only">Bookmarks</h2>
-
-        <div
-          v-if="bookmarkInitialLoading && !bookmarksSession.loaded"
-          class="profile-skeleton-list"
-          aria-live="polite"
-          aria-label="Loading bookmarks"
-        >
-          <div v-for="slot in skeletonCount" :key="slot" class="profile-skeleton-post">
-            <span class="profile-skeleton profile-skeleton--identity" aria-hidden="true"></span>
-            <span class="profile-skeleton-post__copy" aria-hidden="true">
-              <span class="profile-skeleton profile-skeleton--title"></span>
-              <span class="profile-skeleton profile-skeleton--excerpt"></span>
-              <span class="profile-skeleton profile-skeleton--metric"></span>
-            </span>
-          </div>
-        </div>
-        <div v-else-if="bookmarkInitialError" class="profile-state profile-state--inline" role="alert">
-          <p>Bookmarks could not be loaded.</p>
-          <button class="profile-action" type="button" @click="retryInitialBookmarks">Retry bookmarks</button>
-        </div>
-        <p v-else-if="bookmarkShowEmpty" class="profile-empty">No bookmarks yet.</p>
-        <div v-else class="profile-post-list">
-          <PostCard
-            v-for="post in bookmarkItems"
-            :key="post.id"
-            :post="post"
-            :track-view="false"
-            :like-pending="bookmarkLikePendingPostIds.has(post.id)"
-            :repost-pending="bookmarkRepostPendingPostIds.has(post.id)"
-            :bookmark-pending="bookmarkPendingPostIds.has(post.id)"
-            @toggle-like="handleLikeToggle"
-            @toggle-repost="handleRepostToggle"
-            @toggle-bookmark="handleBookmarkToggle"
-          />
-        </div>
-        <div
-          v-if="bookmarkNextCursor || bookmarkLoadingMore || bookmarkLoadMoreError"
-          ref="bookmarkSentinelRef"
-          class="profile-feed-sentinel"
-          aria-live="polite"
-        >
-          <span v-if="bookmarkLoadingMore">Loading more bookmarks...</span>
-          <template v-else-if="bookmarkLoadMoreError">
-            <span>Could not load more bookmarks.</span>
-            <button class="profile-action" type="button" @click="retryBookmarkLoadMore">Retry</button>
-          </template>
-          <button
-            v-else-if="!intersectionObserverAvailable && bookmarkNextCursor"
-            class="profile-action"
-            type="button"
-            @click="loadMoreBookmarks"
-          >
-            Load more bookmarks
           </button>
         </div>
       </section>
@@ -461,7 +380,6 @@ import { usePageTitle } from '../composables/usePageTitle';
 import { updateUserProfile, uploadProfileAvatar } from '../services/userService';
 import type { UpdateUserProfilePayload, UserFollowState } from '../services/userService';
 import { useAuthStore } from '../store/auth';
-import { useBookmarksSessionStore } from '../store/bookmarksSession';
 import { useProfileSessionStore, type ProfileSessionCapture } from '../store/profileSession';
 import type { PublicUser } from '../types/User';
 
@@ -479,7 +397,6 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const profileStore = useProfileSessionStore();
-const bookmarksSession = useBookmarksSessionStore();
 
 const readProfileRouteID = () => (
   route.name === 'UserProfile'
@@ -533,12 +450,12 @@ const followPending = computed(() => activeSession.value?.followPending ?? false
 
 const likePendingPostIds = profileStore.likePendingPostIds;
 const repostPendingPostIds = profileStore.repostPendingPostIds;
+const bookmarkPendingPostIds = profileStore.bookmarkPendingPostIds;
 const pendingDeletePostIds = profileStore.pendingDeletePostIds;
 const deleteErrors = profileStore.deleteErrors;
 
 const profileScrollViewportRef = ref<HTMLElement | null>(null);
 const sentinelRef = ref<HTMLElement | null>(null);
-const bookmarkSentinelRef = ref<HTMLElement | null>(null);
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let observer: IntersectionObserver | null = null;
 let profileEntryVersion = 0;
@@ -591,26 +508,6 @@ const isOwnProfile = computed(() => Boolean(
   && currentViewerID.value !== null
   && user.value.id === currentViewerID.value,
 ));
-const profileTab = computed<'posts' | 'bookmarks'>(() => (
-  isOwnProfile.value && route.query?.tab === 'bookmarks' ? 'bookmarks' : 'posts'
-));
-const bookmarkItems = computed(() => bookmarksSession.items ?? []);
-const bookmarkInitialLoading = computed(() => bookmarksSession.initialLoading);
-const bookmarkInitialError = computed(() => bookmarksSession.initialError);
-const bookmarkLoadingMore = computed(() => bookmarksSession.loadingMore);
-const bookmarkLoadMoreError = computed(() => bookmarksSession.loadMoreError);
-const bookmarkNextCursor = computed(() => bookmarksSession.nextCursor);
-const bookmarkStale = computed(() => bookmarksSession.stale);
-const bookmarkLikePendingPostIds = bookmarksSession.likePendingPostIDs;
-const bookmarkRepostPendingPostIds = bookmarksSession.repostPendingPostIDs;
-const bookmarkPendingPostIds = bookmarksSession.bookmarkPendingPostIDs;
-const bookmarkShowEmpty = computed(() => (
-  bookmarksSession.loaded
-  && !bookmarksSession.initialLoading
-  && !bookmarksSession.initialError
-  && bookmarkItems.value.length === 0
-  && bookmarksSession.nextCursor === null
-));
 const socialReady = computed(() => Boolean(
   authStore.isAuthenticated
   && currentViewerID.value !== null
@@ -636,10 +533,6 @@ const saveCurrentScroll = (targetUserID: number) => {
     return;
   }
 
-  if (profileTab.value === 'bookmarks' && targetUserID === currentViewerID.value) {
-    bookmarksSession.saveScrollTop(viewport.scrollTop);
-    return;
-  }
   profileStore.setScrollTop(targetUserID, viewport.scrollTop);
 };
 
@@ -649,20 +542,6 @@ const restoreScrollOnce = async () => {
 
   const session = activeSession.value;
   const targetUserID = numericUserID.value;
-  if (profileTab.value === 'bookmarks') {
-    if (
-      !isOwnProfile.value
-      || !bookmarksSession.loaded
-      || bookmarksSession.initialLoading
-    ) return;
-    await nextTick();
-    if (!profileViewActive.value || entryVersion !== profileEntryVersion) return;
-    const viewport = profileScrollViewportRef.value;
-    if (!viewport) return;
-    viewport.scrollTop = bookmarksSession.scrollTop;
-    restoredEntryVersion = entryVersion;
-    return;
-  }
   if (
     !authStore.isAuthenticated
     || currentViewerID.value === null
@@ -955,20 +834,6 @@ const retryInitialTimeline = () => {
   }
 };
 
-const retryInitialBookmarks = () => {
-  bookmarksSession.retryInitial();
-};
-
-const retryBookmarkLoadMore = () => {
-  bookmarksSession.retryLoadMore();
-};
-
-const loadMoreBookmarks = () => {
-  if (profileViewActive.value && profileTab.value === 'bookmarks') {
-    void bookmarksSession.loadMore();
-  }
-};
-
 const loadMoreTimeline = () => {
   if (profileViewActive.value && numericUserID.value !== null) {
     void profileStore.loadMoreTimeline(numericUserID.value);
@@ -990,29 +855,15 @@ const handleDeletePost = async (postId: number) => {
 };
 
 const handleLikeToggle = (postId: number) => {
-  if (profileTab.value === 'bookmarks') {
-    void bookmarksSession.toggleLike(postId);
-    return;
-  }
   void profileStore.toggleLike(postId, numericUserID.value ?? undefined);
 };
 
 const handleRepostToggle = (postId: number) => {
-  if (profileTab.value === 'bookmarks') {
-    void bookmarksSession.toggleRepost(postId);
-    return;
-  }
   void profileStore.toggleRepost(postId, numericUserID.value ?? undefined);
 };
 
 const handleBookmarkToggle = (postId: number) => {
   bookmarkMutationError.value = '';
-  if (profileTab.value === 'bookmarks') {
-    void bookmarksSession.toggleBookmark(postId).then((result) => {
-      if (!result) bookmarkMutationError.value = 'Could not update bookmark. Please try again.';
-    });
-    return;
-  }
   void profileStore.toggleBookmark(postId, numericUserID.value ?? undefined).then((result) => {
     if (!result) bookmarkMutationError.value = 'Could not update bookmark. Please try again.';
   });
@@ -1038,16 +889,10 @@ const disconnectObserver = () => {
 
 const updateObserver = () => {
   disconnectObserver();
-  const activeSentinel = profileTab.value === 'bookmarks'
-    ? bookmarkSentinelRef.value
-    : sentinelRef.value;
-  const activeHasMore = profileTab.value === 'bookmarks' ? bookmarkNextCursor.value : hasMore.value;
-  const activeLoadingMore = profileTab.value === 'bookmarks'
-    ? bookmarkLoadingMore.value
-    : timelineLoadingMore.value;
-  const activeLoadMoreError = profileTab.value === 'bookmarks'
-    ? bookmarkLoadMoreError.value
-    : timelineLoadMoreError.value;
+  const activeSentinel = sentinelRef.value;
+  const activeHasMore = hasMore.value;
+  const activeLoadingMore = timelineLoadingMore.value;
+  const activeLoadMoreError = timelineLoadMoreError.value;
   if (
     !profileViewActive.value
     || !intersectionObserverAvailable
@@ -1068,37 +913,10 @@ const updateObserver = () => {
       profileViewActive.value
       && entries.some((entry) => entry.isIntersecting)
     ) {
-      if (profileTab.value === 'bookmarks') loadMoreBookmarks();
-      else loadMoreTimeline();
+      loadMoreTimeline();
     }
   }, { root, rootMargin: '240px 0px' });
   observer.observe(activeSentinel);
-};
-
-const selectProfileTab = (tab: 'posts' | 'bookmarks') => {
-  if (tab === 'bookmarks' && !isOwnProfile.value) {
-    return;
-  }
-  const switchingTab = tab !== profileTab.value;
-  if (switchingTab) {
-    const profileID = numericUserID.value;
-    if (profileID !== null) {
-      saveCurrentScroll(profileID);
-    }
-    profileEntryVersion += 1;
-    restoredEntryVersion = -1;
-  }
-
-  const navigation = router.replace({
-    name: 'UserProfile',
-    params: { id: String(numericUserID.value ?? userId.value) },
-    query: { ...(route.query ?? {}), tab },
-  });
-  if (switchingTab) {
-    void Promise.resolve(navigation).then(() => nextTick(() => {
-      void restoreScrollOnce();
-    }));
-  }
 };
 
 const deactivateProfileView = () => {
@@ -1143,26 +961,6 @@ watch(
   },
 );
 
-watch(
-  [user, isOwnProfile, () => route.query?.tab],
-  ([loadedUser, ownProfile, tab]) => {
-    if (loadedUser && !ownProfile && tab === 'bookmarks') {
-      void router.replace({
-        name: 'UserProfile',
-        params: { id: String(numericUserID.value ?? userId.value) },
-        query: { ...(route.query ?? {}), tab: 'posts' },
-      });
-      return;
-    }
-    if (ownProfile && tab === 'bookmarks') {
-      profileEntryVersion += 1;
-      restoredEntryVersion = -1;
-      void bookmarksSession.loadInitial();
-    }
-  },
-  { immediate: true },
-);
-
 watch(userId, (nextID, previousID) => {
   profileEntryVersion += 1;
   const previousNumericID = Number(previousID);
@@ -1205,24 +1003,8 @@ watch(
     () => activeSession.value?.timelineLoadingMore,
     () => activeSession.value?.timelineLoadMoreError,
     () => activeSession.value?.timelineItems.length,
-    profileTab,
-    () => bookmarkItems.value.length,
-    bookmarkNextCursor,
-    bookmarkLoadingMore,
-    bookmarkLoadMoreError,
   ],
   () => { void nextTick(updateObserver); },
-  { flush: 'post' },
-);
-
-watch(
-  [bookmarkItems, bookmarkInitialLoading, bookmarkStale],
-  () => {
-    if (profileTab.value === 'bookmarks' && bookmarkStale.value) {
-      void bookmarksSession.revalidateBookmarks();
-    }
-    void restoreScrollOnce();
-  },
   { flush: 'post' },
 );
 
@@ -1476,38 +1258,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-.profile-tabs {
-  display: flex;
-  min-height: 52px;
-  align-items: stretch;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.profile-tab {
-  display: inline-flex;
-  align-items: center;
-  margin-inline: var(--space-5);
-  border: 0;
-  border-bottom: 2px solid transparent;
-  padding: 0;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 750;
-}
-
-.profile-tab:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-}
-
-.profile-tab--active {
-  border-bottom-color: var(--color-accent);
-  color: var(--color-text);
-}
-
 .profile-post-list {
   border-top: 0;
 }
@@ -1727,9 +1477,6 @@ onBeforeUnmount(() => {
     font-size: 22px;
   }
 
-  .profile-tab {
-    margin-inline: var(--space-4);
-  }
 }
 .profile-avatar img {
   position: absolute;
