@@ -20,6 +20,7 @@ x-go-service: &go-service
 
 x-go-environment: &go-environment
   DATABASE_DSN: "${DATABASE_DSN:-host=db user=postgres password=1234 dbname=test port=5432 sslmode=disable TimeZone=Asia/Shanghai}"
+  CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-https://exchange-platform-ui.pages.dev,http://localhost:5173,http://127.0.0.1:5173}"
   EMBEDDING_ENABLED: "${EMBEDDING_ENABLED:-false}"
   EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
   EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
