@@ -347,6 +347,29 @@ describe('HistoryView KeepAlive lifecycle', () => {
     wrapper.unmount();
   });
 
+  it('keeps stale Bookmarks dormant while hidden and revalidates on cached reactivation', async () => {
+    const bookmarksStore = mocks.bookmarksStore;
+    mocks.route.query = {};
+    mocks.route.fullPath = '/history';
+    const { showHistory, wrapper } = mountHarness();
+    await settle();
+
+    const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1800;
+    await deactivateHistory(showHistory);
+
+    bookmarksStore.stale = true;
+    await settle();
+    expect(bookmarksStore.revalidateBookmarks).not.toHaveBeenCalled();
+
+    await reactivateHistory(showHistory);
+
+    expect(wrapper.find('.history-scroll-viewport').element).toBe(viewport);
+    expect(viewport.scrollTop).toBe(1800);
+    expect(bookmarksStore.revalidateBookmarks).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
   it('does not overwrite the saved History scroll when a hidden cache is finally unmounted', async () => {
     const historyStore = mocks.historyStore;
     const { showHistory, wrapper } = mountHarness();

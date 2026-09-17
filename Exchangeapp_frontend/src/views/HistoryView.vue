@@ -671,6 +671,7 @@ onBeforeUnmount(() => {
 @keyframes history-shimmer { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .history-skeleton span { animation: none; } }
 @media (max-width: 799px) {
+  .history-view__primary { min-height: 44px; }
   .history-view {
     height: calc(
       100vh

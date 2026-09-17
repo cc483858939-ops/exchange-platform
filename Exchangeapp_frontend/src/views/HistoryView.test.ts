@@ -243,6 +243,92 @@ describe('HistoryView', () => {
     expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'History', query: { tab: 'likes' } });
   });
 
+  it('revalidates stale Bookmarks only when the Bookmarks tab is active', async () => {
+    setAuth(7);
+    setHistoryTab(undefined);
+    mocks.bookmarksStore.loaded.value = true;
+    const historySession = useHistorySessionStore();
+    const revalidateHistory = vi.spyOn(historySession, 'revalidateHistory');
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    mocks.bookmarksStore.stale.value = true;
+    await flushPromises();
+
+    expect(mocks.bookmarksStore.revalidateBookmarks).toHaveBeenCalledTimes(1);
+    expect(revalidateHistory).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('does not revalidate stale Bookmarks while Likes is active, then revalidates on switch', async () => {
+    setAuth(7);
+    setHistoryTab('likes');
+    const historySession = useHistorySessionStore();
+    historySession.loaded = true;
+    historySession.initialLoading = false;
+    mocks.bookmarksStore.loaded.value = true;
+    const revalidateHistory = vi.spyOn(historySession, 'revalidateHistory');
+    const wrapper = mountHistory();
+    await flushPromises();
+    mocks.bookmarksStore.revalidateBookmarks.mockClear();
+    revalidateHistory.mockClear();
+
+    mocks.bookmarksStore.stale.value = true;
+    await flushPromises();
+
+    expect(mocks.bookmarksStore.revalidateBookmarks).not.toHaveBeenCalled();
+    expect(revalidateHistory).not.toHaveBeenCalled();
+
+    setHistoryTab(undefined);
+    await flushPromises();
+
+    expect(mocks.bookmarksStore.revalidateBookmarks).toHaveBeenCalledTimes(1);
+    expect(revalidateHistory).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('uses canonical keyboard navigation and preserves tab semantics', async () => {
+    setAuth(7);
+    setHistoryTab(undefined);
+    mocks.bookmarksStore.loaded.value = true;
+    const wrapper = mountHistory();
+    await flushPromises();
+    mocks.router.replace.mockClear();
+
+    await wrapper.get('#history-bookmarks-tab').trigger('keydown', { key: 'ArrowRight' });
+    expect(mocks.router.replace).toHaveBeenLastCalledWith({ name: 'History', query: { tab: 'likes' } });
+
+    setHistoryTab('likes');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('#history-likes-tab').attributes('aria-selected')).toBe('true');
+    expect(wrapper.get('#history-likes-tab').attributes('tabindex')).toBe('0');
+    expect(wrapper.get('#history-bookmarks-tab').attributes('tabindex')).toBe('-1');
+
+    await wrapper.get('#history-likes-tab').trigger('keydown', { key: 'ArrowLeft' });
+    expect(mocks.router.replace).toHaveBeenLastCalledWith({ name: 'History', query: {} });
+
+    setHistoryTab(undefined);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('#history-bookmarks-tab').trigger('keydown', { key: 'End' });
+    expect(mocks.router.replace).toHaveBeenLastCalledWith({ name: 'History', query: { tab: 'likes' } });
+
+    setHistoryTab('likes');
+    await wrapper.vm.$nextTick();
+    await wrapper.get('#history-likes-tab').trigger('keydown', { key: 'Home' });
+    expect(mocks.router.replace).toHaveBeenLastCalledWith({ name: 'History', query: {} });
+
+    setHistoryTab(undefined);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('#history-bookmarks-tab').trigger('keydown', { key: 'ArrowLeft' });
+    expect(mocks.router.replace).toHaveBeenLastCalledWith({ name: 'History', query: { tab: 'likes' } });
+
+    setHistoryTab('likes');
+    await wrapper.vm.$nextTick();
+    await wrapper.get('#history-likes-tab').trigger('keydown', { key: 'ArrowRight' });
+    expect(mocks.router.replace).toHaveBeenLastCalledWith({ name: 'History', query: {} });
+    wrapper.unmount();
+  });
+
   it('restores independent scroll positions for Bookmarks and Likes', async () => {
     setAuth(7);
     setHistoryTab(undefined);
