@@ -126,7 +126,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: "${MINIO_IMAGE:-minio/minio:RELEASE.2024-12-18T13-15-44Z}"
+    image: "${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z}"
     <<: *service-defaults
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -144,7 +144,7 @@ services:
       NODE_ENV: production
       CACHE_TYPE: redis
       REDIS_URL: "${RSSHUB_REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/${REDIS_DB:-0}}"
-      TWITTER_AUTH_TOKEN: "${TWITTER_AUTH_TOKEN:-}"
+      TWITTER_AUTH_TOKEN: "${TWITTER_AUTH_TOKEN:?TWITTER_AUTH_TOKEN is required for RSSHub}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:1200/healthz"]
       interval: 30s
@@ -154,7 +154,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   kafka:
     image: bitnamilegacy/kafka:4.0.0-debian-12-r10
@@ -325,7 +325,7 @@ services:
     command: ["verify"]
     environment:
       <<: *backend-environment
-      RSSHUB_BASE_URL: "${RSSHUB_BASE_URL:?RSSHUB_BASE_URL is required for the devdata profile}"
+      RSSHUB_BASE_URL: "${RSSHUB_BASE_URL:-http://rsshub:1200}"
       RSSHUB_TIMEOUT: "${RSSHUB_TIMEOUT:-60s}"
       X_API_BASE_URL: "${X_API_BASE_URL:-https://api.x.com}"
       X_API_TIMEOUT: "${X_API_TIMEOUT:-20s}"
