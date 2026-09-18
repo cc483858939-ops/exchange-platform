@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   router: null as any,
   routeLeave: null as (() => unknown) | null,
+  postViewTelemetry: {
+    releaseFeedViewSession: vi.fn(),
+  },
   telemetry: {
     resetObservedCards: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
@@ -51,6 +54,10 @@ vi.mock('../services/recommendationTelemetry', () => ({
 
 vi.mock('../services/recommendationAttribution', () => ({
   savePendingRecommendationAttribution: vi.fn(),
+}));
+
+vi.mock('../services/postViewTelemetry', () => ({
+  getPostViewTelemetry: () => mocks.postViewTelemetry,
 }));
 
 vi.mock('vue-router', () => ({
@@ -444,6 +451,7 @@ describe('HomeView virtualization', () => {
       replace: vi.fn().mockResolvedValue(undefined),
     };
     mocks.routeLeave = null;
+    mocks.postViewTelemetry.releaseFeedViewSession.mockClear();
     Object.values(mocks.telemetry).forEach((mock) => mock.mockClear());
   });
 
@@ -715,6 +723,23 @@ describe('HomeView virtualization', () => {
     await settle();
 
     expect(mountedPostSessionKey(wrapper, 1)).toBe(sessionKey);
+  });
+
+  it('releases tracked viewer sessions when Home unmounts before the viewer watcher flushes', async () => {
+    wrapper = mountHome();
+    await settle();
+    expect(mountedPostSessionKey(wrapper, 1)).toBe('home:7:for-you:0');
+
+    mocks.postViewTelemetry.releaseFeedViewSession.mockClear();
+    mocks.authStore.currentIdentity = { ...viewer, id: 8, username: 'viewer-8' };
+
+    wrapper.unmount();
+    wrapper = null;
+
+    expect(mocks.postViewTelemetry.releaseFeedViewSession.mock.calls).toEqual([
+      ['home:7:for-you:0'],
+      ['home:7:following:0'],
+    ]);
   });
 
   it('rotates and isolates Home view sessions when the authenticated viewer changes', async () => {

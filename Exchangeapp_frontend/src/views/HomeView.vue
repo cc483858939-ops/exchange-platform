@@ -1143,7 +1143,7 @@ onBeforeUnmount(() => {
   }
   homeViewActive.value = false;
   resumeOnActivation = false;
-  releaseHomeViewSessionsForViewer(currentViewerID());
+  releaseHomeViewSessionsForViewer(lastHomeViewerID);
   recommendationCardElements.clear();
 });
 </script>
