@@ -22,7 +22,7 @@
       @keydown="handleFeedKeydown"
       @pointerdown="handleFeedPointerDown"
       @pointerup="handleFeedPointerUp"
-      @pointercancel="handleFeedPointerUp"
+      @pointercancel="handleFeedPointerCancel"
       role="tabpanel"
       tabindex="0"
       :aria-labelledby="'feed-tab-' + activeTab"
@@ -865,10 +865,18 @@ const handleFeedPointerDown = (event: PointerEvent) => {
   }
 
   feedScrollbarDragIntent = true;
-  markFeedUserScrollIntent();
 };
 
 const handleFeedPointerUp = () => {
+  if (!feedScrollbarDragIntent) {
+    return;
+  }
+
+  feedScrollbarDragIntent = false;
+  markFeedUserScrollIntent();
+};
+
+const handleFeedPointerCancel = () => {
   feedScrollbarDragIntent = false;
 };
 

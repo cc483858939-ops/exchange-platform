@@ -483,6 +483,53 @@ describe('HomeView scroll viewport ownership', () => {
     expect(panel.scrollTop).toBe(0);
   });
 
+  it('allows a delayed final scrollbar scroll after pointerup', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    installPanelScrollbarGeometry(panel);
+    dispatchPanelPointerEvent(panel, 'pointerdown', {
+      clientX: 995,
+      clientY: 120,
+    });
+    dispatchPanelPointerEvent(panel, 'pointerup', {
+      clientX: 995,
+      clientY: 120,
+    });
+
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(500);
+  });
+
+  it('does not create scroll intent from pointerup without an active scrollbar drag', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    installPanelScrollbarGeometry(panel);
+    dispatchPanelPointerEvent(panel, 'pointerup', {
+      clientX: 995,
+      clientY: 120,
+    });
+
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+  });
+
+
   it('does not release a cold reload top pin for Space on a button', async () => {
     mocks.initialDocumentNavigation.type = 'reload';
     mocks.initialDocumentNavigation.url = '/';
