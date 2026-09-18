@@ -549,6 +549,41 @@ describe('HomeView scroll viewport ownership', () => {
     expect(scrollToMock).not.toHaveBeenCalled();
   });
 
+  it('keeps For You at the top across sequential reselect-then-refresh actions', async () => {
+    wrapper = mountHome();
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const panelScrollTo = vi.fn();
+    Object.defineProperty(panel, 'scrollTo', {
+      configurable: true,
+      value: panelScrollTo,
+    });
+    panel.scrollTop = 2400;
+    mocks.homeTimeline.requestHomeReselect.mockClear();
+    mocks.homeTimeline.loadForYou.mockClear();
+    mocks.homeTimeline.setScrollTop.mockClear();
+
+    await wrapper.get('[data-feed-tab="for-you"]').trigger('click');
+    await settle();
+
+    expect(panelScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.homeTimeline.setScrollTop).toHaveBeenCalledWith('for-you', 0);
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+
+    panel.scrollTop = 0;
+    panelScrollTo.mockClear();
+    mocks.homeTimeline.setScrollTop.mockClear();
+
+    await wrapper.get('[data-feed-tab="for-you"]').trigger('click');
+    await settle();
+
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+    expect(mocks.homeTimeline.setScrollTop).toHaveBeenCalledWith('for-you', 0);
+    expect(panel.scrollTop).toBe(0);
+  });
+
   it('refreshes For You when Home is reselected at the top', async () => {
     wrapper = mountHome();
     await settle();
@@ -568,7 +603,8 @@ describe('HomeView scroll viewport ownership', () => {
     expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledTimes(1);
     expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
     expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalledWith(true);
-    expect(panelScrollTo).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+    expect(panel.scrollTop).toBe(0);
   });
 
   it('uses the eight-pixel threshold for Home reselect', async () => {
@@ -586,9 +622,11 @@ describe('HomeView scroll viewport ownership', () => {
     mocks.homeTimeline.homeReselectVersion += 1;
     await settle();
     expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
-    expect(panelScrollTo).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+    expect(panel.scrollTop).toBe(0);
 
     mocks.homeTimeline.loadForYou.mockClear();
+    panelScrollTo.mockClear();
     panel.scrollTop = 9;
     mocks.homeTimeline.homeReselectVersion += 1;
     await settle();
@@ -618,7 +656,8 @@ describe('HomeView scroll viewport ownership', () => {
     expect(mocks.homeTimeline.loadFollowing).toHaveBeenCalledWith(true);
     expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
     expect(mocks.homeTimeline.activeTab).toBe('following');
-    expect(panelScrollTo).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+    expect(panel.scrollTop).toBe(0);
   });
 
   it('suppresses a For You refresh while that feed is already loading', async () => {

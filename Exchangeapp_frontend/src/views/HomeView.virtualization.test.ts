@@ -252,6 +252,14 @@ const settle = async () => {
   await nextTick();
 };
 
+const deferred = <T>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
 const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
 const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
@@ -684,6 +692,170 @@ describe('HomeView virtualization', () => {
       virtualList.attributes('style')?.match(/height: ([\d.]+)px/)?.[1] ?? '0',
     );
     expect(resizedTotalSize).not.toBe(initialTotalSize);
+  });
+
+  it('keeps a refreshed heterogeneous For You feed anchored at the top after two reselections', async () => {
+    const refresh = deferred<void>();
+    const freshItems = Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1001));
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
+      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
+    });
+    mocks.homeTimeline.scrollTop.following = 4321;
+    mocks.homeTimeline.loadForYou.mockImplementation(async (force = false) => {
+      if (!force) {
+        return;
+      }
+      mocks.homeTimeline.forYou.items = [];
+      mocks.homeTimeline.forYou.loading = true;
+      mocks.homeTimeline.forYou.loaded = false;
+      await refresh.promise;
+      mocks.homeTimeline.forYou.items = freshItems;
+      mocks.homeTimeline.forYou.loaded = true;
+      mocks.homeTimeline.forYou.loading = false;
+      mocks.homeTimeline.forYou.error = false;
+    });
+    setHeterogeneousHeights(300);
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.loadForYou.mockClear();
+
+    await scrollPanel(wrapper, 25000);
+    const deepIDs = mountedPostIDs(wrapper);
+    expect(deepIDs.some((id) => id >= 50)).toBe(true);
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalledWith(true);
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await nextTick();
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.forYou.items).toHaveLength(0);
+    expect(panel.scrollTop).toBe(0);
+
+    refresh.resolve(undefined);
+    await settle();
+
+    const refreshedIDs = mountedPostIDs(wrapper);
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(4321);
+    expect(refreshedIDs).toContain(1001);
+    expect(refreshedIDs.every((id) => id >= 1001 && id <= 1300)).toBe(true);
+    expect(refreshedIDs.some((id) => deepIDs.includes(id))).toBe(false);
+    expect(refreshedIDs.length).toBeLessThan(50);
+  });
+
+  it('keeps a refreshed heterogeneous Following feed anchored at the top after two reselections', async () => {
+    const refresh = deferred<void>();
+    const freshItems = Array.from({ length: 300 }, (_, index) => makePost(index + 2001));
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
+      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
+    });
+    mocks.homeTimeline.activeTab = 'following';
+    mocks.homeTimeline.scrollTop['for-you'] = 5432;
+    mocks.route.query = { tab: 'following' };
+    mocks.homeTimeline.loadFollowing.mockImplementation(async (force = false) => {
+      if (!force) {
+        return;
+      }
+      mocks.homeTimeline.following.items = [];
+      mocks.homeTimeline.following.loading = true;
+      mocks.homeTimeline.following.loaded = false;
+      await refresh.promise;
+      mocks.homeTimeline.following.items = freshItems;
+      mocks.homeTimeline.following.loaded = true;
+      mocks.homeTimeline.following.loading = false;
+      mocks.homeTimeline.following.error = false;
+      mocks.homeTimeline.following.nextCursor = null;
+    });
+    setHeterogeneousHeights(300);
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.loadFollowing.mockClear();
+
+    await scrollPanel(wrapper, 25000);
+    const deepIDs = mountedPostIDs(wrapper);
+    expect(deepIDs.some((id) => id >= 40)).toBe(true);
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalledWith(true);
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await nextTick();
+    expect(mocks.homeTimeline.loadFollowing).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadFollowing).toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.following.items).toHaveLength(0);
+    expect(panel.scrollTop).toBe(0);
+
+    refresh.resolve(undefined);
+    await settle();
+
+    const refreshedIDs = mountedPostIDs(wrapper);
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(5432);
+    expect(refreshedIDs).toContain(2001);
+    expect(refreshedIDs.every((id) => id >= 2001 && id <= 2300)).toBe(true);
+    expect(refreshedIDs.some((id) => deepIDs.includes(id))).toBe(false);
+    expect(refreshedIDs.length).toBeLessThan(50);
+  });
+
+  it('does not pull the new active tab to zero when a pending For You refresh finishes', async () => {
+    const refresh = deferred<void>();
+    const freshItems = Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 3001));
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
+      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
+    });
+    mocks.homeTimeline.scrollTop.following = 12000;
+    mocks.homeTimeline.loadForYou.mockImplementation(async (force = false) => {
+      if (!force) {
+        return;
+      }
+      mocks.homeTimeline.forYou.items = [];
+      mocks.homeTimeline.forYou.loading = true;
+      mocks.homeTimeline.forYou.loaded = false;
+      await refresh.promise;
+      mocks.homeTimeline.forYou.items = freshItems;
+      mocks.homeTimeline.forYou.loaded = true;
+      mocks.homeTimeline.forYou.loading = false;
+      mocks.homeTimeline.forYou.error = false;
+    });
+    setHeterogeneousHeights(300);
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.loadForYou.mockClear();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(panel.scrollTop).toBe(0);
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await nextTick();
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+    expect(panel.scrollTop).toBe(12000);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(12000);
+
+    refresh.resolve(undefined);
+    await settle();
+
+    expect(panel.scrollTop).toBe(12000);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(12000);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
   });
 
   it('keeps the Home view session key across virtual remounts and rotates it on refresh only', async () => {

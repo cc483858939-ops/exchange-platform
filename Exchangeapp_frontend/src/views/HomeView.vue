@@ -486,6 +486,12 @@ const followingVirtualizerOptions = computed(() => ({
 const forYouVirtualizer = useVirtualizer<HTMLElement, HTMLElement>(forYouVirtualizerOptions);
 const followingVirtualizer = useVirtualizer<HTMLElement, HTMLElement>(followingVirtualizerOptions);
 
+const virtualizerForTab = (tab: FeedTab): HomeVirtualizer => (
+  tab === 'for-you'
+    ? forYouVirtualizer.value
+    : followingVirtualizer.value
+);
+
 const virtualItemsWithInitialFallback = (
   virtualItems: VirtualItem[],
   rowCount: number,
@@ -656,9 +662,7 @@ const restoreScroll = async (tab: FeedTab) => {
     return;
   }
 
-  const virtualizer = tab === 'for-you'
-    ? forYouVirtualizer.value
-    : followingVirtualizer.value;
+  const virtualizer = virtualizerForTab(tab);
   const target = homeTimeline.scrollTop[tab];
   virtualizer.scrollToOffset(target, { align: 'start', behavior: 'auto' });
   if (Math.abs(panel.scrollTop - target) > 1) {
@@ -861,16 +865,65 @@ const prefersReducedMotion = () => typeof window !== 'undefined'
   && typeof window.matchMedia === 'function'
   && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+const prepareActiveFeedRefreshAtTop = (tab: FeedTab) => {
+  homeTimeline.setScrollTop(tab, 0);
+
+  if (!homeViewActive.value || activeTab.value !== tab) {
+    return;
+  }
+
+  const panel = feedPanelRef.value;
+  if (!panel) {
+    return;
+  }
+
+  const virtualizer = virtualizerForTab(tab);
+  virtualizer.measure();
+  virtualizer.scrollToOffset(0, { align: 'start', behavior: 'auto' });
+  if (panel.scrollTop !== 0) {
+    panel.scrollTop = 0;
+  }
+};
+
+const finishActiveFeedRefreshAtTop = async (tab: FeedTab) => {
+  await nextTick();
+
+  if (!homeViewActive.value || activeTab.value !== tab) {
+    return;
+  }
+
+  homeTimeline.setScrollTop(tab, 0);
+
+  const panel = feedPanelRef.value;
+  if (!panel) {
+    return;
+  }
+
+  const virtualizer = virtualizerForTab(tab);
+  virtualizer.scrollToOffset(0, { align: 'start', behavior: 'auto' });
+  if (panel.scrollTop !== 0) {
+    panel.scrollTop = 0;
+  }
+};
+
 const refreshActiveFeed = async () => {
   if (!authStore.isAuthenticated) {
     return;
   }
 
-  if (activeTab.value === 'for-you') {
+  const tab = activeTab.value;
+
+  if (tab === 'for-you') {
     if (forYouFeed.loading || forYouFeed.loadingMore) {
       return;
     }
-    await loadForYou(true);
+
+    prepareActiveFeedRefreshAtTop(tab);
+    try {
+      await loadForYou(true);
+    } finally {
+      await finishActiveFeedRefreshAtTop(tab);
+    }
     return;
   }
 
@@ -881,7 +934,13 @@ const refreshActiveFeed = async () => {
   ) {
     return;
   }
-  await loadFollowing(true);
+
+  prepareActiveFeedRefreshAtTop(tab);
+  try {
+    await loadFollowing(true);
+  } finally {
+    await finishActiveFeedRefreshAtTop(tab);
+  }
 };
 
 const handleHomeReselect = async () => {
