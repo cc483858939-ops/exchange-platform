@@ -435,6 +435,35 @@ const scrollPanel = async (wrapper: ReturnType<typeof mount>, top: number) => {
   await settle();
 };
 
+const virtualListTotalSize = (
+  wrapper: ReturnType<typeof mount>,
+  feed: FeedTab,
+) => Number.parseFloat(
+  wrapper
+    .get(`[data-virtual-feed="${feed}"]`)
+    .attributes('style')
+    ?.match(/height: ([\\d.]+)px/)?.[1] ?? '0',
+);
+
+const resizeRenderedRow = async (
+  wrapper: ReturnType<typeof mount>,
+  feed: FeedTab,
+  index: number,
+  blockSize: number,
+) => {
+  const row = wrapper
+    .get(`[data-virtual-feed="${feed}"] .home-virtual-row[data-index="${index}"]`)
+    .element as HTMLElement;
+  const heights = feed === 'following' ? followingRowHeights : rowHeights;
+  heights.set(index, blockSize);
+
+  const observers = TestResizeObserver.instances
+    .filter((observer) => observer.observed.has(row));
+  expect(observers.length).toBeGreaterThan(0);
+  observers.forEach((observer) => observer.trigger(row, blockSize));
+  await settle();
+};
+
 describe('HomeView virtualization', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
 
@@ -796,6 +825,14 @@ describe('HomeView virtualization', () => {
     expect(refreshedIDs.every((id) => id >= 1001 && id <= 1300)).toBe(true);
     expect(refreshedIDs.some((id) => deepIDs.includes(id))).toBe(false);
     expect(refreshedIDs.length).toBeLessThan(50);
+
+    const totalSizeBeforeLateMeasure = virtualListTotalSize(wrapper, 'for-you');
+    const lateHeight = (rowHeights.get(0) ?? defaultRowHeight) + 360;
+    await resizeRenderedRow(wrapper, 'for-you', 0, lateHeight);
+
+    expect(virtualListTotalSize(wrapper, 'for-you')).not.toBe(totalSizeBeforeLateMeasure);
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
   });
 
   it('keeps a refreshed heterogeneous Following feed anchored at the top after two reselections', async () => {
@@ -856,6 +893,39 @@ describe('HomeView virtualization', () => {
     expect(refreshedIDs.every((id) => id >= 2001 && id <= 2300)).toBe(true);
     expect(refreshedIDs.some((id) => deepIDs.includes(id))).toBe(false);
     expect(refreshedIDs.length).toBeLessThan(50);
+
+    const totalSizeBeforeLateMeasure = virtualListTotalSize(wrapper, 'following');
+    const lateHeight = (followingRowHeights.get(0) ?? defaultRowHeight) + 360;
+    await resizeRenderedRow(wrapper, 'following', 0, lateHeight);
+
+    expect(virtualListTotalSize(wrapper, 'following')).not.toBe(totalSizeBeforeLateMeasure);
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+  });
+
+  it('releases refresh top pin after the user intentionally scrolls down', async () => {
+    rowHeights.set(0, 2);
+    wrapper = mountHome();
+    await settle();
+    mocks.homeTimeline.loadForYou.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(panel.scrollTop).toBe(0);
+
+    await scrollPanel(wrapper, 4);
+    await resizeRenderedRow(wrapper, 'for-you', 0, 102);
+    expect(panel.scrollTop).toBe(4);
+
+    await scrollPanel(wrapper, 150);
+    const userOffset = panel.scrollTop;
+    await resizeRenderedRow(wrapper, 'for-you', 0, 202);
+
+    expect(panel.scrollTop).toBeGreaterThan(userOffset);
+    expect(panel.scrollTop).not.toBe(0);
   });
 
   it('does not pull the new active tab to zero when a pending For You refresh finishes', async () => {
@@ -926,6 +996,38 @@ describe('HomeView virtualization', () => {
     mocks.homeTimeline.homeReselectVersion += 1;
     await settle();
     expect(mountedPostSessionKey(wrapper, 1)).toBe('home:7:for-you:1');
+  });
+
+  it('restores normal virtualizer size adjustment after KeepAlive deactivation', async () => {
+    rowHeights.set(0, 2);
+    const mounted = mountKeepAliveHome();
+    wrapper = mounted.wrapper;
+    await settle();
+    mocks.homeTimeline.loadForYou.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+    expect(panel.scrollTop).toBe(0);
+
+    mounted.state.showHome = false;
+    mocks.route.name = 'PostDetail';
+    await settle();
+
+    mocks.route.name = 'Home';
+    mounted.state.showHome = true;
+    await settle();
+
+    const restoredPanel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(restoredPanel).toBe(panel);
+
+    await scrollPanel(wrapper, 4);
+    const smallOffset = restoredPanel.scrollTop;
+    await resizeRenderedRow(wrapper, 'for-you', 0, 102);
+
+    expect(restoredPanel.scrollTop).toBeGreaterThan(smallOffset);
   });
 
   it('does not rotate the Home view session across KeepAlive deactivation', async () => {

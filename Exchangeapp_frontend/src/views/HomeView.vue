@@ -347,6 +347,10 @@ let lastHomeViewerID = currentViewerID();
 let lastHomeAuthenticated = authStore.isAuthenticated;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
+const feedTopPinned = reactive<Record<FeedTab, boolean>>({
+  'for-you': false,
+  following: false,
+});
 const activeFeedStatus = computed(() => {
   const state = activeTab.value === 'for-you' ? forYouFeed : followingFeed;
   return {
@@ -491,6 +495,17 @@ const virtualizerForTab = (tab: FeedTab): HomeVirtualizer => (
     ? forYouVirtualizer.value
     : followingVirtualizer.value
 );
+
+const setFeedTopPinned = (tab: FeedTab, pinned: boolean) => {
+  if (feedTopPinned[tab] === pinned) {
+    return;
+  }
+
+  feedTopPinned[tab] = pinned;
+  virtualizerForTab(tab).shouldAdjustScrollPositionOnItemSizeChange = pinned
+    ? () => false
+    : undefined;
+};
 
 const virtualItemsWithInitialFallback = (
   virtualItems: VirtualItem[],
@@ -674,6 +689,17 @@ const handleFeedScroll = () => {
   if (!homeViewActive.value) {
     return;
   }
+
+  const panel = feedPanelRef.value;
+  const tab = activeTab.value;
+  if (
+    panel
+    && feedTopPinned[tab]
+    && panel.scrollTop > HOME_RESELECT_TOP_THRESHOLD_PX
+  ) {
+    setFeedTopPinned(tab, false);
+  }
+
   recommendationTelemetry.notifyViewportChange();
 };
 
@@ -865,7 +891,16 @@ const prefersReducedMotion = () => typeof window !== 'undefined'
   && typeof window.matchMedia === 'function'
   && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+const nextAnimationFrame = () => new Promise<void>((resolve) => {
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    queueMicrotask(resolve);
+    return;
+  }
+  window.requestAnimationFrame(() => resolve());
+});
+
 const prepareActiveFeedRefreshAtTop = (tab: FeedTab) => {
+  setFeedTopPinned(tab, true);
   homeTimeline.setScrollTop(tab, 0);
 
   if (!homeViewActive.value || activeTab.value !== tab) {
@@ -878,7 +913,6 @@ const prepareActiveFeedRefreshAtTop = (tab: FeedTab) => {
   }
 
   const virtualizer = virtualizerForTab(tab);
-  virtualizer.measure();
   virtualizer.scrollToOffset(0, { align: 'start', behavior: 'auto' });
   if (panel.scrollTop !== 0) {
     panel.scrollTop = 0;
@@ -892,18 +926,31 @@ const finishActiveFeedRefreshAtTop = async (tab: FeedTab) => {
     return;
   }
 
-  homeTimeline.setScrollTop(tab, 0);
-
   const panel = feedPanelRef.value;
   if (!panel) {
     return;
   }
 
   const virtualizer = virtualizerForTab(tab);
+  virtualizer.measure();
+
+  homeTimeline.setScrollTop(tab, 0);
   virtualizer.scrollToOffset(0, { align: 'start', behavior: 'auto' });
-  if (panel.scrollTop !== 0) {
-    panel.scrollTop = 0;
+  panel.scrollTop = 0;
+
+  await nextAnimationFrame();
+
+  if (
+    !homeViewActive.value
+    || activeTab.value !== tab
+    || !feedTopPinned[tab]
+  ) {
+    return;
   }
+
+  virtualizer.scrollToOffset(0, { align: 'start', behavior: 'auto' });
+  panel.scrollTop = 0;
+  homeTimeline.setScrollTop(tab, 0);
 };
 
 const refreshActiveFeed = async () => {
@@ -1070,6 +1117,7 @@ watch(
       return;
     }
     if (previousTab && previousTab !== tab) {
+      setFeedTopPinned(previousTab, false);
       saveCurrentScroll(previousTab);
       if (previousTab === 'for-you') {
         resetRecommendationObservation();
@@ -1170,6 +1218,8 @@ onDeactivated(() => {
   if (!homeViewActive.value) {
     return;
   }
+  setFeedTopPinned('for-you', false);
+  setFeedTopPinned('following', false);
   homeViewActive.value = false;
   disconnectFeedPanelResizeObserver();
   resumeOnActivation = true;
@@ -1204,6 +1254,8 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
+  setFeedTopPinned('for-you', false);
+  setFeedTopPinned('following', false);
   disconnectFeedPanelResizeObserver();
   if (homeViewActive.value) {
     const tab = activeTab.value;
