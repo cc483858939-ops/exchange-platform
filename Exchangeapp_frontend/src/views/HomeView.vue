@@ -17,6 +17,9 @@
       class="home-feed-panel"
       ref="feedPanelRef"
       @scroll.passive="handleFeedScroll"
+      @wheel.passive="handleFeedUserScrollIntent"
+      @touchmove.passive="handleFeedUserScrollIntent"
+      @keydown="handleFeedKeydown"
       role="tabpanel"
       tabindex="0"
       :aria-labelledby="'feed-tab-' + activeTab"
@@ -252,6 +255,7 @@ import { ElMessage } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import type { ComponentPublicInstance } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
+import { isInitialDocumentReloadForRoute } from '../router/documentNavigation';
 import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -273,6 +277,13 @@ const router = useRouter();
 const authStore = useAuthStore();
 const feedStore = useFeedStore();
 const homeTimeline = useHomeTimelineStore();
+const initialHomeDocumentReload = isInitialDocumentReloadForRoute(route.fullPath);
+const initialHomeDocumentReloadTab: FeedTab = route.query.tab === 'following'
+  ? 'following'
+  : 'for-you';
+if (initialHomeDocumentReload) {
+  homeTimeline.setScrollTop(initialHomeDocumentReloadTab, 0);
+}
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 const getHomePostViewTelemetry = () => getPostViewTelemetry();
 
@@ -297,10 +308,23 @@ const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
 const homeViewActive = ref(true);
 const HOME_RESELECT_TOP_THRESHOLD_PX = 8;
+const HOME_USER_SCROLL_INTENT_WINDOW_MS = 500;
+const HOME_SCROLL_INTENT_KEYS = new Set([
+  'ArrowDown',
+  'ArrowUp',
+  'PageDown',
+  'PageUp',
+  'Home',
+  'End',
+  ' ',
+  'Spacebar',
+]);
 const HOME_POST_ESTIMATE_PX = 360;
 const HOME_INLINE_STATE_ESTIMATE_PX = 72;
 const HOME_VIRTUAL_OVERSCAN = 8;
 let resumeOnActivation = false;
+let lastUserScrollIntentAt = Number.NEGATIVE_INFINITY;
+let correctingPinnedScroll = false;
 
 const currentViewerID = () => {
   const id = authStore.currentIdentity?.id;
@@ -496,7 +520,28 @@ const virtualizerForTab = (tab: FeedTab): HomeVirtualizer => (
     : followingVirtualizer.value
 );
 
+const feedClockNow = () => (
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+
+const clearFeedUserScrollIntent = () => {
+  lastUserScrollIntentAt = Number.NEGATIVE_INFINITY;
+};
+
+const markFeedUserScrollIntent = () => {
+  lastUserScrollIntentAt = feedClockNow();
+};
+
+const hasRecentFeedUserScrollIntent = () => (
+  feedClockNow() - lastUserScrollIntentAt < HOME_USER_SCROLL_INTENT_WINDOW_MS
+);
+
 const setFeedTopPinned = (tab: FeedTab, pinned: boolean) => {
+  if (pinned) {
+    clearFeedUserScrollIntent();
+  }
   if (feedTopPinned[tab] === pinned) {
     return;
   }
@@ -685,22 +730,70 @@ const restoreScroll = async (tab: FeedTab) => {
   }
 };
 
+const enforcePinnedFeedTop = (tab: FeedTab) => {
+  const panel = feedPanelRef.value;
+  if (
+    !panel
+    || !homeViewActive.value
+    || activeTab.value !== tab
+    || !feedTopPinned[tab]
+  ) {
+    return;
+  }
+
+  if (panel.scrollTop === 0) {
+    homeTimeline.setScrollTop(tab, 0);
+    return;
+  }
+
+  correctingPinnedScroll = true;
+  try {
+    const virtualizer = virtualizerForTab(tab);
+    virtualizer.scrollToOffset(0, { align: 'start', behavior: 'auto' });
+    panel.scrollTop = 0;
+    homeTimeline.setScrollTop(tab, 0);
+  } finally {
+    correctingPinnedScroll = false;
+  }
+};
+
+const handleFeedUserScrollIntent = () => {
+  markFeedUserScrollIntent();
+};
+
+const handleFeedKeydown = (event: KeyboardEvent) => {
+  if (HOME_SCROLL_INTENT_KEYS.has(event.key)) {
+    markFeedUserScrollIntent();
+  }
+};
+
 const handleFeedScroll = () => {
   if (!homeViewActive.value) {
     return;
   }
 
-  const panel = feedPanelRef.value;
-  const tab = activeTab.value;
-  if (
-    panel
-    && feedTopPinned[tab]
-    && panel.scrollTop > HOME_RESELECT_TOP_THRESHOLD_PX
-  ) {
-    setFeedTopPinned(tab, false);
+  recommendationTelemetry.notifyViewportChange();
+
+  if (correctingPinnedScroll) {
+    return;
   }
 
-  recommendationTelemetry.notifyViewportChange();
+  const panel = feedPanelRef.value;
+  const tab = activeTab.value;
+  if (!panel || !feedTopPinned[tab]) {
+    return;
+  }
+
+  if (panel.scrollTop <= HOME_RESELECT_TOP_THRESHOLD_PX) {
+    return;
+  }
+
+  if (hasRecentFeedUserScrollIntent()) {
+    setFeedTopPinned(tab, false);
+    return;
+  }
+
+  enforcePinnedFeedTop(tab);
 };
 
 onBeforeRouteLeave(() => {
@@ -885,6 +978,20 @@ const retryActiveFeed = () => {
   } else {
     void loadFollowing(true);
   }
+};
+
+const initializeColdHomeReloadAtTop = () => {
+  if (
+    !initialHomeDocumentReload
+    || !homeViewActive.value
+    || activeTab.value !== initialHomeDocumentReloadTab
+  ) {
+    return;
+  }
+
+  setFeedTopPinned(initialHomeDocumentReloadTab, true);
+  homeTimeline.setScrollTop(initialHomeDocumentReloadTab, 0);
+  enforcePinnedFeedTop(initialHomeDocumentReloadTab);
 };
 
 const prefersReducedMotion = () => typeof window !== 'undefined'
@@ -1211,6 +1318,7 @@ watch(
 );
 
 onMounted(() => {
+  initializeColdHomeReloadAtTop();
   observeFeedPanelResize();
 });
 

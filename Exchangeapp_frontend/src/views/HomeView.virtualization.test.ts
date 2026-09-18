@@ -21,6 +21,10 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   router: null as any,
   routeLeave: null as (() => unknown) | null,
+  initialDocumentNavigation: {
+    type: 'unknown',
+    url: '',
+  },
   postViewTelemetry: {
     releaseFeedViewSession: vi.fn(),
   },
@@ -58,6 +62,13 @@ vi.mock('../services/recommendationAttribution', () => ({
 
 vi.mock('../services/postViewTelemetry', () => ({
   getPostViewTelemetry: () => mocks.postViewTelemetry,
+}));
+
+vi.mock('../router/documentNavigation', () => ({
+  isInitialDocumentReloadForRoute: (fullPath: string) => (
+    mocks.initialDocumentNavigation.type === 'reload'
+    && mocks.initialDocumentNavigation.url === fullPath
+  ),
 }));
 
 vi.mock('vue-router', () => ({
@@ -492,7 +503,9 @@ describe('HomeView virtualization', () => {
     mocks.homeTimeline = makeTimeline({
       forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
     });
-    mocks.route = reactive({ name: 'Home', query: {} });
+    mocks.initialDocumentNavigation.type = 'unknown';
+    mocks.initialDocumentNavigation.url = '';
+    mocks.route = reactive({ name: 'Home', fullPath: '/', query: {} });
     mocks.router = {
       push: vi.fn().mockResolvedValue(undefined),
       replace: vi.fn().mockResolvedValue(undefined),
@@ -507,6 +520,32 @@ describe('HomeView virtualization', () => {
     wrapper = null;
     restoreGeometry();
     document.body.innerHTML = '';
+  });
+
+
+  it('keeps a cold reload pinned through late virtual measurement and synthetic displacement', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+    setHeterogeneousHeights(300);
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(panel.scrollTop).toBe(0);
+
+    const firstRow = wrapper.get('[data-virtual-feed="for-you"] .home-virtual-row[data-index="0"]').element;
+    rowHeights.set(0, (rowHeights.get(0) ?? defaultRowHeight) + 420);
+    TestResizeObserver.instances
+      .filter((observer) => observer.observed.has(firstRow))
+      .forEach((observer) => observer.trigger(firstRow, rowHeights.get(0)!));
+    await settle();
+
+    panel.scrollTop = 10000;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
   });
 
   it('keeps For You mounted rows bounded while source items and measured ranges grow', async () => {
@@ -930,6 +969,7 @@ describe('HomeView virtualization', () => {
     await resizeRenderedRow(wrapper, 'for-you', 0, 102);
     expect(panel.scrollTop).toBe(4);
 
+    await wrapper.get('.home-feed-panel').trigger('wheel');
     await scrollPanel(wrapper, 150);
     const userOffset = panel.scrollTop;
     await resizeRenderedRow(wrapper, 'for-you', 0, 202);

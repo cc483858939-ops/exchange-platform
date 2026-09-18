@@ -21,6 +21,10 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   router: null as any,
   routeLeave: null as (() => unknown) | null,
+  initialDocumentNavigation: {
+    type: 'unknown',
+    url: '',
+  },
   telemetry: {
     resetObservedCards: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
@@ -51,6 +55,13 @@ vi.mock('../services/recommendationTelemetry', () => ({
 
 vi.mock('../services/recommendationAttribution', () => ({
   savePendingRecommendationAttribution: vi.fn(),
+}));
+
+vi.mock('../router/documentNavigation', () => ({
+  isInitialDocumentReloadForRoute: (fullPath: string) => (
+    mocks.initialDocumentNavigation.type === 'reload'
+    && mocks.initialDocumentNavigation.url === fullPath
+  ),
 }));
 
 vi.mock('vue-router', () => ({
@@ -266,7 +277,9 @@ describe('HomeView scroll viewport ownership', () => {
       isPostDeleted: vi.fn().mockReturnValue(false),
     });
     mocks.homeTimeline = makeHomeTimeline();
-    mocks.route = reactive({ name: 'Home', query: {} });
+    mocks.initialDocumentNavigation.type = 'unknown';
+    mocks.initialDocumentNavigation.url = '';
+    mocks.route = reactive({ name: 'Home', fullPath: '/', query: {} });
     mocks.router = {
       push: vi.fn().mockResolvedValue(undefined),
       replace: vi.fn().mockResolvedValue(undefined),
@@ -282,6 +295,109 @@ describe('HomeView scroll viewport ownership', () => {
     restoreProperty(window, 'scrollTo', originalScrollTo);
     restoreProperty(window, 'matchMedia', originalMatchMedia);
     document.body.innerHTML = '';
+  });
+
+
+  it('resets a cold For You document reload to zero and rejects browser-only restoration', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+    mocks.homeTimeline.scrollTop['for-you'] = 12000;
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+
+    panel.scrollTop = 12000;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+
+    panel.scrollTop = 9000;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+  });
+
+  it('resets only Following on a cold Following document reload', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/?tab=following';
+    mocks.route.fullPath = '/?tab=following';
+    mocks.route.query = { tab: 'following' };
+    mocks.homeTimeline.activeTab = 'following';
+    mocks.homeTimeline.scrollTop['for-you'] = 2400;
+    mocks.homeTimeline.scrollTop.following = 9000;
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
+
+    panel.scrollTop = 9000;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
+  });
+
+  it('releases a cold reload top pin after explicit wheel scrolling', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panelWrapper = wrapper.get('.home-feed-panel');
+    const panel = panelWrapper.element as HTMLElement;
+    await panelWrapper.trigger('wheel');
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(500);
+  });
+
+  it.each(['PageDown', 'ArrowDown', 'End', ' '])(
+    'releases a cold reload top pin after %s keyboard scrolling',
+    async (key) => {
+      mocks.initialDocumentNavigation.type = 'reload';
+      mocks.initialDocumentNavigation.url = '/';
+
+      wrapper = mountHome();
+      await settle();
+
+      const panelWrapper = wrapper.get('.home-feed-panel');
+      const panel = panelWrapper.element as HTMLElement;
+      await panelWrapper.trigger('keydown', { key });
+      panel.scrollTop = 500;
+      panel.dispatchEvent(new Event('scroll'));
+      await settle();
+
+      expect(panel.scrollTop).toBe(500);
+    },
+  );
+
+  it('does not classify Home as cold reload after the document reloaded on another route', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/search';
+    mocks.homeTimeline.scrollTop['for-you'] = 2400;
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(panel.scrollTop).toBe(2400);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
   });
 
   it('saves the Home feed panel scrollTop before leaving', async () => {
