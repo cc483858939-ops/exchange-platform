@@ -191,7 +191,8 @@ docker compose up -d prometheus grafana kafka-ui
 
 生产部署的目标拓扑是：前端继续部署在 Cloudflare Pages，单台 Linux VPS 运行
 Caddy、API、Worker、PostgreSQL、Redis、Kafka、Kafka Connect、MinIO 以及一次性
-初始化任务。生产 Compose 与本地开发 Compose 分开；根目录的
+初始化任务。RSSHub 作为可选的 `rss` profile 运行在同一 private network，默认
+生产启动不会拉起它。生产 Compose 与本地开发 Compose 分开；根目录的
 `docker-compose.yml` 仍然只负责本地开发，生产入口是
 `deploy/compose.prod.yml`。本仓库只准备配置、镜像和运维脚本，不在这里执行 VPS
 部署、域名配置或证书申请。
@@ -253,24 +254,30 @@ curl -fsS https://api.example.com/readyz
 `Go.exchange/config/sources/x_sources.json`；测试 fixture 仍保留在
 `Go.exchange/devdata/testdata/x_sources_v1.json`。`.devdata` 挂载到持久化
 `devdata-state` volume。DevData 服务使用 `devdata` profile，不会随默认生产启动
-自动抓取 RSSHub；执行前先在 `deploy/.env` 配置可访问的 `RSSHUB_BASE_URL` 或 X
-token。
+自动抓取 RSSHub；执行前先在 `deploy/.env` 配置 `TWITTER_AUTH_TOKEN`。默认
+`RSSHUB_BASE_URL=http://rsshub:1200`，RSSHub 使用 `rss` profile 启动，不公开宿主机
+端口。RSSHub 源码继续由独立的 `RSSHub` 仓库维护，主仓库只记录生产 Compose
+引用的镜像名和运行参数。
 
 首次完整刷新：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata \
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml \
+  --profile rss --profile devdata run --rm devdata \
   refresh --source=rsshub --allow-destructive --reset-checkpoint
 ```
 
 日常增量和校准：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata \
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml \
+  --profile rss --profile devdata run --rm devdata \
   refresh-incremental --source=rsshub --shard=auto
-docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata \
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml \
+  --profile rss --profile devdata run --rm devdata \
   refresh --source=rsshub --allow-destructive
-docker compose --env-file deploy/.env -f deploy/compose.prod.yml run --rm devdata verify
+docker compose --env-file deploy/.env -f deploy/compose.prod.yml \
+  --profile rss --profile devdata run --rm devdata verify
 ```
 
 ### 备份和受保护重建
@@ -303,8 +310,8 @@ MinIO volume，也不会删除用户上传对象。执行前仍应先做 Postgre
 
 ### 当前明确不包含
 
-VPS 防火墙、DNS、Cloudflare Pages 项目设置、真实 JWT/第三方 token、外部 RSSHub
-部署、GHCR 镜像发布、自动 CD、定时任务编排、对象存储生命周期和异地备份仍由
+VPS 防火墙、DNS、Cloudflare Pages 项目设置、真实 JWT/第三方 token、RSSHub
+镜像发布、自动 CD、定时任务编排、对象存储生命周期和异地备份仍由
 部署者单独决定。生产 Compose 的可观测服务使用 `observability` profile：
 
 ```bash

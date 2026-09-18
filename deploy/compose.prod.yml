@@ -67,6 +67,11 @@ x-jwt-environment: &jwt-environment
 x-service-defaults: &service-defaults
   networks:
     - private
+  logging:
+    driver: json-file
+    options:
+      max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+      max-file: "${DOCKER_LOG_MAX_FILES:-3}"
 
 services:
   db:
@@ -121,7 +126,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    image: "${MINIO_IMAGE:-minio/minio:RELEASE.2024-12-18T13-15-44Z}"
     <<: *service-defaults
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -129,6 +134,26 @@ services:
       MINIO_ROOT_PASSWORD: "${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}"
     volumes:
       - minio-data:/data
+    restart: unless-stopped
+
+  rsshub:
+    profiles: ["rss"]
+    image: "${RSSHUB_IMAGE:-nexus-rsshub:31bf856b-user-pages-v1}"
+    <<: *service-defaults
+    environment:
+      NODE_ENV: production
+      CACHE_TYPE: redis
+      REDIS_URL: "${RSSHUB_REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/${REDIS_DB:-0}}"
+      TWITTER_AUTH_TOKEN: "${TWITTER_AUTH_TOKEN:-}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:1200/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   kafka:
@@ -317,6 +342,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+      rsshub:
+        condition: service_healthy
     restart: "no"
 
   caddy:
