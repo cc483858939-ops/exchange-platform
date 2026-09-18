@@ -252,6 +252,16 @@ const settle = async () => {
   await nextTick();
 };
 
+const settleRefreshFrame = async () => {
+  await settle();
+  if (typeof window.requestAnimationFrame === 'function') {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  }
+  await settle();
+};
+
 const deferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -442,7 +452,7 @@ const virtualListTotalSize = (
   wrapper
     .get(`[data-virtual-feed="${feed}"]`)
     .attributes('style')
-    ?.match(/height: ([\\d.]+)px/)?.[1] ?? '0',
+    ?.match(/height: ([\d.]+)px/)?.[1] ?? '0',
 );
 
 const resizeRenderedRow = async (
@@ -815,7 +825,7 @@ describe('HomeView virtualization', () => {
     expect(panel.scrollTop).toBe(0);
 
     refresh.resolve(undefined);
-    await settle();
+    await settleRefreshFrame();
 
     const refreshedIDs = mountedPostIDs(wrapper);
     expect(panel.scrollTop).toBe(0);
@@ -883,7 +893,7 @@ describe('HomeView virtualization', () => {
     expect(panel.scrollTop).toBe(0);
 
     refresh.resolve(undefined);
-    await settle();
+    await settleRefreshFrame();
 
     const refreshedIDs = mountedPostIDs(wrapper);
     expect(panel.scrollTop).toBe(0);
@@ -910,7 +920,7 @@ describe('HomeView virtualization', () => {
     mocks.homeTimeline.loadForYou.mockClear();
 
     mocks.homeTimeline.homeReselectVersion += 1;
-    await settle();
+    await settleRefreshFrame();
 
     const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
     expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
@@ -1006,7 +1016,7 @@ describe('HomeView virtualization', () => {
     mocks.homeTimeline.loadForYou.mockClear();
 
     mocks.homeTimeline.homeReselectVersion += 1;
-    await settle();
+    await settleRefreshFrame();
 
     const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
     expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
