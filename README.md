@@ -197,6 +197,30 @@ Caddy、API、Worker、PostgreSQL、Redis、Kafka、Kafka Connect、MinIO 以及
 `deploy/compose.prod.yml`。本仓库只准备配置、镜像和运维脚本，不在这里执行 VPS
 部署、域名配置或证书申请。
 
+### 受保护生产部署
+
+VPS 上先执行只读检查：
+
+```bash
+bash scripts/deploy-production.sh CHECK
+```
+
+人工确认检查结果后，才执行：
+
+```bash
+bash scripts/deploy-production.sh DEPLOY-PRODUCTION
+```
+
+生产 Compose 变更需要额外显式授权：
+
+```bash
+ALLOW_PRODUCTION_COMPOSE_CHANGE=1 \
+  bash scripts/deploy-production.sh DEPLOY-PRODUCTION
+```
+
+脚本不部署前端，不运行 RSSHub / DevData，不自动重建有状态基础设施，也不执行
+自动回滚；前端仍由 Cloudflare Pages 负责。
+
 ### 配置和 JWT
 
 在 VPS 上执行：
