@@ -68,62 +68,73 @@
       class="feed-list"
     >
       <template v-if="activeTab === 'for-you'">
-        <PostCard
-          v-for="post in feedStore.recentlyPublishedPosts"
-          :key="'recent-' + post.id"
-          :post="post"
-          :like-pending="likePendingPostIds.has(post.id)"
-          :repost-pending="repostPendingPostIds.has(post.id)"
-          :bookmark-pending="bookmarkPendingPostIds.has(post.id)"
-          :show-delete="canDeletePost(post)"
-          :delete-pending="pendingDeletePostIds.has(post.id)"
-          :delete-error="deleteErrors.get(post.id) || ''"
-          @toggle-like="handleLikeToggle"
-          @toggle-repost="handleRepostToggle"
-          @toggle-bookmark="handleBookmarkToggle"
-          @delete-post="handleDeletePost"
-        />
+        <div
+          class="home-virtual-list"
+          data-virtual-feed="for-you"
+          :style="{ height: `${forYouVirtualizerTotalSize}px` }"
+        >
+          <div
+            v-for="virtualItem in forYouVirtualItems"
+            :key="String(virtualItem.key)"
+            class="home-virtual-row"
+            :data-index="virtualItem.index"
+            :style="virtualRowStyle(virtualItem)"
+            :ref="measureForYouRow"
+          >
+            <PostCard
+              v-if="forYouRowKind(virtualItem.index) === 'recent'"
+              :post="forYouPostForRow(virtualItem.index)"
+              :like-pending="likePendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
+              :repost-pending="repostPendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
+              :bookmark-pending="bookmarkPendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
+              :show-delete="canDeletePost(forYouPostForRow(virtualItem.index))"
+              :delete-pending="pendingDeletePostIds.has(forYouPostForRow(virtualItem.index).id)"
+              :delete-error="deleteErrors.get(forYouPostForRow(virtualItem.index).id) || ''"
+              @toggle-like="handleLikeToggle"
+              @toggle-repost="handleRepostToggle"
+              @toggle-bookmark="handleBookmarkToggle"
+              @delete-post="handleDeletePost"
+            />
 
-        <div
-          v-if="forYouFeed.loading && hasRecentlyPublishedPosts"
-          class="home-feed-inline-state"
-          aria-live="polite"
-        >
-          Loading recommendations...
-        </div>
-        <div
-          v-else-if="forYouFeed.error && hasRecentlyPublishedPosts"
-          class="home-feed-inline-state"
-          aria-live="polite"
-        >
-          <span>Could not load recommendations.</span>
-          <button class="home-state__primary" type="button" @click="loadForYou(true)">
-            Retry
-          </button>
-        </div>
+            <div
+              v-else-if="forYouRowKind(virtualItem.index) === 'inline-state'"
+              class="home-feed-inline-state"
+              aria-live="polite"
+            >
+              <template v-if="forYouInlineStateForRow(virtualItem.index) === 'loading'">
+                Loading recommendations...
+              </template>
+              <template v-else>
+                <span>Could not load recommendations.</span>
+                <button class="home-state__primary" type="button" @click="loadForYou(true)">
+                  Retry
+                </button>
+              </template>
+            </div>
 
-        <div
-          v-for="item in visibleForYouItems"
-          :key="item.recommendation.post.id"
-          class="recommendation-card-wrapper"
-          :ref="element => bindRecommendationCard(element, item)"
-        >
-          <PostCard
-            :post="item.post"
-            :like-pending="likePendingPostIds.has(item.post.id)"
-            :repost-pending="repostPendingPostIds.has(item.post.id)"
-            :bookmark-pending="bookmarkPendingPostIds.has(item.post.id)"
-            :show-not-interested="true"
-            :show-delete="canDeletePost(item.post)"
-            :delete-pending="pendingDeletePostIds.has(item.post.id)"
-            :delete-error="deleteErrors.get(item.post.id) || ''"
-            @post-click="handleRecommendationClick(item.recommendation)"
-            @toggle-like="handleLikeToggle"
-            @toggle-repost="handleRepostToggle"
-            @toggle-bookmark="handleBookmarkToggle"
-            @not-interested="handleNotInterested"
-            @delete-post="handleDeletePost"
-          />
+            <div
+              v-else-if="forYouRowKind(virtualItem.index) === 'recommendation'"
+              class="recommendation-card-wrapper"
+              :ref="element => bindRecommendationCard(element, forYouRecommendationForRow(virtualItem.index))"
+            >
+              <PostCard
+                :post="forYouRecommendationForRow(virtualItem.index).post"
+                :like-pending="likePendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
+                :repost-pending="repostPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
+                :bookmark-pending="bookmarkPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
+                :show-not-interested="true"
+                :show-delete="canDeletePost(forYouRecommendationForRow(virtualItem.index).post)"
+                :delete-pending="pendingDeletePostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
+                :delete-error="deleteErrors.get(forYouRecommendationForRow(virtualItem.index).post.id) || ''"
+                @post-click="handleRecommendationClick(forYouRecommendationForRow(virtualItem.index).recommendation)"
+                @toggle-like="handleLikeToggle"
+                @toggle-repost="handleRepostToggle"
+                @toggle-bookmark="handleBookmarkToggle"
+                @not-interested="handleNotInterested"
+                @delete-post="handleDeletePost"
+              />
+            </div>
+          </div>
         </div>
 
         <div
@@ -151,21 +162,35 @@
       </template>
 
       <template v-else>
-        <PostCard
-          v-for="post in followingFeed.items"
-          :key="post.id"
-          :post="post"
-          :like-pending="likePendingPostIds.has(post.id)"
-          :repost-pending="repostPendingPostIds.has(post.id)"
-          :bookmark-pending="bookmarkPendingPostIds.has(post.id)"
-          :show-delete="canDeletePost(post)"
-          :delete-pending="pendingDeletePostIds.has(post.id)"
-          :delete-error="deleteErrors.get(post.id) || ''"
-          @toggle-like="handleLikeToggle"
-          @toggle-repost="handleRepostToggle"
-          @toggle-bookmark="handleBookmarkToggle"
-          @delete-post="handleDeletePost"
-        />
+        <div
+          class="home-virtual-list"
+          data-virtual-feed="following"
+          :style="{ height: `${followingVirtualizerTotalSize}px` }"
+        >
+          <div
+            v-for="virtualItem in followingVirtualItems"
+            :key="String(virtualItem.key)"
+            class="home-virtual-row"
+            :data-index="virtualItem.index"
+            :style="virtualRowStyle(virtualItem)"
+            :ref="measureFollowingRow"
+          >
+            <PostCard
+              v-if="followingRowKind(virtualItem.index) === 'following'"
+              :post="followingPostForRow(virtualItem.index)"
+              :like-pending="likePendingPostIds.has(followingPostForRow(virtualItem.index).id)"
+              :repost-pending="repostPendingPostIds.has(followingPostForRow(virtualItem.index).id)"
+              :bookmark-pending="bookmarkPendingPostIds.has(followingPostForRow(virtualItem.index).id)"
+              :show-delete="canDeletePost(followingPostForRow(virtualItem.index))"
+              :delete-pending="pendingDeletePostIds.has(followingPostForRow(virtualItem.index).id)"
+              :delete-error="deleteErrors.get(followingPostForRow(virtualItem.index).id) || ''"
+              @toggle-like="handleLikeToggle"
+              @toggle-repost="handleRepostToggle"
+              @toggle-bookmark="handleBookmarkToggle"
+              @delete-post="handleDeletePost"
+            />
+          </div>
+        </div>
 
         <div
           v-if="followingFeed.nextCursor || followingFeed.loadingMore || followingFeed.loadMoreError"
@@ -216,6 +241,8 @@ import {
   ref,
   watch,
 } from 'vue';
+import { useVirtualizer } from '@tanstack/vue-virtual';
+import type { VirtualItem, Virtualizer } from '@tanstack/vue-virtual';
 import { ElMessage } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import type { ComponentPublicInstance } from 'vue';
@@ -229,6 +256,7 @@ import { getRecommendationTelemetry } from '../services/recommendationTelemetry'
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import { useHomeTimelineStore } from '../store/homeTimeline';
+import type { HomeRecommendationItem } from '../store/homeTimeline';
 import type { RecommendedPost } from '../types/Recommendation';
 import type { FeedPost, FeedTab } from '../types/Feed';
 
@@ -260,6 +288,9 @@ const pendingDeletePostIds = homeTimeline.pendingDeletePostIds;
 const deleteErrors = homeTimeline.deleteErrors;
 const homeViewActive = ref(true);
 const HOME_RESELECT_TOP_THRESHOLD_PX = 8;
+const HOME_POST_ESTIMATE_PX = 360;
+const HOME_INLINE_STATE_ESTIMATE_PX = 72;
+const HOME_VIRTUAL_OVERSCAN = 8;
 let resumeOnActivation = false;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
@@ -282,6 +313,204 @@ const visibleForYouItems = computed(() => forYouFeed.items.filter((item) =>
   !recentlyPublishedIDs.value.has(item.post.id)
   && !feedStore.isPostDeleted(item.post.id)
 ));
+
+type ForYouVirtualRow =
+  | {
+      kind: 'recent';
+      key: string;
+      post: FeedPost;
+    }
+  | {
+      kind: 'inline-state';
+      key: string;
+      state: 'loading' | 'error';
+    }
+  | {
+      kind: 'recommendation';
+      key: string;
+      item: HomeRecommendationItem;
+    };
+
+type FollowingVirtualRow = {
+  kind: 'following';
+  key: string;
+  post: FeedPost;
+};
+
+const forYouVirtualRows = computed<ForYouVirtualRow[]>(() => {
+  const rows: ForYouVirtualRow[] = feedStore.recentlyPublishedPosts.map((post) => ({
+    kind: 'recent',
+    key: `recent:${post.id}`,
+    post,
+  }));
+
+  if (forYouFeed.loading && hasRecentlyPublishedPosts.value) {
+    rows.push({
+      kind: 'inline-state',
+      key: 'for-you:inline-loading',
+      state: 'loading',
+    });
+  } else if (forYouFeed.error && hasRecentlyPublishedPosts.value) {
+    rows.push({
+      kind: 'inline-state',
+      key: 'for-you:inline-error',
+      state: 'error',
+    });
+  }
+
+  visibleForYouItems.value.forEach((item) => {
+    rows.push({
+      kind: 'recommendation',
+      key: `recommendation:${item.post.id}`,
+      item,
+    });
+  });
+
+  return rows;
+});
+
+const followingVirtualRows = computed<FollowingVirtualRow[]>(() => (
+  followingFeed.items.map((post) => ({
+    kind: 'following',
+    key: `following:${post.id}`,
+    post,
+  }))
+));
+
+const isVirtualFeedRendered = computed(() => (
+  authStore.isAuthenticated
+  && !(activeFeedStatus.value.loading && !hasRecentlyPublishedPosts.value)
+  && !(activeFeedStatus.value.error && !hasRecentlyPublishedPosts.value)
+  && !(activeFeedStatus.value.empty && !hasRecentlyPublishedPosts.value)
+));
+
+type HomeVirtualizer = Virtualizer<HTMLElement, HTMLElement>;
+
+const forYouVirtualizerOptions = computed(() => ({
+  count: forYouVirtualRows.value.length,
+  getScrollElement: () => feedPanelRef.value,
+  estimateSize: (index: number) => (
+    forYouVirtualRows.value[index]?.kind === 'inline-state'
+      ? HOME_INLINE_STATE_ESTIMATE_PX
+      : HOME_POST_ESTIMATE_PX
+  ),
+  getItemKey: (index: number) => forYouVirtualRows.value[index]?.key ?? index,
+  enabled: homeViewActive.value
+    && authStore.isAuthenticated
+    && activeTab.value === 'for-you'
+    && isVirtualFeedRendered.value,
+  overscan: HOME_VIRTUAL_OVERSCAN,
+}));
+
+const followingVirtualizerOptions = computed(() => ({
+  count: followingVirtualRows.value.length,
+  getScrollElement: () => feedPanelRef.value,
+  estimateSize: () => HOME_POST_ESTIMATE_PX,
+  getItemKey: (index: number) => followingVirtualRows.value[index]?.key ?? index,
+  enabled: homeViewActive.value
+    && authStore.isAuthenticated
+    && activeTab.value === 'following'
+    && isVirtualFeedRendered.value,
+  overscan: HOME_VIRTUAL_OVERSCAN,
+}));
+
+const forYouVirtualizer = useVirtualizer<HTMLElement, HTMLElement>(forYouVirtualizerOptions);
+const followingVirtualizer = useVirtualizer<HTMLElement, HTMLElement>(followingVirtualizerOptions);
+
+const virtualItemsWithInitialFallback = (
+  virtualItems: VirtualItem[],
+  rowCount: number,
+  firstRowKey: string | undefined,
+  estimateSize: number,
+) => {
+  if (virtualItems.length > 0 || rowCount === 0 || firstRowKey === undefined) {
+    return virtualItems;
+  }
+  return [{
+    key: firstRowKey,
+    index: 0,
+    start: 0,
+    end: estimateSize,
+    size: estimateSize,
+    lane: 0,
+  }];
+};
+
+const forYouVirtualItems = computed(() => virtualItemsWithInitialFallback(
+  forYouVirtualizer.value.getVirtualItems(),
+  forYouVirtualRows.value.length,
+  forYouVirtualRows.value[0]?.key,
+  HOME_POST_ESTIMATE_PX,
+));
+const followingVirtualItems = computed(() => virtualItemsWithInitialFallback(
+  followingVirtualizer.value.getVirtualItems(),
+  followingVirtualRows.value.length,
+  followingVirtualRows.value[0]?.key,
+  HOME_POST_ESTIMATE_PX,
+));
+const forYouVirtualizerTotalSize = computed(() => forYouVirtualizer.value.getTotalSize());
+const followingVirtualizerTotalSize = computed(() => followingVirtualizer.value.getTotalSize());
+
+const virtualRowStyle = (virtualItem: VirtualItem) => ({
+  transform: `translateY(${virtualItem.start}px)`,
+});
+
+const forYouRowKind = (index: number) => forYouVirtualRows.value[index]?.kind;
+
+const forYouPostForRow = (index: number): FeedPost => {
+  const row = forYouVirtualRows.value[index];
+  if (row?.kind === 'recent') {
+    return row.post;
+  }
+  if (row?.kind === 'recommendation') {
+    return row.item.post;
+  }
+  throw new Error(`Unexpected For You row at index ${index}`);
+};
+
+const forYouRecommendationForRow = (index: number): HomeRecommendationItem => {
+  const row = forYouVirtualRows.value[index];
+  if (row?.kind === 'recommendation') {
+    return row.item;
+  }
+  throw new Error(`Unexpected recommendation row at index ${index}`);
+};
+
+const forYouInlineStateForRow = (index: number): 'loading' | 'error' => {
+  const row = forYouVirtualRows.value[index];
+  if (row?.kind === 'inline-state') {
+    return row.state;
+  }
+  throw new Error(`Unexpected inline state row at index ${index}`);
+};
+
+const followingPostForRow = (index: number): FeedPost => {
+  const row = followingVirtualRows.value[index];
+  if (row) {
+    return row.post;
+  }
+  throw new Error(`Unexpected Following row at index ${index}`);
+};
+
+const followingRowKind = (index: number) => followingVirtualRows.value[index]?.kind;
+
+const measureVirtualRow = (element: Element | ComponentPublicInstance | null, virtualizer: HomeVirtualizer) => {
+  if (element === null) {
+    virtualizer.measureElement(null);
+    return;
+  }
+  if (element instanceof HTMLElement) {
+    virtualizer.measureElement(element);
+  }
+};
+
+const measureForYouRow = (element: Element | ComponentPublicInstance | null) => {
+  measureVirtualRow(element, forYouVirtualizer.value);
+};
+
+const measureFollowingRow = (element: Element | ComponentPublicInstance | null) => {
+  measureVirtualRow(element, followingVirtualizer.value);
+};
 
 const currentViewerID = () => {
   const id = authStore.currentIdentity?.id;
@@ -314,10 +543,21 @@ const restoreScroll = async (tab: FeedTab) => {
     return;
   }
 
+  const virtualizer = tab === 'for-you'
+    ? forYouVirtualizer.value
+    : followingVirtualizer.value;
+  virtualizer.measure();
+  await nextTick();
+
+  if (!homeViewActive.value || activeTab.value !== tab) {
+    return;
+  }
+
   const target = homeTimeline.scrollTop[tab];
   if (Math.abs(panel.scrollTop - target) > 1) {
     panel.scrollTop = target;
   }
+  virtualizer.scrollToOffset(target, { behavior: 'auto' });
 };
 
 const handleFeedScroll = () => {
@@ -830,6 +1070,19 @@ onBeforeUnmount(() => {
 }
 
 .feed-list {
+  min-width: 0;
+}
+
+.home-virtual-list {
+  position: relative;
+  width: 100%;
+}
+
+.home-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
   min-width: 0;
 }
 

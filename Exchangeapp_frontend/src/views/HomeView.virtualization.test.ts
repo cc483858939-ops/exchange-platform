@@ -1,0 +1,590 @@
+// @vitest-environment jsdom
+
+import { flushPromises, mount } from '@vue/test-utils';
+import {
+  defineComponent,
+  h,
+  KeepAlive,
+  nextTick,
+  reactive,
+} from 'vue';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FeedPost, FeedTab } from '../types/Feed';
+
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+import HomeView from './HomeView.vue';
+
+const mocks = vi.hoisted(() => ({
+  authStore: null as any,
+  feedStore: null as any,
+  homeTimeline: null as any,
+  route: null as any,
+  router: null as any,
+  routeLeave: null as (() => unknown) | null,
+  telemetry: {
+    resetObservedCards: vi.fn(),
+    flush: vi.fn().mockResolvedValue(undefined),
+    observeFeedCard: vi.fn(),
+    detachFeedCard: vi.fn(),
+    unobserveFeedCard: vi.fn(),
+    recordClick: vi.fn(),
+    recordNotInterested: vi.fn(),
+    notifyViewportChange: vi.fn(),
+  },
+}));
+
+vi.mock('../store/auth', () => ({
+  useAuthStore: () => mocks.authStore,
+}));
+
+vi.mock('../store/feed', () => ({
+  useFeedStore: () => mocks.feedStore,
+}));
+
+vi.mock('../store/homeTimeline', () => ({
+  useHomeTimelineStore: () => mocks.homeTimeline,
+}));
+
+vi.mock('../services/recommendationTelemetry', () => ({
+  getRecommendationTelemetry: () => mocks.telemetry,
+}));
+
+vi.mock('../services/recommendationAttribution', () => ({
+  savePendingRecommendationAttribution: vi.fn(),
+}));
+
+vi.mock('vue-router', () => ({
+  useRoute: () => mocks.route,
+  useRouter: () => mocks.router,
+  onBeforeRouteLeave: (guard: () => unknown) => {
+    mocks.routeLeave = guard;
+  },
+}));
+
+const viewer = {
+  id: 7,
+  username: 'viewer',
+  display_name: 'Viewer',
+  avatar_url: '',
+};
+
+const makePost = (id: number): FeedPost => ({
+  id,
+  author: viewer,
+  content: `Post ${id}`,
+  language: 'und',
+  media: [],
+  createdAt: '2026-08-24T00:00:00.000Z',
+  likeCount: 0,
+  replyCount: 0,
+  viewCount: 0,
+  liked: false,
+  likeStatus: 'ready',
+  repostCount: 0,
+  reposted: false,
+  repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
+});
+
+const makeRecommendation = (id: number) => {
+  const tracking = { token: `recommendation-${id}`, source: 'home-test' };
+  return {
+    recommendation: {
+      post: { id },
+      score: 1,
+      tracking,
+    },
+    post: makePost(id),
+  };
+};
+
+const PostCardStub = defineComponent({
+  props: {
+    post: {
+      type: Object,
+      required: true,
+    },
+  },
+  emits: ['notInterested'],
+  template: `
+    <article class="post-card-stub" :data-post-id="post.id">
+      <button
+        class="test-not-interested"
+        type="button"
+        @click="$emit('notInterested', post.id)"
+      >
+        Not interested
+      </button>
+    </article>
+  `,
+});
+
+const makeTimeline = ({
+  forYouItems = [],
+  followingItems = [],
+  recentlyPublishedPosts = [],
+  forYouLoading = false,
+}: {
+  forYouItems?: any[];
+  followingItems?: FeedPost[];
+  recentlyPublishedPosts?: FeedPost[];
+  forYouLoading?: boolean;
+} = {}) => {
+  const scrollTop = reactive<Record<FeedTab, number>>({
+    'for-you': 0,
+    following: 0,
+  });
+  const timeline: any = reactive({
+    activeTab: 'for-you' as FeedTab,
+    homeReselectVersion: 0,
+    forYou: reactive({
+      items: forYouItems,
+      loading: forYouLoading,
+      error: false,
+      loaded: true,
+      loadingMore: false,
+      loadMoreError: false,
+      depleted: true,
+    }),
+    following: reactive({
+      items: followingItems,
+      loading: false,
+      error: false,
+      loaded: true,
+      nextCursor: null,
+      loadingMore: false,
+      loadMoreError: false,
+      stale: false,
+      revalidating: false,
+      revalidateError: false,
+    }),
+    scrollTop,
+    likePendingPostIds: new Set<number>(),
+    repostPendingPostIds: new Set<number>(),
+    bookmarkPendingPostIds: new Set<number>(),
+    pendingDeletePostIds: new Set<number>(),
+    deleteErrors: new Map<number, string>(),
+    setActiveTab: vi.fn((tab: FeedTab) => {
+      timeline.activeTab = tab;
+    }),
+    setScrollTop: vi.fn((tab: FeedTab, value: number) => {
+      scrollTop[tab] = value;
+    }),
+    requestHomeReselect: vi.fn(),
+    loadForYou: vi.fn().mockResolvedValue(undefined),
+    loadMoreForYou: vi.fn().mockResolvedValue(undefined),
+    retryForYouLoadMore: vi.fn(),
+    loadFollowing: vi.fn().mockResolvedValue(undefined),
+    loadMoreFollowing: vi.fn().mockResolvedValue(undefined),
+    revalidateFollowing: vi.fn().mockResolvedValue(undefined),
+    retryFollowingLoadMore: vi.fn(),
+    toggleLike: vi.fn().mockResolvedValue('succeeded'),
+    toggleRepost: vi.fn().mockResolvedValue('succeeded'),
+    toggleBookmark: vi.fn().mockResolvedValue('succeeded'),
+    deletePost: vi.fn().mockResolvedValue(true),
+    dismissRecommendation: vi.fn(),
+  });
+  timeline.dismissRecommendation.mockImplementation((postID: number) => {
+    timeline.forYou.items = timeline.forYou.items.filter(
+      (item: { post: FeedPost }) => item.post.id !== postID,
+    );
+  });
+  return timeline;
+};
+
+const mountHome = () => mount(HomeView, {
+  attachTo: document.body,
+  global: {
+    stubs: {
+      FeedTabs: { template: '<div />' },
+      PostCard: PostCardStub,
+      AppIcon: { template: '<span />' },
+      MobileHomeHeader: { template: '<div />' },
+      RouterLink: { template: '<a><slot /></a>' },
+    },
+  },
+});
+
+const mountKeepAliveHome = () => {
+  const state = reactive({ showHome: true });
+  const Placeholder = defineComponent({
+    name: 'PostDetailView',
+    template: '<div data-placeholder />',
+  });
+  const Host = defineComponent({
+    setup() {
+      return () => h(KeepAlive, { include: 'HomeView', max: 1 }, {
+        default: () => (state.showHome ? h(HomeView) : h(Placeholder)),
+      });
+    },
+  });
+  const wrapper = mount(Host, {
+    attachTo: document.body,
+    global: {
+      stubs: {
+        FeedTabs: { template: '<div />' },
+        PostCard: PostCardStub,
+        AppIcon: { template: '<span />' },
+        MobileHomeHeader: { template: '<div />' },
+        RouterLink: { template: '<a><slot /></a>' },
+      },
+    },
+  });
+  return { wrapper, state };
+};
+
+const settle = async () => {
+  await flushPromises();
+  await nextTick();
+  await flushPromises();
+  await nextTick();
+};
+
+const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+const originalElementScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
+
+let rowHeights = new Map<number, number>();
+let defaultRowHeight = 180;
+
+type TestResizeEntry = {
+  target: Element;
+  borderBoxSize: Array<{ blockSize: number; inlineSize: number }>;
+};
+
+class TestResizeObserver {
+  static instances: TestResizeObserver[] = [];
+
+  readonly observed = new Set<Element>();
+
+  constructor(private readonly callback: (entries: TestResizeEntry[]) => void) {
+    TestResizeObserver.instances.push(this);
+  }
+
+  observe(element: Element) {
+    this.observed.add(element);
+  }
+
+  unobserve(element: Element) {
+    this.observed.delete(element);
+  }
+
+  disconnect() {
+    this.observed.clear();
+  }
+
+  trigger(element: Element, blockSize: number) {
+    this.callback([{
+      target: element,
+      borderBoxSize: [{ blockSize, inlineSize: 1000 }],
+    }]);
+  }
+}
+
+const readOriginalDimension = (
+  descriptor: PropertyDescriptor | undefined,
+  element: HTMLElement,
+) => descriptor?.get?.call(element) ?? 0;
+
+const installGeometry = () => {
+  rowHeights = new Map<number, number>();
+  TestResizeObserver.instances = [];
+  vi.stubGlobal('ResizeObserver', TestResizeObserver);
+
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get() {
+      const element = this as HTMLElement;
+      if (element.classList.contains('home-feed-panel')) {
+        return 800;
+      }
+      if (element.classList.contains('home-virtual-row')) {
+        return rowHeights.get(Number(element.dataset.index)) ?? defaultRowHeight;
+      }
+      return readOriginalDimension(originalOffsetHeight, element);
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get() {
+      const element = this as HTMLElement;
+      if (element.classList.contains('home-feed-panel')
+        || element.classList.contains('home-virtual-row')) {
+        return 1000;
+      }
+      return readOriginalDimension(originalOffsetWidth, element);
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get() {
+      const element = this as HTMLElement;
+      if (element.classList.contains('home-feed-panel')) {
+        return 800;
+      }
+      return readOriginalDimension(originalClientHeight, element);
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get() {
+      const element = this as HTMLElement;
+      if (element.classList.contains('home-feed-panel')) {
+        return 1000;
+      }
+      return readOriginalDimension(originalClientWidth, element);
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get() {
+      const element = this as HTMLElement;
+      if (element.classList.contains('home-feed-panel')) {
+        const virtualList = element.querySelector<HTMLElement>('.home-virtual-list');
+        return Number.parseFloat(virtualList?.style.height ?? '0') || 0;
+      }
+      return readOriginalDimension(originalScrollHeight, element);
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+    configurable: true,
+    value(this: HTMLElement, options: ScrollToOptions | number) {
+      const top = typeof options === 'number' ? options : options.top;
+      if (typeof top === 'number') {
+        this.scrollTop = top;
+        this.dispatchEvent(new Event('scroll'));
+      }
+    },
+  });
+};
+
+const restoreGeometry = () => {
+  for (const [property, descriptor] of [
+    ['offsetHeight', originalOffsetHeight],
+    ['offsetWidth', originalOffsetWidth],
+    ['clientHeight', originalClientHeight],
+    ['clientWidth', originalClientWidth],
+    ['scrollHeight', originalScrollHeight],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(HTMLElement.prototype, property, descriptor);
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, property);
+    }
+  }
+  if (originalElementScrollTo) {
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', originalElementScrollTo);
+  } else {
+    Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo');
+  }
+  vi.unstubAllGlobals();
+};
+
+const mountedPostIDs = (wrapper: ReturnType<typeof mount>) => wrapper
+  .findAll('.post-card-stub')
+  .map((card) => Number(card.attributes('data-post-id')));
+
+const scrollPanel = async (wrapper: ReturnType<typeof mount>, top: number) => {
+  const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+  panel.scrollTop = top;
+  panel.dispatchEvent(new Event('scroll'));
+  await settle();
+};
+
+describe('HomeView virtualization', () => {
+  let wrapper: ReturnType<typeof mount> | null = null;
+
+  beforeEach(() => {
+    installGeometry();
+    defaultRowHeight = 180;
+    mocks.authStore = reactive({
+      isAuthenticated: true,
+      currentIdentity: viewer,
+      token: 'Bearer token',
+    });
+    mocks.feedStore = reactive({
+      recentlyPublishedPosts: [],
+      isPostDeleted: vi.fn().mockReturnValue(false),
+    });
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
+    });
+    mocks.route = reactive({ name: 'Home', query: {} });
+    mocks.router = {
+      push: vi.fn().mockResolvedValue(undefined),
+      replace: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.routeLeave = null;
+    Object.values(mocks.telemetry).forEach((mock) => mock.mockClear());
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    restoreGeometry();
+    document.body.innerHTML = '';
+  });
+
+  it('keeps For You mounted rows bounded while source items and measured ranges grow', async () => {
+    wrapper = mountHome();
+    await settle();
+
+    expect(mocks.homeTimeline.forYou.items).toHaveLength(300);
+    expect(mountedPostIDs(wrapper).length).toBeLessThan(50);
+    expect(mountedPostIDs(wrapper)).toContain(1);
+    expect(mountedPostIDs(wrapper)).not.toContain(300);
+
+    await scrollPanel(wrapper, 25000);
+
+    const deepIDs = mountedPostIDs(wrapper);
+    expect(deepIDs.length).toBeLessThan(50);
+    expect(deepIDs).not.toContain(1);
+    expect(deepIDs.some((id) => id >= 60)).toBe(true);
+
+    mocks.homeTimeline.forYou.items.push(
+      ...Array.from({ length: 20 }, (_, index) => makeRecommendation(index + 301)),
+    );
+    await settle();
+
+    expect(mocks.homeTimeline.forYou.items).toHaveLength(320);
+    expect(mountedPostIDs(wrapper).length).toBeLessThan(50);
+    expect(new Set(mountedPostIDs(wrapper)).size).toBe(mountedPostIDs(wrapper).length);
+  });
+
+  it('keeps Following mounted rows bounded and changes the range after deep scrolling', async () => {
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: [],
+      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
+    });
+    mocks.homeTimeline.activeTab = 'following';
+    mocks.route.query = { tab: 'following' };
+    wrapper = mountHome();
+    await settle();
+
+    expect(mountedPostIDs(wrapper).length).toBeLessThan(50);
+    expect(mountedPostIDs(wrapper)).toContain(1);
+
+    await scrollPanel(wrapper, 25000);
+
+    const deepIDs = mountedPostIDs(wrapper);
+    expect(deepIDs.length).toBeLessThan(50);
+    expect(deepIDs).not.toContain(1);
+    expect(deepIDs.some((id) => id >= 60)).toBe(true);
+  });
+
+  it('preserves logical row order, deduplication, and dynamic measured offsets', async () => {
+    const recentPosts = [makePost(1), makePost(2)];
+    mocks.feedStore.recentlyPublishedPosts = recentPosts;
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: [makeRecommendation(2), makeRecommendation(3)],
+      recentlyPublishedPosts: recentPosts,
+      forYouLoading: true,
+    });
+    rowHeights.set(0, 180);
+    wrapper = mountHome();
+    await settle();
+
+    const rows = wrapper.findAll('.home-virtual-row');
+    expect(rows).toHaveLength(4);
+    expect(rows.map((row) => row.attributes('data-index'))).toEqual(['0', '1', '2', '3']);
+    expect(rows[2].text()).toContain('Loading recommendations...');
+    expect(mountedPostIDs(wrapper)).toEqual([1, 2, 3]);
+
+    const virtualList = wrapper.get('[data-virtual-feed="for-you"]');
+    const initialTotalSize = Number.parseFloat(virtualList.attributes('style')?.match(/height: ([\d.]+)px/)?.[1] ?? '0');
+    const laterRowStart = Number.parseFloat(rows[3].attributes('style')?.match(/translateY\(([\d.]+)px\)/)?.[1] ?? '0');
+    rowHeights.set(0, 520);
+    const measuredRow = rows[0].element;
+    TestResizeObserver.instances
+      .filter((observer) => observer.observed.has(measuredRow))
+      .forEach((observer) => observer.trigger(measuredRow, 520));
+    await settle();
+
+    const updatedTotalSize = Number.parseFloat(virtualList.attributes('style')?.match(/height: ([\d.]+)px/)?.[1] ?? '0');
+    const updatedRows = wrapper.findAll('.home-virtual-row');
+    const updatedLaterRowStart = Number.parseFloat(updatedRows[3].attributes('style')?.match(/translateY\(([\d.]+)px\)/)?.[1] ?? '0');
+    expect(updatedTotalSize).not.toBe(initialTotalSize);
+    expect(updatedLaterRowStart).not.toBe(laterRowStart);
+    expect(new Set(updatedRows.map((row) => row.attributes('data-index'))).size).toBe(updatedRows.length);
+  });
+
+  it('detaches virtualized recommendation rows without logically unobserving them', async () => {
+    wrapper = mountHome();
+    await settle();
+    mocks.telemetry.observeFeedCard.mockClear();
+    mocks.telemetry.detachFeedCard.mockClear();
+    mocks.telemetry.unobserveFeedCard.mockClear();
+
+    await scrollPanel(wrapper, 25000);
+
+    expect(mocks.telemetry.detachFeedCard).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ token: 'recommendation-1' }),
+    );
+    expect(mocks.telemetry.unobserveFeedCard).not.toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ token: 'recommendation-1' }),
+    );
+
+    await scrollPanel(wrapper, 0);
+
+    expect(mocks.telemetry.observeFeedCard).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      expect.objectContaining({ token: 'recommendation-1' }),
+    );
+
+    await wrapper.get('[data-post-id="1"] .test-not-interested').trigger('click');
+    await settle();
+
+    expect(mocks.telemetry.unobserveFeedCard).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ token: 'recommendation-1' }),
+    );
+    expect(mocks.homeTimeline.forYou.items.some((item: { post: FeedPost }) => item.post.id === 1)).toBe(false);
+  });
+
+  it('restores cached Home pixels for each tab after the cached DOM is reset', async () => {
+    defaultRowHeight = 360;
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
+      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
+    });
+    mocks.homeTimeline.scrollTop['for-you'] = 18000;
+    mocks.homeTimeline.scrollTop.following = 22000;
+    const mounted = mountKeepAliveHome();
+    wrapper = mounted.wrapper;
+    await settle();
+
+    const originalPanel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(originalPanel.scrollTop).toBe(18000);
+    mocks.routeLeave?.();
+    originalPanel.scrollTop = 0;
+    mounted.state.showHome = false;
+    mocks.route.name = 'PostDetail';
+    await settle();
+
+    mocks.route.name = 'Home';
+    mounted.state.showHome = true;
+    await settle();
+
+    const restoredForYouPanel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    expect(restoredForYouPanel).toBe(originalPanel);
+    expect(restoredForYouPanel.scrollTop).toBe(18000);
+    expect(mountedPostIDs(wrapper).some((id) => id >= 40)).toBe(true);
+    expect(mountedPostIDs(wrapper).length).toBeLessThan(50);
+
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+    expect(restoredForYouPanel.scrollTop).toBe(22000);
+    expect(mountedPostIDs(wrapper).some((id) => id >= 60)).toBe(true);
+
+    mocks.homeTimeline.activeTab = 'for-you';
+    await settle();
+    expect(restoredForYouPanel.scrollTop).toBe(18000);
+  });
+});

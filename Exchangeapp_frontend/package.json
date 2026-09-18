@@ -14,6 +14,7 @@
     "perf:preview": "vite preview --config vite.perf.config.ts"
   },
   "dependencies": {
+    "@tanstack/vue-virtual": "^3.13.39",
     "axios": "^1.7.3",
     "element-plus": "^2.7.4",
     "emoji-picker-element": "^1.29.1",

@@ -320,6 +320,7 @@ describe('HomeView scroll viewport ownership', () => {
     const originalPanel = wrapper.get('.home-feed-panel').element;
     (originalPanel as HTMLElement).scrollTop = 2400;
     mocks.routeLeave?.();
+    (originalPanel as HTMLElement).scrollTop = 0;
 
     mounted.state.showHome = false;
     await settle();
@@ -338,6 +339,7 @@ describe('HomeView scroll viewport ownership', () => {
     const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
     panel.scrollTop = 2400;
     mocks.routeLeave?.();
+    panel.scrollTop = 0;
 
     windowScrollY = 1300;
     mounted.state.showHome = false;
