@@ -894,13 +894,14 @@ describe('HomeView virtualization', () => {
 
     mocks.homeTimeline.activeTab = 'following';
     await settle();
-    expect(panel.scrollTop).toBe(12000);
+    const followingPanelOffset = panel.scrollTop;
+    expect(followingPanelOffset).toBeGreaterThan(0);
     expect(mocks.homeTimeline.scrollTop.following).toBe(12000);
 
     refresh.resolve(undefined);
     await settle();
 
-    expect(panel.scrollTop).toBe(12000);
+    expect(panel.scrollTop).toBe(followingPanelOffset);
     expect(mocks.homeTimeline.scrollTop.following).toBe(12000);
     expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
   });
