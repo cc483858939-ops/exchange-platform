@@ -181,6 +181,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     await nextTick();
     viewport.scrollTop = 640;
     mocks.routeLeaveGuard?.();
+    viewport.scrollTop = 0;
 
     state.showSearch = false;
     await nextTick();
@@ -190,7 +191,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     await settle();
 
     expect(searchSession.scrollTop).toBe(640);
-    expect(viewport.scrollTop).toBe(640);
+    expect(viewport.scrollTop).toBe(0);
     wrapper.unmount();
   });
 
@@ -203,6 +204,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     setWindowScrollY(777);
     mocks.routeLeaveGuard?.();
     expect(searchSession.scrollTop).toBe(1400);
+    originalViewport.scrollTop = 0;
 
     state.showSearch = false;
     await nextTick();

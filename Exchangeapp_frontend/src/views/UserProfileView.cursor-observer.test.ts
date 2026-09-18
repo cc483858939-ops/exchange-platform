@@ -13,6 +13,7 @@ type Deferred<T> = {
 
 const mocks = vi.hoisted(() => ({
   route: { name: 'UserProfile', params: { id: '7' } },
+  routeLeaveGuard: null as (() => void) | null,
   setRouteID: (_id: string) => {},
   getUser: vi.fn(),
   getUserTimeline: vi.fn(),
@@ -53,7 +54,9 @@ vi.mock('vue-router', async () => {
     route.params.id = id;
   };
   return {
-    onBeforeRouteLeave: vi.fn(),
+    onBeforeRouteLeave: (guard: () => void) => {
+      mocks.routeLeaveGuard = guard;
+    },
     useRoute: () => route,
     useRouter: () => mocks.router,
   };
@@ -308,6 +311,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     installFakeIntersectionObserver();
     vi.resetAllMocks();
     FakeIntersectionObserver.instances.length = 0;
+    mocks.routeLeaveGuard = null;
     mocks.route.name = 'UserProfile';
     mocks.setRouteID('7');
     document.title = 'Exchange';
@@ -471,6 +475,7 @@ describe('UserProfileView observer and cursor concurrency', () => {
     await settle();
     const viewport = wrapper.find('.profile-scroll-viewport').element as HTMLElement;
     viewport.scrollTop = 1480;
+    mocks.routeLeaveGuard?.();
 
     state.showProfile = false;
     await nextTick();
@@ -511,6 +516,8 @@ describe('UserProfileView observer and cursor concurrency', () => {
     originalViewport.scrollTop = 1480;
     const initialObserver = activeObserver();
     expect(initialObserver).toBeDefined();
+    mocks.routeLeaveGuard?.();
+    originalViewport.scrollTop = 0;
 
     state.showProfile = false;
     await nextTick();

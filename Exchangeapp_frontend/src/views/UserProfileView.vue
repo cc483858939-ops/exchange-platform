@@ -929,11 +929,6 @@ const deactivateProfileView = () => {
     return;
   }
 
-  const profileID = numericUserID.value;
-  if (profileID !== null) {
-    saveCurrentScroll(profileID);
-  }
-
   profileViewActive.value = false;
   resumeOnActivation = true;
 

@@ -80,6 +80,11 @@ let resumeOnActivation = false;
 let searchEntryVersion = 0;
 let restoredEntryVersion = -1;
 
+const beginSearchRestoreEpoch = () => {
+  searchEntryVersion += 1;
+  restoredEntryVersion = -1;
+};
+
 const routeQuery = computed(() => normalizeSearchQuery(typeof route.query.q === 'string' ? route.query.q : ''));
 const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
@@ -183,8 +188,7 @@ const syncSearchRouteQuery = (nextQuery: string) => {
   const changed = nextQuery !== query.value;
 
   if (changed) {
-    searchEntryVersion += 1;
-    restoredEntryVersion = -1;
+    beginSearchRestoreEpoch();
   }
 
   searchSession.activateQuery(nextQuery);
@@ -220,7 +224,7 @@ const loadMore = () => { void searchSession.loadMore(); };
 const toggleFollow = (userID: number) => { void searchSession.toggleFollow(userID); };
 
 watch(currentViewerID, (nextID) => {
-  searchEntryVersion += 1;
+  beginSearchRestoreEpoch();
   searchSession.setViewer(nextID);
   resetViewportScroll();
 }, { immediate: true });
@@ -268,6 +272,8 @@ onActivated(() => {
   const returningToSameQuery = nextQuery === query.value;
   if (!returningToSameQuery) {
     syncSearchRouteQuery(nextQuery);
+  } else {
+    beginSearchRestoreEpoch();
   }
 
   void nextTick(() => {
@@ -279,10 +285,7 @@ onActivated(() => {
       return;
     }
 
-    if (returningToSameQuery) {
-      void restoreScrollOnce();
-    }
-
+    void restoreScrollOnce();
     void updateObserver();
   });
 });

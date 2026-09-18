@@ -169,8 +169,13 @@ const mountHarness = () => {
   return { showHistory, wrapper };
 };
 
-const deactivateHistory = async (showHistory: { value: boolean }) => {
+const deactivateHistory = async (
+  showHistory: { value: boolean },
+  wrapper: ReturnType<typeof mountHarness>['wrapper'],
+) => {
   mocks.routeLeaveGuard?.();
+  const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
+  viewport.scrollTop = 0;
   mocks.route.name = 'PostDetail';
   showHistory.value = false;
   await settle();
@@ -243,7 +248,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
     expect(originalObserver.root).toBe(originalViewport);
     expect(originalObserver.rootMargin).toBe('240px 0px');
     setWindowScrollY(777);
-    await deactivateHistory(showHistory);
+    await deactivateHistory(showHistory, wrapper);
 
     expect(historyStore.saveScrollTop).toHaveBeenLastCalledWith(1600);
     expect(historyStore.scrollTop).toBe(1600);
@@ -277,7 +282,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
     const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
     viewport.scrollTop = 1800;
     setWindowScrollY(777);
-    await deactivateHistory(showHistory);
+    await deactivateHistory(showHistory, wrapper);
     expect(historyStore.scrollTop).toBe(1800);
 
     setWindowScrollY(1200);
@@ -287,6 +292,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
     await settle();
 
     expect(historyStore.scrollTop).toBe(1800);
+    expect(viewport.scrollTop).toBe(0);
     wrapper.unmount();
   });
 
@@ -301,7 +307,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
     historyStore.loadInitial.mockClear();
     const observerCount = mocks.observerInstances.length;
 
-    await deactivateHistory(showHistory);
+    await deactivateHistory(showHistory, wrapper);
     originalObserver.trigger();
     historyStore.viewerID = 8;
     historyStore.nextCursor = 'cursor-3';
@@ -333,7 +339,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
     const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
     viewport.scrollTop = 1800;
     setWindowScrollY(777);
-    await deactivateHistory(showHistory);
+    await deactivateHistory(showHistory, wrapper);
     historyStore.stale = true;
     await settle();
     expect(historyStore.revalidateHistory).not.toHaveBeenCalled();
@@ -356,7 +362,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
 
     const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
     viewport.scrollTop = 1800;
-    await deactivateHistory(showHistory);
+    await deactivateHistory(showHistory, wrapper);
 
     bookmarksStore.stale = true;
     await settle();
@@ -377,7 +383,7 @@ describe('HistoryView KeepAlive lifecycle', () => {
 
     const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
     viewport.scrollTop = 1800;
-    await deactivateHistory(showHistory);
+    await deactivateHistory(showHistory, wrapper);
     setWindowScrollY(300);
     wrapper.unmount();
 
@@ -398,7 +404,8 @@ describe('HistoryView KeepAlive lifecycle', () => {
     const originalPost = wrapper.find('.history-card').element;
     const viewport = wrapper.find('.history-scroll-viewport').element as HTMLElement;
     viewport.scrollTop = 1400;
-    await deactivateHistory(showHistory);
+    await deactivateHistory(showHistory, wrapper);
+    expect(bookmarksStore.scrollTop).toBe(1400);
     bookmarksStore.loadInitial.mockClear();
 
     await reactivateHistory(showHistory);

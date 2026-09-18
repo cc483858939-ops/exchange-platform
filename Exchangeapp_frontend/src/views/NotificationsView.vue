@@ -131,6 +131,11 @@ let resumeOnActivation = false;
 let notificationEntryVersion = 0;
 let restoredEntryVersion = -1;
 
+const beginNotificationRestoreEpoch = () => {
+  notificationEntryVersion += 1;
+  restoredEntryVersion = -1;
+};
+
 const hasUnread = computed(() => items.value.some((item) => !item.read));
 
 const currentViewerID = computed(() => (
@@ -280,8 +285,7 @@ const formatActivityAt = (value: string) => {
 };
 
 watch(currentViewerID, () => {
-  notificationEntryVersion += 1;
-  restoredEntryVersion = -1;
+  beginNotificationRestoreEpoch();
   if (notificationsViewActive.value) {
     void notificationStore.loadInitial();
   }
@@ -324,6 +328,7 @@ onActivated(() => {
 
   resumeOnActivation = false;
   notificationsViewActive.value = true;
+  beginNotificationRestoreEpoch();
 
   void notificationStore.loadInitial();
 

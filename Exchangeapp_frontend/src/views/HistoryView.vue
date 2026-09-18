@@ -577,7 +577,6 @@ onDeactivated(() => {
     return;
   }
 
-  saveCurrentScroll();
   historyViewActive.value = false;
   resumeOnActivation = true;
   disconnectObserver();

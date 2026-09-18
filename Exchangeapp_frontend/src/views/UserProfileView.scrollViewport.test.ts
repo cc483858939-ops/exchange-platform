@@ -263,6 +263,7 @@ describe('UserProfileView scroll viewport', () => {
       const originalViewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
       originalViewport.scrollTop = 2400;
       mocks.routeLeaveGuard?.();
+      originalViewport.scrollTop = 0;
 
       state.showProfile = false;
       await nextTick();
@@ -306,6 +307,7 @@ describe('UserProfileView scroll viewport', () => {
       originalViewport.scrollTop = 2400;
       mocks.routeLeaveGuard?.();
       expect(session.scrollTop).toBe(2400);
+      originalViewport.scrollTop = 0;
 
       state.showProfile = false;
       await nextTick();

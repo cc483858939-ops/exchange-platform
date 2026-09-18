@@ -368,6 +368,10 @@ describe('NotificationsView', () => {
     await flushPromises();
     await nextTick();
     const initialObserver = TestIntersectionObserver.instances[0];
+    const viewport = wrapper.get('.notifications-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 1800;
+    mocks.routeLeaveGuard?.();
+    viewport.scrollTop = 0;
     state.showNotifications = false;
     await nextTick();
 
@@ -378,7 +382,8 @@ describe('NotificationsView', () => {
 
     expect(TestIntersectionObserver.instances).toHaveLength(1);
     expect(mocks.getNotifications).toHaveBeenCalledTimes(1);
-    expect(store.scrollTop).toBe(0);
+    expect(store.scrollTop).toBe(1800);
+    expect(viewport.scrollTop).toBe(0);
     wrapper.unmount();
   });
 
@@ -397,6 +402,7 @@ describe('NotificationsView', () => {
     originalViewport.scrollTop = 1800;
     mocks.routeLeaveGuard?.();
     expect(store.scrollTop).toBe(1800);
+    originalViewport.scrollTop = 0;
 
     state.showNotifications = false;
     await nextTick();
