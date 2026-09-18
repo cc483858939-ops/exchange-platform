@@ -105,6 +105,10 @@ const PostCardStub = defineComponent({
       type: Object,
       required: true,
     },
+    viewSessionKey: {
+      type: String,
+      required: false,
+    },
   },
   emits: ['notInterested'],
   template: `
@@ -249,7 +253,9 @@ const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototy
 const originalElementScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
 
 let rowHeights = new Map<number, number>();
+let followingRowHeights = new Map<number, number>();
 let defaultRowHeight = 180;
+let panelWidth = 1000;
 
 type TestResizeEntry = {
   target: Element;
@@ -277,10 +283,10 @@ class TestResizeObserver {
     this.observed.clear();
   }
 
-  trigger(element: Element, blockSize: number) {
+  trigger(element: Element, blockSize: number, inlineSize = panelWidth) {
     this.callback([{
       target: element,
-      borderBoxSize: [{ blockSize, inlineSize: 1000 }],
+      borderBoxSize: [{ blockSize, inlineSize }],
     }]);
   }
 }
@@ -292,6 +298,8 @@ const readOriginalDimension = (
 
 const installGeometry = () => {
   rowHeights = new Map<number, number>();
+  followingRowHeights = new Map<number, number>();
+  panelWidth = 1000;
   TestResizeObserver.instances = [];
   vi.stubGlobal('ResizeObserver', TestResizeObserver);
 
@@ -303,7 +311,9 @@ const installGeometry = () => {
         return 800;
       }
       if (element.classList.contains('home-virtual-row')) {
-        return rowHeights.get(Number(element.dataset.index)) ?? defaultRowHeight;
+        const feed = element.closest<HTMLElement>('[data-virtual-feed]')?.dataset.virtualFeed;
+        const heights = feed === 'following' ? followingRowHeights : rowHeights;
+        return heights.get(Number(element.dataset.index)) ?? defaultRowHeight;
       }
       return readOriginalDimension(originalOffsetHeight, element);
     },
@@ -314,7 +324,7 @@ const installGeometry = () => {
       const element = this as HTMLElement;
       if (element.classList.contains('home-feed-panel')
         || element.classList.contains('home-virtual-row')) {
-        return 1000;
+        return panelWidth;
       }
       return readOriginalDimension(originalOffsetWidth, element);
     },
@@ -334,7 +344,7 @@ const installGeometry = () => {
     get() {
       const element = this as HTMLElement;
       if (element.classList.contains('home-feed-panel')) {
-        return 1000;
+        return panelWidth;
       }
       return readOriginalDimension(originalClientWidth, element);
     },
@@ -387,6 +397,21 @@ const restoreGeometry = () => {
 const mountedPostIDs = (wrapper: ReturnType<typeof mount>) => wrapper
   .findAll('.post-card-stub')
   .map((card) => Number(card.attributes('data-post-id')));
+
+const mountedPostSessionKey = (wrapper: ReturnType<typeof mount>, postID: number) => wrapper
+  .findAllComponents(PostCardStub)
+  .find((card) => (card.props('post') as FeedPost).id === postID)
+  ?.props('viewSessionKey');
+
+const forYouHeightPattern = [180, 520, 240, 700, 190, 640, 300, 460];
+const followingHeightPattern = [260, 680, 210, 580, 340, 760, 220, 430];
+
+const setHeterogeneousHeights = (count: number) => {
+  for (let index = 0; index < count; index += 1) {
+    rowHeights.set(index, forYouHeightPattern[index % forYouHeightPattern.length]);
+    followingRowHeights.set(index, followingHeightPattern[index % followingHeightPattern.length]);
+  }
+};
 
 const scrollPanel = async (wrapper: ReturnType<typeof mount>, top: number) => {
   const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
@@ -548,25 +573,36 @@ describe('HomeView virtualization', () => {
     expect(mocks.homeTimeline.forYou.items.some((item: { post: FeedPost }) => item.post.id === 1)).toBe(false);
   });
 
-  it('restores cached Home pixels for each tab after the cached DOM is reset', async () => {
-    defaultRowHeight = 360;
+  it('restores the same heterogeneous For You region after the cached DOM is reset', async () => {
     mocks.homeTimeline = makeTimeline({
       forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
-      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
     });
-    mocks.homeTimeline.scrollTop['for-you'] = 18000;
-    mocks.homeTimeline.scrollTop.following = 22000;
+    setHeterogeneousHeights(300);
     const mounted = mountKeepAliveHome();
     wrapper = mounted.wrapper;
     await settle();
 
     const originalPanel = wrapper.get('.home-feed-panel').element as HTMLElement;
-    expect(originalPanel.scrollTop).toBe(18000);
+    await scrollPanel(wrapper, 25000);
+    const deepForYouIDs = mountedPostIDs(wrapper);
+    expect(deepForYouIDs.length).toBeGreaterThan(0);
+    expect(deepForYouIDs.some((id) => id >= 50)).toBe(true);
+    expect(deepForYouIDs.length).toBeLessThan(50);
+
     mocks.routeLeave?.();
+    const savedForYouOffset = mocks.homeTimeline.scrollTop['for-you'];
+    expect(savedForYouOffset).toBe(25000);
     originalPanel.scrollTop = 0;
     mounted.state.showHome = false;
     mocks.route.name = 'PostDetail';
     await settle();
+
+    const hiddenRow = originalPanel.querySelector<HTMLElement>('.home-virtual-row');
+    if (hiddenRow) {
+      TestResizeObserver.instances
+        .filter((observer) => observer.observed.has(hiddenRow))
+        .forEach((observer) => observer.trigger(hiddenRow, 0));
+    }
 
     mocks.route.name = 'Home';
     mounted.state.showHome = true;
@@ -574,17 +610,124 @@ describe('HomeView virtualization', () => {
 
     const restoredForYouPanel = wrapper.get('.home-feed-panel').element as HTMLElement;
     expect(restoredForYouPanel).toBe(originalPanel);
-    expect(restoredForYouPanel.scrollTop).toBe(18000);
-    expect(mountedPostIDs(wrapper).some((id) => id >= 40)).toBe(true);
+    expect(restoredForYouPanel.scrollTop).toBe(savedForYouOffset);
+    expect(mountedPostIDs(wrapper)).toEqual(deepForYouIDs);
     expect(mountedPostIDs(wrapper).length).toBeLessThan(50);
+    expect(mountedPostIDs(wrapper).some((id) => id <= 10)).toBe(false);
+  });
+
+  it('keeps separate heterogeneous measurement regions for For You and Following', async () => {
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
+      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
+    });
+    setHeterogeneousHeights(300);
+    wrapper = mountHome();
+    await settle();
+
+    await scrollPanel(wrapper, 25000);
+    const forYouDeepIDs = mountedPostIDs(wrapper);
+    expect(forYouDeepIDs.some((id) => id >= 50)).toBe(true);
+    expect((wrapper.get('.home-feed-panel').element as HTMLElement).scrollTop).toBe(25000);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+    const forYouSessionKey = mountedPostSessionKey(wrapper, forYouDeepIDs[0]);
 
     mocks.homeTimeline.activeTab = 'following';
     await settle();
-    expect(restoredForYouPanel.scrollTop).toBe(22000);
-    expect(mountedPostIDs(wrapper).some((id) => id >= 60)).toBe(true);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(25000);
+    await scrollPanel(wrapper, 25000);
+    const followingDeepIDs = mountedPostIDs(wrapper);
+    expect(followingDeepIDs.some((id) => id >= 40)).toBe(true);
 
     mocks.homeTimeline.activeTab = 'for-you';
     await settle();
-    expect(restoredForYouPanel.scrollTop).toBe(18000);
+    expect(mountedPostIDs(wrapper)).toEqual(forYouDeepIDs);
+    expect(mountedPostSessionKey(wrapper, forYouDeepIDs[0])).toBe(forYouSessionKey);
+
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+    expect(mountedPostIDs(wrapper)).toEqual(followingDeepIDs);
+  });
+
+  it('invalidates both virtualizers after a real panel width change', async () => {
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
+      followingItems: Array.from({ length: 300 }, (_, index) => makePost(index + 1)),
+    });
+    setHeterogeneousHeights(300);
+    wrapper = mountHome();
+    await settle();
+
+    const virtualList = wrapper.get('[data-virtual-feed="for-you"]');
+    const initialTotalSize = Number.parseFloat(
+      virtualList.attributes('style')?.match(/height: ([\d.]+)px/)?.[1] ?? '0',
+    );
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    panelWidth = 900;
+    for (let index = 0; index < 20; index += 1) {
+      rowHeights.set(index, forYouHeightPattern[index % forYouHeightPattern.length] + 100);
+    }
+    TestResizeObserver.instances
+      .filter((observer) => observer.observed.has(panel))
+      .forEach((observer) => observer.trigger(panel, 800, 900));
+    await settle();
+
+    const resizedTotalSize = Number.parseFloat(
+      virtualList.attributes('style')?.match(/height: ([\d.]+)px/)?.[1] ?? '0',
+    );
+    expect(resizedTotalSize).not.toBe(initialTotalSize);
+  });
+
+  it('keeps the Home view session key across virtual remounts and rotates it on refresh only', async () => {
+    wrapper = mountHome();
+    await settle();
+
+    const initialSessionKey = mountedPostSessionKey(wrapper, 1);
+    expect(initialSessionKey).toBe('home:7:for-you:0');
+
+    await scrollPanel(wrapper, 25000);
+    await scrollPanel(wrapper, 0);
+    expect(mountedPostSessionKey(wrapper, 1)).toBe(initialSessionKey);
+
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+    mocks.homeTimeline.activeTab = 'for-you';
+    await settle();
+    expect(mountedPostSessionKey(wrapper, 1)).toBe(initialSessionKey);
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+    expect(mountedPostSessionKey(wrapper, 1)).toBe('home:7:for-you:1');
+  });
+
+  it('does not rotate the Home view session across KeepAlive deactivation', async () => {
+    const mounted = mountKeepAliveHome();
+    wrapper = mounted.wrapper;
+    await settle();
+
+    const sessionKey = mountedPostSessionKey(wrapper, 1);
+    mocks.routeLeave?.();
+    mounted.state.showHome = false;
+    mocks.route.name = 'PostDetail';
+    await settle();
+    mocks.route.name = 'Home';
+    mounted.state.showHome = true;
+    await settle();
+
+    expect(mountedPostSessionKey(wrapper, 1)).toBe(sessionKey);
+  });
+
+  it('rotates and isolates Home view sessions when the authenticated viewer changes', async () => {
+    wrapper = mountHome();
+    await settle();
+    expect(mountedPostSessionKey(wrapper, 1)).toBe('home:7:for-you:0');
+
+    mocks.authStore.currentIdentity = { ...viewer, id: 8, username: 'other-viewer' };
+    await settle();
+    expect(mountedPostSessionKey(wrapper, 1)).toBe('home:8:for-you:1');
+
+    mocks.authStore.currentIdentity = null;
+    await settle();
+    expect(mountedPostSessionKey(wrapper, 1)).toBe('home:anonymous:for-you:2');
   });
 });

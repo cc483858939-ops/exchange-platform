@@ -384,6 +384,84 @@ describe('PostViewTelemetryClient', () => {
     }
   });
 
+  it('deduplicates virtual remounts within a Home session and permits explicit new sessions', async () => {
+    const originalObserver = globalThis.IntersectionObserver;
+    const observers: FakeIntersectionObserver[] = [];
+    class FakeIntersectionObserver {
+      callback: IntersectionObserverCallback;
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      emit(target: HTMLElement, ratio: number): void {
+        this.callback(
+          [{ target, intersectionRatio: ratio } as unknown as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+    }
+
+    Object.defineProperty(globalThis, 'IntersectionObserver', {
+      configurable: true,
+      writable: true,
+      value: FakeIntersectionObserver,
+    });
+
+    const feedClient = new PostViewTelemetryClient(() => currentUserID);
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    feedClient.start();
+
+    const qualify = async (card: HTMLElement, sessionKey?: string) => {
+      feedClient.observeFeedCard(card, 42, sessionKey);
+      observers[0].emit(card, 0.8);
+      await vi.advanceTimersByTimeAsync(1000);
+      await settle();
+    };
+
+    try {
+      const firstSession = 'home:7:for-you:1';
+      const firstCard = document.createElement('article');
+      await qualify(firstCard, firstSession);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+
+      feedClient.unobserveFeedCard(firstCard);
+      const remountedCard = document.createElement('article');
+      await qualify(remountedCard, firstSession);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+
+      const refreshedSession = 'home:7:for-you:2';
+      const refreshedCard = document.createElement('article');
+      await qualify(refreshedCard, refreshedSession);
+      expect(mocks.post).toHaveBeenCalledTimes(2);
+
+      feedClient.unobserveFeedCard(refreshedCard);
+      feedClient.releaseFeedViewSession(refreshedSession);
+      const releasedCard = document.createElement('article');
+      await qualify(releasedCard, refreshedSession);
+      expect(mocks.post).toHaveBeenCalledTimes(3);
+
+      feedClient.unobserveFeedCard(releasedCard);
+      const legacyCard = document.createElement('article');
+      await qualify(legacyCard);
+      expect(mocks.post).toHaveBeenCalledTimes(4);
+    } finally {
+      feedClient.stop();
+      if (originalObserver) {
+        Object.defineProperty(globalThis, 'IntersectionObserver', {
+          configurable: true,
+          writable: true,
+          value: originalObserver,
+        });
+      } else {
+        delete (globalThis as Partial<typeof globalThis>).IntersectionObserver;
+      }
+    }
+  });
+
   it('cancels hidden-tab timers and starts a fresh interval when visible', async () => {
     const originalObserver = globalThis.IntersectionObserver;
     const observers: FakeIntersectionObserver[] = [];
@@ -480,7 +558,7 @@ describe('PostViewTelemetryClient', () => {
         successResponse(body.events));
       feedClient.start();
       const card = document.createElement('article');
-      feedClient.observeFeedCard(card, 47);
+      feedClient.observeFeedCard(card, 47, 'home:7:for-you:1');
       observers[0].emit(card, 0.8);
       await vi.advanceTimersByTimeAsync(1000);
       await settle();
@@ -574,4 +652,3 @@ describe('PostViewTelemetryClient', () => {
   });
 
 });
-

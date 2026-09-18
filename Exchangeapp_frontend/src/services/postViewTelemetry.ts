@@ -33,6 +33,7 @@ type FeedObservation = {
   intersectionRatio: number;
   timer: number | null;
   emitted: boolean;
+  viewSessionKey?: string;
 };
 
 const storageKey = 'post_view_telemetry_queue_v1';
@@ -116,6 +117,7 @@ export class PostViewTelemetryClient {
   private stopped = true;
   private feedObserver: IntersectionObserver | null = null;
   private feedObservations = new Map<HTMLElement, FeedObservation>();
+  private emittedFeedPostsBySession = new Map<string, Set<number>>();
 
   private readonly handleOnline = () => {
     this.clearRetryTimer();
@@ -149,15 +151,15 @@ export class PostViewTelemetryClient {
   }
 
   stop(): void {
-    if (this.stopped) {
-      return;
+    if (!this.stopped) {
+      window.removeEventListener('online', this.handleOnline);
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      this.clearRetryTimer();
+      this.pendingFlush = false;
+      this.teardownFeedObserver();
+      this.stopped = true;
     }
-    window.removeEventListener('online', this.handleOnline);
-    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-    this.clearRetryTimer();
-    this.pendingFlush = false;
-    this.teardownFeedObserver();
-    this.stopped = true;
+    this.emittedFeedPostsBySession.clear();
   }
 
   enqueue(
@@ -203,19 +205,37 @@ export class PostViewTelemetryClient {
     return true;
   }
 
-  observeFeedCard(element: HTMLElement, postID: number): void {
+  observeFeedCard(element: HTMLElement, postID: number, viewSessionKey?: string): void {
     if (this.stopped || !this.feedObserver || !Number.isSafeInteger(postID) || postID <= 0) {
       return;
     }
     this.unobserveFeedCard(element);
+    const normalizedSessionKey = typeof viewSessionKey === 'string' && viewSessionKey.trim().length > 0
+      ? viewSessionKey.trim()
+      : undefined;
     const observation: FeedObservation = {
       postID,
       intersectionRatio: 0,
       timer: null,
-      emitted: false,
+      emitted: normalizedSessionKey !== undefined
+        && this.emittedFeedPostsBySession.get(normalizedSessionKey)?.has(postID) === true,
+      viewSessionKey: normalizedSessionKey,
     };
     this.feedObservations.set(element, observation);
     this.feedObserver.observe(element);
+  }
+
+  releaseFeedViewSession(viewSessionKey: string): void {
+    const normalizedSessionKey = viewSessionKey.trim();
+    if (!normalizedSessionKey) {
+      return;
+    }
+    this.emittedFeedPostsBySession.delete(normalizedSessionKey);
+    for (const observation of this.feedObservations.values()) {
+      if (observation.viewSessionKey === normalizedSessionKey) {
+        observation.emitted = false;
+      }
+    }
   }
 
   unobserveFeedCard(element: HTMLElement): void {
@@ -344,6 +364,12 @@ export class PostViewTelemetryClient {
       );
       if (accepted) {
         observation.emitted = true;
+        if (observation.viewSessionKey) {
+          const emittedPosts = this.emittedFeedPostsBySession.get(observation.viewSessionKey)
+            ?? new Set<number>();
+          emittedPosts.add(observation.postID);
+          this.emittedFeedPostsBySession.set(observation.viewSessionKey, emittedPosts);
+        }
       }
     }, feedQualificationDurationMS);
   }
@@ -495,4 +521,3 @@ export function resetPostViewTelemetryForTests(): void {
   sharedClient?.stop();
   sharedClient = null;
 }
-

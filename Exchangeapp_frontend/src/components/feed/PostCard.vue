@@ -266,6 +266,7 @@ import {
 const props = withDefaults(defineProps<{
   post: FeedPost;
   trackView?: boolean;
+  viewSessionKey?: string;
   likePending?: boolean;
   repostPending?: boolean;
   bookmarkPending?: boolean;
@@ -453,7 +454,11 @@ const viewActionLabel = computed(() => 'Open post, ' + viewLabel.value);
 
 const observeCurrentPost = () => {
   if (props.trackView && postCardRef.value) {
-    postViewTelemetry.observeFeedCard(postCardRef.value, props.post.id);
+    if (props.viewSessionKey) {
+      postViewTelemetry.observeFeedCard(postCardRef.value, props.post.id, props.viewSessionKey);
+    } else {
+      postViewTelemetry.observeFeedCard(postCardRef.value, props.post.id);
+    }
   }
 };
 
@@ -722,9 +727,13 @@ watch(
 );
 
 watch(
-  [() => props.post.id, () => props.trackView],
-  ([postID, trackView], [previousPostID, previousTrackView]) => {
-    if (postID === previousPostID && trackView === previousTrackView) {
+  [() => props.post.id, () => props.trackView, () => props.viewSessionKey],
+  ([postID, trackView, viewSessionKey], [previousPostID, previousTrackView, previousViewSessionKey]) => {
+    if (
+      postID === previousPostID
+      && trackView === previousTrackView
+      && viewSessionKey === previousViewSessionKey
+    ) {
       return;
     }
     unobserveCurrentPost();

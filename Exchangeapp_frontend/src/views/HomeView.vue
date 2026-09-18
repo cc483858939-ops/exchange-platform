@@ -84,6 +84,7 @@
             <PostCard
               v-if="forYouRowKind(virtualItem.index) === 'recent'"
               :post="forYouPostForRow(virtualItem.index)"
+              :view-session-key="homeViewSessionKey('for-you')"
               :like-pending="likePendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
               :repost-pending="repostPendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
               :bookmark-pending="bookmarkPendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
@@ -119,6 +120,7 @@
             >
               <PostCard
                 :post="forYouRecommendationForRow(virtualItem.index).post"
+                :view-session-key="homeViewSessionKey('for-you')"
                 :like-pending="likePendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
                 :repost-pending="repostPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
                 :bookmark-pending="bookmarkPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
@@ -178,6 +180,7 @@
             <PostCard
               v-if="followingRowKind(virtualItem.index) === 'following'"
               :post="followingPostForRow(virtualItem.index)"
+              :view-session-key="homeViewSessionKey('following')"
               :like-pending="likePendingPostIds.has(followingPostForRow(virtualItem.index).id)"
               :repost-pending="repostPendingPostIds.has(followingPostForRow(virtualItem.index).id)"
               :bookmark-pending="bookmarkPendingPostIds.has(followingPostForRow(virtualItem.index).id)"
@@ -238,6 +241,8 @@ import {
   onActivated,
   onBeforeUnmount,
   onDeactivated,
+  onMounted,
+  reactive,
   ref,
   watch,
 } from 'vue';
@@ -253,6 +258,7 @@ import AppIcon from '../components/icons/AppIcon.vue';
 import MobileHomeHeader from '../components/layout/MobileHomeHeader.vue';
 import { savePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
+import { getPostViewTelemetry } from '../services/postViewTelemetry';
 import { useAuthStore } from '../store/auth';
 import { useFeedStore } from '../store/feed';
 import { useHomeTimelineStore } from '../store/homeTimeline';
@@ -268,6 +274,7 @@ const authStore = useAuthStore();
 const feedStore = useFeedStore();
 const homeTimeline = useHomeTimelineStore();
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
+const getHomePostViewTelemetry = () => getPostViewTelemetry();
 
 const skeletonPosts = [0, 1, 2];
 const recommendationCardElements = new Map<number, HTMLElement>();
@@ -278,6 +285,8 @@ let forYouObserver: IntersectionObserver | null = null;
 const followingSentinelRef = ref<HTMLElement | null>(null);
 const followingIntersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let followingObserver: IntersectionObserver | null = null;
+let feedPanelResizeObserver: ResizeObserver | null = null;
+let lastMeasuredFeedPanelWidth: number | null = null;
 
 const forYouFeed = homeTimeline.forYou;
 const followingFeed = homeTimeline.following;
@@ -292,6 +301,50 @@ const HOME_POST_ESTIMATE_PX = 360;
 const HOME_INLINE_STATE_ESTIMATE_PX = 72;
 const HOME_VIRTUAL_OVERSCAN = 8;
 let resumeOnActivation = false;
+
+const currentViewerID = () => {
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
+};
+
+const homeViewSessionVersion = reactive<Record<FeedTab, number>>({
+  'for-you': 0,
+  following: 0,
+});
+
+const makeHomeViewSessionKey = (viewerID: number | null, tab: FeedTab, version: number) => (
+  `home:${viewerID ?? 'anonymous'}:${tab}:${version}`
+);
+
+const homeViewSessionKeys = computed<Record<FeedTab, string>>(() => {
+  const viewerID = currentViewerID();
+  return {
+    'for-you': makeHomeViewSessionKey(viewerID, 'for-you', homeViewSessionVersion['for-you']),
+    following: makeHomeViewSessionKey(viewerID, 'following', homeViewSessionVersion.following),
+  };
+});
+
+const homeViewSessionKey = (tab: FeedTab) => homeViewSessionKeys.value[tab];
+
+const releaseHomeViewSession = (tab: FeedTab, viewerID = currentViewerID()) => {
+  getHomePostViewTelemetry().releaseFeedViewSession(
+    makeHomeViewSessionKey(viewerID, tab, homeViewSessionVersion[tab]),
+  );
+};
+
+const rotateHomeViewSession = (tab: FeedTab) => {
+  releaseHomeViewSession(tab);
+  homeViewSessionVersion[tab] += 1;
+};
+
+const releaseHomeViewSessionsForViewer = (viewerID: number | null) => {
+  (['for-you', 'following'] as FeedTab[]).forEach((tab) => {
+    releaseHomeViewSession(tab, viewerID);
+  });
+};
+
+let lastHomeViewerID = currentViewerID();
+let lastHomeAuthenticated = authStore.isAuthenticated;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
 const activeFeedStatus = computed(() => {
@@ -388,29 +441,45 @@ type HomeVirtualizer = Virtualizer<HTMLElement, HTMLElement>;
 
 const forYouVirtualizerOptions = computed(() => ({
   count: forYouVirtualRows.value.length,
-  getScrollElement: () => feedPanelRef.value,
+  getScrollElement: () => (
+    homeViewActive.value
+    && authStore.isAuthenticated
+    && activeTab.value === 'for-you'
+    && isVirtualFeedRendered.value
+      ? feedPanelRef.value
+      : null
+  ),
   estimateSize: (index: number) => (
     forYouVirtualRows.value[index]?.kind === 'inline-state'
       ? HOME_INLINE_STATE_ESTIMATE_PX
       : HOME_POST_ESTIMATE_PX
   ),
   getItemKey: (index: number) => forYouVirtualRows.value[index]?.key ?? index,
-  enabled: homeViewActive.value
-    && authStore.isAuthenticated
-    && activeTab.value === 'for-you'
-    && isVirtualFeedRendered.value,
+  enabled: true,
+  useCachedMeasurements: !homeViewActive.value
+    || !authStore.isAuthenticated
+    || activeTab.value !== 'for-you'
+    || !isVirtualFeedRendered.value,
   overscan: HOME_VIRTUAL_OVERSCAN,
 }));
 
 const followingVirtualizerOptions = computed(() => ({
   count: followingVirtualRows.value.length,
-  getScrollElement: () => feedPanelRef.value,
-  estimateSize: () => HOME_POST_ESTIMATE_PX,
-  getItemKey: (index: number) => followingVirtualRows.value[index]?.key ?? index,
-  enabled: homeViewActive.value
+  getScrollElement: () => (
+    homeViewActive.value
     && authStore.isAuthenticated
     && activeTab.value === 'following'
-    && isVirtualFeedRendered.value,
+    && isVirtualFeedRendered.value
+      ? feedPanelRef.value
+      : null
+  ),
+  estimateSize: () => HOME_POST_ESTIMATE_PX,
+  getItemKey: (index: number) => followingVirtualRows.value[index]?.key ?? index,
+  enabled: true,
+  useCachedMeasurements: !homeViewActive.value
+    || !authStore.isAuthenticated
+    || activeTab.value !== 'following'
+    || !isVirtualFeedRendered.value,
   overscan: HOME_VIRTUAL_OVERSCAN,
 }));
 
@@ -512,15 +581,59 @@ const measureFollowingRow = (element: Element | ComponentPublicInstance | null) 
   measureVirtualRow(element, followingVirtualizer.value);
 };
 
-const currentViewerID = () => {
-  const id = authStore.currentIdentity?.id;
-  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
-};
-
 const canDeletePost = (post: FeedPost) =>
   authStore.isAuthenticated
   && currentViewerID() !== null
   && post.author.id === currentViewerID();
+
+const readResizeEntryWidth = (entry: ResizeObserverEntry) => {
+  const borderBoxSize = Array.isArray(entry.borderBoxSize)
+    ? entry.borderBoxSize[0]
+    : entry.borderBoxSize;
+  const width = borderBoxSize?.inlineSize
+    ?? entry.contentRect?.width
+    ?? feedPanelRef.value?.clientWidth
+    ?? 0;
+  return Math.round(width);
+};
+
+const handleFeedPanelResize = (entries: ResizeObserverEntry[]) => {
+  const width = entries[0] ? readResizeEntryWidth(entries[0]) : 0;
+  if (width <= 0) {
+    return;
+  }
+  if (lastMeasuredFeedPanelWidth === null) {
+    lastMeasuredFeedPanelWidth = width;
+    return;
+  }
+  if (lastMeasuredFeedPanelWidth === width) {
+    return;
+  }
+
+  lastMeasuredFeedPanelWidth = width;
+  forYouVirtualizer.value.measure();
+  followingVirtualizer.value.measure();
+};
+
+const disconnectFeedPanelResizeObserver = () => {
+  feedPanelResizeObserver?.disconnect();
+  feedPanelResizeObserver = null;
+};
+
+const observeFeedPanelResize = () => {
+  disconnectFeedPanelResizeObserver();
+  if (typeof ResizeObserver === 'undefined' || !feedPanelRef.value) {
+    return;
+  }
+
+  const initialWidth = Math.round(feedPanelRef.value.clientWidth);
+  if (initialWidth > 0 && lastMeasuredFeedPanelWidth === null) {
+    lastMeasuredFeedPanelWidth = initialWidth;
+  }
+
+  feedPanelResizeObserver = new ResizeObserver(handleFeedPanelResize);
+  feedPanelResizeObserver.observe(feedPanelRef.value);
+};
 
 const saveCurrentScroll = (tab: FeedTab) => {
   const panel = feedPanelRef.value;
@@ -546,18 +659,11 @@ const restoreScroll = async (tab: FeedTab) => {
   const virtualizer = tab === 'for-you'
     ? forYouVirtualizer.value
     : followingVirtualizer.value;
-  virtualizer.measure();
-  await nextTick();
-
-  if (!homeViewActive.value || activeTab.value !== tab) {
-    return;
-  }
-
   const target = homeTimeline.scrollTop[tab];
+  virtualizer.scrollToOffset(target, { align: 'start', behavior: 'auto' });
   if (Math.abs(panel.scrollTop - target) > 1) {
     panel.scrollTop = target;
   }
-  virtualizer.scrollToOffset(target, { behavior: 'auto' });
 };
 
 const handleFeedScroll = () => {
@@ -700,11 +806,17 @@ const resetRecommendationObservation = () => {
 };
 
 const loadForYou = async (force = false) => {
+  if (force) {
+    rotateHomeViewSession('for-you');
+  }
   await homeTimeline.loadForYou(force);
   await bindCurrentRecommendationCards();
 };
 
 const loadFollowing = async (force = false) => {
+  if (force) {
+    rotateHomeViewSession('following');
+  }
   if (!force && followingFeed.loaded && followingFeed.stale) {
     await homeTimeline.revalidateFollowing();
   } else {
@@ -898,7 +1010,7 @@ watch(
     loadActiveFeed(tab);
     restoreScroll(tab);
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 );
 
 watch(
@@ -956,6 +1068,20 @@ watch(
 );
 
 watch(
+  [() => currentViewerID(), () => authStore.isAuthenticated],
+  ([viewerID, isAuthenticated]) => {
+    if (viewerID === lastHomeViewerID && isAuthenticated === lastHomeAuthenticated) {
+      return;
+    }
+    releaseHomeViewSessionsForViewer(lastHomeViewerID);
+    homeViewSessionVersion['for-you'] += 1;
+    homeViewSessionVersion.following += 1;
+    lastHomeViewerID = viewerID;
+    lastHomeAuthenticated = isAuthenticated;
+  },
+);
+
+watch(
   () => authStore.isAuthenticated,
   (isAuthenticated) => {
     if (isAuthenticated && homeViewActive.value) {
@@ -965,11 +1091,16 @@ watch(
   { immediate: true },
 );
 
+onMounted(() => {
+  observeFeedPanelResize();
+});
+
 onDeactivated(() => {
   if (!homeViewActive.value) {
     return;
   }
   homeViewActive.value = false;
+  disconnectFeedPanelResizeObserver();
   resumeOnActivation = true;
   disconnectForYouObserver();
   disconnectFollowingObserver();
@@ -977,6 +1108,7 @@ onDeactivated(() => {
 });
 
 onActivated(() => {
+  observeFeedPanelResize();
   if (!resumeOnActivation) {
     return;
   }
@@ -1001,6 +1133,7 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
+  disconnectFeedPanelResizeObserver();
   if (homeViewActive.value) {
     const tab = activeTab.value;
     saveCurrentScroll(tab);
@@ -1010,6 +1143,7 @@ onBeforeUnmount(() => {
   }
   homeViewActive.value = false;
   resumeOnActivation = false;
+  releaseHomeViewSessionsForViewer(currentViewerID());
   recommendationCardElements.clear();
 });
 </script>

@@ -291,6 +291,24 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(bodyObserver?.disconnect).toHaveBeenCalledTimes(1);
   });
 
+  it('passes a logical view session key while preserving legacy two-argument observation', async () => {
+    const sessionKey = 'home:7:for-you:1';
+    const wrapper = mountPostCard(basePost(), { viewSessionKey: sessionKey });
+    const root = wrapper.element;
+
+    expect(mocks.observeFeedCard).toHaveBeenCalledWith(root, 42, sessionKey);
+
+    await wrapper.setProps({ viewSessionKey: 'home:7:for-you:2' });
+    expect(mocks.unobserveFeedCard).toHaveBeenCalledWith(root);
+    expect(mocks.observeFeedCard).toHaveBeenLastCalledWith(root, 42, 'home:7:for-you:2');
+    wrapper.unmount();
+
+    mocks.observeFeedCard.mockClear();
+    const legacyWrapper = mountPostCard();
+    expect(mocks.observeFeedCard).toHaveBeenCalledWith(legacyWrapper.element, 42);
+    legacyWrapper.unmount();
+  });
+
   it('does not show Show more when the collapsed body fits', async () => {
     const wrapper = mountPostCard();
     setBodyGeometry(wrapper, 100, 100);
