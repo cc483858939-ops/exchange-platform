@@ -1270,7 +1270,7 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  overflow-anchor: auto;
+  overflow-anchor: none;
   -webkit-overflow-scrolling: touch;
 }
 
