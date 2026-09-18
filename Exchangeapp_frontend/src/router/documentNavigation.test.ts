@@ -14,14 +14,19 @@ afterEach(() => {
 });
 
 describe('document navigation', () => {
-  it.each<Array<[InitialDocumentNavigation['type'], boolean]>>([
+  const navigationCases: Array<[InitialDocumentNavigation['type'], boolean]> = [
     ['navigate', false],
     ['reload', true],
     ['back_forward', false],
     ['unknown', false],
-  ])('classifies %s navigation correctly for the initial route', (type, expected) => {
-    expect(isInitialDocumentReloadForRoute('/', { type, url: '/' })).toBe(expected);
-  });
+  ];
+
+  it.each(navigationCases)(
+    'classifies %s navigation correctly for the initial route',
+    (type, expected) => {
+      expect(isInitialDocumentReloadForRoute('/', { type, url: '/' })).toBe(expected);
+    },
+  );
 
   it('requires the reloaded document URL to match the mounted route', () => {
     expect(isInitialDocumentReloadForRoute('/', {
