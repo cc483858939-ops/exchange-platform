@@ -514,11 +514,12 @@ describe('UserProfileView observer and cursor concurrency', () => {
 
     state.showProfile = false;
     await nextTick();
+    originalViewport.scrollTop = 0;
     mocks.route.name = 'PostDetail';
     mocks.setRouteID('9999');
     await settle();
 
-    expect(session.scrollTop).toBe(900);
+    expect(session.scrollTop).toBe(1480);
     expect(initialObserver?.disconnectCount).toBeGreaterThan(0);
 
     const userCallsBeforeActivation = mocks.getUser.mock.calls.length;

@@ -461,6 +461,11 @@ let observer: IntersectionObserver | null = null;
 let profileEntryVersion = 0;
 let restoredEntryVersion = -1;
 
+const beginProfileRestoreEpoch = () => {
+  profileEntryVersion += 1;
+  restoredEntryVersion = -1;
+};
+
 const currentViewerID = computed(() => {
   if (!authStore.isAuthenticated) return null;
   const id = authStore.currentIdentity?.id;
@@ -924,6 +929,11 @@ const deactivateProfileView = () => {
     return;
   }
 
+  const profileID = numericUserID.value;
+  if (profileID !== null) {
+    saveCurrentScroll(profileID);
+  }
+
   profileViewActive.value = false;
   resumeOnActivation = true;
 
@@ -940,6 +950,7 @@ const activateProfileView = () => {
   profileViewActive.value = true;
 
   syncProfileRouteID();
+  beginProfileRestoreEpoch();
 
   void nextTick(() => {
     if (!profileViewActive.value) {
@@ -962,7 +973,7 @@ watch(
 );
 
 watch(userId, (nextID, previousID) => {
-  profileEntryVersion += 1;
+  beginProfileRestoreEpoch();
   const previousNumericID = Number(previousID);
   if (Number.isSafeInteger(previousNumericID) && previousNumericID > 0) {
     saveCurrentScroll(previousNumericID);
@@ -976,7 +987,7 @@ watch(
   [currentViewerID, () => authStore.isAuthenticated],
   ([nextViewerID, nextAuthenticated], [previousViewerID, previousAuthenticated]) => {
     if (nextViewerID === previousViewerID && nextAuthenticated === previousAuthenticated) return;
-    profileEntryVersion += 1;
+    beginProfileRestoreEpoch();
     forceCloseEditProfile();
     loadProfile();
   },

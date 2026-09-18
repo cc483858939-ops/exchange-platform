@@ -176,6 +176,12 @@ const prepareLoadedSession = (id: number, scrollTop: number) => {
   return { store, session };
 };
 
+const setProfileRoute = (id: number) => {
+  mocks.route.name = 'UserProfile';
+  mocks.route.params.id = String(id);
+  mocks.route.fullPath = `/users/${id}`;
+};
+
 const restoreScrollY = (descriptor: PropertyDescriptor | undefined) => {
   if (descriptor) {
     Object.defineProperty(window, 'scrollY', descriptor);
@@ -199,7 +205,7 @@ describe('UserProfileView scroll viewport', () => {
       isAuthenticated: true,
       currentIdentity: profile(7),
     });
-    mocks.getUser.mockResolvedValue(profile(7));
+    mocks.getUser.mockImplementation((id: number) => Promise.resolve(profile(id)));
     mocks.getUserTimeline.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
       following: false,
@@ -246,10 +252,10 @@ describe('UserProfileView scroll viewport', () => {
     }
   });
 
-  it('keeps the same cached viewport through a scrolled PostDetail return', async () => {
+  it('restores own-profile scroll after cached PostDetail return even if DOM scroll is reset', async () => {
     const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
-    prepareLoadedSession(7, 0);
+    const { session } = prepareLoadedSession(7, 0);
     const { wrapper, state } = mountKeepAliveProfile();
 
     try {
@@ -260,6 +266,7 @@ describe('UserProfileView scroll viewport', () => {
 
       state.showProfile = false;
       await nextTick();
+      originalViewport.scrollTop = 0;
       mocks.route.name = 'PostDetail';
       mocks.route.params.id = '9999';
       await settle();
@@ -277,11 +284,82 @@ describe('UserProfileView scroll viewport', () => {
       const restoredViewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
       expect(restoredViewport).toBe(originalViewport);
       expect(restoredViewport.scrollTop).toBe(2400);
+      expect(session.scrollTop).toBe(2400);
       expect(scrollTo).not.toHaveBeenCalled();
     } finally {
       wrapper.unmount();
       scrollTo.mockRestore();
       restoreScrollY(scrollYDescriptor);
+    }
+  });
+
+  it('restores an external profile after cached PostDetail return and stays one-shot during updates', async () => {
+    const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    setProfileRoute(8);
+    const { session } = prepareLoadedSession(8, 0);
+    const { wrapper, state } = mountKeepAliveProfile();
+
+    try {
+      await settle();
+      const originalViewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      originalViewport.scrollTop = 2400;
+      mocks.routeLeaveGuard?.();
+      expect(session.scrollTop).toBe(2400);
+
+      state.showProfile = false;
+      await nextTick();
+      originalViewport.scrollTop = 0;
+      session.timelineInitialError = 'hidden update';
+      await settle();
+      expect(originalViewport.scrollTop).toBe(0);
+
+      mocks.route.name = 'PostDetail';
+      mocks.route.params.id = '9999';
+      await settle();
+      setProfileRoute(8);
+      state.showProfile = true;
+      await settle();
+
+      const restoredViewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      expect(restoredViewport).toBe(originalViewport);
+      expect(restoredViewport.scrollTop).toBe(2400);
+      expect(session.scrollTop).toBe(2400);
+
+      restoredViewport.scrollTop = 3100;
+      session.timelineInitialError = 'active update';
+      await settle();
+      expect(restoredViewport.scrollTop).toBe(3100);
+      expect(scrollTo).not.toHaveBeenCalled();
+    } finally {
+      wrapper.unmount();
+      scrollTo.mockRestore();
+      restoreScrollY(scrollYDescriptor);
+    }
+  });
+
+  it('keeps independent scroll positions for different profiles', async () => {
+    prepareLoadedSession(8, 2400);
+    prepareLoadedSession(9, 700);
+    setProfileRoute(8);
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      expect(viewport.scrollTop).toBe(2400);
+
+      mocks.routeLeaveGuard?.();
+      setProfileRoute(9);
+      await settle();
+      expect(viewport.scrollTop).toBe(700);
+
+      mocks.routeLeaveGuard?.();
+      setProfileRoute(8);
+      await settle();
+      expect(viewport.scrollTop).toBe(2400);
+    } finally {
+      wrapper.unmount();
     }
   });
 
