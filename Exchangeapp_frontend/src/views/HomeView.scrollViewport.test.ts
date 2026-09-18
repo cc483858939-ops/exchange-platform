@@ -225,6 +225,71 @@ const settle = async () => {
   await flushPromises();
 };
 
+const installPanelScrollbarGeometry = (
+  panel: HTMLElement,
+  {
+    left = 0,
+    top = 0,
+    width = 1000,
+    height = 800,
+    clientWidth = width,
+  }: {
+    left?: number;
+    top?: number;
+    width?: number;
+    height?: number;
+    clientWidth?: number;
+  } = {},
+) => {
+  Object.defineProperty(panel, 'offsetWidth', {
+    configurable: true,
+    value: width,
+  });
+  Object.defineProperty(panel, 'clientWidth', {
+    configurable: true,
+    value: clientWidth,
+  });
+  Object.defineProperty(panel, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      x: left,
+      y: top,
+      left,
+      top,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      toJSON: () => ({}),
+    }),
+  });
+};
+
+const dispatchPanelPointerEvent = (
+  target: HTMLElement,
+  type: 'pointerdown' | 'pointerup' | 'pointercancel',
+  {
+    clientX,
+    clientY,
+    pointerType = 'mouse',
+  }: {
+    clientX: number;
+    clientY: number;
+    pointerType?: string;
+  },
+) => {
+  const event = new Event(type, {
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperties(event, {
+    clientX: { value: clientX },
+    clientY: { value: clientY },
+    pointerType: { value: pointerType },
+  });
+  target.dispatchEvent(event);
+};
+
 const mountHome = () => mount(HomeView, {
   global: {
     stubs: {
@@ -348,6 +413,118 @@ describe('HomeView scroll viewport ownership', () => {
     expect(panel.scrollTop).toBe(0);
     expect(mocks.homeTimeline.scrollTop.following).toBe(0);
     expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
+  });
+
+
+  it('releases a cold reload top pin for a native scrollbar drag', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    installPanelScrollbarGeometry(panel);
+    dispatchPanelPointerEvent(panel, 'pointerdown', {
+      clientX: 995,
+      clientY: 120,
+    });
+
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(500);
+  });
+
+  it('does not release a cold reload top pin for a normal content pointerdown', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    installPanelScrollbarGeometry(panel);
+    dispatchPanelPointerEvent(panel, 'pointerdown', {
+      clientX: 500,
+      clientY: 120,
+    });
+
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+  });
+
+  it('clears scrollbar drag intent on pointercancel', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    installPanelScrollbarGeometry(panel);
+    dispatchPanelPointerEvent(panel, 'pointerdown', {
+      clientX: 995,
+      clientY: 120,
+    });
+    dispatchPanelPointerEvent(panel, 'pointercancel', {
+      clientX: 995,
+      clientY: 120,
+    });
+
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+  });
+
+  it('does not release a cold reload top pin for Space on a button', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const button = document.createElement('button');
+    panel.appendChild(button);
+    button.dispatchEvent(new KeyboardEvent('keydown', {
+      key: ' ',
+      bubbles: true,
+    }));
+
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+  });
+
+  it('does not release a cold reload top pin for ArrowDown inside a textarea', async () => {
+    mocks.initialDocumentNavigation.type = 'reload';
+    mocks.initialDocumentNavigation.url = '/';
+
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    const textarea = document.createElement('textarea');
+    panel.appendChild(textarea);
+    textarea.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      bubbles: true,
+    }));
+
+    panel.scrollTop = 500;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
   });
 
   it('releases a cold reload top pin after explicit wheel scrolling', async () => {

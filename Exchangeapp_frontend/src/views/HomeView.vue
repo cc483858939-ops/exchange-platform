@@ -20,6 +20,9 @@
       @wheel.passive="handleFeedUserScrollIntent"
       @touchmove.passive="handleFeedUserScrollIntent"
       @keydown="handleFeedKeydown"
+      @pointerdown="handleFeedPointerDown"
+      @pointerup="handleFeedPointerUp"
+      @pointercancel="handleFeedPointerUp"
       role="tabpanel"
       tabindex="0"
       :aria-labelledby="'feed-tab-' + activeTab"
@@ -324,6 +327,7 @@ const HOME_INLINE_STATE_ESTIMATE_PX = 72;
 const HOME_VIRTUAL_OVERSCAN = 8;
 let resumeOnActivation = false;
 let lastUserScrollIntentAt = Number.NEGATIVE_INFINITY;
+let feedScrollbarDragIntent = false;
 let correctingPinnedScroll = false;
 
 const currentViewerID = () => {
@@ -528,6 +532,7 @@ const feedClockNow = () => (
 
 const clearFeedUserScrollIntent = () => {
   lastUserScrollIntentAt = Number.NEGATIVE_INFINITY;
+  feedScrollbarDragIntent = false;
 };
 
 const markFeedUserScrollIntent = () => {
@@ -536,6 +541,10 @@ const markFeedUserScrollIntent = () => {
 
 const hasRecentFeedUserScrollIntent = () => (
   feedClockNow() - lastUserScrollIntentAt < HOME_USER_SCROLL_INTENT_WINDOW_MS
+);
+
+const hasFeedUserScrollIntent = () => (
+  feedScrollbarDragIntent || hasRecentFeedUserScrollIntent()
 );
 
 const setFeedTopPinned = (tab: FeedTab, pinned: boolean) => {
@@ -551,6 +560,10 @@ const setFeedTopPinned = (tab: FeedTab, pinned: boolean) => {
     ? () => false
     : undefined;
 };
+
+if (initialHomeDocumentReload) {
+  setFeedTopPinned(initialHomeDocumentReloadTab, true);
+}
 
 const virtualItemsWithInitialFallback = (
   virtualItems: VirtualItem[],
@@ -761,10 +774,102 @@ const handleFeedUserScrollIntent = () => {
   markFeedUserScrollIntent();
 };
 
-const handleFeedKeydown = (event: KeyboardEvent) => {
-  if (HOME_SCROLL_INTENT_KEYS.has(event.key)) {
-    markFeedUserScrollIntent();
+const isInteractiveKeyboardTarget = (target: EventTarget | null) => {
+  if (
+    typeof HTMLElement === 'undefined'
+    || !(target instanceof HTMLElement)
+  ) {
+    return false;
   }
+
+  return Boolean(target.closest([
+    'button',
+    'a[href]',
+    'input',
+    'textarea',
+    'select',
+    '[contenteditable="true"]',
+    '[role="button"]',
+    '[role="link"]',
+    '[role="textbox"]',
+  ].join(',')));
+};
+
+const isTextEditingTarget = (target: EventTarget | null) => {
+  if (
+    typeof HTMLElement === 'undefined'
+    || !(target instanceof HTMLElement)
+  ) {
+    return false;
+  }
+
+  return Boolean(target.closest(
+    'input, textarea, select, [contenteditable="true"], [role="textbox"]',
+  ));
+};
+
+const handleFeedKeydown = (event: KeyboardEvent) => {
+  if (!HOME_SCROLL_INTENT_KEYS.has(event.key)) {
+    return;
+  }
+
+  if (
+    isInteractiveKeyboardTarget(event.target)
+    && (event.key === ' ' || event.key === 'Spacebar')
+  ) {
+    return;
+  }
+
+  if (
+    isTextEditingTarget(event.target)
+    && (
+      event.key === 'ArrowUp'
+      || event.key === 'ArrowDown'
+      || event.key === 'Home'
+      || event.key === 'End'
+    )
+  ) {
+    return;
+  }
+
+  markFeedUserScrollIntent();
+};
+
+const isFeedVerticalScrollbarPointer = (
+  event: PointerEvent,
+  panel: HTMLElement,
+) => {
+  if (event.pointerType !== 'mouse' || event.target !== panel) {
+    return false;
+  }
+
+  const rect = panel.getBoundingClientRect();
+  const nativeScrollbarWidth = Math.max(
+    0,
+    panel.offsetWidth - panel.clientWidth,
+  );
+  const hitWidth = Math.max(nativeScrollbarWidth, 16);
+
+  return (
+    event.clientX >= rect.right - hitWidth
+    && event.clientX <= rect.right
+    && event.clientY >= rect.top
+    && event.clientY <= rect.bottom
+  );
+};
+
+const handleFeedPointerDown = (event: PointerEvent) => {
+  const panel = feedPanelRef.value;
+  if (!panel || !isFeedVerticalScrollbarPointer(event, panel)) {
+    return;
+  }
+
+  feedScrollbarDragIntent = true;
+  markFeedUserScrollIntent();
+};
+
+const handleFeedPointerUp = () => {
+  feedScrollbarDragIntent = false;
 };
 
 const handleFeedScroll = () => {
@@ -788,7 +893,7 @@ const handleFeedScroll = () => {
     return;
   }
 
-  if (hasRecentFeedUserScrollIntent()) {
+  if (hasFeedUserScrollIntent()) {
     setFeedTopPinned(tab, false);
     return;
   }
