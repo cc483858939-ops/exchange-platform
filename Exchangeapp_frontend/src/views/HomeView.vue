@@ -116,7 +116,7 @@
             <div
               v-else-if="forYouRowKind(virtualItem.index) === 'recommendation'"
               class="recommendation-card-wrapper"
-              :ref="element => bindRecommendationCard(element, forYouRecommendationForRow(virtualItem.index))"
+              :ref="recommendationCardRefForRow(virtualItem.index)"
             >
               <PostCard
                 :post="forYouRecommendationForRow(virtualItem.index).post"
@@ -993,6 +993,18 @@ const bindRecommendationCard = (
       recommendationTelemetry.unobserveFeedCard(item.recommendation.post.id, item.recommendation.tracking);
     }
   });
+};
+
+type RecommendationCardRef = (
+  element: Element | ComponentPublicInstance | null,
+) => void;
+
+const recommendationCardRefForRow = (index: number): RecommendationCardRef => {
+  const item = forYouRecommendationForRow(index);
+
+  return (element) => {
+    bindRecommendationCard(element, item);
+  };
 };
 
 const handleRecommendationClick = (recommendation: RecommendedPost) => {

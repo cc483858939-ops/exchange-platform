@@ -589,6 +589,53 @@ describe('HomeView virtualization', () => {
     expect(mocks.homeTimeline.forYou.items.some((item: { post: FeedPost }) => item.post.id === 1)).toBe(false);
   });
 
+  it('tears down replaced recommendation refs with the captured old item', async () => {
+    const oldItem = makeRecommendation(42);
+    const freshItem = makeRecommendation(99);
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: [oldItem],
+    });
+    wrapper = mountHome();
+    await settle();
+
+    expect(wrapper.find('.recommendation-card-wrapper').exists()).toBe(true);
+    expect(mountedPostIDs(wrapper)).toContain(42);
+
+    mocks.telemetry.detachFeedCard.mockClear();
+    mocks.telemetry.unobserveFeedCard.mockClear();
+    mocks.homeTimeline.forYou.items = [];
+    mocks.homeTimeline.forYou.loading = true;
+    mocks.homeTimeline.forYou.loaded = false;
+
+    await settle();
+
+    expect(wrapper.find('.recommendation-card-wrapper').exists()).toBe(false);
+    expect(mocks.telemetry.detachFeedCard).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ token: 'recommendation-42' }),
+    );
+    expect(mocks.telemetry.unobserveFeedCard).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ token: 'recommendation-42' }),
+    );
+
+    mocks.telemetry.observeFeedCard.mockClear();
+    mocks.homeTimeline.forYou.items = [freshItem];
+    mocks.homeTimeline.forYou.loading = false;
+    mocks.homeTimeline.forYou.loaded = true;
+    mocks.homeTimeline.forYou.error = false;
+
+    await settle();
+
+    expect(wrapper.find('.recommendation-card-wrapper').exists()).toBe(true);
+    expect(mountedPostIDs(wrapper)).toContain(99);
+    expect(mocks.telemetry.observeFeedCard).toHaveBeenCalledWith(
+      expect.anything(),
+      99,
+      expect.objectContaining({ token: 'recommendation-99' }),
+    );
+  });
+
   it('restores the same heterogeneous For You region after the cached DOM is reset', async () => {
     mocks.homeTimeline = makeTimeline({
       forYouItems: Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 1)),
