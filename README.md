@@ -211,12 +211,28 @@ bash scripts/deploy-production.sh CHECK
 bash scripts/deploy-production.sh DEPLOY-PRODUCTION
 ```
 
-生产 Compose 变更需要额外显式授权：
+如果 `CHECK` 显示 `compose_status=pending`，脚本会在任何合并、构建、备份或
+运行时更新前停止。此时需要人工完成以下流程：
+
+1. 审核 `deploy/compose.prod.yml` 的差异。
+2. 如果批准，手工将 Git 快进到目标提交，并手工应用所需的基础设施、网络、
+   volume、镜像、环境变量或服务变更。
+3. 验证生产健康状态。
+4. 使用 `CHECK` 输出的完整目标 SHA 记录人工确认：
 
 ```bash
-ALLOW_PRODUCTION_COMPOSE_CHANGE=1 \
-  bash scripts/deploy-production.sh DEPLOY-PRODUCTION
+bash scripts/deploy-production.sh ACK-COMPOSE-APPLIED <full-target-sha>
 ```
+
+`ACK-COMPOSE-APPLIED` 只记录操作员已经完成并验证 Compose 应用，不会自动修改
+基础设施。ACK 成功后重新执行：
+
+```bash
+bash scripts/deploy-production.sh DEPLOY-PRODUCTION
+```
+
+脚本通过独立的 runtime 和 Compose 状态文件区分“代码部署完成”与“Compose 已由
+操作员应用”。
 
 脚本不部署前端，不运行 RSSHub / DevData，不自动重建有状态基础设施，也不执行
 自动回滚；前端仍由 Cloudflare Pages 负责。

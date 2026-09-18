@@ -395,7 +395,12 @@ jobs:
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml config --quiet
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile rss --profile devdata config --quiet
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile observability config --quiet
-          bash -n scripts/backup-postgres.sh scripts/rebuild-production-data.sh scripts/deploy-production.sh
+          bash -n \
+            scripts/backup-postgres.sh \
+            scripts/rebuild-production-data.sh \
+            scripts/deploy-production.sh \
+            scripts/tests/deploy-production-state-test.sh
+          bash scripts/tests/deploy-production-state-test.sh
 
       - name: Build frontend image
         run: docker build -f Exchangeapp_frontend/Dockerfile -t goexchange-frontend:ci Exchangeapp_frontend
