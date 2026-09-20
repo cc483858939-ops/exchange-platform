@@ -64,7 +64,21 @@ export async function onRequest(context) {
   try {
     const upstreamResponse = await fetch(upstreamUrl.toString(), requestInit);
     const responseHeaders = new Headers(upstreamResponse.headers);
-    responseHeaders.set('cache-control', 'no-store');
+    const isCacheableFileRequest =
+      (method === 'GET' || method === 'HEAD')
+      && segments[0] === 'files';
+    const shouldPreserveFileCache =
+      isCacheableFileRequest && upstreamResponse.ok;
+
+    if (shouldPreserveFileCache) {
+      // The backend owns the cache policy for public files. Keep the proxy
+      // conservative if a successful file response unexpectedly omits it.
+      if (!responseHeaders.has('cache-control')) {
+        responseHeaders.set('cache-control', 'no-store');
+      }
+    } else {
+      responseHeaders.set('cache-control', 'no-store');
+    }
 
     return new Response(upstreamResponse.body, {
       status: upstreamResponse.status,
