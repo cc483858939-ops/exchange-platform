@@ -84,6 +84,10 @@ export type HomeForYouState = HomeFeedState<HomeRecommendationItem> & {
 
 const HOME_FOR_YOU_PAGE_SIZE = 20;
 
+export const GUEST_FOR_YOU_SERVED_STORAGE_KEY =
+  'exchange.guest-for-you.served-post-ids.v1';
+export const GUEST_FOR_YOU_SERVED_LIMIT = 200;
+
 type ForYouAudience =
   | { authenticated: true; viewerID: number }
   | { authenticated: false; viewerID: null };
@@ -93,6 +97,49 @@ const normalizeID = (value: unknown): number | null => {
     return null;
   }
   return value;
+};
+
+const readGuestServedPostIds = (): number[] => {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.sessionStorage.getItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    const result: number[] = [];
+    const seen = new Set<number>();
+    for (const value of parsed) {
+      if (
+        !Number.isSafeInteger(value)
+        || value <= 0
+        || seen.has(value)
+      ) {
+        continue;
+      }
+      seen.add(value);
+      result.push(value);
+    }
+
+    return result.slice(-GUEST_FOR_YOU_SERVED_LIMIT);
+  } catch {
+    return [];
+  }
+};
+
+const persistGuestServedPostIds = (ids: number[]) => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.sessionStorage.setItem(
+      GUEST_FOR_YOU_SERVED_STORAGE_KEY,
+      JSON.stringify(ids),
+    );
+  } catch {
+    // Guest recommendation serving must continue when sessionStorage is unavailable.
+  }
 };
 
 const getErrorStatus = (error: unknown) =>
@@ -143,6 +190,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const followingLoadedPostIds = new Set<number>();
   const forYouLoadedPostIds = new Set<number>();
+  const guestServedPostIds = readGuestServedPostIds();
+  const guestServedPostIdSet = new Set(guestServedPostIds);
   const likeMutationVersions = new Map<number, number>();
   const repostMutationVersions = new Map<number, number>();
   const bookmarkMutationVersions = new Map<number, number>();
@@ -686,6 +735,27 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     return appended;
   };
 
+  const recordGuestServedPostIds = (recommendations: RecommendedPost[]) => {
+    let changed = false;
+    for (const recommendation of recommendations) {
+      const postID = normalizeID(recommendation?.post?.id);
+      if (postID === null || guestServedPostIdSet.has(postID)) continue;
+
+      guestServedPostIdSet.add(postID);
+      guestServedPostIds.push(postID);
+      changed = true;
+    }
+
+    if (!changed) return;
+
+    const overflow = guestServedPostIds.length - GUEST_FOR_YOU_SERVED_LIMIT;
+    if (overflow > 0) {
+      const removed = guestServedPostIds.splice(0, overflow);
+      removed.forEach((postID) => guestServedPostIdSet.delete(postID));
+    }
+    persistGuestServedPostIds(guestServedPostIds);
+  };
+
   const currentForYouAudience = (): ForYouAudience => (
     authStore.isAuthenticated && viewerID.value !== null
       ? { authenticated: true, viewerID: viewerID.value }
@@ -758,9 +828,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
         : await getPublicPostRecommendations({
           limit: HOME_FOR_YOU_PAGE_SIZE,
-          excludePostIds: Array.from(forYouLoadedPostIds),
+          excludePostIds: Array.from(guestServedPostIds),
         });
       if (!currentForYouRequest(version, generation, capturedAudience)) return;
+      if (!capturedAudience.authenticated) {
+        recordGuestServedPostIds(response.items);
+      }
       const newItems = appendForYouRecommendations(response.items);
       forYou.loaded = true;
       forYou.depleted = response.depleted;
@@ -818,10 +891,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
         : await getPublicPostRecommendations({
           limit: HOME_FOR_YOU_PAGE_SIZE,
-          excludePostIds: Array.from(forYouLoadedPostIds),
+          excludePostIds: Array.from(guestServedPostIds),
         });
       if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) return;
 
+      if (!capturedAudience.authenticated) {
+        recordGuestServedPostIds(response.items);
+      }
       const newItems = appendForYouRecommendations(response.items);
       if (response.depleted) {
         forYou.depleted = true;

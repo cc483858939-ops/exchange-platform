@@ -73,7 +73,11 @@ vi.mock('../services/bookmarkService', () => ({
   unbookmarkPost: mocks.unbookmarkPost,
 }));
 
-import { useHomeTimelineStore } from './homeTimeline';
+import {
+  GUEST_FOR_YOU_SERVED_LIMIT,
+  GUEST_FOR_YOU_SERVED_STORAGE_KEY,
+  useHomeTimelineStore,
+} from './homeTimeline';
 
 const author = (id = 7) => ({
   id,
@@ -135,6 +139,22 @@ const settle = async () => {
   await flushPromises();
 };
 
+const createSessionStorage = (): Storage => {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+    clear: () => values.clear(),
+    key: (index: number) => Array.from(values.keys())[index] ?? null,
+    get length() {
+      return values.size;
+    },
+  } as Storage;
+};
+
+let testSessionStorage: Storage;
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(resolvePromise => {
@@ -146,6 +166,12 @@ const deferred = <T>() => {
 describe('home timeline session store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    testSessionStorage = createSessionStorage();
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { sessionStorage: testSessionStorage },
+    });
+    testSessionStorage.removeItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY);
     mocks.authStore = reactive({
       isAuthenticated: true,
       currentIdentity: { id: 7 },
@@ -433,6 +459,7 @@ describe('home timeline session store', () => {
     expect(store.viewerID).toBe(8);
     expect(store.forYou.items).toHaveLength(0);
     expect(store.forYou.loaded).toBe(false);
+    expect(testSessionStorage.getItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY)).toBe(null);
   });
 
   it('drops a late authenticated response after logout begins', async () => {
@@ -446,12 +473,14 @@ describe('home timeline session store', () => {
     mocks.feedStore!.viewerID = null;
     await settle();
 
+    mocks.getPublicPostRecommendations.mockResolvedValue(recommendationPage([recommendation(77)]));
+    const guestRequest = store.loadForYou();
     pending.resolve(recommendationPage([recommendation(88)]));
-    await request;
+    await Promise.all([request, guestRequest]);
 
     expect(store.viewerID).toBe(null);
-    expect(store.forYou.items).toHaveLength(0);
-    expect(store.forYou.loaded).toBe(false);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([77]);
+    expect(JSON.parse(testSessionStorage.getItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY) ?? '[]')).toEqual([77]);
   });
 
   it('keeps independent tab scrollTop values, then clears both for a new viewer', () => {
@@ -470,7 +499,7 @@ describe('home timeline session store', () => {
     expect(store.scrollTop.following).toBe(0);
   });
 
-  it('loads guest For You pages without engagement hydration and excludes loaded IDs', async () => {
+  it('loads guest For You pages without engagement hydration and excludes served IDs', async () => {
     mocks.authStore!.isAuthenticated = false;
     mocks.authStore!.currentIdentity = null;
     mocks.feedStore!.viewerID = null;
@@ -501,6 +530,115 @@ describe('home timeline session store', () => {
       repostStatus: 'ready',
       bookmarkStatus: 'ready',
     });
+  });
+
+  it('persists guest served IDs and preserves them across force refresh', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    mocks.getPublicPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2), recommendation(3)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(4), recommendation(5), recommendation(6)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadForYou(true);
+
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(2, {
+      limit: 20,
+      excludePostIds: [1, 2, 3],
+    });
+    expect(JSON.parse(window.sessionStorage.getItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY) ?? '[]'))
+      .toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('restores guest served IDs when the store is reconstructed', async () => {
+    testSessionStorage.setItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY, JSON.stringify([10, 11, 12]));
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    mocks.getPublicPostRecommendations.mockResolvedValue(recommendationPage([], true));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+
+    expect(mocks.getPublicPostRecommendations).toHaveBeenCalledWith({
+      limit: 20,
+      excludePostIds: [10, 11, 12],
+    });
+  });
+
+  it('deduplicates guest served IDs and keeps only the newest 200 in FIFO order', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    const firstPage = Array.from({ length: 205 }, (_, index) => recommendation(index + 1));
+    mocks.getPublicPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(1), recommendation(2)]))
+      .mockResolvedValueOnce(recommendationPage(firstPage, true));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadForYou(true);
+
+    const stored = JSON.parse(testSessionStorage.getItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY) ?? '[]') as number[];
+    expect(stored).toHaveLength(GUEST_FOR_YOU_SERVED_LIMIT);
+    expect(stored).toEqual(Array.from({ length: 200 }, (_, index) => index + 6));
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(2, {
+      limit: 20,
+      excludePostIds: [1, 2],
+    });
+  });
+
+  it('ignores malformed guest history entries without breaking the request', async () => {
+    testSessionStorage.setItem(
+      GUEST_FOR_YOU_SERVED_STORAGE_KEY,
+      JSON.stringify([0, -1, 1.5, '7', null, 3, 3, Number.MAX_SAFE_INTEGER + 1]),
+    );
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    mocks.getPublicPostRecommendations.mockResolvedValue(recommendationPage([], true));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+
+    expect(mocks.getPublicPostRecommendations).toHaveBeenCalledWith({
+      limit: 20,
+      excludePostIds: [3],
+    });
+  });
+
+  it('continues guest serving when session history cannot be written', async () => {
+    const setItem = vi.spyOn(testSessionStorage, 'setItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+    try {
+      mocks.authStore!.isAuthenticated = false;
+      mocks.authStore!.currentIdentity = null;
+      mocks.feedStore!.viewerID = null;
+      mocks.getPublicPostRecommendations.mockResolvedValue(recommendationPage([recommendation(1)]));
+      const store = useHomeTimelineStore();
+
+      await store.loadForYou();
+
+      expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+      expect(setItem).toHaveBeenCalled();
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it('keeps authenticated recommendations independent from guest storage', async () => {
+    testSessionStorage.setItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY, JSON.stringify([1, 2, 3]));
+    mocks.getPostRecommendations.mockResolvedValue(recommendationPage([recommendation(9)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+
+    expect(mocks.getPostRecommendations).toHaveBeenCalledWith(20);
+    expect(mocks.getPublicPostRecommendations).not.toHaveBeenCalled();
+    expect(testSessionStorage.getItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY)).toBe(JSON.stringify([1, 2, 3]));
   });
 
   it('increments the Home reselect intent without resetting it for a new viewer', () => {

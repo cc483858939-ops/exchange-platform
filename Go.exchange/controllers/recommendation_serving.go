@@ -56,7 +56,8 @@ func servePublicRecommendationCandidatePath(limit uint, cfg config.Recommendatio
 		return outcome, err
 	}
 	ranked := rankRecommendationCandidates(userInterestProfile{}, hydrated, now, cfg, outcome.LanguageContext)
-	selected := selectRecommendationCandidates(ranked, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
+	diversified := diversifyPublicRecommendationCandidates(ranked, int(limit), requestID)
+	selected := selectRecommendationCandidates(diversified, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
 	outcome.FreshSet = publicSet
 	outcome.RecallSets = []recommendationCandidateSet{publicSet}
 	outcome.Selected = selected
