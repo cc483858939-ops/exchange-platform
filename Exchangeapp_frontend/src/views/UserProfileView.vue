@@ -276,6 +276,46 @@
           </button>
         </header>
 
+        <div class="profile-edit-cover">
+          <div class="profile-edit-cover__preview">
+            <img
+              v-if="editCoverPreview"
+              :src="editCoverPreview"
+              alt="Profile cover preview"
+              @error="editCoverLoadFailed = true"
+            />
+          </div>
+          <div class="profile-edit-cover__actions">
+            <label
+              class="profile-action profile-action--compact"
+              for="profile-cover-input"
+              :aria-disabled="editSaving"
+            >
+              <AppIcon name="image" :size="16" />
+              Change cover
+              <input
+                id="profile-cover-input"
+                ref="profileCoverInputRef"
+                class="sr-only"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                :disabled="editSaving"
+                @change="handleCoverSelection"
+              />
+            </label>
+            <button
+              class="profile-action profile-action--compact"
+              type="button"
+              :disabled="editSaving || !editCoverHasValue"
+              @click="removeProfileCover"
+            >
+              <AppIcon name="image-off" :size="16" />
+              Remove cover
+            </button>
+          </div>
+          <p v-if="editCoverError" class="profile-edit-error" role="alert">{{ editCoverError }}</p>
+        </div>
+
         <div class="profile-edit-avatar">
           <div class="profile-avatar profile-avatar--edit">
             <img
@@ -390,7 +430,7 @@ import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
 import { usePageTitle } from '../composables/usePageTitle';
-import { updateUserProfile, uploadProfileAvatar } from '../services/userService';
+import { updateUserProfile, uploadProfileAvatar, uploadProfileCover } from '../services/userService';
 import type { UpdateUserProfilePayload, UserFollowState } from '../services/userService';
 import { useAuthStore } from '../store/auth';
 import { useProfileSessionStore, type ProfileSessionCapture } from '../store/profileSession';
@@ -404,6 +444,8 @@ const profileDisplayNameLimit = 50;
 const profileBioLimit = 160;
 const profileAvatarMaxBytes = 2 * 1024 * 1024;
 const profileAvatarTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const profileCoverMaxBytes = 5 * 1024 * 1024;
+const profileCoverTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const skeletonCount = 3;
 
 const route = useRoute();
@@ -625,17 +667,28 @@ const handleFollowToggle = () => {
   }
 };
 
-type ProfileEditSnapshot = Pick<PublicUser, 'display_name' | 'bio' | 'avatar_url'>;
+type ProfileEditSnapshot = Pick<PublicUser, 'display_name' | 'bio' | 'avatar_url' | 'cover_image_url'>;
+type ProfileSavePhase = 'avatar-upload' | 'cover-upload' | 'profile-save';
 
 const editDialogRef = ref<HTMLDialogElement | null>(null);
 const editDisplayNameInputRef = ref<HTMLInputElement | null>(null);
 const profileAvatarInputRef = ref<HTMLInputElement | null>(null);
+const profileCoverInputRef = ref<HTMLInputElement | null>(null);
 const editOriginal = ref<ProfileEditSnapshot | null>(null);
-const editDraft = reactive<ProfileEditSnapshot>({ display_name: '', bio: '', avatar_url: '' });
+const editDraft = reactive<ProfileEditSnapshot>({
+  display_name: '',
+  bio: '',
+  avatar_url: '',
+  cover_image_url: '',
+});
 const pendingAvatarFile = ref<File | null>(null);
 const pendingAvatarPreviewURL = ref('');
+const pendingCoverFile = ref<File | null>(null);
+const pendingCoverPreviewURL = ref('');
 const editAvatarLoadFailed = ref(false);
 const editAvatarError = ref('');
+const editCoverLoadFailed = ref(false);
+const editCoverError = ref('');
 const editError = ref('');
 const editSaving = ref(false);
 
@@ -654,6 +707,11 @@ const editAvatarPreview = computed(() => {
   return pendingAvatarPreviewURL.value || editDraft.avatar_url;
 });
 const editAvatarHasValue = computed(() => Boolean(pendingAvatarFile.value || editDraft.avatar_url));
+const editCoverPreview = computed(() => {
+  if (editCoverLoadFailed.value) return '';
+  return pendingCoverPreviewURL.value || editDraft.cover_image_url;
+});
+const editCoverHasValue = computed(() => Boolean(pendingCoverFile.value || editDraft.cover_image_url));
 const editCanSave = computed(() => {
   const original = editOriginal.value;
   if (!original || editSaving.value || editDisplayNameOverLimit.value || editBioOverLimit.value) {
@@ -661,9 +719,11 @@ const editCanSave = computed(() => {
   }
   return Boolean(
     pendingAvatarFile.value
+    || pendingCoverFile.value
     || editDraft.display_name.trim() !== original.display_name
     || editDraft.bio.trim() !== original.bio
-    || editDraft.avatar_url !== original.avatar_url,
+    || editDraft.avatar_url !== original.avatar_url
+    || editDraft.cover_image_url !== original.cover_image_url,
   );
 });
 
@@ -674,18 +734,33 @@ const revokePendingAvatarPreview = () => {
   }
 };
 
+const revokePendingCoverPreview = () => {
+  if (pendingCoverPreviewURL.value) {
+    URL.revokeObjectURL(pendingCoverPreviewURL.value);
+    pendingCoverPreviewURL.value = '';
+  }
+};
+
 const clearEditDraft = () => {
   revokePendingAvatarPreview();
+  revokePendingCoverPreview();
   pendingAvatarFile.value = null;
+  pendingCoverFile.value = null;
   editOriginal.value = null;
   editDraft.display_name = '';
   editDraft.bio = '';
   editDraft.avatar_url = '';
+  editDraft.cover_image_url = '';
   editAvatarLoadFailed.value = false;
   editAvatarError.value = '';
+  editCoverLoadFailed.value = false;
+  editCoverError.value = '';
   editError.value = '';
   if (profileAvatarInputRef.value) {
     profileAvatarInputRef.value.value = '';
+  }
+  if (profileCoverInputRef.value) {
+    profileCoverInputRef.value.value = '';
   }
 };
 
@@ -704,10 +779,12 @@ const openEditProfile = () => {
     display_name: user.value.display_name,
     bio: user.value.bio,
     avatar_url: user.value.avatar_url,
+    cover_image_url: user.value.cover_image_url,
   };
   editDraft.display_name = user.value.display_name;
   editDraft.bio = user.value.bio;
   editDraft.avatar_url = user.value.avatar_url;
+  editDraft.cover_image_url = user.value.cover_image_url;
   editDialogRef.value?.showModal();
   void nextTick(() => editDisplayNameInputRef.value?.focus());
 };
@@ -752,6 +829,28 @@ const handleAvatarSelection = (event: Event) => {
   editError.value = '';
 };
 
+const handleCoverSelection = (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (file.size <= 0 || file.size > profileCoverMaxBytes) {
+    editCoverError.value = 'Cover must be between 1 byte and 5 MiB.';
+    return;
+  }
+  if (!profileCoverTypes.has(file.type)) {
+    editCoverError.value = 'Use a JPEG, PNG, or WebP image.';
+    return;
+  }
+
+  revokePendingCoverPreview();
+  pendingCoverFile.value = file;
+  pendingCoverPreviewURL.value = URL.createObjectURL(file);
+  editCoverLoadFailed.value = false;
+  editCoverError.value = '';
+  editError.value = '';
+};
+
 const removeProfileAvatar = () => {
   if (editSaving.value) return;
   revokePendingAvatarPreview();
@@ -760,6 +859,19 @@ const removeProfileAvatar = () => {
   editAvatarLoadFailed.value = false;
   editAvatarError.value = '';
   editError.value = '';
+};
+
+const removeProfileCover = () => {
+  if (editSaving.value) return;
+  revokePendingCoverPreview();
+  pendingCoverFile.value = null;
+  editDraft.cover_image_url = '';
+  editCoverLoadFailed.value = false;
+  editCoverError.value = '';
+  editError.value = '';
+  if (profileCoverInputRef.value) {
+    profileCoverInputRef.value.value = '';
+  }
 };
 
 const isCurrentEditSession = (
@@ -783,20 +895,23 @@ const buildProfilePatch = (): UpdateUserProfilePayload => {
   if (displayName !== original.display_name) payload.display_name = displayName;
   if (bio !== original.bio) payload.bio = bio;
   if (editDraft.avatar_url !== original.avatar_url) payload.avatar_url = editDraft.avatar_url;
+  if (editDraft.cover_image_url !== original.cover_image_url) {
+    payload.cover_image_url = editDraft.cover_image_url;
+  }
   return payload;
 };
 
-const profileEditErrorMessage = (error: unknown, action: 'upload' | 'save') => {
+const profileEditErrorMessage = (error: unknown, phase: ProfileSavePhase) => {
   const status = getErrorStatus(error);
   if (status === 401) return 'Please log in again and retry.';
   if (status === 400) {
-    return action === 'upload'
-      ? 'That photo could not be uploaded.'
-      : 'Check your profile fields and retry.';
+    if (phase === 'avatar-upload') return 'That photo could not be uploaded.';
+    if (phase === 'cover-upload') return 'That cover image could not be uploaded.';
+    return 'Check your profile fields and retry.';
   }
-  return action === 'upload'
-    ? 'Could not upload photo. Please retry.'
-    : 'Could not save profile. Please retry.';
+  if (phase === 'avatar-upload') return 'Could not upload photo. Please retry.';
+  if (phase === 'cover-upload') return 'Could not upload cover image. Please retry.';
+  return 'Could not save profile. Please retry.';
 };
 
 const saveProfile = async () => {
@@ -806,13 +921,15 @@ const saveProfile = async () => {
 
   const capture = profileStore.captureSession(profile.id);
   if (!capture) return;
-  const selectedFile = pendingAvatarFile.value;
+  const selectedAvatarFile = pendingAvatarFile.value;
+  let phase: ProfileSavePhase = 'profile-save';
   editSaving.value = true;
   editError.value = '';
 
   try {
-    if (selectedFile) {
-      const uploadedAvatarURL = await uploadProfileAvatar(selectedFile);
+    if (selectedAvatarFile) {
+      phase = 'avatar-upload';
+      const uploadedAvatarURL = await uploadProfileAvatar(selectedAvatarFile);
       if (!isCurrentEditSession(capture, profile.id, viewerID)) return;
       editDraft.avatar_url = uploadedAvatarURL;
       pendingAvatarFile.value = null;
@@ -820,6 +937,17 @@ const saveProfile = async () => {
       editAvatarLoadFailed.value = false;
     }
 
+    if (pendingCoverFile.value) {
+      phase = 'cover-upload';
+      const uploadedCoverURL = await uploadProfileCover(pendingCoverFile.value);
+      if (!isCurrentEditSession(capture, profile.id, viewerID)) return;
+      editDraft.cover_image_url = uploadedCoverURL;
+      pendingCoverFile.value = null;
+      revokePendingCoverPreview();
+      editCoverLoadFailed.value = false;
+    }
+
+    phase = 'profile-save';
     const payload = buildProfilePatch();
     if (Object.keys(payload).length === 0) {
       editSaving.value = false;
@@ -836,10 +964,7 @@ const saveProfile = async () => {
     editDialogRef.value?.close();
   } catch (error) {
     if (isCurrentEditSession(capture, profile.id, viewerID)) {
-      editError.value = profileEditErrorMessage(
-        error,
-        selectedFile && pendingAvatarFile.value ? 'upload' : 'save',
-      );
+      editError.value = profileEditErrorMessage(error, phase);
     }
   } finally {
     if (isCurrentEditSession(capture, profile.id, viewerID)) {
@@ -1693,6 +1818,38 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: var(--space-4);
+}
+
+.profile-edit-cover {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.profile-edit-cover__preview {
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+}
+
+.profile-edit-cover__preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.profile-edit-cover__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.profile-edit-cover__actions .profile-action {
+  gap: var(--space-1);
 }
 
 .profile-avatar--edit {
