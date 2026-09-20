@@ -609,6 +609,23 @@ describe('home timeline session store', () => {
     });
   });
 
+  it('ignores invalid JSON guest history without breaking the request', async () => {
+    testSessionStorage.setItem(GUEST_FOR_YOU_SERVED_STORAGE_KEY, '{broken-json');
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    mocks.getPublicPostRecommendations.mockResolvedValue(recommendationPage([recommendation(4)]));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+
+    expect(mocks.getPublicPostRecommendations).toHaveBeenCalledWith({
+      limit: 20,
+      excludePostIds: [],
+    });
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([4]);
+  });
+
   it('continues guest serving when session history cannot be written', async () => {
     const setItem = vi.spyOn(testSessionStorage, 'setItem').mockImplementation(() => {
       throw new Error('storage unavailable');

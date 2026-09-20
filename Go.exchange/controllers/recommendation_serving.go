@@ -27,6 +27,12 @@ type recommendationServingOutcome struct {
 	LanguageContext        recommendationLanguageContext
 }
 
+var (
+	publicRecommendationCandidateSetForServing        = loadPublicRecommendationCandidateSet
+	publicRecommendationHydrateForServing             = hydrateRecommendationCandidates
+	diversifyPublicRecommendationCandidatesForServing = diversifyPublicRecommendationCandidates
+)
+
 // servePublicRecommendationCandidatePath is the guest-safe variant of the
 // recommendation pipeline. It deliberately has no user identity, profile,
 // served-history lookup, semantic recall, social graph lookup, or author
@@ -47,16 +53,16 @@ func servePublicRecommendationCandidatePath(limit uint, cfg config.Recommendatio
 	}
 
 	outcome.LanguageContext = buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg)
-	publicSet, err := loadPublicRecommendationCandidateSet(now, cfg, excluded)
+	publicSet, err := publicRecommendationCandidateSetForServing(now, cfg, excluded)
 	if err != nil {
 		return outcome, err
 	}
-	hydrated, err := hydrateRecommendationCandidates(publicSet.Candidates, now)
+	hydrated, err := publicRecommendationHydrateForServing(publicSet.Candidates, now)
 	if err != nil {
 		return outcome, err
 	}
 	ranked := rankRecommendationCandidates(userInterestProfile{}, hydrated, now, cfg, outcome.LanguageContext)
-	diversified := diversifyPublicRecommendationCandidates(ranked, int(limit), requestID)
+	diversified := diversifyPublicRecommendationCandidatesForServing(ranked, int(limit), requestID)
 	selected := selectRecommendationCandidates(diversified, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
 	outcome.FreshSet = publicSet
 	outcome.RecallSets = []recommendationCandidateSet{publicSet}
