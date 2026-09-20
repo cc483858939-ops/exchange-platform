@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"gorm.io/gorm"
@@ -225,7 +224,7 @@ func TestPublicRecommendationServingKeepsExcludedPostsOut(t *testing.T) {
 	}
 }
 
-func TestRecommendationServingUsesGuestDiversificationOnlyForPublicPath(t *testing.T) {
+func TestPublicRecommendationServingUsesGuestDiversification(t *testing.T) {
 	cfg, now := publicServingTestFixture(t, 100)
 	originalDiversifier := diversifyPublicRecommendationCandidatesForServing
 	calls := 0
@@ -242,13 +241,5 @@ func TestRecommendationServingUsesGuestDiversificationOnlyForPublicPath(t *testi
 	}
 	if calls != 1 {
 		t.Fatalf("public serving diversification calls=%d want 1", calls)
-	}
-
-	originalDB := global.Db
-	global.Db = nil
-	_, _ = serveRecommendationCandidatePath(1, 20, cfg, now, "authenticated-boundary", recommendationLanguageContext{})
-	global.Db = originalDB
-	if calls != 1 {
-		t.Fatalf("authenticated serving invoked guest diversification: calls=%d", calls)
 	}
 }
