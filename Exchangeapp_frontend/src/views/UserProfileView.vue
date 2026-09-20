@@ -35,13 +35,6 @@
       </div>
     </section>
 
-    <AuthRequiredState
-      v-else-if="authRequired"
-      title="Log in to view this profile."
-      description="Sign in to view this profile, posts, and connections."
-      :return-to="route.fullPath"
-    />
-
     <section
       v-else-if="profileLoading"
       class="profile-identity profile-identity--loading"
@@ -56,7 +49,7 @@
     </section>
 
     <section
-      v-else-if="user && canRenderAuthenticatedProfile"
+      v-else-if="user && canRenderProfile"
       class="profile-identity"
       aria-labelledby="profile-name"
     >
@@ -113,12 +106,12 @@
             class="profile-follow-button"
             :class="{ 'profile-follow-button--following': followState?.following }"
             type="button"
-            :aria-pressed="followState?.following === true"
+            :aria-pressed="authStore.isAuthenticated ? followState?.following === true : undefined"
             :aria-busy="followPending"
-            :disabled="followPending"
+            :disabled="authStore.isAuthenticated && followPending"
             @click="handleFollowToggle"
           >
-            {{ followState?.following ? 'Following' : 'Follow' }}
+            {{ authStore.isAuthenticated && followState?.following ? 'Following' : 'Follow' }}
           </button>
           <p v-if="followActionError" class="profile-action-error" aria-live="polite">
             {{ followActionError }}
@@ -155,7 +148,7 @@
       </div>
     </section>
 
-    <template v-if="user && canRenderAuthenticatedProfile">
+    <template v-if="user && canRenderProfile">
       <p v-if="bookmarkMutationError" class="profile-action-error" role="status" aria-live="polite">
         {{ bookmarkMutationError }}
       </p>
@@ -202,6 +195,8 @@
             :like-pending="likePendingPostIds.has(item.post.id)"
             :repost-pending="repostPendingPostIds.has(item.post.id)"
             :bookmark-pending="bookmarkPendingPostIds.has(item.post.id)"
+            :track-view="authStore.isAuthenticated"
+            :requires-auth-for-actions="!authStore.isAuthenticated"
             :show-delete="canDeletePost(item.post)"
             :delete-pending="pendingDeletePostIds.has(item.post.id)"
             :delete-error="deleteErrors.get(item.post.id) || ''"
@@ -371,7 +366,6 @@ import {
   watch,
 } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import AuthRequiredState from '../components/auth/AuthRequiredState.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
@@ -471,24 +465,17 @@ const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
 });
-const authRequired = computed(() => Boolean(
-  numericUserID.value !== null
-  && (!authStore.isAuthenticated || currentViewerID.value === null),
-));
-
 const profileDisplayName = computed(() => {
   const displayName = user.value?.display_name?.trim() ?? '';
   return displayName || user.value?.username || 'Profile';
 });
 const headerUsername = computed(() => (
-  authStore.isAuthenticated && currentViewerID.value !== null && user.value
+  user.value
     ? profileDisplayName.value
     : 'Profile'
 ));
 const profilePageTitle = computed(() => {
-  const username = authStore.isAuthenticated && currentViewerID.value !== null
-    ? user.value?.username?.trim()
-    : '';
+  const username = user.value?.username?.trim();
   return username ? `@${username}` : 'Profile';
 });
 usePageTitle(profilePageTitle, profileViewActive);
@@ -503,11 +490,7 @@ const joinedLabel = computed(() => {
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
 
-const canRenderAuthenticatedProfile = computed(() => Boolean(
-  authStore.isAuthenticated
-  && currentViewerID.value !== null
-  && user.value,
-));
+const canRenderProfile = computed(() => Boolean(user.value));
 const isOwnProfile = computed(() => Boolean(
   user.value
   && currentViewerID.value !== null
@@ -521,11 +504,9 @@ const socialReady = computed(() => Boolean(
   && activeSession.value?.followLoaded,
 ));
 const showFollowControl = computed(() => Boolean(
-  authStore.isAuthenticated
-  && user.value
-  && currentViewerID.value !== null
-  && user.value.id !== currentViewerID.value
-  && socialReady.value,
+  user.value
+  && (currentViewerID.value === null || user.value.id !== currentViewerID.value)
+  && (!authStore.isAuthenticated || socialReady.value),
 ));
 const canDeletePost = (post: { author: { id: number } }) =>
   authStore.isAuthenticated
@@ -548,9 +529,7 @@ const restoreScrollOnce = async () => {
   const session = activeSession.value;
   const targetUserID = numericUserID.value;
   if (
-    !authStore.isAuthenticated
-    || currentViewerID.value === null
-    || !session
+    !session
     || targetUserID === null
     || !session.profileLoaded
     || (!session.timelineLoaded && session.timelineInitialLoading)
@@ -586,7 +565,18 @@ const retryFollowState = () => {
   }
 };
 
+const navigateToLogin = () => {
+  void router.push({
+    name: 'Login',
+    query: { returnTo: route.fullPath },
+  });
+};
+
 const handleFollowToggle = () => {
+  if (!authStore.isAuthenticated || currentViewerID.value === null) {
+    navigateToLogin();
+    return;
+  }
   if (numericUserID.value !== null) {
     void profileStore.toggleFollow(numericUserID.value);
   }
@@ -821,10 +811,6 @@ const loadProfile = (force = false) => {
     invalidProfileError.value = 'This profile URL is not valid.';
     return;
   }
-  if (!authStore.isAuthenticated || currentViewerID.value === null) {
-    forceCloseEditProfile();
-    return;
-  }
   forceCloseEditProfile();
   void profileStore.loadProfile(numericUserID.value, force);
 };
@@ -860,14 +846,26 @@ const handleDeletePost = async (postId: number) => {
 };
 
 const handleLikeToggle = (postId: number) => {
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
   void profileStore.toggleLike(postId, numericUserID.value ?? undefined);
 };
 
 const handleRepostToggle = (postId: number) => {
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
   void profileStore.toggleRepost(postId, numericUserID.value ?? undefined);
 };
 
 const handleBookmarkToggle = (postId: number) => {
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
   bookmarkMutationError.value = '';
   void profileStore.toggleBookmark(postId, numericUserID.value ?? undefined).then((result) => {
     if (!result) bookmarkMutationError.value = 'Could not update bookmark. Please try again.';
@@ -906,7 +904,7 @@ const updateObserver = () => {
     || !activeHasMore
     || activeLoadingMore
     || activeLoadMoreError
-    || !canRenderAuthenticatedProfile.value
+    || !canRenderProfile.value
     || !user.value
   ) {
     return;

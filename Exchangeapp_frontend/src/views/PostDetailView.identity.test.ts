@@ -261,7 +261,7 @@ describe('PostDetailView reply composer identity', () => {
     expect(mocks.getUser).not.toHaveBeenCalled();
   });
 
-  it('does not render a composer or request a profile while logged out', async () => {
+  it('renders public content without a composer or profile request while logged out', async () => {
     mocks.authStore!.isAuthenticated = false;
     mocks.authStore!.currentIdentity = null;
 
@@ -270,6 +270,7 @@ describe('PostDetailView reply composer identity', () => {
 
     expect(wrapper.find('.reply-composer').exists()).toBe(false);
     expect(mocks.getUser).not.toHaveBeenCalled();
-    expect(wrapper.get('.detail-state__link').text()).toContain('Log in');
+    expect(mocks.getPostById).toHaveBeenCalledWith('42');
+    expect(wrapper.get('.post-detail__login-reply').text()).toContain('Log in');
   });
 });

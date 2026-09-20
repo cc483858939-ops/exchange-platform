@@ -134,7 +134,7 @@
               :key="postId"
               :reposted="reposted"
               :count="repostCount"
-              :disabled="!authStore.isAuthenticated || repostStateUnavailable"
+              :disabled="repostStateUnavailable"
               :loading="repostStateLoading"
               :pending="repostSubmitting"
               :ariaLabel="detailRepostLabel"
@@ -145,7 +145,7 @@
               :key="postId"
               :liked="liked"
               :count="likeCount"
-              :disabled="!authStore.isAuthenticated"
+              :disabled="likeStateLoading"
               :loading="likeStateLoading"
               :pending="likeSubmitting"
               :ariaLabel="detailLikeLabel"
@@ -156,7 +156,7 @@
               class="post-detail__metric post-detail__bookmark"
               :class="{ 'post-detail__bookmark--active': bookmarked }"
               type="button"
-              :disabled="!authStore.isAuthenticated || bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
+              :disabled="bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
               :aria-busy="bookmarkStateLoading || bookmarkSubmitting ? 'true' : undefined"
               :aria-pressed="bookmarked"
               :aria-label="detailBookmarkLabel"
@@ -226,6 +226,7 @@
         aria-label="Conversation"
       >
         <ReplyComposer
+          v-if="authStore.isAuthenticated"
           :key="postId"
           ref="composerRef"
           :author="replyComposerAuthor"
@@ -233,6 +234,14 @@
           :submitting="replySubmitting"
           @submit="handleCreateReply"
         />
+        <button
+          v-else
+          class="post-detail__login-reply"
+          type="button"
+          @click="focusReplyComposer"
+        >
+          Log in to reply
+        </button>
 
         <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
         <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
@@ -275,10 +284,7 @@
     <section v-else class="detail-state detail-state--error">
       <h2>{{ postFailureTitle }}</h2>
       <p>{{ postFailureMessage }}</p>
-      <RouterLink v-if="!authStore.isAuthenticated" class="detail-state__link" :to="{ name: 'Login' }">
-        Log in
-      </RouterLink>
-      <button v-else type="button" @click="retryPost">Try again</button>
+      <button type="button" @click="retryPost">Try again</button>
     </section>
 
     <PostMediaViewer
@@ -364,7 +370,7 @@
                 :key="postId"
                 :reposted="reposted"
                 :count="repostCount"
-                :disabled="!authStore.isAuthenticated || repostStateUnavailable"
+                :disabled="repostStateUnavailable"
                 :loading="repostStateLoading"
                 :pending="repostSubmitting"
                 :ariaLabel="detailRepostLabel"
@@ -375,7 +381,7 @@
                 :key="postId"
                 :liked="liked"
                 :count="likeCount"
-                :disabled="!authStore.isAuthenticated"
+                :disabled="likeStateLoading"
                 :loading="likeStateLoading"
                 :pending="likeSubmitting"
                 :ariaLabel="detailLikeLabel"
@@ -386,7 +392,7 @@
                 class="post-detail__metric post-detail__bookmark"
                 :class="{ 'post-detail__bookmark--active': bookmarked }"
                 type="button"
-                :disabled="!authStore.isAuthenticated || bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
+                :disabled="bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
                 :aria-busy="bookmarkStateLoading || bookmarkSubmitting ? 'true' : undefined"
                 :aria-pressed="bookmarked"
                 :aria-label="detailBookmarkLabel"
@@ -441,6 +447,7 @@
 
           <template v-if="detailPresentation.kind === 'post'">
             <ReplyComposer
+              v-if="authStore.isAuthenticated"
               :key="postId"
               ref="mediaContextComposerRef"
               :author="replyComposerAuthor"
@@ -448,6 +455,14 @@
               :submitting="replySubmitting"
               @submit="handleCreateReply"
             />
+            <button
+              v-else
+              class="post-detail__login-reply"
+              type="button"
+              @click="focusMediaContextReplyComposer"
+            >
+              Log in to reply
+            </button>
 
             <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
             <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
@@ -577,7 +592,9 @@ const authStore = useAuthStore();
 const postDetailHandoff = usePostDetailHandoffStore();
 const feedStore = useFeedStore();
 const replyDraftStore = useReplyDraftStore();
-const currentIdentity = computed(() => authStore.currentIdentity);
+const currentIdentity = computed(() => (
+  authStore.isAuthenticated ? authStore.currentIdentity : null
+));
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
 const postId = computed(() => String(route.params.id ?? '').trim());
@@ -802,6 +819,10 @@ const resetTranslation = () => {
 };
 
 const handleTranslationAction = async () => {
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
   const currentPost = post.value;
   if (!currentPost || !translationAvailable.value) {
     return;
@@ -887,20 +908,15 @@ const presentationRepostLabel = computed(() => {
 });
 
 const postFailureTitle = computed(() => {
-  if (!authStore.isAuthenticated) {
-    return 'Log in to view this post';
-  }
   return 'Post unavailable';
 });
 
 const postFailureMessage = computed(() => {
-  if (!authStore.isAuthenticated) {
-    return 'Sign in to open this post and join the conversation.';
-  }
   return postError.value || 'The post could not be loaded.';
 });
 
 const currentViewerID = computed(() => {
+  if (!authStore.isAuthenticated) return null;
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : null;
 });
@@ -926,7 +942,11 @@ const replyDraftContent = computed({
 });
 
 const focusReplyComposer = async () => {
-  if (!post.value || !authStore.isAuthenticated) {
+  if (!post.value) {
+    return;
+  }
+  if (!authStore.isAuthenticated) {
+    navigateToLogin(`/posts/${postId.value}?reply=1`);
     return;
   }
 
@@ -934,11 +954,22 @@ const focusReplyComposer = async () => {
 };
 
 const focusMediaContextReplyComposer = async () => {
-  if (!post.value || !authStore.isAuthenticated) {
+  if (!post.value) {
+    return;
+  }
+  if (!authStore.isAuthenticated) {
+    navigateToLogin(`/posts/${postId.value}?reply=1`);
     return;
   }
 
   await mediaContextComposerRef.value?.focus();
+};
+
+const navigateToLogin = (returnTo = route.fullPath || `/posts/${postId.value}`) => {
+  void router.push({
+    name: 'Login',
+    query: { returnTo },
+  });
 };
 
 const postViewTelemetry = getPostViewTelemetry();
@@ -1025,7 +1056,7 @@ const handleReadScroll = () => {
 };
 
 const finishRead = (exitType: string) => {
-  if (!tracking || readEndSent || !trackedPostID || !readTracker) {
+  if (!authStore.isAuthenticated || !tracking || readEndSent || !trackedPostID || !readTracker) {
     return false;
   }
 
@@ -1041,7 +1072,7 @@ const finishRead = (exitType: string) => {
 const handleVisibilityChange = () => {
   if (document.visibilityState === 'hidden') {
     readTracker?.pause();
-    void recommendationTelemetry.flush(true);
+    if (authStore.isAuthenticated) void recommendationTelemetry.flush(true);
   } else if (tracking && !readEndSent) {
     readTracker?.resume();
   }
@@ -1049,7 +1080,7 @@ const handleVisibilityChange = () => {
 
 const handlePageHide = () => {
   finishRead('page_hide');
-  void recommendationTelemetry.flush(true);
+  if (authStore.isAuthenticated) void recommendationTelemetry.flush(true);
 };
 
 const startRead = (id: string, detailVersion: number) => {
@@ -1388,12 +1419,14 @@ const loadBookmarkState = async (id: string, detailVersion: number) => {
 };
 
 const toggleLike = async () => {
-  if (
-    !post.value ||
-    !authStore.isAuthenticated ||
-    likeStateLoading.value ||
-    likeSubmitting.value
-  ) {
+  if (!post.value) {
+    return;
+  }
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
+  if (likeStateLoading.value || likeSubmitting.value) {
     return;
   }
 
@@ -1436,10 +1469,15 @@ const toggleLike = async () => {
 };
 
 const toggleRepost = async () => {
+  if (!post.value) {
+    return;
+  }
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
   if (
-    !post.value
-    || !authStore.isAuthenticated
-    || repostStateLoading.value
+    repostStateLoading.value
     || repostSubmitting.value
     || repostStateUnavailable.value
   ) {
@@ -1488,10 +1526,13 @@ const toggleRepost = async () => {
 };
 
 const toggleBookmark = async () => {
+  if (!post.value) return;
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
   if (
-    !post.value
-    || !authStore.isAuthenticated
-    || bookmarkStateLoading.value
+    bookmarkStateLoading.value
     || bookmarkSubmitting.value
     || bookmarkStateUnavailable.value
   ) return;
@@ -1566,8 +1607,18 @@ const hydrateReplyBookmarkStates = async (replyItems: Post[], detailVersion: num
   }
 };
 
+const initializeGuestReplyBookmarkStates = (replyItems: Post[]) => {
+  replyItems.forEach((reply) => {
+    replyBookmarkStates[reply.id] = { bookmarked: false, status: 'ready' };
+  });
+};
+
 const toggleReplyBookmark = async (replyID: number) => {
-  if (!authStore.isAuthenticated || replyBookmarkPendingIDs.has(replyID)) return;
+  if (!authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
+  if (replyBookmarkPendingIDs.has(replyID)) return;
   const state = replyBookmarkStates[replyID];
   if (!state || state.status !== 'ready') return;
   const reply = replies.value.find(candidate => candidate.id === replyID);
@@ -1663,7 +1714,11 @@ const loadInitialReplies = async (id: string, detailVersion: number) => {
 
     replies.value = mergeReplies(replies.value.concat(page.items));
     nextCursor.value = page.next_cursor || null;
-    void hydrateReplyBookmarkStates(page.items, detailVersion);
+    if (authStore.isAuthenticated) {
+      void hydrateReplyBookmarkStates(page.items, detailVersion);
+    } else {
+      initializeGuestReplyBookmarkStates(page.items);
+    }
   } catch {
     if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
       repliesError.value = 'The replies could not be loaded.';
@@ -1700,7 +1755,11 @@ const loadMoreReplies = async () => {
 
     replies.value = mergeReplies(replies.value.concat(page.items));
     nextCursor.value = page.next_cursor || null;
-    void hydrateReplyBookmarkStates(page.items, detailVersion);
+    if (authStore.isAuthenticated) {
+      void hydrateReplyBookmarkStates(page.items, detailVersion);
+    } else {
+      initializeGuestReplyBookmarkStates(page.items);
+    }
   } catch {
     if (detailVersion === detailRequestVersion && requestVersion === repliesRequestVersion) {
       repliesLoadMoreError.value = 'Could not load more replies.';
@@ -1932,17 +1991,13 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
   const detailVersion = ++detailRequestVersion;
   closeMediaViewer();
   finishRead('navigate_to_post');
-  void recommendationTelemetry.flush(false);
+  if (isAuthenticated) void recommendationTelemetry.flush(false);
   resetPostState();
   resetLikeState();
   resetRepostState();
   resetBookmarkState();
   resetRepliesState();
   handoffPost.value = null;
-
-  if (!isAuthenticated) {
-    return;
-  }
 
   if (!isValidPostID(id)) {
     postError.value = 'This post URL is not valid.';
@@ -1976,13 +2031,15 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       return;
     }
 
-    postViewTelemetry.enqueue(Number(id), createPostViewEventID(), 'post_detail');
-    if (postBodyRef.value) {
-      startRead(id, detailVersion);
+    if (isAuthenticated) {
+      postViewTelemetry.enqueue(Number(id), createPostViewEventID(), 'post_detail');
+      if (postBodyRef.value) {
+        startRead(id, detailVersion);
+      }
+      void loadLikeState(id, detailVersion);
+      void loadRepostState(id, detailVersion);
+      void loadBookmarkState(id, detailVersion);
     }
-    void loadLikeState(id, detailVersion);
-    void loadRepostState(id, detailVersion);
-    void loadBookmarkState(id, detailVersion);
     void loadInitialReplies(id, detailVersion);
   } catch (error) {
     if (detailVersion === detailRequestVersion) {
@@ -2057,7 +2114,7 @@ watch(
 
 onBeforeRouteLeave(to => {
   finishRead(to.name === 'Recommendations' ? 'back_to_recommendation' : 'route_leave');
-  void recommendationTelemetry.flush(false);
+  if (authStore.isAuthenticated) void recommendationTelemetry.flush(false);
 });
 
 onMounted(() => {
@@ -2071,7 +2128,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   registerPostDetailSessionSync(null);
   finishRead('route_leave');
-  void recommendationTelemetry.flush(false);
+  if (authStore.isAuthenticated) void recommendationTelemetry.flush(false);
   disconnectReadGeometryObserver();
   resetTranslation();
   document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -2161,6 +2218,22 @@ onBeforeUnmount(() => {
 
 .post-conversation {
   padding-top: 0;
+}
+
+.post-detail__login-reply {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.post-detail__login-reply:hover {
+  background: var(--color-surface-subtle);
 }
 
 .post-detail__author-row {

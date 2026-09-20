@@ -997,19 +997,30 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.find('.post-detail__reference-link').exists()).toBe(false);
   });
 
-  it('keeps the unauthenticated Post error surface without mounting conversation UI', async () => {
+  it('renders public Post content without protected requests for guests', async () => {
     mocks.authStore.isAuthenticated = false;
     mocks.authStore.currentIdentity = null;
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ content: 'Public post body' }));
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [], next_cursor: null });
 
     wrapper = mountDetail();
     await flushPromises();
 
-    expect(wrapper.find('.detail-state--error').text()).toContain('Log in to view this post');
-    expect(wrapper.find('.detail-state--error').text())
-      .toContain('Sign in to open this post and join the conversation.');
-    expect(wrapper.find('.post-detail').exists()).toBe(false);
+    expect(wrapper.find('.post-detail').exists()).toBe(true);
+    expect(wrapper.text()).toContain('Public post body');
+    expect(wrapper.find('.post-conversation').exists()).toBe(true);
     expect(wrapper.find('.test-composer').exists()).toBe(false);
-    expect(wrapper.text()).not.toContain('Log in to join the conversation.');
-    expect(mocks.getPostById).not.toHaveBeenCalled();
+    expect(wrapper.find('.post-detail__login-reply').exists()).toBe(true);
+    expect(mocks.getPostById).toHaveBeenCalledWith('42');
+    expect(mocks.getPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.getPostRepostState).not.toHaveBeenCalled();
+    expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
+    expect(mocks.telemetry.flush).not.toHaveBeenCalled();
+
+    await wrapper.get('.post-detail__login-reply').trigger('click');
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/42?reply=1' },
+    });
   });
 });

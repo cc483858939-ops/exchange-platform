@@ -126,6 +126,30 @@ const timelineActivityKey = (activityType: TimelineActivityType, sourceID: numbe
   `${activityType}:${sourceID}`
 );
 
+type ProfileAudience =
+  | { authenticated: true; viewerID: number }
+  | { authenticated: false; viewerID: null };
+
+const currentProfileAudience = (
+  authStore: { isAuthenticated: boolean },
+  viewerID: number | null,
+): ProfileAudience => (
+  authStore.isAuthenticated && viewerID !== null
+    ? { authenticated: true, viewerID }
+    : { authenticated: false, viewerID: null }
+);
+
+const matchesProfileAudience = (
+  authStore: { isAuthenticated: boolean },
+  viewerID: number | null,
+  capturedViewerID: number | null,
+) => {
+  const audience = currentProfileAudience(authStore, viewerID);
+  return capturedViewerID === null
+    ? !audience.authenticated
+    : audience.authenticated && audience.viewerID === capturedViewerID;
+};
+
 const timelineActivityToProfileItem = (activity: TimelineItem): ProfileTimelineItem => ({
   activityType: activity.activity_type,
   activityAt: activity.activity_at,
@@ -275,7 +299,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return Boolean(
       session
       && session.profileRequestVersion === capture.profileRequestVersion
-      && viewerID.value === capture.viewerID
+      && matchesProfileAudience(authStore, viewerID.value, capture.viewerID)
       && viewerGeneration.value === capture.viewerGeneration,
     );
   };
@@ -681,6 +705,12 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       if (session.loadedActivityKeys.has(key)) return;
       session.loadedActivityKeys.add(key);
       const item = timelineActivityToProfileItem(activity);
+      const audience = currentProfileAudience(authStore, viewerID.value);
+      if (!audience.authenticated) {
+        item.post.likeStatus = 'ready';
+        item.post.repostStatus = 'ready';
+        item.post.bookmarkStatus = 'ready';
+      }
       if (!session.removedPostIDs.has(item.post.id) && !feedStore.isPostDeleted(item.post.id)) {
         newItems.push(item);
       }
@@ -699,8 +729,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     capturedViewerGeneration: number,
   ) => sessions.get(userID) === session
     && session.timelineRequestVersion === version
-    && authStore.isAuthenticated
-    && viewerID.value === capturedViewerID
+    && matchesProfileAudience(authStore, viewerID.value, capturedViewerID)
     && viewerGeneration.value === capturedViewerGeneration;
 
   const currentTimelineSession = (
@@ -711,8 +740,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     capturedViewerGeneration: number,
   ) => sessions.get(userID) === session
     && session.timelineGeneration === capturedTimelineGeneration
-    && authStore.isAuthenticated
-    && viewerID.value === capturedViewerID
+    && matchesProfileAudience(authStore, viewerID.value, capturedViewerID)
     && viewerGeneration.value === capturedViewerGeneration;
 
   const loadTimeline = async (rawUserID: unknown, force = false) => {
@@ -721,8 +749,6 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     if (
       !userID
       || !session
-      || viewerID.value === null
-      || !authStore.isAuthenticated
       || (session.timelineInitialLoading && !force)
     ) return session;
     if (session.timelineLoaded && !force && !session.timelineStale) return session;
@@ -756,39 +782,41 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       if (session.timelineStaleVersion === capturedTimelineStaleVersion) {
         session.timelineStale = false;
       }
-      const capturedTimelineGeneration = session.timelineGeneration;
-      void hydrateLikeStates(
-        newItems.map((item) => item.post.id),
-        capturedViewerGeneration,
-        () => currentTimelineSession(
-          userID,
-          session,
-          capturedTimelineGeneration,
-          capturedViewerID,
+      if (authStore.isAuthenticated && capturedViewerID !== null) {
+        const capturedTimelineGeneration = session.timelineGeneration;
+        void hydrateLikeStates(
+          newItems.map((item) => item.post.id),
           capturedViewerGeneration,
-        ),
-      );
-      void hydrateRepostStates(
-        newItems.map((item) => item.post.id),
-        () => currentTimelineSession(
-          userID,
-          session,
-          capturedTimelineGeneration,
-          capturedViewerID,
-          capturedViewerGeneration,
-        ),
-      );
-      const capturedBookmarkGeneration = bookmarkGeneration;
-      void hydrateBookmarkStates(
-        newItems.map((item) => item.post.id),
-        () => currentTimelineSession(
-          userID,
-          session,
-          capturedTimelineGeneration,
-          capturedViewerID,
-          capturedViewerGeneration,
-        ) && bookmarkGeneration === capturedBookmarkGeneration,
-      );
+          () => currentTimelineSession(
+            userID,
+            session,
+            capturedTimelineGeneration,
+            capturedViewerID,
+            capturedViewerGeneration,
+          ),
+        );
+        void hydrateRepostStates(
+          newItems.map((item) => item.post.id),
+          () => currentTimelineSession(
+            userID,
+            session,
+            capturedTimelineGeneration,
+            capturedViewerID,
+            capturedViewerGeneration,
+          ),
+        );
+        const capturedBookmarkGeneration = bookmarkGeneration;
+        void hydrateBookmarkStates(
+          newItems.map((item) => item.post.id),
+          () => currentTimelineSession(
+            userID,
+            session,
+            capturedTimelineGeneration,
+            capturedViewerID,
+            capturedViewerGeneration,
+          ) && bookmarkGeneration === capturedBookmarkGeneration,
+        );
+      }
     } catch (error) {
       if (currentTimelineRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
         session.timelineInitialError = getErrorStatus(error) === 404
@@ -809,8 +837,6 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     if (
       !userID
       || !session
-      || viewerID.value === null
-      || !authStore.isAuthenticated
       || !session.timelineLoaded
       || !session.hasMore
       || session.timelineStale
@@ -839,39 +865,41 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       if (session.timelineStaleVersion === capturedTimelineStaleVersion) {
         session.timelineStale = false;
       }
-      const capturedTimelineGeneration = session.timelineGeneration;
-      void hydrateLikeStates(
-        newItems.map((item) => item.post.id),
-        capturedViewerGeneration,
-        () => currentTimelineSession(
-          userID,
-          session,
-          capturedTimelineGeneration,
-          capturedViewerID,
+      if (authStore.isAuthenticated && capturedViewerID !== null) {
+        const capturedTimelineGeneration = session.timelineGeneration;
+        void hydrateLikeStates(
+          newItems.map((item) => item.post.id),
           capturedViewerGeneration,
-        ),
-      );
-      void hydrateRepostStates(
-        newItems.map((item) => item.post.id),
-        () => currentTimelineSession(
-          userID,
-          session,
-          capturedTimelineGeneration,
-          capturedViewerID,
-          capturedViewerGeneration,
-        ),
-      );
-      const capturedBookmarkGeneration = bookmarkGeneration;
-      void hydrateBookmarkStates(
-        newItems.map((item) => item.post.id),
-        () => currentTimelineSession(
-          userID,
-          session,
-          capturedTimelineGeneration,
-          capturedViewerID,
-          capturedViewerGeneration,
-        ) && bookmarkGeneration === capturedBookmarkGeneration,
-      );
+          () => currentTimelineSession(
+            userID,
+            session,
+            capturedTimelineGeneration,
+            capturedViewerID,
+            capturedViewerGeneration,
+          ),
+        );
+        void hydrateRepostStates(
+          newItems.map((item) => item.post.id),
+          () => currentTimelineSession(
+            userID,
+            session,
+            capturedTimelineGeneration,
+            capturedViewerID,
+            capturedViewerGeneration,
+          ),
+        );
+        const capturedBookmarkGeneration = bookmarkGeneration;
+        void hydrateBookmarkStates(
+          newItems.map((item) => item.post.id),
+          () => currentTimelineSession(
+            userID,
+            session,
+            capturedTimelineGeneration,
+            capturedViewerID,
+            capturedViewerGeneration,
+          ) && bookmarkGeneration === capturedBookmarkGeneration,
+        );
+      }
     } catch (error) {
       if (currentTimelineRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) {
         session.timelineLoadMoreError = getErrorStatus(error) === 404
@@ -1316,7 +1344,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const loadProfile = async (rawUserID: unknown, force = false) => {
     const userID = normalizeID(rawUserID);
     const session = userID === null ? null : ensureSession(userID);
-    if (!userID || !session || viewerID.value === null || !authStore.isAuthenticated) return session;
+    if (!userID || !session) return session;
     if (session.profileLoading && !force) return session;
     if (session.profileLoaded && !force) {
       if (session.timelineStale) {
@@ -1324,7 +1352,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       } else if (!session.timelineLoaded && !session.timelineInitialLoading) {
         void loadTimeline(userID);
       }
-      if (viewerID.value !== null && !session.followLoaded && !session.followLoading) {
+      if (authStore.isAuthenticated && viewerID.value !== null && !session.followLoaded && !session.followLoading) {
         void loadFollowState(userID);
       }
       return session;
@@ -1362,8 +1390,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     session.profileNotFound = false;
     const isCurrent = () => sessions.get(userID) === session
       && session.profileRequestVersion === profileVersion
-      && authStore.isAuthenticated
-      && viewerID.value === capturedViewerID
+      && matchesProfileAudience(authStore, viewerID.value, capturedViewerID)
       && viewerGeneration.value === capturedViewerGeneration;
     try {
       const loadedUser = await getUser(String(userID));
@@ -1372,7 +1399,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       session.profileLoaded = true;
       session.profileLoading = false;
       void loadTimeline(userID);
-      if (viewerID.value !== null && authStore.isAuthenticated) void loadFollowState(userID);
+      if (authStore.isAuthenticated && viewerID.value !== null) void loadFollowState(userID);
     } catch (error) {
       if (!isCurrent()) return session;
       session.profileNotFound = getErrorStatus(error) === 404;

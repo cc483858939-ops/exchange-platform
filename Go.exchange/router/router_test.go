@@ -122,6 +122,56 @@ func TestSetupRouterKeepsPublicRecommendationsOpenAndRepresentativeAPIsProtected
 	}
 }
 
+func TestSetupRouterKeepsPublicPostAndProfileReadsOpen(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicRoutes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/posts/not-a-number"},
+		{http.MethodGet, "/api/posts/not-a-number/replies"},
+		{http.MethodGet, "/api/users/not-a-number"},
+		{http.MethodGet, "/api/users/not-a-number/timeline"},
+	}
+	for _, route := range publicRoutes {
+		request := httptest.NewRequest(route.method, route.path, nil)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if response.Code == http.StatusUnauthorized {
+			t.Errorf("%s %s unexpectedly requires authentication: body=%s", route.method, route.path, response.Body.String())
+		}
+	}
+
+	protectedRoutes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/users/search?q=guest"},
+		{http.MethodGet, "/api/users/1/follow"},
+		{http.MethodGet, "/api/users/1/followers"},
+		{http.MethodGet, "/api/users/1/following"},
+		{http.MethodPost, "/api/posts"},
+		{http.MethodPost, "/api/posts/1/translation"},
+		{http.MethodPut, "/api/posts/1/like"},
+		{http.MethodPut, "/api/posts/1/repost"},
+		{http.MethodPut, "/api/posts/1/bookmark"},
+		{http.MethodGet, "/api/me/notifications"},
+	}
+	for _, route := range protectedRoutes {
+		request := httptest.NewRequest(route.method, route.path, nil)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s status=%d body=%s, want 401", route.method, route.path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestSetupRouterRegistersProfileTimelineRoute(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	engine, err := SetupRouter(nil, nil, nil, nil)

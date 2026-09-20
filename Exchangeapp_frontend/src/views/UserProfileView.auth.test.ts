@@ -169,7 +169,7 @@ const setAuth = (isAuthenticated: boolean, id: number | null) => {
   });
 };
 
-describe('UserProfileView auth-required state', () => {
+describe('UserProfileView public read surface', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
@@ -191,29 +191,28 @@ describe('UserProfileView auth-required state', () => {
     mocks.feedStore.isPostDeleted.mockReturnValue(false);
   });
 
-  it('renders the anonymous profile state without making protected requests', async () => {
+  it('renders the anonymous profile without making protected requests', async () => {
     const wrapper = mountProfile();
     await settle();
 
-    expect(wrapper.get('.auth-required-state h1').text()).toBe('Log in to view this profile.');
-    expect(wrapper.get('.auth-required-state p').text()).toBe(
-      'Sign in to view this profile, posts, and connections.',
-    );
-    expect(wrapper.get('.auth-required-state__action').text()).toBe('Log in');
-    expect(wrapper.text()).not.toContain('Profile could not be loaded.');
-    expect(mocks.getUser).not.toHaveBeenCalled();
-    expect(mocks.getUserTimeline).not.toHaveBeenCalled();
+    expect(wrapper.get('.profile-identity h1').text()).toBe('User 7');
+    expect(wrapper.text()).toContain('No posts or reposts yet.');
+    expect(wrapper.find('.auth-required-state').exists()).toBe(false);
+    expect(mocks.getUser).toHaveBeenCalledWith('7');
+    expect(mocks.getUserTimeline).toHaveBeenCalledWith('7', { limit: 20 });
     expect(mocks.getUserFollowState).not.toHaveBeenCalled();
-    expect(document.title).toBe('Profile — Exchange');
+    expect(document.title).toBe('@user-7 — Exchange');
     wrapper.unmount();
   });
 
-  it('passes the full profile deep link, including query and hash, to Login', async () => {
+  it('uses the full profile deep link when a guest chooses Follow', async () => {
     mocks.route.fullPath = '/users/7?source=share#bio';
     const wrapper = mountProfile();
     await settle();
 
-    expect(wrapper.findComponent(RouterLinkStub).props('to')).toEqual({
+    await wrapper.get('.profile-follow-button').trigger('click');
+
+    expect(mocks.router.push).toHaveBeenCalledWith({
       name: 'Login',
       query: {
         returnTo: '/users/7?source=share#bio',
@@ -234,7 +233,7 @@ describe('UserProfileView auth-required state', () => {
     wrapper.unmount();
   });
 
-  it('clears stale profile content immediately when the session expires', async () => {
+  it('keeps the public profile readable when the session expires', async () => {
     mocks.route.params.id = '8';
     mocks.route.fullPath = '/users/8';
     setAuth(true, 7);
@@ -252,25 +251,24 @@ describe('UserProfileView auth-required state', () => {
     mocks.authStore.currentIdentity = null;
     await settle();
 
-    expect(wrapper.get('.auth-required-state h1').text()).toBe('Log in to view this profile.');
-    expect(wrapper.text()).not.toContain('User 8');
-    expect(wrapper.text()).not.toContain('Body 101');
-    expect(mocks.getUser).toHaveBeenCalledTimes(1);
-    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(1);
-    expect(document.title).toBe('Profile — Exchange');
+    expect(wrapper.text()).toContain('User 8');
+    expect(wrapper.text()).toContain('Body 101');
+    expect(mocks.getUser).toHaveBeenCalledTimes(2);
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
+    expect(document.title).toBe('@user-8 — Exchange');
     wrapper.unmount();
   });
 
-  it('loads the profile once when authentication returns without a route change', async () => {
+  it('rehydrates the profile audience when authentication returns without a route change', async () => {
     const wrapper = mountProfile();
     await settle();
-    expect(mocks.getUser).not.toHaveBeenCalled();
+    expect(mocks.getUser).toHaveBeenCalledTimes(1);
 
     mocks.authStore.currentIdentity = { ...profile(7) };
     mocks.authStore.isAuthenticated = true;
     await settle();
 
-    expect(mocks.getUser).toHaveBeenCalledTimes(1);
+    expect(mocks.getUser).toHaveBeenCalledTimes(2);
     expect(mocks.getUser).toHaveBeenCalledWith('7');
     expect(wrapper.text()).toContain('User 7');
     expect(wrapper.find('.auth-required-state').exists()).toBe(false);
