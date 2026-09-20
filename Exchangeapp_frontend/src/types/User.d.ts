@@ -11,6 +11,7 @@ export interface PublicUserSummary extends PublicAuthor {
 }
 
 export interface PublicUser extends PublicUserSummary {
+  cover_image_url: string;
   follower_count: number;
   following_count: number;
 }

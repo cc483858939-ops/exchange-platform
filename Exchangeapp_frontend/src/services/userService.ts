@@ -48,6 +48,7 @@ export type UpdateUserProfilePayload = {
   display_name?: string;
   bio?: string;
   avatar_url?: string;
+  cover_image_url?: string;
 };
 
 export async function updateUserProfile(
@@ -64,6 +65,13 @@ export async function uploadProfileAvatar(file: File): Promise<string> {
   data.append('image', file);
   const response = await apiClient.post<{ avatar_url: string }>('/uploads/profile-avatar', data);
   return response.data.avatar_url;
+}
+
+export async function uploadProfileCover(file: File): Promise<string> {
+  const data = new FormData();
+  data.append('image', file);
+  const response = await apiClient.post<{ cover_image_url: string }>('/uploads/profile-cover', data);
+  return response.data.cover_image_url;
 }
 export type UserFollowState = {
   user_id: number;

@@ -15,6 +15,7 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/models"
 	"Go.exchange/profileavatar"
+	"Go.exchange/profilecover"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -209,7 +210,7 @@ func decodeUserProfilePatch(reader io.Reader, viewerID uint) (map[string]any, er
 		return nil, errors.New("username is not editable")
 	}
 	for field := range fields {
-		if field != "display_name" && field != "bio" && field != "avatar_url" {
+		if field != "display_name" && field != "bio" && field != "avatar_url" && field != "cover_image_url" {
 			return nil, fmt.Errorf("unknown profile field: %s", field)
 		}
 	}
@@ -235,6 +236,13 @@ func decodeUserProfilePatch(reader io.Reader, viewerID uint) (map[string]any, er
 			return nil, err
 		}
 		updates["avatar_url"] = value
+	}
+	if rawValue, exists := fields["cover_image_url"]; exists {
+		value, err := decodeProfileCoverURL(rawValue, viewerID)
+		if err != nil {
+			return nil, err
+		}
+		updates["cover_image_url"] = value
 	}
 	return updates, nil
 }
@@ -276,6 +284,24 @@ func decodeProfileAvatarURL(raw json.RawMessage, viewerID uint) (string, error) 
 func validateProfileAvatarURL(value string, viewerID uint) error {
 	_, _, err := profileavatar.ParseUserAvatarURL(value, viewerID)
 	return err
+}
+
+func decodeProfileCoverURL(raw json.RawMessage, viewerID uint) (string, error) {
+	value := bytes.TrimSpace(raw)
+	if bytes.Equal(value, []byte("null")) {
+		return "", errors.New("cover_image_url cannot be null")
+	}
+	var decoded string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return "", errors.New("cover_image_url must be a string")
+	}
+	if decoded == "" {
+		return "", nil
+	}
+	if _, err := profilecover.ParseUserCoverURL(decoded, viewerID); err != nil {
+		return "", err
+	}
+	return decoded, nil
 }
 
 func UpdateUserProfile(ctx *gin.Context) {

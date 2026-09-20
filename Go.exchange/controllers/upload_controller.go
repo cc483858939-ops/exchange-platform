@@ -16,6 +16,8 @@ import (
 	"Go.exchange/postmedia"
 	"Go.exchange/postmediaimage"
 	"Go.exchange/profileavatar"
+	"Go.exchange/profilecover"
+	"Go.exchange/profilecoverimage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -108,6 +110,20 @@ var statProfileAvatarObject = func(ctx context.Context, objectKey string) (store
 			return storedObjectInfo{}, false, nil
 		}
 		return storedObjectInfo{}, false, fmt.Errorf("stat profile avatar object: %w", err)
+	}
+	return storedObjectInfo{Size: info.Size, ContentType: info.ContentType}, true, nil
+}
+
+var statProfileCoverObject = func(ctx context.Context, objectKey string) (storedObjectInfo, bool, error) {
+	if global.MinioClient == nil {
+		return storedObjectInfo{}, false, errors.New("storage is not initialized")
+	}
+	info, err := global.MinioClient.StatObject(ctx, config.StorageBucket(), objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		if isMissingStoredObjectError(err) {
+			return storedObjectInfo{}, false, nil
+		}
+		return storedObjectInfo{}, false, fmt.Errorf("stat profile cover object: %w", err)
 	}
 	return storedObjectInfo{Size: info.Size, ContentType: info.ContentType}, true, nil
 }
@@ -257,6 +273,65 @@ func UploadProfileAvatar(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{"avatar_url": postFileURL(objectKey)})
 }
+
+func UploadProfileCover(ctx *gin.Context) {
+	viewerID, ok := requireActiveProfileViewerID(ctx)
+	if !ok {
+		return
+	}
+
+	fileHeader, err := ctx.FormFile("image")
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		return
+	}
+	if fileHeader.Size <= 0 || fileHeader.Size > profilecoverimage.MaxSourceBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to open image file"})
+		return
+	}
+	defer file.Close()
+
+	body, err := io.ReadAll(io.LimitReader(file, int64(profilecoverimage.MaxSourceBytes)+1))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
+		return
+	}
+	if len(body) == 0 || len(body) > profilecoverimage.MaxSourceBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
+		return
+	}
+
+	derivative, err := profilecoverimage.Optimize(body)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
+		return
+	}
+	objectKey, err := profilecover.BuildUserV1ObjectKey(viewerID, derivative.ContentHash, derivative.Extension)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build cover object key"})
+		return
+	}
+	info, exists, err := statProfileCoverObject(ctx.Request.Context(), objectKey)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "cover storage is unavailable"})
+		return
+	}
+	if !exists || info.Size != int64(len(derivative.Body)) || info.ContentType != derivative.ContentType {
+		if err := putStoredObject(ctx.Request.Context(), objectKey, bytes.NewReader(derivative.Body), int64(len(derivative.Body)), derivative.ContentType); err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "cover storage is unavailable"})
+			return
+		}
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"cover_image_url": profilecover.FilesURLPrefix + objectKey})
+}
+
 func GetFile(ctx *gin.Context) {
 	objectKey := strings.TrimPrefix(ctx.Param("objectKey"), "/")
 	if !isAllowedObjectKey(objectKey) {
@@ -285,6 +360,9 @@ func fileCacheControl(objectKey string) string {
 	if postmedia.IsPublicObjectKey(objectKey) {
 		return "public, max-age=31536000, immutable"
 	}
+	if profilecover.IsPublicObjectKey(objectKey) {
+		return "public, max-age=31536000, immutable"
+	}
 	if strings.HasPrefix(objectKey, profileavatar.UserV1ObjectPrefix) || strings.HasPrefix(objectKey, profileavatar.DevDataV1ObjectPrefix) {
 		return "public, max-age=31536000, immutable"
 	}
@@ -299,7 +377,7 @@ func isAllowedObjectKey(objectKey string) bool {
 	if strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n") {
 		return false
 	}
-	return postmedia.IsPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
+	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
 }
 
 func classifyStoredObjectError(err error) error {

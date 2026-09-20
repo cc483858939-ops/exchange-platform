@@ -77,6 +77,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.POST("/post-view-events", controllers.NewPostViewEventsHandler(publisher))
 		api.POST("/uploads/post-media", controllers.UploadPostMedia)
 		api.POST("/uploads/profile-avatar", controllers.UploadProfileAvatar)
+		api.POST("/uploads/profile-cover", controllers.UploadProfileCover)
 		api.GET("/users/search", controllers.SearchUsers)
 		api.PATCH("/users/:id", controllers.UpdateUserProfile)
 		api.GET("/users/:id/follow", controllers.GetUserFollowState)

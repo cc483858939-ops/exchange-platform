@@ -34,6 +34,7 @@ type publicUserResponse struct {
 	DisplayName    string    `json:"display_name"`
 	Bio            string    `json:"bio"`
 	AvatarURL      string    `json:"avatar_url"`
+	CoverImageURL  string    `json:"cover_image_url"`
 	CreatedAt      time.Time `json:"created_at"`
 	FollowerCount  int64     `json:"follower_count"`
 	FollowingCount int64     `json:"following_count"`
@@ -277,7 +278,7 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 		return publicUserResponse{}, errors.New("database is not initialized")
 	}
 	var user models.User
-	if err := global.Db.Select("id, username, display_name, bio, avatar_url, created_at").First(&user, id).Error; err != nil {
+	if err := global.Db.Select("id, username, display_name, bio, avatar_url, cover_image_url, created_at").First(&user, id).Error; err != nil {
 		return publicUserResponse{}, err
 	}
 	counts, err := readUserFollowCounts(global.Db, user.ID)
@@ -286,7 +287,7 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 	}
 	return publicUserResponse{
 		ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Bio: user.Bio,
-		AvatarURL: user.AvatarURL, CreatedAt: user.CreatedAt,
+		AvatarURL: user.AvatarURL, CoverImageURL: user.CoverImageURL, CreatedAt: user.CreatedAt,
 		FollowerCount: counts.FollowerCount, FollowingCount: counts.FollowingCount,
 	}, nil
 }

@@ -90,6 +90,7 @@ const author = (id = 7) => ({
 });
 const profile = (id: number) => ({
   ...author(id),
+  cover_image_url: '',
   bio: '',
   created_at: '2026-08-24T00:00:00.000Z',
   follower_count: 0,

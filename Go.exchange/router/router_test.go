@@ -61,6 +61,7 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 		"POST /api/posts",
 		"POST /api/uploads/post-media",
 		"POST /api/uploads/profile-avatar",
+		"POST /api/uploads/profile-cover",
 		"DELETE /api/posts/:id",
 		"GET /api/posts/:id/replies",
 		"GET /api/me/bookmarks",
