@@ -15,6 +15,7 @@ import (
 	"Go.exchange/likes"
 	"Go.exchange/models"
 	"Go.exchange/postlanguage"
+	"Go.exchange/ratelimit"
 	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
@@ -62,13 +63,21 @@ func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
 
 var persistPostGraphFn = persistPostGraph
 
-func NewCreatePostHandler() gin.HandlerFunc {
+func NewCreatePostHandler(limiters ...ratelimit.Limiter) gin.HandlerFunc {
+	var limiter ratelimit.Limiter
+	if len(limiters) > 0 {
+		limiter = limiters[0]
+	}
 	return func(ctx *gin.Context) {
-		createPost(ctx)
+		createPostWithRateLimiter(ctx, limiter)
 	}
 }
 
 func createPost(ctx *gin.Context) {
+	createPostWithRateLimiter(ctx, nil)
+}
+
+func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
@@ -136,6 +145,12 @@ func createPost(ctx *gin.Context) {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": lookupErr.Error()})
 			return
 		}
+	}
+	// A new request consumes quota once. Idempotent replays returned above do
+	// not consume another post_create allowance; failed creates are not refunded
+	// in V1.
+	if limiter != nil && !ratelimit.Enforce(ctx, limiter, ratelimit.ActionPostCreate, ratelimit.FailClosed) {
+		return
 	}
 	author, err := loadPostAuthorForCreate(userID)
 	if err != nil {

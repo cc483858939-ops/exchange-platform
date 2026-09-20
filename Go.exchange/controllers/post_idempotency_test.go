@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"Go.exchange/models"
+	"Go.exchange/ratelimit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -32,6 +34,72 @@ func TestCreatePostRejectsInvalidIdempotencyKey(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), `"code":"POST_INVALID_IDEMPOTENCY_KEY"`) ||
 		!strings.Contains(recorder.Body.String(), `"error":"invalid Idempotency-Key"`) {
 		t.Fatalf("unexpected invalid-key response: %s", recorder.Body.String())
+	}
+}
+
+type postCreateRateLimitSpy struct {
+	calls int
+}
+
+func (s *postCreateRateLimitSpy) Allow(context.Context, ratelimit.Input) (ratelimit.Decision, error) {
+	s.calls++
+	return ratelimit.Decision{Allowed: true, Limit: 5, Remaining: 4}, nil
+}
+
+func TestCreatePostRateLimitSkipsIdempotentReplay(t *testing.T) {
+	key := uuid.New()
+	fingerprint, err := createPostPayloadFingerprint("same post", createPostRequest{Content: "same post"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalLookup := loadClientPublishPostFn
+	originalResponse := buildStoredPostCreateResponseFn
+	originalPersist := persistPostGraphFn
+	originalAuthor := loadPostAuthorForCreate
+	lookupCalls := 0
+	loadClientPublishPostFn = func(authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
+		lookupCalls++
+		if lookupCalls == 1 {
+			return models.Post{}, gorm.ErrRecordNotFound
+		}
+		return models.Post{
+			Model:                    gorm.Model{ID: 72},
+			AuthorID:                 authorID,
+			ClientPublishID:          &clientPublishID,
+			ClientPublishFingerprint: &fingerprint,
+		}, nil
+	}
+	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
+		return publicAuthorResponse{ID: id, Username: "alice"}, nil
+	}
+	persistPostGraphFn = func(post *models.Post, userID uint, content string, _ createPostRequest, _ []validatedPostMedia, now time.Time) error {
+		*post = models.Post{
+			Model:      gorm.Model{ID: 71, CreatedAt: now, UpdatedAt: now},
+			AuthorID:   userID,
+			Content:    content,
+			Language:   "und",
+			Visibility: "public",
+		}
+		return nil
+	}
+	buildStoredPostCreateResponseFn = func(post models.Post, _ time.Time) (postResponse, error) {
+		return postResponse{ID: post.ID, Content: "same post", Media: []postMediaResponse{}}, nil
+	}
+	t.Cleanup(func() {
+		loadClientPublishPostFn = originalLookup
+		buildStoredPostCreateResponseFn = originalResponse
+		persistPostGraphFn = originalPersist
+		loadPostAuthorForCreate = originalAuthor
+	})
+
+	limiter := &postCreateRateLimitSpy{}
+	first := executeCreatePostRequestWithLimiter(t, `{"content":"same post"}`, key.String(), limiter)
+	second := executeCreatePostRequestWithLimiter(t, `{"content":"same post"}`, key.String(), limiter)
+	if first.Code != http.StatusCreated || second.Code != http.StatusOK || second.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("first=%d second=%d replay=%q first_body=%s second_body=%s", first.Code, second.Code, second.Header().Get("Idempotency-Replayed"), first.Body.String(), second.Body.String())
+	}
+	if limiter.calls != 1 {
+		t.Fatalf("rate limiter calls=%d, want 1 for first request and zero for replay", limiter.calls)
 	}
 }
 
@@ -286,6 +354,19 @@ func executeCreatePostRequestWithKey(t *testing.T, body, key string) *httptest.R
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Request.Header.Set("Idempotency-Key", key)
 	NewCreatePostHandler()(ctx)
+	return recorder
+}
+
+func executeCreatePostRequestWithLimiter(t *testing.T, body, key string, limiter ratelimit.Limiter) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", uint(7))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts", bytes.NewBufferString(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("Idempotency-Key", key)
+	NewCreatePostHandler(limiter)(ctx)
 	return recorder
 }
 

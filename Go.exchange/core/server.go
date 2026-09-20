@@ -17,6 +17,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
+	"Go.exchange/ratelimit"
 	"Go.exchange/router"
 	"Go.exchange/runtimehealth"
 	"Go.exchange/translation"
@@ -32,6 +33,10 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	authController, err := controllers.NewAuthController(global.Db, tokens, limiter)
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth controller: %w", err)
+	}
+	applicationLimiter, err := ratelimit.NewRedisLimiter(global.RedisDB)
+	if err != nil {
+		return nil, fmt.Errorf("initialize application rate limiter: %w", err)
 	}
 	port := config.AppPort()
 	readiness := runtimehealth.NewAPIReadiness(runtimehealth.APIOptions{
@@ -59,7 +64,7 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 			BaseURL:        translationConfig.BaseURL,
 		},
 	)
-	handler, err := router.SetupRouter(authController, tokens, publisher, readiness, translationService)
+	handler, err := router.SetupRouterWithRateLimiter(authController, tokens, publisher, readiness, applicationLimiter, translationService)
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}

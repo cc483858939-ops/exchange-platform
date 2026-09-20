@@ -57,6 +57,8 @@ var (
 	translationCacheOperations                   = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_translation_cache_operations_total", Help: "Post translation cache operations by result."}, []string{"operation", "result"})
 	translationProviderRequests                  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_translation_provider_requests_total", Help: "Translation provider requests by outcome."}, []string{"outcome"})
 	translationProviderDuration                  = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_translation_provider_duration_seconds", Help: "Translation provider request latency in seconds.", Buckets: prometheus.DefBuckets})
+	rateLimitDecisions                           = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_rate_limit_decisions_total", Help: "Application rate-limit decisions by policy and result."}, []string{"policy", "result"})
+	rateLimitErrors                              = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_rate_limit_errors_total", Help: "Application rate-limit infrastructure errors by policy."}, []string{"policy"})
 	runtimeReadiness                             = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "runtime_readiness", Help: "Runtime readiness by role and check."}, []string{"role", "check"})
 	runtimeReadinessTransitions                  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "runtime_readiness_transitions_total", Help: "Runtime readiness state transitions."}, []string{"role", "from", "to", "reason"})
 	runtimeReadinessLastSuccess                  = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "runtime_readiness_last_success_timestamp", Help: "Unix timestamp of the last successful readiness evaluation."}, []string{"role"})
@@ -78,6 +80,7 @@ func init() {
 		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
 		translationRequests, translationRequestDuration, translationCacheOperations, translationProviderRequests, translationProviderDuration,
+		rateLimitDecisions, rateLimitErrors,
 		runtimeReadiness, runtimeReadinessTransitions, runtimeReadinessLastSuccess, runtimeReadinessLastEvaluation,
 		workerPipelineHealthy, workerPipelineConsecutiveFailures, workerPipelineLastSuccess, workerPipelineBacklog, workerPipelineBacklogStalled,
 	)
@@ -117,6 +120,12 @@ func Middleware() gin.HandlerFunc {
 }
 
 func Handler() http.Handler { return promhttp.HandlerFor(registry, promhttp.HandlerOpts{}) }
+func RecordRateLimitDecision(policy, result string) {
+	rateLimitDecisions.WithLabelValues(policy, result).Inc()
+}
+func RecordRateLimitError(policy string) {
+	rateLimitErrors.WithLabelValues(policy).Inc()
+}
 func RecordPostEmbeddingEvent(result string) {
 	postEmbeddingEvents.WithLabelValues(result).Inc()
 }
