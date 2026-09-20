@@ -33,7 +33,6 @@
           class="post-media-grid__image"
           :class="{ 'post-media-grid__image--single': visibleMedia.length === 1 }"
           :src="item.url"
-          :srcset="imageSrcset(item)"
           :alt="`Post image ${index + 1}`"
           loading="lazy"
           decoding="async"
@@ -47,7 +46,6 @@
         class="post-media-grid__image"
         :class="{ 'post-media-grid__image--single': visibleMedia.length === 1 }"
         :src="item.url"
-        :srcset="imageSrcset(item)"
         :alt="`Post image ${index + 1}`"
         loading="lazy"
         decoding="async"
@@ -103,7 +101,6 @@ const SINGLE_MEDIA_MAX_HEIGHT_PX = 640;
 
 const visibleMedia = computed(() => props.media.slice(0, 4));
 const failedURLs = ref(new Set<string>());
-const largeFallbackURLs = ref(new Set<string>());
 
 const hasSizedSingleMedia = computed(() => {
   const item = visibleMedia.value[0];
@@ -146,37 +143,11 @@ const singleMediaStyle = computed(() => {
   };
 });
 
-const canUseResponsiveSingleMedia = (item: PostMedia) => (
-  !props.removable
-  && visibleMedia.value.length === 1
-  && hasSizedSingleMedia.value
-  && Boolean(item.large_url?.trim())
-  && item.large_url !== item.url
-  && !largeFallbackURLs.value.has(item.url)
-);
-
-const imageSrcset = (item: PostMedia) => {
-  if (!canUseResponsiveSingleMedia(item)) {
-    return undefined;
-  }
-
-  return `${item.url} 1x, ${item.large_url} 2x`;
-};
-
 const markFailed = (url: string) => {
   failedURLs.value = new Set([...failedURLs.value, url]);
 };
 
 const handleImageError = (item: PostMedia) => {
-  if (canUseResponsiveSingleMedia(item)) {
-    largeFallbackURLs.value = new Set([
-      ...largeFallbackURLs.value,
-      item.url,
-    ]);
-
-    return;
-  }
-
   markFailed(item.url);
 };
 

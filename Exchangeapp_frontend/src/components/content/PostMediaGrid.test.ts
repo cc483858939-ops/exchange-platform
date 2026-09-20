@@ -74,7 +74,7 @@ describe('PostMediaGrid', () => {
       .not.toContain('post-media-grid__image--single');
   });
 
-  it('keeps Medium as src and exposes a density srcset for a read-only single image', () => {
+  it('renders a read-only single image with Medium only', () => {
     const wrapper = mount(PostMediaGrid, {
       props: { media: [singleMedia()] },
       global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
@@ -82,14 +82,14 @@ describe('PostMediaGrid', () => {
     const image = wrapper.get('img');
 
     expect(image.attributes('src')).toBe('/medium.jpg');
-    expect(image.attributes('srcset')).toBe('/medium.jpg 1x, /large.jpg 2x');
+    expect(image.attributes('srcset')).toBeUndefined();
     expect(image.attributes('width')).toBe('960');
     expect(image.attributes('height')).toBe('1200');
     expect(image.attributes('loading')).toBe('lazy');
     expect(image.attributes('decoding')).toBe('async');
   });
 
-  it('keeps responsive delivery and open interaction for an interactive single image', async () => {
+  it('keeps Medium-only delivery and open interaction for an interactive single image', async () => {
     const wrapper = mount(PostMediaGrid, {
       props: { media: [singleMedia()], interactive: true },
       global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
@@ -97,13 +97,13 @@ describe('PostMediaGrid', () => {
     const image = wrapper.get('.post-media-grid__open img');
 
     expect(image.attributes('src')).toBe('/medium.jpg');
-    expect(image.attributes('srcset')).toBe('/medium.jpg 1x, /large.jpg 2x');
+    expect(image.attributes('srcset')).toBeUndefined();
 
     await wrapper.get('.post-media-grid__open').trigger('click');
     expect(wrapper.emitted('open')).toEqual([[0]]);
   });
 
-  it('excludes responsive delivery from a removable single-image preview', async () => {
+  it('keeps removable single-image previews Medium-only', async () => {
     const wrapper = mount(PostMediaGrid, {
       props: { media: [singleMedia()], removable: true },
       global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
@@ -119,8 +119,11 @@ describe('PostMediaGrid', () => {
 
   it.each([2, 3, 4])('keeps %i-image delivery Medium-only', count => {
     const wrapper = mountGrid(count);
+    const expectedURLs = media(count).map(item => item.url);
+    const images = wrapper.findAll('img');
 
-    expect(wrapper.findAll('img').every(image => image.attributes('srcset') === undefined)).toBe(true);
+    expect(images.map(image => image.attributes('src'))).toEqual(expectedURLs);
+    expect(images.every(image => image.attributes('srcset') === undefined)).toBe(true);
     expect(wrapper.findAll('.post-media-grid__item--featured')).toHaveLength(count === 3 ? 1 : 0);
   });
 
@@ -138,16 +141,11 @@ describe('PostMediaGrid', () => {
     expect(wrapper.get('img').attributes('srcset')).toBeUndefined();
   });
 
-  it('falls back from a failed Large candidate to Medium before showing a placeholder', async () => {
+  it('shows a placeholder immediately when the Medium image fails', async () => {
     const wrapper = mount(PostMediaGrid, {
       props: { media: [singleMedia()] },
       global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
     });
-
-    await wrapper.get('img').trigger('error');
-    expect(wrapper.get('img').attributes('src')).toBe('/medium.jpg');
-    expect(wrapper.get('img').attributes('srcset')).toBeUndefined();
-    expect(wrapper.find('[role="img"]').exists()).toBe(false);
 
     await wrapper.get('img').trigger('error');
     expect(wrapper.find('img').exists()).toBe(false);
@@ -286,9 +284,8 @@ describe('PostMediaGrid', () => {
     expect(composerWrapper.emitted('remove')).toEqual([[1]]);
   });
 
-  it('shows an accessible placeholder after both responsive and Medium images fail', async () => {
+  it('shows an accessible placeholder after a Medium image fails', async () => {
     const wrapper = mountGrid(1);
-    await wrapper.get('img').trigger('error');
     await wrapper.get('img').trigger('error');
 
     expect(wrapper.find('img').exists()).toBe(false);
