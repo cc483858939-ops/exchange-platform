@@ -168,7 +168,7 @@
           query: { reply: '1' },
         }"
         :aria-label="replyLabel"
-        @click.capture="prepareDetailNavigation"
+        @click="handleReplyNavigation"
       >
         <AppIcon name="reply" :size="18" />
         <span>{{ post.replyCount }}</span>
@@ -270,6 +270,7 @@ const props = withDefaults(defineProps<{
   likePending?: boolean;
   repostPending?: boolean;
   bookmarkPending?: boolean;
+  requiresAuthForActions?: boolean;
   showNotInterested?: boolean;
   showDelete?: boolean;
   deletePending?: boolean;
@@ -279,6 +280,7 @@ const props = withDefaults(defineProps<{
   likePending: false,
   repostPending: false,
   bookmarkPending: false,
+  requiresAuthForActions: false,
   showNotInterested: false,
   showDelete: false,
   deletePending: false,
@@ -372,6 +374,10 @@ const referenceMedia = computed(() => {
 });
 
 const handleLikeActivation = () => {
+  if (props.requiresAuthForActions) {
+    navigateToLogin();
+    return;
+  }
   if (props.post.likeStatus !== 'ready' || props.likePending) {
     return;
   }
@@ -380,6 +386,10 @@ const handleLikeActivation = () => {
 };
 
 const handleRepostActivation = () => {
+  if (props.requiresAuthForActions) {
+    navigateToLogin();
+    return;
+  }
   if (props.post.repostStatus !== 'ready' || props.repostPending) {
     return;
   }
@@ -388,6 +398,10 @@ const handleRepostActivation = () => {
 };
 
 const handleBookmarkActivation = () => {
+  if (props.requiresAuthForActions) {
+    navigateToLogin();
+    return;
+  }
   if (props.post.bookmarkStatus !== 'ready' || props.bookmarkPending) {
     return;
   }
@@ -419,6 +433,23 @@ const prepareDetailNavigation = (event: MouseEvent) => {
     postDetailHandoff.remember(props.post);
   }
   emit('postClick', props.post);
+};
+
+const navigateToLogin = () => {
+  void router.push({
+    name: 'Login',
+    query: { returnTo: router.currentRoute.value.fullPath },
+  });
+};
+
+const handleReplyNavigation = (event: MouseEvent) => {
+  if (props.requiresAuthForActions) {
+    event.preventDefault();
+    event.stopPropagation();
+    navigateToLogin();
+    return;
+  }
+  prepareDetailNavigation(event);
 };
 
 const likeLabel = computed(() => {
@@ -611,6 +642,10 @@ const copyLink = async () => {
 
 const handleNotInterested = () => {
   closeMore();
+  if (props.requiresAuthForActions) {
+    navigateToLogin();
+    return;
+  }
   emit('notInterested', props.post.id);
 };
 
@@ -679,6 +714,10 @@ const resetTranslation = () => {
 
 const handleTranslationAction = async () => {
   if (!translationAvailable.value) {
+    return;
+  }
+  if (props.requiresAuthForActions) {
+    navigateToLogin();
     return;
   }
   if (translationState.value === 'success') {

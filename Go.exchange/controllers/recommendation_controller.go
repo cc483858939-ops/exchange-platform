@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -19,6 +21,7 @@ import (
 const (
 	defaultRecommendationLimit              = 20
 	maxRecommendationLimit                  = 50
+	maxPublicRecommendationExcludedPostIDs  = 200
 	recommendationFeedbackPostLimit         = recommendation.ProfileReplyLimit
 	recommendationRecentViewPostLimit       = recommendation.ProfileRecentViewLimit
 	recommendationCandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v5"
@@ -58,6 +61,7 @@ type postRecommendationPageResponse struct {
 }
 
 var recommendationServingPathForHandler = serveRecommendationCandidatePath
+var publicRecommendationServingPathForHandler = servePublicRecommendationCandidatePath
 var selectedRecommendationResponsesForHandler = selectedRecommendationResponses
 var attachRecommendationTrackingForHandler = attachRecommendationTracking
 
@@ -159,6 +163,53 @@ func GetPostRecommendations(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, buildPostRecommendationPageResponse(requestID, recommendations))
 }
 
+func GetPublicPostRecommendations(ctx *gin.Context) {
+	started := time.Now()
+	now := started.UTC()
+	requestID := uuid.NewString()
+	limit := parseRecommendationLimit(ctx.Query("limit"))
+	excluded, err := parsePublicRecommendationExcludedPostIDs(ctx.Query("exclude_post_ids"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cfg := normalizedRecommendationConfig()
+	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
+	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
+
+	serving, err := publicRecommendationServingPathForHandler(uint(limit), cfg, now, requestID, browserLanguageContext, excluded)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
+		return
+	}
+	for _, recallSet := range serving.RecallSets {
+		recordRecallMetrics(recallSet)
+	}
+	recommendations, err := selectedRecommendationResponsesForHandler(serving.Selected)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
+		return
+	}
+	for index := range recommendations {
+		recommendations[index].Tracking = nil
+	}
+
+	duration := time.Since(started)
+	outcome := "success"
+	if len(recommendations) == 0 {
+		outcome = "empty"
+	}
+	metrics.RecordRecommendationRequest(outcome, recommendationColdStartStrategyID)
+	metrics.ObserveRecommendationCandidateCount(len(serving.FreshSet.Candidates))
+	metrics.ObserveRecommendationResultCount(len(recommendations))
+	metrics.ObserveRecommendationGenerationDuration(recommendationColdStartStrategyID, duration)
+	recordResultMetrics(serving.Selected)
+
+	ctx.JSON(http.StatusOK, postRecommendationPageResponse{
+		Items: recommendations, RequestID: requestID, Depleted: len(recommendations) < limit,
+	})
+}
+
 func recommendationErrorResponse(ctx *gin.Context, err error, strategyID string) {
 	if strategyID == "" {
 		strategyID = recommendationStrategyID(userInterestProfile{})
@@ -256,6 +307,30 @@ func parseRecommendationLimit(raw string) int {
 		return maxRecommendationLimit
 	}
 	return limit
+}
+
+func parsePublicRecommendationExcludedPostIDs(raw string) (map[uint]struct{}, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[uint]struct{}{}, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > maxPublicRecommendationExcludedPostIDs {
+		return nil, fmt.Errorf("exclude_post_ids may contain at most %d post IDs", maxPublicRecommendationExcludedPostIDs)
+	}
+	result := make(map[uint]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, errors.New("exclude_post_ids must contain positive post IDs")
+		}
+		id, err := strconv.ParseUint(part, 10, 64)
+		if err != nil || id == 0 || uint64(uint(id)) != id {
+			return nil, errors.New("exclude_post_ids must contain positive post IDs")
+		}
+		result[uint(id)] = struct{}{}
+	}
+	return result, nil
 }
 
 func strconvUint(id uint) string { return strconv.FormatUint(uint64(id), 10) }

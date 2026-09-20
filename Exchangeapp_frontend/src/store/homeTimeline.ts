@@ -7,7 +7,10 @@ import {
   getFollowingTimeline,
   type TimelineItem,
 } from '../services/postService';
-import { getPostRecommendations } from '../services/recommendationService';
+import {
+  getPostRecommendations,
+  getPublicPostRecommendations,
+} from '../services/recommendationService';
 import { getPostLikeStates, likePost, unlikePost } from '../services/likeService';
 import {
   bookmarkPost,
@@ -80,6 +83,10 @@ export type HomeForYouState = HomeFeedState<HomeRecommendationItem> & {
 };
 
 const HOME_FOR_YOU_PAGE_SIZE = 20;
+
+type ForYouAudience =
+  | { authenticated: true; viewerID: number }
+  | { authenticated: false; viewerID: null };
 
 const normalizeID = (value: unknown): number | null => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
@@ -647,6 +654,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const appendForYouRecommendations = (recommendations: RecommendedPost[]) => {
+    const audience = currentForYouAudience();
     const appended: HomeRecommendationItem[] = [];
 
     recommendations.forEach((recommendation) => {
@@ -660,9 +668,15 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       }
 
       forYouLoadedPostIds.add(postID);
+      const feedPost = postToFeedPost(recommendation.post);
+      if (!audience.authenticated) {
+        feedPost.likeStatus = 'ready';
+        feedPost.repostStatus = 'ready';
+        feedPost.bookmarkStatus = 'ready';
+      }
       appended.push({
         recommendation,
-        post: postToFeedPost(recommendation.post),
+        post: feedPost,
       });
     });
 
@@ -672,10 +686,23 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     return appended;
   };
 
-  const currentForYouRequest = (version: number, generation: number, capturedViewerID: number) =>
+  const currentForYouAudience = (): ForYouAudience => (
+    authStore.isAuthenticated && viewerID.value !== null
+      ? { authenticated: true, viewerID: viewerID.value }
+      : { authenticated: false, viewerID: null }
+  );
+
+  const isCurrentForYouAudience = (capturedAudience: ForYouAudience) => {
+    const currentAudience = currentForYouAudience();
+    return capturedAudience.authenticated
+      ? currentAudience.authenticated && currentAudience.viewerID === capturedAudience.viewerID
+      : !currentAudience.authenticated;
+  };
+
+  const currentForYouRequest = (version: number, generation: number, capturedAudience: ForYouAudience) =>
     version === forYouRequestVersion
     && generation === authGeneration
-    && isAuthenticatedForViewer(capturedViewerID);
+    && isCurrentForYouAudience(capturedAudience);
 
   const currentFollowingRequest = (version: number, generation: number, capturedViewerID: number) =>
     version === followingRequestVersion
@@ -702,17 +729,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     requestVersion: number,
     generation: number,
     pagingVersion: number,
-    capturedViewerID: number,
-  ) => currentForYouRequest(requestVersion, generation, capturedViewerID)
+    capturedAudience: ForYouAudience,
+  ) => currentForYouRequest(requestVersion, generation, capturedAudience)
     && pagingVersion === forYouPagingVersion;
 
   const loadForYou = async (force = false) => {
-    const capturedViewerID = viewerID.value;
-    if (
-      capturedViewerID === null
-      || !isAuthenticatedForViewer(capturedViewerID)
-      || (forYou.loading && !force)
-    ) {
+    const capturedAudience = currentForYouAudience();
+    if (forYou.loading && !force) {
       return;
     }
     if (forYou.loaded && !force) {
@@ -731,31 +754,38 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.depleted = false;
 
     try {
-      const response = await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE);
-      if (!currentForYouRequest(version, generation, capturedViewerID)) return;
+      const response = capturedAudience.authenticated
+        ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
+        : await getPublicPostRecommendations({
+          limit: HOME_FOR_YOU_PAGE_SIZE,
+          excludePostIds: Array.from(forYouLoadedPostIds),
+        });
+      if (!currentForYouRequest(version, generation, capturedAudience)) return;
       const newItems = appendForYouRecommendations(response.items);
       forYou.loaded = true;
       forYou.depleted = response.depleted;
-      const capturedLikeGeneration = likeGeneration;
-      void hydrateLikeStates(
-        newItems.map(({ post }) => post.id),
-        () => currentForYouRequest(version, generation, capturedViewerID)
-          && likeGeneration === capturedLikeGeneration,
-      );
-      const capturedRepostGeneration = repostGeneration;
-      void hydrateRepostStates(
-        newItems.map(({ post }) => post.id),
-        () => currentForYouRequest(version, generation, capturedViewerID)
-          && repostGeneration === capturedRepostGeneration,
-      );
-      const capturedBookmarkGeneration = bookmarkGeneration;
-      void hydrateBookmarkStates(
-        newItems.map(({ post }) => post.id),
-        () => currentForYouRequest(version, generation, capturedViewerID)
-          && bookmarkGeneration === capturedBookmarkGeneration,
-      );
+      if (capturedAudience.authenticated) {
+        const capturedLikeGeneration = likeGeneration;
+        void hydrateLikeStates(
+          newItems.map(({ post }) => post.id),
+          () => currentForYouRequest(version, generation, capturedAudience)
+            && likeGeneration === capturedLikeGeneration,
+        );
+        const capturedRepostGeneration = repostGeneration;
+        void hydrateRepostStates(
+          newItems.map(({ post }) => post.id),
+          () => currentForYouRequest(version, generation, capturedAudience)
+            && repostGeneration === capturedRepostGeneration,
+        );
+        const capturedBookmarkGeneration = bookmarkGeneration;
+        void hydrateBookmarkStates(
+          newItems.map(({ post }) => post.id),
+          () => currentForYouRequest(version, generation, capturedAudience)
+            && bookmarkGeneration === capturedBookmarkGeneration,
+        );
+      }
     } catch {
-      if (currentForYouRequest(version, generation, capturedViewerID)) {
+      if (currentForYouRequest(version, generation, capturedAudience)) {
         forYou.error = true;
       }
     } finally {
@@ -766,11 +796,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const loadMoreForYou = async () => {
-    const capturedViewerID = viewerID.value;
+    const capturedAudience = currentForYouAudience();
     if (
-      capturedViewerID === null
-      || !isAuthenticatedForViewer(capturedViewerID)
-      || !forYou.loaded
+      !forYou.loaded
       || forYou.loading
       || forYou.loadingMore
       || forYou.loadMoreError
@@ -786,8 +814,13 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.loadMoreError = false;
 
     try {
-      const response = await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE);
-      if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)) return;
+      const response = capturedAudience.authenticated
+        ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
+        : await getPublicPostRecommendations({
+          limit: HOME_FOR_YOU_PAGE_SIZE,
+          excludePostIds: Array.from(forYouLoadedPostIds),
+        });
+      if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) return;
 
       const newItems = appendForYouRecommendations(response.items);
       if (response.depleted) {
@@ -802,30 +835,32 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         }
       }
 
-      const capturedLikeGeneration = likeGeneration;
-      void hydrateLikeStates(
-        newItems.map(({ post }) => post.id),
-        () => currentForYouRequest(requestVersion, generation, capturedViewerID)
-          && likeGeneration === capturedLikeGeneration,
-      );
-      const capturedRepostGeneration = repostGeneration;
-      void hydrateRepostStates(
-        newItems.map(({ post }) => post.id),
-        () => currentForYouRequest(requestVersion, generation, capturedViewerID)
-          && repostGeneration === capturedRepostGeneration,
-      );
-      const capturedBookmarkGeneration = bookmarkGeneration;
-      void hydrateBookmarkStates(
-        newItems.map(({ post }) => post.id),
-        () => currentForYouRequest(requestVersion, generation, capturedViewerID)
-          && bookmarkGeneration === capturedBookmarkGeneration,
-      );
+      if (capturedAudience.authenticated) {
+        const capturedLikeGeneration = likeGeneration;
+        void hydrateLikeStates(
+          newItems.map(({ post }) => post.id),
+          () => currentForYouRequest(requestVersion, generation, capturedAudience)
+            && likeGeneration === capturedLikeGeneration,
+        );
+        const capturedRepostGeneration = repostGeneration;
+        void hydrateRepostStates(
+          newItems.map(({ post }) => post.id),
+          () => currentForYouRequest(requestVersion, generation, capturedAudience)
+            && repostGeneration === capturedRepostGeneration,
+        );
+        const capturedBookmarkGeneration = bookmarkGeneration;
+        void hydrateBookmarkStates(
+          newItems.map(({ post }) => post.id),
+          () => currentForYouRequest(requestVersion, generation, capturedAudience)
+            && bookmarkGeneration === capturedBookmarkGeneration,
+        );
+      }
     } catch {
-      if (currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
+      if (currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) {
         forYou.loadMoreError = true;
       }
     } finally {
-      if (currentForYouPage(requestVersion, generation, pagingVersion, capturedViewerID)) {
+      if (currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) {
         forYou.loadingMore = false;
       }
     }
@@ -1351,9 +1386,9 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   });
 
   watch(
-    () => authStore.currentIdentity?.id,
-    (nextViewerID) => {
-      setViewer(nextViewerID ?? null);
+    [() => authStore.currentIdentity?.id, () => authStore.isAuthenticated],
+    ([nextViewerID, authenticated]) => {
+      setViewer(authenticated ? nextViewerID : null);
     },
     { immediate: true },
   );

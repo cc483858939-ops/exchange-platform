@@ -27,6 +27,42 @@ type recommendationServingOutcome struct {
 	LanguageContext        recommendationLanguageContext
 }
 
+// servePublicRecommendationCandidatePath is the guest-safe variant of the
+// recommendation pipeline. It deliberately has no user identity, profile,
+// served-history lookup, semantic recall, social graph lookup, or author
+// affinity hydration.
+func servePublicRecommendationCandidatePath(limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, browser recommendationLanguageContext, excluded map[uint]struct{}) (recommendationServingOutcome, error) {
+	outcome := recommendationServingOutcome{Profile: userInterestProfile{}}
+	if limit == 0 {
+		limit = defaultRecommendationLimit
+	}
+	if limit > maxRecommendationLimit {
+		limit = maxRecommendationLimit
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+
+	outcome.LanguageContext = buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg)
+	publicSet, err := loadPublicRecommendationCandidateSet(now, cfg, excluded)
+	if err != nil {
+		return outcome, err
+	}
+	hydrated, err := hydrateRecommendationCandidates(publicSet.Candidates, now)
+	if err != nil {
+		return outcome, err
+	}
+	ranked := rankRecommendationCandidates(userInterestProfile{}, hydrated, now, cfg, outcome.LanguageContext)
+	selected := selectRecommendationCandidates(ranked, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
+	outcome.FreshSet = publicSet
+	outcome.RecallSets = []recommendationCandidateSet{publicSet}
+	outcome.Selected = selected
+	return outcome, nil
+}
+
 // serveRecommendationCandidatePath is shared by GetPostRecommendations and
 // DevData verification. Keeping the path here prevents verification from
 // copying the recommender's SQL, ranking, or selection rules.

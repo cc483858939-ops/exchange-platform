@@ -10,7 +10,7 @@ vi.mock('../axios', () => ({
   },
 }));
 
-import { getPostRecommendations } from './recommendationService';
+import { getPostRecommendations, getPublicPostRecommendations } from './recommendationService';
 
 describe('recommendation service', () => {
   beforeEach(() => {
@@ -39,4 +39,22 @@ describe('recommendation service', () => {
       expect(mocks.get).not.toHaveBeenCalled();
     },
   );
+
+  it('requests guest recommendations with deduplicated exclusions', async () => {
+    const page = { items: [], request_id: 'guest-request', depleted: true };
+    mocks.get.mockResolvedValue({ data: page });
+
+    await expect(getPublicPostRecommendations({ limit: 20, excludePostIds: [3, 3, 8] }))
+      .resolves.toEqual(page);
+
+    expect(mocks.get).toHaveBeenCalledWith('/public/recommendations/posts', {
+      params: { limit: 20, exclude_post_ids: '3,8' },
+    });
+  });
+
+  it('rejects invalid guest recommendation exclusions', async () => {
+    await expect(getPublicPostRecommendations({ excludePostIds: [0] }))
+      .rejects.toThrow('Invalid recommendation exclusions');
+    expect(mocks.get).not.toHaveBeenCalled();
+  });
 });

@@ -57,6 +57,7 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 		routes[route.Method+" "+route.Path] = struct{}{}
 	}
 	for _, route := range []string{
+		"GET /api/public/recommendations/posts",
 		"POST /api/posts",
 		"POST /api/uploads/post-media",
 		"POST /api/uploads/profile-avatar",

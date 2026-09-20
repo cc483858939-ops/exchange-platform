@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     applyLikeStateUpdate: ReturnType<typeof vi.fn>;
   } | null,
   getPostRecommendations: vi.fn(),
+  getPublicPostRecommendations: vi.fn(),
   getFollowingTimeline: vi.fn(),
   getPostLikeStates: vi.fn(),
   likePost: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock('./feed', () => ({
 
 vi.mock('../services/recommendationService', () => ({
   getPostRecommendations: mocks.getPostRecommendations,
+  getPublicPostRecommendations: mocks.getPublicPostRecommendations,
 }));
 
 vi.mock('../services/postService', () => ({
@@ -157,6 +159,7 @@ describe('home timeline session store', () => {
       applyLikeStateUpdate: vi.fn(),
     });
     mocks.getPostRecommendations.mockReset();
+    mocks.getPublicPostRecommendations.mockReset();
     mocks.getFollowingTimeline.mockReset();
     mocks.getPostLikeStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.likePost.mockReset();
@@ -424,6 +427,37 @@ describe('home timeline session store', () => {
     expect(store.activeTab).toBe('for-you');
     expect(store.scrollTop['for-you']).toBe(0);
     expect(store.scrollTop.following).toBe(0);
+  });
+
+  it('loads guest For You pages without engagement hydration and excludes loaded IDs', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    mocks.getPublicPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)], true));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+    await settle();
+
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(1, {
+      limit: 20,
+      excludePostIds: [],
+    });
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(2, {
+      limit: 20,
+      excludePostIds: [1],
+    });
+    expect(mocks.getPostLikeStates).not.toHaveBeenCalled();
+    expect(mocks.getPostRepostStates).not.toHaveBeenCalled();
+    expect(mocks.getPostBookmarkStates).not.toHaveBeenCalled();
+    expect(store.forYou.items[0].post).toMatchObject({
+      likeStatus: 'ready',
+      repostStatus: 'ready',
+      bookmarkStatus: 'ready',
+    });
   });
 
   it('increments the Home reselect intent without resetting it for a new viewer', () => {

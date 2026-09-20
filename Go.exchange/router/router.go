@@ -60,6 +60,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	api.GET("/exchange/currencies", controllers.GetExchangeCurrencies)
 	api.GET("/exchange/quote", controllers.GetExchangeQuote)
 	api.GET("/files/*objectKey", controllers.GetFile)
+	api.GET("/public/recommendations/posts", controllers.GetPublicPostRecommendations)
 
 	api.Use(middlewares.AuthMiddleware(verifier))
 	var translationService translation.Service

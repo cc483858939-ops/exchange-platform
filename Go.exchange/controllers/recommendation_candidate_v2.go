@@ -364,6 +364,103 @@ posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 	return result, nil
 }
 
+// publicRecommendationEligibilityQuery intentionally contains only viewer-
+// independent public-post predicates. It must not grow user-specific
+// exclusions such as follows, post behaviors, served history, or materialized
+// interaction state.
+func publicRecommendationEligibilityQuery(query *gorm.DB, now time.Time, excluded map[uint]struct{}) *gorm.DB {
+	query = publicPostScope(query, now).
+		Where("posts.reply_to_post_id IS NULL").
+		Where(
+			"EXISTS (SELECT 1 FROM users AS recommendation_authors " +
+				"WHERE recommendation_authors.id = posts.author_id " +
+				"AND recommendation_authors.deleted_at IS NULL)",
+		)
+	if ids := postIDList(excluded); len(ids) > 0 {
+		query = query.Where("posts.id NOT IN ?", ids)
+	}
+	return query
+}
+
+func loadPublicRecommendationSourceCandidates(now time.Time, cfg config.RecommendationConfig, order interface{}, cap int, source string, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+	if cap <= 0 {
+		return nil, nil
+	}
+	query := publicRecommendationEligibilityQuery(global.Db.Table("posts").Select("posts.id"), now, excluded)
+	var ids []uint
+	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
+		return nil, err
+	}
+	result := make([]embeddingCandidate, 0, len(ids))
+	for _, id := range ids {
+		candidate := embeddingCandidate{PostID: id}
+		if source == "recent" {
+			candidate.FromRecent = true
+		}
+		result = append(result, candidate)
+	}
+	return result, nil
+}
+
+func loadPublicRecommendationTrendingCandidates(now time.Time, cfg config.RecommendationConfig, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+	if cap <= 0 {
+		return nil, nil
+	}
+	cutoff := now.AddDate(0, 0, -cfg.Trending.MaxAgeDays)
+	query := publicRecommendationEligibilityQuery(global.Db.Table("posts").Select("posts.id"), now, excluded).
+		Where("posts.created_at >= ?", cutoff).
+		Where("posts.like_count > 0 OR posts.reply_count > 0")
+	order := gorm.Expr(`
+(
+    LN(1 + GREATEST(posts.like_count, 0))
+    + ? * LN(1 + GREATEST(posts.reply_count, 0))
+)
+*
+EXP(
+    -LN(2)
+    * GREATEST(EXTRACT(EPOCH FROM (? - posts.created_at)) / 3600.0, 0)
+    / ?
+)
+DESC,
+posts.created_at DESC,
+posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
+	var ids []uint
+	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
+		return nil, err
+	}
+	result := make([]embeddingCandidate, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, embeddingCandidate{PostID: id, FromTrending: true})
+	}
+	return result, nil
+}
+
+func loadPublicRecommendationCandidateSet(now time.Time, cfg config.RecommendationConfig, excluded map[uint]struct{}) (recommendationCandidateSet, error) {
+	if global.Db == nil {
+		return recommendationCandidateSet{}, errors.New("database is not initialized")
+	}
+	caps := cfg.Candidates.ColdStart
+	recent, err := loadPublicRecommendationSourceCandidates(now, cfg, "posts.created_at DESC, posts.id DESC", caps.Recent, "recent", excluded)
+	if err != nil {
+		return recommendationCandidateSet{}, err
+	}
+	trending, err := loadPublicRecommendationTrendingCandidates(now, cfg, caps.Trending, excluded)
+	if err != nil {
+		return recommendationCandidateSet{}, err
+	}
+	merged := fuseRecommendationCandidates(
+		caps.Merged,
+		cfg.Fusion.RankConstant,
+		recommendationRecallList{Source: recommendationRecallSourceRecent, Candidates: recent},
+		recommendationRecallList{Source: recommendationRecallSourceTrending, Candidates: trending},
+	)
+	return recommendationCandidateSet{
+		Candidates:  merged,
+		RecentCount: len(recent), RecentPostIDs: recommendationCandidatePostIDs(recent),
+		TrendingCount: len(trending),
+	}, nil
+}
+
 func recommendationCandidateCaps(profile userInterestProfile, cfg config.RecommendationConfig) config.RecommendationCandidateCaps {
 	if len(profile.PositiveVector) == 0 {
 		return cfg.Candidates.ColdStart

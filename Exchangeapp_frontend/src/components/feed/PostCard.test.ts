@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
   remember: vi.fn(),
   translatePost: vi.fn(),
+  push: vi.fn(),
 }));
 
 type ResizeObserverTestInstance = {
@@ -37,7 +38,11 @@ vi.mock('../../services/translationService', () => ({
 }));
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ resolve: () => ({ href: '/posts/42' }) }),
+  useRouter: () => ({
+    resolve: () => ({ href: '/posts/42' }),
+    push: mocks.push,
+    currentRoute: { value: { fullPath: '/?tab=for-you' } },
+  }),
 }));
 
 const basePost = (): FeedPost => ({
@@ -68,6 +73,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.translatePost.mockReset();
+    mocks.push.mockReset();
     resizeObserverInstances.length = 0;
     vi.stubGlobal('ResizeObserver', class {
       private readonly callback: ResizeObserverCallback;
@@ -191,6 +197,28 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       expect(targetChineseLanguage.find('.post-card__translation-action').exists()).toBe(true);
       targetChineseLanguage.unmount();
     }
+  });
+
+  it('routes protected guest actions to login with the current route', async () => {
+    const wrapper = mountPostCard({ ...basePost(), language: 'zh' }, {
+      requiresAuthForActions: true,
+      showNotInterested: true,
+    });
+
+    await wrapper.find('.stub-like-action').trigger('click');
+    expect(mocks.push).toHaveBeenCalledWith({
+      name: 'Login',
+      query: { returnTo: '/?tab=for-you' },
+    });
+    expect(wrapper.emitted('toggleLike')).toBeUndefined();
+
+    await wrapper.get('.post-card__translation-action').trigger('click');
+    expect(mocks.push).toHaveBeenCalledTimes(2);
+    expect(mocks.translatePost).not.toHaveBeenCalled();
+
+    await wrapper.get('.post-card__reply').trigger('click');
+    expect(mocks.push).toHaveBeenCalledTimes(3);
+    expect(wrapper.emitted('postClick')).toBeUndefined();
   });
 
   it('captures content, reply, and view navigation with one handoff and one postClick each', async () => {

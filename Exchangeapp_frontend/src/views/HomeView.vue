@@ -28,19 +28,7 @@
       :aria-labelledby="'feed-tab-' + activeTab"
     >
     <section
-      v-if="!authStore.isAuthenticated"
-      class="home-state home-state--auth"
-      aria-labelledby="home-auth-title"
-    >
-      <h2 id="home-auth-title">Sign in to view your financial feed</h2>
-      <div class="home-state__actions">
-        <RouterLink class="home-state__primary" :to="{ name: 'Login' }">Log in</RouterLink>
-        <RouterLink class="home-state__secondary" :to="{ name: 'Register' }">Sign up</RouterLink>
-      </div>
-    </section>
-
-    <section
-      v-else-if="activeFeedStatus.loading && !hasRecentlyPublishedPosts"
+      v-if="activeFeedStatus.loading && !hasRecentlyPublishedPosts"
       class="feed-list feed-list--loading"
       :aria-labelledby="'feed-tab-' + activeTab"
     >
@@ -90,6 +78,8 @@
             <PostCard
               v-if="forYouRowKind(virtualItem.index) === 'recent'"
               :post="forYouPostForRow(virtualItem.index)"
+              :track-view="authStore.isAuthenticated"
+              :requires-auth-for-actions="!authStore.isAuthenticated"
               :view-session-key="homeViewSessionKey('for-you')"
               :like-pending="likePendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
               :repost-pending="repostPendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
@@ -126,11 +116,13 @@
             >
               <PostCard
                 :post="forYouRecommendationForRow(virtualItem.index).post"
+                :track-view="authStore.isAuthenticated"
+                :requires-auth-for-actions="!authStore.isAuthenticated"
                 :view-session-key="homeViewSessionKey('for-you')"
                 :like-pending="likePendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
                 :repost-pending="repostPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
                 :bookmark-pending="bookmarkPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
-                :show-not-interested="true"
+                :show-not-interested="authStore.isAuthenticated"
                 :show-delete="canDeletePost(forYouRecommendationForRow(virtualItem.index).post)"
                 :delete-pending="pendingDeletePostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
                 :delete-error="deleteErrors.get(forYouRecommendationForRow(virtualItem.index).post.id) || ''"
@@ -389,10 +381,15 @@ const activeFeedStatus = computed(() => {
 });
 
 const hasRecentlyPublishedPosts = computed(
-  () => activeTab.value === 'for-you' && feedStore.recentlyPublishedPosts.length > 0,
+  () => authStore.isAuthenticated
+    && activeTab.value === 'for-you'
+    && feedStore.recentlyPublishedPosts.length > 0,
 );
+const visibleRecentlyPublishedPosts = computed(() => (
+  authStore.isAuthenticated ? feedStore.recentlyPublishedPosts : []
+));
 const recentlyPublishedIDs = computed(
-  () => new Set(feedStore.recentlyPublishedPosts.map((post) => post.id)),
+  () => new Set(visibleRecentlyPublishedPosts.value.map((post) => post.id)),
 );
 const visibleForYouItems = computed(() => forYouFeed.items.filter((item) =>
   !recentlyPublishedIDs.value.has(item.post.id)
@@ -423,7 +420,7 @@ type FollowingVirtualRow = {
 };
 
 const forYouVirtualRows = computed<ForYouVirtualRow[]>(() => {
-  const rows: ForYouVirtualRow[] = feedStore.recentlyPublishedPosts.map((post) => ({
+  const rows: ForYouVirtualRow[] = visibleRecentlyPublishedPosts.value.map((post) => ({
     kind: 'recent',
     key: `recent:${post.id}`,
     post,
@@ -463,7 +460,7 @@ const followingVirtualRows = computed<FollowingVirtualRow[]>(() => (
 ));
 
 const isVirtualFeedRendered = computed(() => (
-  authStore.isAuthenticated
+  (activeTab.value === 'for-you' || authStore.isAuthenticated)
   && !(activeFeedStatus.value.loading && !hasRecentlyPublishedPosts.value)
   && !(activeFeedStatus.value.error && !hasRecentlyPublishedPosts.value)
   && !(activeFeedStatus.value.empty && !hasRecentlyPublishedPosts.value)
@@ -475,7 +472,6 @@ const forYouVirtualizerOptions = computed(() => ({
   count: forYouVirtualRows.value.length,
   getScrollElement: () => (
     homeViewActive.value
-    && authStore.isAuthenticated
     && activeTab.value === 'for-you'
     && isVirtualFeedRendered.value
       ? feedPanelRef.value
@@ -489,7 +485,6 @@ const forYouVirtualizerOptions = computed(() => ({
   getItemKey: (index: number) => forYouVirtualRows.value[index]?.key ?? index,
   enabled: true,
   useCachedMeasurements: !homeViewActive.value
-    || !authStore.isAuthenticated
     || activeTab.value !== 'for-you'
     || !isVirtualFeedRendered.value,
   overscan: HOME_VIRTUAL_OVERSCAN,
@@ -914,6 +909,13 @@ onBeforeRouteLeave(() => {
 });
 
 const selectTab = (tab: FeedTab) => {
+  if (tab === 'following' && !authStore.isAuthenticated) {
+    void router.push({
+      name: 'Login',
+      query: { returnTo: '/?tab=following' },
+    });
+    return;
+  }
   if (activeTab.value === tab) {
     return;
   }
@@ -934,6 +936,14 @@ const reselectTab = (tab: FeedTab) => {
 };
 
 const normalizeRouteTab = (value: unknown): FeedTab => {
+  if (value === 'following' && !authStore.isAuthenticated) {
+    homeTimeline.setActiveTab('for-you');
+    void router.replace({
+      name: 'Login',
+      query: { returnTo: '/?tab=following' },
+    });
+    return 'for-you';
+  }
   const tab: FeedTab = value === 'following' ? 'following' : 'for-you';
   homeTimeline.setActiveTab(tab);
   if (value === undefined || value === 'for-you' || value === 'following') {
@@ -969,7 +979,6 @@ const updateForYouObserver = () => {
     !forYouIntersectionObserverAvailable
     || activeTab.value !== 'for-you'
     || !forYouSentinelRef.value
-    || !authStore.isAuthenticated
     || !forYouFeed.loaded
     || forYouFeed.loading
     || forYouFeed.loadingMore
@@ -1050,6 +1059,13 @@ const loadForYou = async (force = false) => {
 };
 
 const loadFollowing = async (force = false) => {
+  if (!authStore.isAuthenticated) {
+    void router.push({
+      name: 'Login',
+      query: { returnTo: '/?tab=following' },
+    });
+    return;
+  }
   if (force) {
     rotateHomeViewSession('following');
   }
@@ -1174,11 +1190,15 @@ const finishActiveFeedRefreshAtTop = async (tab: FeedTab) => {
 };
 
 const refreshActiveFeed = async () => {
-  if (!authStore.isAuthenticated) {
+  const tab = activeTab.value;
+
+  if (tab === 'following' && !authStore.isAuthenticated) {
+    void router.push({
+      name: 'Login',
+      query: { returnTo: '/?tab=following' },
+    });
     return;
   }
-
-  const tab = activeTab.value;
 
   if (tab === 'for-you') {
     if (forYouFeed.loading || forYouFeed.loadingMore) {
@@ -1238,7 +1258,7 @@ const bindRecommendationCard = (
 ) => {
   if (element instanceof HTMLElement) {
     recommendationCardElements.set(item.recommendation.post.id, element);
-    if (homeViewActive.value) {
+    if (homeViewActive.value && authStore.isAuthenticated) {
       recommendationTelemetry.observeFeedCard(element, item.recommendation.post.id, item.recommendation.tracking);
     }
     return;
@@ -1246,6 +1266,9 @@ const bindRecommendationCard = (
 
   recommendationCardElements.delete(item.recommendation.post.id);
   if (!homeViewActive.value) {
+    return;
+  }
+  if (!authStore.isAuthenticated) {
     return;
   }
   recommendationTelemetry.detachFeedCard(item.recommendation.post.id, item.recommendation.tracking);
@@ -1275,6 +1298,9 @@ const recommendationCardRefForRow = (index: number): RecommendationCardRef => {
 };
 
 const handleRecommendationClick = (recommendation: RecommendedPost) => {
+  if (!authStore.isAuthenticated) {
+    return;
+  }
   savePendingRecommendationAttribution(recommendation.post.id, recommendation.tracking);
   recommendationTelemetry.recordClick(recommendation.post.id, recommendation.tracking);
 };
@@ -1422,8 +1448,8 @@ watch(
 
 watch(
   () => authStore.isAuthenticated,
-  (isAuthenticated) => {
-    if (isAuthenticated && homeViewActive.value) {
+  () => {
+    if (homeViewActive.value) {
       loadActiveFeed();
     }
   },
