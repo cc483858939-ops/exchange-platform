@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { nextTick, reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import UserAvatar from '../components/users/UserAvatar.vue';
 import UserProfileView from './UserProfileView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -216,6 +217,7 @@ describe('UserProfileView public read surface', () => {
       decoding: 'async',
       fetchpriority: 'high',
     });
+    expect(wrapper.getComponent(UserAvatar).props('size')).toBe(112);
     expect(wrapper.text()).toContain('76 Following');
     expect(wrapper.text()).toContain('128 Followers');
     expect(wrapper.text()).toContain('No posts or reposts yet.');

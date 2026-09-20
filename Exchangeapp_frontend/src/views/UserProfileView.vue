@@ -1193,12 +1193,9 @@ onBeforeUnmount(() => {
   min-height: 68px;
 }
 
-.profile-avatar {
+.profile-avatar--edit {
   position: relative;
   display: grid;
-  width: 76px;
-  height: 76px;
-  flex: 0 0 auto;
   place-items: center;
   border: 1px solid var(--color-border-strong);
   border-radius: 50%;
@@ -1246,7 +1243,7 @@ onBeforeUnmount(() => {
 }
 
 .profile-social__item {
-  color: var(--color-text-secondary);
+  color: inherit;
   font-weight: 500;
 }
 
@@ -1260,6 +1257,13 @@ onBeforeUnmount(() => {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.profile-social a:hover .profile-social__item,
+.profile-social a:focus-visible .profile-social__item,
+.profile-social a:hover .profile-social__item strong,
+.profile-social a:focus-visible .profile-social__item strong {
+  color: var(--color-accent);
 }
 
 .profile-social--loading {
@@ -1563,7 +1567,7 @@ onBeforeUnmount(() => {
   }
 }
 
-.profile-avatar img {
+.profile-avatar--edit img {
   position: absolute;
   inset: 0;
   display: block;

@@ -221,6 +221,8 @@ describe('UserProfileView current identity synchronization', () => {
     wrapper = mountProfile();
 
     expect(document.title).toBe('Profile — Exchange');
+    expect(wrapper.find('.profile-skeleton--cover').exists()).toBe(true);
+    expect(wrapper.find('.profile-skeleton--avatar').exists()).toBe(true);
 
     resolveUser({ ...originalUser, username: 'alice', display_name: 'Alice Smith' });
     await settle();
