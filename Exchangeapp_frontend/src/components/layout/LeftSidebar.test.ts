@@ -36,7 +36,7 @@ vi.mock('../../store/searchSession', () => ({
 
 const routerLinkStub = {
   props: { to: { type: [String, Object], required: true } },
-  template: '<a :data-route-name="to && to.name" :data-route-query-tab="to && to.query && to.query.tab" v-bind="$attrs"><slot /></a>',
+  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" :data-route-query-return-to="to && to.query && to.query.returnTo" :data-route-query-intent="to && to.query && to.query.intent" v-bind="$attrs"><slot /></a>',
 };
 
 const mountSidebar = () => mount(LeftSidebar, {
@@ -112,12 +112,55 @@ describe('LeftSidebar navigation', () => {
     expect(wrapper.text()).not.toContain('Go Exchange');
   });
 
-  it('hides private navigation when signed out', () => {
+  it('exposes the complete product navigation when signed out', () => {
     const wrapper = mountSidebar();
-    expect(wrapper.text()).not.toContain('History');
-    expect(wrapper.text()).not.toContain('Bookmarks');
-    expect(wrapper.find('[data-icon="history"]').exists()).toBe(false);
-    expect(wrapper.find('[data-icon="bookmark"]').exists()).toBe(false);
+    expect(wrapper.findAll('.left-sidebar__nav > a').map(link => link.text().trim())).toEqual([
+      'Home',
+      'Search',
+      'Notifications',
+      'History',
+      'Exchange',
+      'Profile',
+      'Post',
+    ]);
+    expect(wrapper.find('.left-sidebar__account').text()).toContain('Log in');
+    expect(wrapper.find('.left-sidebar__account').text()).toContain('Sign up');
+  });
+
+  it('gates anonymous protected destinations and keeps Exchange/Home public', () => {
+    const wrapper = mountSidebar();
+    const links = wrapper.findAll('.left-sidebar__nav > a');
+
+    expect(links[0].attributes('data-route-name')).toBe('Home');
+    expect(links[1].attributes('data-route-name')).toBe('Login');
+    expect(links[1].attributes('data-route-query-return-to')).toBe('/search');
+    expect(links[2].attributes('data-route-name')).toBe('Login');
+    expect(links[2].attributes('data-route-query-return-to')).toBe('/notifications');
+    expect(links[3].attributes('data-route-name')).toBe('Login');
+    expect(links[3].attributes('data-route-query-return-to')).toBe('/history');
+    expect(links[4].attributes('data-route-name')).toBe('CurrencyExchange');
+    expect(links[5].attributes('data-route-name')).toBe('Login');
+    expect(links[5].attributes('data-route-query-intent')).toBe('profile');
+    expect(links[5].attributes('data-route-id')).toBeUndefined();
+    expect(links[6].attributes('data-route-name')).toBe('Login');
+    expect(links[6].attributes('data-route-query-return-to')).toBe('/posts/new');
+  });
+
+  it('does not expose a stale notification badge to guests', () => {
+    const wrapper = mount(LeftSidebar, {
+      props: { notificationBadge: '4' },
+      global: {
+        stubs: {
+          AppIcon: {
+            props: ['name', 'size'],
+            template: '<span class="test-icon" :data-icon="name" :data-size="size" />',
+          },
+          RouterLink: routerLinkStub,
+        },
+      },
+    });
+
+    expect(wrapper.find('.left-sidebar__badge').exists()).toBe(false);
   });
 
   it('reselects active Home For You through the shared Home intent', () => {

@@ -19,7 +19,12 @@
     >
       <h2 id="composer-login-heading">Log in to create a post.</h2>
       <p>Your account is required to publish a post.</p>
-      <RouterLink class="composer-action" :to="{ name: 'Login' }">Log in</RouterLink>
+      <RouterLink
+        class="composer-action"
+        :to="{ name: 'Login', query: { returnTo: '/posts/new' } }"
+      >
+        Log in
+      </RouterLink>
     </section>
 
     <form

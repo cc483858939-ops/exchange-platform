@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   },
   authStore: {
     isAuthenticated: false,
+    currentIdentity: null as { id: number } | null,
     login: vi.fn(),
   },
 }));
@@ -50,6 +51,7 @@ describe('Login return navigation', () => {
     vi.clearAllMocks();
     mocks.route.query = {};
     mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
     mocks.authStore.login.mockResolvedValue(undefined);
     mocks.router.resolve.mockImplementation((candidate: string) => ({
       fullPath: candidate,
@@ -100,6 +102,50 @@ describe('Login return navigation', () => {
     expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'Home' });
   });
 
+  it('routes to the authenticated profile for the profile intent', async () => {
+    mocks.route.query = { intent: 'profile' };
+    mocks.authStore.currentIdentity = { id: 42 };
+    wrapper = mountLogin();
+
+    await submit();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({
+      name: 'UserProfile',
+      params: { id: '42' },
+    });
+  });
+
+  it('lets a valid return target take precedence over the profile intent', async () => {
+    mocks.route.query = {
+      returnTo: '/notifications',
+      intent: 'profile',
+    };
+    mocks.authStore.currentIdentity = { id: 42 };
+    wrapper = mountLogin();
+
+    await submit();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith('/notifications');
+  });
+
+  it('falls back to Home for profile intent without a valid identity', async () => {
+    mocks.route.query = { intent: 'profile' };
+    wrapper = mountLogin();
+
+    await submit();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'Home' });
+  });
+
+  it('falls back to Home for an unknown intent', async () => {
+    mocks.route.query = { intent: 'settings' };
+    wrapper = mountLogin();
+
+    await submit();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'Home' });
+  });
+
   it('stays on Login and keeps the target when authentication fails', async () => {
     mocks.route.query = { returnTo: '/notifications' };
     mocks.authStore.login.mockRejectedValueOnce(new Error('Invalid username or password'));
@@ -128,6 +174,20 @@ describe('Login return navigation', () => {
     wrapper = mountLogin();
 
     expect(mocks.router.replace).toHaveBeenCalledWith('/notifications');
+    expect(mocks.authStore.login).not.toHaveBeenCalled();
+  });
+
+  it('redirects an already-authenticated user with profile intent to their own profile', () => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 42 };
+    mocks.route.query = { intent: 'profile' };
+
+    wrapper = mountLogin();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({
+      name: 'UserProfile',
+      params: { id: '42' },
+    });
     expect(mocks.authStore.login).not.toHaveBeenCalled();
   });
 });

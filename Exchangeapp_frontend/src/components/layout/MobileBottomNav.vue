@@ -2,7 +2,6 @@
   <nav class="mobile-bottom-nav" aria-label="Mobile navigation">
     <div
       class="mobile-bottom-nav__items"
-      :class="{ 'mobile-bottom-nav__items--anonymous': !authStore.isAuthenticated }"
     >
       <RouterLink
         v-for="item in navigationItems"
@@ -44,12 +43,17 @@ import { useSearchSessionStore } from '../../store/searchSession';
 import AppIcon from '../icons/AppIcon.vue';
 
 type RouteParam = string | string[] | undefined;
+type RouteDestination = {
+  name: string;
+  params?: Record<string, string>;
+  query?: Record<string, string | undefined>;
+};
 type NavigationItem = {
   label: string;
   routeName: string;
   icon: 'home' | 'search' | 'exchange' | 'notifications' | 'profile';
   iconSize: number;
-  to: { name: string; params?: { id: string }; query?: { tab?: 'following'; q?: string } };
+  to: RouteDestination;
 };
 
 const props = withDefaults(defineProps<{
@@ -70,40 +74,56 @@ const currentProfileID = computed(() => {
 });
 
 const homeDestination = computed<NavigationItem['to']>(() =>
-  homeTimeline.activeTab === 'following'
+  authStore.isAuthenticated && homeTimeline.activeTab === 'following'
     ? { name: 'Home', query: { tab: 'following' } }
     : { name: 'Home' },
 );
 
+const searchReturnTarget = computed(() => {
+  if (route.name === 'UserSearch' && typeof route.fullPath === 'string' && route.fullPath) {
+    return route.fullPath;
+  }
+
+  const routeQuery = typeof route.query?.q === 'string' ? route.query.q.trim() : '';
+  const query = routeQuery || searchSession.query.trim();
+  return query ? `/search?q=${encodeURIComponent(query)}` : '/search';
+});
+
 const searchDestination = computed<NavigationItem['to']>(() => (
-  searchSession.query
-    ? { name: 'UserSearch', query: { q: searchSession.query } }
-    : { name: 'UserSearch' }
+  authStore.isAuthenticated
+    ? (searchSession.query
+      ? { name: 'UserSearch', query: { q: searchSession.query } }
+      : { name: 'UserSearch' })
+    : { name: 'Login', query: { returnTo: searchReturnTarget.value } }
+));
+
+const notificationsDestination = computed<NavigationItem['to']>(() => (
+  authStore.isAuthenticated
+    ? { name: 'Notifications' }
+    : { name: 'Login', query: { returnTo: '/notifications' } }
+));
+
+const profileDestination = computed<NavigationItem['to']>(() => (
+  authStore.isAuthenticated && currentProfileID.value
+    ? {
+      name: 'UserProfile',
+      params: { id: currentProfileID.value },
+    }
+    : { name: 'Login', query: { intent: 'profile' } }
 ));
 
 const navigationItems = computed<NavigationItem[]>(() => {
-  if (!authStore.isAuthenticated) {
-    return [
-      { label: 'Home', routeName: 'Home', icon: 'home', iconSize: 25, to: homeDestination.value },
-      { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', iconSize: 26, to: { name: 'CurrencyExchange' } },
-      { label: 'Log in', routeName: 'Login', icon: 'profile', iconSize: 25, to: { name: 'Login' } },
-    ];
-  }
-
   return [
     { label: 'Home', routeName: 'Home', icon: 'home', iconSize: 25, to: homeDestination.value },
     { label: 'Search', routeName: 'UserSearch', icon: 'search', iconSize: 27, to: searchDestination.value },
     { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', iconSize: 26, to: { name: 'CurrencyExchange' } },
-    { label: 'Notifications', routeName: 'Notifications', icon: 'notifications', iconSize: 26, to: { name: 'Notifications' } },
+    { label: 'Notifications', routeName: 'Notifications', icon: 'notifications', iconSize: 26, to: notificationsDestination.value },
     {
       label: 'Profile',
       routeName: 'UserProfile',
       icon: 'profile',
       iconSize: 25,
-      to: {
-        name: 'UserProfile',
-        params: { id: currentProfileID.value || '' },
-      },
+      to: profileDestination.value,
     },
   ];
 });
@@ -134,6 +154,10 @@ const isItemActive = (item: NavigationItem) => {
 };
 
 const isReselectableRoot = (item: NavigationItem) => {
+  if (!authStore.isAuthenticated) {
+    return false;
+  }
+
   const routeName = String(route.name || '');
   if (item.routeName === 'UserProfile') {
     const profileID = currentProfileID.value;
@@ -192,7 +216,9 @@ const handleNavigationClick = (event: MouseEvent, item: NavigationItem) => {
   scrollToTop();
 };
 
-const notificationBadge = computed(() => props.notificationBadge);
+const notificationBadge = computed(() => (
+  authStore.isAuthenticated ? props.notificationBadge : null
+));
 </script>
 
 <style scoped>
@@ -217,10 +243,6 @@ const notificationBadge = computed(() => props.notificationBadge);
     display: grid;
     height: var(--mobile-bottom-nav-height);
     grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-
-  .mobile-bottom-nav__items--anonymous {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .mobile-bottom-nav__item {

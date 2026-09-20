@@ -7,7 +7,12 @@
     >
       <section v-if="!authStore.isAuthenticated" class="search-view__state">
         <p>Log in to search people.</p>
-        <RouterLink class="search-view__button" :to="{ name: 'Login' }">Log in</RouterLink>
+        <RouterLink
+          class="search-view__button"
+          :to="{ name: 'Login', query: { returnTo: route.fullPath || '/search' } }"
+        >
+          Log in
+        </RouterLink>
       </section>
       <template v-else>
         <form class="search-view__form" role="search" @submit.prevent="submit">

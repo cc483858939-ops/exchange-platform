@@ -90,9 +90,28 @@ const returnTarget = computed(() =>
   resolveSafeLoginReturnTarget(router, route.query.returnTo),
 );
 
+const ownProfileDestination = computed(() => {
+  const id = authStore.currentIdentity?.id;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+    ? { name: 'UserProfile', params: { id: String(id) } }
+    : { name: 'Home' };
+});
+
+const loginDestination = computed(() => {
+  if (returnTarget.value) {
+    return returnTarget.value;
+  }
+
+  if (route.query.intent === 'profile') {
+    return ownProfileDestination.value;
+  }
+
+  return { name: 'Home' };
+});
+
 onMounted(() => {
   if (authStore.isAuthenticated) {
-    void router.replace(returnTarget.value ?? { name: 'Home' });
+    void router.replace(loginDestination.value);
   }
 });
 
@@ -122,7 +141,7 @@ const login = async () => {
   submitting.value = true;
   try {
     await authStore.login(form.value.username, form.value.password);
-    void router.replace(returnTarget.value ?? { name: 'Home' });
+    void router.replace(loginDestination.value);
   } catch (error) {
     formError.value = formatLoginError(error);
   } finally {

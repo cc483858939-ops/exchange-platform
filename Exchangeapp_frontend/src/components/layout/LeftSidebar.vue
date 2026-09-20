@@ -16,42 +16,20 @@
         class="left-sidebar__link left-sidebar__link--icon"
         :class="{
           'left-sidebar__link--compact-only': item.compactOnly,
+          'left-sidebar__link--primary': item.primary,
         }"
         :to="navigationDestination(item)"
         :aria-label="item.label"
         :title="item.label"
         @click.capture="handleNavigationClick($event, item)"
       >
-        <AppIcon :name="item.icon" :size="26" />
+        <AppIcon :name="item.icon" :size="item.iconSize" />
         <span class="left-sidebar__label">{{ item.label }}</span>
         <span
           v-if="item.name === 'Notifications' && notificationBadge"
           class="left-sidebar__badge"
           aria-label="Unread notifications"
         >{{ notificationBadge }}</span>
-      </router-link>
-      <router-link
-        v-if="authStore.isAuthenticated && currentProfileID !== null"
-        class="left-sidebar__link left-sidebar__link--icon"
-        :to="{
-          name: 'UserProfile',
-          params: { id: String(currentProfileID) },
-        }"
-        aria-label="Profile"
-        title="Profile"
-      >
-        <AppIcon name="profile" :size="26" />
-        <span class="left-sidebar__label">Profile</span>
-      </router-link>
-      <router-link
-        v-if="authStore.isAuthenticated"
-        class="left-sidebar__link left-sidebar__link--icon left-sidebar__link--primary"
-        :to="{ name: 'PostCreate' }"
-        aria-label="Post"
-        title="Post"
-      >
-        <AppIcon name="compose" :size="24" />
-        <span class="left-sidebar__label">Post</span>
       </router-link>
     </nav>
 
@@ -90,7 +68,7 @@ import { useSearchSessionStore } from '../../store/searchSession';
 import BrandMark from '../brand/BrandMark.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
-withDefaults(defineProps<{ notificationBadge?: string | null }>(), {
+const props = withDefaults(defineProps<{ notificationBadge?: string | null }>(), {
   notificationBadge: null,
 });
 
@@ -106,26 +84,75 @@ const currentProfileID = computed(() => {
 });
 
 const navigation = [
-  { name: 'Home', label: 'Home', icon: 'home' as const, compactOnly: false, authOnly: false },
-  { name: 'UserSearch', label: 'Search', icon: 'search' as const, compactOnly: false, authOnly: true },
-  { name: 'Notifications', label: 'Notifications', icon: 'notifications' as const, compactOnly: false, authOnly: true },
-  { name: 'History', label: 'History', icon: 'history' as const, compactOnly: false, authOnly: true },
-  { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, compactOnly: true, authOnly: false },
+  { name: 'Home', label: 'Home', icon: 'home' as const, iconSize: 26, compactOnly: false },
+  { name: 'UserSearch', label: 'Search', icon: 'search' as const, iconSize: 26, compactOnly: false },
+  { name: 'Notifications', label: 'Notifications', icon: 'notifications' as const, iconSize: 26, compactOnly: false },
+  { name: 'History', label: 'History', icon: 'history' as const, iconSize: 26, compactOnly: false },
+  { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, iconSize: 26, compactOnly: true },
+  { name: 'UserProfile', label: 'Profile', icon: 'profile' as const, iconSize: 26, compactOnly: false },
+  { name: 'PostCreate', label: 'Post', icon: 'compose' as const, iconSize: 24, compactOnly: false, primary: true },
 ];
 
 const homeDestination = computed(() => (
-  homeTimeline.activeTab === 'following'
+  authStore.isAuthenticated && homeTimeline.activeTab === 'following'
     ? { name: 'Home', query: { tab: 'following' } }
     : { name: 'Home' }
 ));
 
-const navigationDestination = (item: typeof navigation[number]) => (
-  item.name === 'Home'
-    ? homeDestination.value
-    : { name: item.name }
-);
+const searchReturnTarget = computed(() => {
+  if (route.name === 'UserSearch' && typeof route.fullPath === 'string' && route.fullPath) {
+    return route.fullPath;
+  }
 
-const visibleNavigation = computed(() => navigation.filter((item) => !item.authOnly || authStore.isAuthenticated));
+  const routeQuery = typeof route.query?.q === 'string' ? route.query.q.trim() : '';
+  const sessionQuery = typeof searchSession.query === 'string' ? searchSession.query.trim() : '';
+  const query = routeQuery || sessionQuery;
+  return query ? `/search?q=${encodeURIComponent(query)}` : '/search';
+});
+
+const navigationDestination = (item: typeof navigation[number]) => {
+  if (item.name === 'Home') {
+    return homeDestination.value;
+  }
+
+  if (item.name === 'UserSearch') {
+    return authStore.isAuthenticated
+      ? { name: 'UserSearch' }
+      : { name: 'Login', query: { returnTo: searchReturnTarget.value } };
+  }
+
+  if (item.name === 'Notifications') {
+    return authStore.isAuthenticated
+      ? { name: 'Notifications' }
+      : { name: 'Login', query: { returnTo: '/notifications' } };
+  }
+
+  if (item.name === 'History') {
+    return authStore.isAuthenticated
+      ? { name: 'History' }
+      : { name: 'Login', query: { returnTo: '/history' } };
+  }
+
+  if (item.name === 'UserProfile') {
+    return authStore.isAuthenticated && currentProfileID.value !== null
+      ? { name: 'UserProfile', params: { id: String(currentProfileID.value) } }
+      : { name: 'Login', query: { intent: 'profile' } };
+  }
+
+  if (item.name === 'PostCreate') {
+    return authStore.isAuthenticated
+      ? { name: 'PostCreate' }
+      : { name: 'Login', query: { returnTo: '/posts/new' } };
+  }
+
+  return { name: item.name };
+};
+
+const visibleNavigation = computed(() => navigation.filter((item) => (
+  item.name !== 'UserProfile'
+  || !authStore.isAuthenticated
+  || currentProfileID.value !== null
+)));
 
 const isStandardActivation = (event: MouseEvent) => event.button === 0
   && !event.metaKey
@@ -137,7 +164,7 @@ const handleNavigationClick = (
   event: MouseEvent,
   item: typeof navigation[number],
 ) => {
-  if (!isStandardActivation(event)) {
+  if (!authStore.isAuthenticated || !isStandardActivation(event)) {
     return;
   }
 
@@ -160,6 +187,10 @@ const handleNavigationClick = (
   event.preventDefault();
   homeTimeline.requestHomeReselect();
 };
+
+const notificationBadge = computed(() => (
+  authStore.isAuthenticated ? props.notificationBadge : null
+));
 
 </script>
 

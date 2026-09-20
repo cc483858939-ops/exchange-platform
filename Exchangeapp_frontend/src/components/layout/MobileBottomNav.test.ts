@@ -13,6 +13,8 @@ type AuthState = {
 type RouteState = {
   name: string;
   params: Record<string, string | string[]>;
+  query: Record<string, string | string[]>;
+  fullPath?: string;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -53,7 +55,7 @@ vi.mock('vue-router', () => ({
 
 const routerLinkStub = {
   props: { to: { type: [String, Object], required: true } },
-  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" :data-route-query-q="to && to.query && to.query.q" v-bind="$attrs"><slot /></a>',
+  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" :data-route-query-q="to && to.query && to.query.q" :data-route-query-return-to="to && to.query && to.query.returnTo" :data-route-query-intent="to && to.query && to.query.intent" v-bind="$attrs"><slot /></a>',
 };
 
 const mountNav = (notificationBadge: string | null = null) => mount(MobileBottomNav, {
@@ -95,7 +97,7 @@ const setState = (
     isAuthenticated,
     currentIdentity: isAuthenticated ? { id: 123 } : null,
   });
-  mocks.route = reactive({ name: routeName, params });
+  mocks.route = reactive({ name: routeName, params, query: {} });
 };
 
 describe('MobileBottomNav', () => {
@@ -139,15 +141,29 @@ describe('MobileBottomNav', () => {
     expect(labels).toEqual(['Home', 'Search', 'Exchange', 'Notifications', 'Profile']);
   });
 
-  it('renders only Home, Exchange, and Log in anonymously', () => {
+  it('renders the same five destinations anonymously', () => {
     setState(false);
     const wrapper = mountNav();
     const labels = wrapper.findAll('.mobile-bottom-nav__item').map(item => item.text().trim());
 
-    expect(labels).toEqual(['Home', 'Exchange', 'Log in']);
-    expect(wrapper.text()).not.toContain('Search');
-    expect(wrapper.text()).not.toContain('Notifications');
-    expect(wrapper.text()).not.toContain('Profile');
+    expect(labels).toEqual(['Home', 'Search', 'Exchange', 'Notifications', 'Profile']);
+  });
+
+  it('gates anonymous protected destinations without fabricating a profile id', () => {
+    setState(false);
+    mocks.route!.query = { q: 'alice' };
+    const wrapper = mountNav();
+    const links = wrapper.findAll('.mobile-bottom-nav__item');
+
+    expect(links[0].attributes('data-route-name')).toBe('Home');
+    expect(links[1].attributes('data-route-name')).toBe('Login');
+    expect(links[1].attributes('data-route-query-return-to')).toBe('/search?q=alice');
+    expect(links[2].attributes('data-route-name')).toBe('CurrencyExchange');
+    expect(links[3].attributes('data-route-name')).toBe('Login');
+    expect(links[3].attributes('data-route-query-return-to')).toBe('/notifications');
+    expect(links[4].attributes('data-route-name')).toBe('Login');
+    expect(links[4].attributes('data-route-query-intent')).toBe('profile');
+    expect(links[4].attributes('data-route-id')).toBeUndefined();
   });
 
   it('routes the authenticated Profile item to the current identity', () => {
@@ -216,16 +232,25 @@ describe('MobileBottomNav', () => {
     expect(links[4].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
   });
 
-  it('keeps anonymous navigation at three items with the matching optical sizes and capsule', () => {
+  it('keeps anonymous navigation at five items with the authenticated optical sizes', () => {
     setState(false, 'Home');
     const wrapper = mountNav();
     const icons = wrapper.findAll('.test-icon');
 
-    expect(wrapper.findAll('.mobile-bottom-nav__item')).toHaveLength(3);
-    expect(icons.map(icon => Number(icon.attributes('data-size')))).toEqual([25, 26, 25]);
+    expect(wrapper.findAll('.mobile-bottom-nav__item')).toHaveLength(5);
+    expect(icons.map(icon => Number(icon.attributes('data-size')))).toEqual([25, 27, 26, 26, 25]);
     expect(wrapper.findAll('.mobile-bottom-nav__icon--active')).toHaveLength(1);
     expect(wrapper.findAll('.mobile-bottom-nav__item')[0].find('.mobile-bottom-nav__icon').classes())
       .toContain('mobile-bottom-nav__icon--active');
+  });
+
+  it('does not trigger a guest reselect side effect on Home', () => {
+    setState(false, 'Home');
+    const wrapper = mountNav();
+    const event = dispatchClick(wrapper, 0);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
   });
 
   it('signals an active Home reselect without scrolling the window or changing For You', () => {
@@ -371,6 +396,13 @@ describe('MobileBottomNav', () => {
     expect(wrapper.find('.mobile-bottom-nav__badge').element.parentElement?.classList.contains('mobile-bottom-nav__icon')).toBe(true);
 
     await wrapper.setProps({ notificationBadge: null });
+    expect(wrapper.find('.mobile-bottom-nav__badge').exists()).toBe(false);
+  });
+
+  it('hides a stale notification badge while signed out', () => {
+    setState(false);
+    const wrapper = mountNav('4');
+
     expect(wrapper.find('.mobile-bottom-nav__badge').exists()).toBe(false);
   });
 

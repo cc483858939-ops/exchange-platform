@@ -14,6 +14,7 @@ vi.mock('element-plus/es/components/message/style/css', () => ({}));
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
   router: { push: vi.fn() },
+  route: { fullPath: '/notifications' },
   routeLeaveGuard: null as (() => void) | null,
   getNotifications: vi.fn(),
   getUnreadNotificationCount: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock('vue-router', () => ({
   onBeforeRouteLeave: (guard: () => void) => {
     mocks.routeLeaveGuard = guard;
   },
+  useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));
 
@@ -147,6 +149,7 @@ describe('NotificationsView', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.routeLeaveGuard = null;
+    mocks.route.fullPath = '/notifications';
     setAuth(null);
     setNotificationViewer(null);
     mocks.getNotifications.mockResolvedValue({ items: [], next_cursor: null });

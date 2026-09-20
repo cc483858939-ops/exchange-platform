@@ -22,7 +22,12 @@
 
       <div v-if="!authStore.isAuthenticated" class="notifications-page__state">
         <h2>Log in to view your notifications.</h2>
-        <router-link class="notifications-page__action" :to="{ name: 'Login' }">Log in</router-link>
+        <router-link
+          class="notifications-page__action"
+          :to="{ name: 'Login', query: { returnTo: route.fullPath || '/notifications' } }"
+        >
+          Log in
+        </router-link>
       </div>
       <div v-else-if="loading && items.length === 0" class="notifications-page__state" aria-live="polite">
         <p>Loading notifications…</p>
@@ -98,7 +103,7 @@ import {
 import { storeToRefs } from 'pinia';
 import { ElMessage } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
-import { onBeforeRouteLeave, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { useNotificationStore } from '../store/notification';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -109,6 +114,7 @@ const NOTIFICATIONS_RESELECT_TOP_THRESHOLD_PX = 8;
 
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
+const route = useRoute();
 const router = useRouter();
 const {
   items,
