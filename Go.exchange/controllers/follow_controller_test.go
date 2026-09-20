@@ -277,7 +277,7 @@ func TestGetUserConnectionListsForwardArgumentsAndSerializePage(t *testing.T) {
 					t.Fatalf("loader args viewer=%d target=%d kind=%d limit=%d offset=%d", viewer, target, kind, limit, offset)
 				}
 				return userConnectionPageResponse{
-					Items:   []userConnectionResponse{{User: publicUserResponse{ID: 9, Username: "carol", DisplayName: "Carol"}, Following: true}},
+					Items:   []userConnectionResponse{{User: publicUserSummaryResponse{ID: 9, Username: "carol", DisplayName: "Carol"}, Following: true}},
 					HasMore: true,
 				}, nil
 			}

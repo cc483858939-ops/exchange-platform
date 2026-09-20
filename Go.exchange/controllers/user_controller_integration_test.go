@@ -37,7 +37,7 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,6 +167,137 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		t.Fatalf("missing user status=%d", recorder.Code)
 	}
 }
+
+func TestPublicUserProfileSocialCountsIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+	newUser := func(label string) models.User {
+		return models.User{Username: "public-counts-" + label + "-" + uuid.NewString(), Password: "secret"}
+	}
+	users := []models.User{
+		newUser("target"),
+		newUser("follower-a"),
+		newUser("follower-b"),
+		newUser("deleted-follower"),
+		newUser("followed-c"),
+		newUser("followed-d"),
+		newUser("followed-e"),
+		newUser("deleted-followed"),
+		newUser("viewer"),
+		newUser("empty"),
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	target, followerA, followerB, deletedFollower := users[0], users[1], users[2], users[3]
+	followedC, followedD, followedE, deletedFollowed := users[4], users[5], users[6], users[7]
+	viewer, empty := users[8], users[9]
+	userIDs := make([]uint, 0, len(users))
+	for _, user := range users {
+		userIDs = append(userIDs, user.ID)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
+		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
+	})
+	relations := []models.UserFollow{
+		{FollowerID: followerA.ID, FollowingID: target.ID},
+		{FollowerID: followerB.ID, FollowingID: target.ID},
+		{FollowerID: deletedFollower.ID, FollowingID: target.ID},
+		{FollowerID: target.ID, FollowingID: followedC.ID},
+		{FollowerID: target.ID, FollowingID: followedD.ID},
+		{FollowerID: target.ID, FollowingID: followedE.ID},
+		{FollowerID: target.ID, FollowingID: deletedFollowed.ID},
+	}
+	if err := db.Create(&relations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&deletedFollower).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&deletedFollowed).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	readPublic := func(userID uint) (map[string]json.RawMessage, publicUserResponse) {
+		ctx, recorder := newUserControllerContext("/api/users/"+strconvUint(userID), strconvUint(userID))
+		GetUserByID(ctx)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("public profile status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("decode public profile JSON: %v", err)
+		}
+		var profile publicUserResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &profile); err != nil {
+			t.Fatalf("decode public profile: %v", err)
+		}
+		return raw, profile
+	}
+
+	raw, profile := readPublic(target.ID)
+	if profile.FollowerCount != 2 || profile.FollowingCount != 3 {
+		t.Fatalf("public profile counts=%#v, want followers=2 following=3", profile)
+	}
+	if _, exists := raw["following"]; exists {
+		t.Fatalf("public profile leaked viewer-specific following field: %s", string(raw["following"]))
+	}
+	if _, exists := raw["follower_count"]; !exists {
+		t.Fatal("public profile omitted follower_count")
+	}
+	if _, exists := raw["following_count"]; !exists {
+		t.Fatal("public profile omitted following_count")
+	}
+
+	_, emptyProfile := readPublic(empty.ID)
+	if emptyProfile.FollowerCount != 0 || emptyProfile.FollowingCount != 0 {
+		t.Fatalf("empty profile counts=%#v, want zero counts", emptyProfile)
+	}
+
+	ctx, recorder := newFollowIntegrationContext(http.MethodGet, viewer.ID, target.ID)
+	GetUserFollowState(ctx)
+	state := decodeFollowIntegrationState(t, recorder)
+	if state.Following || state.FollowerCount != profile.FollowerCount || state.FollowingCount != profile.FollowingCount {
+		t.Fatalf("follow-state/public count mismatch state=%#v profile=%#v", state, profile)
+	}
+
+	ctx, recorder = newFollowIntegrationContext(http.MethodPut, viewer.ID, target.ID)
+	FollowUser(ctx)
+	state = decodeFollowIntegrationState(t, recorder)
+	if !state.Following || state.FollowerCount != 3 || state.FollowingCount != 3 {
+		t.Fatalf("follow mutation state=%#v, want follower_count=3", state)
+	}
+	_, profile = readPublic(target.ID)
+	if profile.FollowerCount != 3 || profile.FollowingCount != 3 {
+		t.Fatalf("public counts after follow=%#v, want followers=3 following=3", profile)
+	}
+
+	ctx, recorder = newFollowIntegrationContext(http.MethodDelete, viewer.ID, target.ID)
+	UnfollowUser(ctx)
+	state = decodeFollowIntegrationState(t, recorder)
+	if state.Following || state.FollowerCount != 2 || state.FollowingCount != 3 {
+		t.Fatalf("unfollow mutation state=%#v, want follower_count=2", state)
+	}
+	_, profile = readPublic(target.ID)
+	if profile.FollowerCount != 2 || profile.FollowingCount != 3 {
+		t.Fatalf("public counts after unfollow=%#v, want followers=2 following=3", profile)
+	}
+}
+
 func TestEditableUserProfileIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -176,7 +307,7 @@ func TestEditableUserProfileIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
 		t.Fatal(err)
 	}
 

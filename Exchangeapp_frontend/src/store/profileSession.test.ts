@@ -92,6 +92,8 @@ const profile = (id: number) => ({
   ...author(id),
   bio: '',
   created_at: '2026-08-24T00:00:00.000Z',
+  follower_count: 0,
+  following_count: 0,
 });
 
 const followState = (id: number, following: boolean) => ({

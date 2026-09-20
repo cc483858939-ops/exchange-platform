@@ -167,7 +167,7 @@ func searchUsersFromDB(viewerID uint, query string, limit, offset int) (userConn
 	}
 	for _, row := range rows {
 		page.Items = append(page.Items, userConnectionResponse{
-			User:      publicUserResponse{ID: row.UserID, Username: row.Username, DisplayName: row.DisplayName, Bio: row.Bio, AvatarURL: row.AvatarURL, CreatedAt: row.UserCreatedAt},
+			User:      publicUserSummaryResponse{ID: row.UserID, Username: row.Username, DisplayName: row.DisplayName, Bio: row.Bio, AvatarURL: row.AvatarURL, CreatedAt: row.UserCreatedAt},
 			Following: row.UserID != viewerID && row.ViewerFollowID != nil,
 		})
 	}

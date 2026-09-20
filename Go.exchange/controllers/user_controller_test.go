@@ -145,7 +145,7 @@ func TestSearchUsersContract(t *testing.T) {
 	var receivedLimit, receivedOffset int
 	searchUsers = func(viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
 		receivedViewer, receivedQuery, receivedLimit, receivedOffset = viewerID, query, limit, offset
-		return userConnectionPageResponse{Items: []userConnectionResponse{{User: publicUserResponse{ID: 7, Username: "alice", DisplayName: "Alice"}, Following: true}}, HasMore: true}, nil
+		return userConnectionPageResponse{Items: []userConnectionResponse{{User: publicUserSummaryResponse{ID: 7, Username: "alice", DisplayName: "Alice"}, Following: true}}, HasMore: true}, nil
 	}
 	ctx, recorder := newUserSearchUnitContext("?q=%20@Alice%20", uint(42))
 	SearchUsers(ctx)

@@ -5,8 +5,13 @@ export interface PublicAuthor {
   avatar_url: string;
 }
 
-export interface PublicUser extends PublicAuthor {
+export interface PublicUserSummary extends PublicAuthor {
   bio: string;
   created_at: string;
+}
+
+export interface PublicUser extends PublicUserSummary {
+  follower_count: number;
+  following_count: number;
 }
 

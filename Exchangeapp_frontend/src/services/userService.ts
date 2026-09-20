@@ -1,5 +1,5 @@
 import apiClient from '../axios';
-import type { PublicUser } from '../types/User';
+import type { PublicUser, PublicUserSummary } from '../types/User';
 import type { TimelineResponse } from './postService';
 import { normalizeResourceID } from './resourceId';
 
@@ -8,7 +8,7 @@ export type UserTimelineQuery = {
   cursor?: string;
 };
 export type UserConnectionItem = {
-	user: PublicUser;
+	user: PublicUserSummary;
 	following: boolean;
 };
 

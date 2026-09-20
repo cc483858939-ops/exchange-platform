@@ -29,6 +29,11 @@ type userFollowState struct {
 	FollowingCount int64
 }
 
+type userFollowCounts struct {
+	FollowerCount  int64
+	FollowingCount int64
+}
+
 const (
 	defaultFollowListLimit = 20
 	maxFollowListLimit     = 50
@@ -42,8 +47,8 @@ const (
 )
 
 type userConnectionResponse struct {
-	User      publicUserResponse `json:"user"`
-	Following bool               `json:"following"`
+	User      publicUserSummaryResponse `json:"user"`
+	Following bool                      `json:"following"`
 }
 
 type userConnectionPageResponse struct {
@@ -92,19 +97,34 @@ func readFollowState(db *gorm.DB, viewerID, targetID uint) (userFollowState, err
 		state.Following = relationCount > 0
 	}
 
+	counts, err := readUserFollowCounts(db, targetID)
+	if err != nil {
+		return userFollowState{}, err
+	}
+	state.FollowerCount = counts.FollowerCount
+	state.FollowingCount = counts.FollowingCount
+	return state, nil
+}
+
+func readUserFollowCounts(db *gorm.DB, targetID uint) (userFollowCounts, error) {
+	if db == nil {
+		return userFollowCounts{}, errors.New("database is not initialized")
+	}
+
+	counts := userFollowCounts{}
 	if err := db.Table("user_follows AS uf").
 		Joins("JOIN users AS follower ON follower.id = uf.follower_id AND follower.deleted_at IS NULL").
 		Where("uf.following_id = ?", targetID).
-		Count(&state.FollowerCount).Error; err != nil {
-		return userFollowState{}, err
+		Count(&counts.FollowerCount).Error; err != nil {
+		return userFollowCounts{}, err
 	}
 	if err := db.Table("user_follows AS uf").
 		Joins("JOIN users AS followed ON followed.id = uf.following_id AND followed.deleted_at IS NULL").
 		Where("uf.follower_id = ?", targetID).
-		Count(&state.FollowingCount).Error; err != nil {
-		return userFollowState{}, err
+		Count(&counts.FollowingCount).Error; err != nil {
+		return userFollowCounts{}, err
 	}
-	return state, nil
+	return counts, nil
 }
 
 func loadFollowStateFromDB(viewerID, targetID uint) (userFollowState, error) {
@@ -144,7 +164,7 @@ func loadUserConnectionsFromDB(viewerID, targetID uint, kind followConnectionKin
 	}
 	for _, row := range rows {
 		page.Items = append(page.Items, userConnectionResponse{
-			User:      publicUserResponse{ID: row.UserID, Username: row.Username, DisplayName: row.DisplayName, Bio: row.Bio, AvatarURL: row.AvatarURL, CreatedAt: row.UserCreatedAt},
+			User:      publicUserSummaryResponse{ID: row.UserID, Username: row.Username, DisplayName: row.DisplayName, Bio: row.Bio, AvatarURL: row.AvatarURL, CreatedAt: row.UserCreatedAt},
 			Following: row.UserID != viewerID && row.ViewerFollowID != nil,
 		})
 	}

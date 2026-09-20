@@ -155,10 +155,12 @@ const profile = (id: number) => ({
   id,
   username: `user-${id}`,
   display_name: `User ${id}`,
-  avatar_url: '',
-  bio: '',
-  created_at: '2026-08-15T00:00:00.000Z',
-});
+    avatar_url: '',
+    bio: '',
+    created_at: '2026-08-15T00:00:00.000Z',
+    follower_count: 0,
+    following_count: 0,
+  });
 const post = (id: number, authorID: number) => ({
   id,
   created_at: '2026-08-15T00:00:00.000Z',

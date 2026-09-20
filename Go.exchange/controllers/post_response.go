@@ -19,13 +19,24 @@ type publicAuthorResponse struct {
 	AvatarURL   string `json:"avatar_url"`
 }
 
-type publicUserResponse struct {
+type publicUserSummaryResponse struct {
 	ID          uint      `json:"id"`
 	Username    string    `json:"username"`
 	DisplayName string    `json:"display_name"`
 	Bio         string    `json:"bio"`
 	AvatarURL   string    `json:"avatar_url"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type publicUserResponse struct {
+	ID             uint      `json:"id"`
+	Username       string    `json:"username"`
+	DisplayName    string    `json:"display_name"`
+	Bio            string    `json:"bio"`
+	AvatarURL      string    `json:"avatar_url"`
+	CreatedAt      time.Time `json:"created_at"`
+	FollowerCount  int64     `json:"follower_count"`
+	FollowingCount int64     `json:"following_count"`
 }
 
 type postResponse struct {
@@ -269,7 +280,15 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 	if err := global.Db.Select("id, username, display_name, bio, avatar_url, created_at").First(&user, id).Error; err != nil {
 		return publicUserResponse{}, err
 	}
-	return publicUserResponse{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Bio: user.Bio, AvatarURL: user.AvatarURL, CreatedAt: user.CreatedAt}, nil
+	counts, err := readUserFollowCounts(global.Db, user.ID)
+	if err != nil {
+		return publicUserResponse{}, err
+	}
+	return publicUserResponse{
+		ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Bio: user.Bio,
+		AvatarURL: user.AvatarURL, CreatedAt: user.CreatedAt,
+		FollowerCount: counts.FollowerCount, FollowingCount: counts.FollowingCount,
+	}, nil
 }
 
 func preloadPostAuthor(query *gorm.DB) *gorm.DB {

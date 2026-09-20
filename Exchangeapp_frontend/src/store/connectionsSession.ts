@@ -10,7 +10,7 @@ import {
   type UserConnectionPage,
   type UserFollowState,
 } from '../services/userService';
-import type { PublicAuthor, PublicUser } from '../types/User';
+import type { PublicAuthor, PublicUserSummary } from '../types/User';
 import { useAuthStore } from './auth';
 import { useProfileSessionStore } from './profileSession';
 import {
@@ -40,7 +40,7 @@ export type ConnectionModeSession = {
 
 export type ConnectionsTargetSession = {
   targetID: number;
-  profile: PublicUser | null;
+  profile: PublicUserSummary | null;
   profileLoaded: boolean;
   profileLoading: boolean;
   profileError: string;

@@ -73,17 +73,13 @@
         >
           Joined {{ joinedLabel }}
         </time>
-        <div v-if="socialReady" class="profile-social" aria-label="Social stats">
+        <div class="profile-social" aria-label="Social stats">
           <RouterLink :to="{ name: 'UserFollowing', params: { id: user.id } }">
-            {{ followState?.following_count ?? 0 }} Following
+            {{ displayedFollowingCount }} Following
           </RouterLink>
           <RouterLink :to="{ name: 'UserFollowers', params: { id: user.id } }">
-            {{ followState?.follower_count ?? 0 }} Followers
+            {{ displayedFollowerCount }} Followers
           </RouterLink>
-        </div>
-        <div v-else-if="followLoading" class="profile-social profile-social--loading" aria-label="Loading social stats">
-          <span class="profile-social__skeleton"></span>
-          <span class="profile-social__skeleton"></span>
         </div>
         <p v-if="followError" class="profile-social-error" aria-live="polite">
           <span>Social stats unavailable.</span>
@@ -441,6 +437,16 @@ const followLoading = computed(() => activeSession.value?.followLoading ?? false
 const followError = computed(() => activeSession.value?.followError ?? '');
 const followActionError = computed(() => activeSession.value?.followActionError ?? '');
 const followPending = computed(() => activeSession.value?.followPending ?? false);
+const displayedFollowerCount = computed(() => (
+  followState.value?.follower_count
+  ?? user.value?.follower_count
+  ?? 0
+));
+const displayedFollowingCount = computed(() => (
+  followState.value?.following_count
+  ?? user.value?.following_count
+  ?? 0
+));
 
 const likePendingPostIds = profileStore.likePendingPostIds;
 const repostPendingPostIds = profileStore.repostPendingPostIds;

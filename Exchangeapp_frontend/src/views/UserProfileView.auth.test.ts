@@ -95,10 +95,12 @@ const profile = (id: number) => ({
   id,
   username: `user-${id}`,
   display_name: `User ${id}`,
-  avatar_url: '',
-  bio: '',
-  created_at: '2026-08-15T00:00:00.000Z',
-});
+    avatar_url: '',
+    bio: '',
+    created_at: '2026-08-15T00:00:00.000Z',
+    follower_count: 0,
+    following_count: 0,
+  });
 
 const post = (id: number, authorID: number) => ({
   id,
@@ -193,16 +195,56 @@ describe('UserProfileView public read surface', () => {
   });
 
   it('renders the anonymous profile without making protected requests', async () => {
+    mocks.getUser.mockResolvedValue({
+      ...profile(7),
+      follower_count: 128,
+      following_count: 76,
+    });
     const wrapper = mountProfile();
     await settle();
 
     expect(wrapper.get('.profile-identity h1').text()).toBe('User 7');
+    expect(wrapper.text()).toContain('76 Following');
+    expect(wrapper.text()).toContain('128 Followers');
     expect(wrapper.text()).toContain('No posts or reposts yet.');
     expect(wrapper.find('.auth-required-state').exists()).toBe(false);
     expect(mocks.getUser).toHaveBeenCalledWith('7');
     expect(mocks.getUserTimeline).toHaveBeenCalledWith('7', { limit: 20 });
     expect(mocks.getUserFollowState).not.toHaveBeenCalled();
     expect(document.title).toBe('@user-7 — Exchange');
+    wrapper.unmount();
+  });
+
+  it('renders zero public social counts for a guest', async () => {
+    const wrapper = mountProfile();
+    await settle();
+
+    expect(wrapper.text()).toContain('0 Following');
+    expect(wrapper.text()).toContain('0 Followers');
+    expect(mocks.getUserFollowState).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('lets authenticated follow state override public profile counts', async () => {
+    setAuth(true, 8);
+    mocks.route.params.id = '7';
+    mocks.getUser.mockResolvedValue({
+      ...profile(7),
+      follower_count: 128,
+      following_count: 76,
+    });
+    mocks.getUserFollowState.mockResolvedValue({
+      user_id: 7,
+      following: true,
+      follower_count: 129,
+      following_count: 76,
+    });
+    const wrapper = mountProfile();
+    await settle();
+
+    expect(wrapper.text()).toContain('76 Following');
+    expect(wrapper.text()).toContain('129 Followers');
+    expect(mocks.getUserFollowState).toHaveBeenCalledWith(7);
     wrapper.unmount();
   });
 
