@@ -16,7 +16,7 @@
     {"key": "MrBeast", "platform": "x", "handle": "MrBeast", "category": "entertainment_creator", "max_posts": 40, "enabled": true},
     {"key": "letterboxd", "platform": "x", "handle": "letterboxd", "category": "entertainment_creator", "max_posts": 40, "enabled": true},
     {"key": "historyinmemes", "platform": "x", "handle": "historyinmemes", "category": "entertainment_creator", "max_posts": 40, "enabled": true},
-    {"key": "GordonRamsay", "platform": "x", "handle": "GordonRamsay", "category": "lifestyle_food_humor", "max_posts": 40, "enabled": true},
+    {"key": "naenano78", "platform": "x", "handle": "naenano78", "category": "entertainment_creator", "max_posts": 40, "enabled": true},
     {"key": "CuddlyCutePets", "platform": "x", "handle": "CuddlyCutePets", "category": "lifestyle_food_humor", "max_posts": 40, "enabled": true},
     {"key": "wenqiangjp", "platform": "x", "handle": "wenqiangjp", "category": "lifestyle_food_humor", "max_posts": 40, "enabled": true},
     {"key": "KobeissiLetter", "platform": "x", "handle": "KobeissiLetter", "category": "news", "max_posts": 40, "enabled": true},

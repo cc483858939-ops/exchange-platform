@@ -17,7 +17,7 @@ func TestCuratedRegistryHasExactlyTheControlledTwentyAccounts(t *testing.T) {
 	targetKeys := []string{
 		"thsottiaux", "sugales_noah", "dotey", "naval", "RayDalio", "ahistoryinart", "japanvistamedia",
 		"visualsofearth1", "SpaceX", "NintendoAmerica", "kasu_ps", "MrBeast", "letterboxd",
-		"historyinmemes", "GordonRamsay", "CuddlyCutePets", "wenqiangjp", "KobeissiLetter", "NASA", "neiltyson",
+		"historyinmemes", "naenano78", "CuddlyCutePets", "wenqiangjp", "KobeissiLetter", "NASA", "neiltyson",
 	}
 	for _, key := range targetKeys {
 		account, ok := registry.AccountByKey(key)

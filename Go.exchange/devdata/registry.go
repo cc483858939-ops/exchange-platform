@@ -57,7 +57,7 @@ var curatedV1Accounts = map[string]SourceAccount{
 	"MrBeast":         {Key: "MrBeast", Platform: "x", Handle: "MrBeast", Category: "entertainment_creator"},
 	"letterboxd":      {Key: "letterboxd", Platform: "x", Handle: "letterboxd", Category: "entertainment_creator"},
 	"historyinmemes":  {Key: "historyinmemes", Platform: "x", Handle: "historyinmemes", Category: "entertainment_creator"},
-	"GordonRamsay":    {Key: "GordonRamsay", Platform: "x", Handle: "GordonRamsay", Category: "lifestyle_food_humor"},
+	"naenano78":       {Key: "naenano78", Platform: "x", Handle: "naenano78", Category: "entertainment_creator"},
 	"CuddlyCutePets":  {Key: "CuddlyCutePets", Platform: "x", Handle: "CuddlyCutePets", Category: "lifestyle_food_humor"},
 	"wenqiangjp":      {Key: "wenqiangjp", Platform: "x", Handle: "wenqiangjp", Category: "lifestyle_food_humor"},
 	"KobeissiLetter":  {Key: "KobeissiLetter", Platform: "x", Handle: "KobeissiLetter", Category: "news"},
