@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   telemetry: {
     resetObservedCards: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
+    clearSession: vi.fn(),
     observeFeedCard: vi.fn(),
     detachFeedCard: vi.fn(),
     unobserveFeedCard: vi.fn(),

@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   telemetry: {
     resetObservedCards: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
+    clearSession: vi.fn(),
     observeFeedCard: vi.fn(),
     detachFeedCard: vi.fn(),
     unobserveFeedCard: vi.fn(),
@@ -127,6 +128,18 @@ const PostCardStub = defineComponent({
       type: String,
       required: false,
     },
+    trackView: {
+      type: Boolean,
+      required: false,
+    },
+    requiresAuthForActions: {
+      type: Boolean,
+      required: false,
+    },
+    showNotInterested: {
+      type: Boolean,
+      required: false,
+    },
   },
   emits: ['notInterested'],
   template: `
@@ -219,7 +232,18 @@ const mountHome = () => mount(HomeView, {
   attachTo: document.body,
   global: {
     stubs: {
-      FeedTabs: { template: '<div />' },
+      FeedTabs: {
+        template: `
+          <div class="feed-tabs-stub">
+            <button
+              data-feed-tab="following"
+              type="button"
+              @click="$emit('select', 'following')"
+            >Following</button>
+          </div>
+        `,
+        emits: ['select', 'reselect'],
+      },
       PostCard: PostCardStub,
       AppIcon: { template: '<span />' },
       MobileHomeHeader: { template: '<div />' },
@@ -245,7 +269,18 @@ const mountKeepAliveHome = () => {
     attachTo: document.body,
     global: {
       stubs: {
-        FeedTabs: { template: '<div />' },
+        FeedTabs: {
+          template: `
+            <div class="feed-tabs-stub">
+              <button
+                data-feed-tab="following"
+                type="button"
+                @click="$emit('select', 'following')"
+              >Following</button>
+            </div>
+          `,
+          emits: ['select', 'reselect'],
+        },
         PostCard: PostCardStub,
         AppIcon: { template: '<span />' },
         MobileHomeHeader: { template: '<div />' },
@@ -1126,5 +1161,97 @@ describe('HomeView virtualization', () => {
     mocks.authStore.currentIdentity = null;
     await settle();
     expect(mountedPostSessionKey(wrapper, 1)).toBe('home:anonymous:for-you:2');
+  });
+
+  it('clears recommendation telemetry once per real auth identity boundary', async () => {
+    wrapper = mountHome();
+    await settle();
+    expect(mocks.telemetry.clearSession).not.toHaveBeenCalled();
+
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    await settle();
+    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(1);
+
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { ...viewer, id: 8, username: 'viewer-8' };
+    await settle();
+    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(2);
+
+    mocks.authStore.currentIdentity = { ...viewer, id: 9, username: 'viewer-9' };
+    await settle();
+    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(3);
+
+    mocks.homeTimeline.activeTab = 'following';
+    await settle();
+    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(3);
+  });
+
+  it('renders guest For You in the virtualized feed without recommendation telemetry', async () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: [makeRecommendation(1), makeRecommendation(2), makeRecommendation(3)],
+    });
+    wrapper = mountHome();
+    await settle();
+
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalled();
+    expect(wrapper.get('.home-feed-panel').element).toBeInstanceOf(HTMLElement);
+    expect(wrapper.find('[data-virtual-feed="for-you"]').exists()).toBe(true);
+    expect(mountedPostIDs(wrapper).length).toBeGreaterThan(0);
+    expect(mocks.telemetry.observeFeedCard).not.toHaveBeenCalled();
+    expect(mocks.telemetry.recordClick).not.toHaveBeenCalled();
+    expect(mocks.telemetry.recordNotInterested).not.toHaveBeenCalled();
+
+    const card = wrapper.findComponent(PostCardStub);
+    expect(card.props()).toMatchObject({
+      trackView: false,
+      requiresAuthForActions: true,
+      showNotInterested: false,
+    });
+  });
+
+  it('keeps authenticated recommendation cards on the existing interaction props', async () => {
+    wrapper = mountHome();
+    await settle();
+
+    expect(wrapper.findComponent(PostCardStub).props()).toMatchObject({
+      trackView: true,
+      requiresAuthForActions: false,
+      showNotInterested: true,
+    });
+  });
+
+  it('routes guest Following activation to Login without loading Following', async () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    wrapper = mountHome();
+    await settle();
+
+    await wrapper.get('[data-feed-tab="following"]').trigger('click');
+
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'Login',
+      query: { returnTo: '/?tab=following' },
+    });
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.activeTab).toBe('for-you');
+  });
+
+  it('redirects a direct guest Following deep link without loading Following', async () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    mocks.route.query = { tab: 'following' };
+    mocks.route.fullPath = '/?tab=following';
+    wrapper = mountHome();
+    await settle();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({
+      name: 'Login',
+      query: { returnTo: '/?tab=following' },
+    });
+    expect(mocks.homeTimeline.loadFollowing).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.activeTab).toBe('for-you');
   });
 });

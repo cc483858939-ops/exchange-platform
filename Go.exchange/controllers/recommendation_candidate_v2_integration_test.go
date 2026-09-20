@@ -120,6 +120,97 @@ func TestLoadRecommendationCandidateSetUsesEqualRRFFusionIntegration(t *testing.
 	}
 }
 
+func TestLoadPublicRecommendationCandidateSetUsesOnlyEligiblePublicRootsIntegration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	author := newRecommendationCandidateIntegrationUser(t, db, "public-author")
+	now := time.Now().UTC()
+	recentRoot := newRecommendationCandidateIntegrationPost(t, db, author, "recent-root", now.Add(-10*time.Minute))
+	trendingRoot := newRecommendationCandidateIntegrationPost(t, db, author, "trending-root", now.Add(-30*time.Minute))
+	if err := db.Model(&models.Post{}).Where("id = ?", trendingRoot.ID).Update("like_count", 5).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	privateRoot := models.Post{
+		Model:    gorm.Model{CreatedAt: now.Add(-5 * time.Minute), UpdatedAt: now.Add(-5 * time.Minute)},
+		AuthorID: author.ID, Content: "private-root", Visibility: "private",
+	}
+	conversationID := recentRoot.ID
+	replyRootID := recentRoot.ID
+	reply := models.Post{
+		Model:          gorm.Model{CreatedAt: now.Add(-2 * time.Minute), UpdatedAt: now.Add(-2 * time.Minute)},
+		AuthorID:       author.ID,
+		Content:        "reply-root",
+		Visibility:     "public",
+		ConversationID: &conversationID,
+		ReplyToPostID:  &replyRootID,
+	}
+	if err := db.Create(&privateRoot).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&reply).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs := []uint{recentRoot.ID, trendingRoot.ID, privateRoot.ID, reply.ID}
+	t.Cleanup(func() {
+		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+	})
+
+	cfg := defaultRecommendationConfig()
+	cfg.Candidates.ColdStart.Recent = 100
+	cfg.Candidates.ColdStart.Trending = 100
+	cfg.Candidates.ColdStart.Merged = 200
+
+	candidateSet, err := loadPublicRecommendationCandidateSet(now, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[uint]embeddingCandidate, len(candidateSet.Candidates))
+	for _, candidate := range candidateSet.Candidates {
+		byID[candidate.PostID] = candidate
+	}
+	for _, want := range []uint{recentRoot.ID, trendingRoot.ID} {
+		if _, ok := byID[want]; !ok {
+			t.Fatalf("eligible public root %d missing from candidates=%v", want, candidateIDs(candidateSet.Candidates))
+		}
+	}
+	for _, excluded := range []uint{privateRoot.ID, reply.ID} {
+		if _, ok := byID[excluded]; ok {
+			t.Fatalf("ineligible post %d was returned in candidates=%v", excluded, candidateIDs(candidateSet.Candidates))
+		}
+	}
+	if !byID[recentRoot.ID].FromRecent {
+		t.Fatalf("recent root candidate metadata=%#v", byID[recentRoot.ID])
+	}
+	if !byID[trendingRoot.ID].FromRecent || !byID[trendingRoot.ID].FromTrending {
+		t.Fatalf("trending root candidate metadata=%#v", byID[trendingRoot.ID])
+	}
+
+	excludedSet, err := loadPublicRecommendationCandidateSet(now, cfg, map[uint]struct{}{recentRoot.ID: {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsRecommendationCandidateID(excludedSet.Candidates, recentRoot.ID) {
+		t.Fatalf("explicitly excluded post %d was returned", recentRoot.ID)
+	}
+}
+
+func candidateIDs(candidates []embeddingCandidate) []uint {
+	ids := make([]uint, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.PostID)
+	}
+	return ids
+}
+
+func containsRecommendationCandidateID(candidates []embeddingCandidate, want uint) bool {
+	for _, candidate := range candidates {
+		if candidate.PostID == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing.T) {
 	db := openRecommendationCandidateIntegrationDB(t)
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "viewer")

@@ -87,6 +87,41 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 	}
 }
 
+func TestSetupRouterKeepsPublicRecommendationsOpenAndRepresentativeAPIsProtected(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicRequest := httptest.NewRequest(http.MethodGet, "/api/public/recommendations/posts", nil)
+	publicResponse := httptest.NewRecorder()
+	engine.ServeHTTP(publicResponse, publicRequest)
+	if publicResponse.Code == http.StatusUnauthorized {
+		t.Fatalf("public recommendations unexpectedly require authentication: status=%d body=%s", publicResponse.Code, publicResponse.Body.String())
+	}
+
+	protectedRoutes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/recommendations/posts"},
+		{http.MethodGet, "/api/feed/following"},
+		{http.MethodPost, "/api/posts"},
+		{http.MethodPut, "/api/posts/1/like"},
+		{http.MethodGet, "/api/users/search?q=guest"},
+		{http.MethodGet, "/api/me/notifications"},
+	}
+	for _, route := range protectedRoutes {
+		request := httptest.NewRequest(route.method, route.path, nil)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s status=%d body=%s, want 401", route.method, route.path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestSetupRouterRegistersProfileTimelineRoute(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	engine, err := SetupRouter(nil, nil, nil, nil)

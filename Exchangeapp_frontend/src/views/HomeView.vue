@@ -1438,6 +1438,7 @@ watch(
     if (viewerID === lastHomeViewerID && isAuthenticated === lastHomeAuthenticated) {
       return;
     }
+    recommendationTelemetry.clearSession();
     releaseHomeViewSessionsForViewer(lastHomeViewerID);
     homeViewSessionVersion['for-you'] += 1;
     homeViewSessionVersion.following += 1;

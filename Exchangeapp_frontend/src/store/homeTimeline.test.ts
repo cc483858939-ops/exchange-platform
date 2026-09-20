@@ -413,6 +413,46 @@ describe('home timeline session store', () => {
     expect(store.forYou.loaded).toBe(false);
   });
 
+  it('drops a late guest response when authentication begins', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    const pending = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPublicPostRecommendations.mockReturnValue(pending.promise);
+    const store = useHomeTimelineStore();
+    const request = store.loadForYou();
+
+    mocks.authStore!.isAuthenticated = true;
+    mocks.authStore!.currentIdentity = { id: 8 };
+    await settle();
+
+    pending.resolve(recommendationPage([recommendation(99)]));
+    await request;
+
+    expect(store.viewerID).toBe(8);
+    expect(store.forYou.items).toHaveLength(0);
+    expect(store.forYou.loaded).toBe(false);
+  });
+
+  it('drops a late authenticated response after logout begins', async () => {
+    const pending = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPostRecommendations.mockReturnValue(pending.promise);
+    const store = useHomeTimelineStore();
+    const request = store.loadForYou();
+
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    await settle();
+
+    pending.resolve(recommendationPage([recommendation(88)]));
+    await request;
+
+    expect(store.viewerID).toBe(null);
+    expect(store.forYou.items).toHaveLength(0);
+    expect(store.forYou.loaded).toBe(false);
+  });
+
   it('keeps independent tab scrollTop values, then clears both for a new viewer', () => {
     const store = useHomeTimelineStore();
 
