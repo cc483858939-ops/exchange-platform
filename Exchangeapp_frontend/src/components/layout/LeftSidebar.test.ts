@@ -173,6 +173,56 @@ describe('LeftSidebar navigation', () => {
     expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
   });
 
+  it('reselects guest active Home through the shared Home intent', () => {
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Home');
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Search', '/search'],
+    ['Notifications', '/notifications'],
+    ['History', '/history'],
+    ['Profile', 'profile'],
+    ['Post', '/posts/new'],
+  ] as const)('keeps guest %s on its Login destination without reselect interception', (
+    label,
+    expectedReturnTo,
+  ) => {
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, label);
+    const link = wrapper.get(`.left-sidebar__nav > a[aria-label="${label}"]`);
+
+    expect(link.attributes('data-route-name')).toBe('Login');
+    if (expectedReturnTo === 'profile') {
+      expect(link.attributes('data-route-query-intent')).toBe('profile');
+    } else {
+      expect(link.attributes('data-route-query-return-to')).toBe(expectedReturnTo);
+    }
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Meta', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['Shift', { shiftKey: true }],
+    ['Alt', { altKey: true }],
+    ['middle', { button: 1 }],
+  ])('preserves guest %s-click behavior on an active Home', (_label, init) => {
+    const wrapper = mountSidebar();
+    const event = dispatchClick(wrapper, 'Home', init);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+  });
+
   it('reselects active Home Following while preserving the tab destination', () => {
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity = { id: 7, username: 'reader' };

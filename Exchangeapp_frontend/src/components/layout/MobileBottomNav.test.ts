@@ -244,10 +244,48 @@ describe('MobileBottomNav', () => {
       .toContain('mobile-bottom-nav__icon--active');
   });
 
-  it('does not trigger a guest reselect side effect on Home', () => {
+  it('reselects guest active Home through the shared Home intent', () => {
     setState(false, 'Home');
     const wrapper = mountNav();
     const event = dispatchClick(wrapper, 0);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.homeTimeline.requestHomeReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Search', 'UserSearch', 1],
+    ['Notifications', 'Notifications', 3],
+    ['Profile', 'UserProfile', 4],
+  ] as const)('keeps guest %s on its Login destination without reselect interception', (
+    _label,
+    routeName,
+    index,
+  ) => {
+    setState(false, routeName);
+    const wrapper = mountNav();
+    const event = dispatchClick(wrapper, index);
+    const link = wrapper.findAll('.mobile-bottom-nav__item')[index];
+
+    expect(link.attributes('data-route-name')).toBe('Login');
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Meta', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['Shift', { shiftKey: true }],
+    ['Alt', { altKey: true }],
+    ['middle', { button: 1 }],
+  ])('preserves guest %s-click behavior on an active Home', (_label, init) => {
+    setState(false, 'Home');
+    const wrapper = mountNav();
+    const event = dispatchClick(wrapper, 0, init);
 
     expect(event.defaultPrevented).toBe(false);
     expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();

@@ -1102,6 +1102,32 @@ describe('HomeView virtualization', () => {
     expect(panel.scrollTop).not.toBe(0);
   });
 
+  it('keeps guest Home reselect as a two-stage scroll-then-refresh intent', async () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    wrapper = mountHome();
+    await settle();
+
+    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+    panel.scrollTop = 120;
+    panel.dispatchEvent(new Event('scroll'));
+    await settle();
+    mocks.homeTimeline.loadForYou.mockClear();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(panel.scrollTop).toBe(0);
+    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+    expect(mocks.homeTimeline.loadForYou).not.toHaveBeenCalled();
+
+    mocks.homeTimeline.homeReselectVersion += 1;
+    await settle();
+
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledWith(true);
+  });
+
   it('does not pull the new active tab to zero when a pending For You refresh finishes', async () => {
     const refresh = deferred<void>();
     const freshItems = Array.from({ length: 300 }, (_, index) => makeRecommendation(index + 3001));

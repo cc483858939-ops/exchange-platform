@@ -154,7 +154,7 @@ const isItemActive = (item: NavigationItem) => {
 };
 
 const isReselectableRoot = (item: NavigationItem) => {
-  if (!authStore.isAuthenticated) {
+  if (item.to.name === 'Login') {
     return false;
   }
 

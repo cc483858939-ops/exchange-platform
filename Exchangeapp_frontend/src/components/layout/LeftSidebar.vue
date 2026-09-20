@@ -164,7 +164,12 @@ const handleNavigationClick = (
   event: MouseEvent,
   item: typeof navigation[number],
 ) => {
-  if (!authStore.isAuthenticated || !isStandardActivation(event)) {
+  if (!isStandardActivation(event)) {
+    return;
+  }
+
+  const destination = navigationDestination(item);
+  if (destination.name === 'Login') {
     return;
   }
 
