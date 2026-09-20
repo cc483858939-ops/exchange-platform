@@ -82,7 +82,7 @@
           </RouterLink>
         </div>
         <p v-if="followError" class="profile-social-error" aria-live="polite">
-          <span>Social stats unavailable.</span>
+          <span>Follow status unavailable.</span>
           <button class="profile-action profile-action--compact" type="button" @click="retryFollowState">
             Retry
           </button>

@@ -959,7 +959,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       if (isCurrent()) {
         session.followState = null;
         session.followLoaded = false;
-        session.followError = 'Social stats unavailable.';
+        session.followError = 'Follow status unavailable.';
       }
     } finally {
       if (isCurrent()) session.followLoading = false;

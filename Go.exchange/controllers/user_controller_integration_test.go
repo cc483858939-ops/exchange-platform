@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -181,9 +182,17 @@ func TestPublicUserProfileSocialCountsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
+	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	config.AppConfig = &config.Config{
+		Kafka: config.KafkaConfig{
+			ActivityEventsTopic: "goexchange.activity.events.v1",
+		},
+	}
+	t.Cleanup(func() {
+		global.Db = originalDB
+		config.AppConfig = originalConfig
+	})
 	newUser := func(label string) models.User {
 		return models.User{Username: "public-counts-" + label + "-" + uuid.NewString(), Password: "secret"}
 	}

@@ -10,20 +10,22 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestGetUserTimelineUsesGenericPaginationAndActiveProfileLookup(t *testing.T) {
-	originalProfileLoader := loadUserTimelineProfile
+func TestGetUserTimelineUsesGenericPaginationAndActiveUserLookup(t *testing.T) {
+	originalUserLoader := loadUserTimelineUser
 	originalTimelineLoader := loadUserTimelinePage
 	t.Cleanup(func() {
-		loadUserTimelineProfile = originalProfileLoader
+		loadUserTimelineUser = originalUserLoader
 		loadUserTimelinePage = originalTimelineLoader
 	})
 
 	const userID = uint(7)
-	loadUserTimelineProfile = func(id uint) (publicUserResponse, error) {
+	userLoaderCalled := false
+	loadUserTimelineUser = func(id uint) error {
+		userLoaderCalled = true
 		if id != userID {
 			t.Fatalf("profile id=%d", id)
 		}
-		return publicUserResponse{ID: id}, nil
+		return nil
 	}
 	wantCursor := timelineCursor{
 		ActivityAt:   time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
@@ -46,17 +48,20 @@ func TestGetUserTimelineUsesGenericPaginationAndActiveProfileLookup(t *testing.T
 	if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != `{"items":[],"next_cursor":null}` {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	if !userLoaderCalled {
+		t.Fatal("timeline did not validate the active user")
+	}
 }
 
 func TestGetUserTimelineRejectsInvalidIDCursorAndMissingUser(t *testing.T) {
-	originalProfileLoader := loadUserTimelineProfile
+	originalUserLoader := loadUserTimelineUser
 	originalTimelineLoader := loadUserTimelinePage
 	t.Cleanup(func() {
-		loadUserTimelineProfile = originalProfileLoader
+		loadUserTimelineUser = originalUserLoader
 		loadUserTimelinePage = originalTimelineLoader
 	})
-	loadUserTimelineProfile = func(uint) (publicUserResponse, error) {
-		return publicUserResponse{}, errors.New("profile loader should not be called")
+	loadUserTimelineUser = func(uint) error {
+		return errors.New("profile loader should not be called")
 	}
 	loadUserTimelinePage = func(uint, int, *timelineCursor) (timelinePageResponse, error) {
 		t.Fatal("timeline loader should not be called")
@@ -78,8 +83,8 @@ func TestGetUserTimelineRejectsInvalidIDCursorAndMissingUser(t *testing.T) {
 		}
 	}
 
-	loadUserTimelineProfile = func(uint) (publicUserResponse, error) {
-		return publicUserResponse{}, gorm.ErrRecordNotFound
+	loadUserTimelineUser = func(uint) error {
+		return gorm.ErrRecordNotFound
 	}
 	ctx, recorder := newUserControllerContext("/api/users/7/timeline", "7")
 	GetUserTimeline(ctx)

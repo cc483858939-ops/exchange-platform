@@ -291,6 +291,14 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 	}, nil
 }
 
+func loadActivePublicUserByID(id uint) error {
+	if id == 0 || global.Db == nil {
+		return errors.New("database is not initialized")
+	}
+	var user models.User
+	return global.Db.Select("id").First(&user, id).Error
+}
+
 func preloadPostAuthor(query *gorm.DB) *gorm.DB {
 	return query.Preload("Author", func(tx *gorm.DB) *gorm.DB { return tx.Select("id, username, display_name, avatar_url") })
 }

@@ -248,6 +248,24 @@ describe('UserProfileView public read surface', () => {
     wrapper.unmount();
   });
 
+  it('keeps public counts visible when follow status loading fails', async () => {
+    setAuth(true, 8);
+    mocks.getUser.mockResolvedValue({
+      ...profile(7),
+      follower_count: 128,
+      following_count: 76,
+    });
+    mocks.getUserFollowState.mockRejectedValue(new Error('follow endpoint unavailable'));
+    const wrapper = mountProfile();
+    await settle();
+
+    expect(wrapper.text()).toContain('76 Following');
+    expect(wrapper.text()).toContain('128 Followers');
+    expect(wrapper.text()).toContain('Follow status unavailable.');
+    expect(wrapper.text()).not.toContain('Social stats unavailable.');
+    wrapper.unmount();
+  });
+
   it('uses the full profile deep link when a guest chooses Follow', async () => {
     mocks.route.fullPath = '/users/7?source=share#bio';
     const wrapper = mountProfile();

@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var loadUserTimelineProfile = loadPublicUserByID
+var loadUserTimelineUser = loadActivePublicUserByID
 var loadUserTimelinePage = loadUserTimelinePageFromDB
 
 func GetUserTimeline(ctx *gin.Context) {
@@ -25,7 +25,7 @@ func GetUserTimeline(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := loadUserTimelineProfile(id); err != nil {
+	if err := loadUserTimelineUser(id); err != nil {
 		writeUserAPIError(ctx, err)
 		return
 	}
