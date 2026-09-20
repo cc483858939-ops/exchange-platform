@@ -144,6 +144,7 @@ const canonicalPost = (overrides: Partial<Post> = {}): Post => ({
   view_count: 1234,
   deleted: false,
   ...overrides,
+  repost_count: overrides.repost_count ?? 0,
 });
 
 const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
@@ -234,8 +235,8 @@ const mountDetail = () => mount(PostDetailView, {
       },
       ReplyList: {
         props: ['replies', 'deletingReplyId'],
-        emits: ['openMedia', 'requestDelete'],
-        template: '<div class="test-comment-list"><div v-for="reply in replies" :key="reply.id" class="test-reply" :data-reply-id="reply.id"><span>{{ reply.content }}</span><button class="test-request-delete" type="button" :disabled="deletingReplyId !== null" @click="$emit(\'requestDelete\', reply.id)">Request delete</button></div><button v-if="replies.length" class="test-open-reply-media" type="button" @click="$emit(\'openMedia\', replies[0].media, 1)">Open reply media</button></div>',
+        emits: ['openMedia', 'requestDelete', 'toggleBookmark'],
+        template: '<div class="test-comment-list"><div v-for="reply in replies" :key="reply.id" class="test-reply" :data-reply-id="reply.id"><span>{{ reply.content }}</span><button class="test-reply-bookmark" type="button" @click="$emit(\'toggleBookmark\', reply.id)">Bookmark reply</button><button class="test-request-delete" type="button" :disabled="deletingReplyId !== null" @click="$emit(\'requestDelete\', reply.id)">Request delete</button></div><button v-if="replies.length" class="test-open-reply-media" type="button" @click="$emit(\'openMedia\', replies[0].media, 1)">Open reply media</button></div>',
       },
       ConfirmDialog: {
         props: ['title', 'description', 'confirmLabel', 'cancelLabel', 'danger', 'busy', 'error'],
@@ -1022,5 +1023,73 @@ describe('PostDetailView post-first surface', () => {
       name: 'Login',
       query: { returnTo: '/posts/42?reply=1' },
     });
+  });
+
+  it('routes every guest Post action to Login before protected APIs', async () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ repost_count: 12 }));
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [reply()], next_cursor: null });
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    expect(wrapper.get('.post-detail__engagement .test-repost-action').text()).toBe('12');
+
+    await wrapper.get('.post-detail__engagement .test-like-action').trigger('click');
+    expect(mocks.router.push).toHaveBeenLastCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/42' },
+    });
+    mocks.router.push.mockClear();
+
+    await wrapper.get('.post-detail__engagement .test-repost-action').trigger('click');
+    expect(mocks.router.push).toHaveBeenLastCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/42' },
+    });
+    mocks.router.push.mockClear();
+
+    await wrapper.get('.post-detail__bookmark').trigger('click');
+    expect(mocks.router.push).toHaveBeenLastCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/42' },
+    });
+    mocks.router.push.mockClear();
+
+    await wrapper.get('.post-detail__translation-action').trigger('click');
+    expect(mocks.router.push).toHaveBeenLastCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/42' },
+    });
+    mocks.router.push.mockClear();
+
+    await wrapper.get('.post-detail__reply').trigger('click');
+    expect(mocks.router.push).toHaveBeenLastCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/42?reply=1' },
+    });
+    mocks.router.push.mockClear();
+
+    await wrapper.get('.test-reply-bookmark').trigger('click');
+    expect(mocks.router.push).toHaveBeenLastCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/42' },
+    });
+    expect(mocks.likePost).not.toHaveBeenCalled();
+    expect(mocks.repostPost).not.toHaveBeenCalled();
+    expect(mocks.translatePost).not.toHaveBeenCalled();
+  });
+
+  it('lets authenticated repost hydration override the public aggregate count', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ repost_count: 12 }));
+    mocks.getPostRepostState.mockResolvedValueOnce({ reposts: 13, reposted: true });
+
+    wrapper = mountDetail();
+    await flushPromises();
+
+    expect(wrapper.get('.post-detail__engagement .test-repost-action').text()).toBe('13');
+    expect(wrapper.get('.post-detail__engagement .test-repost-action').attributes('data-reposted'))
+      .toBe('true');
   });
 });

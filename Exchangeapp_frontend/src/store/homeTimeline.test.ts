@@ -81,7 +81,7 @@ const author = (id = 7) => ({
   display_name: `User ${id}`,
   avatar_url: '',
 });
-const post = (id: number, authorID = 7) => ({
+const post = (id: number, authorID = 7, repostCount = 0) => ({
   id,
   created_at: '2026-08-24T00:00:00.000Z',
   updated_at: '2026-08-24T00:00:00.000Z',
@@ -97,13 +97,14 @@ const post = (id: number, authorID = 7) => ({
   visibility: 'public' as const,
   media: [],
   like_count: 0,
+  repost_count: repostCount,
   reply_count: 0,
   view_count: 0,
   deleted: false as const,
 });
 
-const recommendation = (id: number) => ({
-  post: post(id),
+const recommendation = (id: number, repostCount = 0) => ({
+  post: post(id, 7, repostCount),
   score: 1,
 });
 
@@ -474,7 +475,7 @@ describe('home timeline session store', () => {
     mocks.authStore!.currentIdentity = null;
     mocks.feedStore!.viewerID = null;
     mocks.getPublicPostRecommendations
-      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1, 8)]))
       .mockResolvedValueOnce(recommendationPage([recommendation(2)], true));
     const store = useHomeTimelineStore();
 
@@ -494,6 +495,8 @@ describe('home timeline session store', () => {
     expect(mocks.getPostRepostStates).not.toHaveBeenCalled();
     expect(mocks.getPostBookmarkStates).not.toHaveBeenCalled();
     expect(store.forYou.items[0].post).toMatchObject({
+      repostCount: 8,
+      reposted: false,
       likeStatus: 'ready',
       repostStatus: 'ready',
       bookmarkStatus: 'ready',

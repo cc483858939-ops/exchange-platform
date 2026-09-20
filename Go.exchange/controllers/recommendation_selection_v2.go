@@ -458,6 +458,9 @@ func selectedRecommendationResponses(selected []selectedRecommendation) ([]recom
 	if err := hydratePostResponsesMediaFromDB(global.Db, posts); err != nil {
 		return nil, err
 	}
+	if err := hydratePostResponseRepostCountsFromDB(global.Db, posts); err != nil {
+		return nil, err
+	}
 	result := make([]recommendedPostResponse, 0, len(prepared))
 	for index, item := range prepared {
 		post := posts[index]

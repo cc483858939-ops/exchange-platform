@@ -36,7 +36,7 @@ export function postToFeedPost(
     viewCount: Math.max(0, post.view_count),
     liked: false,
     likeStatus: 'unknown',
-    repostCount: 0,
+    repostCount: safeRepostCount(post.repost_count, 0),
     reposted: false,
     repostStatus: 'unknown',
     bookmarked: false,

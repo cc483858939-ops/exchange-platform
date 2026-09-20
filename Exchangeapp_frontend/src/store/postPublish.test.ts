@@ -76,6 +76,7 @@ const publishedPost = (authorID = 7) => ({
   visibility: 'public',
   media: [],
   like_count: 0,
+  repost_count: 0,
   reply_count: 0,
   view_count: 0,
   deleted: false,

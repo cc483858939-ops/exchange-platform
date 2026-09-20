@@ -77,6 +77,13 @@ func loadPostDetail(id string) (postResponse, error) {
 		return postResponse{}, err
 	}
 	ensurePostResponseMedia(&response)
+	if global.Db != nil {
+		responses := []postResponse{response}
+		if err := hydratePostResponseRepostCountsFromDB(global.Db, responses); err != nil {
+			return postResponse{}, err
+		}
+		response = responses[0]
+	}
 	// Reference fields are always loaded after the viewer-independent base
 	// record, so a deleted target becomes a tombstone before the response.
 	if err := hydratePostResponseReferences(&response, time.Now().UTC()); err != nil {

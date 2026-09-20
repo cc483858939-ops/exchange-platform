@@ -44,6 +44,7 @@ type postResponse struct {
 	QuotePost      *postReferenceResponse `json:"quote_post"`
 	Visibility     string                 `json:"visibility"`
 	LikeCount      int64                  `json:"like_count"`
+	RepostCount    int64                  `json:"repost_count"`
 	ReplyCount     int64                  `json:"reply_count"`
 	ViewCount      int64                  `json:"view_count"`
 	Deleted        bool                   `json:"deleted"`
@@ -111,7 +112,7 @@ func newPostResponse(post models.Post) (postResponse, error) {
 		PublishedAt: &publishedAt, Author: author, Content: post.Content, Language: post.Language,
 		ConversationID: conversationID, ReplyToPostID: post.ReplyToPostID, QuotePostID: post.QuotePostID,
 		Media:      make([]postMediaResponse, 0),
-		Visibility: post.Visibility, LikeCount: post.LikeCount, ReplyCount: post.ReplyCount,
+		Visibility: post.Visibility, LikeCount: post.LikeCount, RepostCount: 0, ReplyCount: post.ReplyCount,
 		ViewCount: post.ViewCount, Deleted: false,
 	}, nil
 }
@@ -130,6 +131,61 @@ func newPostResponses(posts []models.Post) ([]postResponse, error) {
 		responses = append(responses, response)
 	}
 	return responses, nil
+}
+
+func loadPostRepostCountsWithDB(db *gorm.DB, postIDs []uint) (map[uint]int64, error) {
+	counts := make(map[uint]int64, len(postIDs))
+	uniqueIDs := make([]uint, 0, len(postIDs))
+	seen := make(map[uint]struct{}, len(postIDs))
+	for _, postID := range postIDs {
+		if postID == 0 {
+			continue
+		}
+		if _, exists := seen[postID]; exists {
+			continue
+		}
+		seen[postID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, postID)
+	}
+	if len(uniqueIDs) == 0 {
+		return counts, nil
+	}
+	if db == nil {
+		return nil, errors.New("database is not initialized")
+	}
+
+	var rows []postRepostCountRow
+	if err := activePostRepostScope(db).
+		Select("ar.post_id, COUNT(*) AS reposts").
+		Where("ar.post_id IN ?", uniqueIDs).
+		Group("ar.post_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.PostID] = normalizePostRepostCount(row.Reposts)
+	}
+	return counts, nil
+}
+
+func hydratePostResponseRepostCountsFromDB(db *gorm.DB, responses []postResponse) error {
+	if len(responses) == 0 {
+		return nil
+	}
+
+	postIDs := make([]uint, 0, len(responses))
+	for index := range responses {
+		responses[index].RepostCount = 0
+		postIDs = append(postIDs, responses[index].ID)
+	}
+	counts, err := loadPostRepostCountsWithDB(db, postIDs)
+	if err != nil {
+		return err
+	}
+	for index := range responses {
+		responses[index].RepostCount = normalizePostRepostCount(counts[responses[index].ID])
+	}
+	return nil
 }
 
 func loadPublicAuthorByID(id uint) (publicAuthorResponse, error) {
@@ -240,6 +296,9 @@ func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
 	// the Post query when the caller provides one.
 	referenceDB := query.Session(&gorm.Session{NewDB: true})
 	if err := hydratePostResponsesMediaFromDB(referenceDB, responses); err != nil {
+		return nil, err
+	}
+	if err := hydratePostResponseRepostCountsFromDB(referenceDB, responses); err != nil {
 		return nil, err
 	}
 	referenceNow := time.Now().UTC()

@@ -29,10 +29,19 @@ const post = (overrides: Partial<Post> = {}): Post => ({
   view_count: 18,
   deleted: false,
   ...overrides,
+  repost_count: overrides.repost_count ?? 0,
 });
 
 describe('feed post mapping', () => {
-  it('maps a canonical Post and defaults repost state to unknown', () => {
+	it('preserves the public repost aggregate while leaving viewer state unknown', () => {
+		const feedPost = postToFeedPost(post({ repost_count: 7 }));
+
+		expect(feedPost.repostCount).toBe(7);
+		expect(feedPost.reposted).toBe(false);
+		expect(feedPost.repostStatus).toBe('unknown');
+	});
+
+	it('maps a canonical Post and defaults repost state to unknown', () => {
     const feedPost = postToFeedPost(post());
 
     expect(feedPost).toMatchObject({

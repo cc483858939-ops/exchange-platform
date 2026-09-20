@@ -117,6 +117,7 @@ const post = (id: number, authorID = 7) => ({
   visibility: 'public' as const,
   media: [],
   like_count: 0,
+  repost_count: 0,
   reply_count: 0,
   view_count: 0,
   deleted: false as const,
@@ -210,6 +211,37 @@ describe('profile session store', () => {
     expect(mocks.getUserTimeline).toHaveBeenCalledTimes(1);
     expect(mocks.getUserFollowState).toHaveBeenCalledTimes(1);
     expect(store.getSession(7)?.timelineItems).toHaveLength(1);
+  });
+
+  it('loads a guest Profile timeline with public repost counts and no protected hydration', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    const guestPost = timelineItem(1);
+    guestPost.post.repost_count = 5;
+    mocks.getUserTimeline.mockResolvedValue({ items: [guestPost], next_cursor: 'next' });
+    const store = useProfileSessionStore();
+
+    await store.loadProfile(7);
+    await settle();
+
+    const session = store.getSession(7)!;
+    expect(session.timelineItems[0].post).toMatchObject({
+      repostCount: 5,
+      reposted: false,
+      repostStatus: 'ready',
+      likeStatus: 'ready',
+      bookmarkStatus: 'ready',
+    });
+    expect(mocks.getUserFollowState).not.toHaveBeenCalled();
+    expect(mocks.getPostLikeStates).not.toHaveBeenCalled();
+    expect(mocks.getPostRepostStates).not.toHaveBeenCalled();
+    expect(mocks.getPostBookmarkStates).not.toHaveBeenCalled();
+
+    mocks.getUserTimeline.mockResolvedValueOnce({ items: [], next_cursor: null });
+    await store.loadMoreTimeline(7);
+    expect(mocks.getUserTimeline).toHaveBeenLastCalledWith('7', { limit: 20, cursor: 'next' });
+    expect(mocks.getPostRepostStates).not.toHaveBeenCalled();
   });
 
   it('keeps up to eight sessions, prioritizes the own profile, and reuses 7 after 7 to 8 to 7', () => {

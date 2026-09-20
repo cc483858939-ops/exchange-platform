@@ -130,10 +130,7 @@ func TestLoadPublicRecommendationCandidateSetUsesOnlyEligiblePublicRootsIntegrat
 		t.Fatal(err)
 	}
 
-	privateRoot := models.Post{
-		Model:    gorm.Model{CreatedAt: now.Add(-5 * time.Minute), UpdatedAt: now.Add(-5 * time.Minute)},
-		AuthorID: author.ID, Content: "private-root", Visibility: "private",
-	}
+	deletedRoot := newRecommendationCandidateIntegrationPost(t, db, author, "deleted-root", now.Add(-5*time.Minute))
 	conversationID := recentRoot.ID
 	replyRootID := recentRoot.ID
 	reply := models.Post{
@@ -144,13 +141,13 @@ func TestLoadPublicRecommendationCandidateSetUsesOnlyEligiblePublicRootsIntegrat
 		ConversationID: &conversationID,
 		ReplyToPostID:  &replyRootID,
 	}
-	if err := db.Create(&privateRoot).Error; err != nil {
+	if err := db.Delete(&deletedRoot).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&reply).Error; err != nil {
 		t.Fatal(err)
 	}
-	postIDs := []uint{recentRoot.ID, trendingRoot.ID, privateRoot.ID, reply.ID}
+	postIDs := []uint{recentRoot.ID, trendingRoot.ID, deletedRoot.ID, reply.ID}
 	t.Cleanup(func() {
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 	})
@@ -173,7 +170,7 @@ func TestLoadPublicRecommendationCandidateSetUsesOnlyEligiblePublicRootsIntegrat
 			t.Fatalf("eligible public root %d missing from candidates=%v", want, candidateIDs(candidateSet.Candidates))
 		}
 	}
-	for _, excluded := range []uint{privateRoot.ID, reply.ID} {
+	for _, excluded := range []uint{deletedRoot.ID, reply.ID} {
 		if _, ok := byID[excluded]; ok {
 			t.Fatalf("ineligible post %d was returned in candidates=%v", excluded, candidateIDs(candidateSet.Candidates))
 		}
@@ -183,6 +180,12 @@ func TestLoadPublicRecommendationCandidateSetUsesOnlyEligiblePublicRootsIntegrat
 	}
 	if !byID[trendingRoot.ID].FromRecent || !byID[trendingRoot.ID].FromTrending {
 		t.Fatalf("trending root candidate metadata=%#v", byID[trendingRoot.ID])
+	}
+	if candidateSet.FollowingCount != 0 {
+		t.Fatalf("anonymous following count=%d, want 0", candidateSet.FollowingCount)
+	}
+	if candidateSet.SemanticCount != 0 {
+		t.Fatalf("anonymous semantic count=%d, want 0", candidateSet.SemanticCount)
 	}
 
 	excludedSet, err := loadPublicRecommendationCandidateSet(now, cfg, map[uint]struct{}{recentRoot.ID: {}})

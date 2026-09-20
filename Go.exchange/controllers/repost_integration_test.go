@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"sync"
@@ -126,6 +127,223 @@ func TestPostRepostIntegration(t *testing.T) {
 		t.Fatalf("idempotent DELETE state=%#v err=%v", state, err)
 	}
 
+}
+
+func TestPublicPostRepostCountHydrationAndCacheFreshnessIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDB, originalRedis, originalCacheLoader := global.Db, global.RedisDB, loadPostDetailCache
+	global.Db = db
+	global.RedisDB = nil
+	t.Cleanup(func() {
+		global.Db = originalDB
+		global.RedisDB = originalRedis
+		loadPostDetailCache = originalCacheLoader
+	})
+
+	users := []models.User{
+		{Username: "public-count-owner-" + uuid.NewString(), Password: "secret"},
+		{Username: "public-count-alice-" + uuid.NewString(), Password: "secret"},
+		{Username: "public-count-bob-" + uuid.NewString(), Password: "secret"},
+		{Username: "public-count-deleted-" + uuid.NewString(), Password: "secret"},
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	owner, alice, bob, deleted := users[0], users[1], users[2], users[3]
+	postIDs := make([]uint, 0, 1)
+	t.Cleanup(func() {
+		db.Unscoped().Where("post_id IN ? OR user_id IN ?", postIDs, []uint{owner.ID, alice.ID, bob.ID, deleted.ID}).Delete(&models.PostRepost{})
+		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+		db.Unscoped().Where("id IN ?", []uint{owner.ID, alice.ID, bob.ID, deleted.ID}).Delete(&models.User{})
+	})
+
+	now := time.Now().UTC().Add(-time.Minute)
+	article := models.Post{
+		Model:    gorm.Model{CreatedAt: now, UpdatedAt: now},
+		AuthorID: owner.ID, Content: "public repost count", Visibility: "public",
+	}
+	if err := db.Create(&article).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs = append(postIDs, article.ID)
+	if err := db.Create(&[]models.PostRepost{
+		{UserID: alice.ID, PostID: article.ID, CreatedAt: now},
+		{UserID: bob.ID, PostID: article.ID, CreatedAt: now},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var cached postResponse
+	cachePrimed := false
+	loadPostDetailCache = func(_ string, loader func() (postResponse, error)) (postResponse, error) {
+		if cachePrimed {
+			return cached, nil
+		}
+		response, err := loader()
+		if err != nil {
+			return postResponse{}, err
+		}
+		cached = response
+		cachePrimed = true
+		return response, nil
+	}
+
+	first, err := loadPostDetail(strconvPostID(article.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RepostCount != 2 {
+		t.Fatalf("initial public repost_count=%d want 2", first.RepostCount)
+	}
+
+	if err := db.Create(&models.PostRepost{UserID: deleted.ID, PostID: article.ID, CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	second, err := loadPostDetail(strconvPostID(article.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.RepostCount != 3 {
+		t.Fatalf("warm-cache public repost_count=%d want 3", second.RepostCount)
+	}
+
+	if err := db.Delete(&deleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	third, err := loadPostDetail(strconvPostID(article.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.RepostCount != 2 {
+		t.Fatalf("deleted-reposter public repost_count=%d want 2", third.RepostCount)
+	}
+
+	ctx, recorder := newReplyIntegrationContext(http.MethodGet, "/api/posts/"+strconvPostID(article.ID), strconvPostID(article.ID), "", 0)
+	GetPostByID(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("public post GET status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		RepostCount int64 `json:"repost_count"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.RepostCount != 2 {
+		t.Fatalf("public post JSON repost_count=%d want 2", payload.RepostCount)
+	}
+}
+
+func TestPublicPostRepostCountsHydrateTimelineRecommendationsAndRepliesIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
+		t.Fatal(err)
+	}
+	originalDB, originalRedis := global.Db, global.RedisDB
+	global.Db = db
+	global.RedisDB = nil
+	t.Cleanup(func() {
+		global.Db = originalDB
+		global.RedisDB = originalRedis
+	})
+
+	users := []models.User{
+		{Username: "surface-count-owner-" + uuid.NewString(), Password: "secret"},
+		{Username: "surface-count-alice-" + uuid.NewString(), Password: "secret"},
+		{Username: "surface-count-bob-" + uuid.NewString(), Password: "secret"},
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	owner, alice, bob := users[0], users[1], users[2]
+	postIDs := make([]uint, 0, 2)
+	t.Cleanup(func() {
+		db.Unscoped().Where("post_id IN ? OR user_id IN ?", postIDs, []uint{owner.ID, alice.ID, bob.ID}).Delete(&models.PostRepost{})
+		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+		db.Unscoped().Where("id IN ?", []uint{owner.ID, alice.ID, bob.ID}).Delete(&models.User{})
+	})
+
+	now := time.Now().UTC().Add(-time.Hour)
+	root := models.Post{
+		Model:    gorm.Model{CreatedAt: now, UpdatedAt: now},
+		AuthorID: owner.ID, Content: "timeline root", Visibility: "public",
+	}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs = append(postIDs, root.ID)
+	conversationID := root.ID
+	replyToID := root.ID
+	reply := models.Post{
+		Model:          gorm.Model{CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
+		AuthorID:       owner.ID,
+		Content:        "public reply",
+		Visibility:     "public",
+		ConversationID: &conversationID,
+		ReplyToPostID:  &replyToID,
+	}
+	if err := db.Create(&reply).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs = append(postIDs, reply.ID)
+	if err := db.Create(&[]models.PostRepost{
+		{UserID: alice.ID, PostID: root.ID, CreatedAt: now},
+		{UserID: bob.ID, PostID: root.ID, CreatedAt: now},
+		{UserID: alice.ID, PostID: reply.ID, CreatedAt: now},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	timeline, err := loadUserTimelinePageFromDB(owner.ID, 20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Items) != 1 || timeline.Items[0].Post.RepostCount != 2 {
+		t.Fatalf("timeline items=%#v want root repost_count=2", timeline.Items)
+	}
+
+	var rootWithAuthor models.Post
+	if err := preloadPostAuthor(publicPostScope(db.Model(&models.Post{}), time.Now().UTC())).First(&rootWithAuthor, root.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	recommendations, err := selectedRecommendationResponses([]selectedRecommendation{{Post: rootWithAuthor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recommendations) != 1 || recommendations[0].Post.RepostCount != 2 {
+		t.Fatalf("recommendations=%#v want root repost_count=2", recommendations)
+	}
+
+	ctx, recorder := newReplyIntegrationContext(http.MethodGet, "/api/posts/"+strconvPostID(root.ID)+"/replies", strconvPostID(root.ID), "", 0)
+	GetPostReplies(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("public replies status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var replies replyListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &replies); err != nil {
+		t.Fatal(err)
+	}
+	if len(replies.Items) != 1 || replies.Items[0].RepostCount != 1 {
+		t.Fatalf("replies=%#v want reply repost_count=1", replies.Items)
+	}
 }
 
 func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {

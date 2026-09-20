@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -27,8 +28,19 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.LikeCount != 17 || response.ReplyCount != 8 || response.ViewCount != 1234 {
-		t.Fatalf("response like_count=%d comment_count=%d view_count=%d", response.LikeCount, response.ReplyCount, response.ViewCount)
+	if response.LikeCount != 17 || response.RepostCount != 0 || response.ReplyCount != 8 || response.ViewCount != 1234 {
+		t.Fatalf("response like_count=%d repost_count=%d comment_count=%d view_count=%d", response.LikeCount, response.RepostCount, response.ReplyCount, response.ViewCount)
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["repost_count"]) != "0" {
+		t.Fatalf("repost_count JSON=%s want numeric zero", fields["repost_count"])
 	}
 	if response.Language != "und" {
 		t.Fatalf("response language=%q want und", response.Language)

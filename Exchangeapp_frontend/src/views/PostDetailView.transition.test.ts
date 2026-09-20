@@ -134,6 +134,7 @@ const canonicalPost = (overrides: Partial<Post> = {}): Post => {
     view_count: 321,
     deleted: false,
     ...overrides,
+    repost_count: overrides.repost_count ?? 0,
   };
 };
 

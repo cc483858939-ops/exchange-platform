@@ -94,6 +94,10 @@ func GetPostReplies(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if err := hydratePostResponseRepostCountsFromDB(global.Db, items); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	var nextCursor *string
 	if hasMore {

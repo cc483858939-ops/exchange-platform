@@ -41,6 +41,7 @@ export interface Post {
   visibility: 'public';
   media: PostMedia[];
   like_count: number;
+  repost_count: number;
   reply_count: number;
   view_count: number;
   deleted: false;

@@ -81,6 +81,7 @@ const post = (id: number, content = `Post ${id}`): Post => ({
   visibility: 'public',
   media: [],
   like_count: 3,
+  repost_count: 0,
   reply_count: 1,
   view_count: 8,
   deleted: false,

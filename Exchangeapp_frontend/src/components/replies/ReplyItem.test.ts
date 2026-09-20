@@ -30,6 +30,7 @@ const makeReply = (overrides: Partial<Post> = {}): Post => ({
   view_count: 0,
   deleted: false,
   ...overrides,
+  repost_count: overrides.repost_count ?? 0,
 });
 
 const mountReply = (props: Record<string, unknown> = {}) => mount(ReplyItem, {

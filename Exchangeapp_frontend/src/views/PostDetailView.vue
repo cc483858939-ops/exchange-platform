@@ -2019,6 +2019,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     handoffPost.value = null;
     post.value = loadedPost;
     likeCount.value = clampCount(loadedPost.like_count);
+    repostCount.value = clampCount(loadedPost.repost_count);
     replyCount.value = clampCount(loadedPost.reply_count);
     viewCount.value = clampCount(loadedPost.view_count);
     postLoading.value = false;
