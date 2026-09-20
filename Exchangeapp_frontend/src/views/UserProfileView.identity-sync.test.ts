@@ -112,6 +112,7 @@ const originalUser = {
   username: 'viewer',
   display_name: 'Viewer',
   avatar_url: '',
+  cover_image_url: '',
   bio: '',
   created_at: '2026-08-15T00:00:00.000Z',
 };

@@ -41,11 +41,16 @@
       aria-live="polite"
       aria-label="Loading profile"
     >
-      <span class="profile-skeleton profile-skeleton--avatar" aria-hidden="true"></span>
-      <span class="profile-skeleton-copy" aria-hidden="true">
-        <span class="profile-skeleton profile-skeleton--name"></span>
-        <span class="profile-skeleton profile-skeleton--handle"></span>
-      </span>
+      <div class="profile-cover profile-skeleton profile-skeleton--cover" aria-hidden="true"></div>
+      <div class="profile-identity__body">
+        <div class="profile-identity__top-row">
+          <span class="profile-skeleton profile-skeleton--avatar" aria-hidden="true"></span>
+        </div>
+        <div class="profile-identity__copy" aria-hidden="true">
+          <span class="profile-skeleton profile-skeleton--name"></span>
+          <span class="profile-skeleton profile-skeleton--handle"></span>
+        </div>
+      </div>
     </section>
 
     <section
@@ -53,66 +58,84 @@
       class="profile-identity"
       aria-labelledby="profile-name"
     >
-      <UserAvatar
-        class="profile-avatar"
-        :avatar-url="user.avatar_url"
-        :display-name="user.display_name"
-        :username="user.username"
-        :size="76"
-        loading="eager"
-        decorative
-      />
-      <div class="profile-identity__copy">
-        <h1 id="profile-name">{{ profileDisplayName }}</h1>
-        <p class="profile-identity__handle">@{{ user.username }}</p>
-        <p v-if="user.bio" class="profile-identity__bio">{{ user.bio }}</p>
-        <time
-          v-if="joinedLabel"
-          class="profile-identity__joined"
-          :datetime="user.created_at"
-        >
-          Joined {{ joinedLabel }}
-        </time>
-        <div class="profile-social" aria-label="Social stats">
-          <RouterLink :to="{ name: 'UserFollowing', params: { id: user.id } }">
-            {{ displayedFollowingCount }} Following
-          </RouterLink>
-          <RouterLink :to="{ name: 'UserFollowers', params: { id: user.id } }">
-            {{ displayedFollowerCount }} Followers
-          </RouterLink>
-        </div>
-        <p v-if="followError" class="profile-social-error" aria-live="polite">
-          <span>Follow status unavailable.</span>
-          <button class="profile-action profile-action--compact" type="button" @click="retryFollowState">
-            Retry
-          </button>
-        </p>
+      <div class="profile-cover" aria-hidden="true">
+        <img
+          v-if="profileCoverURL && !coverLoadFailed"
+          class="profile-cover__image"
+          :src="profileCoverURL"
+          alt=""
+          loading="eager"
+          decoding="async"
+          fetchpriority="high"
+          @error="handleCoverError"
+        />
       </div>
-      <div v-if="isOwnProfile || showFollowControl" class="profile-identity__action">
-        <button
-          v-if="isOwnProfile"
-          class="profile-action profile-action--primary"
-          type="button"
-          @click="openEditProfile"
-        >
-          Edit profile
-        </button>
-        <template v-else>
-          <button
-            class="profile-follow-button"
-            :class="{ 'profile-follow-button--following': followState?.following }"
-            type="button"
-            :aria-pressed="authStore.isAuthenticated ? followState?.following === true : undefined"
-            :aria-busy="followPending"
-            :disabled="authStore.isAuthenticated && followPending"
-            @click="handleFollowToggle"
+
+      <div class="profile-identity__body">
+        <div class="profile-identity__top-row">
+          <UserAvatar
+            class="profile-avatar"
+            :avatar-url="user.avatar_url"
+            :display-name="user.display_name"
+            :username="user.username"
+            :size="112"
+            loading="eager"
+            decorative
+          />
+          <div v-if="isOwnProfile || showFollowControl" class="profile-identity__action">
+            <button
+              v-if="isOwnProfile"
+              class="profile-action profile-action--primary"
+              type="button"
+              @click="openEditProfile"
+            >
+              Edit profile
+            </button>
+            <template v-else>
+              <button
+                class="profile-follow-button"
+                :class="{ 'profile-follow-button--following': followState?.following }"
+                type="button"
+                :aria-pressed="authStore.isAuthenticated ? followState?.following === true : undefined"
+                :aria-busy="followPending"
+                :disabled="authStore.isAuthenticated && followPending"
+                @click="handleFollowToggle"
+              >
+                {{ authStore.isAuthenticated && followState?.following ? 'Following' : 'Follow' }}
+              </button>
+              <p v-if="followActionError" class="profile-action-error" aria-live="polite">
+                {{ followActionError }}
+              </p>
+            </template>
+          </div>
+        </div>
+
+        <div class="profile-identity__copy">
+          <h1 id="profile-name">{{ profileDisplayName }}</h1>
+          <p class="profile-identity__handle">@{{ user.username }}</p>
+          <p v-if="user.bio" class="profile-identity__bio">{{ user.bio }}</p>
+          <time
+            v-if="joinedLabel"
+            class="profile-identity__joined"
+            :datetime="user.created_at"
           >
-            {{ authStore.isAuthenticated && followState?.following ? 'Following' : 'Follow' }}
-          </button>
-          <p v-if="followActionError" class="profile-action-error" aria-live="polite">
-            {{ followActionError }}
+            Joined {{ joinedLabel }}
+          </time>
+          <div class="profile-social" aria-label="Social stats">
+            <RouterLink :to="{ name: 'UserFollowing', params: { id: user.id } }">
+              <span class="profile-social__item"><strong>{{ displayedFollowingCount }}</strong> Following</span>
+            </RouterLink>
+            <RouterLink :to="{ name: 'UserFollowers', params: { id: user.id } }">
+              <span class="profile-social__item"><strong>{{ displayedFollowerCount }}</strong> Followers</span>
+            </RouterLink>
+          </div>
+          <p v-if="followError" class="profile-social-error" aria-live="polite">
+            <span>Follow status unavailable.</span>
+            <button class="profile-action profile-action--compact" type="button" @click="retryFollowState">
+              Retry
+            </button>
           </p>
-        </template>
+        </div>
       </div>
     </section>
 
@@ -475,6 +498,8 @@ const profileDisplayName = computed(() => {
   const displayName = user.value?.display_name?.trim() ?? '';
   return displayName || user.value?.username || 'Profile';
 });
+const profileCoverURL = computed(() => user.value?.cover_image_url?.trim() || '');
+const coverLoadFailed = ref(false);
 const headerUsername = computed(() => (
   user.value
     ? profileDisplayName.value
@@ -492,6 +517,18 @@ const joinedLabel = computed(() => {
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 });
+
+const handleCoverError = () => {
+  coverLoadFailed.value = true;
+};
+
+watch(
+  [() => user.value?.id, profileCoverURL],
+  () => {
+    coverLoadFailed.value = false;
+  },
+  { immediate: true },
+);
 
 const getErrorStatus = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status;
@@ -1124,12 +1161,36 @@ onBeforeUnmount(() => {
 }
 
 .profile-identity {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  padding: var(--space-6) var(--space-5) var(--space-5);
+  display: block;
   border-bottom: 1px solid var(--color-border);
+}
+
+.profile-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  overflow: hidden;
+  background: var(--color-surface-subtle);
+}
+
+.profile-cover__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.profile-identity__body {
+  padding: 0 var(--space-5) var(--space-5);
+}
+
+.profile-identity__top-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 68px;
 }
 
 .profile-avatar {
@@ -1147,8 +1208,13 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
+.profile-identity .profile-avatar {
+  margin-top: -56px;
+  box-shadow: 0 0 0 4px var(--color-surface);
+}
+
 .profile-identity__copy {
-  flex: 1 1 220px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -1157,7 +1223,8 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   justify-items: end;
   gap: var(--space-2);
-  margin-left: auto;
+  min-width: 0;
+  margin-top: var(--space-3);
 }
 
 .profile-social {
@@ -1171,8 +1238,21 @@ onBeforeUnmount(() => {
 }
 
 .profile-social a {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
   color: inherit;
   text-decoration: none;
+}
+
+.profile-social__item {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.profile-social__item strong {
+  color: var(--color-text);
+  font-weight: 750;
 }
 
 .profile-social a:hover,
@@ -1295,16 +1375,22 @@ onBeforeUnmount(() => {
 }
 
 .profile-skeleton--avatar {
-  width: 76px;
-  height: 76px;
+  width: 112px;
+  height: 112px;
+  margin-top: -56px;
   border-radius: 50%;
+  box-shadow: 0 0 0 4px var(--color-surface);
 }
 
-.profile-skeleton-copy {
+.profile-skeleton--cover {
+  aspect-ratio: 3 / 1;
+  border-radius: 0;
+}
+
+.profile-identity--loading .profile-identity__copy {
   display: grid;
-  align-content: center;
   gap: var(--space-2);
-  min-width: 0;
+  margin-top: var(--space-3);
 }
 
 .profile-skeleton--name {
@@ -1448,12 +1534,12 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 420px) {
+@media (max-width: 520px) {
   .profile-header {
     padding-inline: var(--space-3);
   }
 
-  .profile-identity,
+  .profile-identity__body,
   .profile-skeleton-post,
   .profile-empty,
   .profile-state,
@@ -1461,33 +1547,22 @@ onBeforeUnmount(() => {
     padding-inline: var(--space-4);
   }
 
-  .profile-identity {
-    align-items: flex-start;
+  .profile-identity__top-row {
+    gap: var(--space-2);
   }
-
-  .profile-identity__action {
-    flex-basis: 100%;
-    justify-items: start;
-    margin-left: 0;
-  }
-
-  .profile-action-error {
-    justify-content: start;
-    max-width: none;
-    text-align: left;
-  }
-
-  .profile-avatar {
-    width: 64px;
-    height: 64px;
-    font-size: 24px;
-  }
-
-  .profile-identity h1 {
-    font-size: 22px;
-  }
-
 }
+
+@media (max-width: 360px) {
+  .profile-identity__top-row {
+    gap: var(--space-1);
+  }
+
+  .profile-identity__action .profile-action,
+  .profile-identity__action .profile-follow-button {
+    padding-inline: var(--space-3);
+  }
+}
+
 .profile-avatar img {
   position: absolute;
   inset: 0;

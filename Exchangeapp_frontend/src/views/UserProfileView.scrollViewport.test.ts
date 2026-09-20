@@ -255,6 +255,20 @@ describe('UserProfileView scroll viewport', () => {
     }
   });
 
+  it('keeps the profile cover inside the existing scroll viewport', async () => {
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element;
+      const cover = wrapper.get('.profile-cover').element;
+
+      expect(cover.closest('.profile-scroll-viewport')).toBe(viewport);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it('restores own-profile scroll after cached PostDetail return even if DOM scroll is reset', async () => {
     const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});

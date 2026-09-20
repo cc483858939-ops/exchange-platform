@@ -95,12 +95,13 @@ const profile = (id: number) => ({
   id,
   username: `user-${id}`,
   display_name: `User ${id}`,
-    avatar_url: '',
-    bio: '',
-    created_at: '2026-08-15T00:00:00.000Z',
-    follower_count: 0,
-    following_count: 0,
-  });
+  avatar_url: '',
+  cover_image_url: '',
+  bio: '',
+  created_at: '2026-08-15T00:00:00.000Z',
+  follower_count: 0,
+  following_count: 0,
+});
 
 const post = (id: number, authorID: number) => ({
   id,
@@ -197,6 +198,7 @@ describe('UserProfileView public read surface', () => {
   it('renders the anonymous profile without making protected requests', async () => {
     mocks.getUser.mockResolvedValue({
       ...profile(7),
+      cover_image_url: '/api/files/profile-covers/users/v1/7/cover.jpg',
       follower_count: 128,
       following_count: 76,
     });
@@ -204,6 +206,16 @@ describe('UserProfileView public read surface', () => {
     await settle();
 
     expect(wrapper.get('.profile-identity h1').text()).toBe('User 7');
+    const coverImage = wrapper.get('.profile-cover__image');
+    expect(coverImage.attributes('src')).toBe(
+      '/api/files/profile-covers/users/v1/7/cover.jpg',
+    );
+    expect(coverImage.attributes()).toMatchObject({
+      alt: '',
+      loading: 'eager',
+      decoding: 'async',
+      fetchpriority: 'high',
+    });
     expect(wrapper.text()).toContain('76 Following');
     expect(wrapper.text()).toContain('128 Followers');
     expect(wrapper.text()).toContain('No posts or reposts yet.');
@@ -219,9 +231,38 @@ describe('UserProfileView public read surface', () => {
     const wrapper = mountProfile();
     await settle();
 
+    expect(wrapper.find('.profile-cover').exists()).toBe(true);
+    expect(wrapper.find('.profile-cover__image').exists()).toBe(false);
     expect(wrapper.text()).toContain('0 Following');
     expect(wrapper.text()).toContain('0 Followers');
     expect(mocks.getUserFollowState).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('hides a broken cover without mutating the profile and retries after a profile switch', async () => {
+    mocks.getUser.mockImplementation((id: string) => Promise.resolve({
+      ...profile(Number(id)),
+      cover_image_url: id === '7'
+        ? '/api/files/profile-covers/users/v1/7/broken.jpg'
+        : '/api/files/profile-covers/users/v1/8/cover.jpg',
+    }));
+    const wrapper = mountProfile();
+    await settle();
+
+    const coverImage = wrapper.get('.profile-cover__image');
+    await coverImage.trigger('error');
+    await nextTick();
+
+    expect(wrapper.find('.profile-cover').exists()).toBe(true);
+    expect(wrapper.find('.profile-cover__image').exists()).toBe(false);
+    expect(wrapper.get('.profile-identity h1').text()).toBe('User 7');
+
+    mocks.route.params.id = '8';
+    await settle();
+
+    expect(wrapper.get('.profile-cover__image').attributes('src')).toBe(
+      '/api/files/profile-covers/users/v1/8/cover.jpg',
+    );
     wrapper.unmount();
   });
 
