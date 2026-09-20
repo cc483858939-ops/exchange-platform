@@ -34,8 +34,9 @@
           :class="{ 'post-media-grid__image--single': visibleMedia.length === 1 }"
           :src="item.url"
           :alt="`Post image ${index + 1}`"
-          loading="lazy"
+          :loading="imageLoading"
           decoding="async"
+          :fetchpriority="imageFetchPriority(index)"
           :width="item.width > 0 ? item.width : undefined"
           :height="item.height > 0 ? item.height : undefined"
           @error="handleImageError(item)"
@@ -47,8 +48,9 @@
         :class="{ 'post-media-grid__image--single': visibleMedia.length === 1 }"
         :src="item.url"
         :alt="`Post image ${index + 1}`"
-        loading="lazy"
+        :loading="imageLoading"
         decoding="async"
+        :fetchpriority="imageFetchPriority(index)"
         :width="item.width > 0 ? item.width : undefined"
         :height="item.height > 0 ? item.height : undefined"
         @error="handleImageError(item)"
@@ -78,6 +80,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { PostMedia } from '../../types/Post';
+import type { MediaLoadingPolicy } from '../../types/MediaLoading';
 import AppIcon from '../icons/AppIcon.vue';
 
 const props = withDefaults(defineProps<{
@@ -85,10 +88,12 @@ const props = withDefaults(defineProps<{
   removable?: boolean;
   disabled?: boolean;
   interactive?: boolean;
+  loadingPolicy?: MediaLoadingPolicy;
 }>(), {
   removable: false,
   disabled: false,
   interactive: false,
+  loadingPolicy: 'lazy',
 });
 
 const emit = defineEmits<{
@@ -101,6 +106,12 @@ const SINGLE_MEDIA_MAX_HEIGHT_PX = 640;
 
 const visibleMedia = computed(() => props.media.slice(0, 4));
 const failedURLs = ref(new Set<string>());
+const imageLoading = computed(() => (
+  props.loadingPolicy === 'lazy' ? 'lazy' : 'eager'
+));
+const imageFetchPriority = (index: number) => (
+  props.loadingPolicy === 'priority' && index === 0 ? 'high' : undefined
+);
 
 const hasSizedSingleMedia = computed(() => {
   const item = visibleMedia.value[0];

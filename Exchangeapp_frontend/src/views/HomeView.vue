@@ -81,6 +81,7 @@
               :track-view="authStore.isAuthenticated"
               :requires-auth-for-actions="!authStore.isAuthenticated"
               :view-session-key="homeViewSessionKey('for-you')"
+              :media-loading-policy="homeMediaLoadingPolicy('for-you', virtualItem.index)"
               :like-pending="likePendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
               :repost-pending="repostPendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
               :bookmark-pending="bookmarkPendingPostIds.has(forYouPostForRow(virtualItem.index).id)"
@@ -119,6 +120,7 @@
                 :track-view="authStore.isAuthenticated"
                 :requires-auth-for-actions="!authStore.isAuthenticated"
                 :view-session-key="homeViewSessionKey('for-you')"
+                :media-loading-policy="homeMediaLoadingPolicy('for-you', virtualItem.index)"
                 :like-pending="likePendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
                 :repost-pending="repostPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
                 :bookmark-pending="bookmarkPendingPostIds.has(forYouRecommendationForRow(virtualItem.index).post.id)"
@@ -179,6 +181,7 @@
               v-if="followingRowKind(virtualItem.index) === 'following'"
               :post="followingPostForRow(virtualItem.index)"
               :view-session-key="homeViewSessionKey('following')"
+              :media-loading-policy="homeMediaLoadingPolicy('following', virtualItem.index)"
               :like-pending="likePendingPostIds.has(followingPostForRow(virtualItem.index).id)"
               :repost-pending="repostPendingPostIds.has(followingPostForRow(virtualItem.index).id)"
               :bookmark-pending="bookmarkPendingPostIds.has(followingPostForRow(virtualItem.index).id)"
@@ -264,6 +267,7 @@ import { useHomeTimelineStore } from '../store/homeTimeline';
 import type { HomeRecommendationItem } from '../store/homeTimeline';
 import type { RecommendedPost } from '../types/Recommendation';
 import type { FeedPost, FeedTab } from '../types/Feed';
+import type { MediaLoadingPolicy } from '../types/MediaLoading';
 
 defineOptions({ name: 'HomeView' });
 
@@ -418,6 +422,8 @@ type FollowingVirtualRow = {
   key: string;
   post: FeedPost;
 };
+
+type HomeMediaVirtualRow = ForYouVirtualRow | FollowingVirtualRow;
 
 const forYouVirtualRows = computed<ForYouVirtualRow[]>(() => {
   const rows: ForYouVirtualRow[] = visibleRecentlyPublishedPosts.value.map((post) => ({
@@ -636,6 +642,107 @@ const followingPostForRow = (index: number): FeedPost => {
 };
 
 const followingRowKind = (index: number) => followingVirtualRows.value[index]?.kind;
+
+const mediaPostForRow = (row: HomeMediaVirtualRow | undefined): FeedPost | null => {
+  if (!row || row.kind === 'inline-state') {
+    return null;
+  }
+  if (row.kind === 'recommendation') {
+    return row.item.post;
+  }
+  return row.post;
+};
+
+const homeViewportGeometry = (virtualizer: HomeVirtualizer) => {
+  const panel = feedPanelRef.value;
+  const virtualizerHeight = virtualizer.scrollRect?.height ?? 0;
+  const viewportHeight = virtualizerHeight > 0
+    ? virtualizerHeight
+    : panel?.clientHeight ?? 0;
+  const virtualizerOffset = virtualizer.scrollOffset;
+  const viewportStart = typeof virtualizerOffset === 'number'
+    && Number.isFinite(virtualizerOffset)
+    ? virtualizerOffset
+    : panel?.scrollTop ?? 0;
+
+  return {
+    viewportStart: Math.max(0, viewportStart),
+    viewportHeight,
+  };
+};
+
+const classifyHomeMediaPolicies = (
+  rows: readonly HomeMediaVirtualRow[],
+  virtualItems: readonly VirtualItem[],
+  virtualizer: HomeVirtualizer,
+): Map<number, MediaLoadingPolicy> => {
+  const policies = new Map<number, MediaLoadingPolicy>();
+  const orderedMediaItems = [...virtualItems]
+    .sort((left, right) => left.start - right.start || left.index - right.index)
+    .filter((virtualItem) => {
+      const post = mediaPostForRow(rows[virtualItem.index]);
+      return Boolean(post && post.media.length > 0);
+    });
+
+  if (orderedMediaItems.length === 0) {
+    return policies;
+  }
+
+  const { viewportStart, viewportHeight } = homeViewportGeometry(virtualizer);
+  if (!(viewportHeight > 0) || !Number.isFinite(viewportStart)) {
+    orderedMediaItems.forEach((virtualItem, index) => {
+      policies.set(virtualItem.index, index === 0
+        ? 'priority'
+        : index <= 2 ? 'nearby' : 'lazy');
+    });
+    return policies;
+  }
+
+  const viewportEnd = viewportStart + viewportHeight;
+  const nearStart = viewportStart - viewportHeight;
+  const nearEnd = viewportEnd + viewportHeight;
+  let priorityAssigned = false;
+
+  orderedMediaItems.forEach((virtualItem) => {
+    const visible = virtualItem.end > viewportStart
+      && virtualItem.start < viewportEnd;
+    const nearby = virtualItem.end > nearStart
+      && virtualItem.start < nearEnd;
+
+    if (visible && !priorityAssigned) {
+      policies.set(virtualItem.index, 'priority');
+      priorityAssigned = true;
+    } else if (visible || nearby) {
+      policies.set(virtualItem.index, 'nearby');
+    } else {
+      policies.set(virtualItem.index, 'lazy');
+    }
+  });
+
+  return policies;
+};
+
+const homeMediaLoadingPolicies = computed(() => {
+  if (activeTab.value === 'for-you') {
+    return classifyHomeMediaPolicies(
+      forYouVirtualRows.value,
+      forYouVirtualItems.value,
+      forYouVirtualizer.value,
+    );
+  }
+
+  return classifyHomeMediaPolicies(
+    followingVirtualRows.value,
+    followingVirtualItems.value,
+    followingVirtualizer.value,
+  );
+});
+
+const homeMediaLoadingPolicy = (tab: FeedTab, index: number): MediaLoadingPolicy => (
+  tab === activeTab.value
+    ? homeMediaLoadingPolicies.value.get(index) ?? 'lazy'
+    : 'lazy'
+);
 
 const measureVirtualRow = (element: Element | ComponentPublicInstance | null, virtualizer: HomeVirtualizer) => {
   if (element === null) {

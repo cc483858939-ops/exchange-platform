@@ -87,12 +87,21 @@ const viewer = {
   avatar_url: '',
 };
 
-const makePost = (id: number): FeedPost => ({
+const testMedia = (index: number) => [{
+  type: 'image' as const,
+  url: `/media/${index}.jpg`,
+  large_url: `/media/${index}-large.jpg`,
+  width: 1200,
+  height: 800,
+  position: 0,
+}];
+
+const makePost = (id: number, media: FeedPost['media'] = []): FeedPost => ({
   id,
   author: viewer,
   content: `Post ${id}`,
   language: 'und',
-  media: [],
+  media,
   createdAt: '2026-08-24T00:00:00.000Z',
   likeCount: 0,
   replyCount: 0,
@@ -106,7 +115,7 @@ const makePost = (id: number): FeedPost => ({
   bookmarkStatus: 'ready',
 });
 
-const makeRecommendation = (id: number) => {
+const makeRecommendation = (id: number, media: FeedPost['media'] = []) => {
   const tracking = { token: `recommendation-${id}`, source: 'home-test' };
   return {
     recommendation: {
@@ -114,7 +123,7 @@ const makeRecommendation = (id: number) => {
       score: 1,
       tracking,
     },
-    post: makePost(id),
+    post: makePost(id, media),
   };
 };
 
@@ -140,10 +149,18 @@ const PostCardStub = defineComponent({
       type: Boolean,
       required: false,
     },
+    mediaLoadingPolicy: {
+      type: String,
+      required: false,
+    },
   },
   emits: ['notInterested'],
   template: `
-    <article class="post-card-stub" :data-post-id="post.id">
+    <article
+      class="post-card-stub"
+      :data-post-id="post.id"
+      :data-media-loading-policy="mediaLoadingPolicy"
+    >
       <button
         class="test-not-interested"
         type="button"
@@ -607,6 +624,78 @@ describe('HomeView virtualization', () => {
     expect(mocks.homeTimeline.forYou.items).toHaveLength(320);
     expect(mountedPostIDs(wrapper).length).toBeLessThan(50);
     expect(new Set(mountedPostIDs(wrapper)).size).toBe(mountedPostIDs(wrapper).length);
+  });
+
+  it('classifies visible, nearby, and far overscan For You media with one priority card', async () => {
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 40 }, (_, index) => (
+        makeRecommendation(index + 1, testMedia(index + 1))
+      )),
+    });
+    wrapper = mountHome();
+    await settle();
+
+    const policies = wrapper.findAll('.post-card-stub').map((card) => (
+      card.attributes('data-media-loading-policy')
+    ));
+
+    expect(policies.filter(policy => policy === 'priority')).toHaveLength(1);
+    expect(policies).toContain('priority');
+    expect(policies).toContain('nearby');
+    expect(policies).toContain('lazy');
+  });
+
+  it('updates one mounted For You post from lazy to nearby to priority while scrolling', async () => {
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 40 }, (_, index) => (
+        makeRecommendation(index + 1, testMedia(index + 1))
+      )),
+    });
+    wrapper = mountHome();
+    await settle();
+
+    const targetID = 10;
+    const targetSelector = `[data-post-id="${targetID}"]`;
+    expect(wrapper.get(targetSelector).attributes('data-media-loading-policy'))
+      .toBe('lazy');
+
+    const targetRow = wrapper.get(targetSelector).element
+      .closest<HTMLElement>('.home-virtual-row');
+    const targetStart = Number.parseFloat(
+      targetRow?.style.transform.match(/translateY\(([\d.]+)px\)/)?.[1] ?? '0',
+    );
+    expect(targetStart).toBeGreaterThan(800);
+
+    await scrollPanel(wrapper, Math.max(0, targetStart - 820));
+    expect(wrapper.get(targetSelector).attributes('data-media-loading-policy'))
+      .toBe('nearby');
+
+    await scrollPanel(wrapper, targetStart);
+    expect(wrapper.get(targetSelector).attributes('data-media-loading-policy'))
+      .toBe('priority');
+  });
+
+  it('applies the same media policy to authenticated Following', async () => {
+    mocks.homeTimeline = makeTimeline({
+      forYouItems: Array.from({ length: 20 }, (_, index) => (
+        makeRecommendation(index + 1, testMedia(index + 1))
+      )),
+      followingItems: Array.from({ length: 40 }, (_, index) => (
+        makePost(index + 1, testMedia(index + 1))
+      )),
+    });
+    mocks.homeTimeline.activeTab = 'following';
+    mocks.route.query = { tab: 'following' };
+    wrapper = mountHome();
+    await settle();
+
+    const policies = wrapper.findAll('.post-card-stub').map((card) => (
+      card.attributes('data-media-loading-policy')
+    ));
+
+    expect(policies.filter(policy => policy === 'priority')).toHaveLength(1);
+    expect(policies).toContain('nearby');
+    expect(policies).toContain('lazy');
   });
 
   it('keeps Following mounted rows bounded and changes the range after deep scrolling', async () => {
@@ -1191,7 +1280,11 @@ describe('HomeView virtualization', () => {
     mocks.authStore.isAuthenticated = false;
     mocks.authStore.currentIdentity = null;
     mocks.homeTimeline = makeTimeline({
-      forYouItems: [makeRecommendation(1), makeRecommendation(2), makeRecommendation(3)],
+      forYouItems: [
+        makeRecommendation(1, testMedia(1)),
+        makeRecommendation(2, testMedia(2)),
+        makeRecommendation(3, testMedia(3)),
+      ],
     });
     wrapper = mountHome();
     await settle();
@@ -1209,6 +1302,7 @@ describe('HomeView virtualization', () => {
       trackView: false,
       requiresAuthForActions: true,
       showNotInterested: false,
+      mediaLoadingPolicy: 'priority',
     });
   });
 

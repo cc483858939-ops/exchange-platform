@@ -145,7 +145,10 @@
             class="post-card__reference-media-link"
             :to="referenceDestination"
           >
-            <PostMediaGrid :media="referenceMedia" />
+            <PostMediaGrid
+              :media="referenceMedia"
+              :loading-policy="referenceMediaLoadingPolicy"
+            />
           </RouterLink>
         </template>
       </div>
@@ -155,7 +158,10 @@
         :to="{ name: 'PostDetail', params: { id: String(post.id) } }"
         @click.capture="prepareDetailNavigation"
       >
-        <PostMediaGrid :media="post.media" />
+        <PostMediaGrid
+          :media="post.media"
+          :loading-policy="mediaLoadingPolicy"
+        />
       </RouterLink>
     </div>
 
@@ -246,6 +252,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { FeedPost } from '../../types/Feed';
+import type { MediaLoadingPolicy } from '../../types/MediaLoading';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import LinkifiedText from '../content/LinkifiedText.vue';
 import PostMediaGrid from '../content/PostMediaGrid.vue';
@@ -275,6 +282,7 @@ const props = withDefaults(defineProps<{
   showDelete?: boolean;
   deletePending?: boolean;
   deleteError?: string;
+  mediaLoadingPolicy?: MediaLoadingPolicy;
 }>(), {
   trackView: true,
   likePending: false,
@@ -285,6 +293,7 @@ const props = withDefaults(defineProps<{
   showDelete: false,
   deletePending: false,
   deleteError: '',
+  mediaLoadingPolicy: 'lazy',
 });
 
 const emit = defineEmits<{
@@ -372,6 +381,9 @@ const referenceMedia = computed(() => {
   const reference = referencePost.value;
   return reference && !reference.deleted ? reference.media : [];
 });
+const referenceMediaLoadingPolicy = computed<MediaLoadingPolicy>(() => (
+  props.mediaLoadingPolicy === 'priority' ? 'nearby' : props.mediaLoadingPolicy
+));
 
 const handleLikeActivation = () => {
   if (props.requiresAuthForActions) {

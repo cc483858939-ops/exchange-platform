@@ -3,6 +3,7 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import type { PostMedia } from '../../types/Post';
+import type { MediaLoadingPolicy } from '../../types/MediaLoading';
 import PostMediaGrid from './PostMediaGrid.vue';
 
 const media = (count: number) => Array.from({ length: count }, (_, index) => ({
@@ -24,11 +25,17 @@ const singleMedia = (overrides: Partial<PostMedia> = {}): PostMedia => ({
   ...overrides,
 });
 
-const mountGrid = (count: number, removable = false, interactive = false) => mount(PostMediaGrid, {
+const mountGrid = (
+  count: number,
+  removable = false,
+  interactive = false,
+  loadingPolicy?: MediaLoadingPolicy,
+) => mount(PostMediaGrid, {
   props: {
     media: media(count),
     removable,
     interactive,
+    ...(loadingPolicy ? { loadingPolicy } : {}),
   },
   global: {
     stubs: {
@@ -87,7 +94,60 @@ describe('PostMediaGrid', () => {
     expect(image.attributes('height')).toBe('1200');
     expect(image.attributes('loading')).toBe('lazy');
     expect(image.attributes('decoding')).toBe('async');
+    expect(image.attributes('fetchpriority')).toBeUndefined();
   });
+
+  it('keeps every image lazy by default', () => {
+    const wrapper = mountGrid(2);
+
+    expect(wrapper.findAll('img').every(image => (
+      image.attributes('loading') === 'lazy'
+      && image.attributes('decoding') === 'async'
+      && image.attributes('fetchpriority') === undefined
+    ))).toBe(true);
+  });
+
+  it('loads nearby images eagerly without high priority', () => {
+    const wrapper = mountGrid(4, false, false, 'nearby');
+
+    expect(wrapper.findAll('img').every(image => (
+      image.attributes('loading') === 'eager'
+      && image.attributes('decoding') === 'async'
+      && image.attributes('fetchpriority') === undefined
+    ))).toBe(true);
+  });
+
+  it('gives one priority image the high fetch priority', () => {
+    const wrapper = mountGrid(1, false, false, 'priority');
+    const image = wrapper.get('img');
+
+    expect(image.attributes('loading')).toBe('eager');
+    expect(image.attributes('decoding')).toBe('async');
+    expect(image.attributes('fetchpriority')).toBe('high');
+  });
+
+  it('limits high fetch priority to the first image in a priority grid', () => {
+    const wrapper = mountGrid(4, false, false, 'priority');
+    const images = wrapper.findAll('img');
+
+    expect(images.map(image => image.attributes('fetchpriority'))).toEqual([
+      'high', undefined, undefined, undefined,
+    ]);
+    expect(images.every(image => (
+      image.attributes('loading') === 'eager'
+      && image.attributes('decoding') === 'async'
+    ))).toBe(true);
+  });
+
+  it.each<MediaLoadingPolicy>(['lazy', 'nearby', 'priority'])
+    ('keeps Medium-only src delivery for the %s policy', loadingPolicy => {
+      const wrapper = mountGrid(2, false, false, loadingPolicy);
+      const images = wrapper.findAll('img');
+
+      expect(images.map(image => image.attributes('src')))
+        .toEqual(media(2).map(item => item.url));
+      expect(images.every(image => image.attributes('srcset') === undefined)).toBe(true);
+    });
 
   it('keeps Medium-only delivery and open interaction for an interactive single image', async () => {
     const wrapper = mount(PostMediaGrid, {

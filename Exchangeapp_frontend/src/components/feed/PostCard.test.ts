@@ -142,6 +142,73 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     await nextTick();
   };
 
+  const postMedia = (url: string) => ({
+    type: 'image' as const,
+    url,
+    large_url: `${url}-large`,
+    width: 1200,
+    height: 800,
+    position: 0,
+  });
+
+  it('keeps the main media grid lazy when no Home policy is provided', () => {
+    const wrapper = mountPostCard({
+      ...basePost(),
+      media: [postMedia('/main.png')],
+    });
+
+    const image = wrapper.get('.post-card__media-link img');
+    expect(image.attributes('loading')).toBe('lazy');
+    expect(image.attributes('decoding')).toBe('async');
+    expect(image.attributes('fetchpriority')).toBeUndefined();
+  });
+
+  it('passes nearby media policy to the main grid', () => {
+    const wrapper = mountPostCard({
+      ...basePost(),
+      media: [postMedia('/main.png')],
+    }, { mediaLoadingPolicy: 'nearby' });
+
+    const image = wrapper.get('.post-card__media-link img');
+    expect(image.attributes('loading')).toBe('eager');
+    expect(image.attributes('decoding')).toBe('async');
+    expect(image.attributes('fetchpriority')).toBeUndefined();
+  });
+
+  it('passes priority policy to the main grid', () => {
+    const wrapper = mountPostCard({
+      ...basePost(),
+      media: [postMedia('/main.png')],
+    }, { mediaLoadingPolicy: 'priority' });
+
+    const image = wrapper.get('.post-card__media-link img');
+    expect(image.attributes('loading')).toBe('eager');
+    expect(image.attributes('decoding')).toBe('async');
+    expect(image.attributes('fetchpriority')).toBe('high');
+  });
+
+  it('downgrades reference media when the main grid is priority', () => {
+    const wrapper = mountPostCard({
+      ...basePost(),
+      media: [postMedia('/main.png')],
+      quotePost: {
+        id: 9,
+        deleted: false as const,
+        author: basePost().author,
+        content: 'Referenced post',
+        published_at: '2026-08-17T00:00:00.000Z',
+        media: [postMedia('/reference.png')],
+      },
+    }, { mediaLoadingPolicy: 'priority' });
+
+    const referenceImage = wrapper.get('.post-card__reference-media-link img');
+    const mainImage = wrapper.get('.post-card__media-link img');
+    expect(referenceImage.attributes('loading')).toBe('eager');
+    expect(referenceImage.attributes('fetchpriority')).toBeUndefined();
+    expect(mainImage.attributes('loading')).toBe('eager');
+    expect(mainImage.attributes('fetchpriority')).toBe('high');
+  });
+
   it('renders a navigable compact View metric with the analytics icon and destination', async () => {
     const post = basePost();
     const wrapper = mountPostCard(post);
