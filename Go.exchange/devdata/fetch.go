@@ -198,13 +198,15 @@ func validateSourceUser(account SourceAccount, user XUser) (SnapshotAccount, err
 		return SnapshotAccount{}, fmt.Errorf("source account %q resolved to unexpected handle %q", account.Key, user.Username)
 	}
 	return SnapshotAccount{
-		RegistryKey:     account.Key,
-		SourceUserID:    sourceUserID,
-		Handle:          handle,
-		Name:            name,
-		Description:     user.Description,
-		ProfileImageURL: strings.TrimSpace(user.ProfileImageURL),
-		Category:        account.Category,
+		RegistryKey:          account.Key,
+		SourceUserID:         sourceUserID,
+		Handle:               handle,
+		Name:                 name,
+		Description:          user.Description,
+		ProfileImageURL:      strings.TrimSpace(user.ProfileImageURL),
+		ProfileBannerPresent: user.ProfileBannerPresent,
+		ProfileBannerURL:     strings.TrimSpace(user.ProfileBannerURL),
+		Category:             account.Category,
 	}, nil
 }
 

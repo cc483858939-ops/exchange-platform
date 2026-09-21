@@ -73,11 +73,27 @@ type rssHubDocument struct {
 }
 
 type rssHubChannel struct {
-	Title       string       `xml:"title"`
-	Description string       `xml:"description"`
-	Link        string       `xml:"link"`
-	Image       rssHubImage  `xml:"image"`
-	Items       []rssHubItem `xml:"item"`
+	Title         string              `xml:"title"`
+	Description   string              `xml:"description"`
+	Link          string              `xml:"link"`
+	Image         rssHubImage         `xml:"image"`
+	ProfileBanner rssHubProfileBanner `xml:"urn:nexusfeed:rss:1.0 profileBanner"`
+	Items         []rssHubItem        `xml:"item"`
+}
+
+type rssHubProfileBanner struct {
+	Present bool
+	URL     string
+}
+
+func (banner *rssHubProfileBanner) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	banner.Present = true
+	var raw string
+	if err := decoder.DecodeElement(&raw, &start); err != nil {
+		return err
+	}
+	banner.URL = strings.TrimSpace(raw)
+	return nil
 }
 
 type rssHubImage struct {
@@ -312,12 +328,14 @@ func parseRSSHubFeed(handle string, document rssHubDocument) (rssHubFeed, error)
 	name := rssHubDisplayName(document.Channel.Title, handle)
 	protected := false
 	feed := rssHubFeed{user: XUser{
-		ID:              rssHubSourceUserID(handle),
-		Name:            name,
-		Username:        handle,
-		Description:     rssHubDescriptionText(document.Channel.Description),
-		ProfileImageURL: strings.TrimSpace(document.Channel.Image.URL),
-		Protected:       &protected,
+		ID:                   rssHubSourceUserID(handle),
+		Name:                 name,
+		Username:             handle,
+		Description:          rssHubDescriptionText(document.Channel.Description),
+		ProfileImageURL:      strings.TrimSpace(document.Channel.Image.URL),
+		ProfileBannerPresent: document.Channel.ProfileBanner.Present,
+		ProfileBannerURL:     document.Channel.ProfileBanner.URL,
+		Protected:            &protected,
 	}, posts: make([]XPost, 0, len(document.Channel.Items))}
 	for _, item := range document.Channel.Items {
 		feed.posts = append(feed.posts, parseRSSHubItem(handle, item))

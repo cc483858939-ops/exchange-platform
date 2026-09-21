@@ -32,13 +32,15 @@ type SourceMetrics struct {
 }
 
 type SnapshotAccount struct {
-	RegistryKey     string `json:"registry_key"`
-	SourceUserID    string `json:"source_user_id"`
-	Handle          string `json:"handle"`
-	Name            string `json:"name"`
-	Description     string `json:"description"`
-	ProfileImageURL string `json:"profile_image_url"`
-	Category        string `json:"category"`
+	RegistryKey          string `json:"registry_key"`
+	SourceUserID         string `json:"source_user_id"`
+	Handle               string `json:"handle"`
+	Name                 string `json:"name"`
+	Description          string `json:"description"`
+	ProfileImageURL      string `json:"profile_image_url"`
+	ProfileBannerPresent bool   `json:"profile_banner_present"`
+	ProfileBannerURL     string `json:"profile_banner_url"`
+	Category             string `json:"category"`
 }
 
 type SnapshotMedia struct {
@@ -230,6 +232,9 @@ func ValidateSnapshot(snapshot Snapshot, registry SourceRegistry) error {
 		usersByID[account.SourceUserID] = struct{}{}
 		if account.Category != configured.Category {
 			return fmt.Errorf("snapshot account %q category does not match registry", account.RegistryKey)
+		}
+		if !account.ProfileBannerPresent && strings.TrimSpace(account.ProfileBannerURL) != "" {
+			return fmt.Errorf("snapshot account %q has a profile banner URL without presence", account.RegistryKey)
 		}
 		accountsByKey[account.RegistryKey] = account
 	}

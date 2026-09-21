@@ -106,12 +106,14 @@ func (e *XAPIResponseError) Error() string {
 }
 
 type XUser struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Username        string `json:"username"`
-	Description     string `json:"description"`
-	ProfileImageURL string `json:"profile_image_url"`
-	Protected       *bool  `json:"protected"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Username             string `json:"username"`
+	Description          string `json:"description"`
+	ProfileImageURL      string `json:"profile_image_url"`
+	ProfileBannerPresent bool   `json:"profile_banner_present"`
+	ProfileBannerURL     string `json:"profile_banner_url"`
+	Protected            *bool  `json:"protected"`
 }
 
 type XPublicMetrics struct {
