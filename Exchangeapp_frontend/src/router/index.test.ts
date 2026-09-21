@@ -1,10 +1,32 @@
 // @vitest-environment jsdom
 
+import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('element-plus/es/components/message/style/css', () => ({}));
-import router from './index';
+import router, { resolveAuthenticatedGuestOnlyDestination } from './index';
 import { routeScrollBehavior } from './scrollBehavior';
+
+const setAuthenticatedState = (id = 42) => {
+  localStorage.setItem('token', 'access-token');
+  localStorage.setItem('refresh_token', 'refresh-token');
+  localStorage.setItem('auth_user', JSON.stringify({
+    id,
+    username: 'alice',
+    display_name: 'Alice',
+    avatar_url: '',
+  }));
+  setActivePinia(createPinia());
+};
+
+beforeEach(() => {
+  localStorage.clear();
+  setActivePinia(createPinia());
+});
+
+afterEach(() => {
+  localStorage.clear();
+});
 
 describe('History route', () => {
   it('configures the centralized scroll policy', () => {
@@ -41,6 +63,9 @@ describe('History route', () => {
       expect(route?.meta.title).toBe(title);
       expect(typeof route?.components?.default).toBe('function');
     }
+
+    expect(router.getRoutes().find(item => item.name === 'Login')?.meta.guestOnly).toBe(true);
+    expect(router.getRoutes().find(item => item.name === 'Register')?.meta.guestOnly).toBe(true);
 
     const home = router.getRoutes().find(item => item.name === 'Home');
     const loaded = (home?.components?.default as () => Promise<unknown>)?.();
@@ -91,11 +116,15 @@ describe('History route', () => {
 
 describe('Login return target navigation', () => {
   beforeEach(async () => {
-    await router.push('/');
+    if (router.currentRoute.value.fullPath !== '/') {
+      await router.push('/');
+    }
   });
 
   afterEach(async () => {
-    await router.push('/');
+    if (router.currentRoute.value.fullPath !== '/') {
+      await router.push('/');
+    }
   });
 
   it('captures an app route fullPath when entering Login', async () => {
@@ -127,5 +156,91 @@ describe('Login return target navigation', () => {
     });
 
     expect(router.currentRoute.value.query.returnTo).toBe('/search?q=alice');
+  });
+});
+
+describe('guest-only authentication routes', () => {
+  beforeEach(async () => {
+    if (router.currentRoute.value.fullPath !== '/') {
+      await router.push('/');
+    }
+  });
+
+  it('allows a guest to open Login', async () => {
+    await router.push('/login');
+
+    expect(router.currentRoute.value.name).toBe('Login');
+  });
+
+  it('allows a guest to open Register', async () => {
+    await router.push('/register');
+
+    expect(router.currentRoute.value.name).toBe('Register');
+  });
+
+  it('redirects an authenticated user from Login to Home by default', async () => {
+    setAuthenticatedState();
+
+    await router.push('/login');
+
+    expect(router.currentRoute.value.name).toBe('Home');
+  });
+
+  it('redirects an authenticated user from Register to Home without entering Register', async () => {
+    setAuthenticatedState(7);
+
+    await router.push('/register');
+
+    expect(router.currentRoute.value.name).toBe('Home');
+    expect(JSON.parse(localStorage.getItem('auth_user') || 'null').id).toBe(7);
+  });
+
+  it('preserves a safe Login returnTo target for authenticated users', async () => {
+    setAuthenticatedState();
+
+    await router.push({ name: 'Login', query: { returnTo: '/notifications' } });
+
+    expect(router.currentRoute.value.fullPath).toBe('/notifications');
+  });
+
+  it('preserves a safe PostDetail returnTo target for authenticated users', async () => {
+    setAuthenticatedState();
+
+    await router.push({ name: 'Login', query: { returnTo: '/posts/123' } });
+
+    expect(router.currentRoute.value.fullPath).toBe('/posts/123');
+  });
+
+  it('rejects an unsafe Login returnTo target for authenticated users', async () => {
+    setAuthenticatedState();
+
+    await router.push({ name: 'Login', query: { returnTo: 'https://evil.example' } });
+
+    expect(router.currentRoute.value.name).toBe('Home');
+  });
+
+  it('routes authenticated profile intent to the current user profile', async () => {
+    setAuthenticatedState(42);
+
+    await router.push({ name: 'Login', query: { intent: 'profile' } });
+
+    expect(router.currentRoute.value.fullPath).toBe('/users/42');
+  });
+
+  it('falls back to Home when profile intent has no usable identity ID', () => {
+    const destination = resolveAuthenticatedGuestOnlyDestination(
+      router,
+      router.resolve({ name: 'Login', query: { intent: 'profile' } }),
+      { id: 0 },
+    );
+
+    expect(destination).toEqual({ name: 'Home' });
+  });
+
+  it('settles an authenticated Home-to-Login navigation without a redirect loop', async () => {
+    setAuthenticatedState();
+
+    await router.push('/login');
+    expect(router.currentRoute.value.fullPath).toBe('/');
   });
 });

@@ -167,27 +167,24 @@ describe('Login return navigation', () => {
     expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'Home' });
   });
 
-  it('redirects an already-authenticated user on initial mount', () => {
+  it('does not redirect on mount because guest-only access belongs to the router guard', () => {
     mocks.authStore.isAuthenticated = true;
     mocks.route.query = { returnTo: '/notifications' };
 
     wrapper = mountLogin();
 
-    expect(mocks.router.replace).toHaveBeenCalledWith('/notifications');
+    expect(mocks.router.replace).not.toHaveBeenCalled();
     expect(mocks.authStore.login).not.toHaveBeenCalled();
   });
 
-  it('redirects an already-authenticated user with profile intent to their own profile', () => {
+  it('does not handle authenticated profile intent on mount', () => {
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity = { id: 42 };
     mocks.route.query = { intent: 'profile' };
 
     wrapper = mountLogin();
 
-    expect(mocks.router.replace).toHaveBeenCalledWith({
-      name: 'UserProfile',
-      params: { id: '42' },
-    });
+    expect(mocks.router.replace).not.toHaveBeenCalled();
     expect(mocks.authStore.login).not.toHaveBeenCalled();
   });
 });

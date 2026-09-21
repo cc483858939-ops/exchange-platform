@@ -1,5 +1,7 @@
-import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
+import { createRouter, createWebHistory, type RouteLocationNormalized, type RouteLocationRaw, type RouteRecordRaw, type Router } from 'vue-router';
+import { useAuthStore } from '../store/auth';
 import { setPageTitle } from '../utils/pageTitle';
+import { resolveSafeLoginReturnTarget } from './loginReturnTarget';
 import { routeScrollBehavior } from './scrollBehavior';
 
 const HomeView = () => import('../views/HomeView.vue');
@@ -48,8 +50,18 @@ const routes: RouteRecordRaw[] = [
     component: NotificationsView,
     meta: { layout: 'app', title: 'Notifications' },
   },
-  { path: '/login', name: 'Login', component: Login, meta: { layout: 'auth', title: 'Log in' } },
-  { path: '/register', name: 'Register', component: Register, meta: { layout: 'auth', title: 'Sign up' } },
+  {
+    path: '/login',
+    name: 'Login',
+    component: Login,
+    meta: { layout: 'auth', title: 'Log in', guestOnly: true },
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: Register,
+    meta: { layout: 'auth', title: 'Sign up', guestOnly: true },
+  },
   {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
@@ -64,7 +76,36 @@ const router = createRouter({
   scrollBehavior: routeScrollBehavior,
 });
 
+export const resolveAuthenticatedGuestOnlyDestination = (
+  routerInstance: Router,
+  to: Pick<RouteLocationNormalized, 'name' | 'query'>,
+  currentIdentity: { id?: unknown } | null | undefined,
+): RouteLocationRaw | string => {
+  if (to.name === 'Login') {
+    const returnTarget = resolveSafeLoginReturnTarget(routerInstance, to.query.returnTo);
+    if (returnTarget) {
+      return returnTarget;
+    }
+
+    if (to.query.intent === 'profile') {
+      const id = currentIdentity?.id;
+      if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
+        return { name: 'UserProfile', params: { id: String(id) } };
+      }
+    }
+  }
+
+  return { name: 'Home' };
+};
+
 router.beforeEach((to, from) => {
+  if (to.meta.guestOnly) {
+    const authStore = useAuthStore();
+    if (authStore.isAuthenticated) {
+      return resolveAuthenticatedGuestOnlyDestination(router, to, authStore.currentIdentity);
+    }
+  }
+
   if (
     to.name !== 'Login'
     || to.query.returnTo !== undefined

@@ -70,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { resolveSafeLoginReturnTarget } from '../router/loginReturnTarget';
 import { useAuthStore } from '../store/auth';
@@ -107,12 +107,6 @@ const loginDestination = computed(() => {
   }
 
   return { name: 'Home' };
-});
-
-onMounted(() => {
-  if (authStore.isAuthenticated) {
-    void router.replace(loginDestination.value);
-  }
 });
 
 const formatLoginError = (error: unknown) => {
