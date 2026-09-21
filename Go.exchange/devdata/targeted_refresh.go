@@ -44,6 +44,32 @@ func FetchTargetedAccount(ctx context.Context, client SnapshotSourceClient, regi
 	if err := ValidateSnapshot(baseline, registry); err != nil {
 		return TargetedRefreshBatch{}, IncrementalAccountReport{}, fmt.Errorf("%w: %v", ErrIncrementalBaselineRequired, err)
 	}
+	return fetchTargetedAccount(ctx, client, registry, baseline, configured, options)
+}
+
+// FetchTargetedReplacementAccount fetches only the enabled new account after
+// validating the transition-aware baseline. It never resolves or requests the
+// retired key or any unrelated account.
+func FetchTargetedReplacementAccount(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry, baseline Snapshot, replacement RegistryReplacement, options TargetedRefreshOptions) (TargetedRefreshBatch, IncrementalAccountReport, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ValidateRegistry(registry); err != nil {
+		return TargetedRefreshBatch{}, IncrementalAccountReport{}, err
+	}
+	replacement = normalizedReplacement(replacement)
+	if err := ValidateReplacementBaseline(baseline, registry, replacement); err != nil {
+		return TargetedRefreshBatch{}, IncrementalAccountReport{}, fmt.Errorf("%w: %v", ErrIncrementalBaselineRequired, err)
+	}
+	configured, err := resolveTargetedAccount(registry, replacement.NewKey)
+	if err != nil {
+		return TargetedRefreshBatch{}, IncrementalAccountReport{}, err
+	}
+	options.RegistryKey = configured.Key
+	return fetchTargetedAccount(ctx, client, registry, baseline, configured, options)
+}
+
+func fetchTargetedAccount(ctx context.Context, client SnapshotSourceClient, registry SourceRegistry, baseline Snapshot, configured SourceAccount, options TargetedRefreshOptions) (TargetedRefreshBatch, IncrementalAccountReport, error) {
 	if client == nil {
 		return TargetedRefreshBatch{}, IncrementalAccountReport{}, errors.New("source client is not initialized")
 	}

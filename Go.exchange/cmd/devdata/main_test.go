@@ -107,15 +107,18 @@ func TestRunNoArgsUsageOmitsPreflight(t *testing.T) {
 
 func TestParseTargetedCommandFlagsRequireKeyAndSupportFetchCount(t *testing.T) {
 	t.Setenv("DEVDATA_INCREMENTAL_FETCH_COUNT", "17")
-	options, err := parseCommandFlags("refresh-account", []string{"--key=author_b", "--source=rsshub"}, io.Discard, false)
+	options, err := parseCommandFlags("refresh-account", []string{"--key=author_b", "--replace=author_a", "--source=rsshub"}, io.Discard, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.key != "author_b" || options.fetchCount != 17 || options.source != "rsshub" {
+	if options.key != "author_b" || options.replace != "author_a" || options.fetchCount != 17 || options.source != "rsshub" {
 		t.Fatalf("targeted options=%#v", options)
 	}
 	if _, err := parseCommandFlags("refresh-account", nil, io.Discard, false); err == nil || !strings.Contains(err.Error(), "--key is required") {
 		t.Fatalf("missing key error=%v", err)
+	}
+	if _, err := parseCommandFlags("refresh-account", []string{"--key=author_a", "--replace=author_a"}, io.Discard, false); err == nil || !strings.Contains(err.Error(), "must differ") {
+		t.Fatalf("same replacement key error=%v", err)
 	}
 }
 

@@ -76,3 +76,32 @@ func TestValidateRegistryRejectsDuplicateKeysAndHandles(t *testing.T) {
 		t.Fatalf("duplicate handle error=%v", err)
 	}
 }
+
+func TestValidateCuratedRegistryUsesRegistryPolicyInsteadOfFixedAccountIdentity(t *testing.T) {
+	registry := SourceRegistry{
+		Version: SourceRegistryVersion, DefaultMaxPosts: DefaultMaxPosts,
+		Accounts: []SourceAccount{
+			{Key: "replacement_a", Platform: "x", Handle: "replacement_a", Category: "test", MaxPosts: DefaultMaxPosts, Enabled: true},
+			{Key: "retired_b", Platform: "x", Handle: "retired_b", Category: "test", MaxPosts: DefaultMaxPosts, Enabled: false},
+		},
+	}
+	if err := ValidateCuratedV1Registry(registry); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateCuratedRegistryRejectsPolicyViolations(t *testing.T) {
+	base := SourceRegistry{
+		Version: SourceRegistryVersion, DefaultMaxPosts: DefaultMaxPosts,
+		Accounts: []SourceAccount{{Key: "source", Platform: "x", Handle: "source", Category: "test", MaxPosts: DefaultMaxPosts, Enabled: true}},
+	}
+	base.Accounts[0].MaxPosts = DefaultMaxPosts - 1
+	if err := ValidateCuratedV1Registry(base); err == nil || !strings.Contains(err.Error(), "max_posts") {
+		t.Fatalf("max_posts policy error=%v", err)
+	}
+	base.Accounts[0].MaxPosts = DefaultMaxPosts
+	base.Accounts[0].Enabled = false
+	if err := ValidateCuratedV1Registry(base); err == nil || !strings.Contains(err.Error(), "at least one enabled") {
+		t.Fatalf("enabled account policy error=%v", err)
+	}
+}

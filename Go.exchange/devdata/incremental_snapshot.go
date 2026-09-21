@@ -76,6 +76,17 @@ func sha256Hex(raw []byte) string {
 }
 
 func decodeSnapshotBytes(raw []byte, registry SourceRegistry) (Snapshot, error) {
+	snapshot, err := decodeSnapshotJSON(raw)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := ValidateSnapshot(snapshot, registry); err != nil {
+		return Snapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func decodeSnapshotJSON(raw []byte) (Snapshot, error) {
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	var snapshot Snapshot
 	if err := decoder.Decode(&snapshot); err != nil {
@@ -88,9 +99,6 @@ func decodeSnapshotBytes(raw []byte, registry SourceRegistry) (Snapshot, error) 
 			return Snapshot{}, errors.New("X snapshot contains trailing JSON")
 		}
 		return Snapshot{}, fmt.Errorf("decode trailing X snapshot data: %w", err)
-	}
-	if err := ValidateSnapshot(snapshot, registry); err != nil {
-		return Snapshot{}, err
 	}
 	return snapshot, nil
 }

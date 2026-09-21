@@ -42,29 +42,6 @@ type SourceAccount struct {
 
 var xHandlePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
 
-var curatedV1Accounts = map[string]SourceAccount{
-	"thsottiaux":      {Key: "thsottiaux", Platform: "x", Handle: "thsottiaux", Category: "technology_ai"},
-	"sugales_noah":    {Key: "sugales_noah", Platform: "x", Handle: "sugales_noah", Category: "entertainment_creator"},
-	"dotey":           {Key: "dotey", Platform: "x", Handle: "dotey", Category: "technology_ai"},
-	"naval":           {Key: "naval", Platform: "x", Handle: "naval", Category: "business_creator"},
-	"RayDalio":        {Key: "RayDalio", Platform: "x", Handle: "RayDalio", Category: "business_creator"},
-	"ahistoryinart":   {Key: "ahistoryinart", Platform: "x", Handle: "ahistoryinart", Category: "entertainment_creator"},
-	"japanvistamedia": {Key: "japanvistamedia", Platform: "x", Handle: "japanvistamedia", Category: "travel_nature"},
-	"visualsofearth1": {Key: "visualsofearth1", Platform: "x", Handle: "visualsofearth1", Category: "travel_nature"},
-	"SpaceX":          {Key: "SpaceX", Platform: "x", Handle: "SpaceX", Category: "science"},
-	"NintendoAmerica": {Key: "NintendoAmerica", Platform: "x", Handle: "NintendoAmerica", Category: "gaming"},
-	"kasu_ps":         {Key: "kasu_ps", Platform: "x", Handle: "kasu_ps", Category: "gaming"},
-	"MrBeast":         {Key: "MrBeast", Platform: "x", Handle: "MrBeast", Category: "entertainment_creator"},
-	"letterboxd":      {Key: "letterboxd", Platform: "x", Handle: "letterboxd", Category: "entertainment_creator"},
-	"historyinmemes":  {Key: "historyinmemes", Platform: "x", Handle: "historyinmemes", Category: "entertainment_creator"},
-	"naenano78":       {Key: "naenano78", Platform: "x", Handle: "naenano78", Category: "entertainment_creator"},
-	"CuddlyCutePets":  {Key: "CuddlyCutePets", Platform: "x", Handle: "CuddlyCutePets", Category: "lifestyle_food_humor"},
-	"wenqiangjp":      {Key: "wenqiangjp", Platform: "x", Handle: "wenqiangjp", Category: "lifestyle_food_humor"},
-	"KobeissiLetter":  {Key: "KobeissiLetter", Platform: "x", Handle: "KobeissiLetter", Category: "news"},
-	"NASA":            {Key: "NASA", Platform: "x", Handle: "NASA", Category: "science"},
-	"neiltyson":       {Key: "neiltyson", Platform: "x", Handle: "neiltyson", Category: "science"},
-}
-
 func DefaultRegistryPath(baseDir string) string {
 	if strings.TrimSpace(baseDir) == "" {
 		baseDir = "."
@@ -172,26 +149,17 @@ func ValidateCuratedV1Registry(registry SourceRegistry) error {
 	if err := ValidateRegistry(registry); err != nil {
 		return err
 	}
-	enabled := make(map[string]SourceAccount)
+	enabled := 0
 	for _, account := range registry.Accounts {
+		if account.MaxPosts != DefaultMaxPosts {
+			return fmt.Errorf("curated X registry account %q must have max_posts=%d", account.Key, DefaultMaxPosts)
+		}
 		if account.Enabled {
-			enabled[account.Key] = account
+			enabled++
 		}
 	}
-	if len(enabled) != len(curatedV1Accounts) {
-		return fmt.Errorf("curated X registry must have exactly %d enabled accounts, got %d", len(curatedV1Accounts), len(enabled))
-	}
-	for key, expected := range curatedV1Accounts {
-		actual, exists := enabled[key]
-		if !exists {
-			return fmt.Errorf("curated X registry is missing enabled account %q", key)
-		}
-		if actual.Handle != expected.Handle || actual.Platform != expected.Platform || actual.Category != expected.Category {
-			return fmt.Errorf("curated X registry account %q does not match the controlled definition", key)
-		}
-		if actual.MaxPosts != DefaultMaxPosts {
-			return fmt.Errorf("curated X registry account %q must have max_posts=%d", key, DefaultMaxPosts)
-		}
+	if enabled == 0 {
+		return errors.New("curated X registry must have at least one enabled account")
 	}
 	return nil
 }

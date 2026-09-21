@@ -293,6 +293,7 @@ type commandOptions struct {
 	profile          string
 	allowDestructive bool
 	key              string
+	replace          string
 	shard            string
 	fetchCount       int
 	registry         string
@@ -363,6 +364,7 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	}
 	if command == "refresh-account" {
 		flags.StringVar(&options.key, "key", options.key, "enabled source registry key to refresh")
+		flags.StringVar(&options.replace, "replace", options.replace, "old source registry key to retire during a targeted replacement")
 		flags.IntVar(&options.fetchCount, "fetch-count", options.fetchCount, "targeted source window (5-60)")
 	}
 	if err := flags.Parse(args); err != nil {
@@ -393,8 +395,13 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 		}
 	}
 	if command == "refresh-account" {
+		options.key = strings.TrimSpace(options.key)
+		options.replace = strings.TrimSpace(options.replace)
 		if strings.TrimSpace(options.key) == "" {
 			return commandOptions{}, errors.New("--key is required for refresh-account")
+		}
+		if options.replace != "" && options.replace == options.key {
+			return commandOptions{}, errors.New("--replace must differ from --key")
 		}
 		if options.allowDestructive {
 			return commandOptions{}, errors.New("refresh-account does not support --allow-destructive")

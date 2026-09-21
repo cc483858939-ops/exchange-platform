@@ -33,8 +33,16 @@ func runTargetedRefresh(ctx context.Context, baseDir string, options commandOpti
 	if _, err := devdata.ResolveTargetedAccount(registry, options.key); err != nil {
 		return err
 	}
+	replacementMode := options.replace != ""
+	replacement := devdata.RegistryReplacement{OldKey: options.replace, NewKey: options.key}
 	snapshotPath := options.snapshotPath(baseDir)
-	baseline, baselineFingerprint, err := devdata.ReadIncrementalBaseline(snapshotPath, registry)
+	var baseline devdata.Snapshot
+	var baselineFingerprint string
+	if replacementMode {
+		baseline, baselineFingerprint, err = devdata.ReadReplacementBaseline(snapshotPath, registry, replacement)
+	} else {
+		baseline, baselineFingerprint, err = devdata.ReadIncrementalBaseline(snapshotPath, registry)
+	}
 	if err != nil {
 		return err
 	}
@@ -43,18 +51,30 @@ func runTargetedRefresh(ctx context.Context, baseDir string, options commandOpti
 		return err
 	}
 	now := time.Now().UTC()
-	batch, fetchReport, err := devdata.FetchTargetedAccount(ctx, client, registry, baseline, devdata.TargetedRefreshOptions{
+	fetchOptions := devdata.TargetedRefreshOptions{
 		RegistryKey: options.key,
 		FetchCount:  options.fetchCount,
 		FetchedAt:   now,
 		Progress: func(message string) {
 			fmt.Fprintln(stdout, message)
 		},
-	})
+	}
+	var batch devdata.TargetedRefreshBatch
+	var fetchReport devdata.IncrementalAccountReport
+	if replacementMode {
+		batch, fetchReport, err = devdata.FetchTargetedReplacementAccount(ctx, client, registry, baseline, replacement, fetchOptions)
+	} else {
+		batch, fetchReport, err = devdata.FetchTargetedAccount(ctx, client, registry, baseline, fetchOptions)
+	}
 	if err != nil {
 		return err
 	}
-	nextSnapshot, err := devdata.MergeTargetedAccountSnapshot(baseline, batch, registry, now)
+	var nextSnapshot devdata.Snapshot
+	if replacementMode {
+		nextSnapshot, err = devdata.MergeReplacementSnapshot(baseline, batch, registry, options.replace, now)
+	} else {
+		nextSnapshot, err = devdata.MergeTargetedAccountSnapshot(baseline, batch, registry, now)
+	}
 	if err != nil {
 		return err
 	}
@@ -94,13 +114,19 @@ func runTargetedRefresh(ctx context.Context, baseDir string, options commandOpti
 	if err != nil {
 		return err
 	}
-	result, err := devdata.SyncTargeted(ctx, db, registry, batch, redisClient, now, devdata.SyncOptions{
+	syncOptions := devdata.SyncOptions{
 		AvatarResolutions:                    avatarResolutions,
 		CoverResolutions:                     coverResolutions,
 		PostMediaResolutions:                 postMediaResolutions,
 		PreserveExistingAvatarWhenUnresolved: true,
 		PreserveExistingCoverWhenUnresolved:  true,
-	})
+	}
+	var result devdata.SyncResult
+	if replacementMode {
+		result, err = devdata.SyncTargetedReplacement(ctx, db, registry, baseline, options.replace, batch, redisClient, now, syncOptions)
+	} else {
+		result, err = devdata.SyncTargeted(ctx, db, registry, batch, redisClient, now, syncOptions)
+	}
 	if err != nil {
 		return err
 	}
@@ -112,12 +138,20 @@ func runTargetedRefresh(ctx context.Context, baseDir string, options commandOpti
 		return fmt.Errorf("write targeted snapshot: %w", err)
 	}
 
-	fmt.Fprintf(stdout, "Targeted refresh: key=%s\n", batch.RegistryKey)
+	if replacementMode {
+		fmt.Fprintf(stdout, "Targeted replacement: old=%s new=%s\n", options.replace, batch.RegistryKey)
+	} else {
+		fmt.Fprintf(stdout, "Targeted refresh: key=%s\n", batch.RegistryKey)
+	}
 	fmt.Fprintf(stdout, "Source: requests=%d scanned=%d eligible=%d window=%d escalated_to_full=%t coverage_window_exhausted=%t\n", fetchReport.APIRequests, fetchReport.SourcePostsScanned, fetchReport.EligibleSelected, fetchReport.FetchCount, fetchReport.EscalatedToFull, fetchReport.CoverageWindowExhausted)
 	fmt.Fprintf(stdout, "Avatar: uploaded=%d reused=%d failed=%d\n", avatarReport.Uploaded, avatarReport.Reused, avatarReport.Failed)
 	fmt.Fprintf(stdout, "Cover: uploaded=%d reused=%d cleared=%d failed=%d\n", coverReport.Uploaded, coverReport.Reused, coverReport.Cleared, coverReport.Failed)
 	fmt.Fprintf(stdout, "Post media: uploaded=%d reused=%d failed=%d\n", postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
-	fmt.Fprintf(stdout, "Sync: new_posts=%d existing_posts=%d reactivated=%d\n", result.Inserted, result.Kept, result.Reactivated)
+	if replacementMode {
+		fmt.Fprintf(stdout, "Sync: new_posts=%d existing_posts=%d reactivated=%d retired_soft=%d retired_hard=%d\n", result.Inserted, result.Kept, result.Reactivated, result.RetiredSoft, result.RetiredHard)
+	} else {
+		fmt.Fprintf(stdout, "Sync: new_posts=%d existing_posts=%d reactivated=%d\n", result.Inserted, result.Kept, result.Reactivated)
+	}
 	fmt.Fprintf(stdout, "Snapshot: accounts=%d posts=%d\n", len(nextSnapshot.Accounts), len(nextSnapshot.Posts))
 	writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
 	writeCoverLocalizationWarning(stderr, coverReport.Failed)
