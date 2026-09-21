@@ -268,6 +268,17 @@ describe('UserProfileView profile cover editor', () => {
     expect(remove?.attributes('disabled')).toBeDefined();
   });
 
+  it('keeps username visible but readonly in the compact editor', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    const username = wrapper.get('.profile-edit-field--readonly');
+    expect(username.text()).toContain('@user-7');
+    expect(username.text()).toContain("Username can't be changed.");
+    expect(username.find('input').exists()).toBe(false);
+  });
+
   it('previews valid cover selection, replaces previews safely, and defers upload until Save', async () => {
     wrapper = mountProfile();
     await settle();
