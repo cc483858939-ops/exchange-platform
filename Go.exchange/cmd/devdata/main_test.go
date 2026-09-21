@@ -95,13 +95,27 @@ func TestRunNoArgsUsageOmitsPreflight(t *testing.T) {
 		t.Fatal("no-argument invocation unexpectedly succeeded")
 	}
 	message := err.Error()
-	for _, command := range []string{"fetch", "refresh", "refresh-incremental", "rebuild", "verify", "verify-avatars"} {
+	for _, command := range []string{"fetch", "refresh", "refresh-incremental", "refresh-account", "rebuild", "verify", "verify-avatars"} {
 		if !strings.Contains(message, command) {
 			t.Fatalf("usage missing %q: %s", command, message)
 		}
 	}
 	if strings.Contains(message, "preflight") {
 		t.Fatalf("usage still advertises removed preflight command: %s", message)
+	}
+}
+
+func TestParseTargetedCommandFlagsRequireKeyAndSupportFetchCount(t *testing.T) {
+	t.Setenv("DEVDATA_INCREMENTAL_FETCH_COUNT", "17")
+	options, err := parseCommandFlags("refresh-account", []string{"--key=author_b", "--source=rsshub"}, io.Discard, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.key != "author_b" || options.fetchCount != 17 || options.source != "rsshub" {
+		t.Fatalf("targeted options=%#v", options)
+	}
+	if _, err := parseCommandFlags("refresh-account", nil, io.Discard, false); err == nil || !strings.Contains(err.Error(), "--key is required") {
+		t.Fatalf("missing key error=%v", err)
 	}
 }
 

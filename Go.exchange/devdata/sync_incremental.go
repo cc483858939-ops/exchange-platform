@@ -24,6 +24,27 @@ func SyncIncremental(ctx context.Context, db *gorm.DB, registry SourceRegistry, 
 	if err := ValidateIncrementalBatch(batch, registry); err != nil {
 		return SyncResult{}, err
 	}
+	return syncIncrementalBatch(ctx, db, registry, batch, redisClient, syncAt, options)
+}
+
+// SyncTargeted applies only one account's account and source-post updates.
+// It shares the incremental transaction internals without inventing shard
+// semantics for a manual account refresh.
+func SyncTargeted(ctx context.Context, db *gorm.DB, registry SourceRegistry, batch TargetedRefreshBatch, redisClient *redis.Client, syncAt time.Time, options SyncOptions) (SyncResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ValidateTargetedRefreshBatch(batch, registry); err != nil {
+		return SyncResult{}, err
+	}
+	return syncIncrementalBatch(ctx, db, registry, IncrementalBatch{
+		FetchedAt: batch.FetchedAt,
+		Accounts:  batch.Accounts,
+		Posts:     batch.Posts,
+	}, redisClient, syncAt, options)
+}
+
+func syncIncrementalBatch(ctx context.Context, db *gorm.DB, registry SourceRegistry, batch IncrementalBatch, redisClient *redis.Client, syncAt time.Time, options SyncOptions) (SyncResult, error) {
 	if db == nil {
 		return SyncResult{}, errors.New("database is not initialized")
 	}

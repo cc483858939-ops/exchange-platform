@@ -220,15 +220,29 @@ func PrepareIncrementalPostMediaMirrors(ctx context.Context, db *gorm.DB, regist
 	if err := ValidateIncrementalBatch(batch, registry); err != nil {
 		return nil, PostMediaMirrorReport{}, err
 	}
+	return prepareScopedPostMediaMirrors(ctx, db, batch.Posts, downloader, store)
+}
+
+// PrepareTargetedPostMediaMirrors is the single-account counterpart used by
+// refresh-account. Validation guarantees that every post belongs to the
+// selected registry key before the scoped database lookup begins.
+func PrepareTargetedPostMediaMirrors(ctx context.Context, db *gorm.DB, registry SourceRegistry, batch TargetedRefreshBatch, downloader PostMediaFetcher, store AvatarObjectStore) (map[SourcePostKey][]PostMediaResolution, PostMediaMirrorReport, error) {
+	if err := ValidateTargetedRefreshBatch(batch, registry); err != nil {
+		return nil, PostMediaMirrorReport{}, err
+	}
+	return prepareScopedPostMediaMirrors(ctx, db, batch.Posts, downloader, store)
+}
+
+func prepareScopedPostMediaMirrors(ctx context.Context, db *gorm.DB, posts []SnapshotPost, downloader PostMediaFetcher, store AvatarObjectStore) (map[SourcePostKey][]PostMediaResolution, PostMediaMirrorReport, error) {
 	if db == nil {
 		return nil, PostMediaMirrorReport{}, errors.New("database is not initialized")
 	}
 	if err := ValidateMetadataSchema(ctx, db); err != nil {
 		return nil, PostMediaMirrorReport{}, err
 	}
-	postsWithMedia := make([]SnapshotPost, 0, len(batch.Posts))
-	sourceIDs := make([]string, 0, len(batch.Posts))
-	for _, post := range batch.Posts {
+	postsWithMedia := make([]SnapshotPost, 0, len(posts))
+	sourceIDs := make([]string, 0, len(posts))
+	for _, post := range posts {
 		if len(post.Media) == 0 {
 			continue
 		}

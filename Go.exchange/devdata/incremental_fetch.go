@@ -105,55 +105,15 @@ func FetchIncrementalBatchWithOptions(ctx context.Context, client SnapshotSource
 		PerAccount: make([]IncrementalAccountReport, 0, len(selected)),
 	}
 	for _, configured := range selected {
-		beforeRequests, hasCounter := requestCountValue(client)
-		data, rawPosts, fetchErr := FetchSnapshotAccountWithFetchCount(ctx, client, configured, options.FetchCount)
-		afterRequests, _ := requestCountValue(client)
+		data, accountReport, fetchErr := fetchIncrementalAccount(ctx, client, configured, baselineIDs[configured.Key], options.FetchCount, options.Progress)
 		if fetchErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return IncrementalBatch{}, report, ctxErr
 			}
-			emitIncrementalRateLimit(options.Progress, configured.Key, fetchErr)
-			return IncrementalBatch{}, report, fmt.Errorf("incremental fetch failed for %q: %w", configured.Key, fetchErr)
+			return IncrementalBatch{}, report, fetchErr
 		}
-		accountReport := IncrementalAccountReport{
-			RegistryKey:         configured.Key,
-			FetchCount:          options.FetchCount,
-			SourcePostsReturned: len(rawPosts),
-			SourcePostsScanned:  data.Report.SourcePostsScanned,
-			EligibleSelected:    data.Report.EligibleSelected,
-			APIRequests:         accountRequestDelta(beforeRequests, afterRequests, hasCounter, data, nil),
-		}
-		if !hasCounter && accountReport.APIRequests == 0 {
-			accountReport.APIRequests = data.Report.APIRequests
-		}
-
-		if options.FetchCount < incrementalMaximumFetchCount && len(rawPosts) == options.FetchCount && !hasSourcePostOverlap(rawPosts, baselineIDs[configured.Key]) {
-			emitProgress(options.Progress, "Incremental coverage saturated for %s; escalating fetch window to %d", configured.Key, incrementalMaximumFetchCount)
-			beforeFallback, fallbackHasCounter := requestCountValue(client)
-			data, rawPosts, fetchErr = FetchSnapshotAccountWithFetchCount(ctx, client, configured, incrementalMaximumFetchCount)
-			afterFallback, _ := requestCountValue(client)
-			accountReport.FetchCount = incrementalMaximumFetchCount
-			accountReport.SourcePostsReturned = len(rawPosts)
-			accountReport.SourcePostsScanned = data.Report.SourcePostsScanned
-			accountReport.EligibleSelected = data.Report.EligibleSelected
-			accountReport.EscalatedToFull = true
-			if fallbackHasCounter {
-				accountReport.APIRequests += positiveRequestDelta(beforeFallback, afterFallback)
-			} else {
-				accountReport.APIRequests += data.Report.APIRequests
-			}
-			if fetchErr != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return IncrementalBatch{}, report, ctxErr
-				}
-				emitIncrementalRateLimit(options.Progress, configured.Key, fetchErr)
-				return IncrementalBatch{}, report, fmt.Errorf("incremental coverage fallback failed for %q: %w", configured.Key, fetchErr)
-			}
-		}
-		if accountReport.FetchCount == incrementalMaximumFetchCount && accountReport.SourcePostsReturned == incrementalMaximumFetchCount && !hasSourcePostOverlap(rawPosts, baselineIDs[configured.Key]) {
-			accountReport.CoverageWindowExhausted = true
+		if accountReport.CoverageWindowExhausted {
 			batch.CoverageWindowExhausted = append(batch.CoverageWindowExhausted, configured.Key)
-			emitProgress(options.Progress, "WARN: incremental coverage_window_exhausted=true account=%s window=%d; history is not known complete", configured.Key, incrementalMaximumFetchCount)
 		}
 
 		batch.Accounts = append(batch.Accounts, data.Account)
@@ -174,6 +134,56 @@ func FetchIncrementalBatchWithOptions(ctx context.Context, client SnapshotSource
 	sortSnapshotAccounts(batch.Accounts)
 	sortSnapshotPosts(batch.Posts)
 	return batch, report, nil
+}
+
+// fetchIncrementalAccount fetches one account using the same bounded-window
+// and coverage-escalation rules as the shard refresh. Targeted refresh reuses
+// this helper so the two commands cannot drift in their source behavior.
+func fetchIncrementalAccount(ctx context.Context, client SnapshotSourceClient, configured SourceAccount, baselineIDs map[string]struct{}, fetchCount int, progress func(string)) (FetchAccountData, IncrementalAccountReport, error) {
+	beforeRequests, hasCounter := requestCountValue(client)
+	data, rawPosts, fetchErr := FetchSnapshotAccountWithFetchCount(ctx, client, configured, fetchCount)
+	afterRequests, _ := requestCountValue(client)
+	if fetchErr != nil {
+		emitIncrementalRateLimit(progress, configured.Key, fetchErr)
+		return FetchAccountData{}, IncrementalAccountReport{}, fmt.Errorf("incremental fetch failed for %q: %w", configured.Key, fetchErr)
+	}
+	accountReport := IncrementalAccountReport{
+		RegistryKey:         configured.Key,
+		FetchCount:          fetchCount,
+		SourcePostsReturned: len(rawPosts),
+		SourcePostsScanned:  data.Report.SourcePostsScanned,
+		EligibleSelected:    data.Report.EligibleSelected,
+		APIRequests:         accountRequestDelta(beforeRequests, afterRequests, hasCounter, data, nil),
+	}
+	if !hasCounter && accountReport.APIRequests == 0 {
+		accountReport.APIRequests = data.Report.APIRequests
+	}
+
+	if fetchCount < incrementalMaximumFetchCount && len(rawPosts) == fetchCount && !hasSourcePostOverlap(rawPosts, baselineIDs) {
+		emitProgress(progress, "Incremental coverage saturated for %s; escalating fetch window to %d", configured.Key, incrementalMaximumFetchCount)
+		beforeFallback, fallbackHasCounter := requestCountValue(client)
+		data, rawPosts, fetchErr = FetchSnapshotAccountWithFetchCount(ctx, client, configured, incrementalMaximumFetchCount)
+		afterFallback, _ := requestCountValue(client)
+		accountReport.FetchCount = incrementalMaximumFetchCount
+		accountReport.SourcePostsReturned = len(rawPosts)
+		accountReport.SourcePostsScanned = data.Report.SourcePostsScanned
+		accountReport.EligibleSelected = data.Report.EligibleSelected
+		accountReport.EscalatedToFull = true
+		if fallbackHasCounter {
+			accountReport.APIRequests += positiveRequestDelta(beforeFallback, afterFallback)
+		} else {
+			accountReport.APIRequests += data.Report.APIRequests
+		}
+		if fetchErr != nil {
+			emitIncrementalRateLimit(progress, configured.Key, fetchErr)
+			return FetchAccountData{}, accountReport, fmt.Errorf("incremental coverage fallback failed for %q: %w", configured.Key, fetchErr)
+		}
+	}
+	if accountReport.FetchCount == incrementalMaximumFetchCount && accountReport.SourcePostsReturned == incrementalMaximumFetchCount && !hasSourcePostOverlap(rawPosts, baselineIDs) {
+		accountReport.CoverageWindowExhausted = true
+		emitProgress(progress, "WARN: incremental coverage_window_exhausted=true account=%s window=%d; history is not known complete", configured.Key, incrementalMaximumFetchCount)
+	}
+	return data, accountReport, nil
 }
 
 func baselineSourceIDsByAccount(snapshot Snapshot) map[string]map[string]struct{} {

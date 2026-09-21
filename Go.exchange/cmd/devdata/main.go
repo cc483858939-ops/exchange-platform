@@ -29,7 +29,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: go run ./cmd/devdata <fetch|refresh|refresh-incremental|rebuild|verify|verify-avatars> [flags]")
+		return errors.New("usage: go run ./cmd/devdata <fetch|refresh|refresh-incremental|refresh-account|rebuild|verify|verify-avatars> [flags]")
 	}
 	baseDir, err := os.Getwd()
 	if err != nil {
@@ -153,6 +153,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		return runIncrementalRefresh(context.Background(), baseDir, options, stdout, stderr)
+	case "refresh-account":
+		options, err := parseCommandFlags("refresh-account", args[1:], stderr, false)
+		if err != nil {
+			return err
+		}
+		return runTargetedRefresh(context.Background(), baseDir, options, stdout, stderr)
 	case "rebuild":
 		options, err := parseCommandFlags("rebuild", args[1:], stderr, true)
 		if err != nil {
@@ -286,6 +292,7 @@ type commandOptions struct {
 	source           string
 	profile          string
 	allowDestructive bool
+	key              string
 	shard            string
 	fetchCount       int
 	registry         string
@@ -332,7 +339,7 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 		batchSize:  batchSize,
 		batchDelay: batchDelay,
 	}
-	if command == "refresh-incremental" {
+	if command == "refresh-incremental" || command == "refresh-account" {
 		options.fetchCount, err = fetchIntEnv("DEVDATA_INCREMENTAL_FETCH_COUNT", devdata.DefaultRSSHubIncrementalFetchCount)
 		if err != nil {
 			return commandOptions{}, err
@@ -353,6 +360,10 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	if command == "refresh-incremental" {
 		flags.StringVar(&options.shard, "shard", options.shard, "incremental shard (auto or 0-3)")
 		flags.IntVar(&options.fetchCount, "fetch-count", options.fetchCount, "incremental source window (5-60)")
+	}
+	if command == "refresh-account" {
+		flags.StringVar(&options.key, "key", options.key, "enabled source registry key to refresh")
+		flags.IntVar(&options.fetchCount, "fetch-count", options.fetchCount, "targeted source window (5-60)")
 	}
 	if err := flags.Parse(args); err != nil {
 		return commandOptions{}, err
@@ -379,6 +390,20 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 		}
 		if _, err := devdata.ParseIncrementalShard(options.shard, time.Now().UTC()); err != nil {
 			return commandOptions{}, fmt.Errorf("--shard: %w", err)
+		}
+	}
+	if command == "refresh-account" {
+		if strings.TrimSpace(options.key) == "" {
+			return commandOptions{}, errors.New("--key is required for refresh-account")
+		}
+		if options.allowDestructive {
+			return commandOptions{}, errors.New("refresh-account does not support --allow-destructive")
+		}
+		if options.resetCheckpoint {
+			return commandOptions{}, errors.New("refresh-account does not support --reset-checkpoint")
+		}
+		if options.fetchCount < 5 || options.fetchCount > devdata.DefaultRSSHubFullFetchCount {
+			return commandOptions{}, fmt.Errorf("--fetch-count must be between 5 and %d", devdata.DefaultRSSHubFullFetchCount)
 		}
 	}
 	if options.batchSize < 1 {

@@ -189,25 +189,32 @@ func MergeIncrementalSnapshot(baseline Snapshot, batch IncrementalBatch, registr
 	if err != nil {
 		return Snapshot{}, err
 	}
-	baselineAccounts := make(map[string]SnapshotAccount, len(baseline.Accounts))
-	for _, account := range baseline.Accounts {
-		baselineAccounts[account.RegistryKey] = account
-	}
+	selectedKeys := make(map[string]struct{})
 	for _, account := range batch.Accounts {
 		if assignments[account.RegistryKey] != batch.Shard {
 			return Snapshot{}, fmt.Errorf("incremental batch account %q is assigned to shard %d, not %d", account.RegistryKey, assignments[account.RegistryKey], batch.Shard)
 		}
+		selectedKeys[account.RegistryKey] = struct{}{}
+	}
+	return mergeSelectedSnapshot(baseline, batch.Accounts, batch.Posts, registry, selectedKeys, batch.FetchedAt, now, "incremental")
+}
+
+func mergeSelectedSnapshot(baseline Snapshot, updatedAccounts []SnapshotAccount, updatedPosts []SnapshotPost, registry SourceRegistry, selectedKeys map[string]struct{}, fetchedAt, now time.Time, mode string) (Snapshot, error) {
+	baselineAccounts := make(map[string]SnapshotAccount, len(baseline.Accounts))
+	for _, account := range baseline.Accounts {
+		baselineAccounts[account.RegistryKey] = account
+	}
+	for _, account := range updatedAccounts {
 		if previous, ok := baselineAccounts[account.RegistryKey]; ok && previous.SourceUserID != account.SourceUserID {
 			return Snapshot{}, fmt.Errorf("%w: registry key %q changed source user from %q to %q", ErrSourceIdentityMismatch, account.RegistryKey, previous.SourceUserID, account.SourceUserID)
 		}
 	}
-
 	next := cloneSnapshot(baseline)
 	accountsByKey := make(map[string]*SnapshotAccount, len(next.Accounts))
 	for index := range next.Accounts {
 		accountsByKey[next.Accounts[index].RegistryKey] = &next.Accounts[index]
 	}
-	for _, account := range batch.Accounts {
+	for _, account := range updatedAccounts {
 		current := accountsByKey[account.RegistryKey]
 		if current == nil {
 			return Snapshot{}, fmt.Errorf("baseline is missing selected account %q", account.RegistryKey)
@@ -215,11 +222,11 @@ func MergeIncrementalSnapshot(baseline Snapshot, batch IncrementalBatch, registr
 		*current = account
 	}
 
-	postsByKey := make(map[SourcePostKey]SnapshotPost, len(next.Posts)+len(batch.Posts))
+	postsByKey := make(map[SourcePostKey]SnapshotPost, len(next.Posts)+len(updatedPosts))
 	for _, post := range next.Posts {
 		postsByKey[SourcePostKey{RegistryKey: post.RegistryKey, SourcePostID: post.SourcePostID}] = cloneSnapshotPost(post)
 	}
-	for _, post := range batch.Posts {
+	for _, post := range updatedPosts {
 		key := SourcePostKey{RegistryKey: post.RegistryKey, SourcePostID: post.SourcePostID}
 		postsByKey[key] = cloneSnapshotPost(post)
 	}
@@ -231,7 +238,7 @@ func MergeIncrementalSnapshot(baseline Snapshot, batch IncrementalBatch, registr
 	next.Posts = next.Posts[:0]
 	for _, account := range registry.EnabledAccounts() {
 		posts := postsByAccount[account.Key]
-		if assignments[account.Key] == batch.Shard {
+		if _, selected := selectedKeys[account.Key]; selected {
 			sort.SliceStable(posts, func(i, j int) bool {
 				if !posts[i].CreatedAt.Equal(posts[j].CreatedAt) {
 					return posts[i].CreatedAt.After(posts[j].CreatedAt)
@@ -245,13 +252,13 @@ func MergeIncrementalSnapshot(baseline Snapshot, batch IncrementalBatch, registr
 		next.Posts = append(next.Posts, posts...)
 	}
 	if now.IsZero() {
-		now = batch.FetchedAt
+		now = fetchedAt
 	}
 	next.FetchedAt = now.UTC()
 	sortSnapshotAccounts(next.Accounts)
 	sortSnapshotPosts(next.Posts)
 	if err := ValidateSnapshot(next, registry); err != nil {
-		return Snapshot{}, fmt.Errorf("validate merged incremental snapshot: %w", err)
+		return Snapshot{}, fmt.Errorf("validate merged %s snapshot: %w", mode, err)
 	}
 	return next, nil
 }
