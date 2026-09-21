@@ -68,16 +68,23 @@ func NewCreatePostHandler(limiters ...ratelimit.Limiter) gin.HandlerFunc {
 	if len(limiters) > 0 {
 		limiter = limiters[0]
 	}
+	return NewCreatePostHandlerWithRateLimit(limiter, limiter != nil)
+}
+
+// NewCreatePostHandlerWithRateLimit preserves the idempotency-aware placement
+// of the post quota while distinguishing an intentionally disabled limiter
+// from an enabled limiter whose dependency is unavailable.
+func NewCreatePostHandlerWithRateLimit(limiter ratelimit.Limiter, enabled bool) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		createPostWithRateLimiter(ctx, limiter)
+		createPostWithRateLimiter(ctx, limiter, enabled)
 	}
 }
 
 func createPost(ctx *gin.Context) {
-	createPostWithRateLimiter(ctx, nil)
+	createPostWithRateLimiter(ctx, nil, false)
 }
 
-func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter) {
+func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enabled bool) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
@@ -149,7 +156,7 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter) {
 	// A new request consumes quota once. Idempotent replays returned above do
 	// not consume another post_create allowance; failed creates are not refunded
 	// in V1.
-	if limiter != nil && !ratelimit.Enforce(ctx, limiter, ratelimit.ActionPostCreate, ratelimit.FailClosed) {
+	if enabled && !ratelimit.Enforce(ctx, limiter, ratelimit.ActionPostCreate, ratelimit.FailClosed) {
 		return
 	}
 	author, err := loadPostAuthorForCreate(userID)

@@ -66,11 +66,15 @@ func NewRedisLimiter(client *redis.Client) (Limiter, error) {
 	if client == nil {
 		return nil, errors.New("Redis client is required for application rate limiting")
 	}
+	if err := ValidatePolicies(); err != nil {
+		return nil, fmt.Errorf("validate application rate-limit policies: %w", err)
+	}
 	return &RedisLimiter{client: client, now: time.Now}, nil
 }
 
 func (l *RedisLimiter) Allow(ctx context.Context, input Input) (Decision, error) {
 	if l == nil {
+		metrics.RecordRateLimitError(string(input.Action))
 		return Decision{}, errors.New("application rate limiter is unavailable")
 	}
 	policy, err := PolicyFor(input.Action)

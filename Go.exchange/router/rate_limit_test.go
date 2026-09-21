@@ -85,6 +85,39 @@ func TestSetupRouterWiresInitialRateLimitActions(t *testing.T) {
 	}
 }
 
+func TestSetupRouterExplicitlyDisablesApplicationRateLimit(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/users/7/follow", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code == http.StatusServiceUnavailable && strings.Contains(response.Body.String(), `"code":"RATE_LIMIT_UNAVAILABLE"`) {
+		t.Fatalf("legacy router unexpectedly applied application rate limiting: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestSetupRouterWithRateLimiterNilDependencyFailsClosed(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouterWithRateLimiter(nil, rateLimitRouteVerifier{}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/users/7/follow", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s, want 503", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"RATE_LIMIT_UNAVAILABLE"`) {
+		t.Fatalf("body=%s", response.Body.String())
+	}
+}
+
 func TestSetupRouterExposesRateLimitHeadersThroughCORS(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.test")

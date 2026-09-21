@@ -18,14 +18,14 @@ import (
 )
 
 func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, nil, translationServices...)
+	return setupRouter(authController, verifier, publisher, readiness, nil, false, translationServices...)
 }
 
 func SetupRouterWithRateLimiter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, translationServices...)
+	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, true, translationServices...)
 }
 
-func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, translationServices ...translation.Service) (*gin.Engine, error) {
+func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, enableApplicationRateLimit bool, translationServices ...translation.Service) (*gin.Engine, error) {
 	trustedProxies, err := config.TrustedProxyCIDRs()
 	if err != nil {
 		return nil, err
@@ -81,19 +81,19 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		translationService = translationServices[0]
 	}
 	{
-		api.GET("/recommendations/posts", withRateLimit(applicationLimiter, ratelimit.ActionRecommendations, ratelimit.FailOpen, controllers.GetPostRecommendations)...)
+		api.GET("/recommendations/posts", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionRecommendations, ratelimit.FailOpen, controllers.GetPostRecommendations)...)
 		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher))
 		api.POST("/post-view-events", controllers.NewPostViewEventsHandler(publisher))
-		api.POST("/uploads/post-media", withRateLimit(applicationLimiter, ratelimit.ActionMediaUpload, ratelimit.FailClosed, controllers.UploadPostMedia)...)
+		api.POST("/uploads/post-media", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionMediaUpload, ratelimit.FailClosed, controllers.UploadPostMedia)...)
 		api.POST("/uploads/profile-avatar", controllers.UploadProfileAvatar)
 		api.POST("/uploads/profile-cover", controllers.UploadProfileCover)
 		api.GET("/users/search", controllers.SearchUsers)
 		api.PATCH("/users/:id", controllers.UpdateUserProfile)
 		api.GET("/users/:id/follow", controllers.GetUserFollowState)
-		api.PUT("/users/:id/follow", withRateLimit(applicationLimiter, ratelimit.ActionFollowMutation, ratelimit.FailClosed, controllers.FollowUser)...)
+		api.PUT("/users/:id/follow", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionFollowMutation, ratelimit.FailClosed, controllers.FollowUser)...)
 		api.GET("/users/:id/followers", controllers.GetUserFollowers)
 		api.GET("/users/:id/following", controllers.GetUserFollowing)
-		api.DELETE("/users/:id/follow", withRateLimit(applicationLimiter, ratelimit.ActionFollowMutation, ratelimit.FailClosed, controllers.UnfollowUser)...)
+		api.DELETE("/users/:id/follow", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionFollowMutation, ratelimit.FailClosed, controllers.UnfollowUser)...)
 		api.GET("/feed/following", controllers.GetFollowingTimeline)
 		api.GET("/me/history/likes", controllers.GetMyLikedHistory)
 		api.GET("/me/bookmarks", controllers.GetMyBookmarks)
@@ -101,10 +101,10 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.GET("/me/notifications/unread-count", controllers.GetMyUnreadNotificationCount)
 		api.PUT("/me/notifications/:id/read", controllers.MarkMyNotificationRead)
 		api.PUT("/me/notifications/read-all", controllers.MarkMyNotificationsReadAll)
-		api.POST("/posts", controllers.NewCreatePostHandler(applicationLimiter))
+		api.POST("/posts", controllers.NewCreatePostHandlerWithRateLimit(applicationLimiter, enableApplicationRateLimit))
 		api.POST("/posts/repost-states", controllers.GetPostRepostStates)
 		api.POST("/posts/bookmark-states", controllers.GetPostBookmarkStates)
-		api.POST("/posts/:id/translation", withRateLimit(applicationLimiter, ratelimit.ActionTranslation, ratelimit.FailOpen, controllers.NewPostTranslationHandler(translationService))...)
+		api.POST("/posts/:id/translation", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionTranslation, ratelimit.FailOpen, controllers.NewPostTranslationHandler(translationService))...)
 		api.DELETE("/posts/:id", controllers.DeletePost)
 		api.POST("/posts/like-states", controllers.GetPostLikeStates)
 		api.GET("/posts/:id/like", controllers.GetPostLikes)
@@ -120,8 +120,8 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	return router, nil
 }
 
-func withRateLimit(limiter ratelimit.Limiter, action ratelimit.Action, failureMode ratelimit.FailureMode, handler gin.HandlerFunc) []gin.HandlerFunc {
-	if limiter == nil {
+func withRateLimit(enabled bool, limiter ratelimit.Limiter, action ratelimit.Action, failureMode ratelimit.FailureMode, handler gin.HandlerFunc) []gin.HandlerFunc {
+	if !enabled {
 		return []gin.HandlerFunc{handler}
 	}
 	return []gin.HandlerFunc{ratelimit.Middleware(limiter, action, failureMode), handler}

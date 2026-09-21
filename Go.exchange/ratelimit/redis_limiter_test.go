@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis/v7"
 )
 
 func TestRedisLimiterBuildsAllowedDecisionFromAtomicResult(t *testing.T) {
@@ -74,6 +76,34 @@ func TestRedisLimiterPropagatesScriptErrors(t *testing.T) {
 	_, err := limiter.Allow(context.Background(), Input{Subject: "123", Action: ActionRecommendations})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Allow error=%v, want %v", err, wantErr)
+	}
+}
+
+func TestNewRedisLimiterRejectsInvalidPolicyAtConstruction(t *testing.T) {
+	original := Policies[ActionPostCreate]
+	invalid := original
+	invalid.Rules = append([]Rule(nil), original.Rules...)
+	invalid.Rules[0].Limit = 0
+	Policies[ActionPostCreate] = invalid
+	t.Cleanup(func() { Policies[ActionPostCreate] = original })
+
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
+	defer client.Close()
+	_, err := NewRedisLimiter(client)
+	if !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatalf("NewRedisLimiter error=%v, want ErrInvalidPolicy", err)
+	}
+}
+
+func TestNewRedisLimiterConstructsWithoutRedisCall(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
+	defer client.Close()
+	limiter, err := NewRedisLimiter(client)
+	if err != nil {
+		t.Fatalf("NewRedisLimiter error=%v", err)
+	}
+	if limiter == nil {
+		t.Fatal("NewRedisLimiter returned a nil limiter")
 	}
 }
 

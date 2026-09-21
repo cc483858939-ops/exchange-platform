@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"Go.exchange/metrics"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -40,6 +42,7 @@ func Enforce(ctx *gin.Context, limiter Limiter, action Action, failureMode Failu
 		return false
 	}
 	if limiter == nil {
+		metrics.RecordRateLimitError(string(action))
 		return handleLimiterError(ctx, action, failureMode, fmt.Errorf("rate limiter is unavailable"))
 	}
 	requestContext := context.Background()

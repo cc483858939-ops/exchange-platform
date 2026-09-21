@@ -90,6 +90,30 @@ func TestMiddlewareFailureModes(t *testing.T) {
 	}
 }
 
+func TestMiddlewareNilLimiterFailureModes(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mode       FailureMode
+		wantStatus int
+		wantCalled bool
+	}{
+		{name: "fail open", mode: FailOpen, wantStatus: http.StatusNoContent, wantCalled: true},
+		{name: "fail closed", mode: FailClosed, wantStatus: http.StatusServiceUnavailable, wantCalled: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			engine := rateLimitTestRouter(nil, ActionTranslation, test.mode, &called)
+			response := serveRateLimitRequest(engine)
+			if response.Code != test.wantStatus || called != test.wantCalled {
+				t.Fatalf("status=%d called=%v body=%s", response.Code, called, response.Body.String())
+			}
+			if test.mode == FailClosed && !strings.Contains(response.Body.String(), `"code":"RATE_LIMIT_UNAVAILABLE"`) {
+				t.Fatalf("body=%s", response.Body.String())
+			}
+		})
+	}
+}
+
 func TestMiddlewareRequiresAuthenticatedSubject(t *testing.T) {
 	limiter := &fakeLimiter{decision: Decision{Allowed: true}}
 	called := false
