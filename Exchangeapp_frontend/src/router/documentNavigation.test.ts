@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   initialDocumentNavigation,
-  isInitialDocumentReloadForRoute,
+  isInitialDocumentEntryForRoute,
   type InitialDocumentNavigation,
 } from './documentNavigation';
 
@@ -15,7 +15,7 @@ afterEach(() => {
 
 describe('document navigation', () => {
   const navigationCases: Array<[InitialDocumentNavigation['type'], boolean]> = [
-    ['navigate', false],
+    ['navigate', true],
     ['reload', true],
     ['back_forward', false],
     ['unknown', false],
@@ -24,13 +24,13 @@ describe('document navigation', () => {
   it.each(navigationCases)(
     'classifies %s navigation correctly for the initial route',
     (type, expected) => {
-      expect(isInitialDocumentReloadForRoute('/', { type, url: '/' })).toBe(expected);
+      expect(isInitialDocumentEntryForRoute('/', { type, url: '/' })).toBe(expected);
     },
   );
 
-  it('requires the reloaded document URL to match the mounted route', () => {
-    expect(isInitialDocumentReloadForRoute('/', {
-      type: 'reload',
+  it('requires the initial document URL to match the mounted route', () => {
+    expect(isInitialDocumentEntryForRoute('/', {
+      type: 'navigate',
       url: '/search',
     })).toBe(false);
   });

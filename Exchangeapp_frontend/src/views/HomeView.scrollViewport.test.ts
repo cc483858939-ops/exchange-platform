@@ -58,8 +58,11 @@ vi.mock('../services/recommendationAttribution', () => ({
 }));
 
 vi.mock('../router/documentNavigation', () => ({
-  isInitialDocumentReloadForRoute: (fullPath: string) => (
-    mocks.initialDocumentNavigation.type === 'reload'
+  isInitialDocumentEntryForRoute: (fullPath: string) => (
+    (
+      mocks.initialDocumentNavigation.type === 'navigate'
+      || mocks.initialDocumentNavigation.type === 'reload'
+    )
     && mocks.initialDocumentNavigation.url === fullPath
   ),
 }));
@@ -363,60 +366,66 @@ describe('HomeView scroll viewport ownership', () => {
   });
 
 
-  it('resets a cold For You document reload to zero and rejects browser-only restoration', async () => {
-    mocks.initialDocumentNavigation.type = 'reload';
-    mocks.initialDocumentNavigation.url = '/';
-    mocks.homeTimeline.scrollTop['for-you'] = 12000;
+  it.each(['reload', 'navigate'] as const)(
+    'resets a cold For You document %s entry to zero and rejects browser-only restoration',
+    async (navigationType) => {
+      mocks.initialDocumentNavigation.type = navigationType;
+      mocks.initialDocumentNavigation.url = '/';
+      mocks.homeTimeline.scrollTop['for-you'] = 12000;
 
-    wrapper = mountHome();
-    await settle();
+      wrapper = mountHome();
+      await settle();
 
-    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
-    expect(panel.scrollTop).toBe(0);
-    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+      const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+      expect(panel.scrollTop).toBe(0);
+      expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
 
-    panel.scrollTop = 12000;
-    panel.dispatchEvent(new Event('scroll'));
-    await settle();
+      panel.scrollTop = 12000;
+      panel.dispatchEvent(new Event('scroll'));
+      await settle();
 
-    expect(panel.scrollTop).toBe(0);
-    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
+      expect(panel.scrollTop).toBe(0);
+      expect(mocks.homeTimeline.scrollTop['for-you']).toBe(0);
 
-    panel.scrollTop = 9000;
-    panel.dispatchEvent(new Event('scroll'));
-    await settle();
+      panel.scrollTop = 9000;
+      panel.dispatchEvent(new Event('scroll'));
+      await settle();
 
-    expect(panel.scrollTop).toBe(0);
-  });
+      expect(panel.scrollTop).toBe(0);
+    },
+  );
 
-  it('resets only Following on a cold Following document reload', async () => {
-    mocks.initialDocumentNavigation.type = 'reload';
-    mocks.initialDocumentNavigation.url = '/?tab=following';
-    mocks.route.fullPath = '/?tab=following';
-    mocks.route.query = { tab: 'following' };
-    mocks.homeTimeline.activeTab = 'following';
-    mocks.homeTimeline.scrollTop['for-you'] = 2400;
-    mocks.homeTimeline.scrollTop.following = 9000;
+  it.each(['reload', 'navigate'] as const)(
+    'resets only Following on a cold Following document %s entry',
+    async (navigationType) => {
+      mocks.initialDocumentNavigation.type = navigationType;
+      mocks.initialDocumentNavigation.url = '/?tab=following';
+      mocks.route.fullPath = '/?tab=following';
+      mocks.route.query = { tab: 'following' };
+      mocks.homeTimeline.activeTab = 'following';
+      mocks.homeTimeline.scrollTop['for-you'] = 2400;
+      mocks.homeTimeline.scrollTop.following = 9000;
 
-    wrapper = mountHome();
-    await settle();
+      wrapper = mountHome();
+      await settle();
 
-    const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
-    expect(panel.scrollTop).toBe(0);
-    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
-    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
+      const panel = wrapper.get('.home-feed-panel').element as HTMLElement;
+      expect(panel.scrollTop).toBe(0);
+      expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+      expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
 
-    panel.scrollTop = 9000;
-    panel.dispatchEvent(new Event('scroll'));
-    await settle();
+      panel.scrollTop = 9000;
+      panel.dispatchEvent(new Event('scroll'));
+      await settle();
 
-    expect(panel.scrollTop).toBe(0);
-    expect(mocks.homeTimeline.scrollTop.following).toBe(0);
-    expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
-  });
+      expect(panel.scrollTop).toBe(0);
+      expect(mocks.homeTimeline.scrollTop.following).toBe(0);
+      expect(mocks.homeTimeline.scrollTop['for-you']).toBe(2400);
+    },
+  );
 
 
-  it('releases a cold reload top pin for a native scrollbar drag', async () => {
+  it('releases a cold document entry top pin for a native scrollbar drag', async () => {
     mocks.initialDocumentNavigation.type = 'reload';
     mocks.initialDocumentNavigation.url = '/';
 
@@ -437,7 +446,7 @@ describe('HomeView scroll viewport ownership', () => {
     expect(panel.scrollTop).toBe(500);
   });
 
-  it('does not release a cold reload top pin for a normal content pointerdown', async () => {
+  it('does not release a cold document entry top pin for a normal content pointerdown', async () => {
     mocks.initialDocumentNavigation.type = 'reload';
     mocks.initialDocumentNavigation.url = '/';
 
@@ -530,7 +539,7 @@ describe('HomeView scroll viewport ownership', () => {
   });
 
 
-  it('does not release a cold reload top pin for Space on a button', async () => {
+  it('does not release a cold document entry top pin for Space on a button', async () => {
     mocks.initialDocumentNavigation.type = 'reload';
     mocks.initialDocumentNavigation.url = '/';
 
@@ -552,7 +561,7 @@ describe('HomeView scroll viewport ownership', () => {
     expect(panel.scrollTop).toBe(0);
   });
 
-  it('does not release a cold reload top pin for ArrowDown inside a textarea', async () => {
+  it('does not release a cold document entry top pin for ArrowDown inside a textarea', async () => {
     mocks.initialDocumentNavigation.type = 'reload';
     mocks.initialDocumentNavigation.url = '/';
 
@@ -574,7 +583,7 @@ describe('HomeView scroll viewport ownership', () => {
     expect(panel.scrollTop).toBe(0);
   });
 
-  it('releases a cold reload top pin after explicit wheel scrolling', async () => {
+  it('releases a cold document entry top pin after explicit wheel scrolling', async () => {
     mocks.initialDocumentNavigation.type = 'reload';
     mocks.initialDocumentNavigation.url = '/';
 
@@ -592,7 +601,7 @@ describe('HomeView scroll viewport ownership', () => {
   });
 
   it.each(['PageDown', 'ArrowDown', 'End', ' '])(
-    'releases a cold reload top pin after %s keyboard scrolling',
+    'releases a cold document entry top pin after %s keyboard scrolling',
     async (key) => {
       mocks.initialDocumentNavigation.type = 'reload';
       mocks.initialDocumentNavigation.url = '/';
@@ -611,7 +620,7 @@ describe('HomeView scroll viewport ownership', () => {
     },
   );
 
-  it('does not classify Home as cold reload after the document reloaded on another route', async () => {
+  it('does not classify Home as a cold document entry after the initial document loaded on another route', async () => {
     mocks.initialDocumentNavigation.type = 'reload';
     mocks.initialDocumentNavigation.url = '/search';
     mocks.homeTimeline.scrollTop['for-you'] = 2400;

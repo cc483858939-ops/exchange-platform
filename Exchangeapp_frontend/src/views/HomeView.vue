@@ -253,7 +253,7 @@ import { ElMessage } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import type { ComponentPublicInstance } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { isInitialDocumentReloadForRoute } from '../router/documentNavigation';
+import { isInitialDocumentEntryForRoute } from '../router/documentNavigation';
 import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -276,12 +276,12 @@ const router = useRouter();
 const authStore = useAuthStore();
 const feedStore = useFeedStore();
 const homeTimeline = useHomeTimelineStore();
-const initialHomeDocumentReload = isInitialDocumentReloadForRoute(route.fullPath);
-const initialHomeDocumentReloadTab: FeedTab = route.query.tab === 'following'
+const initialHomeDocumentEntry = isInitialDocumentEntryForRoute(route.fullPath);
+const initialHomeDocumentEntryTab: FeedTab = route.query.tab === 'following'
   ? 'following'
   : 'for-you';
-if (initialHomeDocumentReload) {
-  homeTimeline.setScrollTop(initialHomeDocumentReloadTab, 0);
+if (initialHomeDocumentEntry) {
+  homeTimeline.setScrollTop(initialHomeDocumentEntryTab, 0);
 }
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 const getHomePostViewTelemetry = () => getPostViewTelemetry();
@@ -562,8 +562,8 @@ const setFeedTopPinned = (tab: FeedTab, pinned: boolean) => {
     : undefined;
 };
 
-if (initialHomeDocumentReload) {
-  setFeedTopPinned(initialHomeDocumentReloadTab, true);
+if (initialHomeDocumentEntry) {
+  setFeedTopPinned(initialHomeDocumentEntryTab, true);
 }
 
 const virtualItemsWithInitialFallback = (
@@ -1216,18 +1216,18 @@ const retryActiveFeed = () => {
   }
 };
 
-const initializeColdHomeReloadAtTop = () => {
+const initializeColdHomeDocumentEntryAtTop = () => {
   if (
-    !initialHomeDocumentReload
+    !initialHomeDocumentEntry
     || !homeViewActive.value
-    || activeTab.value !== initialHomeDocumentReloadTab
+    || activeTab.value !== initialHomeDocumentEntryTab
   ) {
     return;
   }
 
-  setFeedTopPinned(initialHomeDocumentReloadTab, true);
-  homeTimeline.setScrollTop(initialHomeDocumentReloadTab, 0);
-  enforcePinnedFeedTop(initialHomeDocumentReloadTab);
+  setFeedTopPinned(initialHomeDocumentEntryTab, true);
+  homeTimeline.setScrollTop(initialHomeDocumentEntryTab, 0);
+  enforcePinnedFeedTop(initialHomeDocumentEntryTab);
 };
 
 const prefersReducedMotion = () => typeof window !== 'undefined'
@@ -1565,7 +1565,7 @@ watch(
 );
 
 onMounted(() => {
-  initializeColdHomeReloadAtTop();
+  initializeColdHomeDocumentEntryAtTop();
   observeFeedPanelResize();
 });
 

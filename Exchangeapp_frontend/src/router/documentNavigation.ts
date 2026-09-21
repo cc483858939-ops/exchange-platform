@@ -43,10 +43,10 @@ export const initialDocumentNavigation: InitialDocumentNavigation = {
   url: readDocumentURL(),
 };
 
-export const isInitialDocumentReloadForRoute = (
+export const isInitialDocumentEntryForRoute = (
   routeFullPath: string,
   navigation: InitialDocumentNavigation = initialDocumentNavigation,
 ) => (
-  navigation.type === 'reload'
+  (navigation.type === 'navigate' || navigation.type === 'reload')
   && normalizeDocumentURL(navigation.url) === normalizeDocumentURL(routeFullPath)
 );

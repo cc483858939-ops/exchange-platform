@@ -66,8 +66,11 @@ vi.mock('../services/postViewTelemetry', () => ({
 }));
 
 vi.mock('../router/documentNavigation', () => ({
-  isInitialDocumentReloadForRoute: (fullPath: string) => (
-    mocks.initialDocumentNavigation.type === 'reload'
+  isInitialDocumentEntryForRoute: (fullPath: string) => (
+    (
+      mocks.initialDocumentNavigation.type === 'navigate'
+      || mocks.initialDocumentNavigation.type === 'reload'
+    )
     && mocks.initialDocumentNavigation.url === fullPath
   ),
 }));
