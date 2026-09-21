@@ -35,7 +35,7 @@ func TestDevDataMirrorSchemaIntegrationIsIdempotent(t *testing.T) {
 	}
 
 	for table, columns := range map[string][]string{
-		"devdata_mirror_accounts": {"id", "registry_key", "platform", "source_user_id", "source_handle", "local_user_id", "category", "enabled", "last_fetched_at", "created_at", "updated_at"},
+		"devdata_mirror_accounts": {"id", "registry_key", "platform", "source_user_id", "source_handle", "local_user_id", "category", "enabled", "source_avatar_url", "avatar_object_key", "avatar_content_hash", "source_cover_url", "cover_object_key", "cover_content_hash", "last_fetched_at", "created_at", "updated_at"},
 		"devdata_mirror_posts":    {"id", "platform", "source_post_id", "source_url", "mirror_account_id", "local_post_id", "source_created_at", "source_like_count", "source_reply_count", "source_repost_count", "source_quote_count", "content_hash", "state", "imported_at", "created_at", "updated_at"},
 	} {
 		var rows []struct {

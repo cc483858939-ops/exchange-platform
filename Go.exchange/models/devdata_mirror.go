@@ -17,6 +17,9 @@ type DevDataMirrorAccount struct {
 	SourceAvatarURL   string     `gorm:"type:varchar(512);not null;default:''"`
 	AvatarObjectKey   string     `gorm:"type:varchar(512);not null;default:''"`
 	AvatarContentHash string     `gorm:"type:varchar(64);not null;default:''"`
+	SourceCoverURL    string     `gorm:"type:varchar(512);not null;default:''"`
+	CoverObjectKey    string     `gorm:"type:varchar(512);not null;default:''"`
+	CoverContentHash  string     `gorm:"type:varchar(64);not null;default:''"`
 	LastFetchedAt     *time.Time `gorm:"index"`
 	CreatedAt         time.Time  `gorm:"not null"`
 	UpdatedAt         time.Time  `gorm:"not null"`

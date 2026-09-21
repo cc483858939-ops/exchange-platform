@@ -117,6 +117,9 @@ func syncIncrementalAccounts(tx *gorm.DB, registry SourceRegistry, batch Increme
 				accountUpdates["avatar_object_key"] = resolution.ObjectKey
 				accountUpdates["avatar_content_hash"] = resolution.ContentHash
 			}
+			for key, value := range coverMetadataUpdatesForSync(source, options) {
+				accountUpdates[key] = value
+			}
 			if err := tx.Model(&models.DevDataMirrorAccount{}).Where("id = ?", stored.ID).Updates(accountUpdates).Error; err != nil {
 				return nil, nil, fmt.Errorf("update incremental DevData mirror account %q: %w", source.RegistryKey, err)
 			}
@@ -143,11 +146,12 @@ func syncIncrementalAccounts(tx *gorm.DB, registry SourceRegistry, batch Increme
 			return nil, nil, fmt.Errorf("generate mirror password: %w", err)
 		}
 		user := models.User{
-			Username:    username,
-			Password:    passwordHash,
-			DisplayName: truncateRunes(strings.TrimSpace(source.Name), 50),
-			Bio:         truncateRunes(strings.TrimSpace(source.Description), 160),
-			AvatarURL:   sourceAvatarURLForSync(nil, source, options),
+			Username:      username,
+			Password:      passwordHash,
+			DisplayName:   truncateRunes(strings.TrimSpace(source.Name), 50),
+			Bio:           truncateRunes(strings.TrimSpace(source.Description), 160),
+			AvatarURL:     sourceAvatarURLForSync(nil, source, options),
+			CoverImageURL: sourceCoverURLForSync(nil, source, options),
 		}
 		if err := tx.Create(&user).Error; err != nil {
 			return nil, nil, fmt.Errorf("create incremental mirror user %q: %w", username, err)
@@ -165,6 +169,10 @@ func syncIncrementalAccounts(tx *gorm.DB, registry SourceRegistry, batch Increme
 			CreatedAt:       syncAt,
 			UpdatedAt:       syncAt,
 		}
+		coverSourceURL, coverObjectKey, coverContentHash := newCoverMetadataForSync(source, options)
+		account.SourceCoverURL = coverSourceURL
+		account.CoverObjectKey = coverObjectKey
+		account.CoverContentHash = coverContentHash
 		if resolution, ok := avatarResolutionForSync(source, options); ok {
 			account.AvatarObjectKey = resolution.ObjectKey
 			account.AvatarContentHash = resolution.ContentHash

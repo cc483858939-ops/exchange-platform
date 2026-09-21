@@ -101,11 +101,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		var avatarStore devdata.AvatarObjectStore
 		storageClient, storageErr := config.NewStorageClient()
 		if storageErr != nil {
-			fmt.Fprintln(stderr, "WARN: avatar storage unavailable; avatar localization will be skipped")
+			fmt.Fprintln(stderr, "WARN: mirror storage unavailable; avatar, cover, and PostMedia localization will be skipped")
 		} else {
 			avatarStore, err = devdata.NewMinioAvatarObjectStore(storageClient)
 			if err != nil {
-				fmt.Fprintln(stderr, "WARN: avatar storage adapter unavailable; avatar localization will be skipped")
+				fmt.Fprintln(stderr, "WARN: mirror storage adapter unavailable; avatar, cover, and PostMedia localization will be skipped")
 			}
 		}
 		var avatarFetcher devdata.AvatarFetcher
@@ -117,6 +117,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Avatars: attempted=%d uploaded=%d reused=%d failed=%d\n", avatarReport.Attempted, avatarReport.Uploaded, avatarReport.Reused, avatarReport.Failed)
+		var coverFetcher devdata.CoverFetcher
+		if avatarStore != nil {
+			coverFetcher = devdata.NewCoverDownloader()
+		}
+		coverResolutions, coverReport, err := devdata.PrepareCoverMirrors(context.Background(), registry, snapshot, coverFetcher, avatarStore)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Covers: attempted=%d uploaded=%d reused=%d cleared=%d failed=%d\n", coverReport.Attempted, coverReport.Uploaded, coverReport.Reused, coverReport.Cleared, coverReport.Failed)
 		var postMediaFetcher devdata.PostMediaFetcher
 		if avatarStore != nil {
 			postMediaFetcher = devdata.NewPostMediaDownloader()
@@ -128,12 +137,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
 		if err := syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
 			AvatarResolutions:                    resolutions,
+			CoverResolutions:                     coverResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
+			PreserveExistingCoverWhenUnresolved:  true,
 		}); err != nil {
 			return err
 		}
 		writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
+		writeCoverLocalizationWarning(stderr, coverReport.Failed)
 		return nil
 	case "refresh-incremental":
 		options, err := parseCommandFlags("refresh-incremental", args[1:], stderr, false)
@@ -170,17 +182,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		var mirrorStore devdata.AvatarObjectStore
 		storageClient, storageErr := config.NewStorageClient()
 		if storageErr != nil {
-			fmt.Fprintln(stderr, "WARN: mirror storage unavailable; existing avatars and PostMedia rows will be preserved for unresolved images")
+			fmt.Fprintln(stderr, "WARN: mirror storage unavailable; existing avatars, covers, and PostMedia rows will be preserved for unresolved images")
 		} else {
 			mirrorStore, storageErr = devdata.NewMinioAvatarObjectStore(storageClient)
 			if storageErr != nil {
-				fmt.Fprintln(stderr, "WARN: mirror storage adapter unavailable; existing avatars and PostMedia rows will be preserved for unresolved images")
+				fmt.Fprintln(stderr, "WARN: mirror storage adapter unavailable; existing avatars, covers, and PostMedia rows will be preserved for unresolved images")
 			}
 		}
 		var avatarFetcher devdata.AvatarFetcher
+		var coverFetcher devdata.CoverFetcher
 		var postMediaFetcher devdata.PostMediaFetcher
 		if mirrorStore != nil {
 			avatarFetcher = devdata.NewAvatarDownloader()
+			coverFetcher = devdata.NewCoverDownloader()
 			postMediaFetcher = devdata.NewPostMediaDownloader()
 		}
 		avatarResolutions, avatarReport, err := devdata.PrepareAvatarMirrors(context.Background(), registry, snapshot, avatarFetcher, mirrorStore)
@@ -188,6 +202,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Avatars: attempted=%d uploaded=%d reused=%d failed=%d\n", avatarReport.Attempted, avatarReport.Uploaded, avatarReport.Reused, avatarReport.Failed)
+		coverResolutions, coverReport, err := devdata.PrepareCoverMirrors(context.Background(), registry, snapshot, coverFetcher, mirrorStore)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Covers: attempted=%d uploaded=%d reused=%d cleared=%d failed=%d\n", coverReport.Attempted, coverReport.Uploaded, coverReport.Reused, coverReport.Cleared, coverReport.Failed)
 		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(context.Background(), registry, snapshot, postMediaFetcher, mirrorStore)
 		if err != nil {
 			return err
@@ -199,12 +218,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		if err := syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
 			AvatarResolutions:                    avatarResolutions,
+			CoverResolutions:                     coverResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
+			PreserveExistingCoverWhenUnresolved:  true,
 		}); err != nil {
 			return err
 		}
 		writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
+		writeCoverLocalizationWarning(stderr, coverReport.Failed)
 		return nil
 	case "verify":
 		options, err := parseCommandFlags("verify", args[1:], stderr, false)
@@ -514,21 +536,27 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 	var mirrorStore devdata.AvatarObjectStore
 	storageClient, storageErr := config.NewStorageClient()
 	if storageErr != nil {
-		fmt.Fprintln(stderr, "WARN: mirror storage unavailable; incremental avatar and PostMedia localization will be skipped")
+		fmt.Fprintln(stderr, "WARN: mirror storage unavailable; incremental avatar, cover, and PostMedia localization will be skipped")
 	} else {
 		mirrorStore, storageErr = devdata.NewMinioAvatarObjectStore(storageClient)
 		if storageErr != nil {
-			fmt.Fprintln(stderr, "WARN: mirror storage adapter unavailable; incremental avatar and PostMedia localization will be skipped")
+			fmt.Fprintln(stderr, "WARN: mirror storage adapter unavailable; incremental avatar, cover, and PostMedia localization will be skipped")
 		}
 	}
 	var avatarFetcher devdata.AvatarFetcher
+	var coverFetcher devdata.CoverFetcher
 	var postMediaFetcher devdata.PostMediaFetcher
 	if mirrorStore != nil {
 		avatarFetcher = devdata.NewAvatarDownloader()
+		coverFetcher = devdata.NewCoverDownloader()
 		postMediaFetcher = devdata.NewPostMediaDownloader()
 	}
 	avatarSnapshot := devdata.Snapshot{Version: devdata.DefaultSnapshotVersion, FetchedAt: batch.FetchedAt, Accounts: batch.Accounts}
 	avatarResolutions, avatarReport, err := devdata.PrepareAvatarMirrorsForKeys(ctx, registry, avatarSnapshot, selectedKeys, avatarFetcher, mirrorStore)
+	if err != nil {
+		return err
+	}
+	coverResolutions, coverReport, err := devdata.PrepareCoverMirrorsForKeys(ctx, registry, avatarSnapshot, selectedKeys, coverFetcher, mirrorStore)
 	if err != nil {
 		return err
 	}
@@ -538,8 +566,10 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 	}
 	result, err := devdata.SyncIncremental(ctx, db, registry, batch, redisClient, now, devdata.SyncOptions{
 		AvatarResolutions:                    avatarResolutions,
+		CoverResolutions:                     coverResolutions,
 		PostMediaResolutions:                 postMediaResolutions,
 		PreserveExistingAvatarWhenUnresolved: true,
+		PreserveExistingCoverWhenUnresolved:  true,
 	})
 	if err != nil {
 		return err
@@ -551,15 +581,16 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 		}
 		return fmt.Errorf("write incremental snapshot: %w", err)
 	}
-	writeIncrementalSummary(stdout, shard, fetchReport, result, avatarReport, postMediaReport, nextSnapshot)
+	writeIncrementalSummary(stdout, shard, fetchReport, result, avatarReport, coverReport, postMediaReport, nextSnapshot)
 	writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
+	writeCoverLocalizationWarning(stderr, coverReport.Failed)
 	return nil
 }
 
-func writeIncrementalSummary(stdout io.Writer, shard int, fetchReport devdata.IncrementalFetchReport, syncResult devdata.SyncResult, avatarReport devdata.AvatarMirrorReport, postMediaReport devdata.PostMediaMirrorReport, snapshot devdata.Snapshot) {
+func writeIncrementalSummary(stdout io.Writer, shard int, fetchReport devdata.IncrementalFetchReport, syncResult devdata.SyncResult, avatarReport devdata.AvatarMirrorReport, coverReport devdata.CoverMirrorReport, postMediaReport devdata.PostMediaMirrorReport, snapshot devdata.Snapshot) {
 	fmt.Fprintf(stdout, "Incremental refresh: shard=%d/%d accounts=%d account_refresh_interval≈4h fetch_count=%d escalated_to_60=%d coverage_window_exhausted=%d\n", shard, devdata.IncrementalShardCount, fetchReport.Accounts, fetchReport.FetchCount, fetchReport.EscalatedToFull, fetchReport.CoverageWindowExhausted)
 	fmt.Fprintf(stdout, "Source: requests=%d posts_returned=%d scanned=%d eligible=%d\n", fetchReport.APIRequests, fetchReport.SourcePostsReturned, fetchReport.SourcePostsScanned, fetchReport.EligibleSelected)
-	fmt.Fprintf(stdout, "Sync: new_posts=%d existing_posts=%d reactivated=%d media_uploaded=%d media_reused=%d avatars_uploaded=%d avatars_reused=%d\n", syncResult.Inserted, syncResult.Kept, syncResult.Reactivated, postMediaReport.Uploaded, postMediaReport.Reused, avatarReport.Uploaded, avatarReport.Reused)
+	fmt.Fprintf(stdout, "Sync: new_posts=%d existing_posts=%d reactivated=%d media_uploaded=%d media_reused=%d avatars_uploaded=%d avatars_reused=%d covers_uploaded=%d covers_reused=%d covers_cleared=%d\n", syncResult.Inserted, syncResult.Kept, syncResult.Reactivated, postMediaReport.Uploaded, postMediaReport.Reused, avatarReport.Uploaded, avatarReport.Reused, coverReport.Uploaded, coverReport.Reused, coverReport.Cleared)
 	fmt.Fprintf(stdout, "Snapshot: accounts=%d posts=%d\n", len(snapshot.Accounts), len(snapshot.Posts))
 }
 
@@ -625,4 +656,11 @@ func writeMediaLocalizationWarning(stderr io.Writer, avatarFailures, postMediaFa
 		return
 	}
 	fmt.Fprintf(stderr, "WARN: media localization completed with failures: avatars=%d post_media=%d\n", avatarFailures, postMediaFailures)
+}
+
+func writeCoverLocalizationWarning(stderr io.Writer, coverFailures int) {
+	if coverFailures == 0 {
+		return
+	}
+	fmt.Fprintf(stderr, "WARN: cover localization completed with failures: covers=%d\n", coverFailures)
 }

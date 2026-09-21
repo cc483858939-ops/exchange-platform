@@ -363,6 +363,9 @@ func fileCacheControl(objectKey string) string {
 	if profilecover.IsPublicObjectKey(objectKey) {
 		return "public, max-age=31536000, immutable"
 	}
+	if profilecover.IsDevDataPublicObjectKey(objectKey) {
+		return "public, max-age=31536000, immutable"
+	}
 	if strings.HasPrefix(objectKey, profileavatar.UserV1ObjectPrefix) || strings.HasPrefix(objectKey, profileavatar.DevDataV1ObjectPrefix) {
 		return "public, max-age=31536000, immutable"
 	}
@@ -377,7 +380,7 @@ func isAllowedObjectKey(objectKey string) bool {
 	if strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n") {
 		return false
 	}
-	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
+	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) || profilecover.IsDevDataPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
 }
 
 func classifyStoredObjectError(err error) error {

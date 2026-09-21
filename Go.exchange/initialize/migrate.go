@@ -63,6 +63,9 @@ func RunMigrations() error {
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
+		if err := applyDevDataMirrorCoverColumns(tx); err != nil {
+			return err
+		}
 
 		if err := applyLegacyPostEmbeddingJobCleanup(tx); err != nil {
 			return err
@@ -133,6 +136,23 @@ WHERE reaction_version = 0
 		}
 		return nil
 	})
+}
+
+// applyDevDataMirrorCoverColumns is an explicit, idempotent migration for the
+// DevData profile-cover metadata. The NOT NULL defaults make it safe for
+// existing mirror rows and keep this storage contract independent from the
+// runtime User cover column.
+func applyDevDataMirrorCoverColumns(tx *gorm.DB) error {
+	for _, statement := range []string{
+		"ALTER TABLE devdata_mirror_accounts ADD COLUMN IF NOT EXISTS source_cover_url VARCHAR(512) NOT NULL DEFAULT ''",
+		"ALTER TABLE devdata_mirror_accounts ADD COLUMN IF NOT EXISTS cover_object_key VARCHAR(512) NOT NULL DEFAULT ''",
+		"ALTER TABLE devdata_mirror_accounts ADD COLUMN IF NOT EXISTS cover_content_hash VARCHAR(64) NOT NULL DEFAULT ''",
+	} {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply DevData mirror cover columns: %w", err)
+		}
+	}
+	return nil
 }
 
 // prepareDevDataMirrorUniqueIndexes transfers the old explicitly-created

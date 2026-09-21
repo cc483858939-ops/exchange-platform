@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	FilesURLPrefix     = "/api/files/"
-	UserV1ObjectPrefix = "profile-covers/users/v1/"
+	FilesURLPrefix        = "/api/files/"
+	UserV1ObjectPrefix    = "profile-covers/users/v1/"
+	DevDataV1ObjectPrefix = "profile-covers/devdata/v1/"
 )
 
 // BuildUserV1ObjectKey returns the immutable, user-scoped cover derivative
@@ -56,6 +57,44 @@ func ParseUserCoverURL(value string, userID uint) (string, error) {
 func IsPublicObjectKey(objectKey string) bool {
 	_, _, err := parseObjectKey(objectKey)
 	return err == nil
+}
+
+// IsDevDataPublicObjectKey reports whether objectKey belongs to the exact
+// content-addressed DevData cover namespace. Registry keys are deliberately
+// restricted to one safe path component so the files endpoint cannot become a
+// general profile-covers object browser.
+func IsDevDataPublicObjectKey(objectKey string) bool {
+	if objectKey == "" || strings.ContainsAny(objectKey, "\r\n?#\\") || strings.Contains(objectKey, "..") {
+		return false
+	}
+	if !strings.HasPrefix(objectKey, DevDataV1ObjectPrefix) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(objectKey, DevDataV1ObjectPrefix), "/")
+	if len(parts) != 2 || !isSafeDevDataRegistryComponent(parts[0]) {
+		return false
+	}
+	filename := parts[1]
+	if strings.HasSuffix(filename, ".jpg") {
+		return isLowerSHA256(strings.TrimSuffix(filename, ".jpg"))
+	}
+	if strings.HasSuffix(filename, ".png") {
+		return isLowerSHA256(strings.TrimSuffix(filename, ".png"))
+	}
+	return false
+}
+
+func isSafeDevDataRegistryComponent(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func parseObjectKey(objectKey string) (uint, string, error) {

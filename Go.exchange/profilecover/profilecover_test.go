@@ -72,3 +72,25 @@ func TestBuildUserV1CoverKeyRejectsInvalidInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestDevDataCoverObjectKeyAllowlist(t *testing.T) {
+	hash := strings.Repeat("d", 64)
+	valid := DevDataV1ObjectPrefix + "naenano78/" + hash + ".jpg"
+	if !IsDevDataPublicObjectKey(valid) {
+		t.Fatalf("valid DevData cover key rejected: %q", valid)
+	}
+	for _, key := range []string{
+		DevDataV1ObjectPrefix + "../" + hash + ".jpg",
+		DevDataV1ObjectPrefix + "na/enano78/" + hash + ".jpg",
+		DevDataV1ObjectPrefix + "naenano78/" + strings.ToUpper(hash) + ".jpg",
+		DevDataV1ObjectPrefix + "naenano78/" + hash[:63] + ".jpg",
+		DevDataV1ObjectPrefix + "naenano78/" + hash + ".webp",
+		DevDataV1ObjectPrefix + "naenano78/" + hash + ".jpg/extra",
+		DevDataV1ObjectPrefix + "naenano78/" + hash + ".jpg?cache=1",
+		"profile-covers/users/v1/42/" + hash + ".jpg",
+	} {
+		if IsDevDataPublicObjectKey(key) {
+			t.Fatalf("unsafe DevData cover key accepted: %q", key)
+		}
+	}
+}

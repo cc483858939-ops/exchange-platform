@@ -45,8 +45,10 @@ type SyncResult struct {
 // Post sync and its maintenance behavior unchanged.
 type SyncOptions struct {
 	AvatarResolutions                    map[string]AvatarResolution
+	CoverResolutions                     map[string]CoverResolution
 	PostMediaResolutions                 map[SourcePostKey][]PostMediaResolution
 	PreserveExistingAvatarWhenUnresolved bool
+	PreserveExistingCoverWhenUnresolved  bool
 }
 
 type syncMaintenance struct {
@@ -201,6 +203,9 @@ func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncA
 				accountUpdates["avatar_object_key"] = resolution.ObjectKey
 				accountUpdates["avatar_content_hash"] = resolution.ContentHash
 			}
+			for key, value := range coverMetadataUpdatesForSync(source, options) {
+				accountUpdates[key] = value
+			}
 			if err := tx.Model(&models.DevDataMirrorAccount{}).Where("id = ?", stored.ID).Updates(accountUpdates).Error; err != nil {
 				return nil, fmt.Errorf("update DevData mirror account %q: %w", account.Key, err)
 			}
@@ -221,12 +226,14 @@ func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncA
 			return nil, fmt.Errorf("generate mirror password: %w", err)
 		}
 		avatarURL := sourceAvatarURLForSync(nil, source, options)
+		coverURL := sourceCoverURLForSync(nil, source, options)
 		user := models.User{
-			Username:    username,
-			Password:    passwordHash,
-			DisplayName: truncateRunes(strings.TrimSpace(source.Name), 50),
-			Bio:         truncateRunes(strings.TrimSpace(source.Description), 160),
-			AvatarURL:   avatarURL,
+			Username:      username,
+			Password:      passwordHash,
+			DisplayName:   truncateRunes(strings.TrimSpace(source.Name), 50),
+			Bio:           truncateRunes(strings.TrimSpace(source.Description), 160),
+			AvatarURL:     avatarURL,
+			CoverImageURL: coverURL,
 		}
 		if err := tx.Create(&user).Error; err != nil {
 			return nil, fmt.Errorf("create mirror user %q: %w", username, err)
@@ -245,6 +252,10 @@ func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncA
 			CreatedAt:       syncAt,
 			UpdatedAt:       syncAt,
 		}
+		coverSourceURL, coverObjectKey, coverContentHash := newCoverMetadataForSync(source, options)
+		accountRow.SourceCoverURL = coverSourceURL
+		accountRow.CoverObjectKey = coverObjectKey
+		accountRow.CoverContentHash = coverContentHash
 		if resolution, ok := avatarResolutionForSync(source, options); ok {
 			accountRow.AvatarObjectKey = resolution.ObjectKey
 			accountRow.AvatarContentHash = resolution.ContentHash
@@ -277,20 +288,23 @@ func updateMirrorUser(tx *gorm.DB, user *models.User, source SnapshotAccount, op
 	nextDisplayName := truncateRunes(strings.TrimSpace(source.Name), 50)
 	nextBio := truncateRunes(strings.TrimSpace(source.Description), 160)
 	nextAvatarURL := sourceAvatarURLForSync(user, source, options)
-	changed := user.DisplayName != nextDisplayName || user.Bio != nextBio || user.AvatarURL != nextAvatarURL
+	nextCoverURL := sourceCoverURLForSync(user, source, options)
+	changed := user.DisplayName != nextDisplayName || user.Bio != nextBio || user.AvatarURL != nextAvatarURL || user.CoverImageURL != nextCoverURL
 	if !changed {
 		return false, nil
 	}
 	if err := tx.Model(user).Updates(map[string]interface{}{
-		"display_name": nextDisplayName,
-		"bio":          nextBio,
-		"avatar_url":   nextAvatarURL,
+		"display_name":    nextDisplayName,
+		"bio":             nextBio,
+		"avatar_url":      nextAvatarURL,
+		"cover_image_url": nextCoverURL,
 	}).Error; err != nil {
 		return false, fmt.Errorf("update mirror user %d profile: %w", user.ID, err)
 	}
 	user.DisplayName = nextDisplayName
 	user.Bio = nextBio
 	user.AvatarURL = nextAvatarURL
+	user.CoverImageURL = nextCoverURL
 	return true, nil
 }
 
@@ -313,6 +327,74 @@ func sourceAvatarURLForSync(existing *models.User, source SnapshotAccount, optio
 		return existing.AvatarURL
 	}
 	return truncateRunes(strings.TrimSpace(source.ProfileImageURL), 512)
+}
+
+func coverResolutionForSync(source SnapshotAccount, options SyncOptions) (CoverResolution, bool) {
+	if options.CoverResolutions == nil {
+		return CoverResolution{}, false
+	}
+	resolution, exists := options.CoverResolutions[source.RegistryKey]
+	if !exists || !coverResolutionUsable(source, resolution) {
+		return CoverResolution{}, false
+	}
+	return resolution, true
+}
+
+func sourceCoverURLForSync(existing *models.User, source SnapshotAccount, options SyncOptions) string {
+	if !source.ProfileBannerPresent {
+		if existing != nil {
+			return existing.CoverImageURL
+		}
+		return ""
+	}
+	if strings.TrimSpace(source.ProfileBannerURL) == "" {
+		return ""
+	}
+	if resolution, ok := coverResolutionForSync(source, options); ok {
+		return truncateRunes(resolution.LocalURL, 512)
+	}
+	if existing != nil && options.PreserveExistingCoverWhenUnresolved {
+		return existing.CoverImageURL
+	}
+	return ""
+}
+
+func coverMetadataUpdatesForSync(source SnapshotAccount, options SyncOptions) map[string]interface{} {
+	if !source.ProfileBannerPresent {
+		return nil
+	}
+	if strings.TrimSpace(source.ProfileBannerURL) == "" {
+		return map[string]interface{}{
+			"source_cover_url":   "",
+			"cover_object_key":   "",
+			"cover_content_hash": "",
+		}
+	}
+	if resolution, ok := coverResolutionForSync(source, options); ok {
+		return map[string]interface{}{
+			"source_cover_url":   truncateRunes(strings.TrimSpace(source.ProfileBannerURL), 512),
+			"cover_object_key":   resolution.ObjectKey,
+			"cover_content_hash": resolution.ContentHash,
+		}
+	}
+	return map[string]interface{}{
+		"source_cover_url": truncateRunes(strings.TrimSpace(source.ProfileBannerURL), 512),
+	}
+}
+
+func newCoverMetadataForSync(source SnapshotAccount, options SyncOptions) (string, string, string) {
+	updates := coverMetadataUpdatesForSync(source, options)
+	if updates == nil {
+		return "", "", ""
+	}
+	return stringValue(updates["source_cover_url"]), stringValue(updates["cover_object_key"]), stringValue(updates["cover_content_hash"])
+}
+
+func stringValue(value interface{}) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 func newMirrorPasswordHash() (string, error) {
