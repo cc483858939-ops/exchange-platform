@@ -3,26 +3,25 @@ export type InitialDocumentNavigation = {
   url: string;
 };
 
-const readNavigationType = (): InitialDocumentNavigation['type'] => {
+const readInitialDocumentNavigation = (): InitialDocumentNavigation => {
   if (
     typeof performance === 'undefined'
     || typeof performance.getEntriesByType !== 'function'
   ) {
-    return 'unknown';
+    return { type: 'unknown', url: '' };
   }
 
   const entry = performance
     .getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
 
-  return entry?.type ?? 'unknown';
-};
-
-const readDocumentURL = () => {
-  if (typeof window === 'undefined') {
-    return '';
+  if (!entry) {
+    return { type: 'unknown', url: '' };
   }
 
-  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  return {
+    type: entry.type ?? 'unknown',
+    url: entry.name ?? '',
+  };
 };
 
 const normalizeDocumentURL = (url: string) => {
@@ -32,16 +31,17 @@ const normalizeDocumentURL = (url: string) => {
 
   try {
     const parsed = new URL(url, 'http://document.local');
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    // A URL fragment does not create a new document navigation, and some
+    // browsers omit it from PerformanceNavigationTiming.name. Compare the
+    // document identity by path and query so an initial hash cannot become a
+    // false negative when the timing entry does not preserve the fragment.
+    return `${parsed.pathname}${parsed.search}`;
   } catch {
     return url;
   }
 };
 
-export const initialDocumentNavigation: InitialDocumentNavigation = {
-  type: readNavigationType(),
-  url: readDocumentURL(),
-};
+export const initialDocumentNavigation = readInitialDocumentNavigation();
 
 export const isInitialDocumentEntryForRoute = (
   routeFullPath: string,
