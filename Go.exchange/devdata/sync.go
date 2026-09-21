@@ -377,6 +377,13 @@ func coverMetadataUpdatesForSync(source SnapshotAccount, options SyncOptions) ma
 			"cover_content_hash": resolution.ContentHash,
 		}
 	}
+	if !options.PreserveExistingCoverWhenUnresolved {
+		return map[string]interface{}{
+			"source_cover_url":   truncateRunes(strings.TrimSpace(source.ProfileBannerURL), 512),
+			"cover_object_key":   "",
+			"cover_content_hash": "",
+		}
+	}
 	return map[string]interface{}{
 		"source_cover_url": truncateRunes(strings.TrimSpace(source.ProfileBannerURL), 512),
 	}

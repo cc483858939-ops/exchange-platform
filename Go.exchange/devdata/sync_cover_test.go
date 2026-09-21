@@ -69,6 +69,23 @@ func TestCoverSyncSuccessfulReplacementAndFailedReplacementPreserveOldCover(t *t
 	}
 }
 
+func TestCoverSyncUnresolvedReplacementWithoutPreserveClearsLocalMetadata(t *testing.T) {
+	existing := &models.User{CoverImageURL: "/api/files/profile-covers/devdata/v1/mkbhd/" + strings.Repeat("a", 64) + ".jpg"}
+	source := SnapshotAccount{
+		RegistryKey:          "MKBHD",
+		ProfileBannerPresent: true,
+		ProfileBannerURL:     "https://pbs.twimg.com/profile_banners/new.jpg",
+	}
+	options := SyncOptions{PreserveExistingCoverWhenUnresolved: false}
+	if got := sourceCoverURLForSync(existing, source, options); got != "" {
+		t.Fatalf("unresolved preserve=false cover URL=%q, want empty", got)
+	}
+	updates := coverMetadataUpdatesForSync(source, options)
+	if len(updates) != 3 || updates["source_cover_url"] != source.ProfileBannerURL || updates["cover_object_key"] != "" || updates["cover_content_hash"] != "" {
+		t.Fatalf("unresolved preserve=false metadata updates=%#v", updates)
+	}
+}
+
 func TestNewMirrorCoverNeverFallsBackToRemoteURL(t *testing.T) {
 	source := SnapshotAccount{RegistryKey: "MKBHD", ProfileBannerPresent: true, ProfileBannerURL: "https://pbs.twimg.com/profile_banners/new.jpg"}
 	if got := sourceCoverURLForSync(nil, source, SyncOptions{PreserveExistingCoverWhenUnresolved: true}); got != "" {

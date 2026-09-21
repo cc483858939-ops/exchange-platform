@@ -57,6 +57,17 @@ func TestDevDataCoverMirrorLifecycleIntegration(t *testing.T) {
 		t.Fatalf("failed replacement state user=%#v account=%#v", user, account)
 	}
 
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, failed, nil, failed.FetchedAt.Add(time.Minute), SyncOptions{}); err != nil {
+		t.Fatalf("failed replacement preserve=false sync: %v", err)
+	}
+	account = findMirrorAccount(t, db, accountKey)
+	if err := db.First(&user, account.LocalUserID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.CoverImageURL != "" || account.SourceCoverURL != failed.Accounts[0].ProfileBannerURL || account.CoverObjectKey != "" || account.CoverContentHash != "" {
+		t.Fatalf("failed preserve=false state user=%#v account=%#v", user, account)
+	}
+
 	second := failed
 	derivativeB, err := profilecoverimage.Optimize(avatarPNGFixture(t))
 	if err != nil {
