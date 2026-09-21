@@ -135,11 +135,11 @@ afterAll(() => {
   }
 });
 
-const profile = (id: number, coverImageURL = '') => ({
+const profile = (id: number, coverImageURL = '', avatarURL = '') => ({
   id,
   username: `user-${id}`,
   display_name: `User ${id}`,
-  avatar_url: '',
+  avatar_url: avatarURL,
   cover_image_url: coverImageURL,
   bio: '',
   created_at: '2026-08-15T00:00:00.000Z',
@@ -197,6 +197,13 @@ const openEditor = async (wrapper: VueWrapper) => {
 
 const submitEditor = async (wrapper: VueWrapper) => {
   await wrapper.get('.profile-edit-form').trigger('submit');
+  await settle();
+};
+
+const clickConfirmAction = async (wrapper: VueWrapper, label: string) => {
+  const button = wrapper.findAll('.confirm-dialog__button').find((item) => item.text() === label);
+  if (!button) throw new Error(`Confirm action not found: ${label}`);
+  await button.trigger('click');
   await settle();
 };
 
@@ -334,6 +341,7 @@ describe('UserProfileView profile cover editor', () => {
     expect(mocks.updateUserProfile).toHaveBeenCalledWith(7, { cover_image_url: uploadedURL });
     expect(mocks.authStore.syncCurrentIdentityProfile).toHaveBeenCalledWith(updated);
     expect(wrapper?.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
+    expect(wrapper?.find('.confirm-dialog').exists()).toBe(false);
     expect(wrapper?.get('.profile-cover__image').attributes('src')).toBe(uploadedURL);
   });
 
@@ -455,6 +463,8 @@ describe('UserProfileView profile cover editor', () => {
     await openEditor(wrapper);
     await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
     await wrapper.findAll('button').find((item) => item.text() === 'Cancel')!.trigger('click');
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
+    await clickConfirmAction(wrapper, 'Discard');
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover.webp');
     expect(mocks.uploadProfileCover).not.toHaveBeenCalled();
 
@@ -462,5 +472,218 @@ describe('UserProfileView profile cover editor', () => {
     await setCoverFile(wrapper, new File(['cover2'], 'cover2.webp', { type: 'image/webp' }));
     wrapper.unmount();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover2.webp');
+  });
+
+  it('closes immediately without confirmation when the editor is clean', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    await wrapper.get('.profile-edit-dialog__close').trigger('click');
+
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
+  });
+
+  it('protects a changed bio when the close button is clicked', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-bio').setValue('A bio that should not be lost.');
+
+    await wrapper.get('.profile-edit-dialog__close').trigger('click');
+
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
+    expect(wrapper.find('.confirm-dialog').text()).toContain("Your profile changes haven't been saved.");
+    expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('A bio that should not be lost.');
+  });
+
+  it('protects a changed display name when Cancel is clicked', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-display-name').setValue('Changed display name');
+
+    await wrapper.findAll('button').find((item) => item.text() === 'Cancel')!.trigger('click');
+
+    expect(wrapper.find('.confirm-dialog').text()).toContain('Discard changes?');
+    expect((wrapper.get('#profile-display-name').element as HTMLInputElement).value).toBe('Changed display name');
+  });
+
+  it('protects a pending avatar and preview when Escape triggers dialog cancel', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+
+    const event = new Event('cancel', { cancelable: true });
+    wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
+    await nextTick();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
+    expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe('blob:avatar.webp');
+  });
+
+  it('protects a pending cover and preview when Escape triggers dialog cancel', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+
+    const event = new Event('cancel', { cancelable: true });
+    wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
+    await nextTick();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:cover.webp');
+  });
+
+  it('keeps all draft and preview state after Keep editing', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-display-name').setValue('Changed display name');
+    await wrapper.get('#profile-bio').setValue('Changed bio');
+    await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+
+    const closeButton = wrapper.get('.profile-edit-dialog__close');
+    await closeButton.trigger('click');
+    await clickConfirmAction(wrapper, 'Keep editing');
+
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
+    expect((wrapper.get('#profile-display-name').element as HTMLInputElement).value).toBe('Changed display name');
+    expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('Changed bio');
+    expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe('blob:avatar.webp');
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:cover.webp');
+  });
+
+  it('clears the full edit draft and previews after Discard', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-bio').setValue('Changed bio');
+    await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+
+    await wrapper.findAll('button').find((item) => item.text() === 'Cancel')!.trigger('click');
+    await clickConfirmAction(wrapper, 'Discard');
+
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:avatar.webp');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover.webp');
+
+    await openEditor(wrapper);
+    expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('');
+    expect(wrapper.find('.profile-avatar--edit img').exists()).toBe(false);
+    expect(wrapper.find('.profile-edit-cover__preview img').exists()).toBe(false);
+  });
+
+  it('keeps an over-limit bio dirty even though Save is disabled', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-bio').setValue('b'.repeat(161));
+
+    expect(wrapper.get('.profile-edit-form button[type="submit"]').attributes('disabled')).toBeDefined();
+    await wrapper.get('.profile-edit-dialog__close').trigger('click');
+
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
+  });
+
+  it('keeps an over-limit display name dirty even though Save is disabled', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-display-name').setValue('n'.repeat(51));
+
+    expect(wrapper.get('.profile-edit-form button[type="submit"]').attributes('disabled')).toBeDefined();
+    await wrapper.findAll('button').find((item) => item.text() === 'Cancel')!.trigger('click');
+
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
+  });
+
+  it('treats removing an existing avatar as a dirty edit', async () => {
+    mocks.getUser.mockResolvedValue(profile(7, '', '/existing-avatar.webp'));
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    await wrapper.findAll('button').find((item) => item.text().includes('Remove photo'))!.trigger('click');
+    await wrapper.get('.profile-edit-dialog__close').trigger('click');
+
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
+  });
+
+  it('treats removing an existing cover as a dirty edit', async () => {
+    mocks.getUser.mockResolvedValue(profile(7, '/existing-cover.webp'));
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    await wrapper.findAll('button').find((item) => item.text().includes('Remove cover'))!.trigger('click');
+    await wrapper.get('.profile-edit-dialog__close').trigger('click');
+
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
+  });
+
+  it('does not open discard confirmation or close while a save is in flight', async () => {
+    let resolveCover!: (url: string) => void;
+    mocks.uploadProfileCover.mockReturnValue(new Promise<string>((resolve) => {
+      resolveCover = resolve;
+    }));
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+
+    const savePromise = wrapper.get('.profile-edit-form').trigger('submit');
+    await nextTick();
+    const event = new Event('cancel', { cancelable: true });
+    wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
+    await nextTick();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
+
+    resolveCover('/new-cover.webp');
+    await savePromise;
+    await settle();
+  });
+
+  it('does not stack confirmations after repeated close requests', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-bio').setValue('Changed bio');
+
+    const closeButton = wrapper.get('.profile-edit-dialog__close');
+    await closeButton.trigger('click');
+    await closeButton.trigger('click');
+
+    expect(wrapper.findAll('.confirm-dialog')).toHaveLength(1);
+  });
+
+  it('keeps the editor usable after Escape followed by Keep editing', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await wrapper.get('#profile-bio').setValue('First draft');
+
+    const event = new Event('cancel', { cancelable: true });
+    wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
+    await nextTick();
+    await clickConfirmAction(wrapper, 'Keep editing');
+    await wrapper.get('#profile-bio').setValue('Second draft');
+
+    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
+    expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('Second draft');
   });
 });

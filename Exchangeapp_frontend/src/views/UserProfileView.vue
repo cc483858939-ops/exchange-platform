@@ -270,7 +270,7 @@
             type="button"
             aria-label="Close edit profile"
             :disabled="editSaving"
-            @click="closeEditProfile"
+            @click="requestCloseEditProfile"
           >
             <AppIcon name="close" :size="20" />
           </button>
@@ -401,7 +401,7 @@
         <p v-if="editError" class="profile-edit-error" role="alert" aria-live="polite">{{ editError }}</p>
 
         <footer class="profile-edit-dialog__actions">
-          <button class="profile-action" type="button" :disabled="editSaving" @click="closeEditProfile">
+          <button class="profile-action" type="button" :disabled="editSaving" @click="requestCloseEditProfile">
             Cancel
           </button>
           <button class="profile-follow-button" type="submit" :disabled="!editCanSave" :aria-busy="editSaving">
@@ -410,6 +410,17 @@
         </footer>
       </form>
     </dialog>
+
+    <ConfirmDialog
+      v-if="discardConfirmOpen"
+      title="Discard changes?"
+      description="Your profile changes haven't been saved."
+      confirm-label="Discard"
+      cancel-label="Keep editing"
+      danger
+      @confirm="confirmDiscardEdit"
+      @cancel="cancelDiscardEdit"
+    />
 </template>
 
 <script setup lang="ts">
@@ -425,6 +436,7 @@ import {
   watch,
 } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
+import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
@@ -691,6 +703,9 @@ const editCoverLoadFailed = ref(false);
 const editCoverError = ref('');
 const editError = ref('');
 const editSaving = ref(false);
+const discardConfirmOpen = ref(false);
+const discardFocusTarget = ref<HTMLElement | null>(null);
+const discardFocusSelector = ref('');
 
 const editDisplayNameLength = computed(() => Array.from(editDraft.display_name.trim()).length);
 const editBioLength = computed(() => Array.from(editDraft.bio.trim()).length);
@@ -712,11 +727,10 @@ const editCoverPreview = computed(() => {
   return pendingCoverPreviewURL.value || editDraft.cover_image_url;
 });
 const editCoverHasValue = computed(() => Boolean(pendingCoverFile.value || editDraft.cover_image_url));
-const editCanSave = computed(() => {
+const editDirty = computed(() => {
   const original = editOriginal.value;
-  if (!original || editSaving.value || editDisplayNameOverLimit.value || editBioOverLimit.value) {
-    return false;
-  }
+  if (!original) return false;
+
   return Boolean(
     pendingAvatarFile.value
     || pendingCoverFile.value
@@ -726,6 +740,12 @@ const editCanSave = computed(() => {
     || editDraft.cover_image_url !== original.cover_image_url,
   );
 });
+const editCanSave = computed(() => (
+  editDirty.value
+  && !editSaving.value
+  && !editDisplayNameOverLimit.value
+  && !editBioOverLimit.value
+));
 
 const revokePendingAvatarPreview = () => {
   if (pendingAvatarPreviewURL.value) {
@@ -766,6 +786,9 @@ const clearEditDraft = () => {
 
 const forceCloseEditProfile = () => {
   editSaving.value = false;
+  discardConfirmOpen.value = false;
+  discardFocusTarget.value = null;
+  discardFocusSelector.value = '';
   clearEditDraft();
   if (editDialogRef.value?.open) {
     editDialogRef.value.close();
@@ -789,22 +812,75 @@ const openEditProfile = () => {
   void nextTick(() => editDisplayNameInputRef.value?.focus());
 };
 
-const closeEditProfile = () => {
+const requestCloseEditProfile = (event?: Event) => {
   if (editSaving.value) return;
-  clearEditDraft();
-  if (editDialogRef.value?.open) editDialogRef.value.close();
+
+  if (editDirty.value) {
+    if (discardConfirmOpen.value) return;
+    const currentTarget = event?.currentTarget;
+    const activeElement = document.activeElement;
+    if (currentTarget instanceof HTMLButtonElement && editDialogRef.value?.contains(currentTarget)) {
+      discardFocusTarget.value = currentTarget;
+      discardFocusSelector.value = currentTarget.classList.contains('profile-edit-dialog__close')
+        ? '.profile-edit-dialog__close'
+        : currentTarget.id
+          ? `#${currentTarget.id}`
+          : '';
+    } else if (activeElement instanceof HTMLElement && editDialogRef.value?.contains(activeElement)) {
+      discardFocusTarget.value = activeElement;
+      discardFocusSelector.value = activeElement.id ? `#${activeElement.id}` : '';
+    } else {
+      discardFocusTarget.value = null;
+      discardFocusSelector.value = '';
+    }
+    if (!discardFocusTarget.value) {
+      discardFocusTarget.value = editDisplayNameInputRef.value;
+      discardFocusSelector.value = '#profile-display-name';
+    }
+    discardConfirmOpen.value = true;
+    return;
+  }
+
+  forceCloseEditProfile();
 };
 
 const handleDialogCancel = (event: Event) => {
+  event.preventDefault();
   if (editSaving.value) {
-    event.preventDefault();
     return;
   }
-  clearEditDraft();
+  requestCloseEditProfile(event);
 };
 
 const handleDialogClose = () => {
+  discardConfirmOpen.value = false;
   if (!editSaving.value) clearEditDraft();
+};
+
+const confirmDiscardEdit = () => {
+  forceCloseEditProfile();
+};
+
+const cancelDiscardEdit = () => {
+  discardConfirmOpen.value = false;
+  const focusTarget = discardFocusTarget.value;
+  const focusSelector = discardFocusSelector.value;
+  discardFocusTarget.value = null;
+  discardFocusSelector.value = '';
+  void nextTick(() => {
+    void nextTick(() => {
+      const currentFocusTarget = focusTarget?.isConnected
+        ? focusTarget
+        : focusSelector
+          ? editDialogRef.value?.querySelector<HTMLElement>(focusSelector)
+          : null;
+      if (currentFocusTarget) {
+        currentFocusTarget.focus();
+        return;
+      }
+      editDisplayNameInputRef.value?.focus();
+    });
+  });
 };
 
 const handleAvatarSelection = (event: Event) => {
@@ -950,8 +1026,7 @@ const saveProfile = async () => {
     phase = 'profile-save';
     const payload = buildProfilePatch();
     if (Object.keys(payload).length === 0) {
-      editSaving.value = false;
-      closeEditProfile();
+      forceCloseEditProfile();
       return;
     }
 
@@ -959,9 +1034,7 @@ const saveProfile = async () => {
     if (!isCurrentEditSession(capture, profile.id, viewerID)) return;
     profileStore.updateUser(updatedUser);
     authStore.syncCurrentIdentityProfile(updatedUser);
-    editSaving.value = false;
-    clearEditDraft();
-    editDialogRef.value?.close();
+    forceCloseEditProfile();
   } catch (error) {
     if (isCurrentEditSession(capture, profile.id, viewerID)) {
       editError.value = profileEditErrorMessage(error, phase);
