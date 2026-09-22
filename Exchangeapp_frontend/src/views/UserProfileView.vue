@@ -284,15 +284,16 @@
               alt="Profile cover preview"
               @error="editCoverLoadFailed = true"
             />
-          </div>
-          <div class="profile-edit-cover__actions">
             <label
-              class="profile-action profile-action--compact"
+              class="profile-edit-media-change profile-edit-cover__change"
               for="profile-cover-input"
               :aria-disabled="editSaving"
+              aria-label="Change cover"
+              role="button"
+              tabindex="0"
+              @keydown="handleCoverChangeKeydown"
             >
-              <AppIcon name="image" :size="16" />
-              Change cover
+              <AppIcon name="camera" :size="20" />
               <input
                 id="profile-cover-input"
                 ref="profileCoverInputRef"
@@ -303,13 +304,14 @@
                 @change="handleCoverSelection"
               />
             </label>
+          </div>
+          <div class="profile-edit-cover__actions">
             <button
-              class="profile-action profile-action--compact"
+              class="profile-edit-media-remove"
               type="button"
               :disabled="editSaving || !editCoverHasValue"
               @click="removeProfileCover"
             >
-              <AppIcon name="image-off" :size="16" />
               Remove cover
             </button>
           </div>
@@ -325,30 +327,36 @@
               @error="editAvatarLoadFailed = true"
             />
             <span v-else aria-hidden="true">{{ editProfileInitial }}</span>
+            <label
+              class="profile-edit-media-change profile-edit-avatar__change"
+              for="profile-avatar-input"
+              :aria-disabled="editSaving"
+              aria-label="Change photo"
+              role="button"
+              tabindex="0"
+              @keydown="handleAvatarChangeKeydown"
+            >
+              <AppIcon name="camera" :size="20" />
+              <input
+                id="profile-avatar-input"
+                ref="profileAvatarInputRef"
+                class="sr-only"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                :disabled="editSaving"
+                @change="handleAvatarSelection"
+              />
+            </label>
           </div>
           <div class="profile-edit-avatar__copy">
             <span class="profile-edit-field__label">Avatar</span>
             <div class="profile-edit-avatar__actions">
-              <label class="profile-action profile-action--compact" for="profile-avatar-input">
-                <AppIcon name="camera" :size="16" />
-                Change photo
-                <input
-                  id="profile-avatar-input"
-                  ref="profileAvatarInputRef"
-                  class="sr-only"
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  :disabled="editSaving"
-                  @change="handleAvatarSelection"
-                />
-              </label>
               <button
-                class="profile-action profile-action--compact"
+                class="profile-edit-media-remove"
                 type="button"
                 :disabled="editSaving || !editAvatarHasValue"
                 @click="removeProfileAvatar"
               >
-                <AppIcon name="image-off" :size="16" />
                 Remove photo
               </button>
             </div>
@@ -893,6 +901,21 @@ const cancelDiscardEdit = () => {
       editDisplayNameInputRef.value?.focus();
     });
   });
+};
+
+const activateFileInput = (event: KeyboardEvent, input: HTMLInputElement | null) => {
+  if (editSaving.value) return;
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  input?.click();
+};
+
+const handleCoverChangeKeydown = (event: KeyboardEvent) => {
+  activateFileInput(event, profileCoverInputRef.value);
+};
+
+const handleAvatarChangeKeydown = (event: KeyboardEvent) => {
+  activateFileInput(event, profileAvatarInputRef.value);
 };
 
 const handleAvatarSelection = (event: Event) => {
@@ -1958,6 +1981,7 @@ onBeforeUnmount(() => {
 }
 
 .profile-edit-cover__preview {
+  position: relative;
   width: 100%;
   overflow: hidden;
   border: 1px solid var(--color-border-strong);
@@ -1973,36 +1997,85 @@ onBeforeUnmount(() => {
   object-position: center;
 }
 
+.profile-edit-media-change {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 20, 25, 0.72);
+  color: #fff;
+  cursor: pointer;
+}
+
+.profile-edit-cover__change,
+.profile-edit-avatar__change {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+}
+
+.profile-edit-media-change[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.profile-edit-media-change:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .profile-edit-media-change:hover {
+    background: rgba(15, 20, 25, 0.86);
+  }
+}
+
 .profile-edit-cover__actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-.profile-edit-dialog .profile-action--compact {
-  display: inline-flex;
+.profile-edit-media-remove {
   min-height: 36px;
-  align-items: center;
-  gap: var(--space-1);
-  border-color: var(--color-border);
-  padding: 0 var(--space-3);
+  border: 0;
+  padding: 0 var(--space-2);
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font: inherit;
   font-size: 13px;
   font-weight: 650;
 }
 
-.profile-edit-dialog .profile-edit-cover__actions > button,
-.profile-edit-dialog .profile-edit-avatar__actions > button {
-  border-color: transparent;
-  color: var(--color-text-tertiary);
+.profile-edit-media-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
-.profile-edit-dialog label[aria-disabled="true"] {
-  cursor: wait;
-  opacity: 0.55;
+.profile-edit-media-remove:focus-visible {
+  color: var(--color-danger);
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .profile-edit-media-remove:hover:not(:disabled) {
+    color: var(--color-danger);
+  }
+}
+
+@media (max-width: 520px) {
+  .profile-edit-media-remove {
+    min-height: 44px;
+  }
 }
 
 .profile-avatar--edit {
@@ -2030,10 +2103,6 @@ onBeforeUnmount(() => {
 .profile-edit-avatar__actions {
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.profile-edit-avatar__actions .profile-action {
-  gap: var(--space-1);
 }
 
 .profile-edit-field {
@@ -2161,10 +2230,6 @@ onBeforeUnmount(() => {
     min-height: 60px;
     margin-inline: calc(-1 * var(--space-4));
     padding-inline: var(--space-4);
-  }
-
-  .profile-edit-dialog .profile-action--compact {
-    min-height: 42px;
   }
 
   .profile-edit-dialog__actions {

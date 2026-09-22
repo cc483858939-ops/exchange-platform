@@ -285,6 +285,113 @@ describe('UserProfileView profile cover editor', () => {
     expect(remove?.attributes('disabled')).toBeDefined();
   });
 
+  it('renders direct camera controls inside both media previews without visible change actions', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    expect(wrapper.get('.profile-edit-cover__preview .profile-edit-cover__change').attributes()).toMatchObject({
+      'aria-label': 'Change cover',
+      for: 'profile-cover-input',
+      role: 'button',
+      tabindex: '0',
+    });
+    expect(wrapper.get('.profile-avatar--edit .profile-edit-avatar__change').attributes()).toMatchObject({
+      'aria-label': 'Change photo',
+      for: 'profile-avatar-input',
+      role: 'button',
+      tabindex: '0',
+    });
+    expect(wrapper.get('.profile-edit-cover__actions').text().trim()).toBe('Remove cover');
+    expect(wrapper.get('.profile-edit-avatar__actions').text().trim()).toBe('Remove photo');
+    expect(wrapper.findAll('.profile-edit-cover__actions label')).toHaveLength(0);
+    expect(wrapper.findAll('.profile-edit-avatar__actions label')).toHaveLength(0);
+    expect(wrapper.findAll('#profile-cover-input')).toHaveLength(1);
+    expect(wrapper.findAll('#profile-avatar-input')).toHaveLength(1);
+  });
+
+  it('keeps empty cover and avatar previews directly changeable', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    expect(wrapper.find('.profile-edit-cover__preview img').exists()).toBe(false);
+    expect(wrapper.find('.profile-edit-cover__change').exists()).toBe(true);
+    expect(wrapper.find('.profile-avatar--edit img').exists()).toBe(false);
+    expect(wrapper.get('.profile-avatar--edit').text()).toBe('U');
+    expect(wrapper.find('.profile-edit-avatar__change').exists()).toBe(true);
+    expect(wrapper.get('.profile-edit-media-remove').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.profile-edit-avatar__actions .profile-edit-media-remove').attributes('disabled')).toBeDefined();
+  });
+
+  it('activates cover and avatar file inputs with Enter and Space', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    const coverInput = wrapper.get('#profile-cover-input');
+    const avatarInput = wrapper.get('#profile-avatar-input');
+    const coverClick = vi.spyOn(coverInput.element as HTMLInputElement, 'click');
+    const avatarClick = vi.spyOn(avatarInput.element as HTMLInputElement, 'click');
+
+    const coverChange = wrapper.get('.profile-edit-cover__change');
+    await coverChange.trigger('keydown', { key: 'Enter' });
+    await coverChange.trigger('keydown', { key: ' ' });
+    const avatarChange = wrapper.get('.profile-edit-avatar__change');
+    await avatarChange.trigger('keydown', { key: 'Enter' });
+    await avatarChange.trigger('keydown', { key: ' ' });
+
+    expect(coverClick).toHaveBeenCalledTimes(2);
+    expect(avatarClick).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables media cameras and blocks keyboard activation while saving', async () => {
+    let resolveCover!: (url: string) => void;
+    mocks.uploadProfileCover.mockReturnValue(new Promise<string>((resolve) => {
+      resolveCover = resolve;
+    }));
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+
+    const coverInput = wrapper.get('#profile-cover-input');
+    const avatarInput = wrapper.get('#profile-avatar-input');
+    const coverClick = vi.spyOn(coverInput.element as HTMLInputElement, 'click');
+    const avatarClick = vi.spyOn(avatarInput.element as HTMLInputElement, 'click');
+    const savePromise = wrapper.get('.profile-edit-form').trigger('submit');
+    await nextTick();
+
+    expect(coverInput.attributes('disabled')).toBeDefined();
+    expect(avatarInput.attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.profile-edit-cover__change').attributes('aria-disabled')).toBe('true');
+    expect(wrapper.get('.profile-edit-avatar__change').attributes('aria-disabled')).toBe('true');
+
+    await wrapper.get('.profile-edit-cover__change').trigger('keydown', { key: 'Enter' });
+    await wrapper.get('.profile-edit-avatar__change').trigger('keydown', { key: ' ' });
+    expect(coverClick).not.toHaveBeenCalled();
+    expect(avatarClick).not.toHaveBeenCalled();
+
+    resolveCover('/saved-cover.webp');
+    await savePromise;
+    await settle();
+  });
+
+  it('keeps Remove photo disabled without an avatar', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    expect(wrapper.get('.profile-edit-avatar__actions .profile-edit-media-remove').attributes('disabled')).toBeDefined();
+  });
+
+  it('enables Remove photo when an avatar exists', async () => {
+    mocks.getUser.mockResolvedValue(profile(7, '', '/existing-avatar.webp'));
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    expect(wrapper.get('.profile-edit-avatar__actions .profile-edit-media-remove').attributes('disabled')).toBeUndefined();
+  });
+
   it('uses the same cover framing classes for profile display and edit preview', async () => {
     wrapper = mountProfile();
     await settle();
