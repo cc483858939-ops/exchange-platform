@@ -71,6 +71,40 @@ func TestNormalizedRecommendationConfigRejectsNonPositiveGuestServedHistoryLimit
 	}
 }
 
+func TestNormalizedRecommendationConfigUsesDefaultGuestServedHistoryTTLHours(t *testing.T) {
+	original := config.AppConfig
+	config.AppConfig = &config.Config{}
+	t.Cleanup(func() { config.AppConfig = original })
+
+	if got := normalizedRecommendationConfig().GuestServedHistoryTTLHours; got != 24 {
+		t.Fatalf("guest served history ttl hours=%d, want 24", got)
+	}
+}
+
+func TestNormalizedRecommendationConfigOverridesGuestServedHistoryTTLHours(t *testing.T) {
+	original := config.AppConfig
+	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryTTLHours: 48}}
+	t.Cleanup(func() { config.AppConfig = original })
+
+	if got := normalizedRecommendationConfig().GuestServedHistoryTTLHours; got != 48 {
+		t.Fatalf("guest served history ttl hours=%d, want 48", got)
+	}
+}
+
+func TestNormalizedRecommendationConfigRejectsNonPositiveGuestServedHistoryTTLHours(t *testing.T) {
+	for _, ttlHours := range []int{0, -1} {
+		t.Run(fmt.Sprintf("ttl_hours_%d", ttlHours), func(t *testing.T) {
+			original := config.AppConfig
+			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryTTLHours: ttlHours}}
+			t.Cleanup(func() { config.AppConfig = original })
+
+			if got := normalizedRecommendationConfig().GuestServedHistoryTTLHours; got != 24 {
+				t.Fatalf("guest served history ttl hours=%d, want 24", got)
+			}
+		})
+	}
+}
+
 func TestNormalizedRecommendationConfigOverridesFusionRankConstant(t *testing.T) {
 	original := config.AppConfig
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{

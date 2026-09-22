@@ -28,6 +28,7 @@ func TestGuestRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		ServedHardExclusionMinutes: 30,
 		ServedSoftLookbackDays:     7,
 		GuestServedHistoryLimit:    3,
+		GuestServedHistoryTTLHours: 24,
 	}
 
 	t.Run("write read round trip", func(t *testing.T) {
@@ -271,8 +272,8 @@ func TestGuestRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read refreshed served history ttl: %v", err)
 		}
-		if refreshedTTL <= 7*24*time.Hour || refreshedTTL > wantTTL || refreshedTTL < wantTTL-5*time.Second {
-			t.Fatalf("refreshed ttl=%s want greater than 7d and within 5s of %s", refreshedTTL, wantTTL)
+		if refreshedTTL <= 0 || refreshedTTL > wantTTL || refreshedTTL < wantTTL-5*time.Second {
+			t.Fatalf("refreshed ttl=%s want >0 and within 5s of %s", refreshedTTL, wantTTL)
 		}
 		for _, member := range []string{"801", "802"} {
 			if _, err := client.ZScore(key, member).Result(); err != nil {

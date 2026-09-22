@@ -98,6 +98,7 @@ recommendation:
   served_soft_lookback_days: 7
   served_history_limit: 1000
   guest_served_history_limit: 2000
+  guest_served_history_ttl_hours: 24
   diversity:
     enabled: true
     author_window_size: 8

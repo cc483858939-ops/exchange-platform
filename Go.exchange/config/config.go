@@ -225,6 +225,7 @@ type RecommendationConfig struct {
 	ServedSoftLookbackDays            int                                        `mapstructure:"served_soft_lookback_days"`
 	ServedHistoryLimit                int                                        `mapstructure:"served_history_limit"`
 	GuestServedHistoryLimit           int                                        `mapstructure:"guest_served_history_limit"`
+	GuestServedHistoryTTLHours        int                                        `mapstructure:"guest_served_history_ttl_hours"`
 	Diversity                         RecommendationDiversityConfig              `mapstructure:"diversity"`
 	Trace                             RecommendationTraceConfig                  `mapstructure:"trace"`
 	Candidates                        RecommendationCandidatesConfig             `mapstructure:"candidates"`

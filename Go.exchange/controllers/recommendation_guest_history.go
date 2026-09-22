@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	guestRecommendationSessionHeader = "X-Guest-Recommendation-Session"
-	guestRecommendationHistoryPrefix = "recommendation:guest:served:v1:"
-	defaultGuestServedHistoryLimit   = 2000
-	defaultGuestHardExclusionMinutes = 30
-	defaultGuestSoftLookbackDays     = 7
+	guestRecommendationSessionHeader  = "X-Guest-Recommendation-Session"
+	guestRecommendationHistoryPrefix  = "recommendation:guest:served:v1:"
+	defaultGuestServedHistoryLimit    = 2000
+	defaultGuestHardExclusionMinutes  = 30
+	defaultGuestSoftLookbackDays      = 7
+	defaultGuestServedHistoryTTLHours = 24
 )
 
 func parseGuestRecommendationSessionID(raw string) (string, bool) {
@@ -64,8 +65,15 @@ func effectiveGuestSoftLookbackDays(cfg config.RecommendationConfig) int {
 	return defaultGuestSoftLookbackDays
 }
 
+func effectiveGuestServedHistoryTTLHours(cfg config.RecommendationConfig) int {
+	if cfg.GuestServedHistoryTTLHours > 0 {
+		return cfg.GuestServedHistoryTTLHours
+	}
+	return defaultGuestServedHistoryTTLHours
+}
+
 func guestRecommendationHistoryTTL(cfg config.RecommendationConfig) time.Duration {
-	return time.Duration(effectiveGuestSoftLookbackDays(cfg)+1) * 24 * time.Hour
+	return time.Duration(effectiveGuestServedHistoryTTLHours(cfg)) * time.Hour
 }
 
 func guestRecommendationHistoryMembers(postIDs []uint, score float64) []*redis.Z {

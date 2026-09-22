@@ -73,9 +73,21 @@ func TestGuestRecommendationHistoryMembersDeduplicateAndIgnoreZeroIDs(t *testing
 	}
 }
 
-func TestGuestRecommendationHistoryTTLIncludesOneDayBuffer(t *testing.T) {
-	cfg := config.RecommendationConfig{ServedSoftLookbackDays: 7}
-	if got, want := guestRecommendationHistoryTTL(cfg), 8*24*time.Hour; got != want {
+func TestGuestRecommendationHistoryTTLDefaultsTo24HoursIndependentOfSoftLookback(t *testing.T) {
+	for _, softLookbackDays := range []int{1, 7, 30} {
+		cfg := config.RecommendationConfig{ServedSoftLookbackDays: softLookbackDays}
+		if got, want := guestRecommendationHistoryTTL(cfg), 24*time.Hour; got != want {
+			t.Fatalf("soft lookback days=%d ttl=%s want %s", softLookbackDays, got, want)
+		}
+	}
+}
+
+func TestGuestRecommendationHistoryTTLUsesConfiguredHours(t *testing.T) {
+	cfg := config.RecommendationConfig{
+		ServedSoftLookbackDays:     1,
+		GuestServedHistoryTTLHours: 48,
+	}
+	if got, want := guestRecommendationHistoryTTL(cfg), 48*time.Hour; got != want {
 		t.Fatalf("ttl=%s want %s", got, want)
 	}
 }
