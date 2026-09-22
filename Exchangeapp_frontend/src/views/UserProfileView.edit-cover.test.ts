@@ -296,6 +296,14 @@ describe('UserProfileView profile cover editor', () => {
     expect(username.find('input').exists()).toBe(false);
   });
 
+  it('does not autofocus the display name when opening the profile editor', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    expect(document.activeElement).not.toBe(wrapper.get('#profile-display-name').element);
+  });
+
   it('opens avatar crop before changing the preview and preserves the previous crop when a replacement is canceled', async () => {
     wrapper = mountProfile();
     await settle();

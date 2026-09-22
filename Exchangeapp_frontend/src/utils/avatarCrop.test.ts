@@ -7,6 +7,7 @@ import {
   clampAvatarCropState,
   createAvatarCropGeometry,
   createCroppedAvatar,
+  decodeAvatarImage,
   zoomAvatarCropState,
 } from './avatarCrop';
 
@@ -54,6 +55,91 @@ describe('avatar crop geometry', () => {
       width: 250,
       height: 250,
     });
+  });
+});
+
+describe('decodeAvatarImage source limits', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('rejects a source wider than 8192 pixels and closes the bitmap', async () => {
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 8193,
+      height: 1000,
+      close,
+    }));
+
+    await expect(decodeAvatarImage(new File(['source'], 'wide.webp', { type: 'image/webp' })))
+      .rejects.toMatchObject({ code: 'SOURCE_TOO_LARGE' });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a source taller than 8192 pixels and closes the bitmap', async () => {
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 1000,
+      height: 8193,
+      close,
+    }));
+
+    await expect(decodeAvatarImage(new File(['source'], 'tall.webp', { type: 'image/webp' })))
+      .rejects.toMatchObject({ code: 'SOURCE_TOO_LARGE' });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a source larger than 20 megapixels and closes the bitmap', async () => {
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 5000,
+      height: 5000,
+      close,
+    }));
+
+    await expect(decodeAvatarImage(new File(['source'], 'large.webp', { type: 'image/webp' })))
+      .rejects.toMatchObject({ code: 'SOURCE_TOO_LARGE' });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows the exact 20 megapixel boundary and preserves EXIF orientation decoding', async () => {
+    const close = vi.fn();
+    const createImageBitmap = vi.fn().mockResolvedValue({
+      width: 5000,
+      height: 4000,
+      close,
+    });
+    vi.stubGlobal('createImageBitmap', createImageBitmap);
+
+    const file = new File(['source'], 'boundary.webp', { type: 'image/webp' });
+    const decoded = await decodeAvatarImage(file);
+
+    expect(decoded).toMatchObject({ naturalWidth: 5000, naturalHeight: 4000 });
+    expect(createImageBitmap).toHaveBeenCalledWith(file, { imageOrientation: 'from-image' });
+    decoded.dispose();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fall back to HTMLImageElement after an oversized ImageBitmap', async () => {
+    const close = vi.fn();
+    const fallbackImage = vi.fn();
+    const createObjectURL = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 5000,
+      height: 5000,
+      close,
+    }));
+    vi.stubGlobal('Image', fallbackImage);
+    vi.stubGlobal('URL', {
+      createObjectURL,
+      revokeObjectURL: vi.fn(),
+    });
+
+    await expect(decodeAvatarImage(new File(['source'], 'large.webp', { type: 'image/webp' })))
+      .rejects.toMatchObject({ code: 'SOURCE_TOO_LARGE' });
+    expect(fallbackImage).not.toHaveBeenCalled();
+    expect(createObjectURL).not.toHaveBeenCalled();
   });
 });
 

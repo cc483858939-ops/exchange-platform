@@ -3,6 +3,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import AvatarCropDialog from './AvatarCropDialog.vue';
+import { AvatarCropError } from '../../utils/avatarCrop';
 
 const mocks = vi.hoisted(() => ({
   decodeAvatarImage: vi.fn(),
@@ -82,6 +83,7 @@ describe('AvatarCropDialog', () => {
 
     expect(wrapper.get('dialog').attributes('open')).toBeDefined();
     expect(wrapper.get('.avatar-crop-dialog__image').attributes('src')).toBe('blob:avatar.webp');
+    expect(wrapper.get('.avatar-crop-dialog__viewport').find('.avatar-crop-dialog__circle').exists()).toBe(true);
     expect(wrapper.get('#avatar-crop-zoom').attributes('aria-label')).toBe('Zoom photo');
     expect(wrapper.get('.avatar-crop-dialog__image').attributes('style')).toContain('translate3d(-140px, 0px, 0)');
   });
@@ -141,6 +143,48 @@ describe('AvatarCropDialog', () => {
     expect(wrapper.emitted('apply')).toHaveLength(1);
   });
 
+  it('allows Cancel while preparing and ignores a stale Apply after unmount', async () => {
+    let resolve!: (file: File) => void;
+    mocks.createCroppedAvatar.mockReturnValue(new Promise<File>(res => { resolve = res; }));
+    const wrapper = mountDialog();
+    await settle();
+
+    await wrapper.get('.avatar-crop-dialog__button--primary').trigger('click');
+    expect(wrapper.get('.avatar-crop-dialog__button--primary').text()).toBe('Preparing…');
+    expect(wrapper.get('.avatar-crop-dialog__button--secondary').attributes('disabled')).toBeUndefined();
+
+    await wrapper.get('.avatar-crop-dialog__button--secondary').trigger('click');
+    expect(wrapper.emitted('cancel')).toHaveLength(1);
+
+    wrapper.unmount();
+    resolve(new File(['cropped'], 'avatar-cropped.jpg', { type: 'image/jpeg' }));
+    await settle();
+    expect(wrapper.emitted('apply')).toBeUndefined();
+  });
+
+  it('allows the Close button to cancel while preparing', async () => {
+    let resolve!: (file: File) => void;
+    mocks.createCroppedAvatar.mockReturnValue(new Promise<File>(res => { resolve = res; }));
+    const wrapper = mountDialog();
+    await settle();
+
+    await wrapper.get('.avatar-crop-dialog__button--primary').trigger('click');
+    await wrapper.get('.avatar-crop-dialog__close').trigger('click');
+
+    expect(wrapper.emitted('cancel')).toHaveLength(1);
+    wrapper.unmount();
+    resolve(new File(['cropped'], 'avatar-cropped.jpg', { type: 'image/jpeg' }));
+    await settle();
+  });
+
+  it('shows a dedicated message for an oversized decoded source', async () => {
+    mocks.decodeAvatarImage.mockRejectedValue(new AvatarCropError('SOURCE_TOO_LARGE'));
+    const wrapper = mountDialog();
+    await settle();
+
+    expect(wrapper.get('[role="alert"]').text()).toBe('This photo is too large. Choose a smaller image.');
+  });
+
   it('reports decode failures without closing', async () => {
     mocks.decodeAvatarImage.mockRejectedValue(new Error('decode failed'));
     const wrapper = mountDialog();
@@ -149,5 +193,29 @@ describe('AvatarCropDialog', () => {
     expect(wrapper.get('[role="alert"]').text()).toBe('This image could not be opened. Try another photo.');
     expect(wrapper.get('.avatar-crop-dialog').attributes('open')).toBeDefined();
     expect(wrapper.get('.avatar-crop-dialog__button--primary').attributes('disabled')).toBeDefined();
+  });
+
+  it('revokes the source preview URL on unmount', async () => {
+    const file = sourceFile();
+    const wrapper = mountDialog(file);
+    await settle();
+
+    expect(URL.createObjectURL).toHaveBeenCalledWith(file);
+    wrapper.unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:avatar.webp');
+  });
+
+  it('revokes the old source preview URL when the file changes', async () => {
+    const first = sourceFile();
+    const second = new File(['second'], 'second.webp', { type: 'image/webp' });
+    const wrapper = mountDialog(first);
+    await settle();
+
+    await wrapper.setProps({ file: second });
+    await settle();
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:avatar.webp');
+    expect(URL.createObjectURL).toHaveBeenCalledWith(second);
+    wrapper.unmount();
   });
 });

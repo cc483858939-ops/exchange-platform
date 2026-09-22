@@ -822,7 +822,6 @@ const openEditProfile = () => {
   editDraft.avatar_url = user.value.avatar_url;
   editDraft.cover_image_url = user.value.cover_image_url;
   editDialogRef.value?.showModal();
-  void nextTick(() => editDisplayNameInputRef.value?.focus());
 };
 
 const requestCloseEditProfile = (event?: Event) => {

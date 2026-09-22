@@ -79,7 +79,6 @@
         <button
           class="avatar-crop-dialog__button avatar-crop-dialog__button--secondary"
           type="button"
-          :disabled="applying"
           @click="handleCancel"
         >
           Cancel
@@ -106,6 +105,7 @@ import {
   createCroppedAvatar,
   centeredAvatarCropState,
   decodeAvatarImage,
+  isAvatarCropError,
   zoomAvatarCropState,
   type AvatarCropGeometry,
   type AvatarCropState,
@@ -237,10 +237,12 @@ const initialize = async () => {
     measureCropViewport();
     if (geometry.value) resetCrop();
     loading.value = false;
-  } catch {
+  } catch (error) {
     if (currentVersion !== sessionVersion) return;
     loading.value = false;
-    errorMessage.value = 'This image could not be opened. Try another photo.';
+    errorMessage.value = isAvatarCropError(error, 'SOURCE_TOO_LARGE')
+      ? 'This photo is too large. Choose a smaller image.'
+      : 'This image could not be opened. Try another photo.';
   }
 };
 
@@ -283,7 +285,6 @@ const handlePointerUp = (event: PointerEvent) => {
 };
 
 const handleCancel = () => {
-  if (applying.value) return;
   emit('cancel');
 };
 
@@ -443,7 +444,7 @@ onBeforeUnmount(() => {
 
 .avatar-crop-dialog__circle {
   position: absolute;
-  inset: 10%;
+  inset: 0;
   border: 2px solid rgba(255, 255, 255, 0.96);
   border-radius: 50%;
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);

@@ -30,10 +30,42 @@ export type AvatarCropRequest = {
   outputSize?: number;
 };
 
+export type AvatarCropErrorCode = 'SOURCE_TOO_LARGE' | 'DECODE_FAILED' | 'OUTPUT_FAILED';
+
+export class AvatarCropError extends Error {
+  constructor(public readonly code: AvatarCropErrorCode) {
+    super(code);
+    this.name = 'AvatarCropError';
+  }
+}
+
+export const isAvatarCropError = (
+  error: unknown,
+  code?: AvatarCropErrorCode,
+): error is AvatarCropError => (
+  error instanceof AvatarCropError
+  && (code === undefined || error.code === code)
+);
+
 const defaultOutputSize = 512;
 const maxOutputBytes = 2 * 1024 * 1024;
+const maxSourceDimension = 8192;
+const maxSourcePixels = 20_000_000;
 
 const isPositiveFinite = (value: number) => Number.isFinite(value) && value > 0;
+
+const validateAvatarSourceDimensions = (width: number, height: number) => {
+  if (!isPositiveFinite(width) || !isPositiveFinite(height)) {
+    throw new AvatarCropError('DECODE_FAILED');
+  }
+  if (
+    width > maxSourceDimension
+    || height > maxSourceDimension
+    || width > maxSourcePixels / height
+  ) {
+    throw new AvatarCropError('SOURCE_TOO_LARGE');
+  }
+};
 
 export const createAvatarCropGeometry = (
   cropSize: number,
@@ -134,7 +166,7 @@ const decodeWithImageElement = async (source: Blob): Promise<AvatarCropSource> =
     || typeof URL.createObjectURL !== 'function'
     || typeof Image === 'undefined'
   ) {
-    throw new Error('This image could not be opened.');
+    throw new AvatarCropError('DECODE_FAILED');
   }
 
   const sourceURL = URL.createObjectURL(source);
@@ -144,7 +176,7 @@ const decodeWithImageElement = async (source: Blob): Promise<AvatarCropSource> =
     image.decoding = 'async';
     await new Promise<void>((resolve, reject) => {
       image!.onload = () => resolve();
-      image!.onerror = () => reject(new Error('This image could not be opened.'));
+      image!.onerror = () => reject(new AvatarCropError('DECODE_FAILED'));
       image!.src = sourceURL;
     });
     if (typeof image.decode === 'function') {
@@ -153,9 +185,7 @@ const decodeWithImageElement = async (source: Blob): Promise<AvatarCropSource> =
 
     const naturalWidth = image.naturalWidth || image.width;
     const naturalHeight = image.naturalHeight || image.height;
-    if (!isPositiveFinite(naturalWidth) || !isPositiveFinite(naturalHeight)) {
-      throw new Error('This image could not be opened.');
-    }
+    validateAvatarSourceDimensions(naturalWidth, naturalHeight);
 
     return {
       source: image,
@@ -163,6 +193,11 @@ const decodeWithImageElement = async (source: Blob): Promise<AvatarCropSource> =
       naturalHeight,
       dispose: () => undefined,
     };
+  } catch (error) {
+    if (isAvatarCropError(error)) {
+      throw error;
+    }
+    throw new AvatarCropError('DECODE_FAILED');
   } finally {
     revokeObjectURL(sourceURL);
   }
@@ -170,20 +205,31 @@ const decodeWithImageElement = async (source: Blob): Promise<AvatarCropSource> =
 
 export const decodeAvatarImage = async (source: Blob): Promise<AvatarCropSource> => {
   if (typeof createImageBitmap === 'function') {
+    let bitmap: ImageBitmap;
     try {
-      const bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' });
-      if (!isPositiveFinite(bitmap.width) || !isPositiveFinite(bitmap.height)) {
-        bitmap.close();
-        throw new Error('This image could not be opened.');
+      bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' });
+    } catch (error) {
+      if (isAvatarCropError(error)) {
+        throw error;
       }
+      // Fall back to the browser image decoder when ImageBitmap is unavailable.
+      return decodeWithImageElement(source);
+    }
+
+    try {
+      validateAvatarSourceDimensions(bitmap.width, bitmap.height);
       return {
         source: bitmap,
         naturalWidth: bitmap.width,
         naturalHeight: bitmap.height,
         dispose: () => bitmap.close(),
       };
-    } catch {
-      // Fall back to the browser image decoder when ImageBitmap is unavailable.
+    } catch (error) {
+      bitmap.close();
+      if (isAvatarCropError(error)) {
+        throw error;
+      }
+      throw new AvatarCropError('DECODE_FAILED');
     }
   }
 
@@ -210,7 +256,7 @@ export const createCroppedAvatar = async (request: AvatarCropRequest): Promise<F
     request.naturalHeight,
   );
   if (!geometry || !isPositiveFinite(outputSize)) {
-    throw new Error('Could not prepare this photo. Try another image.');
+    throw new AvatarCropError('OUTPUT_FAILED');
   }
 
   const decoded = await decodeAvatarImage(request.source);
@@ -221,14 +267,14 @@ export const createCroppedAvatar = async (request: AvatarCropRequest): Promise<F
       offsetY: request.offsetY,
     }, geometry);
     if (typeof document === 'undefined') {
-      throw new Error('Could not prepare this photo. Try another image.');
+      throw new AvatarCropError('OUTPUT_FAILED');
     }
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(outputSize);
     canvas.height = Math.round(outputSize);
     const context = canvas.getContext('2d');
     if (!context) {
-      throw new Error('Could not prepare this photo. Try another image.');
+      throw new AvatarCropError('OUTPUT_FAILED');
     }
     context.drawImage(
       decoded.source,
@@ -247,13 +293,13 @@ export const createCroppedAvatar = async (request: AvatarCropRequest): Promise<F
       canvas.toBlob(
         candidate => candidate
           ? resolve(candidate)
-          : reject(new Error('Could not prepare this photo. Try another image.')),
+          : reject(new AvatarCropError('OUTPUT_FAILED')),
         format.type,
         format.type === 'image/jpeg' ? 0.9 : undefined,
       );
     });
     if (blob.size <= 0 || blob.size > maxOutputBytes) {
-      throw new Error('Could not prepare this photo. Try another image.');
+      throw new AvatarCropError('OUTPUT_FAILED');
     }
 
     return new File([blob], outputName(request.source, format.extension), {
