@@ -285,29 +285,46 @@ describe('UserProfileView profile cover editor', () => {
     expect(remove?.attributes('disabled')).toBeDefined();
   });
 
-  it('renders direct camera controls inside both media previews without visible change actions', async () => {
+  it('uses native button controls for cover and avatar media changes', async () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
 
-    expect(wrapper.get('.profile-edit-cover__preview .profile-edit-cover__change').attributes()).toMatchObject({
+    const coverChange = wrapper.get('.profile-edit-cover__preview .profile-edit-cover__change');
+    const avatarChange = wrapper.get('.profile-avatar--edit .profile-edit-avatar__change');
+    expect(coverChange.element.tagName).toBe('BUTTON');
+    expect(coverChange.attributes()).toMatchObject({
       'aria-label': 'Change cover',
-      for: 'profile-cover-input',
-      role: 'button',
-      tabindex: '0',
+      type: 'button',
     });
-    expect(wrapper.get('.profile-avatar--edit .profile-edit-avatar__change').attributes()).toMatchObject({
+    expect(coverChange.attributes('for')).toBeUndefined();
+    expect(coverChange.attributes('role')).toBeUndefined();
+    expect(coverChange.attributes('tabindex')).toBeUndefined();
+    expect(coverChange.attributes('aria-disabled')).toBeUndefined();
+    expect(avatarChange.element.tagName).toBe('BUTTON');
+    expect(avatarChange.attributes()).toMatchObject({
       'aria-label': 'Change photo',
-      for: 'profile-avatar-input',
-      role: 'button',
-      tabindex: '0',
+      type: 'button',
     });
+    expect(avatarChange.attributes('for')).toBeUndefined();
+    expect(avatarChange.attributes('role')).toBeUndefined();
+    expect(avatarChange.attributes('tabindex')).toBeUndefined();
+    expect(avatarChange.attributes('aria-disabled')).toBeUndefined();
     expect(wrapper.get('.profile-edit-cover__actions').text().trim()).toBe('Remove cover');
     expect(wrapper.get('.profile-edit-avatar__actions').text().trim()).toBe('Remove photo');
     expect(wrapper.findAll('.profile-edit-cover__actions label')).toHaveLength(0);
     expect(wrapper.findAll('.profile-edit-avatar__actions label')).toHaveLength(0);
     expect(wrapper.findAll('#profile-cover-input')).toHaveLength(1);
     expect(wrapper.findAll('#profile-avatar-input')).toHaveLength(1);
+  });
+
+  it('keeps hidden media file inputs out of the tab order', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    expect(wrapper.get('#profile-cover-input').attributes('tabindex')).toBe('-1');
+    expect(wrapper.get('#profile-avatar-input').attributes('tabindex')).toBe('-1');
   });
 
   it('keeps empty cover and avatar previews directly changeable', async () => {
@@ -324,7 +341,7 @@ describe('UserProfileView profile cover editor', () => {
     expect(wrapper.get('.profile-edit-avatar__actions .profile-edit-media-remove').attributes('disabled')).toBeDefined();
   });
 
-  it('activates cover and avatar file inputs with Enter and Space', async () => {
+  it('clicking media change buttons activates the associated file inputs', async () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
@@ -334,18 +351,14 @@ describe('UserProfileView profile cover editor', () => {
     const coverClick = vi.spyOn(coverInput.element as HTMLInputElement, 'click');
     const avatarClick = vi.spyOn(avatarInput.element as HTMLInputElement, 'click');
 
-    const coverChange = wrapper.get('.profile-edit-cover__change');
-    await coverChange.trigger('keydown', { key: 'Enter' });
-    await coverChange.trigger('keydown', { key: ' ' });
-    const avatarChange = wrapper.get('.profile-edit-avatar__change');
-    await avatarChange.trigger('keydown', { key: 'Enter' });
-    await avatarChange.trigger('keydown', { key: ' ' });
+    await wrapper.get('.profile-edit-cover__change').trigger('click');
+    await wrapper.get('.profile-edit-avatar__change').trigger('click');
 
-    expect(coverClick).toHaveBeenCalledTimes(2);
-    expect(avatarClick).toHaveBeenCalledTimes(2);
+    expect(coverClick).toHaveBeenCalledTimes(1);
+    expect(avatarClick).toHaveBeenCalledTimes(1);
   });
 
-  it('disables media cameras and blocks keyboard activation while saving', async () => {
+  it('disables media cameras while saving', async () => {
     let resolveCover!: (url: string) => void;
     mocks.uploadProfileCover.mockReturnValue(new Promise<string>((resolve) => {
       resolveCover = resolve;
@@ -364,11 +377,11 @@ describe('UserProfileView profile cover editor', () => {
 
     expect(coverInput.attributes('disabled')).toBeDefined();
     expect(avatarInput.attributes('disabled')).toBeDefined();
-    expect(wrapper.get('.profile-edit-cover__change').attributes('aria-disabled')).toBe('true');
-    expect(wrapper.get('.profile-edit-avatar__change').attributes('aria-disabled')).toBe('true');
+    expect(wrapper.get('.profile-edit-cover__change').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.profile-edit-avatar__change').attributes('disabled')).toBeDefined();
 
-    await wrapper.get('.profile-edit-cover__change').trigger('keydown', { key: 'Enter' });
-    await wrapper.get('.profile-edit-avatar__change').trigger('keydown', { key: ' ' });
+    await wrapper.get('.profile-edit-cover__change').trigger('click');
+    await wrapper.get('.profile-edit-avatar__change').trigger('click');
     expect(coverClick).not.toHaveBeenCalled();
     expect(avatarClick).not.toHaveBeenCalled();
 

@@ -284,26 +284,25 @@
               alt="Profile cover preview"
               @error="editCoverLoadFailed = true"
             />
-            <label
+            <input
+              id="profile-cover-input"
+              ref="profileCoverInputRef"
+              class="sr-only"
+              type="file"
+              tabindex="-1"
+              accept="image/jpeg,image/png,image/webp"
+              :disabled="editSaving"
+              @change="handleCoverSelection"
+            />
+            <button
               class="profile-edit-media-change profile-edit-cover__change"
-              for="profile-cover-input"
-              :aria-disabled="editSaving"
+              type="button"
               aria-label="Change cover"
-              role="button"
-              tabindex="0"
-              @keydown="handleCoverChangeKeydown"
+              :disabled="editSaving"
+              @click="openCoverFilePicker"
             >
               <AppIcon name="camera" :size="20" />
-              <input
-                id="profile-cover-input"
-                ref="profileCoverInputRef"
-                class="sr-only"
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                :disabled="editSaving"
-                @change="handleCoverSelection"
-              />
-            </label>
+            </button>
           </div>
           <div class="profile-edit-cover__actions">
             <button
@@ -327,26 +326,25 @@
               @error="editAvatarLoadFailed = true"
             />
             <span v-else aria-hidden="true">{{ editProfileInitial }}</span>
-            <label
+            <input
+              id="profile-avatar-input"
+              ref="profileAvatarInputRef"
+              class="sr-only"
+              type="file"
+              tabindex="-1"
+              accept="image/jpeg,image/png,image/webp"
+              :disabled="editSaving"
+              @change="handleAvatarSelection"
+            />
+            <button
               class="profile-edit-media-change profile-edit-avatar__change"
-              for="profile-avatar-input"
-              :aria-disabled="editSaving"
+              type="button"
               aria-label="Change photo"
-              role="button"
-              tabindex="0"
-              @keydown="handleAvatarChangeKeydown"
+              :disabled="editSaving"
+              @click="openAvatarFilePicker"
             >
               <AppIcon name="camera" :size="20" />
-              <input
-                id="profile-avatar-input"
-                ref="profileAvatarInputRef"
-                class="sr-only"
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                :disabled="editSaving"
-                @change="handleAvatarSelection"
-              />
-            </label>
+            </button>
           </div>
           <div class="profile-edit-avatar__copy">
             <span class="profile-edit-field__label">Avatar</span>
@@ -903,19 +901,14 @@ const cancelDiscardEdit = () => {
   });
 };
 
-const activateFileInput = (event: KeyboardEvent, input: HTMLInputElement | null) => {
+const openCoverFilePicker = () => {
   if (editSaving.value) return;
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  event.preventDefault();
-  input?.click();
+  profileCoverInputRef.value?.click();
 };
 
-const handleCoverChangeKeydown = (event: KeyboardEvent) => {
-  activateFileInput(event, profileCoverInputRef.value);
-};
-
-const handleAvatarChangeKeydown = (event: KeyboardEvent) => {
-  activateFileInput(event, profileAvatarInputRef.value);
+const openAvatarFilePicker = () => {
+  if (editSaving.value) return;
+  profileAvatarInputRef.value?.click();
 };
 
 const handleAvatarSelection = (event: Event) => {
@@ -2007,6 +2000,8 @@ onBeforeUnmount(() => {
   background: rgba(15, 20, 25, 0.72);
   color: #fff;
   cursor: pointer;
+  padding: 0;
+  font: inherit;
 }
 
 .profile-edit-cover__change,
@@ -2018,10 +2013,9 @@ onBeforeUnmount(() => {
   transform: translate(-50%, -50%);
 }
 
-.profile-edit-media-change[aria-disabled="true"] {
+.profile-edit-media-change:disabled {
   cursor: wait;
   opacity: 0.55;
-  pointer-events: none;
 }
 
 .profile-edit-media-change:focus-visible {
@@ -2030,7 +2024,7 @@ onBeforeUnmount(() => {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .profile-edit-media-change:hover {
+  .profile-edit-media-change:hover:not(:disabled) {
     background: rgba(15, 20, 25, 0.86);
   }
 }
