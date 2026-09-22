@@ -37,6 +37,40 @@ func TestNormalizedRecommendationConfigUsesDefaultFusionRankConstant(t *testing.
 	}
 }
 
+func TestNormalizedRecommendationConfigUsesDefaultGuestServedHistoryLimit(t *testing.T) {
+	original := config.AppConfig
+	config.AppConfig = &config.Config{}
+	t.Cleanup(func() { config.AppConfig = original })
+
+	if got := normalizedRecommendationConfig().GuestServedHistoryLimit; got != 2000 {
+		t.Fatalf("guest served history limit=%d, want 2000", got)
+	}
+}
+
+func TestNormalizedRecommendationConfigOverridesGuestServedHistoryLimit(t *testing.T) {
+	original := config.AppConfig
+	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryLimit: 3000}}
+	t.Cleanup(func() { config.AppConfig = original })
+
+	if got := normalizedRecommendationConfig().GuestServedHistoryLimit; got != 3000 {
+		t.Fatalf("guest served history limit=%d, want 3000", got)
+	}
+}
+
+func TestNormalizedRecommendationConfigRejectsNonPositiveGuestServedHistoryLimit(t *testing.T) {
+	for _, limit := range []int{0, -1} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			original := config.AppConfig
+			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryLimit: limit}}
+			t.Cleanup(func() { config.AppConfig = original })
+
+			if got := normalizedRecommendationConfig().GuestServedHistoryLimit; got != 2000 {
+				t.Fatalf("guest served history limit=%d, want 2000", got)
+			}
+		})
+	}
+}
+
 func TestNormalizedRecommendationConfigOverridesFusionRankConstant(t *testing.T) {
 	original := config.AppConfig
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{

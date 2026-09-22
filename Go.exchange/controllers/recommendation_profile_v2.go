@@ -27,7 +27,7 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 		TrendingWeight:       0.5,
 		AuthorAffinityWeight: 1, AuthorAffinitySaturationScale: 6, FollowingBonus: 0.5,
 		OutOfNetworkMinRatio:       0.30,
-		ServedHardExclusionMinutes: 30, ServedSoftLookbackDays: 7, ServedHistoryLimit: 1000,
+		ServedHardExclusionMinutes: 30, ServedSoftLookbackDays: 7, ServedHistoryLimit: 1000, GuestServedHistoryLimit: 2000,
 		Diversity: config.RecommendationDiversityConfig{
 			Enabled: true, AuthorWindowSize: 8, MaxSameAuthorInWindow: 2,
 			SemanticDuplicateThreshold: 0.92, SemanticDuplicatePenalty: 1,
@@ -150,6 +150,9 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.ServedHistoryLimit > 0 {
 		cfg.ServedHistoryLimit = set.ServedHistoryLimit
 	}
+	if set.GuestServedHistoryLimit > 0 {
+		cfg.GuestServedHistoryLimit = set.GuestServedHistoryLimit
+	}
 	if recommendationSettingProvided("diversity.enabled", set.Diversity.Enabled) {
 		cfg.Diversity.Enabled = set.Diversity.Enabled
 	}
@@ -240,6 +243,9 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	}
 	if cfg.ServedHistoryLimit <= 0 {
 		cfg.ServedHistoryLimit = 1000
+	}
+	if cfg.GuestServedHistoryLimit <= 0 {
+		cfg.GuestServedHistoryLimit = 2000
 	}
 	if cfg.Diversity.AuthorWindowSize <= 0 {
 		cfg.Diversity.AuthorWindowSize = 8

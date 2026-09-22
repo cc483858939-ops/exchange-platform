@@ -35,9 +35,9 @@ var (
 
 // servePublicRecommendationCandidatePath is the guest-safe variant of the
 // recommendation pipeline. It deliberately has no user identity, profile,
-// served-history lookup, semantic recall, social graph lookup, or author
-// affinity hydration.
-func servePublicRecommendationCandidatePath(limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, browser recommendationLanguageContext, excluded map[uint]struct{}) (recommendationServingOutcome, error) {
+// Redis access, semantic recall, social graph lookup, or author affinity
+// hydration. Guest served state is passed in by the controller.
+func servePublicRecommendationCandidatePath(limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, browser recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 	outcome := recommendationServingOutcome{Profile: userInterestProfile{}}
 	if limit == 0 {
 		limit = defaultRecommendationLimit
@@ -53,7 +53,8 @@ func servePublicRecommendationCandidatePath(limit uint, cfg config.Recommendatio
 	}
 
 	outcome.LanguageContext = buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg)
-	publicSet, err := publicRecommendationCandidateSetForServing(now, cfg, excluded)
+	freshExcluded := guestFreshExcludedPostIDs(served)
+	publicSet, err := publicRecommendationCandidateSetForServing(now, cfg, freshExcluded)
 	if err != nil {
 		return outcome, err
 	}
@@ -64,10 +65,67 @@ func servePublicRecommendationCandidatePath(limit uint, cfg config.Recommendatio
 	ranked := rankRecommendationCandidates(userInterestProfile{}, hydrated, now, cfg, outcome.LanguageContext)
 	diversified := diversifyPublicRecommendationCandidatesForServing(ranked, int(limit), requestID)
 	selected := selectRecommendationCandidates(diversified, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
-	outcome.FreshSet = publicSet
-	outcome.RecallSets = []recommendationCandidateSet{publicSet}
+	mergedSet := publicSet
+	if len(selected) < int(limit) {
+		fallbackExcluded := guestFallbackExcludedPostIDs(served, selected)
+		fallbackSet, fallbackErr := publicRecommendationCandidateSetForServing(now, cfg, fallbackExcluded)
+		if fallbackErr != nil {
+			return outcome, fallbackErr
+		}
+		outcome.RecallSets = []recommendationCandidateSet{publicSet, fallbackSet}
+		fallbackHydrated, fallbackErr := publicRecommendationHydrateForServing(fallbackSet.Candidates, now)
+		if fallbackErr != nil {
+			return outcome, fallbackErr
+		}
+		annotateGuestFallbackServedState(fallbackHydrated, served)
+		rankedFallback := rankRecommendationCandidates(userInterestProfile{}, fallbackHydrated, now, cfg, outcome.LanguageContext)
+		selected = selectRecommendationCandidates(rankedFallback, selected, int(limit), cfg, now, recommendationSelectionFresh, requestID)
+		if len(selected) < int(limit) {
+			selected = selectRecommendationCandidates(rankedFallback, selected, int(limit), cfg, now, recommendationSelectionSoft, requestID)
+		}
+		mergedSet = mergeCandidateSets(publicSet, fallbackSet, cfg.Candidates.ColdStart.Merged)
+	} else {
+		outcome.RecallSets = []recommendationCandidateSet{publicSet}
+	}
+	outcome.FreshSet = mergedSet
 	outcome.Selected = selected
 	return outcome, nil
+}
+
+func guestFreshExcludedPostIDs(served map[uint]servedPost) map[uint]struct{} {
+	excluded := make(map[uint]struct{}, len(served))
+	for postID, item := range served {
+		if postID != 0 && (item.Hard || item.Soft) {
+			excluded[postID] = struct{}{}
+		}
+	}
+	return excluded
+}
+
+func guestFallbackExcludedPostIDs(served map[uint]servedPost, selected []selectedRecommendation) map[uint]struct{} {
+	excluded := make(map[uint]struct{}, len(served)+len(selected))
+	for postID, item := range served {
+		if postID != 0 && item.Hard {
+			excluded[postID] = struct{}{}
+		}
+	}
+	for _, item := range selected {
+		if item.Post.ID != 0 {
+			excluded[item.Post.ID] = struct{}{}
+		}
+	}
+	return excluded
+}
+
+func annotateGuestFallbackServedState(candidates []hydratedRecommendationCandidate, served map[uint]servedPost) {
+	for index := range candidates {
+		item, ok := served[candidates[index].Post.ID]
+		if !ok || item.Hard || !item.Soft {
+			continue
+		}
+		candidates[index].Candidate.WasSoftServed = true
+		candidates[index].Candidate.LastServedAt = item.LastServedAt
+	}
 }
 
 // serveRecommendationCandidatePath is shared by GetPostRecommendations and

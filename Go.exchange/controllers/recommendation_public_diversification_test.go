@@ -210,17 +210,110 @@ func TestPublicRecommendationServingVariesAcrossRequests(t *testing.T) {
 	}
 }
 
-func TestPublicRecommendationServingKeepsExcludedPostsOut(t *testing.T) {
-	cfg, now := publicServingTestFixture(t, 100)
-	excluded := map[uint]struct{}{1: {}, 2: {}, 3: {}, 4: {}, 5: {}}
-	outcome, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-exclusion", recommendationLanguageContext{}, excluded)
+func TestPublicRecommendationServingKeepsHardServedPostsOut(t *testing.T) {
+	cfg, now := publicServingTestFixture(t, 300)
+	served := make(map[uint]servedPost, 200)
+	for postID := uint(1); postID <= 200; postID++ {
+		served[postID] = servedPost{LastServedAt: now.Add(-5 * time.Minute), Hard: true}
+	}
+	outcome, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-exclusion", recommendationLanguageContext{}, served)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, postID := range publicServingSelectedIDs(outcome.Selected) {
-		if _, found := excluded[postID]; found {
-			t.Fatalf("excluded post %d re-entered public serving result", postID)
+		if postID <= 200 {
+			t.Fatalf("hard-served post %d re-entered public serving result", postID)
 		}
+	}
+}
+
+func TestPublicRecommendationServingFallbackPrefersUnseenOverHigherScoringSoftPosts(t *testing.T) {
+	cfg, now := publicServingTestFixture(t, 7)
+	served := map[uint]servedPost{
+		1: {LastServedAt: now.Add(-6 * 24 * time.Hour), Soft: true},
+		2: {LastServedAt: now.Add(-4 * 24 * time.Hour), Soft: true},
+		3: {LastServedAt: now.Add(-24 * time.Hour), Soft: true},
+	}
+	originalDiversifier := diversifyPublicRecommendationCandidatesForServing
+	diversifyPublicRecommendationCandidatesForServing = func(ranked []hydratedRecommendationCandidate, _ int, _ string) []hydratedRecommendationCandidate {
+		return ranked[:2]
+	}
+	t.Cleanup(func() {
+		diversifyPublicRecommendationCandidatesForServing = originalDiversifier
+	})
+
+	outcome, err := servePublicRecommendationCandidatePath(5, cfg, now, "guest-unseen-fallback", recommendationLanguageContext{}, served)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := publicServingSelectedIDs(outcome.Selected)
+	if !reflect.DeepEqual(got, []uint{4, 5, 6, 7, 1}) {
+		t.Fatalf("unseen fallback order=%v want [4 5 6 7 1]", got)
+	}
+}
+
+func TestPublicRecommendationServingFallbackPrefersUnseenThenOldestSoftServed(t *testing.T) {
+	cfg, now := publicServingTestFixture(t, 6)
+	served := map[uint]servedPost{
+		1: {LastServedAt: now.Add(-6 * 24 * time.Hour), Soft: true},
+		2: {LastServedAt: now.Add(-4 * 24 * time.Hour), Soft: true},
+		3: {LastServedAt: now.Add(-24 * time.Hour), Soft: true},
+	}
+
+	outcome, err := servePublicRecommendationCandidatePath(5, cfg, now, "guest-fallback", recommendationLanguageContext{}, served)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := publicServingSelectedIDs(outcome.Selected)
+	if !reflect.DeepEqual(got, []uint{4, 5, 6, 1, 2}) {
+		t.Fatalf("fallback order=%v want [4 5 6 1 2]", got)
+	}
+	for _, item := range outcome.Selected[3:] {
+		if !item.Candidate.WasSoftServed {
+			t.Fatalf("soft fallback item was not annotated: %#v", item)
+		}
+	}
+}
+
+func TestPublicRecommendationServingHardServedPostsRemainExcludedWhenPoolIsShort(t *testing.T) {
+	cfg, now := publicServingTestFixture(t, 6)
+	served := map[uint]servedPost{
+		1: {LastServedAt: now.Add(-5 * time.Minute), Hard: true},
+	}
+
+	outcome, err := servePublicRecommendationCandidatePath(6, cfg, now, "guest-hard-short-pool", recommendationLanguageContext{}, served)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, postID := range publicServingSelectedIDs(outcome.Selected) {
+		if postID == 1 {
+			t.Fatalf("hard-served post was returned from fallback: %v", publicServingSelectedIDs(outcome.Selected))
+		}
+	}
+}
+
+func TestPublicRecommendationServingCanWalkPastFormerTwoHundredPostLimit(t *testing.T) {
+	cfg, now := publicServingTestFixture(t, 400)
+	served := make(map[uint]servedPost)
+	seen := make(map[uint]struct{})
+	for page := 0; page < 15; page++ {
+		outcome, err := servePublicRecommendationCandidatePath(20, cfg, now, fmt.Sprintf("guest-page-%d", page), recommendationLanguageContext{}, served)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(outcome.Selected) != 20 {
+			t.Fatalf("page=%d selected=%d want 20", page, len(outcome.Selected))
+		}
+		for _, postID := range publicServingSelectedIDs(outcome.Selected) {
+			if _, duplicate := seen[postID]; duplicate {
+				t.Fatalf("page=%d repeated post %d", page, postID)
+			}
+			seen[postID] = struct{}{}
+			served[postID] = servedPost{LastServedAt: now, Hard: true}
+		}
+	}
+	if len(seen) != 300 {
+		t.Fatalf("unique posts=%d want 300", len(seen))
 	}
 }
 

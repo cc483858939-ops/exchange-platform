@@ -224,6 +224,7 @@ type RecommendationConfig struct {
 	ServedHardExclusionMinutes        int                                        `mapstructure:"served_hard_exclusion_minutes"`
 	ServedSoftLookbackDays            int                                        `mapstructure:"served_soft_lookback_days"`
 	ServedHistoryLimit                int                                        `mapstructure:"served_history_limit"`
+	GuestServedHistoryLimit           int                                        `mapstructure:"guest_served_history_limit"`
 	Diversity                         RecommendationDiversityConfig              `mapstructure:"diversity"`
 	Trace                             RecommendationTraceConfig                  `mapstructure:"trace"`
 	Candidates                        RecommendationCandidatesConfig             `mapstructure:"candidates"`

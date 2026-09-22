@@ -222,6 +222,29 @@ func TestSetupRouterAllowsIdempotencyKeyForPostCreation(t *testing.T) {
 	}
 }
 
+func TestSetupRouterAllowsGuestRecommendationSessionHeader(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.test")
+	engine, err := SetupRouter(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodOptions, "/api/public/recommendations/posts", nil)
+	request.Header.Set("Origin", "https://app.example.test")
+	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	request.Header.Set("Access-Control-Request-Headers", "X-Guest-Recommendation-Session")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(response.Header().Get("Access-Control-Allow-Headers")), "x-guest-recommendation-session") {
+		t.Fatalf("allow headers=%q", response.Header().Get("Access-Control-Allow-Headers"))
+	}
+}
+
 func newClientIPTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

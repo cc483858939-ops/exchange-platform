@@ -364,10 +364,11 @@ posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 	return result, nil
 }
 
-// publicRecommendationEligibilityQuery intentionally contains only viewer-
-// independent public-post predicates. It must not grow user-specific
-// exclusions such as follows, post behaviors, served history, or materialized
-// interaction state.
+// publicRecommendationEligibilityQuery contains viewer-independent public-post
+// eligibility predicates plus caller-provided server-side post exclusions.
+//
+// It must not introduce authenticated-user-specific follow, interaction,
+// profile, or account predicates.
 func publicRecommendationEligibilityQuery(query *gorm.DB, now time.Time, excluded map[uint]struct{}) *gorm.DB {
 	query = publicPostScope(query, now).
 		Where("posts.reply_to_post_id IS NULL").

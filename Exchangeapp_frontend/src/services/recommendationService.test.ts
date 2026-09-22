@@ -40,21 +40,32 @@ describe('recommendation service', () => {
     },
   );
 
-  it('requests guest recommendations with deduplicated exclusions', async () => {
+  it('requests guest recommendations with the tab session header', async () => {
     const page = { items: [], request_id: 'guest-request', depleted: true };
     mocks.get.mockResolvedValue({ data: page });
 
-    await expect(getPublicPostRecommendations({ limit: 20, excludePostIds: [3, 3, 8] }))
+    await expect(getPublicPostRecommendations({
+      limit: 20,
+      guestSessionId: '4ca3706b-197e-4f63-8f51-f99176f8b61c',
+    }))
       .resolves.toEqual(page);
 
     expect(mocks.get).toHaveBeenCalledWith('/public/recommendations/posts', {
-      params: { limit: 20, exclude_post_ids: '3,8' },
+      params: { limit: 20 },
+      headers: {
+        'X-Guest-Recommendation-Session': '4ca3706b-197e-4f63-8f51-f99176f8b61c',
+      },
     });
   });
 
-  it('rejects invalid guest recommendation exclusions', async () => {
-    await expect(getPublicPostRecommendations({ excludePostIds: [0] }))
-      .rejects.toThrow('Invalid recommendation exclusions');
-    expect(mocks.get).not.toHaveBeenCalled();
+  it('does not send a guest session header when unavailable', async () => {
+    const page = { items: [], request_id: 'guest-request', depleted: true };
+    mocks.get.mockResolvedValue({ data: page });
+
+    await expect(getPublicPostRecommendations({ limit: 20 })).resolves.toEqual(page);
+
+    expect(mocks.get).toHaveBeenCalledWith('/public/recommendations/posts', {
+      params: { limit: 20 },
+    });
   });
 });

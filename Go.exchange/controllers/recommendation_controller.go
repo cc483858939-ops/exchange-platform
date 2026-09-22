@@ -1,8 +1,6 @@
 package controllers
 
 import (
-	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -21,7 +19,6 @@ import (
 const (
 	defaultRecommendationLimit              = 20
 	maxRecommendationLimit                  = 50
-	maxPublicRecommendationExcludedPostIDs  = 200
 	recommendationFeedbackPostLimit         = recommendation.ProfileReplyLimit
 	recommendationRecentViewPostLimit       = recommendation.ProfileRecentViewLimit
 	recommendationCandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v5"
@@ -64,6 +61,8 @@ var recommendationServingPathForHandler = serveRecommendationCandidatePath
 var publicRecommendationServingPathForHandler = servePublicRecommendationCandidatePath
 var selectedRecommendationResponsesForHandler = selectedRecommendationResponses
 var attachRecommendationTrackingForHandler = attachRecommendationTracking
+var loadGuestRecommendationServedHistoryForHandler = loadGuestRecommendationServedHistory
+var recordGuestRecommendationServedPostsForHandler = recordGuestRecommendationServedPosts
 
 func buildPostRecommendationPageResponse(requestID string, recommendations []recommendedPostResponse) postRecommendationPageResponse {
 	if recommendations == nil {
@@ -168,16 +167,25 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	now := started.UTC()
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
-	excluded, err := parsePublicRecommendationExcludedPostIDs(ctx.Query("exclude_post_ids"))
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
 	cfg := normalizedRecommendationConfig()
+	guestSessionID, hasGuestSession := parseGuestRecommendationSessionID(
+		ctx.GetHeader(guestRecommendationSessionHeader),
+	)
+	served := map[uint]servedPost{}
+	if hasGuestSession {
+		loaded, err := loadGuestRecommendationServedHistoryForHandler(
+			ctx.Request.Context(), guestSessionID, now, cfg,
+		)
+		if err != nil {
+			log.Printf("[Recommendation] guest served-history load failed: %v", err)
+		} else {
+			served = loaded
+		}
+	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
 	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
 
-	serving, err := publicRecommendationServingPathForHandler(uint(limit), cfg, now, requestID, browserLanguageContext, excluded)
+	serving, err := publicRecommendationServingPathForHandler(uint(limit), cfg, now, requestID, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
 		return
@@ -192,6 +200,19 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	}
 	for index := range recommendations {
 		recommendations[index].Tracking = nil
+	}
+	if hasGuestSession {
+		finalIDs := make([]uint, 0, len(recommendations))
+		for _, recommendation := range recommendations {
+			if recommendation.Post.ID != 0 {
+				finalIDs = append(finalIDs, recommendation.Post.ID)
+			}
+		}
+		if err := recordGuestRecommendationServedPostsForHandler(
+			ctx.Request.Context(), guestSessionID, finalIDs, now, cfg,
+		); err != nil {
+			log.Printf("[Recommendation] guest served-history persist failed: %v", err)
+		}
 	}
 
 	duration := time.Since(started)
@@ -307,30 +328,6 @@ func parseRecommendationLimit(raw string) int {
 		return maxRecommendationLimit
 	}
 	return limit
-}
-
-func parsePublicRecommendationExcludedPostIDs(raw string) (map[uint]struct{}, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return map[uint]struct{}{}, nil
-	}
-	parts := strings.Split(raw, ",")
-	if len(parts) > maxPublicRecommendationExcludedPostIDs {
-		return nil, fmt.Errorf("exclude_post_ids may contain at most %d post IDs", maxPublicRecommendationExcludedPostIDs)
-	}
-	result := make(map[uint]struct{}, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			return nil, errors.New("exclude_post_ids must contain positive post IDs")
-		}
-		id, err := strconv.ParseUint(part, 10, 64)
-		if err != nil || id == 0 || uint64(uint(id)) != id {
-			return nil, errors.New("exclude_post_ids must contain positive post IDs")
-		}
-		result[uint(id)] = struct{}{}
-	}
-	return result, nil
 }
 
 func strconvUint(id uint) string { return strconv.FormatUint(uint64(id), 10) }

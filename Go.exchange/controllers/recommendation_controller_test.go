@@ -1,10 +1,11 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -131,45 +132,50 @@ func TestParseRecommendationLimitPreservesDefaultsAndMaximum(t *testing.T) {
 	}
 }
 
-func TestParsePublicRecommendationExcludedPostIDsValidatesAndDeduplicates(t *testing.T) {
-	got, err := parsePublicRecommendationExcludedPostIDs("1, 2,1,42")
-	if err != nil {
-		t.Fatal(err)
+func TestParseGuestRecommendationSessionIDCanonicalizesAndRejectsInvalidValues(t *testing.T) {
+	got, ok := parseGuestRecommendationSessionID("  4CA3706B-197E-4F63-8F51-F99176F8B61C  ")
+	if !ok || got != "4ca3706b-197e-4f63-8f51-f99176f8b61c" {
+		t.Fatalf("session=%q valid=%t", got, ok)
 	}
-	if len(got) != 3 {
-		t.Fatalf("excluded=%#v", got)
-	}
-	for _, id := range []uint{1, 2, 42} {
-		if _, ok := got[id]; !ok {
-			t.Fatalf("missing excluded id %d", id)
+	for _, raw := range []string{"", "   ", "not-a-uuid", "00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000000x"} {
+		if got, ok := parseGuestRecommendationSessionID(raw); ok || got != "" {
+			t.Fatalf("raw=%q parsed=%q valid=%t", raw, got, ok)
 		}
-	}
-
-	for _, raw := range []string{"1,,2", "0", "-1", "not-a-number"} {
-		if _, err := parsePublicRecommendationExcludedPostIDs(raw); err == nil {
-			t.Errorf("raw=%q accepted", raw)
-		}
-	}
-	tooMany := strings.TrimSuffix(strings.Repeat("1,", maxPublicRecommendationExcludedPostIDs), ",") + ",2"
-	if _, err := parsePublicRecommendationExcludedPostIDs(tooMany); err == nil {
-		t.Error("accepted overbound exclusion list")
 	}
 }
 
 func TestGetPublicPostRecommendationsIsGuestSafeAndUsesPublicEnvelope(t *testing.T) {
 	originalServingPath := publicRecommendationServingPathForHandler
 	originalResponseBuilder := selectedRecommendationResponsesForHandler
+	originalLoader := loadGuestRecommendationServedHistoryForHandler
+	originalRecorder := recordGuestRecommendationServedPostsForHandler
 	t.Cleanup(func() {
 		publicRecommendationServingPathForHandler = originalServingPath
 		selectedRecommendationResponsesForHandler = originalResponseBuilder
+		loadGuestRecommendationServedHistoryForHandler = originalLoader
+		recordGuestRecommendationServedPostsForHandler = originalRecorder
 	})
 
-	publicRecommendationServingPathForHandler = func(limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, browser recommendationLanguageContext, excluded map[uint]struct{}) (recommendationServingOutcome, error) {
+	const rawSessionID = "4CA3706B-197E-4F63-8F51-F99176F8B61C"
+	var recordedSessionID string
+	var recordedPostIDs []uint
+	loadGuestRecommendationServedHistoryForHandler = func(_ context.Context, sessionID string, _ time.Time, _ config.RecommendationConfig) (map[uint]servedPost, error) {
+		if sessionID != "4ca3706b-197e-4f63-8f51-f99176f8b61c" {
+			t.Fatalf("session_id=%q", sessionID)
+		}
+		return map[uint]servedPost{1: {Hard: true}, 2: {Soft: true}}, nil
+	}
+	recordGuestRecommendationServedPostsForHandler = func(_ context.Context, sessionID string, postIDs []uint, _ time.Time, _ config.RecommendationConfig) error {
+		recordedSessionID = sessionID
+		recordedPostIDs = append([]uint(nil), postIDs...)
+		return nil
+	}
+	publicRecommendationServingPathForHandler = func(limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, browser recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 		if limit != 20 || requestID == "" || browser.BrowserPrimary != "en" {
 			t.Fatalf("public serving args limit=%d request_id=%q browser=%#v", limit, requestID, browser)
 		}
-		if len(excluded) != 2 {
-			t.Fatalf("excluded=%#v", excluded)
+		if len(served) != 2 || !served[1].Hard || !served[2].Soft {
+			t.Fatalf("served=%#v", served)
 		}
 		return recommendationServingOutcome{
 			FreshSet: recommendationCandidateSet{Candidates: []embeddingCandidate{{PostID: 101}}},
@@ -177,15 +183,23 @@ func TestGetPublicPostRecommendationsIsGuestSafeAndUsesPublicEnvelope(t *testing
 		}, nil
 	}
 	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
-		return []recommendedPostResponse{{
-			Post:     postResponse{ID: 101, Media: make([]postMediaResponse, 0)},
-			Score:    0.5,
-			Tracking: &recommendationTrackingResponse{RequestID: "must-be-removed"},
-		}}, nil
+		return []recommendedPostResponse{
+			{
+				Post:     postResponse{ID: 101, Media: make([]postMediaResponse, 0)},
+				Score:    0.5,
+				Tracking: &recommendationTrackingResponse{RequestID: "must-be-removed"},
+			},
+			{
+				Post:     postResponse{ID: 102, Media: make([]postMediaResponse, 0)},
+				Score:    0.4,
+				Tracking: &recommendationTrackingResponse{RequestID: "must-be-removed"},
+			},
+		}, nil
 	}
 
-	ctx, recorder := newRecommendationControllerTestContext("/api/public/recommendations/posts?exclude_post_ids=1,2", 0)
+	ctx, recorder := newRecommendationControllerTestContext("/api/public/recommendations/posts?limit=20", 0)
 	ctx.Request.Header.Set("Accept-Language", "en-US,en;q=0.8")
+	ctx.Request.Header.Set(guestRecommendationSessionHeader, rawSessionID)
 	GetPublicPostRecommendations(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -194,15 +208,91 @@ func TestGetPublicPostRecommendationsIsGuestSafeAndUsesPublicEnvelope(t *testing
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Items) != 1 || response.Items[0].Tracking != nil || !response.Depleted {
+	if len(response.Items) != 2 || response.Items[0].Tracking != nil || response.Items[1].Tracking != nil || !response.Depleted {
 		t.Fatalf("response=%#v", response)
+	}
+	if recordedSessionID != "4ca3706b-197e-4f63-8f51-f99176f8b61c" || len(recordedPostIDs) != 2 || recordedPostIDs[0] != 101 || recordedPostIDs[1] != 102 {
+		t.Fatalf("recorded session=%q post_ids=%v", recordedSessionID, recordedPostIDs)
 	}
 }
 
-func TestGetPublicPostRecommendationsRejectsMalformedExclusions(t *testing.T) {
-	ctx, recorder := newRecommendationControllerTestContext("/api/public/recommendations/posts?exclude_post_ids=1,,2", 0)
+func TestGetPublicPostRecommendationsInvalidOrMissingGuestSessionFailsOpen(t *testing.T) {
+	originalServingPath := publicRecommendationServingPathForHandler
+	originalResponseBuilder := selectedRecommendationResponsesForHandler
+	originalLoader := loadGuestRecommendationServedHistoryForHandler
+	originalRecorder := recordGuestRecommendationServedPostsForHandler
+	t.Cleanup(func() {
+		publicRecommendationServingPathForHandler = originalServingPath
+		selectedRecommendationResponsesForHandler = originalResponseBuilder
+		loadGuestRecommendationServedHistoryForHandler = originalLoader
+		recordGuestRecommendationServedPostsForHandler = originalRecorder
+	})
+	loaderCalls := 0
+	recorderCalls := 0
+	loadGuestRecommendationServedHistoryForHandler = func(context.Context, string, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
+		loaderCalls++
+		return nil, nil
+	}
+	recordGuestRecommendationServedPostsForHandler = func(context.Context, string, []uint, time.Time, config.RecommendationConfig) error {
+		recorderCalls++
+		return nil
+	}
+	publicRecommendationServingPathForHandler = func(_ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+		if len(served) != 0 {
+			t.Fatalf("served=%#v", served)
+		}
+		return recommendationServingOutcome{}, nil
+	}
+	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
+		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}}}, nil
+	}
+
+	for _, raw := range []string{"", "not-a-uuid"} {
+		ctx, recorder := newRecommendationControllerTestContext("/api/public/recommendations/posts", 0)
+		if raw != "" {
+			ctx.Request.Header.Set(guestRecommendationSessionHeader, raw)
+		}
+		GetPublicPostRecommendations(ctx)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("raw=%q status=%d body=%s", raw, recorder.Code, recorder.Body.String())
+		}
+	}
+	if loaderCalls != 0 || recorderCalls != 0 {
+		t.Fatalf("invalid/missing guest session performed history I/O: loads=%d records=%d", loaderCalls, recorderCalls)
+	}
+}
+
+func TestGetPublicPostRecommendationsGuestHistoryFailuresFailOpen(t *testing.T) {
+	originalServingPath := publicRecommendationServingPathForHandler
+	originalResponseBuilder := selectedRecommendationResponsesForHandler
+	originalLoader := loadGuestRecommendationServedHistoryForHandler
+	originalRecorder := recordGuestRecommendationServedPostsForHandler
+	t.Cleanup(func() {
+		publicRecommendationServingPathForHandler = originalServingPath
+		selectedRecommendationResponsesForHandler = originalResponseBuilder
+		loadGuestRecommendationServedHistoryForHandler = originalLoader
+		recordGuestRecommendationServedPostsForHandler = originalRecorder
+	})
+	loadGuestRecommendationServedHistoryForHandler = func(context.Context, string, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
+		return nil, errors.New("redis unavailable")
+	}
+	recordGuestRecommendationServedPostsForHandler = func(context.Context, string, []uint, time.Time, config.RecommendationConfig) error {
+		return errors.New("redis unavailable")
+	}
+	publicRecommendationServingPathForHandler = func(_ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+		if len(served) != 0 {
+			t.Fatalf("served=%#v", served)
+		}
+		return recommendationServingOutcome{}, nil
+	}
+	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
+		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}}}, nil
+	}
+
+	ctx, recorder := newRecommendationControllerTestContext("/api/public/recommendations/posts", 0)
+	ctx.Request.Header.Set(guestRecommendationSessionHeader, "4ca3706b-197e-4f63-8f51-f99176f8b61c")
 	GetPublicPostRecommendations(ctx)
-	if recorder.Code != http.StatusBadRequest {
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
