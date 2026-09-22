@@ -411,6 +411,13 @@
       </form>
     </dialog>
 
+    <AvatarCropDialog
+      v-if="avatarCropOpen && avatarCropSourceFile"
+      :file="avatarCropSourceFile"
+      @cancel="handleAvatarCropCancel"
+      @apply="handleAvatarCropApply"
+    />
+
     <ConfirmDialog
       v-if="discardConfirmOpen"
       title="Discard changes?"
@@ -440,6 +447,7 @@ import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
+import AvatarCropDialog from '../components/profile/AvatarCropDialog.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
 import { usePageTitle } from '../composables/usePageTitle';
 import { updateUserProfile, uploadProfileAvatar, uploadProfileCover } from '../services/userService';
@@ -454,7 +462,8 @@ defineOptions({
 
 const profileDisplayNameLimit = 50;
 const profileBioLimit = 160;
-const profileAvatarMaxBytes = 2 * 1024 * 1024;
+const profileAvatarSourceMaxBytes = 10 * 1024 * 1024;
+const profileAvatarGeneratedMaxBytes = 2 * 1024 * 1024;
 const profileAvatarTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const profileCoverMaxBytes = 5 * 1024 * 1024;
 const profileCoverTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -695,6 +704,8 @@ const editDraft = reactive<ProfileEditSnapshot>({
 });
 const pendingAvatarFile = ref<File | null>(null);
 const pendingAvatarPreviewURL = ref('');
+const avatarCropOpen = ref(false);
+const avatarCropSourceFile = ref<File | null>(null);
 const pendingCoverFile = ref<File | null>(null);
 const pendingCoverPreviewURL = ref('');
 const editAvatarLoadFailed = ref(false);
@@ -766,6 +777,8 @@ const clearEditDraft = () => {
   revokePendingCoverPreview();
   pendingAvatarFile.value = null;
   pendingCoverFile.value = null;
+  avatarCropOpen.value = false;
+  avatarCropSourceFile.value = null;
   editOriginal.value = null;
   editDraft.display_name = '';
   editDraft.bio = '';
@@ -888,12 +901,33 @@ const handleAvatarSelection = (event: Event) => {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
-  if (file.size <= 0 || file.size > profileAvatarMaxBytes) {
-    editAvatarError.value = 'Photo must be between 1 byte and 2 MiB.';
+  if (file.size <= 0) {
+    editAvatarError.value = 'Photo must be between 1 byte and 10 MB.';
+    return;
+  }
+  if (file.size > profileAvatarSourceMaxBytes) {
+    editAvatarError.value = 'Photo is too large. Choose an image under 10 MB.';
     return;
   }
   if (!profileAvatarTypes.has(file.type)) {
     editAvatarError.value = 'Use a JPEG, PNG, or WebP image.';
+    return;
+  }
+
+  avatarCropSourceFile.value = file;
+  avatarCropOpen.value = true;
+  editAvatarError.value = '';
+  editError.value = '';
+};
+
+const handleAvatarCropCancel = () => {
+  avatarCropOpen.value = false;
+  avatarCropSourceFile.value = null;
+};
+
+const handleAvatarCropApply = (file: File) => {
+  if (file.size <= 0 || file.size > profileAvatarGeneratedMaxBytes) {
+    editAvatarError.value = 'Could not prepare this photo. Try another image.';
     return;
   }
 
@@ -903,6 +937,8 @@ const handleAvatarSelection = (event: Event) => {
   editAvatarLoadFailed.value = false;
   editAvatarError.value = '';
   editError.value = '';
+  avatarCropOpen.value = false;
+  avatarCropSourceFile.value = null;
 };
 
 const handleCoverSelection = (event: Event) => {

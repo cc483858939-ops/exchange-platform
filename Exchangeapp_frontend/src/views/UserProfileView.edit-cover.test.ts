@@ -152,12 +152,24 @@ const PostCardStub = {
   template: '<article class="post-card">{{ post.content }}</article>',
 };
 
+const AvatarCropDialogStub = {
+  props: ['file'],
+  emits: ['cancel', 'apply'],
+  template: `
+    <div class="avatar-crop-dialog">
+      <button type="button" class="avatar-crop-dialog__cancel" @click="$emit('cancel')">Cancel</button>
+      <button type="button" class="avatar-crop-dialog__apply" @click="$emit('apply', file)">Apply</button>
+    </div>
+  `,
+};
+
 const mountProfile = () => mount(UserProfileView, {
   global: {
     stubs: {
       AppIcon: { template: '<span />' },
       MobileAccountMenu: { template: '<span />' },
       PostCard: PostCardStub,
+      AvatarCropDialog: AvatarCropDialogStub,
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
@@ -186,6 +198,11 @@ const setAvatarFile = async (wrapper: VueWrapper, file: File) => {
     value: [file],
   });
   await input.trigger('change');
+};
+
+const applyAvatarCrop = async (wrapper: VueWrapper) => {
+  await wrapper.get('.avatar-crop-dialog__apply').trigger('click');
+  await nextTick();
 };
 
 const openEditor = async (wrapper: VueWrapper) => {
@@ -277,6 +294,43 @@ describe('UserProfileView profile cover editor', () => {
     expect(username.text()).toContain('@user-7');
     expect(username.text()).toContain("Username can't be changed.");
     expect(username.find('input').exists()).toBe(false);
+  });
+
+  it('opens avatar crop before changing the preview and preserves the previous crop when a replacement is canceled', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    await setAvatarFile(wrapper, new File(['first'], 'first.webp', { type: 'image/webp' }));
+    expect(wrapper.find('.avatar-crop-dialog').exists()).toBe(true);
+    expect(wrapper.find('.profile-avatar--edit img').exists()).toBe(false);
+    expect(mocks.uploadProfileAvatar).not.toHaveBeenCalled();
+
+    await wrapper.get('.avatar-crop-dialog__cancel').trigger('click');
+    expect(wrapper.find('.avatar-crop-dialog').exists()).toBe(false);
+    expect(wrapper.find('.profile-avatar--edit img').exists()).toBe(false);
+
+    await setAvatarFile(wrapper, new File(['first'], 'first.webp', { type: 'image/webp' }));
+    await applyAvatarCrop(wrapper);
+    expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe('blob:first.webp');
+
+    await setAvatarFile(wrapper, new File(['second'], 'second.webp', { type: 'image/webp' }));
+    await wrapper.get('.avatar-crop-dialog__cancel').trigger('click');
+    expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe('blob:first.webp');
+  });
+
+  it('rejects an oversized avatar source before opening the crop dialog', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+
+    const oversized = new File([new Uint8Array((10 * 1024 * 1024) + 1)], 'large.webp', {
+      type: 'image/webp',
+    });
+    await setAvatarFile(wrapper, oversized);
+
+    expect(wrapper.find('.avatar-crop-dialog').exists()).toBe(false);
+    expect(wrapper.get('.profile-edit-avatar').text()).toContain('Photo is too large. Choose an image under 10 MB.');
   });
 
   it('previews valid cover selection, replaces previews safely, and defers upload until Save', async () => {
@@ -383,6 +437,7 @@ describe('UserProfileView profile cover editor', () => {
     await openEditor(wrapper);
     await wrapper.get('#profile-display-name').setValue('Updated');
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await applyAvatarCrop(wrapper);
     await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
     await submitEditor(wrapper);
 
@@ -402,6 +457,7 @@ describe('UserProfileView profile cover editor', () => {
     await settle();
     await openEditor(wrapper);
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await applyAvatarCrop(wrapper);
     await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     await submitEditor(wrapper);
@@ -526,6 +582,7 @@ describe('UserProfileView profile cover editor', () => {
     await settle();
     await openEditor(wrapper);
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await applyAvatarCrop(wrapper);
 
     const event = new Event('cancel', { cancelable: true });
     wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
@@ -560,6 +617,7 @@ describe('UserProfileView profile cover editor', () => {
     await wrapper.get('#profile-display-name').setValue('Changed display name');
     await wrapper.get('#profile-bio').setValue('Changed bio');
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await applyAvatarCrop(wrapper);
     await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     const closeButton = wrapper.get('.profile-edit-dialog__close');
@@ -580,6 +638,7 @@ describe('UserProfileView profile cover editor', () => {
     await openEditor(wrapper);
     await wrapper.get('#profile-bio').setValue('Changed bio');
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await applyAvatarCrop(wrapper);
     await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     await wrapper.findAll('button').find((item) => item.text() === 'Cancel')!.trigger('click');
