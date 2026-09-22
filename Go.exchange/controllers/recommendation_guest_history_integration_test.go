@@ -31,16 +31,34 @@ func TestGuestRecommendationServedHistoryRedisIntegration(t *testing.T) {
 	}
 
 	t.Run("write read round trip", func(t *testing.T) {
-		sessionID, _ := newGuestRecommendationHistoryIntegrationSession(t, client)
+		sessionID, key := newGuestRecommendationHistoryIntegrationSession(t, client)
 		now := time.Now().UTC().Truncate(time.Second)
 
-		if err := recordGuestRecommendationServedPosts(context.Background(), sessionID, []uint{101, 102}, now, cfg); err != nil {
+		if err := recordGuestRecommendationServedPosts(context.Background(), sessionID, []uint{101, 102, 102, 0}, now, cfg); err != nil {
 			t.Fatalf("record served history: %v", err)
+		}
+		cardinality, err := client.ZCard(key).Result()
+		if err != nil {
+			t.Fatalf("read round-trip history cardinality: %v", err)
+		}
+		if cardinality != 2 {
+			t.Fatalf("round-trip history cardinality=%d want 2", cardinality)
+		}
+		for _, member := range []string{"101", "102"} {
+			if _, err := client.ZScore(key, member).Result(); err != nil {
+				t.Fatalf("round-trip member %s was not stored: %v", member, err)
+			}
+		}
+		if _, err := client.ZScore(key, "0").Result(); !errors.Is(err, redis.Nil) {
+			t.Fatalf("round-trip zero member score error=%v want redis.Nil", err)
 		}
 
 		history, err := loadGuestRecommendationServedHistory(context.Background(), sessionID, now, cfg)
 		if err != nil {
 			t.Fatalf("load served history: %v", err)
+		}
+		if len(history) != 2 {
+			t.Fatalf("round-trip loaded history length=%d want 2: %#v", len(history), history)
 		}
 		for _, postID := range []uint{101, 102} {
 			served, ok := history[postID]
@@ -215,6 +233,51 @@ func TestGuestRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		}
 		if rawExists != 0 {
 			t.Fatalf("raw session ID exists as Redis key=%d want 0", rawExists)
+		}
+	})
+
+	t.Run("ttl refresh", func(t *testing.T) {
+		sessionID, key := newGuestRecommendationHistoryIntegrationSession(t, client)
+		now := time.Now().UTC().Truncate(time.Second)
+		if err := recordGuestRecommendationServedPosts(context.Background(), sessionID, []uint{801}, now, cfg); err != nil {
+			t.Fatalf("record initial served history: %v", err)
+		}
+
+		wantTTL := guestRecommendationHistoryTTL(cfg)
+		initialTTL, err := client.TTL(key).Result()
+		if err != nil {
+			t.Fatalf("read initial served history ttl: %v", err)
+		}
+		if initialTTL <= 0 || initialTTL > wantTTL || initialTTL < wantTTL-5*time.Second {
+			t.Fatalf("initial ttl=%s want >0 and within 5s of %s", initialTTL, wantTTL)
+		}
+
+		if err := client.Expire(key, time.Hour).Err(); err != nil {
+			t.Fatalf("shorten served history ttl: %v", err)
+		}
+		shortTTL, err := client.TTL(key).Result()
+		if err != nil {
+			t.Fatalf("read shortened served history ttl: %v", err)
+		}
+		if shortTTL <= 0 || shortTTL > time.Hour || shortTTL < time.Hour-5*time.Second {
+			t.Fatalf("shortened ttl=%s want >0 and within 5s of 1h", shortTTL)
+		}
+
+		later := now.Add(time.Minute)
+		if err := recordGuestRecommendationServedPosts(context.Background(), sessionID, []uint{802}, later, cfg); err != nil {
+			t.Fatalf("record later served history: %v", err)
+		}
+		refreshedTTL, err := client.TTL(key).Result()
+		if err != nil {
+			t.Fatalf("read refreshed served history ttl: %v", err)
+		}
+		if refreshedTTL <= 7*24*time.Hour || refreshedTTL > wantTTL || refreshedTTL < wantTTL-5*time.Second {
+			t.Fatalf("refreshed ttl=%s want greater than 7d and within 5s of %s", refreshedTTL, wantTTL)
+		}
+		for _, member := range []string{"801", "802"} {
+			if _, err := client.ZScore(key, member).Result(); err != nil {
+				t.Fatalf("refreshed member %s was not stored: %v", member, err)
+			}
 		}
 	})
 
