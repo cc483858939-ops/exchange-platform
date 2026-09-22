@@ -19,12 +19,11 @@ type RecommendationServingVerification struct {
 }
 
 type recommendationServingOutcome struct {
-	Profile                userInterestProfile
-	FreshSet               recommendationCandidateSet
-	RecallSets             []recommendationCandidateSet
-	Selected               []selectedRecommendation
-	ServedHistoryLoadError error
-	LanguageContext        recommendationLanguageContext
+	Profile         userInterestProfile
+	FreshSet        recommendationCandidateSet
+	RecallSets      []recommendationCandidateSet
+	Selected        []selectedRecommendation
+	LanguageContext recommendationLanguageContext
 }
 
 var (
@@ -131,7 +130,7 @@ func annotateGuestFallbackServedState(candidates []hydratedRecommendationCandida
 // serveRecommendationCandidatePath is shared by GetPostRecommendations and
 // DevData verification. Keeping the path here prevents verification from
 // copying the recommender's SQL, ranking, or selection rules.
-func serveRecommendationCandidatePath(userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, browser recommendationLanguageContext) (recommendationServingOutcome, error) {
+func serveRecommendationCandidatePath(userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, browser recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 	outcome := recommendationServingOutcome{}
 	if userID == 0 {
 		return outcome, errors.New("missing recommendation verification user")
@@ -163,13 +162,6 @@ func serveRecommendationCandidatePath(userID, limit uint, cfg config.Recommendat
 	outcome.LanguageContext = languageContext
 	loadedAuthors := make(map[uint]struct{})
 
-	served, err := loadRecommendationServedHistory(userID, now, cfg)
-	if err != nil {
-		outcome.ServedHistoryLoadError = err
-		// The product handler treats a served-history read failure as a soft
-		// fallback, so verification must observe the same behavior.
-		served = map[uint]servedPost{}
-	}
 	freshSet, err := loadRecommendationCandidateSet(userID, profile, served, now, cfg, false)
 	if err != nil {
 		return outcome, err
@@ -217,7 +209,7 @@ func VerifyRecommendationServing(userID uint, limit int, now time.Time) (Recomme
 	if limit <= 0 {
 		limit = defaultRecommendationLimit
 	}
-	outcome, err := serveRecommendationCandidatePath(userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString(), recommendationLanguageContext{})
+	outcome, err := serveRecommendationCandidatePath(userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString(), recommendationLanguageContext{}, map[uint]servedPost{})
 	if err != nil {
 		return RecommendationServingVerification{}, err
 	}

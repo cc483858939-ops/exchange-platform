@@ -61,6 +61,8 @@ var recommendationServingPathForHandler = serveRecommendationCandidatePath
 var publicRecommendationServingPathForHandler = servePublicRecommendationCandidatePath
 var selectedRecommendationResponsesForHandler = selectedRecommendationResponses
 var attachRecommendationTrackingForHandler = attachRecommendationTracking
+var loadUserRecommendationServedHistoryForHandler = loadUserRecommendationServedHistory
+var recordUserRecommendationServedPostsForHandler = recordUserRecommendationServedPosts
 var loadGuestRecommendationServedHistoryForHandler = loadGuestRecommendationServedHistory
 var recordGuestRecommendationServedPostsForHandler = recordGuestRecommendationServedPosts
 
@@ -86,10 +88,18 @@ func GetPostRecommendations(ctx *gin.Context) {
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	cfg := normalizedRecommendationConfig()
+	served := map[uint]servedPost{}
+	loaded, historyErr := loadUserRecommendationServedHistoryForHandler(ctx.Request.Context(), userID, now, cfg)
+	if historyErr != nil {
+		log.Printf("[Recommendation] served history for user %d: %v", userID, historyErr)
+		metrics.RecordRecommendationServedHistoryLoadFailure()
+	} else if loaded != nil {
+		served = loaded
+	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
 	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
 
-	serving, err := recommendationServingPathForHandler(userID, uint(limit), cfg, now, requestID, browserLanguageContext)
+	serving, err := recommendationServingPathForHandler(userID, uint(limit), cfg, now, requestID, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(serving.Profile))
 		return
@@ -97,10 +107,6 @@ func GetPostRecommendations(ctx *gin.Context) {
 	profile := serving.Profile
 	freshSet := serving.FreshSet
 	selected := serving.Selected
-	if serving.ServedHistoryLoadError != nil {
-		log.Printf("[Recommendation] served history for user %d: %v", userID, serving.ServedHistoryLoadError)
-		metrics.RecordRecommendationServedHistoryLoadFailure()
-	}
 	for _, recallSet := range serving.RecallSets {
 		recordRecallMetrics(recallSet)
 	}
@@ -117,6 +123,15 @@ func GetPostRecommendations(ctx *gin.Context) {
 	metrics.AddRecommendationTrackingResults("tracked", trackedCount)
 	metrics.AddRecommendationTrackingResults("untracked", len(recommendations)-trackedCount)
 	recordResultMetrics(selected)
+	finalIDs := make([]uint, 0, len(recommendations))
+	for _, recommendation := range recommendations {
+		if recommendation.Post.ID != 0 {
+			finalIDs = append(finalIDs, recommendation.Post.ID)
+		}
+	}
+	if err := recordUserRecommendationServedPostsForHandler(ctx.Request.Context(), userID, finalIDs, now, cfg); err != nil {
+		log.Printf("[Recommendation] user served-history persist failed for user %d: %v", userID, err)
+	}
 
 	duration := time.Since(started)
 	strategyID := recommendationStrategyID(profile)

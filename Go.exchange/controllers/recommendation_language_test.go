@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -177,17 +178,21 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 	originalServingPath := recommendationServingPathForHandler
 	originalResponseBuilder := selectedRecommendationResponsesForHandler
 	originalTracking := attachRecommendationTrackingForHandler
+	originalUserLoader := loadUserRecommendationServedHistoryForHandler
+	originalUserRecorder := recordUserRecommendationServedPostsForHandler
 	originalPersist := persistRecommendationServingTrace
 	t.Cleanup(func() {
 		recommendationServingPathForHandler = originalServingPath
 		selectedRecommendationResponsesForHandler = originalResponseBuilder
 		attachRecommendationTrackingForHandler = originalTracking
+		loadUserRecommendationServedHistoryForHandler = originalUserLoader
+		recordUserRecommendationServedPostsForHandler = originalUserRecorder
 		persistRecommendationServingTrace = originalPersist
 	})
 
 	var received recommendationLanguageContext
 	var persisted models.RecommendationRequest
-	recommendationServingPathForHandler = func(_ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, browser recommendationLanguageContext) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, browser recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		received = browser
 		return recommendationServingOutcome{
 			Profile:         userInterestProfile{ProfileStatus: recommendationProfileStatusMiss},
@@ -199,6 +204,12 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 	}
 	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
+	}
+	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
+		return map[uint]servedPost{}, nil
+	}
+	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
+		return nil
 	}
 	persistRecommendationServingTrace = func(request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
 		persisted = request

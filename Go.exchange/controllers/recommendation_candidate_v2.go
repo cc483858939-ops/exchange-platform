@@ -40,42 +40,6 @@ type hydratedRecommendationCandidate struct {
 	IsNovelAuthor       bool
 }
 
-func loadRecommendationServedHistory(userID uint, now time.Time, cfg config.RecommendationConfig) (map[uint]servedPost, error) {
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-	type servedRow struct {
-		PostID       uint
-		LastServedAt time.Time
-	}
-	var rows []servedRow
-	start := now.AddDate(0, 0, -cfg.ServedSoftLookbackDays)
-	err := global.Db.Table("recommendation_result_traces AS rt").
-		Select("rt.post_id, MAX(rt.created_at) AS last_served_at").
-		Joins("JOIN recommendation_requests AS rr ON rr.request_id = rt.request_id").
-		Where("rr.user_id = ? AND rt.created_at >= ?", userID, start).
-		Group("rt.post_id").
-		Order("last_served_at DESC").
-		Limit(cfg.ServedHistoryLimit).
-		Scan(&rows).Error
-	if err != nil {
-		return nil, err
-	}
-	history := make(map[uint]servedPost, len(rows))
-	hardStart := now.Add(-time.Duration(cfg.ServedHardExclusionMinutes) * time.Minute)
-	for _, row := range rows {
-		if row.PostID == 0 {
-			continue
-		}
-		history[row.PostID] = servedPost{
-			LastServedAt: row.LastServedAt,
-			Hard:         !row.LastServedAt.Before(hardStart),
-			Soft:         row.LastServedAt.After(start) && row.LastServedAt.Before(hardStart),
-		}
-	}
-	return history, nil
-}
-
 func recommendationEligibilityQuery(query *gorm.DB, userID uint, served map[uint]servedPost, now time.Time, softOnly bool, useMaterializedInteractions bool) *gorm.DB {
 	negative := global.Db.Table("post_behaviors AS ni").
 		Select("1").

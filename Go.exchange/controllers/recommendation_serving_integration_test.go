@@ -59,6 +59,7 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 		now,
 		"authenticated-boundary",
 		recommendationLanguageContext{},
+		map[uint]servedPost{},
 	)
 	if err != nil {
 		t.Fatal(err)

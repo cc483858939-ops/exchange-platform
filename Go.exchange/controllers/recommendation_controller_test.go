@@ -27,16 +27,20 @@ func TestGetPostRecommendationsReturnsPageEnvelopeAndPersistsRequestID(t *testin
 	originalServingPath := recommendationServingPathForHandler
 	originalResponseBuilder := selectedRecommendationResponsesForHandler
 	originalTracking := attachRecommendationTrackingForHandler
+	originalUserLoader := loadUserRecommendationServedHistoryForHandler
+	originalUserRecorder := recordUserRecommendationServedPostsForHandler
 	originalPersist := persistRecommendationServingTrace
 	t.Cleanup(func() {
 		recommendationServingPathForHandler = originalServingPath
 		selectedRecommendationResponsesForHandler = originalResponseBuilder
 		attachRecommendationTrackingForHandler = originalTracking
+		loadUserRecommendationServedHistoryForHandler = originalUserLoader
+		recordUserRecommendationServedPostsForHandler = originalUserRecorder
 		persistRecommendationServingTrace = originalPersist
 	})
 
 	var persistedRequest models.RecommendationRequest
-	recommendationServingPathForHandler = func(userID, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, _ recommendationLanguageContext) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(userID, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		if userID != 7 || limit != 20 || requestID == "" {
 			t.Fatalf("serving args user=%d limit=%d request_id=%q", userID, limit, requestID)
 		}
@@ -50,6 +54,12 @@ func TestGetPostRecommendationsReturnsPageEnvelopeAndPersistsRequestID(t *testin
 	}
 	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
+	}
+	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
+		return map[uint]servedPost{}, nil
+	}
+	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
+		return nil
 	}
 	persistRecommendationServingTrace = func(request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
 		persistedRequest = request
@@ -78,16 +88,20 @@ func TestGetPostRecommendationsReturnsEmptyPageAsEmptyArrayAndDepleted(t *testin
 	originalServingPath := recommendationServingPathForHandler
 	originalResponseBuilder := selectedRecommendationResponsesForHandler
 	originalTracking := attachRecommendationTrackingForHandler
+	originalUserLoader := loadUserRecommendationServedHistoryForHandler
+	originalUserRecorder := recordUserRecommendationServedPostsForHandler
 	originalPersist := persistRecommendationServingTrace
 	t.Cleanup(func() {
 		recommendationServingPathForHandler = originalServingPath
 		selectedRecommendationResponsesForHandler = originalResponseBuilder
 		attachRecommendationTrackingForHandler = originalTracking
+		loadUserRecommendationServedHistoryForHandler = originalUserLoader
+		recordUserRecommendationServedPostsForHandler = originalUserRecorder
 		persistRecommendationServingTrace = originalPersist
 	})
 
 	var servedLimit uint
-	recommendationServingPathForHandler = func(_ uint, limit uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ uint, limit uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		servedLimit = limit
 		return recommendationServingOutcome{}, nil
 	}
@@ -96,6 +110,12 @@ func TestGetPostRecommendationsReturnsEmptyPageAsEmptyArrayAndDepleted(t *testin
 	}
 	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
+	}
+	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
+		return map[uint]servedPost{}, nil
+	}
+	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
+		return nil
 	}
 	persistRecommendationServingTrace = func(models.RecommendationRequest, []models.RecommendationResultTrace) error {
 		return nil
@@ -112,6 +132,160 @@ func TestGetPostRecommendationsReturnsEmptyPageAsEmptyArrayAndDepleted(t *testin
 	}
 	if response.Items == nil || len(response.Items) != 0 || response.RequestID == "" || !response.Depleted {
 		t.Fatalf("response=%#v body=%s", response, recorder.Body.String())
+	}
+}
+
+func TestGetPostRecommendationsLoadsAndRecordsUserServedHistory(t *testing.T) {
+	originalServingPath := recommendationServingPathForHandler
+	originalResponseBuilder := selectedRecommendationResponsesForHandler
+	originalTracking := attachRecommendationTrackingForHandler
+	originalUserLoader := loadUserRecommendationServedHistoryForHandler
+	originalUserRecorder := recordUserRecommendationServedPostsForHandler
+	originalPersist := persistRecommendationServingTrace
+	t.Cleanup(func() {
+		recommendationServingPathForHandler = originalServingPath
+		selectedRecommendationResponsesForHandler = originalResponseBuilder
+		attachRecommendationTrackingForHandler = originalTracking
+		loadUserRecommendationServedHistoryForHandler = originalUserLoader
+		recordUserRecommendationServedPostsForHandler = originalUserRecorder
+		persistRecommendationServingTrace = originalPersist
+	})
+
+	events := make([]string, 0, 4)
+	var recordedPostIDs []uint
+	loadUserRecommendationServedHistoryForHandler = func(_ context.Context, userID uint, _ time.Time, _ config.RecommendationConfig) (map[uint]servedPost, error) {
+		if userID != 7 {
+			t.Fatalf("loaded user_id=%d", userID)
+		}
+		events = append(events, "load")
+		return map[uint]servedPost{11: {Hard: true}, 12: {Soft: true}}, nil
+	}
+	recommendationServingPathForHandler = func(_ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+		events = append(events, "serve")
+		if len(served) != 2 || !served[11].Hard || !served[12].Soft {
+			t.Fatalf("served=%#v", served)
+		}
+		return recommendationServingOutcome{}, nil
+	}
+	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
+		return []recommendedPostResponse{
+			{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}},
+			{Post: postResponse{ID: 102, Media: make([]postMediaResponse, 0)}},
+			{Post: postResponse{ID: 0, Media: make([]postMediaResponse, 0)}},
+		}, nil
+	}
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+		return 0, nil
+	}
+	recordUserRecommendationServedPostsForHandler = func(_ context.Context, userID uint, postIDs []uint, _ time.Time, _ config.RecommendationConfig) error {
+		if userID != 7 {
+			t.Fatalf("recorded user_id=%d", userID)
+		}
+		events = append(events, "record")
+		recordedPostIDs = append([]uint(nil), postIDs...)
+		return nil
+	}
+	persistRecommendationServingTrace = func(models.RecommendationRequest, []models.RecommendationResultTrace) error {
+		events = append(events, "trace")
+		return nil
+	}
+
+	ctx, recorder := newRecommendationControllerTestContext("/api/recommendations/posts", 7)
+	GetPostRecommendations(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(recordedPostIDs) != 2 || recordedPostIDs[0] != 101 || recordedPostIDs[1] != 102 {
+		t.Fatalf("recorded post IDs=%v want [101 102]", recordedPostIDs)
+	}
+	if len(events) != 4 || events[0] != "load" || events[1] != "serve" || events[2] != "record" || events[3] != "trace" {
+		t.Fatalf("events=%v want [load serve record trace]", events)
+	}
+}
+
+func TestGetPostRecommendationsUserHistoryReadFailureFailsOpen(t *testing.T) {
+	originalServingPath := recommendationServingPathForHandler
+	originalResponseBuilder := selectedRecommendationResponsesForHandler
+	originalTracking := attachRecommendationTrackingForHandler
+	originalUserLoader := loadUserRecommendationServedHistoryForHandler
+	originalUserRecorder := recordUserRecommendationServedPostsForHandler
+	originalPersist := persistRecommendationServingTrace
+	t.Cleanup(func() {
+		recommendationServingPathForHandler = originalServingPath
+		selectedRecommendationResponsesForHandler = originalResponseBuilder
+		attachRecommendationTrackingForHandler = originalTracking
+		loadUserRecommendationServedHistoryForHandler = originalUserLoader
+		recordUserRecommendationServedPostsForHandler = originalUserRecorder
+		persistRecommendationServingTrace = originalPersist
+	})
+
+	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
+		return nil, errors.New("redis unavailable")
+	}
+	recommendationServingPathForHandler = func(_ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+		if len(served) != 0 {
+			t.Fatalf("served=%#v want empty after read failure", served)
+		}
+		return recommendationServingOutcome{}, nil
+	}
+	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
+		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}}}, nil
+	}
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+		return 0, nil
+	}
+	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
+		return nil
+	}
+	persistRecommendationServingTrace = func(models.RecommendationRequest, []models.RecommendationResultTrace) error {
+		return nil
+	}
+
+	ctx, recorder := newRecommendationControllerTestContext("/api/recommendations/posts", 7)
+	GetPostRecommendations(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGetPostRecommendationsUserHistoryWriteFailureStillPersistsTrace(t *testing.T) {
+	originalServingPath := recommendationServingPathForHandler
+	originalResponseBuilder := selectedRecommendationResponsesForHandler
+	originalTracking := attachRecommendationTrackingForHandler
+	originalUserLoader := loadUserRecommendationServedHistoryForHandler
+	originalUserRecorder := recordUserRecommendationServedPostsForHandler
+	originalPersist := persistRecommendationServingTrace
+	t.Cleanup(func() {
+		recommendationServingPathForHandler = originalServingPath
+		selectedRecommendationResponsesForHandler = originalResponseBuilder
+		attachRecommendationTrackingForHandler = originalTracking
+		loadUserRecommendationServedHistoryForHandler = originalUserLoader
+		recordUserRecommendationServedPostsForHandler = originalUserRecorder
+		persistRecommendationServingTrace = originalPersist
+	})
+
+	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
+		return errors.New("redis unavailable")
+	}
+	recommendationServingPathForHandler = func(_ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+		return recommendationServingOutcome{}, nil
+	}
+	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
+		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}}}, nil
+	}
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+		return 0, nil
+	}
+	tracePersisted := false
+	persistRecommendationServingTrace = func(models.RecommendationRequest, []models.RecommendationResultTrace) error {
+		tracePersisted = true
+		return nil
+	}
+
+	ctx, recorder := newRecommendationControllerTestContext("/api/recommendations/posts", 7)
+	GetPostRecommendations(ctx)
+	if recorder.Code != http.StatusOK || !tracePersisted {
+		t.Fatalf("status=%d trace_persisted=%t body=%s", recorder.Code, tracePersisted, recorder.Body.String())
 	}
 }
 
