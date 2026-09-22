@@ -285,6 +285,17 @@ describe('UserProfileView profile cover editor', () => {
     expect(remove?.attributes('disabled')).toBeDefined();
   });
 
+  it('uses the same cover framing classes for profile display and edit preview', async () => {
+    wrapper = mountProfile();
+    await settle();
+
+    expect(wrapper.find('.profile-cover').exists()).toBe(true);
+
+    await openEditor(wrapper);
+
+    expect(wrapper.find('.profile-edit-cover__preview').exists()).toBe(true);
+  });
+
   it('keeps username visible but readonly in the compact editor', async () => {
     wrapper = mountProfile();
     await settle();

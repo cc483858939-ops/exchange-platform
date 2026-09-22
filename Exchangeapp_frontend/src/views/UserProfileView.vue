@@ -1398,10 +1398,14 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--color-border);
 }
 
+.profile-cover,
+.profile-edit-cover__preview {
+  aspect-ratio: 3 / 1;
+}
+
 .profile-cover {
   position: relative;
   width: 100%;
-  aspect-ratio: 3 / 1;
   overflow: hidden;
   background: var(--color-surface-subtle);
 }
@@ -1955,8 +1959,6 @@ onBeforeUnmount(() => {
 
 .profile-edit-cover__preview {
   width: 100%;
-  aspect-ratio: 4 / 1;
-  max-height: 140px;
   overflow: hidden;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
@@ -2159,10 +2161,6 @@ onBeforeUnmount(() => {
     min-height: 60px;
     margin-inline: calc(-1 * var(--space-4));
     padding-inline: var(--space-4);
-  }
-
-  .profile-edit-cover__preview {
-    max-height: none;
   }
 
   .profile-edit-dialog .profile-action--compact {
