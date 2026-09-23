@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   updateUserProfile: vi.fn(),
   uploadProfileAvatar: vi.fn(),
   uploadProfileCover: vi.fn(),
+  avatarCropOutput: null as File | null,
   coverCropOutput: null as File | null,
   deletePost: vi.fn(),
   getPostLikeStates: vi.fn(),
@@ -153,16 +154,22 @@ const PostCardStub = {
   template: '<article class="post-card">{{ post.content }}</article>',
 };
 
-const AvatarCropDialogStub = {
-  props: ['file'],
+const AvatarCropDialogStub = defineComponent({
+  props: {
+    file: { type: Object as PropType<File>, required: true },
+  },
   emits: ['cancel', 'apply'],
+  setup(props, { emit }) {
+    const apply = () => emit('apply', mocks.avatarCropOutput ?? props.file);
+    return { apply };
+  },
   template: `
     <div class="avatar-crop-dialog">
       <button type="button" class="avatar-crop-dialog__cancel" @click="$emit('cancel')">Cancel</button>
-      <button type="button" class="avatar-crop-dialog__apply" @click="$emit('apply', file)">Apply</button>
+      <button type="button" class="avatar-crop-dialog__apply" @click="apply">Apply</button>
     </div>
   `,
-};
+});
 
 const CoverCropDialogStub = defineComponent({
   props: {
@@ -221,7 +228,16 @@ const setAvatarFile = async (wrapper: VueWrapper, file: File) => {
 };
 
 const applyAvatarCrop = async (wrapper: VueWrapper) => {
+  mocks.avatarCropOutput = null;
   await wrapper.get('.avatar-crop-dialog__apply').trigger('click');
+  mocks.avatarCropOutput = null;
+  await nextTick();
+};
+
+const applyAvatarCropOutput = async (wrapper: VueWrapper, output: File) => {
+  mocks.avatarCropOutput = output;
+  await wrapper.get('.avatar-crop-dialog__apply').trigger('click');
+  mocks.avatarCropOutput = null;
   await nextTick();
 };
 
@@ -268,6 +284,7 @@ describe('UserProfileView profile cover editor', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    mocks.avatarCropOutput = null;
     mocks.coverCropOutput = null;
     mocks.route = reactive({
       name: 'UserProfile',
@@ -497,6 +514,60 @@ describe('UserProfileView profile cover editor', () => {
     expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe('blob:first.webp');
   });
 
+  it('restores focus to Change photo after canceling avatar crop', async () => {
+    wrapper = mountProfile();
+    document.body.append(wrapper.element);
+    await settle();
+    await openEditor(wrapper);
+
+    const avatarButton = wrapper.get('.profile-edit-avatar__change').element as HTMLButtonElement;
+    const avatarFocus = vi.spyOn(avatarButton, 'focus');
+    const coverButton = wrapper.get('.profile-edit-cover__change').element as HTMLButtonElement;
+    const coverFocus = vi.spyOn(coverButton, 'focus');
+
+    await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await wrapper.get('.avatar-crop-dialog__cancel').trigger('click');
+    await settle();
+
+    expect(wrapper.find('.avatar-crop-dialog').exists()).toBe(false);
+    expect(avatarFocus).toHaveBeenCalledTimes(1);
+    expect(coverFocus).not.toHaveBeenCalled();
+  });
+
+  it('restores focus to Change photo after applying avatar crop', async () => {
+    wrapper = mountProfile();
+    document.body.append(wrapper.element);
+    await settle();
+    await openEditor(wrapper);
+
+    const avatarButton = wrapper.get('.profile-edit-avatar__change').element as HTMLButtonElement;
+    const avatarFocus = vi.spyOn(avatarButton, 'focus');
+    const source = new File(['avatar'], 'avatar.webp', { type: 'image/webp' });
+    await setAvatarFile(wrapper, source);
+    await applyAvatarCrop(wrapper);
+    await settle();
+
+    expect(wrapper.find('.avatar-crop-dialog').exists()).toBe(false);
+    expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe('blob:avatar.webp');
+    expect(avatarFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps focus in avatar crop when generated output is invalid', async () => {
+    wrapper = mountProfile();
+    document.body.append(wrapper.element);
+    await settle();
+    await openEditor(wrapper);
+
+    const avatarButton = wrapper.get('.profile-edit-avatar__change').element as HTMLButtonElement;
+    const avatarFocus = vi.spyOn(avatarButton, 'focus');
+    await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
+    await applyAvatarCropOutput(wrapper, new File([], 'empty.webp', { type: 'image/webp' }));
+    await settle();
+
+    expect(wrapper.find('.avatar-crop-dialog').exists()).toBe(true);
+    expect(avatarFocus).not.toHaveBeenCalled();
+  });
+
   it('rejects an oversized avatar source before opening the crop dialog', async () => {
     wrapper = mountProfile();
     await settle();
@@ -551,13 +622,55 @@ describe('UserProfileView profile cover editor', () => {
     expect(mocks.uploadProfileCover).not.toHaveBeenCalled();
   });
 
+  it('restores focus to Change cover after canceling cover crop', async () => {
+    wrapper = mountProfile();
+    document.body.append(wrapper.element);
+    await settle();
+    await openEditor(wrapper);
+
+    const coverButton = wrapper.get('.profile-edit-cover__change').element as HTMLButtonElement;
+    const coverFocus = vi.spyOn(coverButton, 'focus');
+    const avatarButton = wrapper.get('.profile-edit-avatar__change').element as HTMLButtonElement;
+    const avatarFocus = vi.spyOn(avatarButton, 'focus');
+
+    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await wrapper.get('.cover-crop-dialog__cancel').trigger('click');
+    await settle();
+
+    expect(wrapper.find('.cover-crop-dialog').exists()).toBe(false);
+    expect(coverFocus).toHaveBeenCalledTimes(1);
+    expect(avatarFocus).not.toHaveBeenCalled();
+  });
+
+  it('restores focus to Change cover after applying cover crop', async () => {
+    wrapper = mountProfile();
+    document.body.append(wrapper.element);
+    await settle();
+    await openEditor(wrapper);
+
+    const coverButton = wrapper.get('.profile-edit-cover__change').element as HTMLButtonElement;
+    const coverFocus = vi.spyOn(coverButton, 'focus');
+    const source = new File(['cover'], 'cover.webp', { type: 'image/webp' });
+    const cropped = createCroppedCover(source);
+    await setCoverFile(wrapper, source);
+    await applyCoverCrop(wrapper, cropped);
+    await settle();
+
+    expect(wrapper.find('.cover-crop-dialog').exists()).toBe(false);
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:cover-cover-cropped.png');
+    expect(coverFocus).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an invalid generated cover while keeping the crop dialog open and pending preview unchanged', async () => {
     wrapper = mountProfile();
+    document.body.append(wrapper.element);
     await settle();
     await openEditor(wrapper);
     const first = new File(['first'], 'first.webp', { type: 'image/webp' });
     await setAndApplyCoverFile(wrapper, first);
     const oldPreview = wrapper.get('.profile-edit-cover__preview img').attributes('src');
+    const coverButton = wrapper.get('.profile-edit-cover__change').element as HTMLButtonElement;
+    const coverFocus = vi.spyOn(coverButton, 'focus');
 
     await setCoverFile(wrapper, new File(['next'], 'next.webp', { type: 'image/webp' }));
     await applyCoverCrop(wrapper, new File(['invalid'], 'invalid.webp', { type: 'image/webp' }));
@@ -566,6 +679,7 @@ describe('UserProfileView profile cover editor', () => {
     expect(wrapper.get('.profile-edit-cover').text()).toContain('Could not prepare this cover. Try another image.');
     expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe(oldPreview);
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(oldPreview);
+    expect(coverFocus).not.toHaveBeenCalled();
   });
 
   it('rejects unsupported, zero-byte, and oversized cover files before creating previews', async () => {

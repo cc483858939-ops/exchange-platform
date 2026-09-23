@@ -295,6 +295,7 @@
               @change="handleCoverSelection"
             />
             <button
+              ref="profileCoverChangeButtonRef"
               class="profile-edit-media-change profile-edit-cover__change"
               type="button"
               aria-label="Change cover"
@@ -337,6 +338,7 @@
               @change="handleAvatarSelection"
             />
             <button
+              ref="profileAvatarChangeButtonRef"
               class="profile-edit-media-change profile-edit-avatar__change"
               type="button"
               aria-label="Change photo"
@@ -710,6 +712,8 @@ const editDialogRef = ref<HTMLDialogElement | null>(null);
 const editDisplayNameInputRef = ref<HTMLInputElement | null>(null);
 const profileAvatarInputRef = ref<HTMLInputElement | null>(null);
 const profileCoverInputRef = ref<HTMLInputElement | null>(null);
+const profileAvatarChangeButtonRef = ref<HTMLButtonElement | null>(null);
+const profileCoverChangeButtonRef = ref<HTMLButtonElement | null>(null);
 const editOriginal = ref<ProfileEditSnapshot | null>(null);
 const editDraft = reactive<ProfileEditSnapshot>({
   display_name: '',
@@ -734,6 +738,20 @@ const editSaving = ref(false);
 const discardConfirmOpen = ref(false);
 const discardFocusTarget = ref<HTMLElement | null>(null);
 const discardFocusSelector = ref('');
+
+const restoreProfileMediaChangeFocus = (target: HTMLButtonElement | null) => {
+  void nextTick(() => {
+    if (
+      editDialogRef.value?.open !== true
+      || !target?.isConnected
+      || target.disabled
+    ) {
+      return;
+    }
+
+    target.focus();
+  });
+};
 
 const editDisplayNameLength = computed(() => Array.from(editDraft.display_name.trim()).length);
 const editBioLength = computed(() => Array.from(editDraft.bio.trim()).length);
@@ -951,6 +969,7 @@ const handleAvatarSelection = (event: Event) => {
 const handleAvatarCropCancel = () => {
   avatarCropOpen.value = false;
   avatarCropSourceFile.value = null;
+  restoreProfileMediaChangeFocus(profileAvatarChangeButtonRef.value);
 };
 
 const handleAvatarCropApply = (file: File) => {
@@ -967,6 +986,7 @@ const handleAvatarCropApply = (file: File) => {
   editError.value = '';
   avatarCropOpen.value = false;
   avatarCropSourceFile.value = null;
+  restoreProfileMediaChangeFocus(profileAvatarChangeButtonRef.value);
 };
 
 const handleCoverSelection = (event: Event) => {
@@ -992,6 +1012,7 @@ const handleCoverSelection = (event: Event) => {
 const handleCoverCropCancel = () => {
   coverCropOpen.value = false;
   coverCropSourceFile.value = null;
+  restoreProfileMediaChangeFocus(profileCoverChangeButtonRef.value);
 };
 
 const handleCoverCropApply = (file: File) => {
@@ -1012,6 +1033,7 @@ const handleCoverCropApply = (file: File) => {
   editError.value = '';
   coverCropOpen.value = false;
   coverCropSourceFile.value = null;
+  restoreProfileMediaChangeFocus(profileCoverChangeButtonRef.value);
 };
 
 const removeProfileAvatar = () => {
