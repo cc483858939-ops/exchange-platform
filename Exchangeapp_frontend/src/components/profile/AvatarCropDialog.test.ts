@@ -82,6 +82,17 @@ const readCropState = (wrapper: VueWrapper, cropSize: number) => {
   };
 };
 
+const dispatchKeyboard = (element: Element, key: string, shiftKey = false) => {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    shiftKey,
+    bubbles: true,
+    cancelable: true,
+  });
+  element.dispatchEvent(event);
+  return event;
+};
+
 describe('AvatarCropDialog', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -106,9 +117,137 @@ describe('AvatarCropDialog', () => {
 
     expect(wrapper.get('dialog').attributes('open')).toBeDefined();
     expect(wrapper.get('.avatar-crop-dialog__image').attributes('src')).toBe('blob:avatar.webp');
-    expect(wrapper.get('.avatar-crop-dialog__viewport').find('.avatar-crop-dialog__circle').exists()).toBe(true);
+    const viewport = wrapper.get('.avatar-crop-dialog__viewport');
+    expect(viewport.attributes()).toMatchObject({
+      role: 'group',
+      'aria-label': 'Avatar crop preview',
+      'aria-describedby': 'avatar-crop-keyboard-help',
+      tabindex: '0',
+    });
+    expect(wrapper.get('#avatar-crop-keyboard-help').text()).toBe(
+      'Use the arrow keys to move the photo. Hold Shift while pressing an arrow key to move it farther.',
+    );
+    expect(viewport.find('.avatar-crop-dialog__circle').exists()).toBe(true);
     expect(wrapper.get('#avatar-crop-zoom').attributes('aria-label')).toBe('Zoom photo');
     expect(wrapper.get('.avatar-crop-dialog__image').attributes('style')).toContain('translate3d(-140px, 0px, 0)');
+  });
+
+  it('moves the crop with every arrow, supports Shift steps, and stays within bounds', async () => {
+    const wrapper = mountDialog();
+    await settle();
+    const viewport = wrapper.get('.avatar-crop-dialog__viewport').element;
+
+    let before = readCropState(wrapper, 360);
+    let event = dispatchKeyboard(viewport, 'ArrowLeft');
+    await wrapper.vm.$nextTick();
+    let after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX - 8);
+    expect(after.offsetY).toBeCloseTo(before.offsetY);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowRight');
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX + 8);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowLeft', true);
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX - 32);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowRight', true);
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX + 32);
+
+    before = after;
+    for (const [key, shiftKey] of [
+      ['ArrowUp', false],
+      ['ArrowDown', false],
+      ['ArrowUp', true],
+      ['ArrowDown', true],
+    ] as const) {
+      event = dispatchKeyboard(viewport, key, shiftKey);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(after.offsetY).toBeCloseTo(before.offsetY);
+
+    await wrapper.get('#avatar-crop-zoom').setValue('0.5');
+    before = readCropState(wrapper, 360);
+    event = dispatchKeyboard(viewport, 'ArrowUp');
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY - 8);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowDown');
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY + 8);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowUp', true);
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY - 32);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowDown', true);
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY + 32);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'Enter');
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(false);
+    expect(after.offsetX).toBeCloseTo(before.offsetX);
+    expect(after.offsetY).toBeCloseTo(before.offsetY);
+
+    for (let index = 0; index < 100; index += 1) {
+      event = dispatchKeyboard(viewport, 'ArrowLeft');
+    }
+    await wrapper.vm.$nextTick();
+    after = readCropState(wrapper, 360);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(360 - 1600 * after.scale);
+
+    await wrapper.get('.avatar-crop-dialog__button--primary').trigger('click');
+    await settle();
+    const finalRequest = mocks.createCroppedAvatar.mock.calls[mocks.createCroppedAvatar.mock.calls.length - 1]![0];
+    expect(finalRequest.offsetX).toBeCloseTo(after.offsetX);
+    expect(finalRequest.offsetY).toBeCloseTo(after.offsetY);
+  });
+
+  it('keeps the viewport out of the tab order until the source loads', async () => {
+    type DecodedAvatar = {
+      source: CanvasImageSource;
+      naturalWidth: number;
+      naturalHeight: number;
+      dispose: () => void;
+    };
+    let resolve!: (decoded: DecodedAvatar) => void;
+    mocks.decodeAvatarImage.mockReturnValue(new Promise<DecodedAvatar>(res => { resolve = res; }));
+    const wrapper = mountDialog();
+    const viewport = wrapper.get('.avatar-crop-dialog__viewport');
+    expect(viewport.attributes('tabindex')).toBe('-1');
+
+    resolve({ source: {} as CanvasImageSource, naturalWidth: 1600, naturalHeight: 900, dispose: vi.fn() });
+    await settle();
+    expect(viewport.attributes('tabindex')).toBe('0');
   });
 
   it('clamps drag, zooms through the slider, and resets to the default position', async () => {
@@ -198,10 +337,17 @@ describe('AvatarCropDialog', () => {
     await settle();
 
     const apply = wrapper.get('.avatar-crop-dialog__button--primary');
+    const viewport = wrapper.get('.avatar-crop-dialog__viewport');
+    const viewportElement = viewport.element;
+    const before = readCropState(wrapper, 360);
     await apply.trigger('click');
     await apply.trigger('click');
     expect(mocks.createCroppedAvatar).toHaveBeenCalledTimes(1);
     expect(apply.attributes('disabled')).toBeDefined();
+    expect(viewport.attributes('tabindex')).toBe('-1');
+    dispatchKeyboard(viewportElement, 'ArrowLeft');
+    await wrapper.vm.$nextTick();
+    expect(readCropState(wrapper, 360).offsetX).toBeCloseTo(before.offsetX);
 
     resolve(new File(['cropped'], 'avatar-cropped.jpg', { type: 'image/jpeg' }));
     await settle();
@@ -258,6 +404,7 @@ describe('AvatarCropDialog', () => {
     expect(wrapper.get('[role="alert"]').text()).toBe('This image could not be opened. Try another photo.');
     expect(wrapper.get('.avatar-crop-dialog').attributes('open')).toBeDefined();
     expect(wrapper.get('.avatar-crop-dialog__button--primary').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.avatar-crop-dialog__viewport').attributes('tabindex')).toBe('-1');
   });
 
   it('revokes the source preview URL on unmount', async () => {

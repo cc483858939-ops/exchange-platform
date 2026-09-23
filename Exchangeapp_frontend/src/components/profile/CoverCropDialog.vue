@@ -20,12 +20,18 @@
       </header>
 
       <div class="cover-crop-dialog__body">
+        <p id="cover-crop-keyboard-help" class="sr-only">
+          Use the arrow keys to move the photo. Hold Shift while pressing an arrow key to move it farther.
+        </p>
         <div
           ref="cropViewportRef"
           class="cover-crop-dialog__viewport"
           :class="{ 'cover-crop-dialog__viewport--dragging': dragging }"
+          :tabindex="cropInteractionEnabled ? 0 : -1"
           aria-label="Cover crop preview"
-          role="img"
+          aria-describedby="cover-crop-keyboard-help"
+          role="group"
+          @keydown="handleCropKeydown"
           @pointerdown="handlePointerDown"
           @pointermove="handlePointerMove"
           @pointerup="handlePointerUp"
@@ -136,6 +142,8 @@ const applying = ref(false);
 const sourceInvalid = ref(false);
 const errorMessage = ref('');
 const dragging = ref(false);
+const keyboardMoveStep = 8;
+const keyboardMoveLargeStep = 32;
 let sessionVersion = 0;
 let pointerID: number | null = null;
 let previousPointerX = 0;
@@ -146,6 +154,12 @@ const geometry = computed<CoverCropGeometry | null>(() => createCoverCropGeometr
   viewportWidth.value,
   naturalWidth.value,
   naturalHeight.value,
+));
+const cropInteractionEnabled = computed(() => Boolean(
+  geometry.value
+  && !loading.value
+  && !applying.value
+  && !sourceInvalid.value
 ));
 
 const cropState = computed<CoverCropState>(() => ({
@@ -269,6 +283,39 @@ const handleZoomInput = (event: Event) => {
     current.minScale + ratio * (current.maxScale - current.minScale),
     current,
   ));
+};
+
+const handleCropKeydown = (event: KeyboardEvent) => {
+  const current = geometry.value;
+  if (!current || !cropInteractionEnabled.value) return;
+
+  const step = event.shiftKey ? keyboardMoveLargeStep : keyboardMoveStep;
+  let deltaX = 0;
+  let deltaY = 0;
+
+  switch (event.key) {
+    case 'ArrowLeft':
+      deltaX = -step;
+      break;
+    case 'ArrowRight':
+      deltaX = step;
+      break;
+    case 'ArrowUp':
+      deltaY = -step;
+      break;
+    case 'ArrowDown':
+      deltaY = step;
+      break;
+    default:
+      return;
+  }
+
+  event.preventDefault();
+  setCropState(clampCoverCropState({
+    scale: scale.value,
+    offsetX: offsetX.value + deltaX,
+    offsetY: offsetY.value + deltaY,
+  }, current));
 };
 
 const handlePointerDown = (event: PointerEvent) => {
@@ -447,6 +494,24 @@ onBeforeUnmount(() => {
   touch-action: none;
   user-select: none;
   background: #111820;
+}
+
+.cover-crop-dialog__viewport:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+  border: 0;
 }
 
 .cover-crop-dialog__image {

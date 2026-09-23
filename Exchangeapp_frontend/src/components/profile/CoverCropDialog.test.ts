@@ -98,6 +98,17 @@ const dispatchPointer = (
   element.dispatchEvent(event);
 };
 
+const dispatchKeyboard = (element: Element, key: string, shiftKey = false) => {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    shiftKey,
+    bubbles: true,
+    cancelable: true,
+  });
+  element.dispatchEvent(event);
+  return event;
+};
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -135,7 +146,16 @@ describe('CoverCropDialog', () => {
 
     expect(wrapper.get('.cover-crop-dialog').attributes('open')).toBeDefined();
     expect(wrapper.get('#cover-crop-title').text()).toBe('Edit cover');
-    expect(wrapper.find('.cover-crop-dialog__viewport').exists()).toBe(true);
+    const viewport = wrapper.get('.cover-crop-dialog__viewport');
+    expect(viewport.attributes()).toMatchObject({
+      role: 'group',
+      'aria-label': 'Cover crop preview',
+      'aria-describedby': 'cover-crop-keyboard-help',
+      tabindex: '0',
+    });
+    expect(wrapper.get('#cover-crop-keyboard-help').text()).toBe(
+      'Use the arrow keys to move the photo. Hold Shift while pressing an arrow key to move it farther.',
+    );
     expect(wrapper.get('input[type="range"]').attributes()).toMatchObject({
       min: '0',
       max: '1',
@@ -154,6 +174,118 @@ describe('CoverCropDialog', () => {
       offsetX: centered.offsetX,
       offsetY: centered.offsetY,
     });
+  });
+
+  it('moves the crop with every arrow, supports Shift steps, and stays within bounds', async () => {
+    wrapper = mountDialog();
+    await settle();
+    const viewport = wrapper.get('.cover-crop-dialog__viewport').element;
+
+    let before = readImageState(wrapper);
+    let event = dispatchKeyboard(viewport, 'ArrowUp');
+    await wrapper.vm.$nextTick();
+    let after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY - 8);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowDown');
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY + 8);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowUp', true);
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY - 32);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowDown', true);
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(before.offsetY + 32);
+
+    before = after;
+    for (const key of ['ArrowLeft', 'ArrowRight']) {
+      event = dispatchKeyboard(viewport, key);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(after.offsetX).toBeCloseTo(before.offsetX);
+
+    await wrapper.get('input[type="range"]').setValue('0.5');
+    before = readImageState(wrapper);
+    event = dispatchKeyboard(viewport, 'ArrowLeft');
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX - 8);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowRight');
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX + 8);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowLeft', true);
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX - 32);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'ArrowRight', true);
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetX).toBeCloseTo(before.offsetX + 32);
+
+    before = after;
+    event = dispatchKeyboard(viewport, 'Enter');
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(false);
+    expect(after.offsetX).toBeCloseTo(before.offsetX);
+    expect(after.offsetY).toBeCloseTo(before.offsetY);
+
+    for (let index = 0; index < 100; index += 1) {
+      event = dispatchKeyboard(viewport, 'ArrowUp');
+    }
+    await wrapper.vm.$nextTick();
+    after = readImageState(wrapper);
+    expect(event.defaultPrevented).toBe(true);
+    expect(after.offsetY).toBeCloseTo(460 / 3 - after.height);
+
+    await wrapper.get('.cover-crop-dialog__apply').trigger('click');
+    await settle();
+    const finalRequest = mocks.createCroppedCover.mock.calls[mocks.createCroppedCover.mock.calls.length - 1]![0];
+    expect(finalRequest.offsetX).toBeCloseTo(after.offsetX);
+    expect(finalRequest.offsetY).toBeCloseTo(after.offsetY);
+  });
+
+  it('keeps the viewport out of the tab order until the source loads', async () => {
+    type DecodedCover = {
+      source: CanvasImageSource;
+      naturalWidth: number;
+      naturalHeight: number;
+      dispose: () => void;
+    };
+    let resolve!: (decoded: DecodedCover) => void;
+    mocks.decodeCoverImage.mockReturnValue(new Promise<DecodedCover>(res => { resolve = res; }));
+    wrapper = mountDialog();
+    const viewport = wrapper.get('.cover-crop-dialog__viewport');
+    expect(viewport.attributes('tabindex')).toBe('-1');
+
+    resolve({ source: {} as CanvasImageSource, naturalWidth: 1600, naturalHeight: 900, dispose: vi.fn() });
+    await settle();
+    expect(viewport.attributes('tabindex')).toBe('0');
   });
 
   it('drags the image while clamping the crop to source pixels', async () => {
@@ -214,9 +346,16 @@ describe('CoverCropDialog', () => {
     await settle();
 
     await wrapper.get('.cover-crop-dialog__apply').trigger('click');
+    const viewport = wrapper.get('.cover-crop-dialog__viewport');
+    const viewportElement = viewport.element;
+    const before = readImageState(wrapper);
     expect(wrapper.get('.cover-crop-dialog__apply').text()).toBe('Preparing…');
     expect(wrapper.get('.cover-crop-dialog__apply').attributes('disabled')).toBeDefined();
     expect(wrapper.get('.cover-crop-dialog__reset').attributes('disabled')).toBeDefined();
+    expect(viewport.attributes('tabindex')).toBe('-1');
+    dispatchKeyboard(viewportElement, 'ArrowUp');
+    await wrapper.vm.$nextTick();
+    expect(readImageState(wrapper)).toMatchObject({ offsetX: before.offsetX, offsetY: before.offsetY });
     expect(wrapper.get('.cover-crop-dialog__close').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('.cover-crop-dialog__actions button').attributes('disabled')).toBeUndefined();
     expect(mocks.createCroppedCover).toHaveBeenCalledWith(expect.objectContaining({
@@ -268,6 +407,7 @@ describe('CoverCropDialog', () => {
 
     expect(wrapper.get('.cover-crop-dialog__error').text()).toBe('This cover is too large. Choose a smaller image.');
     expect(wrapper.get('.cover-crop-dialog__apply').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.cover-crop-dialog__viewport').attributes('tabindex')).toBe('-1');
     expect(wrapper.get('.cover-crop-dialog').attributes('open')).toBeDefined();
   });
 
@@ -277,6 +417,7 @@ describe('CoverCropDialog', () => {
     await settle();
     expect(wrapper.get('.cover-crop-dialog__error').text()).toBe('This image could not be opened. Try another cover.');
     expect(wrapper.get('.cover-crop-dialog').attributes('open')).toBeDefined();
+    expect(wrapper.get('.cover-crop-dialog__viewport').attributes('tabindex')).toBe('-1');
 
     wrapper.unmount();
     wrapper = null;

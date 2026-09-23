@@ -20,11 +20,17 @@
       </header>
 
       <div class="avatar-crop-dialog__body">
+        <p id="avatar-crop-keyboard-help" class="sr-only">
+          Use the arrow keys to move the photo. Hold Shift while pressing an arrow key to move it farther.
+        </p>
         <div
           ref="cropViewportRef"
           class="avatar-crop-dialog__viewport"
+          :tabindex="cropInteractionEnabled ? 0 : -1"
           aria-label="Avatar crop preview"
-          role="img"
+          aria-describedby="avatar-crop-keyboard-help"
+          role="group"
+          @keydown="handleCropKeydown"
           @pointerdown="handlePointerDown"
           @pointermove="handlePointerMove"
           @pointerup="handlePointerUp"
@@ -133,6 +139,8 @@ const offsetY = ref(0);
 const loading = ref(true);
 const applying = ref(false);
 const errorMessage = ref('');
+const keyboardMoveStep = 8;
+const keyboardMoveLargeStep = 32;
 let sessionVersion = 0;
 let pointerID: number | null = null;
 let previousPointerX = 0;
@@ -143,6 +151,12 @@ const geometry = computed<AvatarCropGeometry | null>(() => createAvatarCropGeome
   cropSize.value,
   naturalWidth.value,
   naturalHeight.value,
+));
+const cropInteractionEnabled = computed(() => Boolean(
+  geometry.value
+  && !loading.value
+  && !applying.value
+  && !errorMessage.value
 ));
 
 const cropState = computed<AvatarCropState>(() => ({
@@ -259,6 +273,39 @@ const handleZoomInput = (event: Event) => {
     current.minScale + ratio * (current.maxScale - current.minScale),
     current,
   ));
+};
+
+const handleCropKeydown = (event: KeyboardEvent) => {
+  const current = geometry.value;
+  if (!current || !cropInteractionEnabled.value) return;
+
+  const step = event.shiftKey ? keyboardMoveLargeStep : keyboardMoveStep;
+  let deltaX = 0;
+  let deltaY = 0;
+
+  switch (event.key) {
+    case 'ArrowLeft':
+      deltaX = -step;
+      break;
+    case 'ArrowRight':
+      deltaX = step;
+      break;
+    case 'ArrowUp':
+      deltaY = -step;
+      break;
+    case 'ArrowDown':
+      deltaY = step;
+      break;
+    default:
+      return;
+  }
+
+  event.preventDefault();
+  setCropState(clampAvatarCropState({
+    scale: scale.value,
+    offsetX: offsetX.value + deltaX,
+    offsetY: offsetY.value + deltaY,
+  }, current));
 };
 
 const handlePointerDown = (event: PointerEvent) => {
@@ -433,6 +480,24 @@ onBeforeUnmount(() => {
   touch-action: none;
   user-select: none;
   background: #111820;
+}
+
+.avatar-crop-dialog__viewport:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+  border: 0;
 }
 
 .avatar-crop-dialog__image {
