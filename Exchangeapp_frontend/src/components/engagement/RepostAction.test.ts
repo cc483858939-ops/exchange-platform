@@ -36,22 +36,24 @@ afterEach(() => {
 });
 
 describe('RepostAction', () => {
-  it('renders the repost mark with a single rounded, unfilled path', () => {
+  it('renders the repost mark with two rounded, unfilled paths', () => {
     const wrapper = mount(AppIcon, {
       props: { name: 'repost', size: 18 },
     });
-    const path = wrapper.get('path');
+    const paths = wrapper.findAll('path');
 
-    expect(wrapper.findAll('path')).toHaveLength(1);
+    expect(paths).toHaveLength(2);
     expect(wrapper.get('svg').attributes('viewBox')).toBe('0 0 24 24');
     expect(wrapper.get('svg').attributes()).toMatchObject({ width: '18', height: '18' });
-    expect(path.attributes('d')).toBeTruthy();
-    expect(path.attributes()).toMatchObject({
-      fill: 'none',
-      stroke: 'currentColor',
-      'stroke-width': '2',
-      'stroke-linecap': 'round',
-      'stroke-linejoin': 'round',
+    paths.forEach(path => {
+      expect(path.attributes('d')).toBeTruthy();
+      expect(path.attributes()).toMatchObject({
+        fill: 'none',
+        stroke: 'currentColor',
+        'stroke-width': '2.1',
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round',
+      });
     });
   });
 
