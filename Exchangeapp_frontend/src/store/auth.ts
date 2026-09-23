@@ -29,6 +29,13 @@ type AuthErrorResponse = {
   message?: string;
 };
 
+export class AuthSessionChangedError extends Error {
+  constructor() {
+    super('Authentication session changed');
+    this.name = 'AuthSessionChangedError';
+  }
+}
+
 const toAuthRequestError = (error: unknown, fallback: string): AuthRequestError => {
   const data = (error as { response?: { data?: AuthErrorResponse } }).response?.data;
   const code = typeof data?.code === 'string' && data.code.trim() ? data.code.trim() : null;
@@ -60,6 +67,7 @@ export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(asAuthorizationHeader(storedAccessToken));
   const refreshToken = ref<string | null>(localStorage.getItem(refreshTokenKey));
   const identity = ref<AuthIdentity | null>(loadStoredIdentity() || decodeAuthIdentity(storedAccessToken));
+  const sessionVersion = ref(0);
 
   const isAuthenticated = computed(() => Boolean(token.value && refreshToken.value && identity.value));
   const currentIdentity = computed<AuthIdentity | null>(() => identity.value);
@@ -71,6 +79,11 @@ export const useAuthStore = defineStore('auth', () => {
     } else {
       localStorage.removeItem(authUserKey);
     }
+  };
+
+  const advanceSessionVersion = (): number => {
+    sessionVersion.value += 1;
+    return sessionVersion.value;
   };
 
   const setTokens = (response: AuthResponse) => {
@@ -88,12 +101,17 @@ export const useAuthStore = defineStore('auth', () => {
     persistIdentity(normalizedIdentity);
   };
 
-  const clearAuth = () => {
+  const clearAuthState = () => {
     token.value = null;
     refreshToken.value = null;
     localStorage.removeItem(accessTokenKey);
     localStorage.removeItem(refreshTokenKey);
     persistIdentity(null);
+  };
+
+  const clearAuth = () => {
+    advanceSessionVersion();
+    clearAuthState();
   };
 
   const syncCurrentIdentityProfile = (candidate: AuthIdentity): boolean => {
@@ -106,39 +124,77 @@ export const useAuthStore = defineStore('auth', () => {
   };
 
   const login = async (username: string, password: string) => {
+    const operationVersion = advanceSessionVersion();
+
     try {
       const response = await authClient.post<AuthResponse>('/auth/login', { username, password });
+      if (sessionVersion.value !== operationVersion) {
+        throw new AuthSessionChangedError();
+      }
       setTokens(response.data);
     } catch (error) {
+      if (error instanceof AuthSessionChangedError) {
+        throw error;
+      }
       throw toAuthRequestError(error, '登录失败，请稍后重试');
     }
   };
 
   const register = async (username: string, password: string) => {
+    const operationVersion = advanceSessionVersion();
+
     try {
       const response = await authClient.post<AuthResponse>('/auth/register', { username, password });
+      if (sessionVersion.value !== operationVersion) {
+        throw new AuthSessionChangedError();
+      }
       setTokens(response.data);
     } catch (error) {
+      if (error instanceof AuthSessionChangedError) {
+        throw error;
+      }
       throw toAuthRequestError(error, '注册失败，请稍后重试');
     }
   };
 
   const refreshAccessToken = async () => {
-    if (!refreshToken.value) {
+    const versionAtStart = sessionVersion.value;
+    const refreshTokenAtStart = refreshToken.value;
+
+    if (!refreshTokenAtStart) {
       clearAuth();
       throw new Error('Missing refresh token');
     }
+
     try {
       const response = await authClient.post<AuthResponse>('/auth/refresh', {
-        refresh_token: refreshToken.value,
+        refresh_token: refreshTokenAtStart,
       });
+
+      if (
+        sessionVersion.value !== versionAtStart ||
+        refreshToken.value !== refreshTokenAtStart
+      ) {
+        throw new AuthSessionChangedError();
+      }
+
       setTokens(response.data);
       if (!token.value) {
         throw new Error('Missing access token');
       }
       return token.value;
     } catch (error) {
-      clearAuth();
+      if (error instanceof AuthSessionChangedError) {
+        throw error;
+      }
+
+      if (
+        sessionVersion.value === versionAtStart &&
+        refreshToken.value === refreshTokenAtStart
+      ) {
+        clearAuth();
+      }
+
       throw error;
     }
   };
@@ -150,6 +206,7 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     token,
     refreshToken,
+    sessionVersion,
     isAuthenticated,
     currentIdentity,
     login,

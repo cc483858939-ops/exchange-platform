@@ -1,17 +1,23 @@
 import axios from 'axios';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { apiBaseUrl } from './api';
-import { useAuthStore } from './store/auth';
+import { AuthSessionChangedError, useAuthStore } from './store/auth';
 
 type RetryableRequestConfig = InternalAxiosRequestConfig & {
   _retry?: boolean;
+  _authSessionVersion?: number;
+};
+
+type RefreshState = {
+  sessionVersion: number;
+  promise: Promise<string>;
 };
 
 const instance = axios.create({
   baseURL: apiBaseUrl,
 });
 
-let refreshPromise: Promise<string> | null = null;
+let refreshState: RefreshState | null = null;
 
 const authEndpointPaths = ['/auth/login', '/auth/register', '/auth/refresh'];
 
@@ -24,6 +30,14 @@ const isAuthEndpoint = (url?: string) => {
 
 instance.interceptors.request.use(config => {
   const authStore = useAuthStore();
+  const authConfig = config as RetryableRequestConfig;
+
+  if (authConfig._authSessionVersion === undefined) {
+    authConfig._authSessionVersion = authStore.sessionVersion;
+  } else if (authConfig._authSessionVersion !== authStore.sessionVersion) {
+    return Promise.reject(new AuthSessionChangedError());
+  }
+
   if (authStore.token) {
     config.headers.Authorization = authStore.token;
   }
@@ -40,25 +54,52 @@ instance.interceptors.response.use(
       error.response?.status !== 401 ||
       !originalRequest ||
       originalRequest._retry ||
-      isAuthEndpoint(originalRequest.url) ||
-      !authStore.refreshToken
+      isAuthEndpoint(originalRequest.url)
     ) {
+      return Promise.reject(error);
+    }
+
+    const requestVersion = originalRequest._authSessionVersion;
+    if (requestVersion === undefined || requestVersion !== authStore.sessionVersion) {
+      return Promise.reject(error);
+    }
+
+    if (!authStore.refreshToken) {
       return Promise.reject(error);
     }
 
     originalRequest._retry = true;
 
     try {
-      if (!refreshPromise) {
-        refreshPromise = authStore.refreshAccessToken().finally(() => {
-          refreshPromise = null;
+      if (!refreshState || refreshState.sessionVersion !== requestVersion) {
+        const state: RefreshState = {
+          sessionVersion: requestVersion,
+          promise: authStore.refreshAccessToken(),
+        };
+        refreshState = state;
+        state.promise = state.promise.finally(() => {
+          if (refreshState === state) {
+            refreshState = null;
+          }
         });
       }
-      const accessToken = await refreshPromise;
+
+      const activeRefreshState = refreshState;
+      if (!activeRefreshState || activeRefreshState.sessionVersion !== requestVersion) {
+        return Promise.reject(new AuthSessionChangedError());
+      }
+
+      const accessToken = await activeRefreshState.promise;
+      if (
+        activeRefreshState.sessionVersion !== requestVersion ||
+        authStore.sessionVersion !== requestVersion
+      ) {
+        return Promise.reject(new AuthSessionChangedError());
+      }
+
       originalRequest.headers.Authorization = accessToken;
       return instance(originalRequest);
     } catch (refreshError) {
-      authStore.clearAuth();
       return Promise.reject(refreshError);
     }
   }
