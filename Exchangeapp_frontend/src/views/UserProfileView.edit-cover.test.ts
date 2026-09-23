@@ -2,7 +2,7 @@
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import { nextTick, reactive } from 'vue';
+import { defineComponent, nextTick, reactive, type PropType } from 'vue';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import UserProfileView from './UserProfileView.vue';
 
@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   updateUserProfile: vi.fn(),
   uploadProfileAvatar: vi.fn(),
   uploadProfileCover: vi.fn(),
+  coverCropOutput: null as File | null,
   deletePost: vi.fn(),
   getPostLikeStates: vi.fn(),
   likePost: vi.fn(),
@@ -163,6 +164,24 @@ const AvatarCropDialogStub = {
   `,
 };
 
+const CoverCropDialogStub = defineComponent({
+  props: {
+    file: { type: Object as PropType<File>, required: true },
+  },
+  emits: ['cancel', 'apply'],
+  setup(props, { emit }) {
+    return {
+      apply: () => emit('apply', mocks.coverCropOutput ?? props.file),
+    };
+  },
+  template: `
+    <div class="cover-crop-dialog">
+      <button type="button" class="cover-crop-dialog__cancel" @click="$emit('cancel')">Cancel</button>
+      <button type="button" class="cover-crop-dialog__apply" @click="apply">Apply</button>
+    </div>
+  `,
+});
+
 const mountProfile = () => mount(UserProfileView, {
   global: {
     stubs: {
@@ -170,6 +189,7 @@ const mountProfile = () => mount(UserProfileView, {
       MobileAccountMenu: { template: '<span />' },
       PostCard: PostCardStub,
       AvatarCropDialog: AvatarCropDialogStub,
+      CoverCropDialog: CoverCropDialogStub,
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
@@ -205,6 +225,24 @@ const applyAvatarCrop = async (wrapper: VueWrapper) => {
   await nextTick();
 };
 
+const createCroppedCover = (source: File, type: 'image/jpeg' | 'image/png' = 'image/png') => {
+  const baseName = source.name.replace(/\.[^.]+$/, '');
+  const extension = type === 'image/jpeg' ? 'jpg' : 'png';
+  return new File([source], `${baseName}-cover-cropped.${extension}`, { type });
+};
+
+const applyCoverCrop = async (wrapper: VueWrapper, output: File) => {
+  mocks.coverCropOutput = output;
+  await wrapper.get('.cover-crop-dialog__apply').trigger('click');
+  mocks.coverCropOutput = null;
+  await nextTick();
+};
+
+const setAndApplyCoverFile = async (wrapper: VueWrapper, file: File) => {
+  await setCoverFile(wrapper, file);
+  await applyCoverCrop(wrapper, createCroppedCover(file));
+};
+
 const openEditor = async (wrapper: VueWrapper) => {
   const button = wrapper.findAll('button').find((item) => item.text() === 'Edit profile');
   if (!button) throw new Error('Edit profile button not found');
@@ -230,6 +268,7 @@ describe('UserProfileView profile cover editor', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    mocks.coverCropOutput = null;
     mocks.route = reactive({
       name: 'UserProfile',
       params: { id: '7' },
@@ -366,7 +405,7 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     const coverInput = wrapper.get('#profile-cover-input');
     const avatarInput = wrapper.get('#profile-avatar-input');
@@ -472,22 +511,61 @@ describe('UserProfileView profile cover editor', () => {
     expect(wrapper.get('.profile-edit-avatar').text()).toContain('Photo is too large. Choose an image under 10 MB.');
   });
 
-  it('previews valid cover selection, replaces previews safely, and defers upload until Save', async () => {
+  it('crops valid cover selections before previewing and preserves the pending crop when replacement is canceled', async () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
     const first = new File(['first'], 'first.webp', { type: 'image/webp' });
     const second = new File(['second'], 'second.png', { type: 'image/png' });
+    const firstOutput = createCroppedCover(first);
+    const secondOutput = createCroppedCover(second);
 
     await setCoverFile(wrapper, first);
-    expect(URL.createObjectURL).toHaveBeenCalledWith(first);
-    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:first.webp');
+    expect(wrapper.find('.cover-crop-dialog').exists()).toBe(true);
+    expect(wrapper.find('.profile-edit-cover__preview img').exists()).toBe(false);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(wrapper.get('.profile-edit-form button[type="submit"]').attributes('disabled')).toBeDefined();
     expect(mocks.uploadProfileCover).not.toHaveBeenCalled();
 
+    await wrapper.get('.cover-crop-dialog__cancel').trigger('click');
+    expect(wrapper.find('.cover-crop-dialog').exists()).toBe(false);
+    expect(wrapper.find('.profile-edit-cover__preview img').exists()).toBe(false);
+
+    await setCoverFile(wrapper, first);
+    await applyCoverCrop(wrapper, firstOutput);
+    expect(URL.createObjectURL).toHaveBeenCalledWith(firstOutput);
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:first-cover-cropped.png');
+
     await setCoverFile(wrapper, second);
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first.webp');
-    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:second.png');
+    expect(wrapper.find('.cover-crop-dialog').exists()).toBe(true);
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:first-cover-cropped.png');
+    await wrapper.get('.cover-crop-dialog__cancel').trigger('click');
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:first-cover-cropped.png');
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:first-cover-cropped.png');
+
+    await setCoverFile(wrapper, second);
+    await applyCoverCrop(wrapper, secondOutput);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first-cover-cropped.png');
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:second-cover-cropped.png');
     expect(wrapper.get('.profile-edit-form button[type="submit"]').attributes('disabled')).toBeUndefined();
+    expect(mocks.uploadProfileCover).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid generated cover while keeping the crop dialog open and pending preview unchanged', async () => {
+    wrapper = mountProfile();
+    await settle();
+    await openEditor(wrapper);
+    const first = new File(['first'], 'first.webp', { type: 'image/webp' });
+    await setAndApplyCoverFile(wrapper, first);
+    const oldPreview = wrapper.get('.profile-edit-cover__preview img').attributes('src');
+
+    await setCoverFile(wrapper, new File(['next'], 'next.webp', { type: 'image/webp' }));
+    await applyCoverCrop(wrapper, new File(['invalid'], 'invalid.webp', { type: 'image/webp' }));
+
+    expect(wrapper.find('.cover-crop-dialog').exists()).toBe(true);
+    expect(wrapper.get('.profile-edit-cover').text()).toContain('Could not prepare this cover. Try another image.');
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe(oldPreview);
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(oldPreview);
   });
 
   it('rejects unsupported, zero-byte, and oversized cover files before creating previews', async () => {
@@ -536,7 +614,7 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
     await submitEditor(wrapper);
 
     expect(mocks.uploadProfileAvatar).not.toHaveBeenCalled();
@@ -577,7 +655,7 @@ describe('UserProfileView profile cover editor', () => {
     await wrapper.get('#profile-display-name').setValue('Updated');
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
     await applyAvatarCrop(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
     await submitEditor(wrapper);
 
     expect(events).toEqual(['avatar', 'cover', 'patch']);
@@ -597,7 +675,7 @@ describe('UserProfileView profile cover editor', () => {
     await openEditor(wrapper);
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
     await applyAvatarCrop(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     await submitEditor(wrapper);
     expect(wrapper.get('.profile-edit-error').text()).toBe('Could not upload cover image. Please retry.');
@@ -624,7 +702,7 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     await submitEditor(wrapper);
     expect(wrapper.get('.profile-edit-error').text()).toBe('Could not save profile. Please retry.');
@@ -648,7 +726,7 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
     const savePromise = wrapper.get('.profile-edit-form').trigger('submit');
     await nextTick();
 
@@ -667,17 +745,17 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
     await wrapper.findAll('button').find((item) => item.text() === 'Cancel')!.trigger('click');
     expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
     await clickConfirmAction(wrapper, 'Discard');
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover.webp');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover-cover-cropped.png');
     expect(mocks.uploadProfileCover).not.toHaveBeenCalled();
 
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover2'], 'cover2.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover2'], 'cover2.webp', { type: 'image/webp' }));
     wrapper.unmount();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover2.webp');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover2-cover-cropped.png');
   });
 
   it('closes immediately without confirmation when the editor is clean', async () => {
@@ -737,7 +815,7 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     const event = new Event('cancel', { cancelable: true });
     wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
@@ -746,7 +824,7 @@ describe('UserProfileView profile cover editor', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
     expect(wrapper.find('.confirm-dialog').exists()).toBe(true);
-    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:cover.webp');
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:cover-cover-cropped.png');
   });
 
   it('keeps all draft and preview state after Keep editing', async () => {
@@ -757,7 +835,7 @@ describe('UserProfileView profile cover editor', () => {
     await wrapper.get('#profile-bio').setValue('Changed bio');
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
     await applyAvatarCrop(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     const closeButton = wrapper.get('.profile-edit-dialog__close');
     await closeButton.trigger('click');
@@ -768,7 +846,7 @@ describe('UserProfileView profile cover editor', () => {
     expect((wrapper.get('#profile-display-name').element as HTMLInputElement).value).toBe('Changed display name');
     expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('Changed bio');
     expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe('blob:avatar.webp');
-    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:cover.webp');
+    expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe('blob:cover-cover-cropped.png');
   });
 
   it('clears the full edit draft and previews after Discard', async () => {
@@ -778,7 +856,7 @@ describe('UserProfileView profile cover editor', () => {
     await wrapper.get('#profile-bio').setValue('Changed bio');
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
     await applyAvatarCrop(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     await wrapper.findAll('button').find((item) => item.text() === 'Cancel')!.trigger('click');
     await clickConfirmAction(wrapper, 'Discard');
@@ -786,7 +864,7 @@ describe('UserProfileView profile cover editor', () => {
     expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
     expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:avatar.webp');
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover.webp');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cover-cover-cropped.png');
 
     await openEditor(wrapper);
     expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('');
@@ -850,7 +928,7 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
 
     const savePromise = wrapper.get('.profile-edit-form').trigger('submit');
     await nextTick();

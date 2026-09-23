@@ -1,3 +1,15 @@
+import {
+  clampImageCropState,
+  centeredImageCropState,
+  createImageCropGeometry,
+  decodeImage,
+  imageCropSourceRect,
+  isImageCropError,
+  zoomImageCropState,
+  type ImageCropGeometry,
+  type ImageCropSource,
+} from './imageCrop';
+
 export type AvatarCropState = {
   scale: number;
   offsetX: number;
@@ -12,12 +24,7 @@ export type AvatarCropGeometry = {
   maxScale: number;
 };
 
-export type AvatarCropSource = {
-  source: CanvasImageSource;
-  naturalWidth: number;
-  naturalHeight: number;
-  dispose: () => void;
-};
+export type AvatarCropSource = ImageCropSource;
 
 export type AvatarCropRequest = {
   source: Blob;
@@ -51,189 +58,65 @@ const defaultOutputSize = 512;
 const maxOutputBytes = 2 * 1024 * 1024;
 const maxSourceDimension = 8192;
 const maxSourcePixels = 20_000_000;
+const avatarDecodeLimits = { maxDimension: maxSourceDimension, maxPixels: maxSourcePixels };
 
-const isPositiveFinite = (value: number) => Number.isFinite(value) && value > 0;
-
-const validateAvatarSourceDimensions = (width: number, height: number) => {
-  if (!isPositiveFinite(width) || !isPositiveFinite(height)) {
-    throw new AvatarCropError('DECODE_FAILED');
-  }
-  if (
-    width > maxSourceDimension
-    || height > maxSourceDimension
-    || width > maxSourcePixels / height
-  ) {
-    throw new AvatarCropError('SOURCE_TOO_LARGE');
-  }
-};
+const toImageCropGeometry = (geometry: AvatarCropGeometry): ImageCropGeometry => ({
+  viewportWidth: geometry.cropSize,
+  viewportHeight: geometry.cropSize,
+  naturalWidth: geometry.naturalWidth,
+  naturalHeight: geometry.naturalHeight,
+  minScale: geometry.minScale,
+  maxScale: geometry.maxScale,
+});
 
 export const createAvatarCropGeometry = (
   cropSize: number,
   naturalWidth: number,
   naturalHeight: number,
 ): AvatarCropGeometry | null => {
-  if (
-    !isPositiveFinite(cropSize)
-    || !isPositiveFinite(naturalWidth)
-    || !isPositiveFinite(naturalHeight)
-  ) {
-    return null;
-  }
-
-  const minScale = Math.max(cropSize / naturalWidth, cropSize / naturalHeight);
+  const geometry = createImageCropGeometry(cropSize, cropSize, naturalWidth, naturalHeight);
+  if (!geometry) return null;
   return {
     cropSize,
     naturalWidth,
     naturalHeight,
-    minScale,
-    maxScale: minScale * 4,
+    minScale: geometry.minScale,
+    maxScale: geometry.maxScale,
   };
 };
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 export const clampAvatarCropState = (
   state: AvatarCropState,
   geometry: AvatarCropGeometry,
-): AvatarCropState => {
-  const scale = clamp(
-    Number.isFinite(state.scale) && state.scale > 0 ? state.scale : geometry.minScale,
-    geometry.minScale,
-    geometry.maxScale,
-  );
-  const displayWidth = geometry.naturalWidth * scale;
-  const displayHeight = geometry.naturalHeight * scale;
-  const minX = geometry.cropSize - displayWidth;
-  const minY = geometry.cropSize - displayHeight;
-
-  return {
-    scale,
-    offsetX: clamp(Number.isFinite(state.offsetX) ? state.offsetX : 0, minX, 0),
-    offsetY: clamp(Number.isFinite(state.offsetY) ? state.offsetY : 0, minY, 0),
-  };
-};
+): AvatarCropState => clampImageCropState(state, toImageCropGeometry(geometry));
 
 export const centeredAvatarCropState = (
   geometry: AvatarCropGeometry,
-): AvatarCropState => clampAvatarCropState({
-  scale: geometry.minScale,
-  offsetX: (geometry.cropSize - geometry.naturalWidth * geometry.minScale) / 2,
-  offsetY: (geometry.cropSize - geometry.naturalHeight * geometry.minScale) / 2,
-}, geometry);
+): AvatarCropState => centeredImageCropState(toImageCropGeometry(geometry));
 
 export const zoomAvatarCropState = (
   state: AvatarCropState,
   nextScale: number,
   geometry: AvatarCropGeometry,
-): AvatarCropState => {
-  const current = clampAvatarCropState(state, geometry);
-  const scale = clamp(nextScale, geometry.minScale, geometry.maxScale);
-  const center = geometry.cropSize / 2;
-  const sourceCenterX = (center - current.offsetX) / current.scale;
-  const sourceCenterY = (center - current.offsetY) / current.scale;
-
-  return clampAvatarCropState({
-    scale,
-    offsetX: center - sourceCenterX * scale,
-    offsetY: center - sourceCenterY * scale,
-  }, geometry);
-};
+): AvatarCropState => zoomImageCropState(state, nextScale, toImageCropGeometry(geometry));
 
 export const avatarCropSourceRect = (
   state: AvatarCropState,
   geometry: AvatarCropGeometry,
-) => {
-  const clamped = clampAvatarCropState(state, geometry);
-  const sourceX = -clamped.offsetX / clamped.scale;
-  const sourceY = -clamped.offsetY / clamped.scale;
-  return {
-    x: sourceX === 0 ? 0 : sourceX,
-    y: sourceY === 0 ? 0 : sourceY,
-    width: geometry.cropSize / clamped.scale,
-    height: geometry.cropSize / clamped.scale,
-  };
-};
-
-const revokeObjectURL = (url: string) => {
-  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-    URL.revokeObjectURL(url);
-  }
-};
-
-const decodeWithImageElement = async (source: Blob): Promise<AvatarCropSource> => {
-  if (
-    typeof URL === 'undefined'
-    || typeof URL.createObjectURL !== 'function'
-    || typeof Image === 'undefined'
-  ) {
-    throw new AvatarCropError('DECODE_FAILED');
-  }
-
-  const sourceURL = URL.createObjectURL(source);
-  let image: HTMLImageElement | null = null;
-  try {
-    image = new Image();
-    image.decoding = 'async';
-    await new Promise<void>((resolve, reject) => {
-      image!.onload = () => resolve();
-      image!.onerror = () => reject(new AvatarCropError('DECODE_FAILED'));
-      image!.src = sourceURL;
-    });
-    if (typeof image.decode === 'function') {
-      await image.decode();
-    }
-
-    const naturalWidth = image.naturalWidth || image.width;
-    const naturalHeight = image.naturalHeight || image.height;
-    validateAvatarSourceDimensions(naturalWidth, naturalHeight);
-
-    return {
-      source: image,
-      naturalWidth,
-      naturalHeight,
-      dispose: () => undefined,
-    };
-  } catch (error) {
-    if (isAvatarCropError(error)) {
-      throw error;
-    }
-    throw new AvatarCropError('DECODE_FAILED');
-  } finally {
-    revokeObjectURL(sourceURL);
-  }
-};
+) => imageCropSourceRect(state, toImageCropGeometry(geometry));
 
 export const decodeAvatarImage = async (source: Blob): Promise<AvatarCropSource> => {
-  if (typeof createImageBitmap === 'function') {
-    let bitmap: ImageBitmap;
-    try {
-      bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' });
-    } catch (error) {
-      if (isAvatarCropError(error)) {
-        throw error;
-      }
-      // Fall back to the browser image decoder when ImageBitmap is unavailable.
-      return decodeWithImageElement(source);
+  try {
+    return await decodeImage(source, avatarDecodeLimits);
+  } catch (error) {
+    if (error instanceof AvatarCropError) {
+      throw error;
     }
-
-    try {
-      validateAvatarSourceDimensions(bitmap.width, bitmap.height);
-      return {
-        source: bitmap,
-        naturalWidth: bitmap.width,
-        naturalHeight: bitmap.height,
-        dispose: () => bitmap.close(),
-      };
-    } catch (error) {
-      bitmap.close();
-      if (isAvatarCropError(error)) {
-        throw error;
-      }
-      throw new AvatarCropError('DECODE_FAILED');
+    if (isImageCropError(error)) {
+      throw new AvatarCropError(error.code);
     }
+    throw new AvatarCropError('DECODE_FAILED');
   }
-
-  return decodeWithImageElement(source);
 };
 
 const outputFormat = (source: Blob) => (
@@ -255,7 +138,7 @@ export const createCroppedAvatar = async (request: AvatarCropRequest): Promise<F
     request.naturalWidth,
     request.naturalHeight,
   );
-  if (!geometry || !isPositiveFinite(outputSize)) {
+  if (!geometry || !Number.isFinite(outputSize) || outputSize <= 0) {
     throw new AvatarCropError('OUTPUT_FAILED');
   }
 

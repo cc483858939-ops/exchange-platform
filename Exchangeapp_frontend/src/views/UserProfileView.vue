@@ -424,6 +424,13 @@
       @apply="handleAvatarCropApply"
     />
 
+    <CoverCropDialog
+      v-if="coverCropOpen && coverCropSourceFile"
+      :file="coverCropSourceFile"
+      @cancel="handleCoverCropCancel"
+      @apply="handleCoverCropApply"
+    />
+
     <ConfirmDialog
       v-if="discardConfirmOpen"
       title="Discard changes?"
@@ -454,6 +461,7 @@ import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import AvatarCropDialog from '../components/profile/AvatarCropDialog.vue';
+import CoverCropDialog from '../components/profile/CoverCropDialog.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
 import { usePageTitle } from '../composables/usePageTitle';
 import { updateUserProfile, uploadProfileAvatar, uploadProfileCover } from '../services/userService';
@@ -473,6 +481,7 @@ const profileAvatarGeneratedMaxBytes = 2 * 1024 * 1024;
 const profileAvatarTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const profileCoverMaxBytes = 5 * 1024 * 1024;
 const profileCoverTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const profileCoverGeneratedTypes = new Set(['image/jpeg', 'image/png']);
 const skeletonCount = 3;
 
 const route = useRoute();
@@ -714,6 +723,8 @@ const avatarCropOpen = ref(false);
 const avatarCropSourceFile = ref<File | null>(null);
 const pendingCoverFile = ref<File | null>(null);
 const pendingCoverPreviewURL = ref('');
+const coverCropOpen = ref(false);
+const coverCropSourceFile = ref<File | null>(null);
 const editAvatarLoadFailed = ref(false);
 const editAvatarError = ref('');
 const editCoverLoadFailed = ref(false);
@@ -785,6 +796,8 @@ const clearEditDraft = () => {
   pendingCoverFile.value = null;
   avatarCropOpen.value = false;
   avatarCropSourceFile.value = null;
+  coverCropOpen.value = false;
+  coverCropSourceFile.value = null;
   editOriginal.value = null;
   editDraft.display_name = '';
   editDraft.bio = '';
@@ -970,12 +983,35 @@ const handleCoverSelection = (event: Event) => {
     return;
   }
 
+  coverCropSourceFile.value = file;
+  coverCropOpen.value = true;
+  editCoverError.value = '';
+  editError.value = '';
+};
+
+const handleCoverCropCancel = () => {
+  coverCropOpen.value = false;
+  coverCropSourceFile.value = null;
+};
+
+const handleCoverCropApply = (file: File) => {
+  if (
+    file.size <= 0
+    || file.size > profileCoverMaxBytes
+    || !profileCoverGeneratedTypes.has(file.type)
+  ) {
+    editCoverError.value = 'Could not prepare this cover. Try another image.';
+    return;
+  }
+
   revokePendingCoverPreview();
   pendingCoverFile.value = file;
   pendingCoverPreviewURL.value = URL.createObjectURL(file);
   editCoverLoadFailed.value = false;
   editCoverError.value = '';
   editError.value = '';
+  coverCropOpen.value = false;
+  coverCropSourceFile.value = null;
 };
 
 const removeProfileAvatar = () => {
