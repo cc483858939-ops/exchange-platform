@@ -44,6 +44,8 @@ describe('RepostAction', () => {
 
     expect(wrapper.findAll('path')).toHaveLength(1);
     expect(wrapper.get('svg').attributes('viewBox')).toBe('0 0 24 24');
+    expect(wrapper.get('svg').attributes()).toMatchObject({ width: '18', height: '18' });
+    expect(path.attributes('d')).toBeTruthy();
     expect(path.attributes()).toMatchObject({
       fill: 'none',
       stroke: 'currentColor',
