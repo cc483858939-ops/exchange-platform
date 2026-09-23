@@ -141,12 +141,12 @@ describe('RepostAction', () => {
     expect(wrapper.emitted('toggle')).toBeUndefined();
   });
 
-  it('finishes repost motion after 320ms', async () => {
+  it('finishes repost motion after 400ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountRepostAction();
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(319);
+    vi.advanceTimersByTime(399);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('reposting');
 
@@ -155,12 +155,12 @@ describe('RepostAction', () => {
     expect(wrapper.get('button').attributes('data-motion')).toBe('idle');
   });
 
-  it('finishes undo motion after 180ms', async () => {
+  it('finishes undo motion after 300ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountRepostAction({ reposted: true, count: 9 });
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(179);
+    vi.advanceTimersByTime(299);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('unreposting');
 

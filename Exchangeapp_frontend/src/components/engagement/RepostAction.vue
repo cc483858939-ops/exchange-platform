@@ -50,8 +50,8 @@ type RepostMotion = 'idle' | 'reposting' | 'unreposting';
 type CountIntent = 'up' | 'down' | null;
 type CountTransition = 'repost-count-up' | 'repost-count-down' | 'repost-count-fade';
 
-const repostMotionDurationMs = 320;
-const unrepostMotionDurationMs = 180;
+const repostMotionDurationMs = 400;
+const unrepostMotionDurationMs = 300;
 
 const props = withDefaults(defineProps<{
   reposted: boolean;
@@ -302,11 +302,11 @@ onBeforeUnmount(() => {
 }
 
 .repost-action--reposting .repost-action__icon {
-  animation: nexus-repost-in var(--repost-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: nexus-repost-in var(--repost-motion-duration) cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
 .repost-action--unreposting .repost-action__icon {
-  animation: nexus-repost-out var(--unrepost-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: nexus-repost-out var(--unrepost-motion-duration) cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
 .repost-action--reposting .repost-action__visual::after {
@@ -344,16 +344,16 @@ onBeforeUnmount(() => {
     transform: rotate(0deg) scale(1);
   }
 
-  25% {
-    transform: rotate(0deg) scale(0.86);
+  18% {
+    transform: rotate(55deg) scale(0.92);
   }
 
-  68% {
-    transform: rotate(20deg) scale(1.1);
+  70% {
+    transform: rotate(300deg) scale(1.06);
   }
 
   100% {
-    transform: rotate(0deg) scale(1);
+    transform: rotate(360deg) scale(1);
   }
 }
 
@@ -362,12 +362,12 @@ onBeforeUnmount(() => {
     transform: rotate(0deg) scale(1);
   }
 
-  40% {
-    transform: rotate(-12deg) scale(0.9);
+  30% {
+    transform: rotate(-110deg) scale(0.94);
   }
 
   100% {
-    transform: rotate(0deg) scale(1);
+    transform: rotate(-360deg) scale(1);
   }
 }
 
