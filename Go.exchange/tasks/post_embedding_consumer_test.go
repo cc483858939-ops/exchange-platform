@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -301,6 +302,25 @@ func postEmbeddingRecoveryMetric(t *testing.T, outcome, code string) float64 {
 	return 0
 }
 
+func postEmbeddingDomainMetric(t *testing.T, metricName, labelName, labelValue string) float64 {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	appmetrics.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
+	prefix := fmt.Sprintf("%s{%s=%q} ", metricName, labelName, labelValue)
+	for _, line := range strings.Split(recorder.Body.String(), "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		fields := strings.Fields(line)
+		value, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			t.Fatalf("parse metric %q: %v", line, err)
+		}
+		return value
+	}
+	return 0
+}
+
 func assertPostEmbeddingRecoveryIncrement(t *testing.T, outcome, code string, before float64) {
 	t.Helper()
 	if got := postEmbeddingRecoveryMetric(t, outcome, code); got != before+1 {
@@ -578,6 +598,146 @@ func TestPostEmbeddingInvalidProviderContractsGoToDLQ(t *testing.T) {
 			}
 			if payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeProviderContractInvalid {
 				t.Fatalf("DLQ failure=%s/%s", payload.ErrorClass, payload.ErrorCode)
+			}
+		})
+	}
+}
+
+func TestPostEmbeddingRealProviderContractFailuresGoToDLQWithoutRetry(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed_json", body: "{"},
+		{name: "empty_vector", body: `{"model":"served-model","data":[{"index":0,"embedding":[]}]}`},
+		{name: "empty_model", body: `{"model":"  ","data":[{"index":0,"embedding":[1,2]}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requestCount++
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			embedder, err := embeddings.NewOpenAICompatibleEmbedder(config.EmbeddingConfig{
+				BaseURL: server.URL, APIKey: "test-key", Model: "requested-model", TimeoutSeconds: 2,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			message := postEmbeddingTestMessage(t, 42)
+			store := newPostEmbeddingTestStore()
+			dlqBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeProviderContractInvalid)
+			retryableBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable)
+			contractRetryBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderContractInvalid)
+			contractExhaustedBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderContractInvalid)
+			failureBefore := postEmbeddingDomainMetric(t, "go_exchange_post_embedding_failures_total", "stage", "provider")
+			nonRetryableBefore := postEmbeddingDomainMetric(t, "go_exchange_post_embedding_events_total", "result", "provider_non_retryable")
+			reader, consumeErr := consumePostEmbeddingTestMessageWithPolicy(
+				t, message, store, embedder, nil,
+				kafkaRetryPolicy{MaxAttempts: 3, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond},
+			)
+			if !errors.Is(consumeErr, reader.stopErr) || requestCount != 1 || reader.commitCalls != 1 || len(reader.committed) != 1 || reader.committed[0].Offset != message.Offset || store.writeCalls != 0 || len(store.upserted) != 0 || len(reader.publisher.messages) != 1 {
+				t.Fatalf("err=%v requests=%d commits=%d committed=%d writes=%d DLQ=%d", consumeErr, requestCount, reader.commitCalls, len(reader.committed), store.writeCalls, len(reader.publisher.messages))
+			}
+			var payload consumerDLQPayload
+			if err := json.Unmarshal(reader.publisher.messages[0].Value, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Consumer != kafkaConsumerPostEmbedding || payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeProviderContractInvalid {
+				t.Fatalf("DLQ consumer=%q failure=%s/%s", payload.Consumer, payload.ErrorClass, payload.ErrorCode)
+			}
+			assertPostEmbeddingRecoveryIncrement(t, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeProviderContractInvalid, dlqBefore)
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable); got != retryableBefore {
+				t.Fatalf("provider_retryable retry_attempt=%v want unchanged %v", got, retryableBefore)
+			}
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderContractInvalid); got != contractRetryBefore {
+				t.Fatalf("provider_contract_invalid retry_attempt=%v want unchanged %v", got, contractRetryBefore)
+			}
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderContractInvalid); got != contractExhaustedBefore {
+				t.Fatalf("provider_contract_invalid retry_exhausted=%v want unchanged %v", got, contractExhaustedBefore)
+			}
+			if got := postEmbeddingDomainMetric(t, "go_exchange_post_embedding_failures_total", "stage", "provider"); got != failureBefore+1 {
+				t.Fatalf("provider failure metric=%v want %v", got, failureBefore+1)
+			}
+			if got := postEmbeddingDomainMetric(t, "go_exchange_post_embedding_events_total", "result", "provider_non_retryable"); got != nonRetryableBefore+1 {
+				t.Fatalf("provider_non_retryable metric=%v want %v", got, nonRetryableBefore+1)
+			}
+		})
+	}
+}
+
+func TestPostEmbeddingOpenAICompatibleProviderHTTPStatusRecovery(t *testing.T) {
+	tests := []struct {
+		name             string
+		status           int
+		attempts         int
+		wantRequests     int
+		wantClass        kafkaFailureClass
+		wantCode         string
+		wantCommits      int
+		wantDLQ          int
+		wantRetries      float64
+		wantRetryExhaust float64
+		wantStopErr      bool
+	}{
+		{name: "503 retries", status: http.StatusServiceUnavailable, attempts: 3, wantRequests: 3, wantClass: kafkaFailureRetryable, wantCode: kafkaFailureCodeProviderRetryable, wantRetries: 2, wantRetryExhaust: 1},
+		{name: "422 permanent", status: http.StatusUnprocessableEntity, attempts: 5, wantRequests: 1, wantClass: kafkaFailurePermanent, wantCode: kafkaFailureCodeProviderPermanent, wantCommits: 1, wantDLQ: 1, wantStopErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requestCount++
+				http.Error(w, "provider failure", test.status)
+			}))
+			defer server.Close()
+			embedder, err := embeddings.NewOpenAICompatibleEmbedder(config.EmbeddingConfig{
+				BaseURL: server.URL, APIKey: "test-key", Model: "requested-model", TimeoutSeconds: 2,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			store := newPostEmbeddingTestStore()
+			retryBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, test.wantCode)
+			exhaustedBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, test.wantCode)
+			dlqBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeMessageDLQ, test.wantCode)
+			reader, consumeErr := consumePostEmbeddingTestMessageWithPolicy(
+				t, postEmbeddingTestMessage(t, 42), store, embedder, nil,
+				kafkaRetryPolicy{MaxAttempts: test.attempts},
+			)
+			if requestCount != test.wantRequests || reader.commitCalls != test.wantCommits || store.writeCalls != 0 || len(reader.publisher.messages) != test.wantDLQ {
+				t.Fatalf("err=%v requests=%d commits=%d writes=%d DLQ=%d", consumeErr, requestCount, reader.commitCalls, store.writeCalls, len(reader.publisher.messages))
+			}
+			if test.wantStopErr {
+				if !errors.Is(consumeErr, reader.stopErr) {
+					t.Fatalf("err=%v want reader stop error", consumeErr)
+				}
+			} else if kafkaFailureClassOf(consumeErr) != test.wantClass || kafkaFailureCode(consumeErr) != test.wantCode {
+				t.Fatalf("class=%q code=%q err=%v want %s/%s", kafkaFailureClassOf(consumeErr), kafkaFailureCode(consumeErr), consumeErr, test.wantClass, test.wantCode)
+			}
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, test.wantCode); got != retryBefore+test.wantRetries {
+				t.Fatalf("retry_attempt=%v want %v", got, retryBefore+test.wantRetries)
+			}
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, test.wantCode); got != exhaustedBefore+test.wantRetryExhaust {
+				t.Fatalf("retry_exhausted=%v want %v", got, exhaustedBefore+test.wantRetryExhaust)
+			}
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeMessageDLQ, test.wantCode); got != dlqBefore+float64(test.wantDLQ) {
+				t.Fatalf("message_dlq=%v want %v", got, dlqBefore+float64(test.wantDLQ))
+			}
+			if test.wantDLQ == 1 {
+				var payload consumerDLQPayload
+				if err := json.Unmarshal(reader.publisher.messages[0].Value, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if payload.Consumer != kafkaConsumerPostEmbedding || payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeProviderPermanent {
+					t.Fatalf("DLQ consumer=%q failure=%s/%s", payload.Consumer, payload.ErrorClass, payload.ErrorCode)
+				}
 			}
 		})
 	}

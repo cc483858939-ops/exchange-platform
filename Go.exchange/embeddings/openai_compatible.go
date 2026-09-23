@@ -31,8 +31,44 @@ func (e *ProviderHTTPError) Error() string {
 	return fmt.Sprintf("embedding provider returned status %d", e.StatusCode)
 }
 
+type ProviderContractError struct {
+	cause error
+}
+
+func (e *ProviderContractError) Error() string {
+	if e == nil || e.cause == nil {
+		return "embedding provider returned an invalid response"
+	}
+	return "embedding provider returned an invalid response: " + e.cause.Error()
+}
+
+func (e *ProviderContractError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func newProviderContractError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ProviderContractError{cause: err}
+}
+
+func IsProviderContractError(err error) bool {
+	var contractErr *ProviderContractError
+	return errors.As(err, &contractErr)
+}
+
 func IsRetryableProviderError(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if IsProviderContractError(err) {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -50,8 +86,7 @@ func IsRetryableProviderError(err error) bool {
 	if errors.As(err, &networkErr) {
 		return true
 	}
-	// Provider response decoding and validation errors are retryable because
-	// they indicate a transient or unclassified provider contract failure.
+	// Unclassified provider failures remain retryable to avoid losing transient errors.
 	return true
 }
 
@@ -134,15 +169,15 @@ func (e *OpenAICompatibleEmbedder) Embed(ctx context.Context, texts []string) (E
 	}
 	var payload embeddingResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return EmbedResult{}, fmt.Errorf("decode embedding provider response: %w", err)
+		return EmbedResult{}, newProviderContractError(fmt.Errorf("decode embedding provider response: %w", err))
 	}
 	vectors, err := validateEmbeddingData(payload.Data, len(texts))
 	if err != nil {
-		return EmbedResult{}, err
+		return EmbedResult{}, newProviderContractError(err)
 	}
 	model := strings.TrimSpace(payload.Model)
 	if model == "" {
-		model = e.model
+		return EmbedResult{}, newProviderContractError(errors.New("embedding provider returned an empty model"))
 	}
 	return EmbedResult{Vectors: vectors, Model: model}, nil
 }

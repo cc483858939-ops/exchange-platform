@@ -425,6 +425,9 @@ func generatePostEmbedding(ctx context.Context, embedder embeddings.Embedder, te
 				return ctx.Err()
 			}
 			metrics.RecordPostEmbeddingFailure("provider")
+			if embeddings.IsProviderContractError(err) {
+				return permanentKafkaError(kafkaFailureCodeProviderContractInvalid, err)
+			}
 			if embeddings.IsRetryableProviderError(err) {
 				return retryableKafkaError(kafkaFailureCodeProviderRetryable, err)
 			}

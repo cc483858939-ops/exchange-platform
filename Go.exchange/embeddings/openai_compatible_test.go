@@ -85,6 +85,32 @@ func TestOpenAICompatibleEmbedderRejectsProviderFailuresWithoutLeakingKey(t *tes
 	}
 }
 
+func TestOpenAICompatibleEmbedderHTTPStatusFailuresStayProviderErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		retryable bool
+	}{
+		{name: "503", status: http.StatusServiceUnavailable, retryable: true},
+		{name: "422", status: http.StatusUnprocessableEntity, retryable: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			embedder, _ := testEmbedder(t, func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "provider failure", test.status)
+			})
+			_, err := embedder.Embed(context.Background(), []string{"text"})
+			var providerErr *ProviderHTTPError
+			if !errors.As(err, &providerErr) || providerErr.StatusCode != test.status {
+				t.Fatalf("error=%T %v want ProviderHTTPError status %d", err, err, test.status)
+			}
+			if IsProviderContractError(err) || IsRetryableProviderError(err) != test.retryable {
+				t.Fatalf("contract=%t retryable=%t want retryable=%t", IsProviderContractError(err), IsRetryableProviderError(err), test.retryable)
+			}
+		})
+	}
+}
+
 func TestIsRetryableProviderError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -107,6 +133,8 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{name: "429", err: &ProviderHTTPError{StatusCode: http.StatusTooManyRequests}, retryable: true},
 		{name: "500", err: &ProviderHTTPError{StatusCode: http.StatusInternalServerError}, retryable: true},
 		{name: "503", err: &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable}, retryable: true},
+		{name: "provider contract", err: newProviderContractError(errors.New("response is invalid")), retryable: false},
+		{name: "wrapped provider contract", err: errors.Join(errors.New("provider call failed"), newProviderContractError(errors.New("response is invalid"))), retryable: false},
 		{name: "unknown", err: errors.New("provider response was malformed"), retryable: true},
 	}
 	for _, test := range tests {
@@ -115,6 +143,26 @@ func TestIsRetryableProviderError(t *testing.T) {
 				t.Fatalf("retryable=%t want=%t", got, test.retryable)
 			}
 		})
+	}
+}
+
+func TestProviderContractErrorClassification(t *testing.T) {
+	cause := errors.New("invalid response")
+	contractErr := newProviderContractError(cause)
+	if !IsProviderContractError(contractErr) {
+		t.Fatal("typed provider contract error was not recognized")
+	}
+	if IsRetryableProviderError(contractErr) {
+		t.Fatal("provider contract error must not be retryable")
+	}
+	if !errors.Is(contractErr, cause) {
+		t.Fatal("provider contract error does not unwrap to its cause")
+	}
+	if IsProviderContractError(errors.New("unknown provider failure")) {
+		t.Fatal("untyped provider error was classified as a contract error")
+	}
+	if got := newProviderContractError(nil); got != nil {
+		t.Fatalf("nil cause produced a provider contract error: %v", got)
 	}
 }
 
@@ -129,6 +177,7 @@ func TestOpenAICompatibleEmbedderRejectsMalformedResponses(t *testing.T) {
 		{name: "out of range index", body: `{"data":[{"index":2,"embedding":[1,2]}]}`},
 		{name: "empty vector", body: `{"data":[{"index":0,"embedding":[]}]}`},
 		{name: "inconsistent dimensions", body: `{"data":[{"index":0,"embedding":[1,2]},{"index":1,"embedding":[3]}]}`},
+		{name: "empty model", body: `{"model":"  ","data":[{"index":0,"embedding":[1,2]},{"index":1,"embedding":[3,4]}]}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -136,10 +185,42 @@ func TestOpenAICompatibleEmbedderRejectsMalformedResponses(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(test.body))
 			})
-			if _, err := embedder.Embed(context.Background(), []string{"a", "b"}); err == nil {
-				t.Fatal("expected validation error")
+			_, err := embedder.Embed(context.Background(), []string{"a", "b"})
+			if err == nil || !IsProviderContractError(err) {
+				t.Fatalf("expected typed provider contract error, got %v", err)
+			}
+			if IsRetryableProviderError(err) {
+				t.Fatalf("provider contract error must not be retryable: %v", err)
 			}
 		})
+	}
+}
+
+func TestOpenAICompatibleEmbedderClassifiesNonFiniteContractResponse(t *testing.T) {
+	_, validationErr := validateEmbeddingData([]struct {
+		Index     int       `json:"index"`
+		Embedding []float32 `json:"embedding"`
+	}{{Index: 0, Embedding: []float32{float32(math.NaN())}}}, 1)
+	if validationErr == nil {
+		t.Fatal("expected non-finite vector validation error")
+	}
+	contractErr := newProviderContractError(validationErr)
+	if !IsProviderContractError(contractErr) || IsRetryableProviderError(contractErr) || !errors.Is(contractErr, validationErr) {
+		t.Fatalf("non-finite validation error classification: contract=%t retryable=%t err=%v", IsProviderContractError(contractErr), IsRetryableProviderError(contractErr), contractErr)
+	}
+}
+
+func TestOpenAICompatibleEmbedderRejectsEmptyProviderModel(t *testing.T) {
+	embedder, _ := testEmbedder(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"   ","data":[{"index":0,"embedding":[1,2]}]}`))
+	})
+	result, err := embedder.Embed(context.Background(), []string{"text"})
+	if err == nil || !IsProviderContractError(err) || IsRetryableProviderError(err) {
+		t.Fatalf("empty provider model error=%v contract=%t retryable=%t", err, IsProviderContractError(err), IsRetryableProviderError(err))
+	}
+	if result.Model == "test-model" {
+		t.Fatalf("empty provider model fell back to configured model: %#v", result)
 	}
 }
 
