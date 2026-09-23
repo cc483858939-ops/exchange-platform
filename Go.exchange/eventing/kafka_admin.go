@@ -42,6 +42,7 @@ func RequiredKafkaTopics(cfg config.KafkaConfig) ([]TopicSpec, error) {
 		{Name: cfg.PostEmbeddingTopic, Partitions: cfg.PostEmbeddingPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.ActivityEventsTopic, Partitions: cfg.ActivityEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.NotificationDLQTopic, Partitions: cfg.NotificationDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: cfg.ConsumerDLQTopic, Partitions: cfg.ConsumerDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 	}
 	seen := make(map[string]struct{}, len(specs))
 	for index := range specs {

@@ -219,6 +219,7 @@ jobs:
           for required_test in \
             TestCanonicalPostDeletePGRedisIdentityE2E \
             TestCanonicalPostLikeRedisToPostgresProjectionIntegration \
+            TestLikeSnapshotProjectionIntegrationRecoverySemantics \
             TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration \
             TestPostLikeHotPathDoesNotLoadPostgres \
             TestPostLikeSafeExpiryRecoveryIntegration \
@@ -315,6 +316,7 @@ jobs:
             "goexchange.post.embedding.v1"
             "goexchange.activity.events.v1"
             "goexchange.notification.projection.dlq.v1"
+            "goexchange.consumer.dlq.v1"
             "goexchange.connect.configs"
             "goexchange.connect.offsets"
             "goexchange.connect.status"
@@ -352,6 +354,7 @@ jobs:
 
           assert_partition_count "goexchange.activity.events.v1" "12"
           assert_partition_count "goexchange.notification.projection.dlq.v1" "3"
+          assert_partition_count "goexchange.consumer.dlq.v1" "6"
   frontend:
     name: Frontend / Test and Build
     runs-on: ubuntu-latest

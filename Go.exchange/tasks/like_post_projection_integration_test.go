@@ -168,7 +168,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 	if len(snapshotPublisher.events) != 1 || snapshotPublisher.events[0].ID != snapshotEventID {
 		t.Fatalf("snapshot events=%#v", snapshotPublisher.events)
 	}
-	if err := applyLikeSnapshotEvent(snapshotPublisher.events[0]); err != nil {
+	if _, err := applyLikeSnapshotEvent(context.Background(), db, snapshotPublisher.events[0]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,7 +193,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 		t.Fatalf("user recommendation dirty rows=%d want 1", dirtyCount)
 	}
 
-	if err := applyLikeSnapshotEvent(snapshotPublisher.events[0]); err != nil {
+	if _, err := applyLikeSnapshotEvent(context.Background(), db, snapshotPublisher.events[0]); err != nil {
 		t.Fatal(err)
 	}
 	if err := applyUserBehaviorEvent(behaviorPublisher.events[0]); err != nil {

@@ -44,6 +44,22 @@ groups:
           summary: Go.exchange notification activity reached the DLQ
           description: At least one malformed notification activity event was sent to the DLQ during the last fifteen minutes.
 
+      - alert: GoExchangeKafkaConsumerDLQActivity
+        expr: increase(go_exchange_kafka_consumer_recovery_total{outcome="dlq"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka consumer message reached generic DLQ
+          description: At least one permanently invalid Kafka consumer message reached the generic DLQ during the last fifteen minutes.
+
+      - alert: GoExchangeKafkaConsumerRetryExhausted
+        expr: increase(go_exchange_kafka_consumer_recovery_total{outcome="retry_exhausted"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka consumer retries exhausted
+          description: A Kafka consumer exhausted bounded in-process retries during the last fifteen minutes.
+
   - name: go-exchange-runtime-readiness
     rules:
       - alert: GoExchangeRuntimeDependencyNotReady

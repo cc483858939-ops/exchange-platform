@@ -136,7 +136,7 @@ func TestRecommendationBehaviorEnvelopeRejectsMissingStructuralFields(t *testing
 }
 
 func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
-	cfg := config.KafkaConfig{Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", PostEmbeddingTopic: "embedding", ActivityEventsTopic: "activity", NotificationDLQTopic: "notification-dlq", TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, PostEmbeddingPartitions: 6, ActivityEventsPartitions: 12, NotificationDLQPartitions: 3}
+	cfg := config.KafkaConfig{Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", PostEmbeddingTopic: "embedding", ActivityEventsTopic: "activity", NotificationDLQTopic: "notification-dlq", ConsumerDLQTopic: "consumer-dlq", TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, PostEmbeddingPartitions: 6, ActivityEventsPartitions: 12, NotificationDLQPartitions: 3, ConsumerDLQPartitions: 6}
 	specs, err := RequiredKafkaTopics(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +144,9 @@ func TestSupportedEventTypesResolveToProvisionedTopics(t *testing.T) {
 	provisioned := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		provisioned[spec.Name] = struct{}{}
+	}
+	if _, ok := provisioned[cfg.ConsumerDLQTopic]; !ok {
+		t.Fatalf("generic consumer DLQ topic %q was not provisioned", cfg.ConsumerDLQTopic)
 	}
 	for _, eventType := range []string{EventTypePostViewed, EventTypePostLiked, EventTypePostUnliked, EventTypePostEmbeddingRequested, EventTypePostLikeSnapshot, EventTypeRecommendationImpression, EventTypeRecommendationClick, EventTypeRecommendationReadEnd, EventTypeRecommendationFeedDwell, EventTypeRecommendationNotInterested} {
 		topic, err := TopicForEvent(cfg, eventType)

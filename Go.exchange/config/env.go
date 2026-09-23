@@ -48,6 +48,9 @@ func ValidateRuntimeEventingConfig(role string) error {
 		return errors.New("Kafka activity events topic is not configured")
 	}
 	if role == RuntimeRoleWorker || role == RuntimeRoleAll {
+		if strings.TrimSpace(AppConfig.Kafka.ConsumerDLQTopic) == "" {
+			return errors.New("Kafka consumer DLQ topic is not configured")
+		}
 		if strings.TrimSpace(AppConfig.Kafka.NotificationGroupID) == "" {
 			return errors.New("Kafka notification consumer group is not configured")
 		}

@@ -66,6 +66,21 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	}
 }
 
+func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
+	RecordKafkaConsumerRecovery("like_snapshot_projection", "dlq", "decode_envelope")
+	RecordKafkaConsumerRecovery("like_snapshot_projection", "dlq", "unbounded-event-id")
+	RecordKafkaConsumerRecovery("unbounded-topic", "dlq", "decode_envelope")
+	r := httptest.NewRecorder()
+	Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := r.Body.String()
+	if !strings.Contains(body, `go_exchange_kafka_consumer_recovery_total{code="decode_envelope",consumer="like_snapshot_projection",outcome="dlq"} `) {
+		t.Fatal(body)
+	}
+	if strings.Contains(body, "unbounded-event-id") || strings.Contains(body, "unbounded-topic") {
+		t.Fatal("unbounded Kafka recovery labels were exported")
+	}
+}
+
 func prometheusMetricValue(t *testing.T, prefix string) float64 {
 	t.Helper()
 	r := httptest.NewRecorder()

@@ -240,7 +240,7 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	if !ok {
 		t.Fatalf("snapshot event missing events=%#v", snapshotPublisher.events)
 	}
-	if err := applyLikeSnapshotEvent(snapshotEvent); err != nil {
+	if _, err := applyLikeSnapshotEvent(ctx, env.db, snapshotEvent); err != nil {
 		t.Fatal(err)
 	}
 
@@ -336,7 +336,7 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	if !ok {
 		t.Fatalf("second snapshot event missing events=%#v", secondSnapshotPublisher.events)
 	}
-	if err := applyLikeSnapshotEvent(secondSnapshot); err != nil {
+	if _, err := applyLikeSnapshotEvent(ctx, env.db, secondSnapshot); err != nil {
 		t.Fatal(err)
 	}
 	secondBehaviorPublisher := &relayTestPublisher{}
