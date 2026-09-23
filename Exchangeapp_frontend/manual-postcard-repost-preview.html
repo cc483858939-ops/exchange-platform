@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PostCard Repost motion preview</title>
+    <style>
+      html { background: #f7f9fa; }
+      body { margin: 0; }
+      .feed-preview { width: min(100%, 600px); margin: 0 auto; padding: 20px 0; }
+      .preview-label { margin: 0 16px 8px; color: #71767b; font: 13px/1.4 system-ui, sans-serif; }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script type="module">
+      import { createApp, h, ref } from 'vue';
+      import { createPinia } from 'pinia';
+      import { createMemoryHistory, createRouter } from 'vue-router';
+      import '/src/styles/tokens.css';
+      import '/src/styles/base.css';
+      import PostCard from '/src/components/feed/PostCard.vue';
+
+      const post = ref({
+        id: 42,
+        author: { id: 7, username: 'reader', display_name: 'Reader', avatar_url: '' },
+        content: 'A compact feed post for checking the Repost motion tail in its real card context.',
+        language: 'en',
+        media: [],
+        createdAt: '2026-08-17T00:00:00.000Z',
+        likeCount: 12,
+        replyCount: 3,
+        viewCount: 1234,
+        liked: false,
+        likeStatus: 'ready',
+        repostCount: 8,
+        reposted: false,
+        repostStatus: 'ready',
+        bookmarked: false,
+        bookmarkStatus: 'ready',
+      });
+
+      const Demo = {
+        setup() {
+          const toggleRepost = id => {
+            if (id !== post.value.id) return;
+            const reposted = !post.value.reposted;
+            post.value = { ...post.value, reposted, repostCount: post.value.repostCount + (reposted ? 1 : -1) };
+          };
+          return () => h('div', { class: 'feed-preview' }, [
+            h('p', { class: 'preview-label' }, 'PostCard feed context · local fixture · 18px compact Repost'),
+            h(PostCard, {
+              post: post.value,
+              trackView: false,
+              onToggleRepost: toggleRepost,
+            }),
+          ]);
+        },
+      };
+
+      const router = createRouter({ history: createMemoryHistory(), routes: [] });
+      const app = createApp(Demo);
+      app.use(createPinia());
+      app.use(router);
+      await router.isReady();
+      app.mount('#app');
+    </script>
+  </body>
+</html>

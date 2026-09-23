@@ -250,7 +250,7 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != RequiredSchemaVersion || PublishedSchemaCompatibilityFloor != 4 {
+	if PublishedSchemaCurrentVersion != 9 || PublishedSchemaCompatibilityFloor != 9 || RequiredSchemaVersion != 9 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
 	}
 }
@@ -279,6 +279,10 @@ func TestRuntimeSchemaVersionsCompatibleUsesRequiredVersionInterval(t *testing.T
 		{name: "required older than single version", current: 5, floor: 5, required: 4, want: false},
 		{name: "required newer than single version", current: 4, floor: 4, required: 5, want: false},
 		{name: "older published interval includes required", current: 5, floor: 3, required: 4, want: true},
+		{name: "schema 9 accepts required version 9", current: 9, floor: 9, required: 9, want: true},
+		{name: "schema 9 rejects required version 8", current: 9, floor: 9, required: 8, want: false},
+		{name: "schema 9 rejects required version 4", current: 9, floor: 9, required: 4, want: false},
+		{name: "schema 9 rejects required version 10", current: 9, floor: 9, required: 10, want: false},
 		{name: "floor exceeds current", current: 4, floor: 5, required: 5, want: false},
 		{name: "current is zero", current: 0, floor: 0, required: 0, want: false},
 		{name: "floor is zero", current: 5, floor: 0, required: 5, want: false},

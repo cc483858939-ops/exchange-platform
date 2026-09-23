@@ -302,11 +302,11 @@ onBeforeUnmount(() => {
 }
 
 .repost-action--reposting .repost-action__icon {
-  animation: nexus-repost-in var(--repost-motion-duration) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: nexus-repost-in var(--repost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
 }
 
 .repost-action--unreposting .repost-action__icon {
-  animation: nexus-repost-out var(--unrepost-motion-duration) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: nexus-repost-out var(--unrepost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
 }
 
 .repost-action--reposting .repost-action__visual::after {
@@ -345,11 +345,7 @@ onBeforeUnmount(() => {
   }
 
   18% {
-    transform: rotate(55deg) scale(0.92);
-  }
-
-  70% {
-    transform: rotate(300deg) scale(1.06);
+    transform: rotate(55deg) scale(0.96);
   }
 
   100% {
@@ -362,8 +358,8 @@ onBeforeUnmount(() => {
     transform: rotate(0deg) scale(1);
   }
 
-  30% {
-    transform: rotate(-110deg) scale(0.94);
+  15% {
+    transform: rotate(-45deg) scale(0.97);
   }
 
   100% {

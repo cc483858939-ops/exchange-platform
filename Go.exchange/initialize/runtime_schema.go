@@ -17,15 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-const RequiredSchemaVersion int64 = 8
+// Schema 9 changes post_embeddings identity to (post_id, version).
+const RequiredSchemaVersion int64 = 9
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 8
-	PublishedSchemaCompatibilityFloor int64 = 4
+	PublishedSchemaCurrentVersion     int64 = 9
+	PublishedSchemaCompatibilityFloor int64 = 9
 )
 
 const runtimeSchemaStateID uint = 1

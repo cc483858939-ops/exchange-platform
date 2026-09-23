@@ -1,6 +1,7 @@
 package initialize
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -29,6 +30,19 @@ func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 
 	if err := RunMigrations(); err != nil {
 		t.Fatal(err)
+	}
+	var runtimeState models.RuntimeSchemaState
+	if err := db.Where("id = ?", runtimeSchemaStateID).Take(&runtimeState).Error; err != nil {
+		t.Fatalf("load published runtime schema state: %v", err)
+	}
+	if runtimeState.CurrentVersion != 9 || runtimeState.CompatibilityFloor != 9 {
+		t.Fatalf("runtime schema state current=%d floor=%d, want literal 9/9", runtimeState.CurrentVersion, runtimeState.CompatibilityFloor)
+	}
+	if err := CheckRuntimeSchema(context.Background(), db, SchemaValidationOptions{RequiredVersion: 8}); SchemaReasonCode(err) != "schema_incompatible" {
+		t.Fatalf("schema 9 compatibility for required version 8: reason=%q err=%v, want schema_incompatible", SchemaReasonCode(err), err)
+	}
+	if err := CheckRuntimeSchema(context.Background(), db, SchemaValidationOptions{RequiredVersion: 9}); err != nil {
+		t.Fatalf("schema 9 rejected required version 9: %v", err)
 	}
 	var primaryKeyDefinition string
 	if err := db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'post_embeddings'::regclass AND conname = 'post_embeddings_pkey'").Scan(&primaryKeyDefinition).Error; err != nil {
