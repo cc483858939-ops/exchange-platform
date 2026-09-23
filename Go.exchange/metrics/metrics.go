@@ -140,7 +140,9 @@ func ObservePostEmbeddingProcessingDuration(duration time.Duration) {
 	postEmbeddingProcessingDuration.Observe(duration.Seconds())
 }
 func RecordKafkaConsumerRecovery(consumer, outcome, code string) {
-	if consumer != "like_snapshot_projection" {
+	switch consumer {
+	case "like_snapshot_projection", "user_behavior_projection", "recommendation_metrics":
+	default:
 		return
 	}
 	switch outcome {

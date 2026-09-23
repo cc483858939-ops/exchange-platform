@@ -1,19 +1,19 @@
 package tasks
 
 import (
-	"errors"
 	"testing"
 	"time"
 
 	"Go.exchange/eventing"
 
 	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 )
 
-func TestApplyRecommendationMetricsEventClassifiesInvalidPayload(t *testing.T) {
-	err := applyRecommendationMetricsEvent(eventing.Envelope{Payload: []byte("{\"user_id\":")})
-	if !errors.Is(err, errInvalidRecommendationMetricsEvent) {
-		t.Fatalf("expected invalid payload error, got %v", err)
+func TestDecodeRecommendationMetricsEventClassifiesInvalidEnvelope(t *testing.T) {
+	_, err := decodeRecommendationMetricEvent(kafka.Message{Value: []byte("{\"user_id\":")})
+	if kafkaFailureClassOf(err) != kafkaFailurePermanent || kafkaFailureCode(err) != kafkaFailureCodeDecodeEnvelope {
+		t.Fatalf("class=%q code=%q err=%v", kafkaFailureClassOf(err), kafkaFailureCode(err), err)
 	}
 }
 

@@ -1,15 +1,16 @@
 package tasks
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -38,12 +39,8 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig := global.Db, config.AppConfig
 	groupID := "test-user-behavior-" + uuid.NewString()
-	config.AppConfig = &config.Config{}
-	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
-	config.AppConfig.Kafka.ActivityEventsTopic = "goexchange.activity.events.v1"
-	global.Db = db
+	kafkaConfig := config.KafkaConfig{UserBehaviorGroupID: groupID, ActivityEventsTopic: "goexchange.activity.events.v1"}
 
 	var userOneID, userTwoID uint
 	postIDs := make([]uint, 0, 11)
@@ -54,7 +51,6 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		db.Unscoped().Where("user_id IN ?", []uint{userOneID, userTwoID}).Delete(&models.PostReaction{})
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{userOneID, userTwoID}).Delete(&models.User{})
-		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
 	userOne := models.User{
@@ -94,13 +90,12 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		userBehaviorMessage(t, mustPostViewedEvent(t, "view-4", userOneID, postID(1), base.Add(time.Minute))),
 		userBehaviorMessage(t, mustPostViewedEvent(t, "view-5", userOneID, postID(1), base.Add(3*time.Minute))),
 		userBehaviorMessage(t, mustPostViewedEvent(t, "view-6", userOneID, postID(2), base)),
-		kafka.Message{Value: []byte("{malformed")},
 		userBehaviorMessage(t, mustPostViewedEvent(t, "view-7", userOneID, postID(2), base.Add(time.Minute))),
 	)
 	duplicate := userBehaviorMessage(t, mustPostViewedEvent(t, "view-8", userOneID, postID(3), base))
 	viewMessages = append(viewMessages, duplicate, duplicate)
 
-	if err := applyUserBehaviorBatch(viewMessages); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, viewMessages); err != nil {
 		t.Fatal(err)
 	}
 	var dirty models.UserRecoProfileDirty
@@ -110,7 +105,7 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 	if dirty.DirtyVersion < 1 || dirty.Reason != "user_behavior_projection" {
 		t.Fatalf("dirty profile=%#v want version>=1 reason=%q", dirty, "user_behavior_projection")
 	}
-	if err := applyUserBehaviorBatch(viewMessages); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, viewMessages); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,7 +115,7 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 	assertViewBehaviorCount(t, db, userOneID, postID(3), 1, base)
 
 	lateView := userBehaviorMessage(t, mustPostViewedEvent(t, "view-9", userOneID, postID(0), base.Add(-time.Hour)))
-	if err := applyUserBehaviorBatch([]kafka.Message{lateView}); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{lateView}); err != nil {
 		t.Fatal(err)
 	}
 	assertViewBehaviorCount(t, db, userOneID, postID(0), 4, base.Add(2*time.Minute))
@@ -130,7 +125,7 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		userBehaviorMessage(t, mustLikeEvent("reaction-v7", eventing.EventTypePostUnliked, userOneID, postID(4), 7, base.Add(time.Minute))),
 		userBehaviorMessage(t, mustLikeEvent("reaction-v6", eventing.EventTypePostLiked, userOneID, postID(4), 6, base.Add(2*time.Minute))),
 	}
-	if err := applyUserBehaviorBatch(reactionMessages); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, reactionMessages); err != nil {
 		t.Fatal(err)
 	}
 	assertReaction(t, db, userOneID, postID(4), false, 7, base.Add(time.Minute))
@@ -145,7 +140,7 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		userBehaviorMessage(t, mustLikeEvent("reaction-v8", eventing.EventTypePostLiked, userTwoID, postID(5), 8, base.Add(time.Minute))),
 		userBehaviorMessage(t, mustLikeEvent("reaction-v9", eventing.EventTypePostUnliked, userTwoID, postID(5), 9, base.Add(2*time.Minute))),
 	}
-	if err := applyUserBehaviorBatch(staleReactions); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, staleReactions); err != nil {
 		t.Fatal(err)
 	}
 	assertReaction(t, db, userTwoID, postID(5), true, 10, base)
@@ -154,7 +149,7 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		userBehaviorMessage(t, mustLikeEvent("reaction-tie-like", eventing.EventTypePostLiked, userTwoID, postID(6), 12, base)),
 		userBehaviorMessage(t, mustLikeEvent("reaction-tie-unlike", eventing.EventTypePostUnliked, userTwoID, postID(6), 12, base.Add(time.Minute))),
 	}
-	if err := applyUserBehaviorBatch(tieReactions); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, tieReactions); err != nil {
 		t.Fatal(err)
 	}
 	assertReaction(t, db, userTwoID, postID(6), true, 12, base)
@@ -181,7 +176,7 @@ func TestUserBehaviorProjectionBatchesViewsAndReactionsIntegration(t *testing.T)
 		}).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := applyUserBehaviorBatch([]kafka.Message{
+		if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{
 			userBehaviorMessage(t, mustLikeEvent(uuid.NewString(), test.incomingType, userTwoID, test.postID, test.incomingVersion, base.Add(time.Minute))),
 		}); err != nil {
 			t.Fatal(err)
@@ -203,12 +198,8 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig := global.Db, config.AppConfig
 	groupID := "test-public-view-count-" + uuid.NewString()
-	config.AppConfig = &config.Config{}
-	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
-	config.AppConfig.Kafka.ActivityEventsTopic = "goexchange.activity.events.v1"
-	global.Db = db
+	kafkaConfig := config.KafkaConfig{UserBehaviorGroupID: groupID, ActivityEventsTopic: "goexchange.activity.events.v1"}
 
 	viewerOne := models.User{Username: "view-count-one-" + uuid.NewString(), Password: "test"}
 	viewerTwo := models.User{Username: "view-count-two-" + uuid.NewString(), Password: "test"}
@@ -237,7 +228,6 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 		db.Unscoped().Where("user_id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.PostReaction{})
 		db.Unscoped().Where("id IN ?", []uint{postOne.ID, postTwo.ID, postThree.ID}).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{viewerOne.ID, viewerTwo.ID}).Delete(&models.User{})
-		global.Db, config.AppConfig = originalDB, originalConfig
 	})
 
 	base := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
@@ -250,10 +240,10 @@ func TestUserBehaviorProjectionUpdatesPublicViewCountIntegration(t *testing.T) {
 		userBehaviorMessage(t, mustPostViewedEvent(t, "view-count-6", viewerTwo.ID, postOne.ID, base)),
 		userBehaviorMessage(t, mustLikeEvent("view-count-like", eventing.EventTypePostLiked, viewerOne.ID, postThree.ID, 1, base)),
 	}
-	if err := applyUserBehaviorBatch(firstBatch); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, firstBatch); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyUserBehaviorBatch(firstBatch); err != nil {
+	if err := applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, firstBatch); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,18 +272,8 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig, originalIncrement := global.Db, config.AppConfig, incrementPostViewCounts
 	groupID := "test-public-view-rollback-" + uuid.NewString()
-	config.AppConfig = &config.Config{}
-	config.AppConfig.Kafka.UserBehaviorGroupID = groupID
-	global.Db = db
-	incrementPostViewCounts = func(*gorm.DB, map[uint]int64) error {
-		return errors.New("injected view count failure")
-	}
-	t.Cleanup(func() {
-		incrementPostViewCounts = originalIncrement
-		global.Db, config.AppConfig = originalDB, originalConfig
-	})
+	kafkaConfig := config.KafkaConfig{UserBehaviorGroupID: groupID}
 
 	author := models.User{Username: "view-rollback-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&author).Error; err != nil {
@@ -310,8 +290,9 @@ func TestUserBehaviorProjectionRollsBackViewCountAndInboxOnFailureIntegration(t 
 		db.Unscoped().Delete(&article)
 		db.Unscoped().Delete(&author)
 	})
+	installUserBehaviorPostUpdateFailureTrigger(t, db, article.ID)
 
-	err = applyUserBehaviorBatch([]kafka.Message{
+	err = applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{
 		userBehaviorMessage(t, mustPostViewedEvent(t, "view-rollback", author.ID, article.ID, time.Now().UTC())),
 	})
 	if err == nil {
@@ -342,6 +323,38 @@ func assertPostViewCount(t *testing.T, db *gorm.DB, postID uint, want int64) {
 	if article.ViewCount != want {
 		t.Fatalf("article %d view_count=%d want=%d", postID, article.ViewCount, want)
 	}
+}
+
+func applyUserBehaviorMessagesForIntegration(t *testing.T, db *gorm.DB, kafkaConfig config.KafkaConfig, messages []kafka.Message) error {
+	t.Helper()
+	ctx := context.Background()
+	records, err := classifyUserBehaviorBatch(ctx, nil, kafkaConfig, messages)
+	if err != nil {
+		return err
+	}
+	return applyUserBehaviorRecords(ctx, db, kafkaConfig.UserBehaviorGroupID, kafkaConfig, records)
+}
+
+func applyUserBehaviorEventForIntegration(t *testing.T, db *gorm.DB, kafkaConfig config.KafkaConfig, event eventing.Envelope) error {
+	t.Helper()
+	return applyUserBehaviorMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{userBehaviorMessage(t, event)})
+}
+
+func installUserBehaviorPostUpdateFailureTrigger(t *testing.T, db *gorm.DB, postID uint) {
+	t.Helper()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	functionName := "test_user_behavior_fail_post_update_" + suffix
+	triggerName := "test_user_behavior_fail_post_update_trigger_" + suffix
+	if err := db.Exec(fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected user behavior projection failure'; RETURN NEW; END $$`, functionName)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE UPDATE ON posts FOR EACH ROW WHEN (NEW.id = %d) EXECUTE FUNCTION %s()`, triggerName, postID, functionName)).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON posts`, triggerName))
+		db.Exec(fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, functionName))
+	})
 }
 
 func mustPostViewedEvent(t *testing.T, id string, userID, postID uint, occurredAt time.Time) eventing.Envelope {

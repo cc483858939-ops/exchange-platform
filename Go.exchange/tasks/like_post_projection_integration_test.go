@@ -179,7 +179,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 	if len(behaviorPublisher.events) != 1 || behaviorPublisher.events[0].ID != behaviorEventID {
 		t.Fatalf("behavior events=%#v", behaviorPublisher.events)
 	}
-	if err := applyUserBehaviorEvent(behaviorPublisher.events[0]); err != nil {
+	if err := applyUserBehaviorEventForIntegration(t, db, config.AppConfig.Kafka, behaviorPublisher.events[0]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,7 +196,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 	if _, err := applyLikeSnapshotEvent(context.Background(), db, snapshotPublisher.events[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyUserBehaviorEvent(behaviorPublisher.events[0]); err != nil {
+	if err := applyUserBehaviorEventForIntegration(t, db, config.AppConfig.Kafka, behaviorPublisher.events[0]); err != nil {
 		t.Fatal(err)
 	}
 	assertCanonicalLikeProjectionRows(t, db, post.ID, actor.ID, mutation.Version)

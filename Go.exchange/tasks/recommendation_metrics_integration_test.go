@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -8,7 +9,6 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -37,8 +37,8 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig := global.Db, config.AppConfig
 	groupID := "test-rec-metrics-" + uuid.NewString()
+	kafkaConfig := config.KafkaConfig{RecommendationMetricsGroupID: groupID}
 	user := models.User{
 		Username: "test-rec-metrics-" + uuid.NewString(),
 		Password: "test",
@@ -63,12 +63,6 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatal(err)
 	}
 	postID = post.ID
-	config.AppConfig = &config.Config{}
-	config.AppConfig.Kafka.RecommendationMetricsGroupID = groupID
-	global.Db = db
-
-	t.Cleanup(func() { global.Db, config.AppConfig = originalDB, originalConfig })
-
 	baseAt := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	base := eventing.RecommendationBehaviorPayload{
 		UserID: userID, PostID: postID, RequestID: uuid.NewString(),
@@ -86,7 +80,6 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		messages = append(messages, recommendationMessage(t, event))
 	}
 	messages = append(messages, messages[0])
-	messages = append(messages, kafka.Message{Value: []byte("{malformed")})
 
 	clickPayload := base
 	click, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, baseAt, clickPayload)
@@ -130,7 +123,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 	messages = append(messages, recommendationMessage(t, dateEvent))
 
-	if err := applyRecommendationMetricsBatch(messages); err != nil {
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, messages); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,10 +135,10 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatalf("dirty profile=%#v want version=1 reason=%q", dirty, "recommendation_feedback_projection")
 	}
 
-	if err := applyRecommendationMetricsBatch([]kafka.Message{messages[0]}); err != nil {
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{messages[0]}); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRecommendationMetricsBatch([]kafka.Message{explorationMessage}); err != nil {
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{explorationMessage}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
@@ -194,4 +187,14 @@ func recommendationMessage(t *testing.T, event eventing.Envelope) kafka.Message 
 		t.Fatal(err)
 	}
 	return kafka.Message{Value: body}
+}
+
+func applyRecommendationMetricsMessagesForIntegration(t *testing.T, db *gorm.DB, kafkaConfig config.KafkaConfig, messages []kafka.Message) error {
+	t.Helper()
+	ctx := context.Background()
+	records, err := classifyRecommendationMetricsBatch(ctx, nil, kafkaConfig, messages)
+	if err != nil {
+		return err
+	}
+	return applyRecommendationMetricRecords(ctx, db, kafkaConfig.RecommendationMetricsGroupID, kafkaConfig, records)
 }

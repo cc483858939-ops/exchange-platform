@@ -30,12 +30,18 @@ const (
 	recommendationMetricsBatchWindow        = 50 * time.Millisecond
 )
 
-var errInvalidRecommendationMetricsEvent = errors.New("invalid recommendation metrics event")
-
 type recommendationMetricEvent struct {
 	Envelope eventing.Envelope
 	Payload  eventing.RecommendationBehaviorPayload
 }
+
+type recommendationMetricsMessageReader interface {
+	FetchMessage(context.Context) (kafka.Message, error)
+	CommitMessages(context.Context, ...kafka.Message) error
+	Close() error
+}
+
+type recommendationMetricRecordsApplyFunc func(context.Context, *gorm.DB, string, config.KafkaConfig, []recommendationMetricEvent) error
 
 type recommendationMetricKey struct {
 	MetricDate             time.Time
@@ -92,10 +98,11 @@ func startRecommendationMetricsConsumer(ctx context.Context, wg *sync.WaitGroup)
 }
 
 func runRecommendationMetricsConsumer(ctx context.Context) {
+	kafkaConfig := config.AppConfig.Kafka
 	reader, err := eventing.NewKafkaReader(
-		config.AppConfig.Kafka,
-		config.AppConfig.Kafka.RecommendationEventsTopic,
-		config.AppConfig.Kafka.RecommendationMetricsGroupID,
+		kafkaConfig,
+		kafkaConfig.RecommendationEventsTopic,
+		kafkaConfig.RecommendationMetricsGroupID,
 	)
 	if err != nil {
 		PipelineFailure(PipelineRecommendationMetrics, "kafka_reader_unavailable", 0)
@@ -105,6 +112,41 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 	recommendationMetricsConsumers.Add(1)
 	defer recommendationMetricsConsumers.Add(-1)
 	defer reader.Close()
+	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
+	if err := consumeRecommendationMetricsMessages(ctx, reader, publisher, global.Db, kafkaConfig); err != nil && ctx.Err() == nil {
+		PipelineFailure(PipelineRecommendationMetrics, "projection_failed", 0)
+		log.Printf("[RecommendationMetrics] consumer stopped: %v", err)
+	}
+}
+
+func consumeRecommendationMetricsMessages(
+	ctx context.Context,
+	reader recommendationMetricsMessageReader,
+	publisher rawKafkaMessagePublisher,
+	db *gorm.DB,
+	kafkaConfig config.KafkaConfig,
+) error {
+	return consumeRecommendationMetricsMessagesWithApply(ctx, reader, publisher, db, kafkaConfig, defaultKafkaRetryPolicy, applyRecommendationMetricRecords)
+}
+
+func consumeRecommendationMetricsMessagesWithApply(
+	ctx context.Context,
+	reader recommendationMetricsMessageReader,
+	publisher rawKafkaMessagePublisher,
+	db *gorm.DB,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+	apply recommendationMetricRecordsApplyFunc,
+) error {
+	if ctx == nil {
+		return errors.New("recommendation metrics consumer context is nil")
+	}
+	if reader == nil {
+		return errors.New("recommendation metrics message reader is nil")
+	}
+	if apply == nil {
+		return errors.New("recommendation metrics apply function is nil")
+	}
 	for {
 		first, err := reader.FetchMessage(ctx)
 		if err != nil {
@@ -112,27 +154,61 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 				PipelineFailure(PipelineRecommendationMetrics, "kafka_fetch_failed", 0)
 				log.Printf("[RecommendationMetrics] fetch Kafka message: %v", err)
 			}
-			return
+			return err
 		}
 		batch := collectRecommendationMetricsBatch(ctx, reader, first)
-		if err := applyRecommendationMetricsBatch(batch); err != nil {
-			metrics.RecordRecommendationTelemetryProjection("retryable_error")
-			PipelineFailure(PipelineRecommendationMetrics, "projection_failed", 0)
-			log.Printf("[RecommendationMetrics] apply batch of %d messages: %v", len(batch), err)
-			return
+		records, err := classifyRecommendationMetricsBatch(ctx, publisher, kafkaConfig, batch)
+		if err != nil {
+			return fmt.Errorf("classify recommendation metrics batch of %d messages: %w", len(batch), err)
+		}
+		if len(records) > 0 {
+			attempts := 0
+			err = retryKafkaOperation(ctx, policy, func() error {
+				attempts++
+				applyErr := apply(ctx, db, strings.TrimSpace(kafkaConfig.RecommendationMetricsGroupID), kafkaConfig, records)
+				if applyErr != nil && kafkaFailureClassOf(applyErr) == kafkaFailureRetryable && attempts < policy.MaxAttempts && ctx.Err() == nil {
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetry, kafkaFailureCode(applyErr))
+					log.Printf("[RecommendationMetrics] retry attempt=%d max_attempts=%d code=%s", attempts, policy.MaxAttempts, kafkaFailureCode(applyErr))
+				}
+				return applyErr
+			})
+			if err != nil {
+				metrics.RecordRecommendationTelemetryProjection("retryable_error")
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts >= policy.MaxAttempts {
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCode(err))
+				}
+				return fmt.Errorf("apply recommendation metrics batch of %d messages: %w", len(batch), err)
+			}
+			metrics.RecordRecommendationTelemetryProjection("applied")
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeApplied, kafkaRecoveryCodeNone)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() == nil {
 				PipelineFailure(PipelineRecommendationMetrics, "kafka_commit_failed", 0)
 				log.Printf("[RecommendationMetrics] commit Kafka batch: %v", err)
 			}
-			return
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetry, kafkaFailureCode(commitErr))
+			return commitErr
 		}
-		PipelineCommit(PipelineRecommendationMetrics, time.Now().UTC(), kafkaBacklog(reader))
+		backlog := int64(0)
+		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
+			backlog = kafkaBacklog(statsReader)
+		}
+		PipelineCommit(PipelineRecommendationMetrics, time.Now().UTC(), backlog)
 	}
 }
 
-func collectRecommendationMetricsBatch(ctx context.Context, reader *kafka.Reader, first kafka.Message) []kafka.Message {
+func collectRecommendationMetricsBatch(ctx context.Context, reader recommendationMetricsMessageReader, first kafka.Message) []kafka.Message {
 	batch := []kafka.Message{first}
 	if len(batch) >= recommendationMetricsBatchSize {
 		return batch
@@ -153,87 +229,111 @@ func collectRecommendationMetricsBatch(ctx context.Context, reader *kafka.Reader
 	return batch
 }
 
-func applyRecommendationMetricsBatch(messages []kafka.Message) error {
-	records := make([]recommendationMetricEvent, 0, len(messages))
-	seenEventIDs := make(map[string]struct{}, len(messages))
-	for _, message := range messages {
-		record, err := decodeRecommendationMetricEvent(message.Value)
-		if err != nil {
-			metrics.RecordRecommendationTelemetryProjection("invalid_payload")
-			log.Printf("[RecommendationMetrics] discard invalid message: %v", err)
-			continue
-		}
-		if _, exists := seenEventIDs[record.Envelope.ID]; exists {
-			metrics.RecordRecommendationTelemetryProjection("duplicate_in_batch")
-			continue
-		}
-		seenEventIDs[record.Envelope.ID] = struct{}{}
-		records = append(records, record)
-	}
-	if len(records) == 0 {
-		return nil
-	}
-	return applyRecommendationMetricRecords(records)
-}
-
-func decodeRecommendationMetricEvent(raw []byte) (recommendationMetricEvent, error) {
-	event, err := eventing.DecodeEnvelope(raw)
+func decodeRecommendationMetricEvent(message kafka.Message) (recommendationMetricEvent, error) {
+	event, err := eventing.DecodeEnvelope(message.Value)
 	if err != nil {
-		return recommendationMetricEvent{}, fmt.Errorf("%w: decode envelope: %v", errInvalidRecommendationMetricsEvent, err)
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeDecodeEnvelope, err)
 	}
 	if _, err := uuid.Parse(event.ID); err != nil {
-		return recommendationMetricEvent{}, fmt.Errorf("%w: event id must be UUID", errInvalidRecommendationMetricsEvent)
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("recommendation event id must be UUID"))
 	}
 	if event.SchemaVersion != eventing.RecommendationBehaviorSchemaVersion {
-		return recommendationMetricEvent{}, fmt.Errorf("%w: unsupported schema version %d", errInvalidRecommendationMetricsEvent, event.SchemaVersion)
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, fmt.Errorf("unsupported recommendation behavior schema version %d", event.SchemaVersion))
 	}
 	if !eventing.IsRecommendationEventType(event.Type) {
-		return recommendationMetricEvent{}, fmt.Errorf("%w: unsupported event type %q", errInvalidRecommendationMetricsEvent, event.Type)
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeUnsupportedEvent, fmt.Errorf("unsupported recommendation event type %q", event.Type))
 	}
 	if event.OccurredAt.IsZero() {
-		return recommendationMetricEvent{}, fmt.Errorf("%w: occurred_at is required", errInvalidRecommendationMetricsEvent)
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("recommendation event occurred_at is required"))
 	}
 	var payload eventing.RecommendationBehaviorPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return recommendationMetricEvent{}, fmt.Errorf("%w: decode payload: %v", errInvalidRecommendationMetricsEvent, err)
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeDecodePayload, err)
 	}
 	if payload.UserID == 0 || payload.PostID == 0 || strings.TrimSpace(payload.RequestID) == "" ||
 		strings.TrimSpace(payload.Scene) == "" || payload.Position <= 0 ||
 		strings.TrimSpace(payload.RankerVersion) == "" || strings.TrimSpace(payload.RankerConfigHash) == "" ||
 		strings.TrimSpace(payload.StrategyID) == "" || payload.ReceivedAt.IsZero() ||
 		!validRecommendationMetricsPayload(event.Type, payload) {
-		return recommendationMetricEvent{}, fmt.Errorf("%w: invalid event %q", errInvalidRecommendationMetricsEvent, event.ID)
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("recommendation behavior payload failed validation"))
 	}
 	return recommendationMetricEvent{Envelope: event, Payload: payload}, nil
 }
 
-// applyRecommendationMetricsEvent remains a small single-event seam for unit
-// tests and operational callers; the Kafka loop always uses the batch path.
-func applyRecommendationMetricsEvent(event eventing.Envelope) error {
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("%w: marshal envelope: %v", errInvalidRecommendationMetricsEvent, err)
+func classifyRecommendationMetricsBatch(
+	ctx context.Context,
+	publisher rawKafkaMessagePublisher,
+	kafkaConfig config.KafkaConfig,
+	messages []kafka.Message,
+) ([]recommendationMetricEvent, error) {
+	if ctx == nil {
+		return nil, errors.New("recommendation metrics batch context is nil")
 	}
-	record, err := decodeRecommendationMetricEvent(raw)
-	if err != nil {
-		return err
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return applyRecommendationMetricRecords([]recommendationMetricEvent{record})
+	valid := make([]recommendationMetricEvent, 0, len(messages))
+	type permanentMessage struct {
+		message kafka.Message
+		err     error
+	}
+	permanent := make([]permanentMessage, 0)
+	for _, message := range messages {
+		record, err := decodeRecommendationMetricEvent(message)
+		if err != nil {
+			if kafkaFailureClassOf(err) != kafkaFailurePermanent {
+				return nil, err
+			}
+			metrics.RecordRecommendationTelemetryProjection("invalid_payload")
+			permanent = append(permanent, permanentMessage{message: message, err: err})
+			continue
+		}
+		valid = append(valid, record)
+	}
+	for _, failure := range permanent {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		log.Printf("[RecommendationMetrics] route permanent message to DLQ topic=%s partition=%d offset=%d code=%s", failure.message.Topic, failure.message.Partition, failure.message.Offset, kafkaFailureCode(failure.err))
+		if err := publishConsumerDLQ(ctx, publisher, kafkaConfig.ConsumerDLQTopic, kafkaConsumerRecommendationMetrics, failure.message, failure.err, 1); err != nil {
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(err))
+			return nil, err
+		}
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeDLQ, kafkaFailureCode(failure.err))
+	}
+	seenEventIDs := make(map[string]struct{}, len(valid))
+	records := make([]recommendationMetricEvent, 0, len(valid))
+	for _, record := range valid {
+		if _, exists := seenEventIDs[record.Envelope.ID]; exists {
+			metrics.RecordRecommendationTelemetryProjection("duplicate_in_batch")
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeNoop, kafkaRecoveryCodeNone)
+			continue
+		}
+		seenEventIDs[record.Envelope.ID] = struct{}{}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
-func applyRecommendationMetricRecords(records []recommendationMetricEvent) error {
-	if global.Db == nil {
-		return errors.New("database is not initialized")
+func applyRecommendationMetricRecords(ctx context.Context, db *gorm.DB, consumerName string, _ config.KafkaConfig, records []recommendationMetricEvent) error {
+	if ctx == nil {
+		return errors.New("recommendation metrics apply context is nil")
 	}
-	consumerName := ""
-	if config.AppConfig != nil {
-		consumerName = strings.TrimSpace(config.AppConfig.Kafka.RecommendationMetricsGroupID)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	if len(records) == 0 {
+		return nil
+	}
+	if db == nil {
+		return retryableKafkaError(kafkaFailureCodeDatabaseUnavailable, errors.New("database is not initialized"))
+	}
+	consumerName = strings.TrimSpace(consumerName)
 	if consumerName == "" {
 		return errors.New("recommendation metrics consumer group is not configured")
 	}
 
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		eventIDs := make([]string, 0, len(records))
 		for _, record := range records {
 			eventIDs = append(eventIDs, record.Envelope.ID)
@@ -252,6 +352,13 @@ func applyRecommendationMetricRecords(records []recommendationMetricEvent) error
 		}
 		return recommendation.InvalidateProfiles(tx, recommendationMetricProfileInvalidationUsers(records, firstDelivery), "recommendation_feedback_projection", time.Now().UTC())
 	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, err)
+	}
+	return nil
 }
 
 func recommendationMetricProfileInvalidationUsers(records []recommendationMetricEvent, firstDelivery map[string]struct{}) []uint {

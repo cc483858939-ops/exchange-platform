@@ -220,6 +220,8 @@ jobs:
             TestCanonicalPostDeletePGRedisIdentityE2E \
             TestCanonicalPostLikeRedisToPostgresProjectionIntegration \
             TestLikeSnapshotProjectionIntegrationRecoverySemantics \
+            TestUserBehaviorProjectionRecoverySemanticsIntegration \
+            TestRecommendationMetricsProjectionRecoverySemanticsIntegration \
             TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration \
             TestPostLikeHotPathDoesNotLoadPostgres \
             TestPostLikeSafeExpiryRecoveryIntegration \

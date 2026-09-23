@@ -252,7 +252,7 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	if !ok {
 		t.Fatalf("behavior event missing events=%#v", behaviorPublisher.events)
 	}
-	if err := applyUserBehaviorEvent(behaviorEvent); err != nil {
+	if err := applyUserBehaviorEventForIntegration(t, env.db, config.AppConfig.Kafka, behaviorEvent); err != nil {
 		t.Fatal(err)
 	}
 
@@ -347,7 +347,7 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	if !ok {
 		t.Fatalf("second behavior event missing events=%#v", secondBehaviorPublisher.events)
 	}
-	if err := applyUserBehaviorEvent(secondBehavior); err != nil {
+	if err := applyUserBehaviorEventForIntegration(t, env.db, config.AppConfig.Kafka, secondBehavior); err != nil {
 		t.Fatal(err)
 	}
 

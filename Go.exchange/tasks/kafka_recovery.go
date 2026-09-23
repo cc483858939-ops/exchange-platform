@@ -37,6 +37,8 @@ const (
 
 const (
 	kafkaConsumerLikeSnapshotProjection  = "like_snapshot_projection"
+	kafkaConsumerUserBehaviorProjection  = "user_behavior_projection"
+	kafkaConsumerRecommendationMetrics   = "recommendation_metrics"
 	kafkaRecoveryOutcomeApplied          = "applied"
 	kafkaRecoveryOutcomeNoop             = "noop"
 	kafkaRecoveryOutcomeRetry            = "retry"

@@ -67,8 +67,12 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 }
 
 func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
-	RecordKafkaConsumerRecovery("like_snapshot_projection", "dlq", "decode_envelope")
-	RecordKafkaConsumerRecovery("like_snapshot_projection", "dlq", "unbounded-event-id")
+	consumers := []string{"like_snapshot_projection", "user_behavior_projection", "recommendation_metrics"}
+	for _, consumer := range consumers {
+		RecordKafkaConsumerRecovery(consumer, "dlq", "decode_envelope")
+	}
+	RecordKafkaConsumerRecovery("user_behavior_projection", "unbounded-outcome", "decode_envelope")
+	RecordKafkaConsumerRecovery("recommendation_metrics", "dlq", "unbounded-error-code")
 	RecordKafkaConsumerRecovery("unbounded-topic", "dlq", "decode_envelope")
 	r := httptest.NewRecorder()
 	Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -76,7 +80,12 @@ func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
 	if !strings.Contains(body, `go_exchange_kafka_consumer_recovery_total{code="decode_envelope",consumer="like_snapshot_projection",outcome="dlq"} `) {
 		t.Fatal(body)
 	}
-	if strings.Contains(body, "unbounded-event-id") || strings.Contains(body, "unbounded-topic") {
+	for _, consumer := range consumers[1:] {
+		if !strings.Contains(body, fmt.Sprintf(`go_exchange_kafka_consumer_recovery_total{code="decode_envelope",consumer="%s",outcome="dlq"} `, consumer)) {
+			t.Fatalf("known consumer %q was not exported: %s", consumer, body)
+		}
+	}
+	if strings.Contains(body, "unbounded-error-code") || strings.Contains(body, "unbounded-outcome") || strings.Contains(body, "unbounded-topic") {
 		t.Fatal("unbounded Kafka recovery labels were exported")
 	}
 }

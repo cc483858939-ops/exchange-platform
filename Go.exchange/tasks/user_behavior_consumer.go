@@ -14,6 +14,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
@@ -39,6 +40,8 @@ type userBehaviorEventRecord struct {
 	Envelope eventing.Envelope
 	Payload  eventing.UserBehaviorPayload
 }
+
+type userBehaviorRecordsApplyFunc func(context.Context, *gorm.DB, string, config.KafkaConfig, []userBehaviorEventRecord) error
 
 type userBehaviorPair struct {
 	UserID uint
@@ -87,10 +90,11 @@ func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 }
 
 func runUserBehaviorProjectionConsumer(ctx context.Context) {
+	kafkaConfig := config.AppConfig.Kafka
 	reader, err := eventing.NewKafkaReader(
-		config.AppConfig.Kafka,
-		config.AppConfig.Kafka.UserBehaviorTopic,
-		config.AppConfig.Kafka.UserBehaviorGroupID,
+		kafkaConfig,
+		kafkaConfig.UserBehaviorTopic,
+		kafkaConfig.UserBehaviorGroupID,
 	)
 	if err != nil {
 		PipelineFailure(PipelineUserBehaviorProjection, "kafka_reader_unavailable", 0)
@@ -100,7 +104,8 @@ func runUserBehaviorProjectionConsumer(ctx context.Context) {
 	userBehaviorConsumers.Add(1)
 	defer userBehaviorConsumers.Add(-1)
 	defer reader.Close()
-	if err := consumeUserBehaviorMessages(ctx, reader, applyUserBehaviorBatch); err != nil && ctx.Err() == nil {
+	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
+	if err := consumeUserBehaviorMessages(ctx, reader, publisher, global.Db, kafkaConfig); err != nil && ctx.Err() == nil {
 		PipelineFailure(PipelineUserBehaviorProjection, "projection_failed", 0)
 		log.Printf("[BehaviorProjection] consumer stopped: %v", err)
 	}
@@ -109,8 +114,31 @@ func runUserBehaviorProjectionConsumer(ctx context.Context) {
 func consumeUserBehaviorMessages(
 	ctx context.Context,
 	reader userBehaviorMessageReader,
-	applyBatch func([]kafka.Message) error,
+	publisher rawKafkaMessagePublisher,
+	db *gorm.DB,
+	kafkaConfig config.KafkaConfig,
 ) error {
+	return consumeUserBehaviorMessagesWithApply(ctx, reader, publisher, db, kafkaConfig, defaultKafkaRetryPolicy, applyUserBehaviorRecords)
+}
+
+func consumeUserBehaviorMessagesWithApply(
+	ctx context.Context,
+	reader userBehaviorMessageReader,
+	publisher rawKafkaMessagePublisher,
+	db *gorm.DB,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+	apply userBehaviorRecordsApplyFunc,
+) error {
+	if ctx == nil {
+		return errors.New("user behavior consumer context is nil")
+	}
+	if reader == nil {
+		return errors.New("user behavior message reader is nil")
+	}
+	if apply == nil {
+		return errors.New("user behavior apply function is nil")
+	}
 	for {
 		first, err := reader.FetchMessage(ctx)
 		if err != nil {
@@ -120,14 +148,45 @@ func consumeUserBehaviorMessages(
 			return err
 		}
 		batch := collectUserBehaviorBatch(ctx, reader, first)
-		if err := applyBatch(batch); err != nil {
-			return fmt.Errorf("apply user behavior batch of %d messages: %w", len(batch), err)
+		records, err := classifyUserBehaviorBatch(ctx, publisher, kafkaConfig, batch)
+		if err != nil {
+			return fmt.Errorf("classify user behavior batch of %d messages: %w", len(batch), err)
+		}
+		if len(records) > 0 {
+			attempts := 0
+			err = retryKafkaOperation(ctx, policy, func() error {
+				attempts++
+				applyErr := apply(ctx, db, strings.TrimSpace(kafkaConfig.UserBehaviorGroupID), kafkaConfig, records)
+				if applyErr != nil && kafkaFailureClassOf(applyErr) == kafkaFailureRetryable && attempts < policy.MaxAttempts && ctx.Err() == nil {
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetry, kafkaFailureCode(applyErr))
+					log.Printf("[BehaviorProjection] retry attempt=%d max_attempts=%d code=%s", attempts, policy.MaxAttempts, kafkaFailureCode(applyErr))
+				}
+				return applyErr
+			})
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts >= policy.MaxAttempts {
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCode(err))
+				}
+				return fmt.Errorf("apply user behavior batch of %d messages: %w", len(batch), err)
+			}
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeApplied, kafkaRecoveryCodeNone)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() == nil {
 				log.Printf("[BehaviorProjection] commit Kafka batch: %v", err)
 			}
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetry, kafkaFailureCode(commitErr))
+			return commitErr
 		}
 		backlog := int64(0)
 		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
@@ -158,48 +217,83 @@ func collectUserBehaviorBatch(ctx context.Context, reader userBehaviorMessageRea
 	return batch
 }
 
-func applyUserBehaviorBatch(messages []kafka.Message) error {
-	records := make([]userBehaviorEventRecord, 0, len(messages))
-	seenEventIDs := make(map[string]struct{}, len(messages))
+func decodeUserBehaviorMessage(message kafka.Message) (userBehaviorEventRecord, error) {
+	const currentSchemaVersion = 1
+	event, err := eventing.DecodeEnvelope(message.Value)
+	if err != nil {
+		return userBehaviorEventRecord{}, permanentKafkaError(kafkaFailureCodeDecodeEnvelope, err)
+	}
+	if !isUserBehaviorEvent(event.Type) {
+		return userBehaviorEventRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedEvent, fmt.Errorf("unsupported user behavior event type %q", event.Type))
+	}
+	if event.SchemaVersion != currentSchemaVersion {
+		return userBehaviorEventRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, fmt.Errorf("unsupported user behavior schema version %d", event.SchemaVersion))
+	}
+	var payload eventing.UserBehaviorPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return userBehaviorEventRecord{}, permanentKafkaError(kafkaFailureCodeDecodePayload, err)
+	}
+	if payload.UserID == 0 || payload.PostID == 0 {
+		return userBehaviorEventRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("user behavior payload requires user_id and post_id"))
+	}
+	if (event.Type == eventing.EventTypePostLiked || event.Type == eventing.EventTypePostUnliked) && payload.LikeVersion <= 0 {
+		return userBehaviorEventRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("like behavior payload requires positive like_version"))
+	}
+	return userBehaviorEventRecord{Envelope: event, Payload: payload}, nil
+}
+
+func classifyUserBehaviorBatch(
+	ctx context.Context,
+	publisher rawKafkaMessagePublisher,
+	kafkaConfig config.KafkaConfig,
+	messages []kafka.Message,
+) ([]userBehaviorEventRecord, error) {
+	if ctx == nil {
+		return nil, errors.New("user behavior batch context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	valid := make([]userBehaviorEventRecord, 0, len(messages))
+	type permanentMessage struct {
+		message kafka.Message
+		err     error
+	}
+	permanent := make([]permanentMessage, 0)
 	for _, message := range messages {
-		record, err := decodeUserBehaviorEvent(message.Value)
+		record, err := decodeUserBehaviorMessage(message)
 		if err != nil {
-			log.Printf("[BehaviorProjection] discard malformed or unsupported Kafka message: %v", err)
+			if kafkaFailureClassOf(err) != kafkaFailurePermanent {
+				return nil, err
+			}
+			permanent = append(permanent, permanentMessage{message: message, err: err})
 			continue
 		}
+		valid = append(valid, record)
+	}
+	for _, failure := range permanent {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		log.Printf("[BehaviorProjection] route permanent message to DLQ topic=%s partition=%d offset=%d code=%s", failure.message.Topic, failure.message.Partition, failure.message.Offset, kafkaFailureCode(failure.err))
+		if err := publishConsumerDLQ(ctx, publisher, kafkaConfig.ConsumerDLQTopic, kafkaConsumerUserBehaviorProjection, failure.message, failure.err, 1); err != nil {
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(err))
+			return nil, err
+		}
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeDLQ, kafkaFailureCode(failure.err))
+	}
+	seenEventIDs := make(map[string]struct{}, len(valid))
+	records := make([]userBehaviorEventRecord, 0, len(valid))
+	for _, record := range valid {
 		if _, exists := seenEventIDs[record.Envelope.ID]; exists {
-			log.Printf("[BehaviorProjection] discard duplicate event in fetched batch: %s", record.Envelope.ID)
+			log.Printf("[BehaviorProjection] skip duplicate event in fetched batch: %s", record.Envelope.ID)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeNoop, kafkaRecoveryCodeNone)
 			continue
 		}
 		seenEventIDs[record.Envelope.ID] = struct{}{}
 		records = append(records, record)
 	}
-	if len(records) == 0 {
-		return nil
-	}
-	return applyUserBehaviorRecords(records)
-}
-
-func decodeUserBehaviorEvent(raw []byte) (userBehaviorEventRecord, error) {
-	event, err := eventing.DecodeEnvelope(raw)
-	if err != nil {
-		return userBehaviorEventRecord{}, err
-	}
-	if !isUserBehaviorEvent(event.Type) {
-		return userBehaviorEventRecord{}, fmt.Errorf("unsupported user behavior event type %q", event.Type)
-	}
-	var payload eventing.UserBehaviorPayload
-	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return userBehaviorEventRecord{}, fmt.Errorf("decode user behavior payload: %w", err)
-	}
-	if payload.UserID == 0 || payload.PostID == 0 {
-		return userBehaviorEventRecord{}, errors.New("user behavior payload requires user_id and post_id")
-	}
-	if (event.Type == eventing.EventTypePostLiked || event.Type == eventing.EventTypePostUnliked) &&
-		payload.LikeVersion <= 0 {
-		return userBehaviorEventRecord{}, errors.New("like behavior payload requires positive like_version")
-	}
-	return userBehaviorEventRecord{Envelope: event, Payload: payload}, nil
+	return records, nil
 }
 
 func isUserBehaviorEvent(eventType string) bool {
@@ -208,31 +302,27 @@ func isUserBehaviorEvent(eventType string) bool {
 		eventType == eventing.EventTypePostUnliked
 }
 
-// applyUserBehaviorEvent remains a single-event seam for existing operational and
-// focused tests. Kafka consumption always uses applyUserBehaviorBatch.
-func applyUserBehaviorEvent(event eventing.Envelope) error {
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return applyUserBehaviorBatch([]kafka.Message{{Value: raw}})
-}
-
 // ConsumerInbox retention must be coordinated with Kafka retention, the replay
 // window, and a future rebuild strategy before automatic cleanup is introduced.
-func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
-	if global.Db == nil {
-		return errors.New("database is not initialized")
+func applyUserBehaviorRecords(ctx context.Context, db *gorm.DB, consumerName string, kafkaConfig config.KafkaConfig, records []userBehaviorEventRecord) error {
+	if ctx == nil {
+		return errors.New("user behavior apply context is nil")
 	}
-	consumerName := ""
-	if config.AppConfig != nil {
-		consumerName = strings.TrimSpace(config.AppConfig.Kafka.UserBehaviorGroupID)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	if len(records) == 0 {
+		return nil
+	}
+	if db == nil {
+		return retryableKafkaError(kafkaFailureCodeDatabaseUnavailable, errors.New("database is not initialized"))
+	}
+	consumerName = strings.TrimSpace(consumerName)
 	if consumerName == "" {
 		return errors.New("user behavior consumer group is not configured")
 	}
 
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		eventIDs := make([]string, 0, len(records))
 		for _, record := range records {
 			eventIDs = append(eventIDs, record.Envelope.ID)
@@ -248,7 +338,7 @@ func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
 		}
 
 		viewCountDeltas := aggregatePostViewCountDeltas(records, firstDelivery)
-		if err := incrementPostViewCounts(tx, viewCountDeltas); err != nil {
+		if err := bulkIncrementPostViewCounts(tx, viewCountDeltas); err != nil {
 			return err
 		}
 
@@ -257,11 +347,18 @@ func applyUserBehaviorRecords(records []userBehaviorEventRecord) error {
 		if err != nil {
 			return err
 		}
-		if err := appendAppliedReactionActivities(tx, applied); err != nil {
+		if err := appendAppliedReactionActivities(tx, kafkaConfig, applied); err != nil {
 			return err
 		}
 		return recommendation.InvalidateProfiles(tx, userBehaviorProfileInvalidationUsers(records, firstDelivery), "user_behavior_projection", time.Now().UTC())
 	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, err)
+	}
+	return nil
 }
 
 func userBehaviorProfileInvalidationUsers(records []userBehaviorEventRecord, firstDelivery map[string]struct{}) []uint {
@@ -282,8 +379,6 @@ func userBehaviorProfileInvalidationUsers(records []userBehaviorEventRecord, fir
 	sort.Slice(users, func(i, j int) bool { return users[i] < users[j] })
 	return users
 }
-
-var incrementPostViewCounts = bulkIncrementPostViewCounts
 
 func aggregatePostViewCountDeltas(
 	records []userBehaviorEventRecord,
@@ -517,14 +612,11 @@ RETURNING user_id, post_id, reaction_version, liked, state_changed_at`
 	return applied, nil
 }
 
-func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedPostReaction) error {
+func appendAppliedReactionActivities(tx *gorm.DB, kafkaConfig config.KafkaConfig, applied []appliedPostReaction) error {
 	if len(applied) == 0 {
 		return nil
 	}
-	if config.AppConfig == nil {
-		return errors.New("application config is not initialized")
-	}
-	if strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) == "" {
+	if strings.TrimSpace(kafkaConfig.ActivityEventsTopic) == "" {
 		return errors.New("Kafka activity events topic is not configured")
 	}
 	postIDs := make([]uint, 0, len(applied))
@@ -559,7 +651,7 @@ func appendAppliedReactionActivities(tx *gorm.DB, applied []appliedPostReaction)
 		if err != nil {
 			return err
 		}
-		outboxEvent, err := eventing.NewOutboxEvent(config.AppConfig.Kafka, envelope)
+		outboxEvent, err := eventing.NewOutboxEvent(kafkaConfig, envelope)
 		if err != nil {
 			return err
 		}

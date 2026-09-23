@@ -8,15 +8,19 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/eventing"
 
 	"github.com/segmentio/kafka-go"
+	"gorm.io/gorm"
 )
 
 type fakeUserBehaviorReader struct {
-	messages []kafka.Message
-	index    int
-	commits  [][]kafka.Message
+	messages   []kafka.Message
+	index      int
+	commits    [][]kafka.Message
+	commitErr  error
+	closeCount int
 }
 
 func (r *fakeUserBehaviorReader) FetchMessage(_ context.Context) (kafka.Message, error) {
@@ -30,20 +34,21 @@ func (r *fakeUserBehaviorReader) FetchMessage(_ context.Context) (kafka.Message,
 
 func (r *fakeUserBehaviorReader) CommitMessages(_ context.Context, messages ...kafka.Message) error {
 	r.commits = append(r.commits, append([]kafka.Message(nil), messages...))
-	return nil
+	return r.commitErr
 }
 
-func (*fakeUserBehaviorReader) Close() error {
+func (r *fakeUserBehaviorReader) Close() error {
+	r.closeCount++
 	return nil
 }
 
 func TestUserBehaviorConsumerCommitsOnlyAfterSuccessfulApply(t *testing.T) {
-	reader := &fakeUserBehaviorReader{messages: []kafka.Message{{Value: []byte("{\"id\":\"view-1\",\"type\":\"post.viewed\"}")}}}
+	reader := &fakeUserBehaviorReader{messages: []kafka.Message{mustUserBehaviorRecoveryMessage(t, 0, "view-1", eventing.EventTypePostViewed, 7, 42, 0)}}
 	applied := false
-	err := consumeUserBehaviorMessages(context.Background(), reader, func(messages []kafka.Message) error {
+	err := consumeUserBehaviorMessagesWithApply(context.Background(), reader, nil, nil, userBehaviorRecoveryConfig(), kafkaRetryPolicy{MaxAttempts: 1}, func(_ context.Context, _ *gorm.DB, _ string, _ config.KafkaConfig, records []userBehaviorEventRecord) error {
 		applied = true
-		if len(messages) != 1 {
-			t.Fatalf("messages=%d want=1", len(messages))
+		if len(records) != 1 {
+			t.Fatalf("records=%d want=1", len(records))
 		}
 		return nil
 	})
@@ -56,10 +61,10 @@ func TestUserBehaviorConsumerCommitsOnlyAfterSuccessfulApply(t *testing.T) {
 }
 
 func TestUserBehaviorConsumerDoesNotCommitWhenApplyFails(t *testing.T) {
-	reader := &fakeUserBehaviorReader{messages: []kafka.Message{{Value: []byte("{\"id\":\"view-1\",\"type\":\"post.viewed\"}")}}}
+	reader := &fakeUserBehaviorReader{messages: []kafka.Message{mustUserBehaviorRecoveryMessage(t, 0, "view-1", eventing.EventTypePostViewed, 7, 42, 0)}}
 	wantErr := errors.New("database unavailable")
-	err := consumeUserBehaviorMessages(context.Background(), reader, func([]kafka.Message) error {
-		return wantErr
+	err := consumeUserBehaviorMessagesWithApply(context.Background(), reader, nil, nil, userBehaviorRecoveryConfig(), kafkaRetryPolicy{MaxAttempts: 1}, func(context.Context, *gorm.DB, string, config.KafkaConfig, []userBehaviorEventRecord) error {
+		return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, wantErr)
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("consume error=%v want=%v", err, wantErr)
@@ -76,10 +81,10 @@ func TestDecodeUserBehaviorEventAllowsVersionedLikeEventID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := decodeUserBehaviorEvent(mustUserBehaviorEnvelopeBytes(t, eventing.Envelope{
+	record, err := decodeUserBehaviorMessage(kafka.Message{Value: mustUserBehaviorEnvelopeBytes(t, eventing.Envelope{
 		ID: "like-state:7:42:5", Type: eventing.EventTypePostLiked,
 		SchemaVersion: 1, OccurredAt: time.Now().UTC(), Payload: body,
-	}))
+	})})
 	if err != nil {
 		t.Fatalf("decode error=%v", err)
 	}
