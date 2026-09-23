@@ -24,7 +24,7 @@
         :class="{ 'post-media-viewer__close--split': desktopSplitActive }"
         type="button"
         aria-label="Close image viewer"
-        @click="requestClose"
+        @click.stop="requestClose"
       >
         <AppIcon name="close" :size="20" />
       </button>
@@ -249,6 +249,23 @@ let pinchStart: PinchStart | null = null;
 let gestureHadMultiplePointers = false;
 const VIEWER_CLICK_DRAG_THRESHOLD_PX = 8;
 const SWIPE_THRESHOLD_PX = 50;
+const VIEWER_INTERACTIVE_TARGET_SELECTOR = [
+  'button',
+  'a[href]',
+  'input',
+  'textarea',
+  'select',
+  '[role="button"]',
+  '[role="link"]',
+].join(',');
+
+const isViewerInteractiveTarget = (target: EventTarget | null) => {
+  if (typeof Element === 'undefined' || !(target instanceof Element)) {
+    return false;
+  }
+
+  return Boolean(target.closest(VIEWER_INTERACTIVE_TARGET_SELECTOR));
+};
 
 const clamp = (value: number, min: number, max: number) => (
   Math.min(Math.max(value, min), max)
@@ -743,6 +760,10 @@ const handleKeydown = (event: KeyboardEvent) => {
 };
 
 const handlePointerDown = (event: PointerEvent) => {
+  if (isViewerInteractiveTarget(event.target)) {
+    return;
+  }
+
   suppressNextViewerClick = false;
   capturePointer(event);
   activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });

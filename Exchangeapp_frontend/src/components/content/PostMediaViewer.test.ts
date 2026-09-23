@@ -198,6 +198,23 @@ const mountViewer = (
   return wrapper;
 };
 
+const stubPanePointerCapture = (wrapper: ReturnType<typeof mountViewer>) => {
+  const pane = wrapper.get('.post-media-viewer__media-pane').element as HTMLElement;
+  const setPointerCapture = vi.fn();
+  const releasePointerCapture = vi.fn();
+
+  Object.defineProperty(pane, 'setPointerCapture', {
+    configurable: true,
+    value: setPointerCapture,
+  });
+  Object.defineProperty(pane, 'releasePointerCapture', {
+    configurable: true,
+    value: releasePointerCapture,
+  });
+
+  return { setPointerCapture, releasePointerCapture };
+};
+
 const setStableGeometry = (
   wrapper: ReturnType<typeof mountViewer>,
   options: { frameWidth?: number; frameHeight?: number; imageWidth?: number; imageHeight?: number } = {},
@@ -383,6 +400,79 @@ describe('PostMediaViewer', () => {
     await wrapper.get('[aria-label="Next image"]').trigger('click');
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/2-medium.jpg');
     expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('does not capture the pointer or close when Next is clicked from its nested icon', async () => {
+    mediaQueryState.matches = true;
+    const wrapper = mountViewer(4, 0, {
+      desktopContext: true,
+      context: '<div class="context-child">Post context</div>',
+    });
+    await nextTick();
+
+    expect(wrapper.get('.post-media-viewer__surface').classes())
+      .toContain('post-media-viewer__surface--split');
+    expect(wrapper.get('.post-media-viewer__image').attributes('src'))
+      .toBe('/media/0-medium.jpg');
+    expect(wrapper.get('.post-media-viewer__counter').text()).toBe('1 / 4');
+
+    const { setPointerCapture } = stubPanePointerCapture(wrapper);
+    const nextButton = wrapper.get('[aria-label="Next image"]');
+    await nextButton.get('.icon-stub').trigger('pointerdown', {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+    });
+
+    expect(setPointerCapture).not.toHaveBeenCalled();
+
+    await nextButton.trigger('click');
+
+    expect(wrapper.get('.post-media-viewer__image').attributes('src'))
+      .toBe('/media/1-medium.jpg');
+    expect(wrapper.get('.post-media-viewer__counter').text()).toBe('2 / 4');
+    expect(wrapper.get('dialog').attributes('open')).toBe('');
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('does not capture the pointer or close when Previous is clicked', async () => {
+    const wrapper = mountViewer(4, 1);
+    expect(wrapper.get('.post-media-viewer__counter').text()).toBe('2 / 4');
+
+    const { setPointerCapture } = stubPanePointerCapture(wrapper);
+    const previousButton = wrapper.get('[aria-label="Previous image"]');
+    await previousButton.trigger('pointerdown', {
+      pointerId: 2,
+      clientX: 100,
+      clientY: 100,
+    });
+
+    expect(setPointerCapture).not.toHaveBeenCalled();
+
+    await previousButton.trigger('click');
+
+    expect(wrapper.get('.post-media-viewer__image').attributes('src'))
+      .toBe('/media/0-medium.jpg');
+    expect(wrapper.get('.post-media-viewer__counter').text()).toBe('1 / 4');
+    expect(wrapper.get('dialog').attributes('open')).toBe('');
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('keeps Close outside pointer capture and emits one close event', async () => {
+    const wrapper = mountViewer(2, 0);
+    const { setPointerCapture } = stubPanePointerCapture(wrapper);
+    const closeButton = wrapper.get('[aria-label="Close image viewer"]');
+
+    await closeButton.get('.icon-stub').trigger('pointerdown', {
+      pointerId: 3,
+      clientX: 20,
+      clientY: 20,
+    });
+    expect(setPointerCapture).not.toHaveBeenCalled();
+
+    await closeButton.trigger('click');
+
+    expect(wrapper.emitted('close')).toHaveLength(1);
   });
 
   it('disables navigation at the first and last image', () => {
