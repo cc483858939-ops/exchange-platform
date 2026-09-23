@@ -487,19 +487,6 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  clip-path: inset(50%);
-  border: 0;
-}
-
 .avatar-crop-dialog__image {
   position: absolute;
   top: 0;

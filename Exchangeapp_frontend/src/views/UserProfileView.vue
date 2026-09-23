@@ -349,7 +349,6 @@
             </button>
           </div>
           <div class="profile-edit-avatar__copy">
-            <span class="profile-edit-field__label">Avatar</span>
             <div class="profile-edit-avatar__actions">
               <button
                 class="profile-edit-media-remove"
@@ -381,12 +380,6 @@
           <p id="profile-display-name-help" v-if="editDisplayNameOverLimit" class="profile-edit-error" role="alert">
             Display name must be 50 characters or fewer.
           </p>
-        </div>
-
-        <div class="profile-edit-field profile-edit-field--readonly">
-          <span class="profile-edit-field__label">Username</span>
-          <strong>@{{ user?.username }}</strong>
-          <small>Username can't be changed.</small>
         </div>
 
         <div class="profile-edit-field">
@@ -1821,17 +1814,6 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 @media (max-width: 799px) {
   .profile-view {
     height: calc(
@@ -1928,7 +1910,7 @@ onBeforeUnmount(() => {
 
 .profile-edit-form {
   display: grid;
-  gap: var(--space-5);
+  gap: var(--space-4);
   max-height: min(90vh, 820px);
   max-height: min(90dvh, 820px);
   box-sizing: border-box;
@@ -2146,12 +2128,6 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.profile-edit-avatar__copy > .profile-edit-field__label {
-  color: var(--color-text);
-  font-size: 14px;
-  font-weight: 700;
-}
-
 .profile-edit-avatar__actions {
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -2163,8 +2139,7 @@ onBeforeUnmount(() => {
 }
 
 .profile-edit-field__label,
-.profile-edit-field__label-row,
-.profile-edit-field--readonly small {
+.profile-edit-field__label-row {
   color: var(--color-text-secondary);
   font-size: 13px;
 }
@@ -2203,21 +2178,6 @@ onBeforeUnmount(() => {
   border-color: var(--color-accent);
   outline: 2px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
   outline-offset: 1px;
-}
-
-.profile-edit-field--readonly {
-  align-items: start;
-  gap: var(--space-1);
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.profile-edit-field--readonly strong {
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.25;
 }
 
 .profile-edit-error {
@@ -2274,7 +2234,6 @@ onBeforeUnmount(() => {
   .profile-edit-form {
     max-height: 100vh;
     max-height: 100dvh;
-    gap: var(--space-5);
     padding-inline: var(--space-4);
   }
 

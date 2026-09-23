@@ -2592,17 +2592,6 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--color-border);
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  clip-path: inset(50%);
-}
-
 @media (max-width: 799px) {
   .detail-header {
     top: var(--mobile-safe-top);

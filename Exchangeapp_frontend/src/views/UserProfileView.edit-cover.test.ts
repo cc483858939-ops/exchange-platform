@@ -189,7 +189,8 @@ const CoverCropDialogStub = defineComponent({
   `,
 });
 
-const mountProfile = () => mount(UserProfileView, {
+const mountProfile = (options: { attachTo?: Element } = {}) => mount(UserProfileView, {
+  attachTo: options.attachTo,
   global: {
     stubs: {
       AppIcon: { template: '<span />' },
@@ -280,6 +281,13 @@ const clickConfirmAction = async (wrapper: VueWrapper, label: string) => {
 
 describe('UserProfileView profile cover editor', () => {
   let wrapper: VueWrapper | null = null;
+  let attachedHost: HTMLDivElement | null = null;
+
+  const mountAttachedProfile = () => {
+    attachedHost = document.createElement('div');
+    document.body.append(attachedHost);
+    return mountProfile({ attachTo: attachedHost });
+  };
 
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -314,6 +322,8 @@ describe('UserProfileView profile cover editor', () => {
   afterEach(() => {
     wrapper?.unmount();
     wrapper = null;
+    attachedHost?.remove();
+    attachedHost = null;
   });
 
   it('initializes the current cover and does not upload before Save', async () => {
@@ -368,6 +378,7 @@ describe('UserProfileView profile cover editor', () => {
     expect(avatarChange.attributes('aria-disabled')).toBeUndefined();
     expect(wrapper.get('.profile-edit-cover__actions').text().trim()).toBe('Remove cover');
     expect(wrapper.get('.profile-edit-avatar__actions').text().trim()).toBe('Remove photo');
+    expect(wrapper.find('.profile-edit-avatar__copy > .profile-edit-field__label').exists()).toBe(false);
     expect(wrapper.findAll('.profile-edit-cover__actions label')).toHaveLength(0);
     expect(wrapper.findAll('.profile-edit-avatar__actions label')).toHaveLength(0);
     expect(wrapper.findAll('#profile-cover-input')).toHaveLength(1);
@@ -472,15 +483,14 @@ describe('UserProfileView profile cover editor', () => {
     expect(wrapper.find('.profile-edit-cover__preview').exists()).toBe(true);
   });
 
-  it('keeps username visible but readonly in the compact editor', async () => {
+  it('omits readonly username metadata from the edit profile form', async () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
 
-    const username = wrapper.get('.profile-edit-field--readonly');
-    expect(username.text()).toContain('@user-7');
-    expect(username.text()).toContain("Username can't be changed.");
-    expect(username.find('input').exists()).toBe(false);
+    expect(wrapper.find('.profile-edit-field--readonly').exists()).toBe(false);
+    expect(wrapper.get('.profile-edit-form').text()).not.toContain("Username can't be changed.");
+    expect(wrapper.get('.profile-edit-form').text()).not.toContain('@user-7');
   });
 
   it('does not autofocus the display name when opening the profile editor', async () => {
@@ -515,8 +525,7 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('restores focus to Change photo after canceling avatar crop', async () => {
-    wrapper = mountProfile();
-    document.body.append(wrapper.element);
+    wrapper = mountAttachedProfile();
     await settle();
     await openEditor(wrapper);
 
@@ -535,8 +544,7 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('restores focus to Change photo after applying avatar crop', async () => {
-    wrapper = mountProfile();
-    document.body.append(wrapper.element);
+    wrapper = mountAttachedProfile();
     await settle();
     await openEditor(wrapper);
 
@@ -553,8 +561,7 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('keeps focus in avatar crop when generated output is invalid', async () => {
-    wrapper = mountProfile();
-    document.body.append(wrapper.element);
+    wrapper = mountAttachedProfile();
     await settle();
     await openEditor(wrapper);
 
@@ -623,8 +630,7 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('restores focus to Change cover after canceling cover crop', async () => {
-    wrapper = mountProfile();
-    document.body.append(wrapper.element);
+    wrapper = mountAttachedProfile();
     await settle();
     await openEditor(wrapper);
 
@@ -643,8 +649,7 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('restores focus to Change cover after applying cover crop', async () => {
-    wrapper = mountProfile();
-    document.body.append(wrapper.element);
+    wrapper = mountAttachedProfile();
     await settle();
     await openEditor(wrapper);
 
@@ -662,8 +667,7 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('rejects an invalid generated cover while keeping the crop dialog open and pending preview unchanged', async () => {
-    wrapper = mountProfile();
-    document.body.append(wrapper.element);
+    wrapper = mountAttachedProfile();
     await settle();
     await openEditor(wrapper);
     const first = new File(['first'], 'first.webp', { type: 'image/webp' });
