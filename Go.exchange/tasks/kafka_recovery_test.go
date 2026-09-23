@@ -40,63 +40,80 @@ func TestKafkaProcessErrorClassificationAndUnwrap(t *testing.T) {
 
 func TestRetryKafkaOperationImmediateSuccess(t *testing.T) {
 	calls := 0
-	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 5}, func() error {
+	var retryAttempts []int
+	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 5}, func(attempt int, _ error) {
+		retryAttempts = append(retryAttempts, attempt)
+	}, func() error {
 		calls++
 		return nil
 	})
-	if err != nil || calls != 1 {
-		t.Fatalf("err=%v calls=%d want 1 successful call", err, calls)
+	if err != nil || calls != 1 || len(retryAttempts) != 0 {
+		t.Fatalf("err=%v calls=%d retries=%v want one successful call and no retry callback", err, calls, retryAttempts)
 	}
 }
 
 func TestRetryKafkaOperationRetriesThenSucceeds(t *testing.T) {
 	calls := 0
-	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 5, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}, func() error {
+	var retryAttempts []int
+	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 5, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}, func(attempt int, _ error) {
+		retryAttempts = append(retryAttempts, attempt)
+	}, func() error {
 		calls++
 		if calls < 3 {
 			return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, errors.New("temporary"))
 		}
 		return nil
 	})
-	if err != nil || calls != 3 {
-		t.Fatalf("err=%v calls=%d want 3 successful attempts", err, calls)
+	if err != nil || calls != 3 || len(retryAttempts) != 2 || retryAttempts[0] != 2 || retryAttempts[1] != 3 {
+		t.Fatalf("err=%v calls=%d retry_attempts=%v want attempts 2 and 3", err, calls, retryAttempts)
 	}
 }
 
 func TestRetryKafkaOperationStopsOnPermanentError(t *testing.T) {
 	calls := 0
+	retryCallbacks := 0
 	sentinel := errors.New("invalid event")
-	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 5, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}, func() error {
+	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 5, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}, func(int, error) {
+		retryCallbacks++
+	}, func() error {
 		calls++
 		return permanentKafkaError(kafkaFailureCodeInvalidPayload, sentinel)
 	})
-	if !errors.Is(err, sentinel) || calls != 1 {
-		t.Fatalf("err=%v calls=%d want one permanent attempt", err, calls)
+	if !errors.Is(err, sentinel) || calls != 1 || retryCallbacks != 0 {
+		t.Fatalf("err=%v calls=%d retry_callbacks=%d want one permanent attempt", err, calls, retryCallbacks)
 	}
 }
 
 func TestRetryKafkaOperationExhaustsBoundedAttempts(t *testing.T) {
 	calls := 0
+	var retryAttempts []int
 	sentinel := errors.New("database unavailable")
-	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 3, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}, func() error {
+	err := retryKafkaOperation(context.Background(), kafkaRetryPolicy{MaxAttempts: 3, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}, func(attempt int, _ error) {
+		retryAttempts = append(retryAttempts, attempt)
+	}, func() error {
 		calls++
 		return retryableKafkaError(kafkaFailureCodeDatabaseUnavailable, sentinel)
 	})
-	if !errors.Is(err, sentinel) || calls != 3 {
-		t.Fatalf("err=%v calls=%d want 3 attempts and final error", err, calls)
+	if !errors.Is(err, sentinel) || calls != 3 || len(retryAttempts) != 2 || retryAttempts[0] != 2 || retryAttempts[1] != 3 {
+		t.Fatalf("err=%v calls=%d retry_attempts=%v want three calls and callbacks 2, 3", err, calls, retryAttempts)
 	}
 }
 
 func TestRetryKafkaOperationStopsWhenContextIsCanceledDuringBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	calls := 0
-	err := retryKafkaOperation(ctx, kafkaRetryPolicy{MaxAttempts: 5, InitialBackoff: time.Hour, MaxBackoff: time.Hour}, func() error {
+	var retryAttempts []int
+	cancelTimer := time.AfterFunc(10*time.Millisecond, cancel)
+	defer cancelTimer.Stop()
+	err := retryKafkaOperation(ctx, kafkaRetryPolicy{MaxAttempts: 5, InitialBackoff: time.Hour, MaxBackoff: time.Hour}, func(attempt int, _ error) {
+		retryAttempts = append(retryAttempts, attempt)
+	}, func() error {
 		calls++
-		cancel()
 		return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, errors.New("temporary"))
 	})
-	if !errors.Is(err, context.Canceled) || calls != 1 {
-		t.Fatalf("err=%v calls=%d want prompt cancellation after one call", err, calls)
+	if !errors.Is(err, context.Canceled) || calls != 1 || len(retryAttempts) != 0 {
+		t.Fatalf("err=%v calls=%d retry_attempts=%v want cancellation without a nonexistent next attempt", err, calls, retryAttempts)
 	}
 }
 

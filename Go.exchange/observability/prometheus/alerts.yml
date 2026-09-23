@@ -45,7 +45,7 @@ groups:
           description: At least one malformed notification activity event was sent to the DLQ during the last fifteen minutes.
 
       - alert: GoExchangeKafkaConsumerDLQActivity
-        expr: increase(go_exchange_kafka_consumer_recovery_total{outcome="dlq"}[15m]) > 0
+        expr: increase(go_exchange_kafka_consumer_recovery_total{outcome="message_dlq"}[15m]) > 0
         labels:
           severity: warning
         annotations:

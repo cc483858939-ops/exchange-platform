@@ -118,6 +118,7 @@ func consumeLikeSnapshotMessagesWithApply(
 			if ctx.Err() == nil {
 				PipelineFailure(PipelineLikeSnapshotProjection, "kafka_commit_failed", 0)
 				commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
+				metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 				log.Printf("[LikeSnapshotProjection] commit topic=%s partition=%d offset=%d code=%s: %v", message.Topic, message.Partition, message.Offset, kafkaFailureCode(commitErr), err)
 				return commitErr
 			}
@@ -163,19 +164,18 @@ func processLikeSnapshotMessageWithApply(
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(publishErr))
 			return publishErr
 		}
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeDLQ, kafkaFailureCode(err))
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCode(err))
 		return nil
 	}
 
 	attempts := 0
 	var outcome likeSnapshotApplyOutcome
-	err = retryKafkaOperation(ctx, policy, func() error {
+	err = retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
+		log.Printf("[LikeSnapshotProjection] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
+	}, func() error {
 		attempts++
 		outcome, err = apply(ctx, db, event, payload)
-		if err != nil && kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts < policy.MaxAttempts && ctx.Err() == nil {
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeRetry, kafkaFailureCode(err))
-			log.Printf("[LikeSnapshotProjection] retry attempt=%d max_attempts=%d code=%s", attempts, policy.MaxAttempts, kafkaFailureCode(err))
-		}
 		return err
 	})
 	if err != nil {
@@ -188,9 +188,9 @@ func processLikeSnapshotMessageWithApply(
 		return err
 	}
 	if outcome == likeSnapshotNoop {
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeNoop, kafkaRecoveryCodeNone)
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone)
 	} else {
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeApplied, kafkaRecoveryCodeNone)
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeMessageApplied, kafkaRecoveryCodeNone)
 	}
 	return nil
 }

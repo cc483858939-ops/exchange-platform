@@ -23,28 +23,36 @@ const (
 )
 
 const (
-	kafkaFailureCodeDecodeEnvelope      = "decode_envelope"
-	kafkaFailureCodeUnsupportedEvent    = "unsupported_event_type"
-	kafkaFailureCodeUnsupportedSchema   = "unsupported_schema"
-	kafkaFailureCodeDecodePayload       = "decode_payload"
-	kafkaFailureCodeInvalidPayload      = "invalid_payload"
-	kafkaFailureCodeDatabaseUnavailable = "database_unavailable"
-	kafkaFailureCodeDatabaseTransaction = "database_transaction"
-	kafkaFailureCodeDLQPublish          = "dlq_publish"
-	kafkaFailureCodeKafkaCommit         = "kafka_commit"
-	kafkaRecoveryCodeNone               = "none"
+	kafkaFailureCodeDecodeEnvelope          = "decode_envelope"
+	kafkaFailureCodeUnsupportedEvent        = "unsupported_event_type"
+	kafkaFailureCodeUnsupportedSchema       = "unsupported_schema"
+	kafkaFailureCodeDecodePayload           = "decode_payload"
+	kafkaFailureCodeInvalidPayload          = "invalid_payload"
+	kafkaFailureCodeDatabaseUnavailable     = "database_unavailable"
+	kafkaFailureCodeDatabaseTransaction     = "database_transaction"
+	kafkaFailureCodeDLQPublish              = "dlq_publish"
+	kafkaFailureCodeKafkaCommit             = "kafka_commit"
+	kafkaFailureCodeProviderRetryable       = "provider_retryable"
+	kafkaFailureCodeProviderPermanent       = "provider_permanent"
+	kafkaFailureCodeProviderContractInvalid = "provider_contract_invalid"
+	kafkaFailureCodeSourceChanged           = "source_changed"
+	kafkaFailureCodeInternalState           = "internal_state"
+	kafkaRecoveryCodeNone                   = "none"
 )
 
 const (
-	kafkaConsumerLikeSnapshotProjection  = "like_snapshot_projection"
-	kafkaConsumerUserBehaviorProjection  = "user_behavior_projection"
-	kafkaConsumerRecommendationMetrics   = "recommendation_metrics"
-	kafkaRecoveryOutcomeApplied          = "applied"
-	kafkaRecoveryOutcomeNoop             = "noop"
-	kafkaRecoveryOutcomeRetry            = "retry"
-	kafkaRecoveryOutcomeRetryExhausted   = "retry_exhausted"
-	kafkaRecoveryOutcomeDLQ              = "dlq"
-	kafkaRecoveryOutcomeDLQPublishFailed = "dlq_publish_failed"
+	kafkaConsumerLikeSnapshotProjection    = "like_snapshot_projection"
+	kafkaConsumerUserBehaviorProjection    = "user_behavior_projection"
+	kafkaConsumerRecommendationMetrics     = "recommendation_metrics"
+	kafkaConsumerPostEmbedding             = "post_embedding"
+	kafkaRecoveryOutcomeMessageApplied     = "message_applied"
+	kafkaRecoveryOutcomeBatchApplied       = "batch_applied"
+	kafkaRecoveryOutcomeMessageNoop        = "message_noop"
+	kafkaRecoveryOutcomeRetryAttempt       = "retry_attempt"
+	kafkaRecoveryOutcomeRetryExhausted     = "retry_exhausted"
+	kafkaRecoveryOutcomeMessageDLQ         = "message_dlq"
+	kafkaRecoveryOutcomeDLQPublishFailed   = "dlq_publish_failed"
+	kafkaRecoveryOutcomeRedeliveryRequired = "redelivery_required"
 )
 
 type kafkaProcessError struct {
@@ -112,7 +120,7 @@ var defaultKafkaRetryPolicy = kafkaRetryPolicy{
 	MaxBackoff:     2 * time.Second,
 }
 
-func retryKafkaOperation(ctx context.Context, policy kafkaRetryPolicy, operation func() error) error {
+func retryKafkaOperation(ctx context.Context, policy kafkaRetryPolicy, onRetry func(attempt int, err error), operation func() error) error {
 	if ctx == nil {
 		return errors.New("Kafka retry context is nil")
 	}
@@ -140,6 +148,12 @@ func retryKafkaOperation(ctx context.Context, policy kafkaRetryPolicy, operation
 		}
 		if err := waitForKafkaRetry(ctx, kafkaRetryBackoff(policy, attempt)); err != nil {
 			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if onRetry != nil {
+			onRetry(attempt+1, lastErr)
 		}
 	}
 	return lastErr

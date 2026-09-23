@@ -18,7 +18,7 @@ var (
 	postEmbeddingFailures                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_failures_total", Help: "Post embedding processing failures by stage."}, []string{"stage"})
 	postEmbeddingPublishFailures                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_publish_failures_total", Help: "Post embedding publish failures by source."}, []string{"source"})
 	postEmbeddingProcessingDuration              = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_processing_duration_seconds", Help: "Post embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
-	kafkaConsumerRecovery                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_kafka_consumer_recovery_total", Help: "Kafka consumer message recovery outcomes by consumer, outcome, and stable failure code."}, []string{"consumer", "outcome", "code"})
+	kafkaConsumerRecovery                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_kafka_consumer_recovery_total", Help: "Kafka consumer recovery control-flow events by consumer, outcome, and stable code."}, []string{"consumer", "outcome", "code"})
 	outboxCDCSlotActive                          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_active", Help: "Whether the configured PostgreSQL CDC slot is active."})
 	outboxCDCWALLagBytes                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_wal_lag_bytes", Help: "WAL lag behind the outbox CDC slot in bytes."})
 	outboxCDCSlotConfirmedLSN                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_confirmed_lsn", Help: "Confirmed flush LSN reported by the outbox CDC slot."})
@@ -141,17 +141,17 @@ func ObservePostEmbeddingProcessingDuration(duration time.Duration) {
 }
 func RecordKafkaConsumerRecovery(consumer, outcome, code string) {
 	switch consumer {
-	case "like_snapshot_projection", "user_behavior_projection", "recommendation_metrics":
+	case "like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding":
 	default:
 		return
 	}
 	switch outcome {
-	case "applied", "noop", "retry", "retry_exhausted", "dlq", "dlq_publish_failed":
+	case "message_applied", "batch_applied", "message_noop", "retry_attempt", "retry_exhausted", "message_dlq", "dlq_publish_failed", "redelivery_required":
 	default:
 		return
 	}
 	switch code {
-	case "none", "decode_envelope", "unsupported_event_type", "unsupported_schema", "decode_payload", "invalid_payload", "database_unavailable", "database_transaction", "dlq_publish", "kafka_commit":
+	case "none", "decode_envelope", "unsupported_event_type", "unsupported_schema", "decode_payload", "invalid_payload", "database_unavailable", "database_transaction", "dlq_publish", "kafka_commit", "provider_retryable", "provider_permanent", "provider_contract_invalid", "source_changed", "internal_state":
 	default:
 		return
 	}

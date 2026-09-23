@@ -515,7 +515,10 @@ func TestPostEmbeddingUpToDateDoesNotInvalidateProfileIntegration(t *testing.T) 
 		t.Fatal(err)
 	}
 	store := gormPostEmbeddingStore{db: db}
-	if err := processPostEmbeddingMessage(context.Background(), kafka.Message{Value: raw}, unchangedPostEmbeddingProvider{}, store, version); err != nil {
+	if err := processPostEmbeddingMessage(
+		context.Background(), kafka.Message{Value: raw}, &fakeRawKafkaMessagePublisher{}, unchangedPostEmbeddingProvider{}, store,
+		version, config.KafkaConfig{ConsumerDLQTopic: "goexchange.consumer.dlq.v1"}, kafkaRetryPolicy{MaxAttempts: 1},
+	); err != nil {
 		t.Fatal(err)
 	}
 	var dirtyCount int64

@@ -163,13 +163,12 @@ func consumeRecommendationMetricsMessagesWithApply(
 		}
 		if len(records) > 0 {
 			attempts := 0
-			err = retryKafkaOperation(ctx, policy, func() error {
+			err = retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
+				metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
+				log.Printf("[RecommendationMetrics] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
+			}, func() error {
 				attempts++
 				applyErr := apply(ctx, db, strings.TrimSpace(kafkaConfig.RecommendationMetricsGroupID), kafkaConfig, records)
-				if applyErr != nil && kafkaFailureClassOf(applyErr) == kafkaFailureRetryable && attempts < policy.MaxAttempts && ctx.Err() == nil {
-					metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetry, kafkaFailureCode(applyErr))
-					log.Printf("[RecommendationMetrics] retry attempt=%d max_attempts=%d code=%s", attempts, policy.MaxAttempts, kafkaFailureCode(applyErr))
-				}
 				return applyErr
 			})
 			if err != nil {
@@ -183,7 +182,7 @@ func consumeRecommendationMetricsMessagesWithApply(
 				return fmt.Errorf("apply recommendation metrics batch of %d messages: %w", len(batch), err)
 			}
 			metrics.RecordRecommendationTelemetryProjection("applied")
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeApplied, kafkaRecoveryCodeNone)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -197,7 +196,7 @@ func consumeRecommendationMetricsMessagesWithApply(
 				return ctx.Err()
 			}
 			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetry, kafkaFailureCode(commitErr))
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 			return commitErr
 		}
 		backlog := int64(0)
@@ -299,14 +298,14 @@ func classifyRecommendationMetricsBatch(
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(err))
 			return nil, err
 		}
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeDLQ, kafkaFailureCode(failure.err))
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCode(failure.err))
 	}
 	seenEventIDs := make(map[string]struct{}, len(valid))
 	records := make([]recommendationMetricEvent, 0, len(valid))
 	for _, record := range valid {
 		if _, exists := seenEventIDs[record.Envelope.ID]; exists {
 			metrics.RecordRecommendationTelemetryProjection("duplicate_in_batch")
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeNoop, kafkaRecoveryCodeNone)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone)
 			continue
 		}
 		seenEventIDs[record.Envelope.ID] = struct{}{}

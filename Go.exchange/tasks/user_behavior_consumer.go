@@ -154,13 +154,12 @@ func consumeUserBehaviorMessagesWithApply(
 		}
 		if len(records) > 0 {
 			attempts := 0
-			err = retryKafkaOperation(ctx, policy, func() error {
+			err = retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
+				metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
+				log.Printf("[BehaviorProjection] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
+			}, func() error {
 				attempts++
 				applyErr := apply(ctx, db, strings.TrimSpace(kafkaConfig.UserBehaviorGroupID), kafkaConfig, records)
-				if applyErr != nil && kafkaFailureClassOf(applyErr) == kafkaFailureRetryable && attempts < policy.MaxAttempts && ctx.Err() == nil {
-					metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetry, kafkaFailureCode(applyErr))
-					log.Printf("[BehaviorProjection] retry attempt=%d max_attempts=%d code=%s", attempts, policy.MaxAttempts, kafkaFailureCode(applyErr))
-				}
 				return applyErr
 			})
 			if err != nil {
@@ -172,7 +171,7 @@ func consumeUserBehaviorMessagesWithApply(
 				}
 				return fmt.Errorf("apply user behavior batch of %d messages: %w", len(batch), err)
 			}
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeApplied, kafkaRecoveryCodeNone)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -185,7 +184,7 @@ func consumeUserBehaviorMessagesWithApply(
 				return ctx.Err()
 			}
 			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetry, kafkaFailureCode(commitErr))
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 			return commitErr
 		}
 		backlog := int64(0)
@@ -280,14 +279,14 @@ func classifyUserBehaviorBatch(
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(err))
 			return nil, err
 		}
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeDLQ, kafkaFailureCode(failure.err))
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCode(failure.err))
 	}
 	seenEventIDs := make(map[string]struct{}, len(valid))
 	records := make([]userBehaviorEventRecord, 0, len(valid))
 	for _, record := range valid {
 		if _, exists := seenEventIDs[record.Envelope.ID]; exists {
 			log.Printf("[BehaviorProjection] skip duplicate event in fetched batch: %s", record.Envelope.ID)
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeNoop, kafkaRecoveryCodeNone)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone)
 			continue
 		}
 		seenEventIDs[record.Envelope.ID] = struct{}{}
