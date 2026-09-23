@@ -301,10 +301,6 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-.repost-action--reposted .repost-action__icon {
-  transform: rotate(180deg);
-}
-
 .repost-action--reposting .repost-action__icon {
   animation: nexus-repost-in var(--repost-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -352,22 +348,22 @@ onBeforeUnmount(() => {
     transform: rotate(0deg) scale(0.86);
   }
 
-  72% {
-    transform: rotate(190deg) scale(1.1);
+  68% {
+    transform: rotate(20deg) scale(1.1);
   }
 
   100% {
-    transform: rotate(180deg) scale(1);
+    transform: rotate(0deg) scale(1);
   }
 }
 
 @keyframes nexus-repost-out {
   0% {
-    transform: rotate(180deg) scale(1);
+    transform: rotate(0deg) scale(1);
   }
 
   40% {
-    transform: rotate(180deg) scale(0.9);
+    transform: rotate(-12deg) scale(0.9);
   }
 
   100% {

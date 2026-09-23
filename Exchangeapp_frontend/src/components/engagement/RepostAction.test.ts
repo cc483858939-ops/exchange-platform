@@ -2,6 +2,7 @@
 
 import { mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import AppIcon from '../icons/AppIcon.vue';
 import RepostAction from './RepostAction.vue';
 
 const mountRepostAction = (props: Partial<{
@@ -35,6 +36,23 @@ afterEach(() => {
 });
 
 describe('RepostAction', () => {
+  it('renders the repost mark with a single rounded, unfilled path', () => {
+    const wrapper = mount(AppIcon, {
+      props: { name: 'repost', size: 18 },
+    });
+    const path = wrapper.get('path');
+
+    expect(wrapper.findAll('path')).toHaveLength(1);
+    expect(wrapper.get('svg').attributes('viewBox')).toBe('0 0 24 24');
+    expect(path.attributes()).toMatchObject({
+      fill: 'none',
+      stroke: 'currentColor',
+      'stroke-width': '2',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+    });
+  });
+
   it('renders a structured decorative icon and count without particle DOM', () => {
     const wrapper = mountRepostAction();
 
