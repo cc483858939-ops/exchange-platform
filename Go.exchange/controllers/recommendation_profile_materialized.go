@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
@@ -22,8 +21,8 @@ const (
 	recommendationProfileStatusIncompatible = "incompatible"
 )
 
-func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
-	if global.Db == nil {
+func loadMaterializedUserInterestProfile(db *gorm.DB, userID uint, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
+	if db == nil {
 		metrics.RecordRecommendationProfileLoad("error")
 		return userInterestProfile{}, errors.New("database is not initialized")
 	}
@@ -34,13 +33,13 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 		ProfileStatus:      recommendationProfileStatusMiss,
 	}
 	var row models.UserRecoProfile
-	if err := global.Db.Where("user_id = ?", userID).First(&row).Error; err != nil {
+	if err := db.Where("user_id = ?", userID).First(&row).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			metrics.RecordRecommendationProfileLoad("error")
 			return profile, err
 		}
 		metrics.RecordRecommendationProfileLoad(recommendationProfileStatusMiss)
-		queueMaterializedProfileRecovery(userID, "serving_miss", now)
+		queueMaterializedProfileRecovery(db, userID, "serving_miss", now)
 		return profile, nil
 	}
 
@@ -50,7 +49,7 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 	if !compatible {
 		profile.ProfileStatus = recommendationProfileStatusIncompatible
 		metrics.RecordRecommendationProfileLoad(recommendationProfileStatusIncompatible)
-		queueMaterializedProfileRecovery(userID, "profile_incompatible", now)
+		queueMaterializedProfileRecovery(db, userID, "profile_incompatible", now)
 		return profile, nil
 	}
 	profile.ProfileStatus = recommendationProfileStatusHit
@@ -89,7 +88,7 @@ func loadMaterializedUserInterestProfile(userID uint, now time.Time, cfg config.
 	metrics.RecordRecommendationProfileLoad(profile.ProfileStatus)
 	metrics.ObserveRecommendationProfileAge(age)
 	if profile.ProfileStatus == recommendationProfileStatusStale {
-		queueMaterializedProfileRecovery(userID, "serving_stale", now)
+		queueMaterializedProfileRecovery(db, userID, "serving_stale", now)
 	}
 	return profile, nil
 }
@@ -131,8 +130,8 @@ func materializedNegativeConfidence(
 	return confidence
 }
 
-func queueMaterializedProfileRecovery(userID uint, reason string, now time.Time) {
-	if err := recommendation.EnsureProfilesQueued(global.Db, []uint{userID}, reason, now); err != nil {
+func queueMaterializedProfileRecovery(db *gorm.DB, userID uint, reason string, now time.Time) {
+	if err := recommendation.EnsureProfilesQueued(db, []uint{userID}, reason, now); err != nil {
 		log.Printf("[RecommendationProfile] queue recovery user=%d reason=%s: %v", userID, reason, err)
 		metrics.RecordRecommendationProfileLoad("error")
 	}

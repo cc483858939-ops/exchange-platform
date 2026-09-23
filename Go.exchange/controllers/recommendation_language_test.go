@@ -9,6 +9,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/models"
+	"gorm.io/gorm"
 )
 
 func assertRecommendationLanguageFloat(t *testing.T, got, want float64) {
@@ -175,6 +176,7 @@ func TestNormalizedRecommendationLanguageAffinityConfigHonorsExplicitZeroAndFals
 }
 
 func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *testing.T) {
+	ensureRecommendationControllerTestDB(t)
 	originalServingPath := recommendationServingPathForHandler
 	originalResponseBuilder := selectedRecommendationResponsesForHandler
 	originalTracking := attachRecommendationTrackingForHandler
@@ -192,14 +194,14 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 
 	var received recommendationLanguageContext
 	var persisted models.RecommendationRequest
-	recommendationServingPathForHandler = func(_ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, browser recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, browser recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		received = browser
 		return recommendationServingOutcome{
 			Profile:         userInterestProfile{ProfileStatus: recommendationProfileStatusMiss},
 			LanguageContext: buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg),
 		}, nil
 	}
-	selectedRecommendationResponsesForHandler = func([]selectedRecommendation) ([]recommendedPostResponse, error) {
+	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
 		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}, Score: .5}}, nil
 	}
 	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
@@ -211,7 +213,7 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
 		return nil
 	}
-	persistRecommendationServingTrace = func(request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
+	persistRecommendationServingTrace = func(_ context.Context, request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
 		persisted = request
 		return nil
 	}

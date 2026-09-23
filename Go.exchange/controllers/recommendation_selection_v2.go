@@ -3,6 +3,7 @@ package controllers
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"math"
 	"sort"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"gorm.io/gorm"
 )
 
 type recommendationSelectionMode int
@@ -438,7 +440,10 @@ func recommendationSelectionBefore(left, right hydratedRecommendationCandidate, 
 	return left.Post.ID > right.Post.ID
 }
 
-func selectedRecommendationResponses(selected []selectedRecommendation) ([]recommendedPostResponse, error) {
+func selectedRecommendationResponsesFromDB(db *gorm.DB, selected []selectedRecommendation, now time.Time) ([]recommendedPostResponse, error) {
+	if db == nil {
+		return nil, errors.New("database is not initialized")
+	}
 	type selectedResponse struct {
 		post  postResponse
 		score float64
@@ -455,16 +460,16 @@ func selectedRecommendationResponses(selected []selectedRecommendation) ([]recom
 	for _, item := range prepared {
 		posts = append(posts, item.post)
 	}
-	if err := hydratePostResponsesMediaFromDB(global.Db, posts); err != nil {
+	if err := hydratePostResponsesMediaFromDB(db, posts); err != nil {
 		return nil, err
 	}
-	if err := hydratePostResponseRepostCountsFromDB(global.Db, posts); err != nil {
+	if err := hydratePostResponseRepostCountsFromDB(db, posts); err != nil {
 		return nil, err
 	}
 	result := make([]recommendedPostResponse, 0, len(prepared))
 	for index, item := range prepared {
 		post := posts[index]
-		if err := hydratePostResponseReferences(&post, time.Now().UTC()); err != nil {
+		if err := hydratePostResponseReferencesFromDB(db, &post, now); err != nil {
 			return nil, err
 		}
 		result = append(result, recommendedPostResponse{
@@ -472,4 +477,8 @@ func selectedRecommendationResponses(selected []selectedRecommendation) ([]recom
 		})
 	}
 	return result, nil
+}
+
+func selectedRecommendationResponses(selected []selectedRecommendation) ([]recommendedPostResponse, error) {
+	return selectedRecommendationResponsesFromDB(global.Db, selected, time.Now().UTC())
 }

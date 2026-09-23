@@ -204,6 +204,7 @@ func (c RecommendationProfileMaterializationConfig) Normalized() RecommendationP
 }
 
 type RecommendationConfig struct {
+	ServingTimeoutMS                  int                                        `mapstructure:"serving_timeout_ms"`
 	BehaviorWeights                   RecommendationBehaviorWeights              `mapstructure:"behavior_weights"`
 	SemanticRecall                    RecommendationSemanticRecallConfig         `mapstructure:"semantic_recall"`
 	Fusion                            RecommendationFusionConfig                 `mapstructure:"fusion"`

@@ -104,7 +104,7 @@ func TestLoadRecommendationCandidateSetUsesEqualRRFFusionIntegration(t *testing.
 	userIDs := []uint{viewer.ID, author.ID}
 	t.Cleanup(func() { cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs) })
 
-	candidateSet, err := loadRecommendationCandidateSet(viewer.ID, userInterestProfile{}, map[uint]servedPost{}, now, defaultRecommendationConfig(), false)
+	candidateSet, err := loadRecommendationCandidateSet(db, viewer.ID, userInterestProfile{}, map[uint]servedPost{}, now, defaultRecommendationConfig(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestLoadPublicRecommendationCandidateSetUsesOnlyEligiblePublicRootsIntegrat
 	cfg.Candidates.ColdStart.Trending = 100
 	cfg.Candidates.ColdStart.Merged = 200
 
-	candidateSet, err := loadPublicRecommendationCandidateSet(now, cfg, nil)
+	candidateSet, err := loadPublicRecommendationCandidateSet(db, now, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestLoadPublicRecommendationCandidateSetUsesOnlyEligiblePublicRootsIntegrat
 		t.Fatalf("anonymous semantic count=%d, want 0", candidateSet.SemanticCount)
 	}
 
-	excludedSet, err := loadPublicRecommendationCandidateSet(now, cfg, map[uint]struct{}{recentRoot.ID: {}})
+	excludedSet, err := loadPublicRecommendationCandidateSet(db, now, cfg, map[uint]struct{}{recentRoot.ID: {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,6 +234,7 @@ func TestRecommendationRecallSkipsDeletedAuthorBeforeLimitIntegration(t *testing
 	}
 
 	candidates, err := loadRecommendationSourceCandidates(
+		db,
 		viewer.ID,
 		userInterestProfile{},
 		map[uint]servedPost{},
@@ -277,7 +278,7 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 
 	originalLoader := loadRecommendationPostEmbeddings
 	var embeddingPostIDs []uint
-	loadRecommendationPostEmbeddings = func(postIDs []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, postIDs []uint, _ string) (map[uint][]float32, error) {
 		embeddingPostIDs = append([]uint(nil), postIDs...)
 		return map[uint][]float32{}, nil
 	}
@@ -286,6 +287,7 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 	})
 
 	hydrated, err := hydrateRecommendationCandidates(
+		db,
 		[]embeddingCandidate{
 			{PostID: validArticle.ID, FromRecent: true},
 			{PostID: badArticle.ID, FromTrending: true},
@@ -326,7 +328,7 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 
 	originalLoader := loadRecommendationPostEmbeddings
 	called := false
-	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
 		called = true
 		return nil, nil
 	}
@@ -335,6 +337,7 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 	})
 
 	hydrated, err := hydrateRecommendationCandidates(
+		db,
 		[]embeddingCandidate{{PostID: badArticle.ID}},
 		now,
 	)
@@ -362,7 +365,7 @@ func TestRecommendationHydrationPropagatesEmbeddingErrorIntegration(t *testing.T
 
 	sentinel := errors.New("embedding load failure")
 	originalLoader := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(postIDs []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, postIDs []uint, _ string) (map[uint][]float32, error) {
 		if len(postIDs) != 1 || postIDs[0] != validArticle.ID {
 			t.Fatalf("embedding article IDs=%v, want [%d]", postIDs, validArticle.ID)
 		}
@@ -373,6 +376,7 @@ func TestRecommendationHydrationPropagatesEmbeddingErrorIntegration(t *testing.T
 	})
 
 	_, err := hydrateRecommendationCandidates(
+		db,
 		[]embeddingCandidate{{PostID: validArticle.ID}},
 		now,
 	)

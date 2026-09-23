@@ -3,9 +3,50 @@ package controllers
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/recommendation"
 )
+
+func TestRecommendationServingTimeoutNormalizesConfiguredAndInvalidValues(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		configured int
+		wantMS     int
+		want       time.Duration
+	}{
+		{name: "configured", configured: 2500, wantMS: 2500, want: 2500 * time.Millisecond},
+		{name: "zero defaults", configured: 0, wantMS: 5000, want: defaultRecommendationServingTimeout},
+		{name: "negative defaults", configured: -1, wantMS: 5000, want: defaultRecommendationServingTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := config.AppConfig
+			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{ServingTimeoutMS: test.configured}}
+			t.Cleanup(func() { config.AppConfig = original })
+
+			cfg := normalizedRecommendationConfig()
+			if cfg.ServingTimeoutMS != test.wantMS {
+				t.Fatalf("serving timeout ms=%d want %d", cfg.ServingTimeoutMS, test.wantMS)
+			}
+			if got := recommendationServingTimeout(cfg); got != test.want {
+				t.Fatalf("serving timeout=%s want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRecommendationServingTimeoutDoesNotChangeRecommendationHashes(t *testing.T) {
+	base := defaultRecommendationConfig()
+	mutated := base
+	mutated.ServingTimeoutMS = 2500
+	if got, want := recommendation.ProfileConfigHash(mutated, config.ActiveEmbeddingVersion()), recommendation.ProfileConfigHash(base, config.ActiveEmbeddingVersion()); got != want {
+		t.Fatalf("profile hash changed with serving timeout: got=%q want=%q", got, want)
+	}
+	if got, want := recommendationRankerConfigHash(mutated), recommendationRankerConfigHash(base); got != want {
+		t.Fatalf("ranker hash changed with serving timeout: got=%q want=%q", got, want)
+	}
+}
 
 func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.T) {
 	original := config.AppConfig

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -53,6 +54,8 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 	})
 
 	outcome, err := serveRecommendationCandidatePath(
+		context.Background(),
+		db,
 		viewer.ID,
 		20,
 		cfg,

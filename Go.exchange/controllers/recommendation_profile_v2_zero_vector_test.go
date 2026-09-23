@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestValidEmbeddingVectorRejectsZeroAndNonFiniteVectors(t *testing.T) {
@@ -34,7 +36,7 @@ func TestValidEmbeddingVectorRejectsZeroAndNonFiniteVectors(t *testing.T) {
 
 func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.T) {
 	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {0, 0}}, nil
 	}
 	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
@@ -61,7 +63,7 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.
 
 func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.T) {
 	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {0, 0}}, nil
 	}
 	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
@@ -92,7 +94,7 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.
 
 func TestBuildEmbeddingInterestProfileCountsOnlyNonZeroEmbeddings(t *testing.T) {
 	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {0, 0}, 2: {1, 0}}, nil
 	}
 	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })

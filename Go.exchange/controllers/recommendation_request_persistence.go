@@ -14,11 +14,14 @@ const recommendationTracePersistTimeout = 5 * time.Second
 
 var persistRecommendationServingTrace = persistRecommendationServingTraceToDB
 
-func persistRecommendationServingTraceToDB(request models.RecommendationRequest, results []models.RecommendationResultTrace) error {
+func persistRecommendationServingTraceToDB(parent context.Context, request models.RecommendationRequest, results []models.RecommendationResultTrace) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), recommendationTracePersistTimeout)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, recommendationTracePersistTimeout)
 	defer cancel()
 	return global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&request).Error; err != nil {

@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"sort"
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
@@ -59,7 +62,7 @@ type postRecommendationPageResponse struct {
 
 var recommendationServingPathForHandler = serveRecommendationCandidatePath
 var publicRecommendationServingPathForHandler = servePublicRecommendationCandidatePath
-var selectedRecommendationResponsesForHandler = selectedRecommendationResponses
+var selectedRecommendationResponsesForHandler = selectedRecommendationResponsesFromDB
 var attachRecommendationTrackingForHandler = attachRecommendationTracking
 var loadUserRecommendationServedHistoryForHandler = loadUserRecommendationServedHistory
 var recordUserRecommendationServedPostsForHandler = recordUserRecommendationServedPosts
@@ -88,8 +91,13 @@ func GetPostRecommendations(ctx *gin.Context) {
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	cfg := normalizedRecommendationConfig()
+	requestCtx := ctx.Request.Context()
+	if err := requestCtx.Err(); err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(userInterestProfile{}))
+		return
+	}
 	served := map[uint]servedPost{}
-	loaded, historyErr := loadUserRecommendationServedHistoryForHandler(ctx.Request.Context(), userID, now, cfg)
+	loaded, historyErr := loadUserRecommendationServedHistoryForHandler(requestCtx, userID, now, cfg)
 	if historyErr != nil {
 		log.Printf("[Recommendation] served history for user %d: %v", userID, historyErr)
 		metrics.RecordRecommendationServedHistoryLoadFailure()
@@ -98,8 +106,15 @@ func GetPostRecommendations(ctx *gin.Context) {
 	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
 	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
+	if global.Db == nil {
+		recommendationErrorResponse(ctx, errors.New("database is not initialized"), recommendationStrategyID(userInterestProfile{}))
+		return
+	}
+	servingCtx, cancel := context.WithTimeout(requestCtx, recommendationServingTimeout(cfg))
+	defer cancel()
+	servingDB := global.Db.WithContext(servingCtx)
 
-	serving, err := recommendationServingPathForHandler(userID, uint(limit), cfg, now, requestID, browserLanguageContext, served)
+	serving, err := recommendationServingPathForHandler(servingCtx, servingDB, userID, uint(limit), cfg, now, requestID, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(serving.Profile))
 		return
@@ -111,7 +126,11 @@ func GetPostRecommendations(ctx *gin.Context) {
 		recordRecallMetrics(recallSet)
 	}
 
-	recommendations, err := selectedRecommendationResponsesForHandler(selected)
+	if err := servingCtx.Err(); err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
+		return
+	}
+	recommendations, err := selectedRecommendationResponsesForHandler(servingDB, selected, now)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 		return
@@ -129,7 +148,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 			finalIDs = append(finalIDs, recommendation.Post.ID)
 		}
 	}
-	if err := recordUserRecommendationServedPostsForHandler(ctx.Request.Context(), userID, finalIDs, now, cfg); err != nil {
+	if err := recordUserRecommendationServedPostsForHandler(requestCtx, userID, finalIDs, now, cfg); err != nil {
 		log.Printf("[Recommendation] user served-history persist failed for user %d: %v", userID, err)
 	}
 
@@ -170,7 +189,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 		GenerationLatencyMS:     duration.Milliseconds(), CreatedAt: now,
 	}
 	traces := buildRecommendationResultTraces(requestRecord, selected, now, cfg)
-	if err := persistRecommendationServingTrace(requestRecord, traces); err != nil {
+	if err := persistRecommendationServingTrace(requestCtx, requestRecord, traces); err != nil {
 		log.Printf("[RecommendationTelemetry] persist serving trace %s: %v", requestID, err)
 		metrics.RecordRecommendationTracePersistFailure()
 	}
@@ -183,13 +202,18 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	requestID := uuid.NewString()
 	limit := parseRecommendationLimit(ctx.Query("limit"))
 	cfg := normalizedRecommendationConfig()
+	requestCtx := ctx.Request.Context()
+	if err := requestCtx.Err(); err != nil {
+		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
+		return
+	}
 	guestSessionID, hasGuestSession := parseGuestRecommendationSessionID(
 		ctx.GetHeader(guestRecommendationSessionHeader),
 	)
 	served := map[uint]servedPost{}
 	if hasGuestSession {
 		loaded, err := loadGuestRecommendationServedHistoryForHandler(
-			ctx.Request.Context(), guestSessionID, now, cfg,
+			requestCtx, guestSessionID, now, cfg,
 		)
 		if err != nil {
 			log.Printf("[Recommendation] guest served-history load failed: %v", err)
@@ -199,8 +223,15 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
 	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
+	if global.Db == nil {
+		recommendationErrorResponse(ctx, errors.New("database is not initialized"), recommendationColdStartStrategyID)
+		return
+	}
+	servingCtx, cancel := context.WithTimeout(requestCtx, recommendationServingTimeout(cfg))
+	defer cancel()
+	servingDB := global.Db.WithContext(servingCtx)
 
-	serving, err := publicRecommendationServingPathForHandler(uint(limit), cfg, now, requestID, browserLanguageContext, served)
+	serving, err := publicRecommendationServingPathForHandler(servingCtx, servingDB, uint(limit), cfg, now, requestID, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
 		return
@@ -208,7 +239,11 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	for _, recallSet := range serving.RecallSets {
 		recordRecallMetrics(recallSet)
 	}
-	recommendations, err := selectedRecommendationResponsesForHandler(serving.Selected)
+	if err := servingCtx.Err(); err != nil {
+		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
+		return
+	}
+	recommendations, err := selectedRecommendationResponsesForHandler(servingDB, serving.Selected, now)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
 		return
@@ -224,7 +259,7 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 			}
 		}
 		if err := recordGuestRecommendationServedPostsForHandler(
-			ctx.Request.Context(), guestSessionID, finalIDs, now, cfg,
+			requestCtx, guestSessionID, finalIDs, now, cfg,
 		); err != nil {
 			log.Printf("[Recommendation] guest served-history persist failed: %v", err)
 		}
@@ -249,6 +284,28 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 func recommendationErrorResponse(ctx *gin.Context, err error, strategyID string) {
 	if strategyID == "" {
 		strategyID = recommendationStrategyID(userInterestProfile{})
+	}
+	requestErr := ctx.Request.Context().Err()
+	if requestErr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		outcome := "canceled"
+		if errors.Is(requestErr, context.DeadlineExceeded) {
+			outcome = "timeout"
+		}
+		metrics.RecordRecommendationRequest(outcome, strategyID)
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		metrics.RecordRecommendationRequest("timeout", strategyID)
+		ctx.JSON(http.StatusGatewayTimeout, gin.H{"error": "recommendation timed out"})
+		return
+	}
+	if errors.Is(err, context.Canceled) {
+		metrics.RecordRecommendationRequest("canceled", strategyID)
+		if requestErr != nil {
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 	metrics.RecordRecommendationRequest("error", strategyID)
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

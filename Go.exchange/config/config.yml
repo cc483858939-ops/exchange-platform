@@ -55,6 +55,7 @@ outbox:
   cleanup_batch_size: 5000
 
 recommendation:
+  serving_timeout_ms: 5000
   behavior_weights:
     view: 0.25
     like: 4

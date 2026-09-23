@@ -7,7 +7,6 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/pgvector/pgvector-go"
@@ -40,15 +39,15 @@ type hydratedRecommendationCandidate struct {
 	IsNovelAuthor       bool
 }
 
-func recommendationEligibilityQuery(query *gorm.DB, userID uint, served map[uint]servedPost, now time.Time, softOnly bool, useMaterializedInteractions bool) *gorm.DB {
-	negative := global.Db.Table("post_behaviors AS ni").
+func recommendationEligibilityQuery(db *gorm.DB, query *gorm.DB, userID uint, served map[uint]servedPost, now time.Time, softOnly bool, useMaterializedInteractions bool) *gorm.DB {
+	negative := db.Table("post_behaviors AS ni").
 		Select("1").
 		Where("ni.user_id = ? AND ni.post_id = posts.id AND ni.action = ? AND ni.active = TRUE",
 			userID, eventing.RecommendationBehaviorActionNotInterested)
-	laterLike := global.Db.Table("post_reaction AS ar").
+	laterLike := db.Table("post_reaction AS ar").
 		Select("1").
 		Where("ar.user_id = ? AND ar.post_id = ni.post_id AND ar.liked = TRUE AND ar.state_changed_at > ni.last_seen_at", userID)
-	laterReply := global.Db.Table("post_behaviors AS rb").
+	laterReply := db.Table("post_behaviors AS rb").
 		Select("1").
 		Where("rb.user_id = ? AND rb.post_id = ni.post_id AND rb.action = ? AND rb.active = TRUE AND rb.last_seen_at > ni.last_seen_at",
 			userID, PostBehaviorActionReply)
@@ -63,7 +62,7 @@ func recommendationEligibilityQuery(query *gorm.DB, userID uint, served map[uint
 		Where("posts.author_id <> ?", userID).
 		Where("NOT EXISTS (?)", negative)
 	if useMaterializedInteractions {
-		interacted := global.Db.Table("user_post_reco_states AS rs").
+		interacted := db.Table("user_post_reco_states AS rs").
 			Select("1").
 			Where("rs.user_id = ? AND rs.post_id = posts.id AND rs.interacted = TRUE", userID)
 		query = query.Where("NOT EXISTS (?)", interacted)
@@ -132,14 +131,14 @@ func recommendationSemanticQuota(cap int, recentRatio float64) (int, int) {
 	return recentCap, cap - recentCap
 }
 
-func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
+func loadRecommendationSemanticCandidates(db *gorm.DB, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
 	if len(profile.PositiveVector) == 0 || cap <= 0 {
 		return nil, nil
 	}
 
 	recentCap, evergreenCap := recommendationSemanticQuota(cap, cfg.SemanticRecall.RecentRatio)
 	cutoff := now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays)
-	recent, err := loadRecommendationSemanticPool(userID, profile, served, now, softOnly, cutoff, ">=", recentCap, nil)
+	recent, err := loadRecommendationSemanticPool(db, userID, profile, served, now, softOnly, cutoff, ">=", recentCap, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +147,7 @@ func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfi
 		selectedIDs[candidate.PostID] = struct{}{}
 	}
 
-	evergreen, err := loadRecommendationSemanticPool(userID, profile, served, now, softOnly, cutoff, "<", evergreenCap, selectedIDs)
+	evergreen, err := loadRecommendationSemanticPool(db, userID, profile, served, now, softOnly, cutoff, "<", evergreenCap, selectedIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +160,7 @@ func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfi
 
 	remaining := cap - len(result)
 	if remaining > 0 {
-		backfill, err := loadRecommendationSemanticPool(userID, profile, served, now, softOnly, time.Time{}, "", remaining, selectedIDs)
+		backfill, err := loadRecommendationSemanticPool(db, userID, profile, served, now, softOnly, time.Time{}, "", remaining, selectedIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -170,13 +169,14 @@ func loadRecommendationSemanticCandidates(userID uint, profile userInterestProfi
 	return result, nil
 }
 
-func loadRecommendationSemanticPool(userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, softOnly bool, cutoff time.Time, comparison string, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+func loadRecommendationSemanticPool(db *gorm.DB, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, softOnly bool, cutoff time.Time, comparison string, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
 	queryVector := pgvector.NewVector(profile.PositiveVector)
 	query := recommendationEligibilityQuery(
-		global.Db.Table("post_embeddings AS ae").
+		db,
+		db.Table("post_embeddings AS ae").
 			Select("ae.post_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
 			Joins("JOIN posts ON posts.id = ae.post_id").
 			Where("ae.version = ? AND ae.dimensions = ?", config.ActiveEmbeddingVersion(), len(profile.PositiveVector)),
@@ -206,12 +206,13 @@ func loadRecommendationSemanticPool(userID uint, profile userInterestProfile, se
 	return result, nil
 }
 
-func loadRecommendationFollowingCandidates(userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
+func loadRecommendationFollowingCandidates(db *gorm.DB, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
 	query := recommendationEligibilityQuery(
-		global.Db.Table("posts").
+		db,
+		db.Table("posts").
 			Select("posts.id").
 			Joins("JOIN user_follows AS uf ON uf.following_id = posts.author_id AND uf.follower_id = ?", userID),
 		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
@@ -228,11 +229,11 @@ func loadRecommendationFollowingCandidates(userID uint, profile userInterestProf
 	return result, nil
 }
 
-func loadRecommendationSourceCandidates(userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, order interface{}, cap int, source string) ([]embeddingCandidate, error) {
+func loadRecommendationSourceCandidates(db *gorm.DB, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, order interface{}, cap int, source string) ([]embeddingCandidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
-	query := recommendationEligibilityQuery(global.Db.Table("posts").Select("posts.id"), userID, served, now, softOnly, profile.MaterializedInteractionsReady)
+	query := recommendationEligibilityQuery(db, db.Table("posts").Select("posts.id"), userID, served, now, softOnly, profile.MaterializedInteractionsReady)
 	query = applyLegacyProfileInteractionExclusion(query, profile)
 	var ids []uint
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
@@ -250,24 +251,24 @@ func loadRecommendationSourceCandidates(userID uint, profile userInterestProfile
 	return result, nil
 }
 
-func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool) (recommendationCandidateSet, error) {
-	if global.Db == nil {
+func loadRecommendationCandidateSet(db *gorm.DB, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool) (recommendationCandidateSet, error) {
+	if db == nil {
 		return recommendationCandidateSet{}, errors.New("database is not initialized")
 	}
 	caps := recommendationCandidateCaps(profile, cfg)
-	semantic, err := loadRecommendationSemanticCandidates(userID, profile, served, now, cfg, softOnly, caps.Semantic)
+	semantic, err := loadRecommendationSemanticCandidates(db, userID, profile, served, now, cfg, softOnly, caps.Semantic)
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
-	following, err := loadRecommendationFollowingCandidates(userID, profile, served, now, cfg, softOnly, caps.Following)
+	following, err := loadRecommendationFollowingCandidates(db, userID, profile, served, now, cfg, softOnly, caps.Following)
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
-	recent, err := loadRecommendationSourceCandidates(userID, profile, served, now, cfg, softOnly, "posts.created_at DESC, posts.id DESC", caps.Recent, "recent")
+	recent, err := loadRecommendationSourceCandidates(db, userID, profile, served, now, cfg, softOnly, "posts.created_at DESC, posts.id DESC", caps.Recent, "recent")
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
-	trending, err := loadRecommendationTrendingCandidates(userID, profile, served, now, cfg, softOnly, caps.Trending)
+	trending, err := loadRecommendationTrendingCandidates(db, userID, profile, served, now, cfg, softOnly, caps.Trending)
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
@@ -292,13 +293,14 @@ func loadRecommendationCandidateSet(userID uint, profile userInterestProfile, se
 	}, nil
 }
 
-func loadRecommendationTrendingCandidates(userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
+func loadRecommendationTrendingCandidates(db *gorm.DB, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
 	cutoff := now.AddDate(0, 0, -cfg.Trending.MaxAgeDays)
 	query := recommendationEligibilityQuery(
-		global.Db.Table("posts").Select("posts.id"),
+		db,
+		db.Table("posts").Select("posts.id"),
 		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	).Where("posts.created_at >= ?", cutoff).
 		Where("posts.like_count > 0 OR posts.reply_count > 0")
@@ -347,11 +349,11 @@ func publicRecommendationEligibilityQuery(query *gorm.DB, now time.Time, exclude
 	return query
 }
 
-func loadPublicRecommendationSourceCandidates(now time.Time, cfg config.RecommendationConfig, order interface{}, cap int, source string, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+func loadPublicRecommendationSourceCandidates(db *gorm.DB, now time.Time, cfg config.RecommendationConfig, order interface{}, cap int, source string, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
-	query := publicRecommendationEligibilityQuery(global.Db.Table("posts").Select("posts.id"), now, excluded)
+	query := publicRecommendationEligibilityQuery(db.Table("posts").Select("posts.id"), now, excluded)
 	var ids []uint
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
@@ -367,12 +369,12 @@ func loadPublicRecommendationSourceCandidates(now time.Time, cfg config.Recommen
 	return result, nil
 }
 
-func loadPublicRecommendationTrendingCandidates(now time.Time, cfg config.RecommendationConfig, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+func loadPublicRecommendationTrendingCandidates(db *gorm.DB, now time.Time, cfg config.RecommendationConfig, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
 	cutoff := now.AddDate(0, 0, -cfg.Trending.MaxAgeDays)
-	query := publicRecommendationEligibilityQuery(global.Db.Table("posts").Select("posts.id"), now, excluded).
+	query := publicRecommendationEligibilityQuery(db.Table("posts").Select("posts.id"), now, excluded).
 		Where("posts.created_at >= ?", cutoff).
 		Where("posts.like_count > 0 OR posts.reply_count > 0")
 	order := gorm.Expr(`
@@ -400,16 +402,16 @@ posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 	return result, nil
 }
 
-func loadPublicRecommendationCandidateSet(now time.Time, cfg config.RecommendationConfig, excluded map[uint]struct{}) (recommendationCandidateSet, error) {
-	if global.Db == nil {
+func loadPublicRecommendationCandidateSet(db *gorm.DB, now time.Time, cfg config.RecommendationConfig, excluded map[uint]struct{}) (recommendationCandidateSet, error) {
+	if db == nil {
 		return recommendationCandidateSet{}, errors.New("database is not initialized")
 	}
 	caps := cfg.Candidates.ColdStart
-	recent, err := loadPublicRecommendationSourceCandidates(now, cfg, "posts.created_at DESC, posts.id DESC", caps.Recent, "recent", excluded)
+	recent, err := loadPublicRecommendationSourceCandidates(db, now, cfg, "posts.created_at DESC, posts.id DESC", caps.Recent, "recent", excluded)
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
-	trending, err := loadPublicRecommendationTrendingCandidates(now, cfg, caps.Trending, excluded)
+	trending, err := loadPublicRecommendationTrendingCandidates(db, now, cfg, caps.Trending, excluded)
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
@@ -514,7 +516,10 @@ func recommendationCandidatePostIDs(candidates []embeddingCandidate) []uint {
 	return ids
 }
 
-func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.Time) ([]hydratedRecommendationCandidate, error) {
+func hydrateRecommendationCandidates(db *gorm.DB, candidates []embeddingCandidate, now time.Time) ([]hydratedRecommendationCandidate, error) {
+	if db == nil {
+		return nil, errors.New("database is not initialized")
+	}
 	ids := make([]uint, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.PostID != 0 {
@@ -524,7 +529,7 @@ func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.T
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	query := publicPostScope(global.Db.Model(&models.Post{}).Select(publicPostSelectColumns).Where("posts.id IN ?", ids), now)
+	query := publicPostScope(db.Model(&models.Post{}).Select(publicPostSelectColumns).Where("posts.id IN ?", ids), now)
 	var posts []models.Post
 	if err := preloadPostAuthor(query).Find(&posts).Error; err != nil {
 		return nil, err
@@ -541,7 +546,7 @@ func hydrateRecommendationCandidates(candidates []embeddingCandidate, now time.T
 	if len(validPostIDs) == 0 {
 		return nil, nil
 	}
-	embeddings, err := loadRecommendationPostEmbeddings(validPostIDs, config.ActiveEmbeddingVersion())
+	embeddings, err := loadRecommendationPostEmbeddings(db, validPostIDs, config.ActiveEmbeddingVersion())
 	if err != nil {
 		return nil, err
 	}

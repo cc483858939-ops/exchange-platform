@@ -114,7 +114,7 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 		if err := db.Create(&profile).Error; err != nil {
 			t.Fatal(err)
 		}
-		loaded, err := loadMaterializedUserInterestProfile(user.ID, now, cfg)
+		loaded, err := loadMaterializedUserInterestProfile(db, user.ID, now, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 		if err := db.Create(&profile).Error; err != nil {
 			t.Fatal(err)
 		}
-		loaded, err := loadMaterializedUserInterestProfile(user.ID, now, cfg)
+		loaded, err := loadMaterializedUserInterestProfile(db, user.ID, now, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,7 +144,7 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 
 	t.Run("miss", func(t *testing.T) {
 		user := newRecommendationProfileControllerIntegrationUser(t, db, "loader-miss")
-		loaded, err := loadMaterializedUserInterestProfile(user.ID, now, cfg)
+		loaded, err := loadMaterializedUserInterestProfile(db, user.ID, now, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,7 +173,7 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 			if err := db.Create(&profile).Error; err != nil {
 				t.Fatal(err)
 			}
-			loaded, err := loadMaterializedUserInterestProfile(user.ID, now, cfg)
+			loaded, err := loadMaterializedUserInterestProfile(db, user.ID, now, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -211,6 +211,7 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 
 	profile := userInterestProfile{MaterializedInteractionsReady: true}
 	candidates, err := loadRecommendationSourceCandidates(
+		db,
 		viewer.ID, profile, map[uint]servedPost{}, now, normalizedRecommendationConfig(), false,
 		"posts.created_at DESC, posts.id DESC", 10, "recent",
 	)
@@ -243,6 +244,7 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 	}
 
 	candidates, err := loadRecommendationSourceCandidates(
+		db,
 		viewer.ID, userInterestProfile{MaterializedInteractionsReady: true}, map[uint]servedPost{}, now,
 		normalizedRecommendationConfig(), false, "posts.created_at DESC, posts.id DESC", 10, "recent",
 	)

@@ -9,10 +9,21 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
+	"gorm.io/gorm"
 )
+
+const defaultRecommendationServingTimeout = 5 * time.Second
+
+func recommendationServingTimeout(cfg config.RecommendationConfig) time.Duration {
+	if cfg.ServingTimeoutMS > 0 {
+		return time.Duration(cfg.ServingTimeoutMS) * time.Millisecond
+	}
+	return defaultRecommendationServingTimeout
+}
 
 func defaultRecommendationConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
+		ServingTimeoutMS: 5000,
 		BehaviorWeights: config.RecommendationBehaviorWeights{
 			View: 0.25, Like: 4, Click: 1, QualifiedRead: 2.5, Reply: 5, QuickBounce: -2, NotInterested: -8,
 		},
@@ -54,6 +65,9 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 		return cfg
 	}
 	set := config.AppConfig.Recommendation
+	if set.ServingTimeoutMS > 0 {
+		cfg.ServingTimeoutMS = set.ServingTimeoutMS
+	}
 	if recommendationSettingProvided("behavior_weights.view", set.BehaviorWeights.View != 0) {
 		cfg.BehaviorWeights.View = set.BehaviorWeights.View
 	}
@@ -358,16 +372,16 @@ type userInterestProfile struct {
 	MaterializedInteractionsReady bool
 }
 
-var loadRecommendationPostEmbeddings = func(postIDs []uint, version string) (map[uint][]float32, error) {
+var loadRecommendationPostEmbeddings = func(db *gorm.DB, postIDs []uint, version string) (map[uint][]float32, error) {
 	result := make(map[uint][]float32)
 	if len(postIDs) == 0 {
 		return result, nil
 	}
-	if global.Db == nil {
+	if db == nil {
 		return nil, errors.New("database is not initialized")
 	}
 	var rows []models.PostEmbedding
-	if err := global.Db.Select("post_id, embedding").Where("post_id IN ? AND version = ?", postIDs, version).Find(&rows).Error; err != nil {
+	if err := db.Select("post_id, embedding").Where("post_id IN ? AND version = ?", postIDs, version).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -397,7 +411,7 @@ func buildEmbeddingInterestProfile(behaviors []postBehaviorSignal, feedback []re
 	}
 	canonical := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
 	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, config.ActiveEmbeddingVersion(), func(ids []uint, version string) (map[uint][]float32, error) {
-		return loadRecommendationPostEmbeddings(ids, version)
+		return loadRecommendationPostEmbeddings(global.Db, ids, version)
 	})
 	if err != nil {
 		return profile, err

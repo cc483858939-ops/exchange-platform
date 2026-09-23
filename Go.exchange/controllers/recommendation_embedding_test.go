@@ -13,7 +13,7 @@ import (
 
 func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVectors(t *testing.T) {
 	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(ids []uint, version string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, ids []uint, version string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
 	}
 	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
@@ -46,7 +46,7 @@ func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) 
 	originalLoader := loadRecommendationPostEmbeddings
 	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "v2"}}
 	var gotVersion string
-	loadRecommendationPostEmbeddings = func(_ []uint, version string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, version string) (map[uint][]float32, error) {
 		gotVersion = version
 		return map[uint][]float32{1: {1, 0}}, nil
 	}

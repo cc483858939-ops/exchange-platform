@@ -1,18 +1,20 @@
 package controllers
 
 import (
+	"errors"
 	"math"
 
 	"Go.exchange/config"
-	"Go.exchange/global"
 	"Go.exchange/models"
+
+	"gorm.io/gorm"
 )
 
 // loadMaterializedCandidateAuthorContext scopes both profile affinity and
 // following lookups to authors represented by the current candidate batch.
 // loadedAuthors is retained across the fresh and soft passes so the second
 // pass only queries newly encountered authors.
-func loadMaterializedCandidateAuthorContext(userID uint, profile *userInterestProfile, candidates []hydratedRecommendationCandidate, loadedAuthors map[uint]struct{}, cfg config.RecommendationConfig) error {
+func loadMaterializedCandidateAuthorContext(db *gorm.DB, userID uint, profile *userInterestProfile, candidates []hydratedRecommendationCandidate, loadedAuthors map[uint]struct{}, cfg config.RecommendationConfig) error {
 	if profile.AuthorAffinity == nil {
 		profile.AuthorAffinity = make(map[uint]float64)
 	}
@@ -41,13 +43,16 @@ func loadMaterializedCandidateAuthorContext(userID uint, profile *userInterestPr
 	for _, authorID := range authorIDs {
 		loadedAuthors[authorID] = struct{}{}
 	}
-	if len(authorIDs) == 0 || global.Db == nil {
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+	if len(authorIDs) == 0 {
 		return nil
 	}
 
 	if profile.MaterializedInteractionsReady {
 		var affinities []models.UserAuthorAffinity
-		if err := global.Db.Where("user_id = ? AND author_id IN ?", userID, authorIDs).Find(&affinities).Error; err != nil {
+		if err := db.Where("user_id = ? AND author_id IN ?", userID, authorIDs).Find(&affinities).Error; err != nil {
 			return err
 		}
 		scale := cfg.AuthorAffinitySaturationScale
@@ -61,7 +66,7 @@ func loadMaterializedCandidateAuthorContext(userID uint, profile *userInterestPr
 		}
 	}
 	var follows []uint
-	if err := global.Db.Table("user_follows").Where("follower_id = ? AND following_id IN ?", userID, authorIDs).Pluck("following_id", &follows).Error; err != nil {
+	if err := db.Table("user_follows").Where("follower_id = ? AND following_id IN ?", userID, authorIDs).Pluck("following_id", &follows).Error; err != nil {
 		return err
 	}
 	for _, authorID := range follows {

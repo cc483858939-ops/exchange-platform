@@ -53,7 +53,7 @@ func TestCanonicalV2PreservesLikeReplyAndNIPrecedence(t *testing.T) {
 
 func TestRecommendationProfileCapsPositivePostAndSeparatesNegativeVector(t *testing.T) {
 	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ []uint, _ string) (map[uint][]float32, error) {
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
 		return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
 	}
 	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })

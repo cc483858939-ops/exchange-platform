@@ -80,7 +80,7 @@ func TestSemanticRecallRecentQuotaAndEvergreenReservationIntegration(t *testing.
 	cfg.SemanticRecall.RecentWindowDays = 30
 	cfg.SemanticRecall.RecentRatio = 0.75
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
-	candidates, err := loadRecommendationSemanticCandidates(viewer.ID, profile, map[uint]servedPost{}, now, cfg, false, 4)
+	candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, profile, map[uint]servedPost{}, now, cfg, false, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 	}
 	servedHistory := map[uint]servedPost{served.ID: {LastServedAt: now.Add(-time.Minute), Hard: true}}
 	cfg := defaultRecommendationConfig()
-	candidates, err := loadRecommendationSemanticCandidates(viewer.ID, profile, servedHistory, now, cfg, false, 20)
+	candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, profile, servedHistory, now, cfg, false, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestSemanticRecallUnderfillBackfillsNearestNeighborsWithoutDuplicatesIntegr
 		cfg := defaultRecommendationConfig()
 		cfg.SemanticRecall.RecentWindowDays = 30
 		cfg.SemanticRecall.RecentRatio = 0.75
-		candidates, err := loadRecommendationSemanticCandidates(viewer.ID, userInterestProfile{PositiveVector: []float32{1, 0}}, map[uint]servedPost{}, now, cfg, false, 4)
+		candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, userInterestProfile{PositiveVector: []float32{1, 0}}, map[uint]servedPost{}, now, cfg, false, 4)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +211,7 @@ func TestSemanticRecallUnderfillBackfillsNearestNeighborsWithoutDuplicatesIntegr
 		cfg := defaultRecommendationConfig()
 		cfg.SemanticRecall.RecentWindowDays = 30
 		cfg.SemanticRecall.RecentRatio = 0.75
-		candidates, err := loadRecommendationSemanticCandidates(viewer.ID, userInterestProfile{PositiveVector: []float32{1, 0}}, map[uint]servedPost{}, now, cfg, false, 4)
+		candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, userInterestProfile{PositiveVector: []float32{1, 0}}, map[uint]servedPost{}, now, cfg, false, 4)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +266,7 @@ func TestRecommendationTrendingRecallUsesAgeDecayAndPositiveEngagementIntegratio
 	cfg.Trending.MaxAgeDays = 7
 	cfg.Trending.HalfLifeHours = 24
 	cfg.Trending.ReplyFactor = 0
-	candidates, err := loadRecommendationTrendingCandidates(viewer.ID, userInterestProfile{}, map[uint]servedPost{}, now, cfg, false, 10)
+	candidates, err := loadRecommendationTrendingCandidates(db, viewer.ID, userInterestProfile{}, map[uint]servedPost{}, now, cfg, false, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestRecommendationTrendingRecallUsesPublishedAtAndIDTieBreakIntegration(t *
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
 
 	cfg := defaultRecommendationConfig()
-	candidates, err := loadRecommendationTrendingCandidates(viewer.ID, userInterestProfile{}, map[uint]servedPost{}, now, cfg, false, 2)
+	candidates, err := loadRecommendationTrendingCandidates(db, viewer.ID, userInterestProfile{}, map[uint]servedPost{}, now, cfg, false, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestRecommendationTrendingRecallPreservesEligibilityIntegration(t *testing.
 	cfg := defaultRecommendationConfig()
 	profile := userInterestProfile{InteractedPostIDs: map[uint]struct{}{interacted.ID: {}}}
 	served := map[uint]servedPost{hardServed.ID: {LastServedAt: now.Add(-time.Minute), Hard: true}}
-	candidates, err := loadRecommendationTrendingCandidates(viewer.ID, profile, served, now, cfg, false, 20)
+	candidates, err := loadRecommendationTrendingCandidates(db, viewer.ID, profile, served, now, cfg, false, 20)
 	if err != nil {
 		t.Fatal(err)
 	}

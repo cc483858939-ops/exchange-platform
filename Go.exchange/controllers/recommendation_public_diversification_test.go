@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"testing"
@@ -136,7 +137,7 @@ func publicServingTestFixture(t *testing.T, count int) (config.RecommendationCon
 
 	originalLoader := publicRecommendationCandidateSetForServing
 	originalHydrator := publicRecommendationHydrateForServing
-	publicRecommendationCandidateSetForServing = func(_ time.Time, _ config.RecommendationConfig, excluded map[uint]struct{}) (recommendationCandidateSet, error) {
+	publicRecommendationCandidateSetForServing = func(_ *gorm.DB, _ time.Time, _ config.RecommendationConfig, excluded map[uint]struct{}) (recommendationCandidateSet, error) {
 		candidates := make([]embeddingCandidate, 0, len(fixture))
 		for _, item := range fixture {
 			if _, excluded := excluded[item.Post.ID]; excluded {
@@ -146,7 +147,7 @@ func publicServingTestFixture(t *testing.T, count int) (config.RecommendationCon
 		}
 		return recommendationCandidateSet{Candidates: candidates}, nil
 	}
-	publicRecommendationHydrateForServing = func(candidates []embeddingCandidate, _ time.Time) ([]hydratedRecommendationCandidate, error) {
+	publicRecommendationHydrateForServing = func(_ *gorm.DB, candidates []embeddingCandidate, _ time.Time) ([]hydratedRecommendationCandidate, error) {
 		byID := make(map[uint]hydratedRecommendationCandidate, len(fixture))
 		for _, item := range fixture {
 			byID[item.Candidate.PostID] = item
@@ -182,11 +183,11 @@ func publicServingSelectedIDs(selected []selectedRecommendation) []uint {
 
 func TestPublicRecommendationServingIsReproducibleForSameRequest(t *testing.T) {
 	cfg, now := publicServingTestFixture(t, 100)
-	first, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-a", recommendationLanguageContext{}, nil)
+	first, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 20, cfg, now, "guest-a", recommendationLanguageContext{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-a", recommendationLanguageContext{}, nil)
+	second, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 20, cfg, now, "guest-a", recommendationLanguageContext{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,11 +198,11 @@ func TestPublicRecommendationServingIsReproducibleForSameRequest(t *testing.T) {
 
 func TestPublicRecommendationServingVariesAcrossRequests(t *testing.T) {
 	cfg, now := publicServingTestFixture(t, 100)
-	first, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-a", recommendationLanguageContext{}, nil)
+	first, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 20, cfg, now, "guest-a", recommendationLanguageContext{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-b", recommendationLanguageContext{}, nil)
+	second, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 20, cfg, now, "guest-b", recommendationLanguageContext{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +217,7 @@ func TestPublicRecommendationServingKeepsHardServedPostsOut(t *testing.T) {
 	for postID := uint(1); postID <= 200; postID++ {
 		served[postID] = servedPost{LastServedAt: now.Add(-5 * time.Minute), Hard: true}
 	}
-	outcome, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-exclusion", recommendationLanguageContext{}, served)
+	outcome, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 20, cfg, now, "guest-exclusion", recommendationLanguageContext{}, served)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +243,7 @@ func TestPublicRecommendationServingFallbackPrefersUnseenOverHigherScoringSoftPo
 		diversifyPublicRecommendationCandidatesForServing = originalDiversifier
 	})
 
-	outcome, err := servePublicRecommendationCandidatePath(5, cfg, now, "guest-unseen-fallback", recommendationLanguageContext{}, served)
+	outcome, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 5, cfg, now, "guest-unseen-fallback", recommendationLanguageContext{}, served)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +261,7 @@ func TestPublicRecommendationServingFallbackPrefersUnseenThenOldestSoftServed(t 
 		3: {LastServedAt: now.Add(-24 * time.Hour), Soft: true},
 	}
 
-	outcome, err := servePublicRecommendationCandidatePath(5, cfg, now, "guest-fallback", recommendationLanguageContext{}, served)
+	outcome, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 5, cfg, now, "guest-fallback", recommendationLanguageContext{}, served)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +282,7 @@ func TestPublicRecommendationServingHardServedPostsRemainExcludedWhenPoolIsShort
 		1: {LastServedAt: now.Add(-5 * time.Minute), Hard: true},
 	}
 
-	outcome, err := servePublicRecommendationCandidatePath(6, cfg, now, "guest-hard-short-pool", recommendationLanguageContext{}, served)
+	outcome, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 6, cfg, now, "guest-hard-short-pool", recommendationLanguageContext{}, served)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +298,7 @@ func TestPublicRecommendationServingCanWalkPastFormerTwoHundredPostLimit(t *test
 	served := make(map[uint]servedPost)
 	seen := make(map[uint]struct{})
 	for page := 0; page < 15; page++ {
-		outcome, err := servePublicRecommendationCandidatePath(20, cfg, now, fmt.Sprintf("guest-page-%d", page), recommendationLanguageContext{}, served)
+		outcome, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 20, cfg, now, fmt.Sprintf("guest-page-%d", page), recommendationLanguageContext{}, served)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -329,7 +330,7 @@ func TestPublicRecommendationServingUsesGuestDiversification(t *testing.T) {
 		diversifyPublicRecommendationCandidatesForServing = originalDiversifier
 	})
 
-	if _, err := servePublicRecommendationCandidatePath(20, cfg, now, "guest-boundary", recommendationLanguageContext{}, nil); err != nil {
+	if _, err := servePublicRecommendationCandidatePath(context.Background(), &gorm.DB{}, 20, cfg, now, "guest-boundary", recommendationLanguageContext{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {

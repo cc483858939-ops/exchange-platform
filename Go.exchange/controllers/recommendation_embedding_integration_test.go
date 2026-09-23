@@ -80,7 +80,7 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 
 	cfg := defaultRecommendationConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}, InteractedPostIDs: map[uint]struct{}{interacted.ID: {}}}
-	candidates, err := loadRecommendationSemanticCandidates(viewer.ID, profile, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
+	candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, profile, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	})
 
 	cfg := defaultRecommendationConfig()
-	candidates, err := loadRecommendationSemanticCandidates(viewer.ID, userInterestProfile{
+	candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, userInterestProfile{
 		PositiveVector: []float32{1, 0},
 	}, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {
