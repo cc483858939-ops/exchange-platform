@@ -891,7 +891,7 @@ const repostLabel = computed(() => {
   flex: 0 1 auto;
   min-width: 0;
   color: var(--color-text);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -899,7 +899,7 @@ const repostLabel = computed(() => {
   flex: 1 1 0;
   min-width: 0;
   color: var(--color-text-tertiary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
 }
 

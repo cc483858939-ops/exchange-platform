@@ -83,7 +83,16 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-layout {
   display: grid;
-  width: min(100%, 1268px);
+  width: min(
+    100%,
+    calc(
+      var(--shell-left-width)
+      + var(--shell-main-width)
+      + var(--shell-right-width)
+      + var(--space-6)
+      + var(--space-6)
+    )
+  );
   min-height: 100vh;
   grid-template-columns: var(--shell-left-width) minmax(0, var(--shell-main-width)) var(--shell-right-width);
   align-items: start;
@@ -113,7 +122,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1279px) {
   .app-layout {
-    width: min(100%, 792px);
+    width: min(100%, calc(96px + var(--shell-main-width) + var(--space-4)));
     grid-template-columns: 96px minmax(0, var(--shell-main-width));
     gap: var(--space-4);
   }
