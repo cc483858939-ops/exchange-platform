@@ -32,7 +32,7 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "post_embedding_v1"}}
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{ServingVersion: "post_embedding_v1"}}
 	t.Cleanup(func() {
 		global.Db = originalDB
 		config.AppConfig = originalConfig
@@ -123,7 +123,7 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "v2"}}
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{ServingVersion: "v2"}}
 	t.Cleanup(func() {
 		global.Db = originalDB
 		config.AppConfig = originalConfig

@@ -13,7 +13,8 @@ type EmbeddingConfig struct {
 	BaseURL        string `mapstructure:"base_url"`
 	APIKey         string `mapstructure:"api_key"`
 	Model          string `mapstructure:"model"`
-	Version        string `mapstructure:"version"`
+	ServingVersion string `mapstructure:"serving_version"`
+	BuildVersion   string `mapstructure:"build_version"`
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 }
 
@@ -69,7 +70,10 @@ func (c TranslationConfig) Normalized() TranslationConfig {
 	return c
 }
 
-const DefaultEmbeddingVersion = "post_embedding_v1"
+const (
+	DefaultServingEmbeddingVersion = "post_embedding_v1"
+	DefaultBuildEmbeddingVersion   = "post_embedding_v1"
+)
 
 type KafkaConfig struct {
 	Brokers                        []string `mapstructure:"brokers"`
@@ -330,15 +334,22 @@ func (c *Config) HasRecommendationSetting(path string) bool {
 	return c.RecommendationPresence[path]
 }
 
-// ActiveEmbeddingVersion returns the one embedding-space identity used by
-// workers, profile construction, and semantic recall.
-func ActiveEmbeddingVersion() string {
+func ServingEmbeddingVersion() string {
 	if AppConfig != nil {
-		if version := strings.TrimSpace(AppConfig.Embedding.Version); version != "" {
+		if version := strings.TrimSpace(AppConfig.Embedding.ServingVersion); version != "" {
 			return version
 		}
 	}
-	return DefaultEmbeddingVersion
+	return DefaultServingEmbeddingVersion
+}
+
+func BuildEmbeddingVersion() string {
+	if AppConfig != nil {
+		if version := strings.TrimSpace(AppConfig.Embedding.BuildVersion); version != "" {
+			return version
+		}
+	}
+	return DefaultBuildEmbeddingVersion
 }
 
 func InitConfig() {
@@ -388,8 +399,11 @@ func applySensitiveEnvironmentOverrides(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")); value != "" {
 		cfg.Embedding.Model = value
 	}
-	if value := strings.TrimSpace(os.Getenv("EMBEDDING_VERSION")); value != "" {
-		cfg.Embedding.Version = value
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_SERVING_VERSION")); value != "" {
+		cfg.Embedding.ServingVersion = value
+	}
+	if value := strings.TrimSpace(os.Getenv("EMBEDDING_BUILD_VERSION")); value != "" {
+		cfg.Embedding.BuildVersion = value
 	}
 	if value := strings.TrimSpace(os.Getenv("EMBEDDING_TIMEOUT_SECONDS")); value != "" {
 		if parsed := parsePositiveInt(value); parsed > 0 {

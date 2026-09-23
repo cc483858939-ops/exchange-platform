@@ -171,6 +171,10 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"fk_post_embeddings_post",
 			"chk_post_embeddings_vector_dimensions",
 		},
+		Indexes: []string{
+			"post_embeddings_pkey",
+			"idx_post_embeddings_version_post",
+		},
 	},
 	{
 		Table: "post_behaviors",

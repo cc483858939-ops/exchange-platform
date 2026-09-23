@@ -29,11 +29,11 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		embedding := recoveryIntegrationEmbedding(post.ID, "v1", post.Content, []float32{1, 2}, now)
-		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
 		if err != nil || outcome != postEmbeddingWriteCommitted {
 			t.Fatalf("outcome=%d err=%v", outcome, err)
 		}
-		persisted, err := store.GetEmbedding(context.Background(), post.ID)
+		persisted, err := store.GetEmbedding(context.Background(), post.ID, "v1")
 		if err != nil || persisted.Version != "v1" || persisted.ContentHash != embeddings.PostEmbeddingContentHash(post.Content) {
 			t.Fatalf("embedding=%+v err=%v", persisted, err)
 		}
@@ -46,13 +46,35 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("shadow build does not invalidate serving profile", func(t *testing.T) {
+		user, post := newPostEmbeddingIntegrationFixture(t, db, "shadow content")
+		if err := db.Create(&models.PostBehavior{
+			UserID: user.ID, PostID: post.ID, Action: recommendation.PostBehaviorView,
+			Count: 1, LastSeenAt: now, Active: true,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+		embedding := recoveryIntegrationEmbedding(post.ID, "post_embedding_v2", post.Content, []float32{2, 1}, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, false, now)
+		if err != nil || outcome != postEmbeddingWriteCommitted {
+			t.Fatalf("outcome=%d err=%v", outcome, err)
+		}
+		var dirtyCount int64
+		if err := db.Model(&models.UserRecoProfileDirty{}).Where("user_id = ?", user.ID).Count(&dirtyCount).Error; err != nil {
+			t.Fatal(err)
+		}
+		if dirtyCount != 0 {
+			t.Fatalf("shadow write invalidated %d serving profiles", dirtyCount)
+		}
+	})
+
 	t.Run("changed source rejects stale embedding", func(t *testing.T) {
 		_, post := newPostEmbeddingIntegrationFixture(t, db, "content A")
 		embedding := recoveryIntegrationEmbedding(post.ID, "v1", post.Content, []float32{1, 2}, now)
 		if err := db.Model(&models.Post{}).Where("id = ?", post.ID).Update("content", "content B").Error; err != nil {
 			t.Fatal(err)
 		}
-		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
 		if err != nil || outcome != postEmbeddingWriteStaleContent {
 			t.Fatalf("outcome=%d err=%v", outcome, err)
 		}
@@ -71,7 +93,7 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		embedding := recoveryIntegrationEmbedding(post.ID, "v1", post.Content, []float32{1, 2}, now)
-		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
 		if err != nil || outcome != postEmbeddingWritePostMissing {
 			t.Fatalf("outcome=%d err=%v", outcome, err)
 		}
@@ -110,13 +132,13 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 		})
 
 		updated := recoveryIntegrationEmbedding(post.ID, "v1", post.Content, []float32{1, 2}, now.Add(time.Minute))
-		if _, err := store.CommitEmbeddingIfCurrent(context.Background(), updated, now.Add(time.Minute)); err == nil {
+		if _, err := store.CommitEmbeddingIfCurrent(context.Background(), updated, true, now.Add(time.Minute)); err == nil {
 			t.Fatal("embedding update unexpectedly succeeded when profile invalidation was rejected")
 		}
 		if err := dropConstraint(); err != nil {
 			t.Fatal(err)
 		}
-		persisted, err := store.GetEmbedding(context.Background(), post.ID)
+		persisted, err := store.GetEmbedding(context.Background(), post.ID, "old-version")
 		if err != nil {
 			t.Fatal(err)
 		}

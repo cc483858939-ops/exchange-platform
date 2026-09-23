@@ -203,7 +203,7 @@ func materializeRecommendationProfileUser(userID uint, now time.Time, settings c
 			return err
 		}
 		canonical := recommendation.CanonicalizeOutcomes(sources.Behaviors, sources.Feedback, sources.Reactions)
-		embeddingVersion := config.ActiveEmbeddingVersion()
+		embeddingVersion := config.ServingEmbeddingVersion()
 		embeddings, err := loadMaterializerEmbeddings(tx, canonical.Outcomes, embeddingVersion)
 		if err != nil {
 			return err

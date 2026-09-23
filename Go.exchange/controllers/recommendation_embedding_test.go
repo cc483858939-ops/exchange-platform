@@ -44,7 +44,7 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) {
 	originalConfig := config.AppConfig
 	originalLoader := loadRecommendationPostEmbeddings
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "v2"}}
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{ServingVersion: "v2"}}
 	var gotVersion string
 	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, version string) (map[uint][]float32, error) {
 		gotVersion = version

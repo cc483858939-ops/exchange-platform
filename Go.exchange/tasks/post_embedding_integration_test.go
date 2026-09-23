@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"Go.exchange/embeddings"
+	"Go.exchange/global"
+	"Go.exchange/initialize"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
@@ -34,6 +36,12 @@ func openPostEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 		&models.User{}, &models.Post{}, &models.PostEmbedding{},
 		&models.PostBehavior{}, &models.PostReaction{}, &models.UserRecoProfileDirty{},
 	); err != nil {
+		t.Fatal(err)
+	}
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+	if err := initialize.RunMigrations(); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -82,7 +90,7 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	if err != nil || loadedPost.ID != article.ID {
 		t.Fatalf("post=%#v err=%v", loadedPost, err)
 	}
-	if _, err := store.GetEmbedding(context.Background(), article.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := store.GetEmbedding(context.Background(), article.ID, "v1"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("missing embedding err=%v", err)
 	}
 
@@ -91,7 +99,9 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 2}),
 		ContentHash: embeddings.PostEmbeddingContentHash(article.Content), CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
-	outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), first, time.Now().UTC())
+	first.CreatedAt = time.Now().UTC().Add(-time.Hour)
+	first.UpdatedAt = first.CreatedAt
+	outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), first, true, time.Now().UTC())
 	if err != nil || outcome != postEmbeddingWriteCommitted {
 		t.Fatalf("first outcome=%d err=%v", outcome, err)
 	}
@@ -100,23 +110,48 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	second.ContentHash = embeddings.PostEmbeddingContentHash(article.Content)
 	second.Embedding = pgvector.NewVector([]float32{3, 4})
 	second.UpdatedAt = time.Now().UTC()
-	outcome, err = store.CommitEmbeddingIfCurrent(context.Background(), second, time.Now().UTC())
+	outcome, err = store.CommitEmbeddingIfCurrent(context.Background(), second, true, time.Now().UTC())
 	if err != nil || outcome != postEmbeddingWriteCommitted {
 		t.Fatalf("second outcome=%d err=%v", outcome, err)
 	}
-	persisted, err := store.GetEmbedding(context.Background(), article.ID)
+	persisted, err := store.GetEmbedding(context.Background(), article.ID, "v2")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if persisted.Version != "v2" || persisted.ContentHash != embeddings.PostEmbeddingContentHash(article.Content) || len(persisted.Embedding.Slice()) != 2 {
 		t.Fatalf("embedding=%#v", persisted)
 	}
+	if !persisted.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("new v2 row created_at=%s want=%s", persisted.CreatedAt, first.CreatedAt)
+	}
+	updatedV2 := second
+	updatedV2.Model = "updated-model"
+	updatedV2.Embedding = pgvector.NewVector([]float32{5, 6})
+	updatedV2.CreatedAt = time.Now().UTC()
+	updatedV2.UpdatedAt = time.Now().UTC().Add(time.Minute)
+	if outcome, err = store.CommitEmbeddingIfCurrent(context.Background(), updatedV2, false, time.Now().UTC()); err != nil || outcome != postEmbeddingWriteCommitted {
+		t.Fatalf("updated v2 outcome=%d err=%v", outcome, err)
+	}
+	persisted, err = store.GetEmbedding(context.Background(), article.ID, "v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Model != "updated-model" || persisted.Embedding.Slice()[0] != 5 || !persisted.CreatedAt.Equal(first.CreatedAt) || !persisted.UpdatedAt.Equal(updatedV2.UpdatedAt) {
+		t.Fatalf("updated v2 embedding=%+v", persisted)
+	}
+	persistedV1, err := store.GetEmbedding(context.Background(), article.ID, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persistedV1.Model != first.Model || persistedV1.Embedding.Slice()[0] != 1 || !persistedV1.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("v1 embedding changed after v2 writes: %+v", persistedV1)
+	}
 	var count int64
 	if err := db.Model(&models.PostEmbedding{}).Where("post_id = ?", article.ID).Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Fatalf("rows=%d want=1", count)
+	if count != 2 {
+		t.Fatalf("rows=%d want=2", count)
 	}
 }
 
@@ -139,11 +174,11 @@ func TestCommitEmbeddingIfCurrentRejectsChangedContentIntegration(t *testing.T) 
 		Embedding:   pgvector.NewVector([]float32{1, 2}),
 		ContentHash: embeddings.PostEmbeddingContentHash("H1"), CreatedAt: now, UpdatedAt: now,
 	}
-	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, now)
+	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
 	if err != nil || outcome != postEmbeddingWriteStaleContent {
 		t.Fatalf("outcome=%d err=%v", outcome, err)
 	}
-	if _, err := (gormPostEmbeddingStore{db: db}).GetEmbedding(context.Background(), article.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := (gormPostEmbeddingStore{db: db}).GetEmbedding(context.Background(), article.ID, "v1"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("stale embedding lookup err=%v", err)
 	}
 	var dirtyCount int64
@@ -168,7 +203,7 @@ func TestCommitEmbeddingIfCurrentPreservesNewerEmbeddingIntegration(t *testing.T
 		t.Fatal(err)
 	}
 	var before models.PostEmbedding
-	if err := db.First(&before, "post_id = ?", article.ID).Error; err != nil {
+	if err := db.First(&before, "post_id = ? AND version = ?", article.ID, "v2").Error; err != nil {
 		t.Fatal(err)
 	}
 	stale := existing
@@ -177,12 +212,12 @@ func TestCommitEmbeddingIfCurrentPreservesNewerEmbeddingIntegration(t *testing.T
 	stale.ContentHash = embeddings.PostEmbeddingContentHash("H1")
 	stale.Embedding = pgvector.NewVector([]float32{1, 2})
 
-	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), stale, now.Add(time.Minute))
+	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), stale, true, now.Add(time.Minute))
 	if err != nil || outcome != postEmbeddingWriteStaleContent {
 		t.Fatalf("outcome=%d err=%v", outcome, err)
 	}
 	var persisted models.PostEmbedding
-	if err := db.First(&persisted, "post_id = ?", article.ID).Error; err != nil {
+	if err := db.First(&persisted, "post_id = ? AND version = ?", article.ID, "v2").Error; err != nil {
 		t.Fatal(err)
 	}
 	if persisted.Version != before.Version || persisted.Model != before.Model || persisted.Dimensions != before.Dimensions ||
@@ -222,7 +257,7 @@ func TestCommitEmbeddingIfCurrentWaitsForPostRowLockIntegration(t *testing.T) {
 	}
 	resultCh := make(chan writeResult, 1)
 	go func() {
-		outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, now)
+		outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
 		resultCh <- writeResult{outcome: outcome, err: err}
 	}()
 	select {
@@ -243,7 +278,7 @@ func TestCommitEmbeddingIfCurrentWaitsForPostRowLockIntegration(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("conditional write did not finish after source transaction committed")
 	}
-	if _, err := (gormPostEmbeddingStore{db: db}).GetEmbedding(context.Background(), article.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := (gormPostEmbeddingStore{db: db}).GetEmbedding(context.Background(), article.ID, "v1"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("stale embedding lookup err=%v", err)
 	}
 }

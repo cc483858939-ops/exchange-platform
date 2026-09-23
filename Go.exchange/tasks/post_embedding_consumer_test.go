@@ -74,12 +74,14 @@ type postEmbeddingTestStore struct {
 	embeddingErr      error
 	embeddingErrors   []error
 	getEmbeddingCalls int
+	embeddingVersions []string
 	writeOutcome      postEmbeddingWriteOutcome
 	writeOutcomes     []postEmbeddingWriteOutcome
 	writeErr          error
 	writeErrors       []error
 	writeCalls        int
 	upserted          []models.PostEmbedding
+	invalidationFlags []bool
 }
 
 func (s *postEmbeddingTestStore) GetPost(context.Context, uint) (models.Post, error) {
@@ -90,16 +92,26 @@ func (s *postEmbeddingTestStore) GetPost(context.Context, uint) (models.Post, er
 	return s.post, popPostEmbeddingTestError(&s.postErrors, s.postErr)
 }
 
-func (s *postEmbeddingTestStore) GetEmbedding(context.Context, uint) (models.PostEmbedding, error) {
+func (s *postEmbeddingTestStore) GetEmbedding(_ context.Context, _ uint, version string) (models.PostEmbedding, error) {
 	s.getEmbeddingCalls++
-	if len(s.upserted) > 0 {
-		return s.upserted[len(s.upserted)-1], nil
+	s.embeddingVersions = append(s.embeddingVersions, version)
+	for index := len(s.upserted) - 1; index >= 0; index-- {
+		if s.upserted[index].Version == version {
+			return s.upserted[index], nil
+		}
 	}
-	return s.embedding, popPostEmbeddingTestError(&s.embeddingErrors, s.embeddingErr)
+	if s.embedding.Version == version {
+		return s.embedding, popPostEmbeddingTestError(&s.embeddingErrors, s.embeddingErr)
+	}
+	if err := popPostEmbeddingTestError(&s.embeddingErrors, s.embeddingErr); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return models.PostEmbedding{}, err
+	}
+	return models.PostEmbedding{}, gorm.ErrRecordNotFound
 }
 
-func (s *postEmbeddingTestStore) CommitEmbeddingIfCurrent(_ context.Context, embedding models.PostEmbedding, _ time.Time) (postEmbeddingWriteOutcome, error) {
+func (s *postEmbeddingTestStore) CommitEmbeddingIfCurrent(_ context.Context, embedding models.PostEmbedding, invalidateProfiles bool, _ time.Time) (postEmbeddingWriteOutcome, error) {
 	s.writeCalls++
+	s.invalidationFlags = append(s.invalidationFlags, invalidateProfiles)
 	if writeErr := popPostEmbeddingTestError(&s.writeErrors, s.writeErr); writeErr != nil {
 		return postEmbeddingWriteCommitted, writeErr
 	}
@@ -362,13 +374,13 @@ func TestPostEmbeddingConsumerSkipsCurrentProjection(t *testing.T) {
 	assertPostEmbeddingRecoveryIncrement(t, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone, noopBefore)
 }
 
-func TestPostEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T) {
+func TestPostEmbeddingConsumerRegeneratesMissingBuildVersionAndStaleContent(t *testing.T) {
 	tests := []struct {
 		name    string
 		version string
 		hash    string
 	}{
-		{name: "stale version", version: "old", hash: embeddings.PostEmbeddingContentHash("Body")},
+		{name: "missing build version", version: "old", hash: embeddings.PostEmbeddingContentHash("Body")},
 		{name: "stale content", version: "v1", hash: "old-hash"},
 	}
 	for _, test := range tests {
@@ -383,6 +395,62 @@ func TestPostEmbeddingConsumerRegeneratesStaleVersionAndContent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPostEmbeddingConsumerBuildVersionLookupAndProfileInvalidation(t *testing.T) {
+	originalConfig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = originalConfig })
+
+	t.Run("shadow version writes without invalidating serving profiles", func(t *testing.T) {
+		config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{
+			ServingVersion: "post_embedding_v1",
+			BuildVersion:   "post_embedding_v2",
+		}}
+		store := newPostEmbeddingTestStore()
+		store.embeddingErr = nil
+		store.embedding = models.PostEmbedding{
+			PostID: 42, Version: "post_embedding_v1", ContentHash: embeddings.PostEmbeddingContentHash("Body"),
+		}
+		reader := &postEmbeddingTestReader{
+			messages:  []kafka.Message{postEmbeddingTestMessage(t, 42)},
+			stopErr:   errors.New("test reader stopped"),
+			publisher: &fakeRawKafkaMessagePublisher{},
+		}
+		embedder := &postEmbeddingTestEmbedder{}
+		err := consumePostEmbeddingMessagesWithPolicy(
+			context.Background(), reader, reader.publisher, embedder, store,
+			"post_embedding_v2", postEmbeddingRecoveryConfig(), kafkaRetryPolicy{MaxAttempts: 1},
+		)
+		if !errors.Is(err, reader.stopErr) || embedder.calls != 1 || reader.commitCalls != 1 || len(store.upserted) != 1 {
+			t.Fatalf("err=%v provider=%d commits=%d writes=%+v", err, embedder.calls, reader.commitCalls, store.upserted)
+		}
+		if len(store.embeddingVersions) != 1 || store.embeddingVersions[0] != "post_embedding_v2" || store.upserted[0].Version != "post_embedding_v2" {
+			t.Fatalf("lookups=%v upserts=%+v", store.embeddingVersions, store.upserted)
+		}
+		if len(store.invalidationFlags) != 1 || store.invalidationFlags[0] {
+			t.Fatalf("shadow-build invalidation flags=%v", store.invalidationFlags)
+		}
+	})
+
+	t.Run("serving build still invalidates profiles", func(t *testing.T) {
+		config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{
+			ServingVersion: "post_embedding_v2",
+			BuildVersion:   "post_embedding_v2",
+		}}
+		store := newPostEmbeddingTestStore()
+		reader := &postEmbeddingTestReader{
+			messages:  []kafka.Message{postEmbeddingTestMessage(t, 42)},
+			stopErr:   errors.New("test reader stopped"),
+			publisher: &fakeRawKafkaMessagePublisher{},
+		}
+		err := consumePostEmbeddingMessagesWithPolicy(
+			context.Background(), reader, reader.publisher, &postEmbeddingTestEmbedder{}, store,
+			"post_embedding_v2", postEmbeddingRecoveryConfig(), kafkaRetryPolicy{MaxAttempts: 1},
+		)
+		if !errors.Is(err, reader.stopErr) || len(store.invalidationFlags) != 1 || !store.invalidationFlags[0] {
+			t.Fatalf("err=%v invalidation flags=%v", err, store.invalidationFlags)
+		}
+	})
 }
 
 func TestPostEmbeddingConsumerCommitsMissingPosts(t *testing.T) {

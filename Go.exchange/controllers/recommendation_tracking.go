@@ -160,9 +160,9 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 		c.Following, c.Recent, c.Trending, c.Merged, cfg.Fusion.RankConstant,
 		cfg.LanguageAffinity.Enabled, cfg.LanguageAffinity.Weight, cfg.LanguageAffinity.EvidenceSaturationScale, cfg.LanguageAffinity.MaxBehaviorShare,
 		recommendationCandidateRetrievalVersion,
-		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion()),
+		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, config.ServingEmbeddingVersion()),
 		recommendationCanonicalOutcomeVersion, recommendationPassiveRecencyPolicy,
-		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, config.ActiveEmbeddingVersion(),
+		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, config.ServingEmbeddingVersion(),
 	)
 }
 func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {

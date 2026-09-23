@@ -8,10 +8,13 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/embeddings"
 	"Go.exchange/global"
+	"Go.exchange/initialize"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -26,10 +29,14 @@ func openRecommendationCandidateIntegrationDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := db.AutoMigrate(
 		&models.User{},
 		&models.UserFollow{},
 		&models.Post{},
+		&models.PostEmbedding{},
 		&models.PostBehavior{},
 		&models.PostReaction{},
 	); err != nil {
@@ -43,6 +50,9 @@ func openRecommendationCandidateIntegrationDB(t *testing.T) *gorm.DB {
 		global.Db = originalDB
 		config.AppConfig = originalConfig
 	})
+	if err := initialize.RunMigrations(); err != nil {
+		t.Fatal(err)
+	}
 	return db
 }
 
@@ -72,7 +82,16 @@ func newRecommendationCandidateIntegrationPost(t *testing.T, db *gorm.DB, author
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
+	embedding := models.PostEmbedding{
+		PostID: article.ID, Version: config.ServingEmbeddingVersion(), Model: "recommendation-candidate-test",
+		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}),
+		ContentHash: embeddings.PostEmbeddingContentHash(article.Content),
+	}
+	if err := db.Create(&embedding).Error; err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
+		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostEmbedding{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostReaction{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
@@ -82,6 +101,7 @@ func newRecommendationCandidateIntegrationPost(t *testing.T, db *gorm.DB, author
 
 func cleanupRecommendationCandidateIntegrationData(db *gorm.DB, postIDs, userIDs []uint) {
 	db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
+	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostEmbedding{})
 	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
 	db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})
 	db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
@@ -117,6 +137,117 @@ func TestLoadRecommendationCandidateSetUsesEqualRRFFusionIntegration(t *testing.
 	}
 	if want := 3.0 / 61; math.Abs(candidate.FusionScore-want) > 1e-12 {
 		t.Fatalf("fusion score=%v want=%v", candidate.FusionScore, want)
+	}
+}
+
+func TestRecommendationCandidateSourcesRequireServingEmbeddingIntegration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	viewer := newRecommendationCandidateIntegrationUser(t, db, "serving-viewer")
+	author := newRecommendationCandidateIntegrationUser(t, db, "serving-author")
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	v1Only := newRecommendationCandidateIntegrationPost(t, db, author, "v1-only", now.Add(-time.Minute))
+	v1AndV2 := newRecommendationCandidateIntegrationPost(t, db, author, "v1-and-v2", now)
+	if err := db.Create(&models.PostEmbedding{
+		PostID: v1AndV2.ID, Version: "post_embedding_v2", Model: "candidate-v2", Dimensions: 2,
+		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: embeddings.PostEmbeddingContentHash(v1AndV2.Content),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: author.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, post := range []models.Post{v1Only, v1AndV2} {
+		if err := db.Model(&models.Post{}).Where("id = ?", post.ID).Update("like_count", 1).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	postIDs := []uint{v1Only.ID, v1AndV2.ID}
+	userIDs := []uint{viewer.ID, author.ID}
+	t.Cleanup(func() { cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs) })
+
+	originalConfig := config.AppConfig
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{
+		ServingVersion: "post_embedding_v2",
+		BuildVersion:   "post_embedding_v2",
+	}}
+	t.Cleanup(func() { config.AppConfig = originalConfig })
+	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
+	served := map[uint]servedPost{}
+	cfg := defaultRecommendationConfig()
+	assertOnlyV2 := func(source string, candidates []embeddingCandidate, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s candidates: %v", source, err)
+		}
+		if len(candidates) != 1 || candidates[0].PostID != v1AndV2.ID {
+			t.Fatalf("%s candidates=%v, want only v1+v2 post %d", source, candidateIDs(candidates), v1AndV2.ID)
+		}
+	}
+	following, err := loadRecommendationFollowingCandidates(db, viewer.ID, profile, served, now, cfg, false, 10)
+	assertOnlyV2("following", following, err)
+	recent, err := loadRecommendationSourceCandidates(db, viewer.ID, profile, served, now, cfg, false, "posts.created_at DESC, posts.id DESC", 10, "recent")
+	assertOnlyV2("recent", recent, err)
+	trending, err := loadRecommendationTrendingCandidates(db, viewer.ID, profile, served, now, cfg, false, 10)
+	assertOnlyV2("trending", trending, err)
+	semantic, err := loadRecommendationSemanticPool(db, viewer.ID, profile, served, now, false, time.Time{}, "", 10, nil)
+	assertOnlyV2("semantic", semantic, err)
+	publicRecent, err := loadPublicRecommendationSourceCandidates(db, now, cfg, "posts.created_at DESC, posts.id DESC", 10, "recent", nil)
+	assertOnlyV2("public recent", publicRecent, err)
+	publicTrending, err := loadPublicRecommendationTrendingCandidates(db, now, cfg, 10, nil)
+	assertOnlyV2("public trending", publicTrending, err)
+}
+
+func TestRecommendationPreSwitchContinuesUsingV1Integration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	viewer := newRecommendationCandidateIntegrationUser(t, db, "pre-switch-viewer")
+	author := newRecommendationCandidateIntegrationUser(t, db, "pre-switch-author")
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	v1Only := newRecommendationCandidateIntegrationPost(t, db, author, "v1-only", now)
+	v2Only := newRecommendationCandidateIntegrationPost(t, db, author, "v2-only", now.Add(time.Minute))
+	if err := db.Unscoped().Where("post_id = ? AND version = ?", v2Only.ID, "post_embedding_v1").Delete(&models.PostEmbedding{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.PostEmbedding{
+		PostID: v2Only.ID, Version: "post_embedding_v2", Model: "candidate-v2", Dimensions: 2,
+		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: embeddings.PostEmbeddingContentHash(v2Only.Content),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: author.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs := []uint{v1Only.ID, v2Only.ID}
+	userIDs := []uint{viewer.ID, author.ID}
+	t.Cleanup(func() { cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs) })
+
+	originalConfig := config.AppConfig
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{
+		ServingVersion: "post_embedding_v1",
+		BuildVersion:   "post_embedding_v2",
+	}}
+	t.Cleanup(func() { config.AppConfig = originalConfig })
+	cfg := defaultRecommendationConfig()
+	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
+	served := map[uint]servedPost{}
+	authenticated, err := loadRecommendationSourceCandidates(db, viewer.ID, profile, served, now, cfg, false, "posts.created_at DESC, posts.id DESC", 10, "recent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := loadPublicRecommendationSourceCandidates(db, now, cfg, "posts.created_at DESC, posts.id DESC", 10, "recent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semantic, err := loadRecommendationSemanticPool(db, viewer.ID, profile, served, now, false, time.Time{}, "", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []struct {
+		name       string
+		candidates []embeddingCandidate
+	}{{"authenticated recent", authenticated}, {"public recent", public}, {"semantic", semantic}} {
+		if len(source.candidates) != 1 || source.candidates[0].PostID != v1Only.ID {
+			t.Fatalf("%s candidates=%v, want only v1 post %d", source.name, candidateIDs(source.candidates), v1Only.ID)
+		}
 	}
 }
 
@@ -280,7 +411,7 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 	var embeddingPostIDs []uint
 	loadRecommendationPostEmbeddings = func(_ *gorm.DB, postIDs []uint, _ string) (map[uint][]float32, error) {
 		embeddingPostIDs = append([]uint(nil), postIDs...)
-		return map[uint][]float32{}, nil
+		return map[uint][]float32{validArticle.ID: {1, 0}}, nil
 	}
 	t.Cleanup(func() {
 		loadRecommendationPostEmbeddings = originalLoader
@@ -349,6 +480,32 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 	}
 	if called {
 		t.Fatal("embedding loader was called for all-invalid candidates")
+	}
+}
+
+func TestRecommendationHydrationDropsCandidateWithoutServingEmbeddingIntegration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	author := newRecommendationCandidateIntegrationUser(t, db, "missing-serving-embedding")
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	article := newRecommendationCandidateIntegrationPost(t, db, author, "missing-serving-embedding", now)
+	postIDs := []uint{article.ID}
+	userIDs := []uint{author.ID}
+	t.Cleanup(func() { cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs) })
+
+	originalLoader := loadRecommendationPostEmbeddings
+	var requestedVersion string
+	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, version string) (map[uint][]float32, error) {
+		requestedVersion = version
+		return map[uint][]float32{}, nil
+	}
+	t.Cleanup(func() { loadRecommendationPostEmbeddings = originalLoader })
+
+	hydrated, err := hydrateRecommendationCandidates(db, []embeddingCandidate{{PostID: article.ID}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hydrated) != 0 || requestedVersion != config.ServingEmbeddingVersion() {
+		t.Fatalf("hydrated=%+v requested_version=%q want=%q", hydrated, requestedVersion, config.ServingEmbeddingVersion())
 	}
 }
 

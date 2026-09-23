@@ -47,8 +47,8 @@ var errPostEmbeddingSourceChanged = errors.New("post content changed during embe
 
 type postEmbeddingStore interface {
 	GetPost(context.Context, uint) (models.Post, error)
-	GetEmbedding(context.Context, uint) (models.PostEmbedding, error)
-	CommitEmbeddingIfCurrent(context.Context, models.PostEmbedding, time.Time) (postEmbeddingWriteOutcome, error)
+	GetEmbedding(context.Context, uint, string) (models.PostEmbedding, error)
+	CommitEmbeddingIfCurrent(context.Context, models.PostEmbedding, bool, time.Time) (postEmbeddingWriteOutcome, error)
 }
 
 type gormPostEmbeddingStore struct {
@@ -64,12 +64,12 @@ func (s gormPostEmbeddingStore) GetPost(ctx context.Context, postID uint) (model
 	return post, err
 }
 
-func (s gormPostEmbeddingStore) GetEmbedding(ctx context.Context, postID uint) (models.PostEmbedding, error) {
+func (s gormPostEmbeddingStore) GetEmbedding(ctx context.Context, postID uint, version string) (models.PostEmbedding, error) {
 	var embedding models.PostEmbedding
 	if s.db == nil {
 		return embedding, errors.New("database is not initialized")
 	}
-	err := s.db.WithContext(ctx).Where("post_id = ?", postID).First(&embedding).Error
+	err := s.db.WithContext(ctx).Where("post_id = ? AND version = ?", postID, version).First(&embedding).Error
 	return embedding, err
 }
 
@@ -77,7 +77,7 @@ func (s gormPostEmbeddingStore) GetEmbedding(ctx context.Context, postID uint) (
 // lock, then commits the embedding and authoritative user fan-out in one
 // transaction. The provider call happens before this method, so the post row
 // is not locked during external network work.
-func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, embedding models.PostEmbedding, now time.Time) (postEmbeddingWriteOutcome, error) {
+func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, embedding models.PostEmbedding, invalidateProfiles bool, now time.Time) (postEmbeddingWriteOutcome, error) {
 	if s.db == nil {
 		return postEmbeddingWriteCommitted, errors.New("database is not initialized")
 	}
@@ -100,23 +100,25 @@ func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, em
 			return nil
 		}
 		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "post_id"}},
+			Columns: []clause.Column{{Name: "post_id"}, {Name: "version"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
-				"version": embedding.Version, "model": embedding.Model, "dimensions": embedding.Dimensions,
+				"model": embedding.Model, "dimensions": embedding.Dimensions,
 				"embedding": embedding.Embedding, "content_hash": embedding.ContentHash, "updated_at": embedding.UpdatedAt,
 			}),
 		}).Create(&embedding).Error; err != nil {
 			return err
 		}
-		var users []uint
-		if err := tx.Raw(`
+		if invalidateProfiles {
+			var users []uint
+			if err := tx.Raw(`
 SELECT user_id FROM post_behaviors WHERE post_id = ?
 UNION
 SELECT user_id FROM post_reaction WHERE post_id = ?`, embedding.PostID, embedding.PostID).Scan(&users).Error; err != nil {
-			return err
-		}
-		if err := recommendation.InvalidateProfiles(tx, users, "post_embedding_changed", now); err != nil {
-			return err
+				return err
+			}
+			if err := recommendation.InvalidateProfiles(tx, users, "post_embedding_changed", now); err != nil {
+				return err
+			}
 		}
 		outcome = postEmbeddingWriteCommitted
 		return nil
@@ -159,10 +161,10 @@ func runPostEmbeddingConsumer(ctx context.Context) {
 		log.Printf("[PostEmbedding] consumer disabled: database is not initialized")
 		return
 	}
-	activeVersion := strings.TrimSpace(config.ActiveEmbeddingVersion())
-	if activeVersion == "" {
+	buildVersion := strings.TrimSpace(config.BuildEmbeddingVersion())
+	if buildVersion == "" {
 		PipelineFailure(PipelinePostEmbedding, "embedding_config_invalid", 0)
-		log.Printf("[PostEmbedding] consumer disabled: active embedding version is empty")
+		log.Printf("[PostEmbedding] consumer disabled: build embedding version is empty")
 		return
 	}
 	embedder, err := embeddings.NewOpenAICompatibleEmbedder(embeddingConfig)
@@ -184,7 +186,7 @@ func runPostEmbeddingConsumer(ctx context.Context) {
 	}()
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
 	store := gormPostEmbeddingStore{db: db}
-	if err := consumePostEmbeddingMessages(ctx, reader, publisher, embedder, store, activeVersion, kafkaConfig); err != nil && ctx.Err() == nil {
+	if err := consumePostEmbeddingMessages(ctx, reader, publisher, embedder, store, buildVersion, kafkaConfig); err != nil && ctx.Err() == nil {
 		if errors.Is(err, errPostEmbeddingSourceChanged) {
 			log.Printf("[PostEmbedding] source changed during embedding; leaving Kafka message uncommitted for redelivery")
 			return
@@ -200,10 +202,10 @@ func consumePostEmbeddingMessages(
 	publisher rawKafkaMessagePublisher,
 	embedder embeddings.Embedder,
 	store postEmbeddingStore,
-	activeVersion string,
+	buildVersion string,
 	kafkaConfig config.KafkaConfig,
 ) error {
-	return consumePostEmbeddingMessagesWithPolicy(ctx, reader, publisher, embedder, store, activeVersion, kafkaConfig, defaultKafkaRetryPolicy)
+	return consumePostEmbeddingMessagesWithPolicy(ctx, reader, publisher, embedder, store, buildVersion, kafkaConfig, defaultKafkaRetryPolicy)
 }
 
 func consumePostEmbeddingMessagesWithPolicy(
@@ -212,7 +214,7 @@ func consumePostEmbeddingMessagesWithPolicy(
 	publisher rawKafkaMessagePublisher,
 	embedder embeddings.Embedder,
 	store postEmbeddingStore,
-	activeVersion string,
+	buildVersion string,
 	kafkaConfig config.KafkaConfig,
 	policy kafkaRetryPolicy,
 ) error {
@@ -228,9 +230,9 @@ func consumePostEmbeddingMessagesWithPolicy(
 	if store == nil {
 		return errors.New("post embedding store is nil")
 	}
-	activeVersion = strings.TrimSpace(activeVersion)
-	if activeVersion == "" {
-		return errors.New("active embedding version is required")
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "" {
+		return errors.New("build embedding version is required")
 	}
 	kafkaConfig.ConsumerDLQTopic = strings.TrimSpace(kafkaConfig.ConsumerDLQTopic)
 	if kafkaConfig.ConsumerDLQTopic == "" {
@@ -245,7 +247,7 @@ func consumePostEmbeddingMessagesWithPolicy(
 			return err
 		}
 		started := time.Now()
-		processErr := processPostEmbeddingMessage(ctx, message, publisher, embedder, store, activeVersion, kafkaConfig, policy)
+		processErr := processPostEmbeddingMessage(ctx, message, publisher, embedder, store, buildVersion, kafkaConfig, policy)
 		if processErr != nil {
 			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
 			return processErr
@@ -279,7 +281,7 @@ func processPostEmbeddingMessage(
 	publisher rawKafkaMessagePublisher,
 	embedder embeddings.Embedder,
 	store postEmbeddingStore,
-	activeVersion string,
+	buildVersion string,
 	kafkaConfig config.KafkaConfig,
 	policy kafkaRetryPolicy,
 ) error {
@@ -292,9 +294,9 @@ func processPostEmbeddingMessage(
 	if store == nil {
 		return errors.New("post embedding store is nil")
 	}
-	activeVersion = strings.TrimSpace(activeVersion)
-	if activeVersion == "" {
-		return errors.New("active embedding version is required")
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "" {
+		return errors.New("build embedding version is required")
 	}
 	postID, err := decodePostEmbeddingMessage(message)
 	if err != nil {
@@ -307,7 +309,7 @@ func processPostEmbeddingMessage(
 		return publishPostEmbeddingDLQ(ctx, publisher, kafkaConfig, message, err)
 	}
 
-	post, contentHash, noop, err := loadPostEmbeddingSource(ctx, store, postID, activeVersion, policy)
+	post, contentHash, noop, err := loadPostEmbeddingSource(ctx, store, postID, buildVersion, policy)
 	if err != nil {
 		return err
 	}
@@ -329,11 +331,12 @@ func processPostEmbeddingMessage(
 	now := time.Now().UTC()
 	vector := pgvector.NewVector(result.Vectors[0])
 	embedding := models.PostEmbedding{
-		PostID: postID, Version: activeVersion, Model: modelName,
+		PostID: postID, Version: buildVersion, Model: modelName,
 		Dimensions: dimensions, Embedding: vector, ContentHash: contentHash,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	outcome, err := commitPostEmbedding(ctx, store, embedding, now, policy)
+	invalidateProfiles := buildVersion == config.ServingEmbeddingVersion()
+	outcome, err := commitPostEmbedding(ctx, store, embedding, invalidateProfiles, now, policy)
 	if err != nil {
 		return err
 	}
@@ -362,7 +365,7 @@ func loadPostEmbeddingSource(
 	ctx context.Context,
 	store postEmbeddingStore,
 	postID uint,
-	activeVersion string,
+	buildVersion string,
 	policy kafkaRetryPolicy,
 ) (models.Post, string, bool, error) {
 	var post models.Post
@@ -393,7 +396,7 @@ func loadPostEmbeddingSource(
 	var existing models.PostEmbedding
 	var embeddingErr error
 	err = retryPostEmbeddingStage(ctx, policy, func() error {
-		existing, embeddingErr = store.GetEmbedding(ctx, postID)
+		existing, embeddingErr = store.GetEmbedding(ctx, postID, buildVersion)
 		if errors.Is(embeddingErr, gorm.ErrRecordNotFound) {
 			return nil
 		}
@@ -409,7 +412,7 @@ func loadPostEmbeddingSource(
 	if err != nil {
 		return models.Post{}, "", false, err
 	}
-	if embeddingErr == nil && existing.Version == activeVersion && existing.ContentHash == contentHash {
+	if embeddingErr == nil && existing.ContentHash == contentHash {
 		metrics.RecordPostEmbeddingEvent("up_to_date")
 		return models.Post{}, "", true, nil
 	}
@@ -467,11 +470,11 @@ func validatePostEmbeddingResult(result embeddings.EmbedResult) error {
 	return nil
 }
 
-func commitPostEmbedding(ctx context.Context, store postEmbeddingStore, embedding models.PostEmbedding, now time.Time, policy kafkaRetryPolicy) (postEmbeddingWriteOutcome, error) {
+func commitPostEmbedding(ctx context.Context, store postEmbeddingStore, embedding models.PostEmbedding, invalidateProfiles bool, now time.Time, policy kafkaRetryPolicy) (postEmbeddingWriteOutcome, error) {
 	var outcome postEmbeddingWriteOutcome
 	err := retryPostEmbeddingStage(ctx, policy, func() error {
 		var err error
-		outcome, err = store.CommitEmbeddingIfCurrent(ctx, embedding, now)
+		outcome, err = store.CommitEmbeddingIfCurrent(ctx, embedding, invalidateProfiles, now)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()

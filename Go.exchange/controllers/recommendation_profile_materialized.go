@@ -43,9 +43,10 @@ func loadMaterializedUserInterestProfile(db *gorm.DB, userID uint, now time.Time
 		return profile, nil
 	}
 
-	expectedHash := recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion())
+	servingVersion := config.ServingEmbeddingVersion()
+	expectedHash := recommendation.ProfileConfigHash(cfg, servingVersion)
 	compatible := row.ProfileVersion == recommendation.MaterializedProfileVersion &&
-		row.ProfileConfigHash == expectedHash && row.EmbeddingVersion == config.ActiveEmbeddingVersion()
+		row.ProfileConfigHash == expectedHash && row.EmbeddingVersion == servingVersion
 	if !compatible {
 		profile.ProfileStatus = recommendationProfileStatusIncompatible
 		metrics.RecordRecommendationProfileLoad(recommendationProfileStatusIncompatible)

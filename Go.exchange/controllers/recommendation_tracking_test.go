@@ -75,7 +75,7 @@ func TestRecommendationRankerConfigHashExplorationDoesNotChangeProfileHash(t *te
 	mutated.LanguageAffinity.Weight = 0.1
 	mutated.LanguageAffinity.EvidenceSaturationScale = 9
 	mutated.LanguageAffinity.MaxBehaviorShare = 0.8
-	if got, want := recommendation.ProfileConfigHash(mutated, config.ActiveEmbeddingVersion()), recommendation.ProfileConfigHash(base, config.ActiveEmbeddingVersion()); got != want {
+	if got, want := recommendation.ProfileConfigHash(mutated, config.ServingEmbeddingVersion()), recommendation.ProfileConfigHash(base, config.ServingEmbeddingVersion()); got != want {
 		t.Fatalf("profile hash changed with exploration settings: got=%q want=%q", got, want)
 	}
 }

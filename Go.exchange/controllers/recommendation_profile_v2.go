@@ -410,7 +410,7 @@ func buildEmbeddingInterestProfile(behaviors []postBehaviorSignal, feedback []re
 		reactionRows[postID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
 	}
 	canonical := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
-	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, config.ActiveEmbeddingVersion(), func(ids []uint, version string) (map[uint][]float32, error) {
+	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, config.ServingEmbeddingVersion(), func(ids []uint, version string) (map[uint][]float32, error) {
 		return loadRecommendationPostEmbeddings(global.Db, ids, version)
 	})
 	if err != nil {

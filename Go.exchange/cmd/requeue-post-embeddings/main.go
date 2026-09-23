@@ -23,7 +23,6 @@ const requeuePostEmbeddingPageSize = 500
 type requeueStats struct {
 	Scanned      int
 	Missing      int
-	StaleVersion int
 	StaleContent int
 	Published    int
 }
@@ -32,27 +31,26 @@ type requeuePost struct {
 	ID                   uint
 	Content              string
 	EmbeddingPostID      *uint
-	EmbeddingVersion     *string
 	EmbeddingContentHash *string
 }
 
 type postEmbeddingReconciliationScanner interface {
-	ListPage(context.Context, uint, int) ([]requeuePost, error)
+	ListPage(context.Context, uint, int, string) ([]requeuePost, error)
 }
 
 type gormPostEmbeddingReconciliationScanner struct {
 	db *gorm.DB
 }
 
-func (s gormPostEmbeddingReconciliationScanner) ListPage(ctx context.Context, lastID uint, pageSize int) ([]requeuePost, error) {
+func (s gormPostEmbeddingReconciliationScanner) ListPage(ctx context.Context, lastID uint, pageSize int, buildVersion string) ([]requeuePost, error) {
 	if s.db == nil {
 		return nil, errors.New("database is not initialized")
 	}
 	var rows []requeuePost
 	err := s.db.WithContext(ctx).
 		Table("posts AS p").
-		Select("p.id, p.content, pe.post_id AS embedding_post_id, pe.version AS embedding_version, pe.content_hash AS embedding_content_hash").
-		Joins("LEFT JOIN post_embeddings AS pe ON pe.post_id = p.id").
+		Select("p.id, p.content, pe.post_id AS embedding_post_id, pe.content_hash AS embedding_content_hash").
+		Joins("LEFT JOIN post_embeddings AS pe ON pe.post_id = p.id AND pe.version = ?", buildVersion).
 		Where("p.deleted_at IS NULL AND p.id > ?", lastID).
 		Order("p.id ASC").
 		Limit(pageSize).
@@ -73,22 +71,22 @@ func main() {
 	}
 	defer publisher.Close()
 
-	stats, err := requeuePostEmbeddings(context.Background(), global.Db, publisher, config.ActiveEmbeddingVersion(), time.Now().UTC())
+	stats, err := requeuePostEmbeddings(context.Background(), global.Db, publisher, config.BuildEmbeddingVersion(), time.Now().UTC())
 	if err != nil {
 		log.Fatalf("failed to requeue post embeddings: %v", err)
 	}
-	log.Printf("post embedding reconciliation completed: scanned=%d missing=%d stale_version=%d stale_content=%d published=%d",
-		stats.Scanned, stats.Missing, stats.StaleVersion, stats.StaleContent, stats.Published)
+	log.Printf("post embedding reconciliation completed: scanned=%d missing=%d stale_content=%d published=%d",
+		stats.Scanned, stats.Missing, stats.StaleContent, stats.Published)
 }
 
-func requeuePostEmbeddings(ctx context.Context, db *gorm.DB, publisher eventing.BatchPublisher, activeVersion string, now time.Time) (requeueStats, error) {
+func requeuePostEmbeddings(ctx context.Context, db *gorm.DB, publisher eventing.BatchPublisher, buildVersion string, now time.Time) (requeueStats, error) {
 	if db == nil {
 		return requeueStats{}, errors.New("database is not initialized")
 	}
-	return reconcilePostEmbeddings(ctx, gormPostEmbeddingReconciliationScanner{db: db}, publisher, activeVersion, now)
+	return reconcilePostEmbeddings(ctx, gormPostEmbeddingReconciliationScanner{db: db}, publisher, buildVersion, now)
 }
 
-func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconciliationScanner, publisher eventing.BatchPublisher, activeVersion string, now time.Time) (requeueStats, error) {
+func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconciliationScanner, publisher eventing.BatchPublisher, buildVersion string, now time.Time) (requeueStats, error) {
 	stats := requeueStats{}
 	if scanner == nil {
 		return stats, errors.New("post embedding reconciliation scanner is nil")
@@ -96,9 +94,9 @@ func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconcili
 	if ctx == nil {
 		return stats, errors.New("post embedding reconciliation context is nil")
 	}
-	activeVersion = strings.TrimSpace(activeVersion)
-	if activeVersion == "" {
-		return stats, errors.New("active embedding version is required")
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "" {
+		return stats, errors.New("build embedding version is required")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -106,7 +104,7 @@ func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconcili
 
 	var lastID uint
 	for {
-		rows, err := scanner.ListPage(ctx, lastID, requeuePostEmbeddingPageSize)
+		rows, err := scanner.ListPage(ctx, lastID, requeuePostEmbeddingPageSize, buildVersion)
 		if err != nil {
 			return stats, fmt.Errorf("scan posts requiring embeddings: %w", err)
 		}
@@ -118,14 +116,11 @@ func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconcili
 
 		for _, row := range rows {
 			currentHash := embeddings.PostEmbeddingContentHash(row.Content)
-			if row.EmbeddingPostID != nil && row.EmbeddingVersion != nil && row.EmbeddingContentHash != nil &&
-				*row.EmbeddingVersion == activeVersion && *row.EmbeddingContentHash == currentHash {
+			if row.EmbeddingPostID != nil && row.EmbeddingContentHash != nil && *row.EmbeddingContentHash == currentHash {
 				continue
 			}
 			if row.EmbeddingPostID == nil {
 				stats.Missing++
-			} else if row.EmbeddingVersion == nil || *row.EmbeddingVersion != activeVersion {
-				stats.StaleVersion++
 			} else {
 				stats.StaleContent++
 			}

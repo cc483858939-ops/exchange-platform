@@ -36,7 +36,7 @@ func openRecommendationProfileControllerIntegrationDB(t *testing.T) *gorm.DB {
 	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
 	config.AppConfig = &config.Config{
-		Embedding: config.EmbeddingConfig{Version: recommendationProfileControllerIntegrationEmbeddingVersion},
+		Embedding: config.EmbeddingConfig{ServingVersion: recommendationProfileControllerIntegrationEmbeddingVersion},
 	}
 	t.Cleanup(func() {
 		global.Db = originalDB
@@ -93,8 +93,8 @@ func controllerIntegrationVector(values []float32) *pgvector.Vector {
 func compatibleControllerIntegrationProfile(userID uint, cfg config.RecommendationConfig, nextRebuildAt, computedAt time.Time) models.UserRecoProfile {
 	return models.UserRecoProfile{
 		UserID: userID, ProfileVersion: recommendation.MaterializedProfileVersion,
-		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion()),
-		EmbeddingVersion:  config.ActiveEmbeddingVersion(), Dimensions: 2,
+		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, config.ServingEmbeddingVersion()),
+		EmbeddingVersion:  config.ServingEmbeddingVersion(), Dimensions: 2,
 		PositiveVector:   controllerIntegrationVector([]float32{1, 0}),
 		NegativeVector:   controllerIntegrationVector([]float32{0, 1}),
 		NegativeEvidence: 6, PositiveSignalCount: 1, NegativeSignalCount: 1,

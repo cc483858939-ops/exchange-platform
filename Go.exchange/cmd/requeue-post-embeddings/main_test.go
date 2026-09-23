@@ -92,7 +92,7 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Scanned != 6 || stats.Missing != 3 || stats.StaleVersion != 1 || stats.StaleContent != 1 || stats.Published != 5 {
+	if stats.Scanned != 6 || stats.Missing != 4 || stats.StaleContent != 1 || stats.Published != 5 {
 		t.Fatalf("stats=%+v", stats)
 	}
 	if publisher.calls != 1 || len(publisher.events) != 5 {

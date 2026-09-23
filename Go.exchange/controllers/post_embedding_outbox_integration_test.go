@@ -55,7 +55,7 @@ func openPostEmbeddingOutboxIntegrationDatabase(t *testing.T) *gorm.DB {
 	originalDB, originalConfig := global.Db, config.AppConfig
 	global.Db = db
 	config.AppConfig = &config.Config{
-		Embedding: config.EmbeddingConfig{Enabled: true, Version: "test-version"},
+		Embedding: config.EmbeddingConfig{Enabled: true, ServingVersion: "test-version"},
 		Kafka: config.KafkaConfig{
 			PostEmbeddingTopic:  testPostEmbeddingTopic,
 			ActivityEventsTopic: testActivityTopic,

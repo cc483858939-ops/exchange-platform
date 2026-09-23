@@ -12,7 +12,8 @@ embedding:
   base_url: ""
   api_key: ""
   model: "@cf/baai/bge-m3"
-  version: "post_embedding_v1"
+  serving_version: "post_embedding_v1"
+  build_version: "post_embedding_v1"
   timeout_seconds: 10
 
 translation:

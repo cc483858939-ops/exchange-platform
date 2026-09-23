@@ -171,6 +171,25 @@ func TestValidateSchemaObjectsRequiresEveryPostContractObject(t *testing.T) {
 	}
 }
 
+func TestPostEmbeddingRuntimeSchemaCanaryRequiresVersionedIdentityAndIndex(t *testing.T) {
+	for _, canary := range postSchemaObjectCanaries {
+		if canary.Table != "post_embeddings" {
+			continue
+		}
+		indexes := make(map[string]struct{}, len(canary.Indexes))
+		for _, index := range canary.Indexes {
+			indexes[index] = struct{}{}
+		}
+		for _, required := range []string{"post_embeddings_pkey", "idx_post_embeddings_version_post"} {
+			if _, exists := indexes[required]; !exists {
+				t.Fatalf("post_embeddings schema canary is missing index %q: %v", required, canary.Indexes)
+			}
+		}
+		return
+	}
+	t.Fatal("post_embeddings schema canary is missing")
+}
+
 func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	db, err := gorm.Open(postgres.Open("host=127.0.0.1 user=unused dbname=unused sslmode=disable"), &gorm.Config{
 		DryRun:               true,

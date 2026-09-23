@@ -25,7 +25,7 @@ func openRecommendationRecallV3IntegrationDB(t *testing.T) *gorm.DB {
 	}
 
 	originalConfig := config.AppConfig
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{Version: "recommendation-recall-v3-test"}}
+	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{ServingVersion: "recommendation-recall-v3-test"}}
 	t.Cleanup(func() { config.AppConfig = originalConfig })
 	return db
 }
@@ -35,7 +35,7 @@ func newRecommendationSemanticPost(t *testing.T, db *gorm.DB, author models.User
 	article := newRecommendationCandidateIntegrationPost(t, db, author, title, publishedAt)
 	if err := db.Create(&models.PostEmbedding{
 		PostID:      article.ID,
-		Version:     config.ActiveEmbeddingVersion(),
+		Version:     config.ServingEmbeddingVersion(),
 		Model:       "recommendation-recall-v3-test",
 		Dimensions:  len(vector),
 		Embedding:   pgvector.NewVector(vector),

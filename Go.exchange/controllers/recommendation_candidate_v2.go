@@ -54,6 +54,12 @@ func recommendationEligibilityQuery(db *gorm.DB, query *gorm.DB, userID uint, se
 	negative = negative.Where("NOT EXISTS (?)", laterLike).Where("NOT EXISTS (?)", laterReply)
 	query = publicPostScope(query, now).
 		Where("posts.reply_to_post_id IS NULL").
+		Where(`EXISTS (
+			SELECT 1
+			FROM post_embeddings AS serving_embedding
+			WHERE serving_embedding.post_id = posts.id
+			  AND serving_embedding.version = ?
+		)`, config.ServingEmbeddingVersion()).
 		Where(
 			"EXISTS (SELECT 1 FROM users AS recommendation_authors "+
 				"WHERE recommendation_authors.id = posts.author_id "+
@@ -179,7 +185,7 @@ func loadRecommendationSemanticPool(db *gorm.DB, userID uint, profile userIntere
 		db.Table("post_embeddings AS ae").
 			Select("ae.post_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
 			Joins("JOIN posts ON posts.id = ae.post_id").
-			Where("ae.version = ? AND ae.dimensions = ?", config.ActiveEmbeddingVersion(), len(profile.PositiveVector)),
+			Where("ae.version = ? AND ae.dimensions = ?", config.ServingEmbeddingVersion(), len(profile.PositiveVector)),
 		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	)
 	query = applyLegacyProfileInteractionExclusion(query, profile)
@@ -338,6 +344,12 @@ posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 func publicRecommendationEligibilityQuery(query *gorm.DB, now time.Time, excluded map[uint]struct{}) *gorm.DB {
 	query = publicPostScope(query, now).
 		Where("posts.reply_to_post_id IS NULL").
+		Where(`EXISTS (
+			SELECT 1
+			FROM post_embeddings AS serving_embedding
+			WHERE serving_embedding.post_id = posts.id
+			  AND serving_embedding.version = ?
+		)`, config.ServingEmbeddingVersion()).
 		Where(
 			"EXISTS (SELECT 1 FROM users AS recommendation_authors " +
 				"WHERE recommendation_authors.id = posts.author_id " +
@@ -546,7 +558,7 @@ func hydrateRecommendationCandidates(db *gorm.DB, candidates []embeddingCandidat
 	if len(validPostIDs) == 0 {
 		return nil, nil
 	}
-	embeddings, err := loadRecommendationPostEmbeddings(db, validPostIDs, config.ActiveEmbeddingVersion())
+	embeddings, err := loadRecommendationPostEmbeddings(db, validPostIDs, config.ServingEmbeddingVersion())
 	if err != nil {
 		return nil, err
 	}
@@ -560,7 +572,11 @@ func hydrateRecommendationCandidates(db *gorm.DB, candidates []embeddingCandidat
 		if !ok {
 			continue
 		}
-		result = append(result, hydratedRecommendationCandidate{Candidate: candidate, Post: post, Embedding: embeddings[candidate.PostID]})
+		embedding, exists := embeddings[candidate.PostID]
+		if !exists || len(embedding) == 0 {
+			continue
+		}
+		result = append(result, hydratedRecommendationCandidate{Candidate: candidate, Post: post, Embedding: embedding})
 	}
 	return result, nil
 }

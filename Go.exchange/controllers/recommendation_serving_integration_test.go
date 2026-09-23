@@ -20,8 +20,8 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 	profile := models.UserRecoProfile{
 		UserID:            viewer.ID,
 		ProfileVersion:    recommendation.MaterializedProfileVersion,
-		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, config.ActiveEmbeddingVersion()),
-		EmbeddingVersion:  config.ActiveEmbeddingVersion(),
+		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, config.ServingEmbeddingVersion()),
+		EmbeddingVersion:  config.ServingEmbeddingVersion(),
 		Dimensions:        0,
 		ComputedAt:        now.Add(-time.Minute),
 		NextRebuildAt:     now.Add(time.Hour),

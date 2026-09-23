@@ -14,16 +14,18 @@ type reconciliationTestScanner struct {
 	pages [][]requeuePost
 	err   error
 	calls []struct {
-		lastID   uint
-		pageSize int
+		lastID       uint
+		pageSize     int
+		buildVersion string
 	}
 }
 
-func (s *reconciliationTestScanner) ListPage(_ context.Context, lastID uint, pageSize int) ([]requeuePost, error) {
+func (s *reconciliationTestScanner) ListPage(_ context.Context, lastID uint, pageSize int, buildVersion string) ([]requeuePost, error) {
 	s.calls = append(s.calls, struct {
-		lastID   uint
-		pageSize int
-	}{lastID: lastID, pageSize: pageSize})
+		lastID       uint
+		pageSize     int
+		buildVersion string
+	}{lastID: lastID, pageSize: pageSize, buildVersion: buildVersion})
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -50,17 +52,17 @@ func (p *reconciliationTestPublisher) PublishBatch(_ context.Context, events []e
 	return nil
 }
 
-func reconciliationPost(id uint, _ string, content string, version, hash *string) requeuePost {
+func reconciliationPost(id uint, content string, hasTargetEmbedding bool, hash *string) requeuePost {
 	return requeuePost{
 		ID: id, Content: content,
 		EmbeddingPostID: func() *uint {
-			if version == nil && hash == nil {
+			if !hasTargetEmbedding {
 				return nil
 			}
 			value := id
 			return &value
 		}(),
-		EmbeddingVersion: version, EmbeddingContentHash: hash,
+		EmbeddingContentHash: hash,
 	}
 }
 
@@ -69,18 +71,18 @@ func stringPointer(value string) *string { return &value }
 func TestReconcilePostEmbeddingsClassifiesAndPublishesOnlyStaleRows(t *testing.T) {
 	currentHash := embeddings.PostEmbeddingContentHash("body")
 	scanner := &reconciliationTestScanner{pages: [][]requeuePost{{
-		reconciliationPost(1, "missing", "body", nil, nil),
-		reconciliationPost(2, "current", "body", stringPointer("v1"), stringPointer(currentHash)),
-		reconciliationPost(3, "both stale", "body", stringPointer("old"), stringPointer("old-hash")),
-		reconciliationPost(4, "content stale", "body", stringPointer("v1"), stringPointer("old-hash")),
+		reconciliationPost(1, "body", false, nil),
+		reconciliationPost(2, "body", true, stringPointer(currentHash)),
+		reconciliationPost(3, "body", false, nil), // v1 exists, but the target-v2 join is missing.
+		reconciliationPost(4, "body", true, stringPointer("old-hash")),
 	}, nil}}
 	publisher := &reconciliationTestPublisher{}
 
-	stats, err := reconcilePostEmbeddings(context.Background(), scanner, publisher, "v1", time.Now().UTC())
+	stats, err := reconcilePostEmbeddings(context.Background(), scanner, publisher, "v2", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Scanned != 4 || stats.Missing != 1 || stats.StaleVersion != 1 || stats.StaleContent != 1 || stats.Published != 3 {
+	if stats.Scanned != 4 || stats.Missing != 2 || stats.StaleContent != 1 || stats.Published != 3 {
 		t.Fatalf("stats=%+v", stats)
 	}
 	if publisher.calls != 1 || len(publisher.events) != 3 {
@@ -92,13 +94,13 @@ func TestReconcilePostEmbeddingsPaginationAdvancesWithoutDuplicates(t *testing.T
 	first := make([]requeuePost, 500)
 	for index := range first {
 		id := uint(index + 1)
-		first[index] = reconciliationPost(id, "title", "body", nil, nil)
+		first[index] = reconciliationPost(id, "body", false, nil)
 	}
-	second := []requeuePost{reconciliationPost(501, "title", "body", nil, nil)}
+	second := []requeuePost{reconciliationPost(501, "body", false, nil)}
 	scanner := &reconciliationTestScanner{pages: [][]requeuePost{first, second, nil}}
 	publisher := &reconciliationTestPublisher{}
 
-	stats, err := reconcilePostEmbeddings(context.Background(), scanner, publisher, "v1", time.Now().UTC())
+	stats, err := reconcilePostEmbeddings(context.Background(), scanner, publisher, "v2", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +111,8 @@ func TestReconcilePostEmbeddingsPaginationAdvancesWithoutDuplicates(t *testing.T
 		t.Fatalf("calls=%+v", scanner.calls)
 	}
 	for _, call := range scanner.calls {
-		if call.pageSize != requeuePostEmbeddingPageSize {
-			t.Fatalf("page size=%d", call.pageSize)
+		if call.pageSize != requeuePostEmbeddingPageSize || call.buildVersion != "v2" {
+			t.Fatalf("scanner call=%+v", call)
 		}
 	}
 	seen := make(map[string]struct{}, len(publisher.events))
@@ -125,7 +127,7 @@ func TestReconcilePostEmbeddingsPaginationAdvancesWithoutDuplicates(t *testing.T
 func TestReconcilePostEmbeddingsPublishAndScannerFailures(t *testing.T) {
 	t.Run("publish", func(t *testing.T) {
 		publisherErr := errors.New("broker down")
-		scanner := &reconciliationTestScanner{pages: [][]requeuePost{{reconciliationPost(1, "title", "body", nil, nil)}}}
+		scanner := &reconciliationTestScanner{pages: [][]requeuePost{{reconciliationPost(1, "body", false, nil)}}}
 		_, err := reconcilePostEmbeddings(context.Background(), scanner, &reconciliationTestPublisher{err: publisherErr}, "v1", time.Now().UTC())
 		if !errors.Is(err, publisherErr) {
 			t.Fatalf("err=%v", err)

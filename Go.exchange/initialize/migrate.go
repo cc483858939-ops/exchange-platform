@@ -369,6 +369,9 @@ func applyRecommendationProfileMaterializationSchema(tx *gorm.DB) error {
 
 func applyPostEmbeddingConstraints(tx *gorm.DB) error {
 	statements := []string{
+		"ALTER TABLE post_embeddings DROP CONSTRAINT IF EXISTS post_embeddings_pkey",
+		"ALTER TABLE post_embeddings ADD CONSTRAINT post_embeddings_pkey PRIMARY KEY (post_id, version)",
+		"CREATE INDEX IF NOT EXISTS idx_post_embeddings_version_post ON post_embeddings (version, post_id)",
 		"ALTER TABLE post_embeddings DROP CONSTRAINT IF EXISTS fk_post_embeddings_post",
 		"ALTER TABLE post_embeddings ADD CONSTRAINT fk_post_embeddings_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE post_embeddings DROP CONSTRAINT IF EXISTS chk_post_embeddings_vector_dimensions",
