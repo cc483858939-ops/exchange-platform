@@ -606,7 +606,9 @@ describe('UserProfileView profile cover editor', () => {
     expect(mocks.authStore.syncCurrentIdentityProfile).toHaveBeenCalledWith(updated);
   });
 
-  it('uploads a cover-only edit once, patches once, and updates the profile immediately', async () => {
+  it('uploads the cropped cover file on Save and patches the returned URL once', async () => {
+    const source = new File(['raw-source'], 'original.webp', { type: 'image/webp' });
+    const cropped = new File(['cropped-output'], 'original-cover-cropped.png', { type: 'image/png' });
     const uploadedURL = '/api/files/profile-covers/users/v1/7/new.webp';
     const updated = profile(7, uploadedURL);
     mocks.uploadProfileCover.mockResolvedValue(uploadedURL);
@@ -614,11 +616,22 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
-    await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
+
+    await setCoverFile(wrapper, source);
+    expect(source).not.toBe(cropped);
+    expect(wrapper.find('.cover-crop-dialog').exists()).toBe(true);
+    expect(mocks.uploadProfileCover).not.toHaveBeenCalled();
+
+    await applyCoverCrop(wrapper, cropped);
+    expect(URL.createObjectURL).toHaveBeenCalledWith(cropped);
+    expect(mocks.uploadProfileCover).not.toHaveBeenCalled();
+
     await submitEditor(wrapper);
 
     expect(mocks.uploadProfileAvatar).not.toHaveBeenCalled();
     expect(mocks.uploadProfileCover).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadProfileCover.mock.calls[0]?.[0]).toBe(cropped);
+    expect(mocks.uploadProfileCover.mock.calls[0]?.[0]).not.toBe(source);
     expect(mocks.updateUserProfile).toHaveBeenCalledTimes(1);
     expect(mocks.updateUserProfile).toHaveBeenCalledWith(7, { cover_image_url: uploadedURL });
     expect(mocks.authStore.syncCurrentIdentityProfile).toHaveBeenCalledWith(updated);
