@@ -106,6 +106,7 @@ import {
   centeredAvatarCropState,
   decodeAvatarImage,
   isAvatarCropError,
+  remapAvatarCropState,
   zoomAvatarCropState,
   type AvatarCropGeometry,
   type AvatarCropState,
@@ -184,13 +185,15 @@ const resetCrop = () => {
 
 const measureCropViewport = () => {
   const measured = cropViewportRef.value?.clientWidth ?? 0;
-  if (measured <= 0 || !geometry.value || measured === cropSize.value) return;
-  const previousState = cropState.value;
-  cropSize.value = measured;
+  const oldGeometry = geometry.value;
+  if (measured <= 0 || !oldGeometry || measured === cropSize.value) return;
+
   const nextGeometry = createAvatarCropGeometry(measured, naturalWidth.value, naturalHeight.value);
-  if (nextGeometry) {
-    setCropState(clampAvatarCropState(previousState, nextGeometry));
-  }
+  if (!nextGeometry) return;
+
+  const nextState = remapAvatarCropState(cropState.value, oldGeometry, nextGeometry);
+  cropSize.value = measured;
+  setCropState(nextState);
 };
 
 const openDialog = () => {

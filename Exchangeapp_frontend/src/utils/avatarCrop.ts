@@ -5,6 +5,7 @@ import {
   decodeImage,
   imageCropSourceRect,
   isImageCropError,
+  remapImageCropState,
   zoomImageCropState,
   type ImageCropGeometry,
   type ImageCropSource,
@@ -99,6 +100,16 @@ export const zoomAvatarCropState = (
   nextScale: number,
   geometry: AvatarCropGeometry,
 ): AvatarCropState => zoomImageCropState(state, nextScale, toImageCropGeometry(geometry));
+
+export const remapAvatarCropState = (
+  state: AvatarCropState,
+  oldGeometry: AvatarCropGeometry,
+  newGeometry: AvatarCropGeometry,
+): AvatarCropState => remapImageCropState(
+  state,
+  toImageCropGeometry(oldGeometry),
+  toImageCropGeometry(newGeometry),
+);
 
 export const avatarCropSourceRect = (
   state: AvatarCropState,

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { flushPromises, mount } from '@vue/test-utils';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import AvatarCropDialog from './AvatarCropDialog.vue';
-import { AvatarCropError } from '../../utils/avatarCrop';
+import { AvatarCropError, createAvatarCropGeometry } from '../../utils/avatarCrop';
 
 const mocks = vi.hoisted(() => ({
   decodeAvatarImage: vi.fn(),
@@ -63,7 +63,30 @@ const settle = async () => {
   await Promise.resolve();
 };
 
+const readCropState = (wrapper: VueWrapper, cropSize: number) => {
+  const image = wrapper.get('.avatar-crop-dialog__image').element as HTMLImageElement;
+  const transform = image.style.transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px, 0\)/);
+  if (!transform) throw new Error('Crop image transform not found');
+
+  const scale = Number.parseFloat(image.style.width) / 1600;
+  const offsetX = Number(transform[1]);
+  const offsetY = Number(transform[2]);
+  const geometry = createAvatarCropGeometry(cropSize, 1600, 900)!;
+  return {
+    scale,
+    offsetX,
+    offsetY,
+    zoomRatio: (scale - geometry.minScale) / (geometry.maxScale - geometry.minScale),
+    sourceCenterX: (cropSize / 2 - offsetX) / scale,
+    sourceCenterY: (cropSize / 2 - offsetY) / scale,
+  };
+};
+
 describe('AvatarCropDialog', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.decodeAvatarImage.mockResolvedValue({
@@ -104,6 +127,48 @@ describe('AvatarCropDialog', () => {
     await wrapper.get('.avatar-crop-dialog__reset').trigger('click');
     expect(image.attributes('style')).toContain('width: 640px');
     expect(image.attributes('style')).toContain('translate3d(-140px, 0px, 0)');
+  });
+
+  it('preserves crop center and normalized zoom when the viewport is resized', async () => {
+    vi.stubGlobal('ResizeObserver', undefined);
+    const wrapper = mountDialog();
+    const viewport = wrapper.get('.avatar-crop-dialog__viewport').element;
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 360 });
+    await settle();
+
+    await wrapper.get('#avatar-crop-zoom').setValue('0.5');
+    await wrapper.get('.avatar-crop-dialog__viewport').trigger('pointerdown', {
+      pointerId: 7,
+      clientX: 100,
+      clientY: 100,
+    });
+    await wrapper.get('.avatar-crop-dialog__viewport').trigger('pointermove', {
+      pointerId: 7,
+      clientX: 125,
+      clientY: 85,
+    });
+    await wrapper.get('.avatar-crop-dialog__viewport').trigger('pointerup', {
+      pointerId: 7,
+      clientX: 125,
+      clientY: 85,
+    });
+
+    const beforeResize = readCropState(wrapper, 360);
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 300 });
+    window.dispatchEvent(new Event('resize'));
+    await wrapper.vm.$nextTick();
+
+    const afterResize = readCropState(wrapper, 300);
+    expect(afterResize.zoomRatio).toBeCloseTo(beforeResize.zoomRatio);
+    expect(afterResize.sourceCenterX).toBeCloseTo(beforeResize.sourceCenterX);
+    expect(afterResize.sourceCenterY).toBeCloseTo(beforeResize.sourceCenterY);
+
+    await wrapper.get('.avatar-crop-dialog__reset').trigger('click');
+    const afterReset = readCropState(wrapper, 300);
+    expect(afterReset.zoomRatio).toBeCloseTo(0);
+    expect(afterReset.offsetX).toBeCloseTo((300 - 1600 * createAvatarCropGeometry(300, 1600, 900)!.minScale) / 2);
+    expect(afterReset.offsetY).toBeCloseTo(0);
+    wrapper.unmount();
   });
 
   it('cancels without applying and applies a generated file only after Apply', async () => {

@@ -8,6 +8,7 @@ import {
   createAvatarCropGeometry,
   createCroppedAvatar,
   decodeAvatarImage,
+  remapAvatarCropState,
   zoomAvatarCropState,
 } from './avatarCrop';
 
@@ -55,6 +56,57 @@ describe('avatar crop geometry', () => {
       width: 250,
       height: 250,
     });
+  });
+
+  it('preserves normalized zoom and source center when the avatar viewport changes size', () => {
+    const oldGeometry = createAvatarCropGeometry(360, 1600, 900)!;
+    const newGeometry = createAvatarCropGeometry(300, 1600, 900)!;
+    let state = centeredAvatarCropState(oldGeometry);
+    state = zoomAvatarCropState(state, oldGeometry.minScale * 2.5, oldGeometry);
+    state = clampAvatarCropState({
+      ...state,
+      offsetX: state.offsetX - 40,
+      offsetY: state.offsetY - 20,
+    }, oldGeometry);
+
+    const oldSourceCenter = {
+      x: (oldGeometry.cropSize / 2 - state.offsetX) / state.scale,
+      y: (oldGeometry.cropSize / 2 - state.offsetY) / state.scale,
+    };
+    const oldZoomRatio = (state.scale - oldGeometry.minScale)
+      / (oldGeometry.maxScale - oldGeometry.minScale);
+    const remapped = remapAvatarCropState(state, oldGeometry, newGeometry);
+    const newSourceCenter = {
+      x: (newGeometry.cropSize / 2 - remapped.offsetX) / remapped.scale,
+      y: (newGeometry.cropSize / 2 - remapped.offsetY) / remapped.scale,
+    };
+    const newZoomRatio = (remapped.scale - newGeometry.minScale)
+      / (newGeometry.maxScale - newGeometry.minScale);
+
+    expect(newZoomRatio).toBeCloseTo(oldZoomRatio);
+    expect(newSourceCenter.x).toBeCloseTo(oldSourceCenter.x);
+    expect(newSourceCenter.y).toBeCloseTo(oldSourceCenter.y);
+  });
+
+  it('keeps a remapped edge crop clamped to the resized viewport', () => {
+    const oldGeometry = createAvatarCropGeometry(360, 1600, 900)!;
+    const newGeometry = createAvatarCropGeometry(300, 1600, 900)!;
+    const edgeState = clampAvatarCropState({
+      scale: oldGeometry.maxScale,
+      offsetX: -100_000,
+      offsetY: 100_000,
+    }, oldGeometry);
+
+    const remapped = remapAvatarCropState(edgeState, oldGeometry, newGeometry);
+    const displayWidth = newGeometry.naturalWidth * remapped.scale;
+    const displayHeight = newGeometry.naturalHeight * remapped.scale;
+
+    expect(displayWidth).toBeGreaterThanOrEqual(newGeometry.cropSize);
+    expect(displayHeight).toBeGreaterThanOrEqual(newGeometry.cropSize);
+    expect(remapped.offsetX).toBeLessThanOrEqual(0);
+    expect(remapped.offsetY).toBeLessThanOrEqual(0);
+    expect(remapped.offsetX).toBeGreaterThanOrEqual(newGeometry.cropSize - displayWidth);
+    expect(remapped.offsetY).toBeGreaterThanOrEqual(newGeometry.cropSize - displayHeight);
   });
 });
 
