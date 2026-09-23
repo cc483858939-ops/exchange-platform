@@ -50,7 +50,7 @@ describe('RepostAction', () => {
       expect(path.attributes()).toMatchObject({
         fill: 'none',
         stroke: 'currentColor',
-        'stroke-width': '2.1',
+        'stroke-width': '1.8',
         'stroke-linecap': 'round',
         'stroke-linejoin': 'round',
       });

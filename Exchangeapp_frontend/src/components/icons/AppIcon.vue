@@ -241,18 +241,18 @@
 
     <template v-else-if="props.name === 'repost'">
       <path
-        d="M10.25 17.25H7.75A3 3 0 0 1 4.75 14.25V6.75M2.75 8.75 4.75 6.75 6.75 8.75"
+        d="M10.75 17.5H6.5A3 3 0 0 1 3.5 14.5V5.25M1.25 7.5 3.5 5.25 5.75 7.5"
         fill="none"
         stroke="currentColor"
-        stroke-width="2.1"
+        stroke-width="1.8"
         stroke-linecap="round"
         stroke-linejoin="round"
       />
       <path
-        d="M13.75 6.75H16.25A3 3 0 0 1 19.25 9.75V17.25M17.25 15.25 19.25 17.25 21.25 15.25"
+        d="M13.25 6.5H17.5A3 3 0 0 1 20.5 9.5V18.75M18.25 16.5 20.5 18.75 22.75 16.5"
         fill="none"
         stroke="currentColor"
-        stroke-width="2.1"
+        stroke-width="1.8"
         stroke-linecap="round"
         stroke-linejoin="round"
       />
