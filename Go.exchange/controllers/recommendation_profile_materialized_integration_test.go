@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/embeddings"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
@@ -83,6 +84,18 @@ func newRecommendationProfileControllerIntegrationPost(t *testing.T, db *gorm.DB
 		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 	})
 	return article
+}
+
+func addRecommendationProfileControllerServingEmbedding(t *testing.T, db *gorm.DB, post models.Post) {
+	t.Helper()
+	embedding := models.PostEmbedding{
+		PostID: post.ID, Version: config.ServingEmbeddingVersion(), Model: "p1a-follow-up-controller-test",
+		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}),
+		ContentHash: embeddings.PostEmbeddingContentHash(post.Content),
+	}
+	if err := db.Create(&embedding).Error; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func controllerIntegrationVector(values []float32) *pgvector.Vector {
@@ -195,6 +208,8 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	interacted := newRecommendationProfileControllerIntegrationPost(t, db, author.ID, "interacted", now)
 	eligible := newRecommendationProfileControllerIntegrationPost(t, db, author.ID, "eligible", now.Add(-time.Minute))
+	addRecommendationProfileControllerServingEmbedding(t, db, interacted)
+	addRecommendationProfileControllerServingEmbedding(t, db, eligible)
 	if err := db.Create(&models.UserPostRecoState{
 		UserID: viewer.ID, PostID: interacted.ID, Interacted: true,
 		CanonicalVersion: recommendation.CanonicalOutcomeVersion, RebuiltAt: now,
@@ -229,6 +244,7 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 	author := newRecommendationProfileControllerIntegrationUser(t, db, "ni-author")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	article := newRecommendationProfileControllerIntegrationPost(t, db, author.ID, "not-interested", now)
+	addRecommendationProfileControllerServingEmbedding(t, db, article)
 	if err := db.Create(&models.PostBehavior{
 		UserID: viewer.ID, PostID: article.ID, Action: eventing.RecommendationBehaviorActionNotInterested,
 		Count: 1, LastSeenAt: now.Add(-time.Minute), Active: true,

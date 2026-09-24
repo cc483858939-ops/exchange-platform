@@ -36,6 +36,7 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 		article := newRecommendationProfileControllerIntegrationPost(
 			t, db, author.ID, "authenticated-serving-candidate", now.Add(-time.Duration(index+1)*time.Minute),
 		)
+		addRecommendationProfileControllerServingEmbedding(t, db, article)
 		if err := db.Model(&models.Post{}).Where("id = ?", article.ID).Updates(map[string]interface{}{
 			"like_count": int64(candidateCount - index),
 		}).Error; err != nil {

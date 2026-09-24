@@ -32,7 +32,7 @@ func openRecommendationRecallV3IntegrationDB(t *testing.T) *gorm.DB {
 
 func newRecommendationSemanticPost(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, vector []float32) models.Post {
 	t.Helper()
-	article := newRecommendationCandidateIntegrationPost(t, db, author, title, publishedAt)
+	article := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, title, publishedAt)
 	if err := db.Create(&models.PostEmbedding{
 		PostID:      article.ID,
 		Version:     config.ServingEmbeddingVersion(),
@@ -126,12 +126,21 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 	notInterested := newRecommendationSemanticPost(t, db, validAuthor, "semantic-not-interested", now.Add(-4*time.Hour), vector)
 	served := newRecommendationSemanticPost(t, db, validAuthor, "semantic-served", now.Add(-5*time.Hour), vector)
 	deleted := newRecommendationSemanticPost(t, db, deletedAuthor, "semantic-deleted-author", now.Add(-6*time.Hour), vector)
-	wrongVersion := newRecommendationCandidateIntegrationPost(t, db, validAuthor, "semantic-wrong-version", now.Add(-7*time.Hour))
+	wrongVersion := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, validAuthor, "semantic-wrong-version", now.Add(-7*time.Hour))
 	if err := db.Create(&models.PostEmbedding{
 		PostID: wrongVersion.ID, Version: "old-embedding-version", Model: "test", Dimensions: 2,
 		Embedding: pgvector.NewVector(vector), ContentHash: "semantic-wrong-version",
 	}).Error; err != nil {
 		t.Fatal(err)
+	}
+	var servingEmbeddingCount int64
+	if err := db.Model(&models.PostEmbedding{}).
+		Where("post_id = ? AND version = ?", wrongVersion.ID, config.ServingEmbeddingVersion()).
+		Count(&servingEmbeddingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if servingEmbeddingCount != 0 {
+		t.Fatalf("wrong-version fixture has %d serving embeddings, want none", servingEmbeddingCount)
 	}
 	postIDs := []uint{valid.ID, self.ID, interacted.ID, notInterested.ID, served.ID, deleted.ID, wrongVersion.ID}
 	userIDs := []uint{viewer.ID, validAuthor.ID, deletedAuthor.ID}

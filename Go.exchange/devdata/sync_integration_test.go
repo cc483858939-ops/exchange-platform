@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
+	"Go.exchange/embeddings"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
@@ -55,6 +57,22 @@ func openDevDataIntegrationDB(t *testing.T) *gorm.DB {
 		t.Fatalf("run DevData integration migrations: %v", err)
 	}
 	return db
+}
+
+func addDevDataServingEmbedding(t *testing.T, db *gorm.DB, postID uint) {
+	t.Helper()
+	var post models.Post
+	if err := db.First(&post, postID).Error; err != nil {
+		t.Fatalf("load Post %d for serving embedding: %v", postID, err)
+	}
+	embedding := models.PostEmbedding{
+		PostID: post.ID, Version: config.ServingEmbeddingVersion(), Model: "devdata-integration-serving",
+		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}),
+		ContentHash: embeddings.PostEmbeddingContentHash(post.Content),
+	}
+	if err := db.Create(&embedding).Error; err != nil {
+		t.Fatalf("create serving embedding for Post %d: %v", postID, err)
+	}
 }
 
 func newSyncIntegrationData() syncIntegrationData {
@@ -801,12 +819,16 @@ func TestDevDataMirrorSyncLifecycleIntegration(t *testing.T) {
 	if followCount != 1 {
 		t.Fatalf("follow was not preserved after retirement")
 	}
+	addDevDataServingEmbedding(t, db, keepLocalID)
 	verification, err := VerifyCore(context.Background(), db, data.Registry, now.Add(5*time.Minute))
 	if err != nil {
 		t.Fatalf("cold-start verification: %v", err)
 	}
 	if verification.RecentCandidates == 0 || verification.FinalColdFeed == 0 || verification.ActiveImportedRoots != 1 {
 		t.Fatalf("verification=%#v", verification)
+	}
+	if verification.DevDataRecentCandidates == 0 || verification.DevDataFinalFeed == 0 || !verification.DevDataPostsInFinalFeed {
+		t.Fatalf("DevData recommendation verification=%#v", verification)
 	}
 
 	reactivatedSnapshot := data.snapshot(now.Add(6*time.Minute), keepRoot, replyRoot)
@@ -897,6 +919,7 @@ func TestDevDataVerifyRejectsUnrelatedRecommendationInventoryIntegration(t *test
 	if err := db.Create(&post).Error; err != nil {
 		t.Fatalf("create unrelated post: %v", err)
 	}
+	addDevDataServingEmbedding(t, db, post.ID)
 	if _, err := VerifyCore(context.Background(), db, data.Registry, now); err == nil || !strings.Contains(err.Error(), "no active DevData imported Post") {
 		t.Fatalf("unrelated recommendation inventory error=%v", err)
 	}

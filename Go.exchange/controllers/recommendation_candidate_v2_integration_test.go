@@ -75,19 +75,25 @@ func newRecommendationCandidateIntegrationUser(t *testing.T, db *gorm.DB, label 
 
 func newRecommendationCandidateIntegrationPost(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time) models.Post {
 	t.Helper()
-	article := models.Post{
-		Model:    gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt},
-		AuthorID: author.ID, Content: "body", Visibility: "public",
-	}
-	if err := db.Create(&article).Error; err != nil {
-		t.Fatal(err)
-	}
+	article := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, title, publishedAt)
 	embedding := models.PostEmbedding{
 		PostID: article.ID, Version: config.ServingEmbeddingVersion(), Model: "recommendation-candidate-test",
 		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}),
 		ContentHash: embeddings.PostEmbeddingContentHash(article.Content),
 	}
 	if err := db.Create(&embedding).Error; err != nil {
+		t.Fatal(err)
+	}
+	return article
+}
+
+func newRecommendationCandidateIntegrationPostWithoutEmbedding(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time) models.Post {
+	t.Helper()
+	article := models.Post{
+		Model:    gorm.Model{CreatedAt: publishedAt, UpdatedAt: publishedAt},
+		AuthorID: author.ID, Content: "body", Visibility: "public",
+	}
+	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

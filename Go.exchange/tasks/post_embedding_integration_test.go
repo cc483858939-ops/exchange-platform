@@ -68,6 +68,11 @@ func newPostEmbeddingIntegrationFixture(t *testing.T, db *gorm.DB, content strin
 	return user, article
 }
 
+func postgresTimestampEqual(got, want time.Time) bool {
+	delta := got.Sub(want)
+	return delta > -time.Microsecond && delta < time.Microsecond
+}
+
 func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	db := openPostEmbeddingIntegrationDatabase(t)
 
@@ -121,7 +126,7 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	if persisted.Version != "v2" || persisted.ContentHash != embeddings.PostEmbeddingContentHash(article.Content) || len(persisted.Embedding.Slice()) != 2 {
 		t.Fatalf("embedding=%#v", persisted)
 	}
-	if !persisted.CreatedAt.Equal(first.CreatedAt) {
+	if !postgresTimestampEqual(persisted.CreatedAt, first.CreatedAt) {
 		t.Fatalf("new v2 row created_at=%s want=%s", persisted.CreatedAt, first.CreatedAt)
 	}
 	updatedV2 := second
@@ -136,14 +141,14 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Model != "updated-model" || persisted.Embedding.Slice()[0] != 5 || !persisted.CreatedAt.Equal(first.CreatedAt) || !persisted.UpdatedAt.Equal(updatedV2.UpdatedAt) {
+	if persisted.Model != "updated-model" || persisted.Embedding.Slice()[0] != 5 || !postgresTimestampEqual(persisted.CreatedAt, first.CreatedAt) || !postgresTimestampEqual(persisted.UpdatedAt, updatedV2.UpdatedAt) {
 		t.Fatalf("updated v2 embedding=%+v", persisted)
 	}
 	persistedV1, err := store.GetEmbedding(context.Background(), article.ID, "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persistedV1.Model != first.Model || persistedV1.Embedding.Slice()[0] != 1 || !persistedV1.CreatedAt.Equal(first.CreatedAt) {
+	if persistedV1.Model != first.Model || persistedV1.Embedding.Slice()[0] != 1 || !postgresTimestampEqual(persistedV1.CreatedAt, first.CreatedAt) {
 		t.Fatalf("v1 embedding changed after v2 writes: %+v", persistedV1)
 	}
 	var count int64
