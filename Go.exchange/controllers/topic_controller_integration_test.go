@@ -78,6 +78,11 @@ func TestTopicFeedMembershipOrderingAndCursorIntegration(t *testing.T) {
 
 	includedAccount := newAccount("included", true)
 	disabledAccount := newAccount("disabled", false)
+	if result := db.Model(&models.DevDataMirrorAccount{}).Where("id = ?", disabledAccount.ID).UpdateColumn("enabled", false); result.Error != nil {
+		t.Fatal(result.Error)
+	} else if result.RowsAffected != 1 {
+		t.Fatalf("disabled account update affected %d rows, want 1", result.RowsAffected)
+	}
 	otherAccount := newAccount("other", true)
 	author := newUser("author")
 	deletedAuthor := newUser("deleted-author")

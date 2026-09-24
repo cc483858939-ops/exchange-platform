@@ -160,11 +160,12 @@ func TestLoadRecommendationCandidateSetUsesEqualRRFFusionIntegration(t *testing.
 	}
 }
 
-func TestRecommendationCandidateSourcesRequireServingEmbeddingIntegration(t *testing.T) {
+func TestRecommendationCandidateSourcesOnlyRequireEmbeddingForSemanticRecallIntegration(t *testing.T) {
 	db := openRecommendationCandidateIntegrationDB(t)
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "serving-viewer")
 	author := newRecommendationCandidateIntegrationUser(t, db, "serving-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	noEmbedding := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "no-embedding", now.Add(-2*time.Minute))
 	v1Only := newRecommendationCandidateIntegrationPost(t, db, author, "v1-only", now.Add(-time.Minute))
 	v1AndV2 := newRecommendationCandidateIntegrationPost(t, db, author, "v1-and-v2", now)
 	if err := db.Create(&models.PostEmbedding{
@@ -176,12 +177,12 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingIntegration(t *tes
 	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: author.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, post := range []models.Post{v1Only, v1AndV2} {
+	for _, post := range []models.Post{noEmbedding, v1Only, v1AndV2} {
 		if err := db.Model(&models.Post{}).Where("id = ?", post.ID).Update("like_count", 1).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	postIDs := []uint{v1Only.ID, v1AndV2.ID}
+	postIDs := []uint{noEmbedding.ID, v1Only.ID, v1AndV2.ID}
 	userIDs := []uint{viewer.ID, author.ID}
 	t.Cleanup(func() { cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs) })
 
@@ -189,30 +190,57 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingIntegration(t *tes
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	served := map[uint]servedPost{}
 	cfg := defaultRecommendationConfig()
-	assertOnlyV2 := func(source string, candidates []embeddingCandidate, err error) {
+	assertAllNonSemanticCandidates := func(source string, candidates []embeddingCandidate, err error) {
 		t.Helper()
 		if err != nil {
 			t.Fatalf("%s candidates: %v", source, err)
 		}
-		if len(candidates) != 1 || candidates[0].PostID != v1AndV2.ID {
-			t.Fatalf("%s candidates=%v, want only v1+v2 post %d", source, candidateIDs(candidates), v1AndV2.ID)
+		want := map[uint]struct{}{noEmbedding.ID: {}, v1Only.ID: {}, v1AndV2.ID: {}}
+		got := make(map[uint]struct{}, len(candidates))
+		for _, candidate := range candidates {
+			got[candidate.PostID] = struct{}{}
+			var hasSource bool
+			switch source {
+			case "following":
+				hasSource = candidate.FromFollowing
+			case "recent", "public recent":
+				hasSource = candidate.FromRecent
+			case "trending", "public trending":
+				hasSource = candidate.FromTrending
+			}
+			if !hasSource {
+				t.Fatalf("%s candidate metadata=%#v, want source flag", source, candidate)
+			}
+		}
+		if len(candidates) != len(want) || len(got) != len(want) {
+			t.Fatalf("%s candidates=%v, want posts %v", source, candidateIDs(candidates), []uint{noEmbedding.ID, v1Only.ID, v1AndV2.ID})
+		}
+		for postID := range want {
+			if _, ok := got[postID]; !ok {
+				t.Fatalf("%s candidates=%v, want post %d", source, candidateIDs(candidates), postID)
+			}
 		}
 	}
 	following, err := loadRecommendationFollowingCandidates(db, servingVersion, viewer.ID, profile, served, now, cfg, false, 10)
-	assertOnlyV2("following", following, err)
+	assertAllNonSemanticCandidates("following", following, err)
 	recent, err := loadRecommendationSourceCandidates(db, servingVersion, viewer.ID, profile, served, now, cfg, false, "posts.created_at DESC, posts.id DESC", 10, "recent")
-	assertOnlyV2("recent", recent, err)
+	assertAllNonSemanticCandidates("recent", recent, err)
 	trending, err := loadRecommendationTrendingCandidates(db, servingVersion, viewer.ID, profile, served, now, cfg, false, 10)
-	assertOnlyV2("trending", trending, err)
+	assertAllNonSemanticCandidates("trending", trending, err)
 	semantic, err := loadRecommendationSemanticPool(db, servingVersion, viewer.ID, profile, served, now, false, time.Time{}, "", 10, nil)
-	assertOnlyV2("semantic", semantic, err)
+	if err != nil {
+		t.Fatalf("semantic candidates: %v", err)
+	}
+	if len(semantic) != 1 || semantic[0].PostID != v1AndV2.ID || !semantic[0].FromSemantic {
+		t.Fatalf("semantic candidates=%v, want only v1+v2 post %d", candidateIDs(semantic), v1AndV2.ID)
+	}
 	publicRecent, err := loadPublicRecommendationSourceCandidates(db, servingVersion, now, cfg, "posts.created_at DESC, posts.id DESC", 10, "recent", nil)
-	assertOnlyV2("public recent", publicRecent, err)
+	assertAllNonSemanticCandidates("public recent", publicRecent, err)
 	publicTrending, err := loadPublicRecommendationTrendingCandidates(db, servingVersion, now, cfg, 10, nil)
-	assertOnlyV2("public trending", publicTrending, err)
+	assertAllNonSemanticCandidates("public trending", publicTrending, err)
 }
 
-func TestRecommendationPreSwitchContinuesUsingV1Integration(t *testing.T) {
+func TestRecommendationSemanticRecallGatedByServingEmbeddingVersionIntegration(t *testing.T) {
 	db := openRecommendationCandidateIntegrationDB(t)
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "pre-switch-viewer")
 	author := newRecommendationCandidateIntegrationUser(t, db, "pre-switch-author")
@@ -251,13 +279,48 @@ func TestRecommendationPreSwitchContinuesUsingV1Integration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, source := range []struct {
-		name       string
-		candidates []embeddingCandidate
-	}{{"authenticated recent", authenticated}, {"public recent", public}, {"semantic", semantic}} {
-		if len(source.candidates) != 1 || source.candidates[0].PostID != v1Only.ID {
-			t.Fatalf("%s candidates=%v, want only v1 post %d", source.name, candidateIDs(source.candidates), v1Only.ID)
+	assertRecentIncludesBothVersions := func(source string, candidates []embeddingCandidate) {
+		t.Helper()
+		byID := make(map[uint]embeddingCandidate, len(candidates))
+		for _, candidate := range candidates {
+			byID[candidate.PostID] = candidate
 		}
+		for _, postID := range []uint{v1Only.ID, v2Only.ID} {
+			candidate, ok := byID[postID]
+			if !ok || !candidate.FromRecent {
+				t.Fatalf("%s candidates=%v, want recent fixture post %d", source, candidateIDs(candidates), postID)
+			}
+		}
+	}
+	assertRecentIncludesBothVersions("authenticated recent", authenticated)
+	assertRecentIncludesBothVersions("public recent", public)
+	hydrated, err := hydrateRecommendationCandidates(db, servingVersion, authenticated, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydratedFixtures := make(map[uint]hydratedRecommendationCandidate)
+	for _, candidate := range hydrated {
+		if candidate.Post.ID == v1Only.ID || candidate.Post.ID == v2Only.ID {
+			hydratedFixtures[candidate.Post.ID] = candidate
+		}
+	}
+	if len(hydratedFixtures) != 2 {
+		t.Fatalf("hydrated fixture posts=%v, want v1 post %d and v2-only post %d", hydratedFixtures, v1Only.ID, v2Only.ID)
+	}
+	if len(hydratedFixtures[v1Only.ID].Embedding) == 0 {
+		t.Fatalf("v1-only post %d has no serving-v1 embedding", v1Only.ID)
+	}
+	if hydratedFixtures[v2Only.ID].Embedding != nil {
+		t.Fatalf("v2-only post %d embedding=%v, want nil under serving-v1", v2Only.ID, hydratedFixtures[v2Only.ID].Embedding)
+	}
+	semanticFixtureCandidates := make(map[uint]embeddingCandidate)
+	for _, candidate := range semantic {
+		if candidate.PostID == v1Only.ID || candidate.PostID == v2Only.ID {
+			semanticFixtureCandidates[candidate.PostID] = candidate
+		}
+	}
+	if len(semanticFixtureCandidates) != 1 || !semanticFixtureCandidates[v1Only.ID].FromSemantic {
+		t.Fatalf("semantic fixture candidates=%v, want only serving-v1 post %d", candidateIDs(semantic), v1Only.ID)
 	}
 }
 
@@ -496,7 +559,7 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 	}
 }
 
-func TestRecommendationHydrationDropsCandidateWithoutServingEmbeddingIntegration(t *testing.T) {
+func TestRecommendationHydrationRetainsCandidateWithoutServingEmbeddingIntegration(t *testing.T) {
 	db := openRecommendationCandidateIntegrationDB(t)
 	author := newRecommendationCandidateIntegrationUser(t, db, "missing-serving-embedding")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
@@ -517,8 +580,8 @@ func TestRecommendationHydrationDropsCandidateWithoutServingEmbeddingIntegration
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hydrated) != 0 || requestedVersion != "post_embedding_v1" {
-		t.Fatalf("hydrated=%+v requested_version=%q want=%q", hydrated, requestedVersion, "post_embedding_v1")
+	if len(hydrated) != 1 || hydrated[0].Post.ID != article.ID || hydrated[0].Embedding != nil || requestedVersion != "post_embedding_v1" {
+		t.Fatalf("hydrated=%+v requested_version=%q want retained post %d with nil embedding using %q", hydrated, requestedVersion, article.ID, "post_embedding_v1")
 	}
 }
 
