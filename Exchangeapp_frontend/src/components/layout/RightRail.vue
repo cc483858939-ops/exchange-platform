@@ -10,6 +10,7 @@
           :key="topic.slug"
           class="right-rail__topic"
           :to="{ name: 'Topic', params: { slug: topic.slug } }"
+          :replace="route.name === 'Topic'"
         >
           <span class="right-rail__topic-label">#{{ topic.label }}</span>
           <span class="right-rail__topic-description">{{ topic.description }}</span>
@@ -29,8 +30,10 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { getTopics, type TopicSummary } from '../../services/topicService';
 
+const route = useRoute();
 const topics = ref<TopicSummary[]>([]);
 const topicsUnavailable = ref(false);
 let active = true;
