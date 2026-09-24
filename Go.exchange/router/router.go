@@ -72,6 +72,8 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	api.GET("/public/recommendations/posts", controllers.GetPublicPostRecommendations)
 	api.GET("/posts/:id", controllers.GetPostByID)
 	api.GET("/posts/:id/replies", controllers.GetPostReplies)
+	api.GET("/topics", controllers.GetTopics)
+	api.GET("/topics/:slug/posts", controllers.GetTopicPosts)
 	api.GET("/users/:id", controllers.GetUserByID)
 	api.GET("/users/:id/timeline", controllers.GetUserTimeline)
 

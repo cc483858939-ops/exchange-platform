@@ -1,0 +1,47 @@
+{
+  "version": "curated_topics_v1",
+  "topics": [
+    {
+      "slug": "japan",
+      "label": "Japan",
+      "description": "Life, culture & places in Japan",
+      "source_keys": ["japanvistamedia", "wenqiangjp"],
+      "enabled": true
+    },
+    {
+      "slug": "ai",
+      "label": "AI",
+      "description": "AI tools, models & coding",
+      "source_keys": ["thsottiaux", "dotey"],
+      "enabled": true
+    },
+    {
+      "slug": "space",
+      "label": "Space",
+      "description": "Space, science & exploration",
+      "source_keys": ["SpaceX", "NASA", "neiltyson"],
+      "enabled": true
+    },
+    {
+      "slug": "business",
+      "label": "Business",
+      "description": "Markets, investing & ideas",
+      "source_keys": ["naval", "RayDalio", "KobeissiLetter"],
+      "enabled": true
+    },
+    {
+      "slug": "culture",
+      "label": "Culture",
+      "description": "Film, art & history",
+      "source_keys": ["letterboxd", "ahistoryinart", "historyinmemes"],
+      "enabled": true
+    },
+    {
+      "slug": "creators",
+      "label": "Creators",
+      "description": "Creators, lifestyle & entertainment",
+      "source_keys": ["sugales_noah", "kasu_ps", "naenano78", "MrBeast"],
+      "enabled": true
+    }
+  ]
+}

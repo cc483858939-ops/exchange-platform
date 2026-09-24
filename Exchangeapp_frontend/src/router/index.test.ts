@@ -50,6 +50,7 @@ describe('History route', () => {
       ['UserFollowers', '/users/:id/followers', 'app', 'Followers'],
       ['UserSearch', '/search', 'app', 'Search'],
       ['History', '/history', 'app', 'History'],
+      ['Topic', '/topics/:slug', 'app', 'Topic'],
       ['Notifications', '/notifications', 'app', 'Notifications'],
       ['Login', '/login', 'auth', 'Log in'],
       ['Register', '/register', 'auth', 'Sign up'],
@@ -66,6 +67,7 @@ describe('History route', () => {
 
     expect(router.getRoutes().find(item => item.name === 'Login')?.meta.guestOnly).toBe(true);
     expect(router.getRoutes().find(item => item.name === 'Register')?.meta.guestOnly).toBe(true);
+    expect(router.getRoutes().find(item => item.name === 'Topic')?.meta.guestOnly).toBeUndefined();
 
     const home = router.getRoutes().find(item => item.name === 'Home');
     const loaded = (home?.components?.default as () => Promise<unknown>)?.();
@@ -109,6 +111,7 @@ describe('History route', () => {
 
   it('keeps known static, dynamic, and create routes ahead of the catch-all', () => {
     expect(router.resolve('/notifications').name).toBe('Notifications');
+    expect(router.resolve('/topics/japan').name).toBe('Topic');
     expect(router.resolve('/posts/42').name).toBe('PostDetail');
     expect(router.resolve('/posts/new').name).toBe('PostCreate');
   });

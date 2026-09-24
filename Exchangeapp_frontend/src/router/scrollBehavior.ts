@@ -6,6 +6,7 @@ export const routeScrollBehavior: RouterScrollBehavior = (to, from, savedPositio
     to.name === 'Home'
     || to.name === 'UserProfile'
     || to.name === 'History'
+    || to.name === 'Topic'
     || to.name === 'Notifications'
     || to.name === 'UserSearch'
   ) {

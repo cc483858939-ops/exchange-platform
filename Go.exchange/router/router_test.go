@@ -134,6 +134,8 @@ func TestSetupRouterKeepsPublicPostAndProfileReadsOpen(t *testing.T) {
 		method string
 		path   string
 	}{
+		{http.MethodGet, "/api/topics"},
+		{http.MethodGet, "/api/topics/japan/posts"},
 		{http.MethodGet, "/api/posts/not-a-number"},
 		{http.MethodGet, "/api/posts/not-a-number/replies"},
 		{http.MethodGet, "/api/users/not-a-number"},
