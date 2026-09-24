@@ -239,13 +239,12 @@ WHERE mirror_accounts.registry_key IN ?
 			page.Items = append(page.Items, response)
 		}
 	}
-	if hasMore && len(page.Items) > 0 {
-		last := page.Items[len(page.Items)-1]
-		createdAt := last.CreatedAt
-		if last.PublishedAt != nil {
-			createdAt = *last.PublishedAt
-		}
-		encoded, err := encodeTopicPostCursor(topicPostCursor{CreatedAt: createdAt, PostID: last.ID})
+	if hasMore && len(rows) > 0 {
+		lastRow := rows[len(rows)-1]
+		encoded, err := encodeTopicPostCursor(topicPostCursor{
+			CreatedAt: lastRow.CreatedAt,
+			PostID:    lastRow.ID,
+		})
 		if err != nil {
 			return postPageResponse{}, fmt.Errorf("encode topic cursor: %w", err)
 		}

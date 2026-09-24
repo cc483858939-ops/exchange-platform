@@ -153,7 +153,20 @@ func TestTopicCursorRequiresTimestampAndPostID(t *testing.T) {
 	if err != nil || !got.CreatedAt.Equal(want.CreatedAt) || got.PostID != want.PostID {
 		t.Fatalf("decoded cursor=%+v err=%v", got, err)
 	}
-	if _, err := decodeTopicPostCursor(base64.RawURLEncoding.EncodeToString([]byte(`{"created_at":"2026-09-20T12:00:00Z","post_id":42,"extra":true}`))); err == nil {
-		t.Fatal("cursor with unknown fields was accepted")
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "malformed base64", raw: "%%%"},
+		{name: "missing created_at", raw: base64.RawURLEncoding.EncodeToString([]byte(`{"post_id":42}`))},
+		{name: "missing post_id", raw: base64.RawURLEncoding.EncodeToString([]byte(`{"created_at":"2026-09-20T12:00:00Z"}`))},
+		{name: "zero post_id", raw: base64.RawURLEncoding.EncodeToString([]byte(`{"created_at":"2026-09-20T12:00:00Z","post_id":0}`))},
+		{name: "unknown field", raw: base64.RawURLEncoding.EncodeToString([]byte(`{"created_at":"2026-09-20T12:00:00Z","post_id":42,"extra":true}`))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := decodeTopicPostCursor(test.raw); err == nil {
+				t.Fatalf("cursor %q was accepted", test.raw)
+			}
+		})
 	}
 }
