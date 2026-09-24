@@ -248,13 +248,15 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 		t.Fatalf("dirty rows=%d want=0 after successful materialization", dirtyCount)
 	}
 
+	switchAt := now.Add(time.Minute)
 	if err := embeddingstate.SetServingVersion(context.Background(), db, config.BuildEmbeddingVersion()); err != nil {
 		t.Fatalf("switch serving version without process restart: %v", err)
 	}
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "serving_version_switch", now.Add(time.Minute)); err != nil {
+	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "serving_version_switch", switchAt); err != nil {
 		t.Fatal(err)
 	}
-	if err := materializeRecommendationProfileUser(context.Background(), user.ID, now.Add(time.Minute), settings, now); err != nil {
+	runAt := switchAt.Add(time.Duration(settings.DebounceSeconds+1) * time.Second)
+	if err := materializeRecommendationProfileUser(context.Background(), user.ID, runAt, settings, switchAt); err != nil {
 		t.Fatalf("materialize profile after serving switch: %v", err)
 	}
 	if err := db.First(&profile, "user_id = ?", user.ID).Error; err != nil {
@@ -262,6 +264,9 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 	}
 	if profile.EmbeddingVersion != "post_embedding_v2" {
 		t.Fatalf("materializer retained old serving version after switch: got=%q want=post_embedding_v2", profile.EmbeddingVersion)
+	}
+	if profile.PositiveVector == nil || profile.NegativeVector == nil || profile.PositiveVector.Slice()[1] <= profile.PositiveVector.Slice()[0] || profile.NegativeVector.Slice()[0] <= profile.NegativeVector.Slice()[1] {
+		t.Fatalf("profile vectors do not reflect post_embedding_v2 after serving switch: positive=%v negative=%v", profile.PositiveVector, profile.NegativeVector)
 	}
 }
 

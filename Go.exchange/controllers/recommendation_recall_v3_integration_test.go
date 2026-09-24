@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/embeddings"
 	"Go.exchange/eventing"
 	"Go.exchange/models"
 
@@ -242,7 +243,17 @@ func assertUniqueRecommendationPostIDs(t *testing.T, candidates []embeddingCandi
 
 func newRecommendationTrendingPost(t *testing.T, db *gorm.DB, author models.User, title string, publishedAt time.Time, likes, replies int64) models.Post {
 	t.Helper()
-	article := newRecommendationCandidateIntegrationPost(t, db, author, title, publishedAt)
+	article := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, title, publishedAt)
+	if err := db.Create(&models.PostEmbedding{
+		PostID:      article.ID,
+		Version:     recommendationRecallV3TestVersion,
+		Model:       "recommendation-recall-v3-test",
+		Dimensions:  2,
+		Embedding:   pgvector.NewVector([]float32{1, 0}),
+		ContentHash: embeddings.PostEmbeddingContentHash(article.Content),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Model(&models.Post{}).Where("id = ?", article.ID).Updates(map[string]interface{}{
 		"like_count": likes, "reply_count": replies,
 	}).Error; err != nil {
