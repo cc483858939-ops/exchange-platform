@@ -39,7 +39,7 @@ type hydratedRecommendationCandidate struct {
 	IsNovelAuthor       bool
 }
 
-func recommendationEligibilityQuery(db *gorm.DB, query *gorm.DB, userID uint, servingVersion string, served map[uint]servedPost, now time.Time, softOnly bool, useMaterializedInteractions bool) *gorm.DB {
+func recommendationEligibilityQuery(db *gorm.DB, query *gorm.DB, userID uint, served map[uint]servedPost, now time.Time, softOnly bool, useMaterializedInteractions bool) *gorm.DB {
 	negative := db.Table("post_behaviors AS ni").
 		Select("1").
 		Where("ni.user_id = ? AND ni.post_id = posts.id AND ni.action = ? AND ni.active = TRUE",
@@ -54,12 +54,6 @@ func recommendationEligibilityQuery(db *gorm.DB, query *gorm.DB, userID uint, se
 	negative = negative.Where("NOT EXISTS (?)", laterLike).Where("NOT EXISTS (?)", laterReply)
 	query = publicPostScope(query, now).
 		Where("posts.reply_to_post_id IS NULL").
-		Where(`EXISTS (
-			SELECT 1
-			FROM post_embeddings AS serving_embedding
-			WHERE serving_embedding.post_id = posts.id
-			  AND serving_embedding.version = ?
-		)`, servingVersion).
 		Where(
 			"EXISTS (SELECT 1 FROM users AS recommendation_authors "+
 				"WHERE recommendation_authors.id = posts.author_id "+
@@ -186,7 +180,7 @@ func loadRecommendationSemanticPool(db *gorm.DB, servingVersion string, userID u
 			Select("ae.post_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
 			Joins("JOIN posts ON posts.id = ae.post_id").
 			Where("ae.version = ? AND ae.dimensions = ?", servingVersion, len(profile.PositiveVector)),
-		userID, servingVersion, served, now, softOnly, profile.MaterializedInteractionsReady,
+		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	)
 	query = applyLegacyProfileInteractionExclusion(query, profile)
 	if comparison != "" {
@@ -221,7 +215,7 @@ func loadRecommendationFollowingCandidates(db *gorm.DB, servingVersion string, u
 		db.Table("posts").
 			Select("posts.id").
 			Joins("JOIN user_follows AS uf ON uf.following_id = posts.author_id AND uf.follower_id = ?", userID),
-		userID, servingVersion, served, now, softOnly, profile.MaterializedInteractionsReady,
+		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	)
 	query = applyLegacyProfileInteractionExclusion(query, profile)
 	var ids []uint
@@ -239,7 +233,7 @@ func loadRecommendationSourceCandidates(db *gorm.DB, servingVersion string, user
 	if cap <= 0 {
 		return nil, nil
 	}
-	query := recommendationEligibilityQuery(db, db.Table("posts").Select("posts.id"), userID, servingVersion, served, now, softOnly, profile.MaterializedInteractionsReady)
+	query := recommendationEligibilityQuery(db, db.Table("posts").Select("posts.id"), userID, served, now, softOnly, profile.MaterializedInteractionsReady)
 	query = applyLegacyProfileInteractionExclusion(query, profile)
 	var ids []uint
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
@@ -307,7 +301,7 @@ func loadRecommendationTrendingCandidates(db *gorm.DB, servingVersion string, us
 	query := recommendationEligibilityQuery(
 		db,
 		db.Table("posts").Select("posts.id"),
-		userID, servingVersion, served, now, softOnly, profile.MaterializedInteractionsReady,
+		userID, served, now, softOnly, profile.MaterializedInteractionsReady,
 	).Where("posts.created_at >= ?", cutoff).
 		Where("posts.like_count > 0 OR posts.reply_count > 0")
 	query = applyLegacyProfileInteractionExclusion(query, profile)
@@ -341,15 +335,9 @@ posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 //
 // It must not introduce authenticated-user-specific follow, interaction,
 // profile, or account predicates.
-func publicRecommendationEligibilityQuery(query *gorm.DB, servingVersion string, now time.Time, excluded map[uint]struct{}) *gorm.DB {
+func publicRecommendationEligibilityQuery(query *gorm.DB, now time.Time, excluded map[uint]struct{}) *gorm.DB {
 	query = publicPostScope(query, now).
 		Where("posts.reply_to_post_id IS NULL").
-		Where(`EXISTS (
-			SELECT 1
-			FROM post_embeddings AS serving_embedding
-			WHERE serving_embedding.post_id = posts.id
-			  AND serving_embedding.version = ?
-		)`, servingVersion).
 		Where(
 			"EXISTS (SELECT 1 FROM users AS recommendation_authors " +
 				"WHERE recommendation_authors.id = posts.author_id " +
@@ -365,7 +353,7 @@ func loadPublicRecommendationSourceCandidates(db *gorm.DB, servingVersion string
 	if cap <= 0 {
 		return nil, nil
 	}
-	query := publicRecommendationEligibilityQuery(db.Table("posts").Select("posts.id"), servingVersion, now, excluded)
+	query := publicRecommendationEligibilityQuery(db.Table("posts").Select("posts.id"), now, excluded)
 	var ids []uint
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
@@ -386,7 +374,7 @@ func loadPublicRecommendationTrendingCandidates(db *gorm.DB, servingVersion stri
 		return nil, nil
 	}
 	cutoff := now.AddDate(0, 0, -cfg.Trending.MaxAgeDays)
-	query := publicRecommendationEligibilityQuery(db.Table("posts").Select("posts.id"), servingVersion, now, excluded).
+	query := publicRecommendationEligibilityQuery(db.Table("posts").Select("posts.id"), now, excluded).
 		Where("posts.created_at >= ?", cutoff).
 		Where("posts.like_count > 0 OR posts.reply_count > 0")
 	order := gorm.Expr(`
@@ -572,9 +560,9 @@ func hydrateRecommendationCandidates(db *gorm.DB, servingVersion string, candida
 		if !ok {
 			continue
 		}
-		embedding, exists := embeddings[candidate.PostID]
-		if !exists || len(embedding) == 0 {
-			continue
+		embedding := embeddings[candidate.PostID]
+		if len(embedding) == 0 {
+			embedding = nil
 		}
 		result = append(result, hydratedRecommendationCandidate{Candidate: candidate, Post: post, Embedding: embedding})
 	}

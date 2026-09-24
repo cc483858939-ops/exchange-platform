@@ -189,6 +189,71 @@ func TestRecommendationRankerFallsBackToRecallSemanticWhenHydratedEmbeddingMissi
 	}
 }
 
+func TestRecommendationRankerKeepsNilEmbeddingWithNonSemanticScores(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.LanguageAffinity.Enabled = true
+	cfg.LanguageAffinity.Weight = 0.25
+	profile := userInterestProfile{PositiveVector: []float32{1, 0}, NegativeVector: []float32{0, 1}, NegativeConfidence: 1}
+	candidate := hydratedRecommendationCandidate{
+		Candidate: embeddingCandidate{PostID: 1, FromTrending: true},
+		Post: models.Post{
+			Model:     gorm.Model{ID: 1, CreatedAt: now},
+			AuthorID:  10,
+			Language:  "en",
+			LikeCount: 3,
+		},
+	}
+
+	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{candidate}, now, cfg, recommendationLanguageContext{Combined: recommendationLanguagePrior{EN: 1}})
+	if len(ranked) != 1 || ranked[0].Post.ID != 1 {
+		t.Fatalf("ranked=%#v, want nil-embedding candidate retained", ranked)
+	}
+	got := ranked[0].Breakdown
+	if got.PositiveSemantic != 0 || got.NegativeSemantic != 0 || got.SemanticComponent != 0 {
+		t.Fatalf("semantic breakdown=%#v, want all zero without comparable embedding", got)
+	}
+	if got.TrendingComponent <= 0 || got.LanguageComponent <= 0 {
+		t.Fatalf("non-semantic breakdown=%#v, want positive trending and language components", got)
+	}
+}
+
+func TestRecommendationRankerKeepsMixedEmbeddedAndNilEmbeddingCandidates(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
+	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
+		{
+			Candidate: embeddingCandidate{PostID: 1, FromRecent: true},
+			Post:      models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 10},
+			Embedding: []float32{1, 0},
+		},
+		{
+			Candidate: embeddingCandidate{PostID: 2, FromTrending: true},
+			Post:      models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 11, LikeCount: 2},
+		},
+	}, now, cfg)
+	if len(ranked) != 2 {
+		t.Fatalf("ranked count=%d, want both embedded and nil-embedding candidates", len(ranked))
+	}
+	byID := make(map[uint]recommendationScoreBreakdown, len(ranked))
+	for _, candidate := range ranked {
+		byID[candidate.Post.ID] = candidate.Breakdown
+	}
+	if _, ok := byID[1]; !ok {
+		t.Fatalf("embedded candidate missing from ranked results: %#v", ranked)
+	}
+	if _, ok := byID[2]; !ok {
+		t.Fatalf("nil-embedding candidate missing from ranked results: %#v", ranked)
+	}
+	if math.Abs(byID[1].PositiveSemantic-1) > 1e-9 || math.Abs(byID[1].SemanticComponent-cfg.SemanticWeight) > 1e-9 {
+		t.Fatalf("embedded candidate semantic breakdown=%#v, want normal positive semantic score", byID[1])
+	}
+	if byID[2].PositiveSemantic != 0 || byID[2].NegativeSemantic != 0 || byID[2].SemanticComponent != 0 {
+		t.Fatalf("nil-embedding candidate semantic breakdown=%#v, want zero semantic score", byID[2])
+	}
+}
+
 func TestRecommendationRankerIgnoresFusionScore(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
