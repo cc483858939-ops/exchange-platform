@@ -359,11 +359,11 @@ onBeforeUnmount(() => {
   }
 
   15% {
-    transform: rotate(-45deg) scale(0.97);
+    transform: rotate(45deg) scale(0.97);
   }
 
   100% {
-    transform: rotate(-360deg) scale(1);
+    transform: rotate(360deg) scale(1);
   }
 }
 
