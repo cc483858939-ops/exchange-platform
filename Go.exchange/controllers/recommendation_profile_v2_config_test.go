@@ -40,10 +40,10 @@ func TestRecommendationServingTimeoutDoesNotChangeRecommendationHashes(t *testin
 	base := defaultRecommendationConfig()
 	mutated := base
 	mutated.ServingTimeoutMS = 2500
-	if got, want := recommendation.ProfileConfigHash(mutated, config.ServingEmbeddingVersion()), recommendation.ProfileConfigHash(base, config.ServingEmbeddingVersion()); got != want {
+	if got, want := recommendation.ProfileConfigHash(mutated, "post_embedding_v1"), recommendation.ProfileConfigHash(base, "post_embedding_v1"); got != want {
 		t.Fatalf("profile hash changed with serving timeout: got=%q want=%q", got, want)
 	}
-	if got, want := recommendationRankerConfigHash(mutated), recommendationRankerConfigHash(base); got != want {
+	if got, want := recommendationRankerConfigHash(mutated, "post_embedding_v1"), recommendationRankerConfigHash(base, "post_embedding_v1"); got != want {
 		t.Fatalf("ranker hash changed with serving timeout: got=%q want=%q", got, want)
 	}
 }

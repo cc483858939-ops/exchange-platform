@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"Go.exchange/embeddings"
+	"Go.exchange/embeddingstate"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
@@ -29,7 +30,7 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		embedding := recoveryIntegrationEmbedding(post.ID, "v1", post.Content, []float32{1, 2}, now)
-		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
 		if err != nil || outcome != postEmbeddingWriteCommitted {
 			t.Fatalf("outcome=%d err=%v", outcome, err)
 		}
@@ -55,7 +56,7 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		embedding := recoveryIntegrationEmbedding(post.ID, "post_embedding_v2", post.Content, []float32{2, 1}, now)
-		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, false, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
 		if err != nil || outcome != postEmbeddingWriteCommitted {
 			t.Fatalf("outcome=%d err=%v", outcome, err)
 		}
@@ -74,7 +75,7 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 		if err := db.Model(&models.Post{}).Where("id = ?", post.ID).Update("content", "content B").Error; err != nil {
 			t.Fatal(err)
 		}
-		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
 		if err != nil || outcome != postEmbeddingWriteStaleContent {
 			t.Fatalf("outcome=%d err=%v", outcome, err)
 		}
@@ -93,7 +94,7 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		embedding := recoveryIntegrationEmbedding(post.ID, "v1", post.Content, []float32{1, 2}, now)
-		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
+		outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
 		if err != nil || outcome != postEmbeddingWritePostMissing {
 			t.Fatalf("outcome=%d err=%v", outcome, err)
 		}
@@ -132,7 +133,7 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 		})
 
 		updated := recoveryIntegrationEmbedding(post.ID, "v1", post.Content, []float32{1, 2}, now.Add(time.Minute))
-		if _, err := store.CommitEmbeddingIfCurrent(context.Background(), updated, true, now.Add(time.Minute)); err == nil {
+		if _, err := store.CommitEmbeddingIfCurrent(context.Background(), updated, now.Add(time.Minute)); err == nil {
 			t.Fatal("embedding update unexpectedly succeeded when profile invalidation was rejected")
 		}
 		if err := dropConstraint(); err != nil {
@@ -153,6 +154,42 @@ func TestPostEmbeddingProjectionRecoverySemanticsIntegration(t *testing.T) {
 			t.Fatalf("dirty profile rows=%d after rollback, want=0", dirtyCount)
 		}
 	})
+}
+
+func TestPostEmbeddingCommitInvalidatesProfilesAfterRuntimeServingSwitchIntegration(t *testing.T) {
+	db := openPostEmbeddingIntegrationDatabase(t)
+	user, post := newPostEmbeddingIntegrationFixture(t, db, "v2 serving")
+	now := time.Now().UTC()
+	if err := db.Create(&models.PostBehavior{
+		UserID: user.ID, PostID: post.ID, Action: recommendation.PostBehaviorView,
+		Count: 1, LastSeenAt: now, Active: true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := embeddingstate.SetServingVersion(context.Background(), db, "post_embedding_v2"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := embeddingstate.SetServingVersion(context.Background(), db, "v1"); err != nil {
+			t.Errorf("restore integration serving version: %v", err)
+		}
+	})
+
+	embedding := recoveryIntegrationEmbedding(post.ID, "post_embedding_v2", post.Content, []float32{2, 1}, now)
+	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, now)
+	if err != nil || outcome != postEmbeddingWriteCommitted {
+		t.Fatalf("outcome=%d err=%v", outcome, err)
+	}
+	if _, err := (gormPostEmbeddingStore{db: db}).GetEmbedding(context.Background(), post.ID, "post_embedding_v2"); err != nil {
+		t.Fatalf("serving v2 embedding was not written: %v", err)
+	}
+	var dirtyCount int64
+	if err := db.Model(&models.UserRecoProfileDirty{}).Where("user_id = ?", user.ID).Count(&dirtyCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dirtyCount != 1 {
+		t.Fatalf("v2 serving write invalidated %d profiles, want 1", dirtyCount)
+	}
 }
 
 func recoveryIntegrationEmbedding(postID uint, version, content string, vector []float32, now time.Time) models.PostEmbedding {

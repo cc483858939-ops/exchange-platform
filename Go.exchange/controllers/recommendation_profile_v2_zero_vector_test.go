@@ -48,6 +48,7 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.
 		map[uint]recommendationReactionState{1: {Liked: true, StateChangedAt: now}},
 		now,
 		defaultRecommendationConfig(),
+		"post_embedding_v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +80,7 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.
 		nil,
 		now,
 		defaultRecommendationConfig(),
+		"post_embedding_v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +111,7 @@ func TestBuildEmbeddingInterestProfileCountsOnlyNonZeroEmbeddings(t *testing.T) 
 		},
 		now,
 		defaultRecommendationConfig(),
+		"post_embedding_v1",
 	)
 	if err != nil {
 		t.Fatal(err)

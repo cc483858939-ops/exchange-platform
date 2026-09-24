@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/embeddingstate"
 	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
@@ -44,7 +45,7 @@ func startRecommendationProfileMaterializer(ctx context.Context, wg *sync.WaitGr
 			settings := recommendationProfileMaterializerSettings()
 			now := time.Now().UTC()
 			if global.Db != nil {
-				if err := materializeDueRecommendationProfiles(now, settings); err != nil {
+				if err := materializeDueRecommendationProfiles(ctx, now, settings); err != nil {
 					PipelineFailure(PipelineRecommendationProfile, "materialization_failed", 0)
 					log.Printf("[RecommendationProfile] materialize due profiles: %v", err)
 				} else {
@@ -136,19 +137,22 @@ func recommendationProfileMaterializerRecommendationConfigWithoutApp() config.Re
 	}
 }
 
-func materializeDueRecommendationProfiles(now time.Time, settings config.RecommendationProfileMaterializationConfig) error {
+func materializeDueRecommendationProfiles(ctx context.Context, now time.Time, settings config.RecommendationProfileMaterializationConfig) error {
+	if ctx == nil {
+		return errors.New("materializer context is nil")
+	}
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
 	settings = settings.Normalized()
 	cutoff := now.Add(-time.Duration(settings.DebounceSeconds) * time.Second)
 	var dirty []models.UserRecoProfileDirty
-	if err := global.Db.Where("dirty_at <= ? AND next_attempt_at <= ?", cutoff, now).
+	if err := global.Db.WithContext(ctx).Where("dirty_at <= ? AND next_attempt_at <= ?", cutoff, now).
 		Order("dirty_at ASC, user_id ASC").Limit(settings.BatchSize).Find(&dirty).Error; err != nil {
 		return err
 	}
 	for _, row := range dirty {
-		if err := materializeRecommendationProfileUser(row.UserID, now, settings, cutoff); err != nil {
+		if err := materializeRecommendationProfileUser(ctx, row.UserID, now, settings, cutoff); err != nil {
 			if errors.Is(err, errRecommendationProfileLockSkipped) {
 				continue
 			}
@@ -162,7 +166,10 @@ func recommendationProfileLockKey(userID uint) int64 {
 	return recommendationProfileAdvisoryLockNamespace + int64(userID)
 }
 
-func materializeRecommendationProfileUser(userID uint, now time.Time, settings config.RecommendationProfileMaterializationConfig, cutoff time.Time) error {
+func materializeRecommendationProfileUser(ctx context.Context, userID uint, now time.Time, settings config.RecommendationProfileMaterializationConfig, cutoff time.Time) error {
+	if ctx == nil {
+		return errors.New("materializer context is nil")
+	}
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
@@ -173,7 +180,7 @@ func materializeRecommendationProfileUser(userID uint, now time.Time, settings c
 	}
 	var claim *recommendationProfileMaterializerClaim
 	lockSkipped := false
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var acquired bool
 		if err := tx.Raw("SELECT pg_try_advisory_xact_lock(?)", recommendationProfileLockKey(userID)).Scan(&acquired).Error; err != nil {
 			return err
@@ -194,6 +201,10 @@ func materializeRecommendationProfileUser(userID uint, now time.Time, settings c
 		}
 		claim = &recommendationProfileMaterializerClaim{UserID: userID, DirtyVersion: dirty.DirtyVersion, Attempts: dirty.Attempts}
 
+		servingVersion, err := embeddingstate.LoadServingVersion(ctx, tx)
+		if err != nil {
+			return err
+		}
 		cfg := recommendationProfileMaterializerRecommendationConfig()
 		if cfg.FeedbackLookbackDays <= 0 {
 			cfg.FeedbackLookbackDays = 90
@@ -203,7 +214,7 @@ func materializeRecommendationProfileUser(userID uint, now time.Time, settings c
 			return err
 		}
 		canonical := recommendation.CanonicalizeOutcomes(sources.Behaviors, sources.Feedback, sources.Reactions)
-		embeddingVersion := config.ServingEmbeddingVersion()
+		embeddingVersion := servingVersion
 		embeddings, err := loadMaterializerEmbeddings(tx, canonical.Outcomes, embeddingVersion)
 		if err != nil {
 			return err

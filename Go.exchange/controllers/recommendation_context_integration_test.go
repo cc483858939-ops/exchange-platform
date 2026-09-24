@@ -20,10 +20,10 @@ func TestRecommendationOnlineDBOperationsHonorCanceledContextIntegration(t *test
 	now := time.Now().UTC()
 	cfg := normalizedRecommendationConfig()
 
-	if _, err := loadMaterializedUserInterestProfile(scopedDB, 1, now, cfg); !errors.Is(err, context.Canceled) {
+	if _, err := loadMaterializedUserInterestProfile(scopedDB, 1, "post_embedding_v1", now, cfg); !errors.Is(err, context.Canceled) {
 		t.Fatalf("materialized profile error=%v, want context.Canceled", err)
 	}
-	if _, err := loadPublicRecommendationCandidateSet(scopedDB, now, cfg, nil); !errors.Is(err, context.Canceled) {
+	if _, err := loadPublicRecommendationCandidateSet(scopedDB, "post_embedding_v1", now, cfg, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("public candidate error=%v, want context.Canceled", err)
 	}
 	if err := global.Db.Exec("SELECT 1").Error; err != nil {

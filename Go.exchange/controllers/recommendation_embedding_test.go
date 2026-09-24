@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/config"
 	"Go.exchange/models"
 
 	"gorm.io/gorm"
@@ -25,7 +24,7 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 			{Behavior: models.PostBehavior{Model: gorm.Model{ID: 3}, PostID: 3, Action: PostBehaviorActionView, LastSeenAt: now}},
 		},
 		[]recommendationFeedbackSignal{{Event: recommendationFeedbackEvent{EventID: "2", PostID: 2, EventType: recommendationFeedbackEventTypeReadEnd, OccurredAt: now, ReadOutcome: &readOutcome}}},
-		map[uint]recommendationReactionState{3: {Liked: false, StateChangedAt: now}}, now, defaultRecommendationConfig(),
+		map[uint]recommendationReactionState{3: {Liked: false, StateChangedAt: now}}, now, defaultRecommendationConfig(), "post_embedding_v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -42,16 +41,13 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 }
 
 func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) {
-	originalConfig := config.AppConfig
 	originalLoader := loadRecommendationPostEmbeddings
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{ServingVersion: "v2"}}
 	var gotVersion string
 	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, version string) (map[uint][]float32, error) {
 		gotVersion = version
 		return map[uint][]float32{1: {1, 0}}, nil
 	}
 	t.Cleanup(func() {
-		config.AppConfig = originalConfig
 		loadRecommendationPostEmbeddings = originalLoader
 	})
 
@@ -62,6 +58,7 @@ func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) 
 		nil,
 		now,
 		defaultRecommendationConfig(),
+		"v2",
 	)
 	if err != nil {
 		t.Fatal(err)

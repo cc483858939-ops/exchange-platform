@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/config"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 )
@@ -20,8 +19,8 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 	profile := models.UserRecoProfile{
 		UserID:            viewer.ID,
 		ProfileVersion:    recommendation.MaterializedProfileVersion,
-		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, config.ServingEmbeddingVersion()),
-		EmbeddingVersion:  config.ServingEmbeddingVersion(),
+		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, "p1a-follow-up-controller-v1"),
+		EmbeddingVersion:  "p1a-follow-up-controller-v1",
 		Dimensions:        0,
 		ComputedAt:        now.Add(-time.Minute),
 		NextRebuildAt:     now.Add(time.Hour),
@@ -62,6 +61,7 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 		cfg,
 		now,
 		"authenticated-boundary",
+		recommendationServingSnapshot{EmbeddingVersion: "p1a-follow-up-controller-v1"},
 		recommendationLanguageContext{},
 		map[uint]servedPost{},
 	)

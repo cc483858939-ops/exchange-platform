@@ -20,6 +20,11 @@ import (
 
 func ensureRecommendationControllerTestDB(t *testing.T) {
 	t.Helper()
+	originalServingVersionLoader := loadRecommendationServingVersionForHandler
+	loadRecommendationServingVersionForHandler = func(context.Context, *gorm.DB) (string, error) {
+		return "post_embedding_v1", nil
+	}
+	t.Cleanup(func() { loadRecommendationServingVersionForHandler = originalServingVersionLoader })
 	if global.Db != nil {
 		return
 	}
@@ -60,11 +65,11 @@ func TestGetPostRecommendationsReturnsPageEnvelopeAndPersistsRequestID(t *testin
 	})
 
 	var persistedRequest models.RecommendationRequest
-	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, userID, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, userID, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, snapshot recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		if userID != 7 || limit != 20 || requestID == "" {
 			t.Fatalf("serving args user=%d limit=%d request_id=%q", userID, limit, requestID)
 		}
-		return recommendationServingOutcome{}, nil
+		return recommendationServingOutcome{EmbeddingVersion: snapshot.EmbeddingVersion}, nil
 	}
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
 		return []recommendedPostResponse{{
@@ -72,7 +77,7 @@ func TestGetPostRecommendationsReturnsPageEnvelopeAndPersistsRequestID(t *testin
 			Score: 0.91,
 		}}, nil
 	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
 	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
@@ -104,6 +109,79 @@ func TestGetPostRecommendationsReturnsPageEnvelopeAndPersistsRequestID(t *testin
 	}
 }
 
+func TestGetPostRecommendationsUsesOneServingSnapshotForTrackingAndTrace(t *testing.T) {
+	ensureRecommendationControllerTestDB(t)
+	originalServingPath := recommendationServingPathForHandler
+	originalResponses := selectedRecommendationResponsesForHandler
+	originalTracking := attachRecommendationTrackingForHandler
+	originalLoader := loadRecommendationServingVersionForHandler
+	originalHistory := loadUserRecommendationServedHistoryForHandler
+	originalRecorder := recordUserRecommendationServedPostsForHandler
+	originalPersist := persistRecommendationServingTrace
+	t.Cleanup(func() {
+		recommendationServingPathForHandler = originalServingPath
+		selectedRecommendationResponsesForHandler = originalResponses
+		attachRecommendationTrackingForHandler = originalTracking
+		loadRecommendationServingVersionForHandler = originalLoader
+		loadUserRecommendationServedHistoryForHandler = originalHistory
+		recordUserRecommendationServedPostsForHandler = originalRecorder
+		persistRecommendationServingTrace = originalPersist
+	})
+
+	currentServingVersion := "post_embedding_v1"
+	loaderCalls := 0
+	var servingVersions []string
+	var trackingVersions []string
+	var persistedHashes []string
+	loadRecommendationServingVersionForHandler = func(context.Context, *gorm.DB) (string, error) {
+		loaderCalls++
+		return currentServingVersion, nil
+	}
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, snapshot recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+		servingVersions = append(servingVersions, snapshot.EmbeddingVersion)
+		currentServingVersion = "post_embedding_v2"
+		return recommendationServingOutcome{
+			EmbeddingVersion: snapshot.EmbeddingVersion,
+			Profile:          userInterestProfile{ProfileStatus: recommendationProfileStatusMiss},
+			Selected:         []selectedRecommendation{{Post: models.Post{Model: gorm.Model{ID: 101}}}},
+		}, nil
+	}
+	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
+		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}}}, nil
+	}
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, servingVersion string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+		trackingVersions = append(trackingVersions, servingVersion)
+		return 0, nil
+	}
+	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
+		return map[uint]servedPost{}, nil
+	}
+	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error { return nil }
+	persistRecommendationServingTrace = func(_ context.Context, request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
+		persistedHashes = append(persistedHashes, request.RankerConfigHash)
+		return nil
+	}
+
+	for range 2 {
+		ctx, recorder := newRecommendationControllerTestContext("/api/recommendations/posts", 7)
+		GetPostRecommendations(ctx)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	}
+	if loaderCalls != 2 || len(servingVersions) != 2 || len(trackingVersions) != 2 || len(persistedHashes) != 2 {
+		t.Fatalf("loader calls=%d serving=%v tracking=%v hashes=%v", loaderCalls, servingVersions, trackingVersions, persistedHashes)
+	}
+	if servingVersions[0] != "post_embedding_v1" || servingVersions[1] != "post_embedding_v2" ||
+		trackingVersions[0] != servingVersions[0] || trackingVersions[1] != servingVersions[1] {
+		t.Fatalf("serving snapshots=%v tracking snapshots=%v", servingVersions, trackingVersions)
+	}
+	cfg := normalizedRecommendationConfig()
+	if persistedHashes[0] != recommendationRankerConfigHash(cfg, servingVersions[0]) || persistedHashes[1] != recommendationRankerConfigHash(cfg, servingVersions[1]) {
+		t.Fatalf("persisted hashes=%v do not match request snapshots=%v", persistedHashes, servingVersions)
+	}
+}
+
 func TestGetPostRecommendationsReturnsEmptyPageAsEmptyArrayAndDepleted(t *testing.T) {
 	ensureRecommendationControllerTestDB(t)
 	originalServingPath := recommendationServingPathForHandler
@@ -122,14 +200,14 @@ func TestGetPostRecommendationsReturnsEmptyPageAsEmptyArrayAndDepleted(t *testin
 	})
 
 	var servedLimit uint
-	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, limit uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, limit uint, _ config.RecommendationConfig, _ time.Time, _ string, snapshot recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		servedLimit = limit
-		return recommendationServingOutcome{}, nil
+		return recommendationServingOutcome{EmbeddingVersion: snapshot.EmbeddingVersion}, nil
 	}
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
 		return nil, nil
 	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
 	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
@@ -182,7 +260,7 @@ func TestGetPostRecommendationsLoadsAndRecordsUserServedHistory(t *testing.T) {
 		events = append(events, "load")
 		return map[uint]servedPost{11: {Hard: true}, 12: {Soft: true}}, nil
 	}
-	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 		events = append(events, "serve")
 		if len(served) != 2 || !served[11].Hard || !served[12].Soft {
 			t.Fatalf("served=%#v", served)
@@ -196,7 +274,7 @@ func TestGetPostRecommendationsLoadsAndRecordsUserServedHistory(t *testing.T) {
 			{Post: postResponse{ID: 0, Media: make([]postMediaResponse, 0)}},
 		}, nil
 	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
 	recordUserRecommendationServedPostsForHandler = func(_ context.Context, userID uint, postIDs []uint, _ time.Time, _ config.RecommendationConfig) error {
@@ -245,7 +323,7 @@ func TestGetPostRecommendationsUserHistoryReadFailureFailsOpen(t *testing.T) {
 	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
 		return nil, errors.New("redis unavailable")
 	}
-	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 		if len(served) != 0 {
 			t.Fatalf("served=%#v want empty after read failure", served)
 		}
@@ -254,7 +332,7 @@ func TestGetPostRecommendationsUserHistoryReadFailureFailsOpen(t *testing.T) {
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
 		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}}}, nil
 	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
 	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
@@ -291,13 +369,13 @@ func TestGetPostRecommendationsUserHistoryWriteFailureStillPersistsTrace(t *test
 	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
 		return errors.New("redis unavailable")
 	}
-	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		return recommendationServingOutcome{}, nil
 	}
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
 		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}}}, nil
 	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
 	tracePersisted := false
@@ -369,7 +447,7 @@ func TestGetPublicPostRecommendationsIsGuestSafeAndUsesPublicEnvelope(t *testing
 		recordedPostIDs = append([]uint(nil), postIDs...)
 		return nil
 	}
-	publicRecommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, browser recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+	publicRecommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, limit uint, _ config.RecommendationConfig, _ time.Time, requestID string, _ recommendationServingSnapshot, browser recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 		if limit != 20 || requestID == "" || browser.BrowserPrimary != "en" {
 			t.Fatalf("public serving args limit=%d request_id=%q browser=%#v", limit, requestID, browser)
 		}
@@ -377,8 +455,9 @@ func TestGetPublicPostRecommendationsIsGuestSafeAndUsesPublicEnvelope(t *testing
 			t.Fatalf("served=%#v", served)
 		}
 		return recommendationServingOutcome{
-			FreshSet: recommendationCandidateSet{Candidates: []embeddingCandidate{{PostID: 101}}},
-			Selected: []selectedRecommendation{{}},
+			EmbeddingVersion: "post_embedding_v1",
+			FreshSet:         recommendationCandidateSet{Candidates: []embeddingCandidate{{PostID: 101}}},
+			Selected:         []selectedRecommendation{{}},
 		}, nil
 	}
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
@@ -415,6 +494,36 @@ func TestGetPublicPostRecommendationsIsGuestSafeAndUsesPublicEnvelope(t *testing
 	}
 }
 
+func TestGetPublicPostRecommendationsLoadsServingSnapshotOnce(t *testing.T) {
+	ensureRecommendationControllerTestDB(t)
+	originalLoader := loadRecommendationServingVersionForHandler
+	originalServingPath := publicRecommendationServingPathForHandler
+	originalResponses := selectedRecommendationResponsesForHandler
+	t.Cleanup(func() {
+		loadRecommendationServingVersionForHandler = originalLoader
+		publicRecommendationServingPathForHandler = originalServingPath
+		selectedRecommendationResponsesForHandler = originalResponses
+	})
+	loaderCalls := 0
+	var servingVersion string
+	loadRecommendationServingVersionForHandler = func(context.Context, *gorm.DB) (string, error) {
+		loaderCalls++
+		return "post_embedding_v2", nil
+	}
+	publicRecommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, snapshot recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+		servingVersion = snapshot.EmbeddingVersion
+		return recommendationServingOutcome{EmbeddingVersion: snapshot.EmbeddingVersion}, nil
+	}
+	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
+		return nil, nil
+	}
+	ctx, recorder := newRecommendationControllerTestContext("/api/public/recommendations/posts", 0)
+	GetPublicPostRecommendations(ctx)
+	if recorder.Code != http.StatusOK || loaderCalls != 1 || servingVersion != "post_embedding_v2" {
+		t.Fatalf("status=%d loader calls=%d serving version=%q body=%s", recorder.Code, loaderCalls, servingVersion, recorder.Body.String())
+	}
+}
+
 func TestGetPublicPostRecommendationsInvalidOrMissingGuestSessionFailsOpen(t *testing.T) {
 	ensureRecommendationControllerTestDB(t)
 	originalServingPath := publicRecommendationServingPathForHandler
@@ -437,7 +546,7 @@ func TestGetPublicPostRecommendationsInvalidOrMissingGuestSessionFailsOpen(t *te
 		recorderCalls++
 		return nil
 	}
-	publicRecommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+	publicRecommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 		if len(served) != 0 {
 			t.Fatalf("served=%#v", served)
 		}
@@ -480,7 +589,7 @@ func TestGetPublicPostRecommendationsGuestHistoryFailuresFailOpen(t *testing.T) 
 	recordGuestRecommendationServedPostsForHandler = func(context.Context, string, []uint, time.Time, config.RecommendationConfig) error {
 		return errors.New("redis unavailable")
 	}
-	publicRecommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+	publicRecommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 		if len(served) != 0 {
 			t.Fatalf("served=%#v", served)
 		}
@@ -520,7 +629,7 @@ func TestGetPostRecommendationsPassesDeadlineAndScopedDB(t *testing.T) {
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{ServingTimeoutMS: 2500}}
 	var servingCtx context.Context
 	var servingDB *gorm.DB
-	recommendationServingPathForHandler = func(ctx context.Context, db *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(ctx context.Context, db *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		servingCtx = ctx
 		servingDB = db
 		deadline, ok := ctx.Deadline()
@@ -535,7 +644,7 @@ func TestGetPostRecommendationsPassesDeadlineAndScopedDB(t *testing.T) {
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
 		return nil, nil
 	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
 	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
@@ -567,7 +676,7 @@ func TestGetPublicPostRecommendationsPassesDeadlineAndScopedDB(t *testing.T) {
 	})
 
 	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{ServingTimeoutMS: 2500}}
-	publicRecommendationServingPathForHandler = func(ctx context.Context, db *gorm.DB, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	publicRecommendationServingPathForHandler = func(ctx context.Context, db *gorm.DB, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok || time.Until(deadline) < 2*time.Second || time.Until(deadline) > 2500*time.Millisecond {
 			t.Fatalf("public serving deadline=%v ok=%t", deadline, ok)
@@ -601,7 +710,7 @@ func TestGetPostRecommendationsPropagatesParentCancellationWithoutWritingJSON(t 
 	var servingContextErr error
 	parent, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	recommendationServingPathForHandler = func(ctx context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(ctx context.Context, _ *gorm.DB, _ uint, _ uint, _ config.RecommendationConfig, _ time.Time, _ string, _ recommendationServingSnapshot, _ recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		servingCalled = true
 		cancel()
 		servingContextErr = ctx.Err()
@@ -631,7 +740,7 @@ func TestGetPostRecommendationsServingDeadlineReturnsGatewayTimeout(t *testing.T
 		loadUserRecommendationServedHistoryForHandler = originalUserLoader
 	})
 
-	recommendationServingPathForHandler = func(context.Context, *gorm.DB, uint, uint, config.RecommendationConfig, time.Time, string, recommendationLanguageContext, map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(context.Context, *gorm.DB, uint, uint, config.RecommendationConfig, time.Time, string, recommendationServingSnapshot, recommendationLanguageContext, map[uint]servedPost) (recommendationServingOutcome, error) {
 		return recommendationServingOutcome{}, context.DeadlineExceeded
 	}
 	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {

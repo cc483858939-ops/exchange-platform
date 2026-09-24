@@ -71,7 +71,6 @@ func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 	t.Setenv("EMBEDDING_BASE_URL", "https://embedding.example")
 	t.Setenv("EMBEDDING_API_KEY", "runtime-embedding-key")
 	t.Setenv("EMBEDDING_MODEL", "text-embedding-3-small")
-	t.Setenv("EMBEDDING_SERVING_VERSION", " post_embedding_serving_test ")
 	t.Setenv("EMBEDDING_BUILD_VERSION", " post_embedding_build_test ")
 	t.Setenv("EMBEDDING_TIMEOUT_SECONDS", "15")
 	t.Setenv("MINIO_ACCESS_KEY", "runtime-access")
@@ -83,7 +82,7 @@ func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 	if cfg.Database.Dsn != "postgres://runtime" {
 		t.Fatalf("database dsn=%q", cfg.Database.Dsn)
 	}
-	if !cfg.Embedding.Enabled || cfg.Embedding.BaseURL != "https://embedding.example" || cfg.Embedding.APIKey != "runtime-embedding-key" || cfg.Embedding.Model != "text-embedding-3-small" || cfg.Embedding.ServingVersion != "post_embedding_serving_test" || cfg.Embedding.BuildVersion != "post_embedding_build_test" || cfg.Embedding.TimeoutSeconds != 15 {
+	if !cfg.Embedding.Enabled || cfg.Embedding.BaseURL != "https://embedding.example" || cfg.Embedding.APIKey != "runtime-embedding-key" || cfg.Embedding.Model != "text-embedding-3-small" || cfg.Embedding.BuildVersion != "post_embedding_build_test" || cfg.Embedding.TimeoutSeconds != 15 {
 		t.Fatalf("embedding config=%+v", cfg.Embedding)
 	}
 	if cfg.Storage.AccessKey != "runtime-access" || cfg.Storage.SecretKey != "runtime-secret" {
@@ -171,31 +170,21 @@ func TestValidateRuntimeEventingConfigByRole(t *testing.T) {
 	}
 }
 
-func TestServingAndBuildEmbeddingVersionsAreIndependent(t *testing.T) {
+func TestBuildEmbeddingVersionUsesStaticConfiguration(t *testing.T) {
 	original := AppConfig
 	t.Cleanup(func() { AppConfig = original })
 
 	AppConfig = nil
-	if got := ServingEmbeddingVersion(); got != DefaultServingEmbeddingVersion {
-		t.Fatalf("default serving version=%q want=%q", got, DefaultServingEmbeddingVersion)
-	}
 	if got := BuildEmbeddingVersion(); got != DefaultBuildEmbeddingVersion {
 		t.Fatalf("default build version=%q want=%q", got, DefaultBuildEmbeddingVersion)
 	}
-	AppConfig = &Config{Embedding: EmbeddingConfig{ServingVersion: "  post_embedding_v1  ", BuildVersion: " post_embedding_v2 "}}
-	if got := ServingEmbeddingVersion(); got != "post_embedding_v1" {
-		t.Fatalf("configured serving version=%q", got)
-	}
+	AppConfig = &Config{Embedding: EmbeddingConfig{BuildVersion: " post_embedding_v2 "}}
 	if got := BuildEmbeddingVersion(); got != "post_embedding_v2" {
 		t.Fatalf("configured build version=%q", got)
 	}
-	AppConfig = &Config{Embedding: EmbeddingConfig{ServingVersion: "post_embedding_v2"}}
+	AppConfig = &Config{Embedding: EmbeddingConfig{}}
 	if got := BuildEmbeddingVersion(); got != DefaultBuildEmbeddingVersion {
-		t.Fatalf("empty build version must use its own default, got=%q", got)
-	}
-	AppConfig = &Config{Embedding: EmbeddingConfig{BuildVersion: "post_embedding_v2"}}
-	if got := ServingEmbeddingVersion(); got != DefaultServingEmbeddingVersion {
-		t.Fatalf("empty serving version must use its own default, got=%q", got)
+		t.Fatalf("empty build version must use its default, got=%q", got)
 	}
 }
 

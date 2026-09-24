@@ -13,7 +13,6 @@ type EmbeddingConfig struct {
 	BaseURL        string `mapstructure:"base_url"`
 	APIKey         string `mapstructure:"api_key"`
 	Model          string `mapstructure:"model"`
-	ServingVersion string `mapstructure:"serving_version"`
 	BuildVersion   string `mapstructure:"build_version"`
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 }
@@ -71,8 +70,7 @@ func (c TranslationConfig) Normalized() TranslationConfig {
 }
 
 const (
-	DefaultServingEmbeddingVersion = "post_embedding_v1"
-	DefaultBuildEmbeddingVersion   = "post_embedding_v1"
+	DefaultBuildEmbeddingVersion = "post_embedding_v1"
 )
 
 type KafkaConfig struct {
@@ -334,15 +332,6 @@ func (c *Config) HasRecommendationSetting(path string) bool {
 	return c.RecommendationPresence[path]
 }
 
-func ServingEmbeddingVersion() string {
-	if AppConfig != nil {
-		if version := strings.TrimSpace(AppConfig.Embedding.ServingVersion); version != "" {
-			return version
-		}
-	}
-	return DefaultServingEmbeddingVersion
-}
-
 func BuildEmbeddingVersion() string {
 	if AppConfig != nil {
 		if version := strings.TrimSpace(AppConfig.Embedding.BuildVersion); version != "" {
@@ -398,9 +387,6 @@ func applySensitiveEnvironmentOverrides(cfg *Config) {
 	}
 	if value := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")); value != "" {
 		cfg.Embedding.Model = value
-	}
-	if value := strings.TrimSpace(os.Getenv("EMBEDDING_SERVING_VERSION")); value != "" {
-		cfg.Embedding.ServingVersion = value
 	}
 	if value := strings.TrimSpace(os.Getenv("EMBEDDING_BUILD_VERSION")); value != "" {
 		cfg.Embedding.BuildVersion = value

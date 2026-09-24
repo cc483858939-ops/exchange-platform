@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"Go.exchange/embeddingstate"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -44,6 +45,7 @@ func RunMigrations() error {
 			&models.PostRepost{},
 			&models.PostBookmark{},
 			&models.PostEmbedding{},
+			&models.EmbeddingServingState{},
 			&models.OutboxEvent{},
 			&models.Notification{},
 			&models.ConsumerInbox{},
@@ -64,6 +66,9 @@ func RunMigrations() error {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
 		if err := applyDevDataMirrorCoverColumns(tx); err != nil {
+			return err
+		}
+		if err := applyEmbeddingServingStateSchema(tx); err != nil {
 			return err
 		}
 
@@ -136,6 +141,31 @@ WHERE reaction_version = 0
 		}
 		return nil
 	})
+}
+
+// applyEmbeddingServingStateSchema owns the singleton constraints and seeds
+// the initial runtime serving version without overwriting operator changes.
+func applyEmbeddingServingStateSchema(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("database transaction is not initialized")
+	}
+	for _, statement := range []string{
+		"ALTER TABLE embedding_serving_state DROP CONSTRAINT IF EXISTS chk_embedding_serving_state_singleton",
+		"ALTER TABLE embedding_serving_state ADD CONSTRAINT chk_embedding_serving_state_singleton CHECK (id = 1)",
+		"ALTER TABLE embedding_serving_state DROP CONSTRAINT IF EXISTS chk_embedding_serving_state_version_nonblank",
+		"ALTER TABLE embedding_serving_state ADD CONSTRAINT chk_embedding_serving_state_version_nonblank CHECK (char_length(btrim(serving_version)) > 0)",
+	} {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply embedding serving state constraints: %w", err)
+		}
+	}
+	if err := tx.Exec(`
+INSERT INTO embedding_serving_state (id, serving_version, updated_at)
+VALUES (?, ?, NOW())
+ON CONFLICT (id) DO NOTHING`, embeddingstate.ServingStateID, embeddingstate.DefaultServingVersion).Error; err != nil {
+		return fmt.Errorf("seed embedding serving state: %w", err)
+	}
+	return nil
 }
 
 // applyDevDataMirrorCoverColumns is an explicit, idempotent migration for the

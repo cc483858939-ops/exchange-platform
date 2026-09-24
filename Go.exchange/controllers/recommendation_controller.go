@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/embeddingstate"
 	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
@@ -62,6 +63,7 @@ type postRecommendationPageResponse struct {
 
 var recommendationServingPathForHandler = serveRecommendationCandidatePath
 var publicRecommendationServingPathForHandler = servePublicRecommendationCandidatePath
+var loadRecommendationServingVersionForHandler = embeddingstate.LoadServingVersion
 var selectedRecommendationResponsesForHandler = selectedRecommendationResponsesFromDB
 var attachRecommendationTrackingForHandler = attachRecommendationTracking
 var loadUserRecommendationServedHistoryForHandler = loadUserRecommendationServedHistory
@@ -113,8 +115,14 @@ func GetPostRecommendations(ctx *gin.Context) {
 	servingCtx, cancel := context.WithTimeout(requestCtx, recommendationServingTimeout(cfg))
 	defer cancel()
 	servingDB := global.Db.WithContext(servingCtx)
+	servingVersion, err := loadRecommendationServingVersionForHandler(servingCtx, servingDB)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(userInterestProfile{}))
+		return
+	}
+	snapshot := recommendationServingSnapshot{EmbeddingVersion: servingVersion}
 
-	serving, err := recommendationServingPathForHandler(servingCtx, servingDB, userID, uint(limit), cfg, now, requestID, browserLanguageContext, served)
+	serving, err := recommendationServingPathForHandler(servingCtx, servingDB, userID, uint(limit), cfg, now, requestID, snapshot, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(serving.Profile))
 		return
@@ -135,7 +143,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(profile))
 		return
 	}
-	trackedCount, trackingErr := attachRecommendationTrackingForHandler(userID, requestID, profile, selected, recommendations, now)
+	trackedCount, trackingErr := attachRecommendationTrackingForHandler(userID, requestID, serving.EmbeddingVersion, profile, selected, recommendations, now)
 	if trackingErr != nil {
 		log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
 	}
@@ -166,7 +174,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 
 	requestRecord := models.RecommendationRequest{
 		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
-		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg),
+		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg, serving.EmbeddingVersion),
 		ProfileVersion: profile.ProfileVersion, ProfileConfigHash: profile.ProfileConfigHash,
 		ProfileStatus: profile.ProfileStatus, ProfileAgeMS: profile.ProfileAgeMS,
 		BrowserLanguagePrimary: serving.LanguageContext.BrowserPrimary, LanguageContextSource: serving.LanguageContext.Source,
@@ -230,8 +238,14 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	servingCtx, cancel := context.WithTimeout(requestCtx, recommendationServingTimeout(cfg))
 	defer cancel()
 	servingDB := global.Db.WithContext(servingCtx)
+	servingVersion, err := loadRecommendationServingVersionForHandler(servingCtx, servingDB)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
+		return
+	}
+	snapshot := recommendationServingSnapshot{EmbeddingVersion: servingVersion}
 
-	serving, err := publicRecommendationServingPathForHandler(servingCtx, servingDB, uint(limit), cfg, now, requestID, browserLanguageContext, served)
+	serving, err := publicRecommendationServingPathForHandler(servingCtx, servingDB, uint(limit), cfg, now, requestID, snapshot, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
 		return

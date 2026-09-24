@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/config"
 	"Go.exchange/embeddings"
+	"Go.exchange/embeddingstate"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
@@ -56,6 +56,18 @@ func openDevDataIntegrationDB(t *testing.T) *gorm.DB {
 	if err := initialize.RunMigrations(); err != nil {
 		t.Fatalf("run DevData integration migrations: %v", err)
 	}
+	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)
+	if err != nil {
+		t.Fatalf("load previous serving version: %v", err)
+	}
+	if err := embeddingstate.SetServingVersion(context.Background(), db, embeddingstate.DefaultServingVersion); err != nil {
+		t.Fatalf("set integration serving version: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := embeddingstate.SetServingVersion(context.Background(), db, previousServingVersion); err != nil {
+			t.Errorf("restore embedding serving version: %v", err)
+		}
+	})
 	return db
 }
 
@@ -65,8 +77,12 @@ func addDevDataServingEmbedding(t *testing.T, db *gorm.DB, postID uint) {
 	if err := db.First(&post, postID).Error; err != nil {
 		t.Fatalf("load Post %d for serving embedding: %v", postID, err)
 	}
+	version, err := embeddingstate.LoadServingVersion(context.Background(), db)
+	if err != nil {
+		t.Fatalf("load current serving version: %v", err)
+	}
 	embedding := models.PostEmbedding{
-		PostID: post.ID, Version: config.ServingEmbeddingVersion(), Model: "devdata-integration-serving",
+		PostID: post.ID, Version: version, Model: "devdata-integration-serving",
 		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}),
 		ContentHash: embeddings.PostEmbeddingContentHash(post.Content),
 	}

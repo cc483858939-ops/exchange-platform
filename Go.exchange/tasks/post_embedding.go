@@ -14,6 +14,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/embeddings"
+	"Go.exchange/embeddingstate"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/metrics"
@@ -48,7 +49,7 @@ var errPostEmbeddingSourceChanged = errors.New("post content changed during embe
 type postEmbeddingStore interface {
 	GetPost(context.Context, uint) (models.Post, error)
 	GetEmbedding(context.Context, uint, string) (models.PostEmbedding, error)
-	CommitEmbeddingIfCurrent(context.Context, models.PostEmbedding, bool, time.Time) (postEmbeddingWriteOutcome, error)
+	CommitEmbeddingIfCurrent(context.Context, models.PostEmbedding, time.Time) (postEmbeddingWriteOutcome, error)
 }
 
 type gormPostEmbeddingStore struct {
@@ -73,11 +74,29 @@ func (s gormPostEmbeddingStore) GetEmbedding(ctx context.Context, postID uint, v
 	return embedding, err
 }
 
+func lockEmbeddingServingVersion(tx *gorm.DB) (string, error) {
+	if tx == nil {
+		return "", errors.New("database transaction is not initialized")
+	}
+	var servingState models.EmbeddingServingState
+	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+		Select("id", "serving_version").
+		Where("id = ?", embeddingstate.ServingStateID).
+		Take(&servingState).Error; err != nil {
+		return "", fmt.Errorf("lock embedding serving state: %w", err)
+	}
+	servingVersion := strings.TrimSpace(servingState.ServingVersion)
+	if servingVersion == "" {
+		return "", errors.New("embedding serving state version is blank")
+	}
+	return servingVersion, nil
+}
+
 // CommitEmbeddingIfCurrent validates the canonical post while holding its row
 // lock, then commits the embedding and authoritative user fan-out in one
 // transaction. The provider call happens before this method, so the post row
 // is not locked during external network work.
-func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, embedding models.PostEmbedding, invalidateProfiles bool, now time.Time) (postEmbeddingWriteOutcome, error) {
+func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, embedding models.PostEmbedding, now time.Time) (postEmbeddingWriteOutcome, error) {
 	if s.db == nil {
 		return postEmbeddingWriteCommitted, errors.New("database is not initialized")
 	}
@@ -99,6 +118,10 @@ func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, em
 			outcome = postEmbeddingWriteStaleContent
 			return nil
 		}
+		servingVersion, err := lockEmbeddingServingVersion(tx)
+		if err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "post_id"}, {Name: "version"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
@@ -108,7 +131,7 @@ func (s gormPostEmbeddingStore) CommitEmbeddingIfCurrent(ctx context.Context, em
 		}).Create(&embedding).Error; err != nil {
 			return err
 		}
-		if invalidateProfiles {
+		if embedding.Version == servingVersion {
 			var users []uint
 			if err := tx.Raw(`
 SELECT user_id FROM post_behaviors WHERE post_id = ?
@@ -335,8 +358,7 @@ func processPostEmbeddingMessage(
 		Dimensions: dimensions, Embedding: vector, ContentHash: contentHash,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	invalidateProfiles := buildVersion == config.ServingEmbeddingVersion()
-	outcome, err := commitPostEmbedding(ctx, store, embedding, invalidateProfiles, now, policy)
+	outcome, err := commitPostEmbedding(ctx, store, embedding, now, policy)
 	if err != nil {
 		return err
 	}
@@ -470,11 +492,11 @@ func validatePostEmbeddingResult(result embeddings.EmbedResult) error {
 	return nil
 }
 
-func commitPostEmbedding(ctx context.Context, store postEmbeddingStore, embedding models.PostEmbedding, invalidateProfiles bool, now time.Time, policy kafkaRetryPolicy) (postEmbeddingWriteOutcome, error) {
+func commitPostEmbedding(ctx context.Context, store postEmbeddingStore, embedding models.PostEmbedding, now time.Time, policy kafkaRetryPolicy) (postEmbeddingWriteOutcome, error) {
 	var outcome postEmbeddingWriteOutcome
 	err := retryPostEmbeddingStage(ctx, policy, func() error {
 		var err error
-		outcome, err = store.CommitEmbeddingIfCurrent(ctx, embedding, invalidateProfiles, now)
+		outcome, err = store.CommitEmbeddingIfCurrent(ctx, embedding, now)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()

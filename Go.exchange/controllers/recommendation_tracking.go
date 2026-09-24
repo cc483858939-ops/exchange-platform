@@ -60,7 +60,7 @@ type recommendationTrackingClaims struct {
 	ExplorationReason      string `json:"exploration_reason"`
 }
 
-func attachRecommendationTracking(userID uint, requestID string, profile userInterestProfile, selected []selectedRecommendation, recommendations []recommendedPostResponse, now time.Time) (int, error) {
+func attachRecommendationTracking(userID uint, requestID, servingVersion string, profile userInterestProfile, selected []selectedRecommendation, recommendations []recommendedPostResponse, now time.Time) (int, error) {
 	if len(recommendations) == 0 || !config.RecommendationTelemetryEnabled() {
 		return 0, nil
 	}
@@ -83,7 +83,7 @@ func attachRecommendationTracking(userID uint, requestID string, profile userInt
 	issuedAt := now.UTC()
 	expiresAt := issuedAt.Add(config.RecommendationTelemetryTokenTTL())
 	strategyID := recommendationStrategyID(profile)
-	configHash := recommendationRankerConfigHash(normalizedRecommendationConfig())
+	configHash := recommendationRankerConfigHash(normalizedRecommendationConfig(), servingVersion)
 
 	for index := range recommendations {
 		if selected[index].Post.ID != recommendations[index].Post.ID {
@@ -133,13 +133,13 @@ func recommendationTelemetryRequestSelected(userID uint, requestID string, perce
 	return bucket%100 < percent
 }
 
-func recommendationRankerConfigHash(cfg config.RecommendationConfig) string {
-	canonical := recommendationRankerConfigCanonicalString(cfg)
+func recommendationRankerConfigHash(cfg config.RecommendationConfig, servingVersion string) string {
+	canonical := recommendationRankerConfigCanonicalString(cfg, servingVersion)
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) string {
+func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig, servingVersion string) string {
 	p := cfg.Candidates.Personalized
 	c := cfg.Candidates.ColdStart
 	return fmt.Sprintf(
@@ -160,9 +160,9 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig) 
 		c.Following, c.Recent, c.Trending, c.Merged, cfg.Fusion.RankConstant,
 		cfg.LanguageAffinity.Enabled, cfg.LanguageAffinity.Weight, cfg.LanguageAffinity.EvidenceSaturationScale, cfg.LanguageAffinity.MaxBehaviorShare,
 		recommendationCandidateRetrievalVersion,
-		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, config.ServingEmbeddingVersion()),
+		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, servingVersion),
 		recommendationCanonicalOutcomeVersion, recommendationPassiveRecencyPolicy,
-		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, config.ServingEmbeddingVersion(),
+		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, servingVersion,
 	)
 }
 func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {

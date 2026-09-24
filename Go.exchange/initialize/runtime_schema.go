@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 9 changes post_embeddings identity to (post_id, version).
-const RequiredSchemaVersion int64 = 9
+// Schema 10 adds database-backed recommendation embedding serving state.
+const RequiredSchemaVersion int64 = 10
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 9
-	PublishedSchemaCompatibilityFloor int64 = 9
+	PublishedSchemaCurrentVersion     int64 = 10
+	PublishedSchemaCompatibilityFloor int64 = 10
 )
 
 const runtimeSchemaStateID uint = 1
@@ -178,6 +178,13 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		},
 	},
 	{
+		Table: "embedding_serving_state",
+		Constraints: []string{
+			"chk_embedding_serving_state_singleton",
+			"chk_embedding_serving_state_version_nonblank",
+		},
+	},
+	{
 		Table: "post_behaviors",
 		Constraints: []string{
 			"fk_post_behaviors_user",
@@ -207,6 +214,7 @@ var apiSchemaModels = []interface{}{
 	&models.OutboxEvent{},
 	&models.ExchangeRate{},
 	&models.PostEmbedding{},
+	&models.EmbeddingServingState{},
 	&models.PostBehavior{},
 	&models.UserPostRecoState{},
 	&models.UserRecoProfile{},

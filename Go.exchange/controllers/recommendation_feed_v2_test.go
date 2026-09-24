@@ -71,7 +71,7 @@ func TestRecommendationProfileCapsPositivePostAndSeparatesNegativeVector(t *test
 			{Event: recommendationFeedbackEvent{PostID: 2, EventID: "bounce", EventType: recommendationFeedbackEventTypeReadEnd, OccurredAt: now, ReadOutcome: &quick}},
 		},
 		map[uint]recommendationReactionState{1: {Liked: true, StateChangedAt: now}},
-		now, cfg,
+		now, cfg, "post_embedding_v1",
 	)
 	if err != nil {
 		t.Fatal(err)

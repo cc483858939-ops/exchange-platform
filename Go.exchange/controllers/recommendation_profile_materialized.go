@@ -21,7 +21,7 @@ const (
 	recommendationProfileStatusIncompatible = "incompatible"
 )
 
-func loadMaterializedUserInterestProfile(db *gorm.DB, userID uint, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
+func loadMaterializedUserInterestProfile(db *gorm.DB, userID uint, servingVersion string, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
 	if db == nil {
 		metrics.RecordRecommendationProfileLoad("error")
 		return userInterestProfile{}, errors.New("database is not initialized")
@@ -43,7 +43,6 @@ func loadMaterializedUserInterestProfile(db *gorm.DB, userID uint, now time.Time
 		return profile, nil
 	}
 
-	servingVersion := config.ServingEmbeddingVersion()
 	expectedHash := recommendation.ProfileConfigHash(cfg, servingVersion)
 	compatible := row.ProfileVersion == recommendation.MaterializedProfileVersion &&
 		row.ProfileConfigHash == expectedHash && row.EmbeddingVersion == servingVersion

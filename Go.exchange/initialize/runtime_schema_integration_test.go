@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/embeddingstate"
 	"Go.exchange/models"
 
 	"gorm.io/driver/postgres"
@@ -73,8 +74,37 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if currentSchema != primarySchema {
 		t.Fatalf("unexpected migration schema: got %q want %q", currentSchema, primarySchema)
 	}
-	if err := insertIntegrationState(tx, PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor); err != nil {
-		t.Fatalf("insert runtime schema state: %v", err)
+	if err := applyEmbeddingServingStateSchema(tx); err != nil {
+		t.Fatalf("apply embedding serving state schema: %v", err)
+	}
+	var servingState models.EmbeddingServingState
+	if err := tx.Where("id = ?", embeddingstate.ServingStateID).Take(&servingState).Error; err != nil {
+		t.Fatalf("load initial embedding serving state: %v", err)
+	}
+	if servingState.ServingVersion != embeddingstate.DefaultServingVersion {
+		t.Fatalf("initial serving version=%q want=%q", servingState.ServingVersion, embeddingstate.DefaultServingVersion)
+	}
+	if err := embeddingstate.SetServingVersion(context.Background(), tx, "post_embedding_v2"); err != nil {
+		t.Fatalf("set operator serving version: %v", err)
+	}
+	if err := applyEmbeddingServingStateSchema(tx); err != nil {
+		t.Fatalf("rerun embedding serving state migration: %v", err)
+	}
+	if err := tx.Where("id = ?", embeddingstate.ServingStateID).Take(&servingState).Error; err != nil {
+		t.Fatalf("load serving state after migration rerun: %v", err)
+	}
+	if servingState.ServingVersion != "post_embedding_v2" {
+		t.Fatalf("migration rerun overwrote operator version: %q", servingState.ServingVersion)
+	}
+	if err := updateRuntimeSchemaState(tx, "integration-test"); err != nil {
+		t.Fatalf("publish runtime schema state: %v", err)
+	}
+	var publishedState models.RuntimeSchemaState
+	if err := tx.Where("id = ?", runtimeSchemaStateID).Take(&publishedState).Error; err != nil {
+		t.Fatalf("load published runtime schema state: %v", err)
+	}
+	if publishedState.CurrentVersion != 10 || publishedState.CompatibilityFloor != 10 {
+		t.Fatalf("published schema contract=%d/%d want=10/10", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
 	}
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)

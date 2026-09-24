@@ -194,17 +194,18 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 
 	var received recommendationLanguageContext
 	var persisted models.RecommendationRequest
-	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, browser recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, snapshot recommendationServingSnapshot, browser recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
 		received = browser
 		return recommendationServingOutcome{
-			Profile:         userInterestProfile{ProfileStatus: recommendationProfileStatusMiss},
-			LanguageContext: buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg),
+			EmbeddingVersion: snapshot.EmbeddingVersion,
+			Profile:          userInterestProfile{ProfileStatus: recommendationProfileStatusMiss},
+			LanguageContext:  buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg),
 		}, nil
 	}
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
 		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}, Score: .5}}, nil
 	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
+	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
 	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {

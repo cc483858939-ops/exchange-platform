@@ -81,7 +81,6 @@ type postEmbeddingTestStore struct {
 	writeErrors       []error
 	writeCalls        int
 	upserted          []models.PostEmbedding
-	invalidationFlags []bool
 }
 
 func (s *postEmbeddingTestStore) GetPost(context.Context, uint) (models.Post, error) {
@@ -109,9 +108,8 @@ func (s *postEmbeddingTestStore) GetEmbedding(_ context.Context, _ uint, version
 	return models.PostEmbedding{}, gorm.ErrRecordNotFound
 }
 
-func (s *postEmbeddingTestStore) CommitEmbeddingIfCurrent(_ context.Context, embedding models.PostEmbedding, invalidateProfiles bool, _ time.Time) (postEmbeddingWriteOutcome, error) {
+func (s *postEmbeddingTestStore) CommitEmbeddingIfCurrent(_ context.Context, embedding models.PostEmbedding, _ time.Time) (postEmbeddingWriteOutcome, error) {
 	s.writeCalls++
-	s.invalidationFlags = append(s.invalidationFlags, invalidateProfiles)
 	if writeErr := popPostEmbeddingTestError(&s.writeErrors, s.writeErr); writeErr != nil {
 		return postEmbeddingWriteCommitted, writeErr
 	}
@@ -397,14 +395,13 @@ func TestPostEmbeddingConsumerRegeneratesMissingBuildVersionAndStaleContent(t *t
 	}
 }
 
-func TestPostEmbeddingConsumerBuildVersionLookupAndProfileInvalidation(t *testing.T) {
+func TestPostEmbeddingConsumerUsesStaticBuildVersion(t *testing.T) {
 	originalConfig := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = originalConfig })
 
 	t.Run("shadow version writes without invalidating serving profiles", func(t *testing.T) {
 		config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{
-			ServingVersion: "post_embedding_v1",
-			BuildVersion:   "post_embedding_v2",
+			BuildVersion: "post_embedding_v2",
 		}}
 		store := newPostEmbeddingTestStore()
 		store.embeddingErr = nil
@@ -427,15 +424,14 @@ func TestPostEmbeddingConsumerBuildVersionLookupAndProfileInvalidation(t *testin
 		if len(store.embeddingVersions) != 1 || store.embeddingVersions[0] != "post_embedding_v2" || store.upserted[0].Version != "post_embedding_v2" {
 			t.Fatalf("lookups=%v upserts=%+v", store.embeddingVersions, store.upserted)
 		}
-		if len(store.invalidationFlags) != 1 || store.invalidationFlags[0] {
-			t.Fatalf("shadow-build invalidation flags=%v", store.invalidationFlags)
+		if store.writeCalls != 1 {
+			t.Fatalf("shadow build write calls=%d want=1", store.writeCalls)
 		}
 	})
 
-	t.Run("serving build still invalidates profiles", func(t *testing.T) {
+	t.Run("serving selection is not part of static build configuration", func(t *testing.T) {
 		config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{
-			ServingVersion: "post_embedding_v2",
-			BuildVersion:   "post_embedding_v2",
+			BuildVersion: "post_embedding_v2",
 		}}
 		store := newPostEmbeddingTestStore()
 		reader := &postEmbeddingTestReader{
@@ -447,8 +443,8 @@ func TestPostEmbeddingConsumerBuildVersionLookupAndProfileInvalidation(t *testin
 			context.Background(), reader, reader.publisher, &postEmbeddingTestEmbedder{}, store,
 			"post_embedding_v2", postEmbeddingRecoveryConfig(), kafkaRetryPolicy{MaxAttempts: 1},
 		)
-		if !errors.Is(err, reader.stopErr) || len(store.invalidationFlags) != 1 || !store.invalidationFlags[0] {
-			t.Fatalf("err=%v invalidation flags=%v", err, store.invalidationFlags)
+		if !errors.Is(err, reader.stopErr) || store.writeCalls != 1 || len(store.upserted) != 1 || store.upserted[0].Version != "post_embedding_v2" {
+			t.Fatalf("err=%v write_calls=%d upserts=%+v", err, store.writeCalls, store.upserted)
 		}
 	})
 }

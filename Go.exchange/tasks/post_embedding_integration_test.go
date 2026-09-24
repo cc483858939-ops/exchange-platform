@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"Go.exchange/embeddings"
+	"Go.exchange/embeddingstate"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
@@ -44,6 +45,18 @@ func openPostEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err := initialize.RunMigrations(); err != nil {
 		t.Fatal(err)
 	}
+	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := embeddingstate.SetServingVersion(context.Background(), db, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := embeddingstate.SetServingVersion(context.Background(), db, previousServingVersion); err != nil {
+			t.Errorf("restore embedding serving version: %v", err)
+		}
+	})
 	return db
 }
 
@@ -106,7 +119,7 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	}
 	first.CreatedAt = time.Now().UTC().Add(-time.Hour)
 	first.UpdatedAt = first.CreatedAt
-	outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), first, true, time.Now().UTC())
+	outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), first, time.Now().UTC())
 	if err != nil || outcome != postEmbeddingWriteCommitted {
 		t.Fatalf("first outcome=%d err=%v", outcome, err)
 	}
@@ -115,7 +128,7 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	second.ContentHash = embeddings.PostEmbeddingContentHash(article.Content)
 	second.Embedding = pgvector.NewVector([]float32{3, 4})
 	second.UpdatedAt = time.Now().UTC()
-	outcome, err = store.CommitEmbeddingIfCurrent(context.Background(), second, true, time.Now().UTC())
+	outcome, err = store.CommitEmbeddingIfCurrent(context.Background(), second, time.Now().UTC())
 	if err != nil || outcome != postEmbeddingWriteCommitted {
 		t.Fatalf("second outcome=%d err=%v", outcome, err)
 	}
@@ -134,7 +147,7 @@ func TestPostEmbeddingGORMStoreIntegration(t *testing.T) {
 	updatedV2.Embedding = pgvector.NewVector([]float32{5, 6})
 	updatedV2.CreatedAt = time.Now().UTC()
 	updatedV2.UpdatedAt = time.Now().UTC().Add(time.Minute)
-	if outcome, err = store.CommitEmbeddingIfCurrent(context.Background(), updatedV2, false, time.Now().UTC()); err != nil || outcome != postEmbeddingWriteCommitted {
+	if outcome, err = store.CommitEmbeddingIfCurrent(context.Background(), updatedV2, time.Now().UTC()); err != nil || outcome != postEmbeddingWriteCommitted {
 		t.Fatalf("updated v2 outcome=%d err=%v", outcome, err)
 	}
 	persisted, err = store.GetEmbedding(context.Background(), article.ID, "v2")
@@ -179,7 +192,7 @@ func TestCommitEmbeddingIfCurrentRejectsChangedContentIntegration(t *testing.T) 
 		Embedding:   pgvector.NewVector([]float32{1, 2}),
 		ContentHash: embeddings.PostEmbeddingContentHash("H1"), CreatedAt: now, UpdatedAt: now,
 	}
-	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
+	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, now)
 	if err != nil || outcome != postEmbeddingWriteStaleContent {
 		t.Fatalf("outcome=%d err=%v", outcome, err)
 	}
@@ -217,7 +230,7 @@ func TestCommitEmbeddingIfCurrentPreservesNewerEmbeddingIntegration(t *testing.T
 	stale.ContentHash = embeddings.PostEmbeddingContentHash("H1")
 	stale.Embedding = pgvector.NewVector([]float32{1, 2})
 
-	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), stale, true, now.Add(time.Minute))
+	outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), stale, now.Add(time.Minute))
 	if err != nil || outcome != postEmbeddingWriteStaleContent {
 		t.Fatalf("outcome=%d err=%v", outcome, err)
 	}
@@ -262,7 +275,7 @@ func TestCommitEmbeddingIfCurrentWaitsForPostRowLockIntegration(t *testing.T) {
 	}
 	resultCh := make(chan writeResult, 1)
 	go func() {
-		outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
+		outcome, err := (gormPostEmbeddingStore{db: db}).CommitEmbeddingIfCurrent(context.Background(), embedding, now)
 		resultCh <- writeResult{outcome: outcome, err: err}
 	}()
 	select {
@@ -285,5 +298,90 @@ func TestCommitEmbeddingIfCurrentWaitsForPostRowLockIntegration(t *testing.T) {
 	}
 	if _, err := (gormPostEmbeddingStore{db: db}).GetEmbedding(context.Background(), article.ID, "v1"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("stale embedding lookup err=%v", err)
+	}
+}
+
+func TestEmbeddingWriteServingStateLockOrdersRuntimeCutoverIntegration(t *testing.T) {
+	db := openPostEmbeddingIntegrationDatabase(t)
+	_, article := newPostEmbeddingIntegrationFixture(t, db, "H1")
+	dbConn, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbConn.SetMaxOpenConns(4)
+
+	writeTx := db.Begin()
+	if writeTx.Error != nil {
+		t.Fatal(writeTx.Error)
+	}
+	defer writeTx.Rollback()
+	servingVersion, err := lockEmbeddingServingVersion(writeTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servingVersion != "v1" {
+		t.Fatalf("locked serving version=%q want v1", servingVersion)
+	}
+	now := time.Now().UTC()
+	if err := writeTx.Create(&models.PostEmbedding{
+		PostID: article.ID, Version: "v1", Model: "test-model", Dimensions: 2,
+		Embedding: pgvector.NewVector([]float32{1, 2}), ContentHash: embeddings.PostEmbeddingContentHash(article.Content),
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	setterDone := make(chan error, 1)
+	go func() {
+		setterDone <- embeddingstate.SetServingVersion(context.Background(), db, "v2")
+	}()
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	setterWaitingForLock := false
+	for !setterWaitingForLock {
+		var blocked bool
+		if err := db.Raw(`
+SELECT EXISTS (
+	SELECT 1
+	FROM pg_stat_activity
+	WHERE datname = current_database()
+	  AND pid <> pg_backend_pid()
+	  AND wait_event_type = 'Lock'
+	  AND query ILIKE '%UPDATE embedding_serving_state%'
+)`).Scan(&blocked).Error; err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			setterWaitingForLock = true
+			break
+		}
+		select {
+		case setterErr := <-setterDone:
+			t.Fatalf("serving-state setter completed before write transaction released its lock: %v", setterErr)
+		case <-poll.C:
+		case <-deadline.C:
+			t.Fatal("serving-state setter never appeared waiting on the write transaction lock")
+		}
+	}
+
+	if got, err := embeddingstate.LoadServingVersion(context.Background(), db); err != nil || got != "v1" {
+		t.Fatalf("serving version while write lock held=%q err=%v, want v1", got, err)
+	}
+	if err := writeTx.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-setterDone:
+		if err != nil {
+			t.Fatalf("serving-state setter after write commit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serving-state setter did not complete after write transaction committed")
+	}
+	if got, err := embeddingstate.LoadServingVersion(context.Background(), db); err != nil || got != "v2" {
+		t.Fatalf("serving version after lock release=%q err=%v, want v2", got, err)
 	}
 }

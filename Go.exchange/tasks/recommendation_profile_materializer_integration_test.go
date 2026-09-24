@@ -10,6 +10,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/embeddings"
+	"Go.exchange/embeddingstate"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
@@ -42,8 +43,7 @@ func openRecommendationProfileMaterializerIntegrationDB(t *testing.T) *gorm.DB {
 	global.Db = db
 	config.AppConfig = &config.Config{
 		Embedding: config.EmbeddingConfig{
-			ServingVersion: recommendationProfileIntegrationEmbeddingVersion,
-			BuildVersion:   recommendationProfileIntegrationEmbeddingVersion,
+			BuildVersion: "post_embedding_v2",
 		},
 	}
 	t.Cleanup(func() {
@@ -53,6 +53,18 @@ func openRecommendationProfileMaterializerIntegrationDB(t *testing.T) *gorm.DB {
 	if err := initialize.RunMigrations(); err != nil {
 		t.Fatal(err)
 	}
+	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := embeddingstate.SetServingVersion(context.Background(), db, recommendationProfileIntegrationEmbeddingVersion); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := embeddingstate.SetServingVersion(context.Background(), db, previousServingVersion); err != nil {
+			t.Errorf("restore embedding serving version: %v", err)
+		}
+	})
 	return db
 }
 
@@ -163,7 +175,7 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	version := config.ServingEmbeddingVersion()
+	version := recommendationProfileIntegrationEmbeddingVersion
 	for _, embedding := range []models.PostEmbedding{
 		newRecommendationProfileIntegrationEmbedding(positiveArticle.ID, version, []float32{1, 0}, "positive", now),
 		newRecommendationProfileIntegrationEmbedding(negativeArticle.ID, version, []float32{0, 1}, "negative", now),
@@ -180,7 +192,7 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 
 	settings := recommendationProfileIntegrationSettings()
 	cutoff := now.Add(-time.Minute)
-	if err := materializeRecommendationProfileUser(user.ID, now, settings, cutoff); err != nil {
+	if err := materializeRecommendationProfileUser(context.Background(), user.ID, now, settings, cutoff); err != nil {
 		t.Fatal(err)
 	}
 
@@ -234,6 +246,22 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 	}
 	if dirtyCount != 0 {
 		t.Fatalf("dirty rows=%d want=0 after successful materialization", dirtyCount)
+	}
+
+	if err := embeddingstate.SetServingVersion(context.Background(), db, config.BuildEmbeddingVersion()); err != nil {
+		t.Fatalf("switch serving version without process restart: %v", err)
+	}
+	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "serving_version_switch", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := materializeRecommendationProfileUser(context.Background(), user.ID, now.Add(time.Minute), settings, now); err != nil {
+		t.Fatalf("materialize profile after serving switch: %v", err)
+	}
+	if err := db.First(&profile, "user_id = ?", user.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if profile.EmbeddingVersion != "post_embedding_v2" {
+		t.Fatalf("materializer retained old serving version after switch: got=%q want=post_embedding_v2", profile.EmbeddingVersion)
 	}
 }
 
@@ -341,7 +369,7 @@ func newPostEmbeddingFanoutFixture(t *testing.T, db *gorm.DB, label string) (mod
 
 func commitPostEmbeddingForIntegration(t *testing.T, store gormPostEmbeddingStore, embedding models.PostEmbedding, now time.Time) {
 	t.Helper()
-	outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, true, now)
+	outcome, err := store.CommitEmbeddingIfCurrent(context.Background(), embedding, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +389,7 @@ func TestPostEmbeddingUpdateInvalidatesAffectedProfileIntegration(t *testing.T) 
 		t.Fatal(err)
 	}
 	store := gormPostEmbeddingStore{db: db}
-	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ServingEmbeddingVersion(), []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
+	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, recommendationProfileIntegrationEmbeddingVersion, []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
 	commitPostEmbeddingForIntegration(t, store, embedding, now)
 	var persisted models.PostEmbedding
 	if err := db.First(&persisted, "post_id = ?", article.ID).Error; err != nil {
@@ -394,7 +422,7 @@ func TestPostEmbeddingFanoutWorksBeforeCanonicalStateIntegration(t *testing.T) {
 		t.Fatalf("canonical state unexpectedly exists before fan-out: %d", stateCount)
 	}
 	store := gormPostEmbeddingStore{db: db}
-	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ServingEmbeddingVersion(), []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
+	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, recommendationProfileIntegrationEmbeddingVersion, []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
 	commitPostEmbeddingForIntegration(t, store, embedding, now)
 	var dirty models.UserRecoProfileDirty
 	if err := db.First(&dirty, "user_id = ?", user.ID).Error; err != nil {
@@ -413,7 +441,7 @@ func TestPostEmbeddingFanoutIncludesReactionOnlyUserIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := gormPostEmbeddingStore{db: db}
-	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ServingEmbeddingVersion(), []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
+	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, recommendationProfileIntegrationEmbeddingVersion, []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
 	commitPostEmbeddingForIntegration(t, store, embedding, now)
 	var dirty models.UserRecoProfileDirty
 	if err := db.First(&dirty, "user_id = ?", user.ID).Error; err != nil {
@@ -438,7 +466,7 @@ func TestPostEmbeddingFanoutDeduplicatesBehaviorAndReactionUserIntegration(t *te
 		t.Fatal(err)
 	}
 	store := gormPostEmbeddingStore{db: db}
-	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, config.ServingEmbeddingVersion(), []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
+	embedding := newRecommendationProfileIntegrationEmbedding(article.ID, recommendationProfileIntegrationEmbeddingVersion, []float32{1, 0}, embeddings.PostEmbeddingContentHash(article.Content), now)
 	commitPostEmbeddingForIntegration(t, store, embedding, now)
 	var dirty models.UserRecoProfileDirty
 	if err := db.First(&dirty, "user_id = ?", user.ID).Error; err != nil {
@@ -474,7 +502,15 @@ func TestPostEmbeddingUpdateRollsBackWhenProfileInvalidationFailsIntegration(t *
 	}
 
 	updated := newRecommendationProfileIntegrationEmbedding(article.ID, "new-version", []float32{0, 1}, embeddings.PostEmbeddingContentHash(article.Content), now.Add(time.Minute))
-	if _, err := store.CommitEmbeddingIfCurrent(context.Background(), updated, true, now.Add(time.Minute)); err == nil {
+	if err := embeddingstate.SetServingVersion(context.Background(), db, "new-version"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := embeddingstate.SetServingVersion(context.Background(), db, recommendationProfileIntegrationEmbeddingVersion); err != nil {
+			t.Errorf("restore serving version: %v", err)
+		}
+	})
+	if _, err := store.CommitEmbeddingIfCurrent(context.Background(), updated, now.Add(time.Minute)); err == nil {
 		t.Fatal("embedding update unexpectedly succeeded when invalidation constraint rejected the dirty row")
 	}
 	if err := db.Exec("ALTER TABLE user_reco_profile_dirty DROP CONSTRAINT IF EXISTS " + constraintName).Error; err != nil {
@@ -507,7 +543,7 @@ func TestPostEmbeddingUpToDateDoesNotInvalidateProfileIntegration(t *testing.T) 
 	db := openRecommendationProfileMaterializerIntegrationDB(t)
 	user, article := newPostEmbeddingFanoutFixture(t, db, "up-to-date")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	version := config.ServingEmbeddingVersion()
+	version := recommendationProfileIntegrationEmbeddingVersion
 	hash := embeddings.PostEmbeddingContentHash(article.Content)
 	if err := db.Create(&models.PostEmbedding{
 		PostID: article.ID, Version: version, Model: "existing-model", Dimensions: 2,

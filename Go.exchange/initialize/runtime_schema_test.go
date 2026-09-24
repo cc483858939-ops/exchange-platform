@@ -190,6 +190,25 @@ func TestPostEmbeddingRuntimeSchemaCanaryRequiresVersionedIdentityAndIndex(t *te
 	t.Fatal("post_embeddings schema canary is missing")
 }
 
+func TestEmbeddingServingStateRuntimeSchemaCanaryRequiresSingletonConstraints(t *testing.T) {
+	for _, canary := range postSchemaObjectCanaries {
+		if canary.Table != "embedding_serving_state" {
+			continue
+		}
+		constraints := make(map[string]struct{}, len(canary.Constraints))
+		for _, constraint := range canary.Constraints {
+			constraints[constraint] = struct{}{}
+		}
+		for _, required := range []string{"chk_embedding_serving_state_singleton", "chk_embedding_serving_state_version_nonblank"} {
+			if _, exists := constraints[required]; !exists {
+				t.Fatalf("embedding_serving_state canary is missing constraint %q: %v", required, canary.Constraints)
+			}
+		}
+		return
+	}
+	t.Fatal("embedding_serving_state canary is missing")
+}
+
 func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	db, err := gorm.Open(postgres.Open("host=127.0.0.1 user=unused dbname=unused sslmode=disable"), &gorm.Config{
 		DryRun:               true,
@@ -209,11 +228,25 @@ func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	apiTables := canaryTableSet(api)
 	workerTables := canaryTableSet(worker)
 	for _, required := range []string{
-		"users", "post_media", "post_embeddings", "post_behaviors", "user_post_reco_states",
+		"users", "post_media", "post_embeddings", "embedding_serving_state", "post_behaviors", "user_post_reco_states",
 		"user_reco_profiles", "user_author_affinities", "user_reco_profile_dirty", "exchange_rates", "runtime_schema_state",
 	} {
 		if !apiTables[required] {
 			t.Fatalf("API schema registry omitted %q", required)
+		}
+	}
+	for _, canary := range api {
+		if canary.Table != "embedding_serving_state" {
+			continue
+		}
+		columns := make(map[string]struct{}, len(canary.Columns))
+		for _, column := range canary.Columns {
+			columns[column] = struct{}{}
+		}
+		for _, required := range []string{"id", "serving_version", "updated_at"} {
+			if _, exists := columns[required]; !exists {
+				t.Fatalf("embedding serving state schema columns omit %q: %v", required, canary.Columns)
+			}
 		}
 	}
 	for _, required := range []string{"consumer_inboxes", "recommendation_daily_metrics"} {
@@ -250,8 +283,11 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != 9 || PublishedSchemaCompatibilityFloor != 9 || RequiredSchemaVersion != 9 {
+	if PublishedSchemaCurrentVersion != 10 || PublishedSchemaCompatibilityFloor != 10 || RequiredSchemaVersion != 10 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
+	}
+	if !runtimeSchemaVersionsCompatible(10, 10, 10) || runtimeSchemaVersionsCompatible(10, 10, 9) {
+		t.Fatal("schema 10 must accept schema 10 and reject schema-9 binaries")
 	}
 }
 

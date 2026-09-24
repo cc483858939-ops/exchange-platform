@@ -24,6 +24,5 @@ data:
   EMBEDDING_ENABLED: "false"
   EMBEDDING_BASE_URL: ""
   EMBEDDING_MODEL: "@cf/baai/bge-m3"
-  EMBEDDING_SERVING_VERSION: "post_embedding_v1"
   EMBEDDING_BUILD_VERSION: "post_embedding_v1"
   EMBEDDING_TIMEOUT_SECONDS: "10"

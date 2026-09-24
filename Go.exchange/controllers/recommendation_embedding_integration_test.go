@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/models"
 
@@ -30,12 +29,10 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalConfig := global.Db, config.AppConfig
+	originalDB := global.Db
 	global.Db = db
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{ServingVersion: "post_embedding_v1"}}
 	t.Cleanup(func() {
 		global.Db = originalDB
-		config.AppConfig = originalConfig
 	})
 
 	viewer := models.User{Username: "semantic-viewer-" + uuid.NewString(), Password: "test"}
@@ -80,7 +77,7 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 
 	cfg := defaultRecommendationConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}, InteractedPostIDs: map[uint]struct{}{interacted.ID: {}}}
-	candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, profile, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
+	candidates, err := loadRecommendationSemanticCandidates(db, "post_embedding_v1", viewer.ID, profile, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,12 +118,10 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalConfig := global.Db, config.AppConfig
+	originalDB := global.Db
 	global.Db = db
-	config.AppConfig = &config.Config{Embedding: config.EmbeddingConfig{ServingVersion: "v2"}}
 	t.Cleanup(func() {
 		global.Db = originalDB
-		config.AppConfig = originalConfig
 	})
 
 	viewer := models.User{Username: "semantic-version-viewer-" + uuid.NewString(), Password: "test"}
@@ -170,7 +165,7 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	})
 
 	cfg := defaultRecommendationConfig()
-	candidates, err := loadRecommendationSemanticCandidates(db, viewer.ID, userInterestProfile{
+	candidates, err := loadRecommendationSemanticCandidates(db, "v2", viewer.ID, userInterestProfile{
 		PositiveVector: []float32{1, 0},
 	}, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {

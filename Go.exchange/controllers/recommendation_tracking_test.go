@@ -52,12 +52,12 @@ func TestRecommendationRankerConfigHashIncludesV6ServingSettings(t *testing.T) {
 		{name: "language max behavior share", mutate: func(cfg *config.RecommendationConfig) { cfg.LanguageAffinity.MaxBehaviorShare = 0.9 }},
 	}
 
-	baseHash := recommendationRankerConfigHash(base)
+	baseHash := recommendationRankerConfigHash(base, "post_embedding_v1")
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mutated := base
 			tc.mutate(&mutated)
-			if got := recommendationRankerConfigHash(mutated); got == baseHash {
+			if got := recommendationRankerConfigHash(mutated, "post_embedding_v1"); got == baseHash {
 				t.Fatalf("hash=%q unchanged from base %q", got, baseHash)
 			}
 		})
@@ -75,8 +75,17 @@ func TestRecommendationRankerConfigHashExplorationDoesNotChangeProfileHash(t *te
 	mutated.LanguageAffinity.Weight = 0.1
 	mutated.LanguageAffinity.EvidenceSaturationScale = 9
 	mutated.LanguageAffinity.MaxBehaviorShare = 0.8
-	if got, want := recommendation.ProfileConfigHash(mutated, config.ServingEmbeddingVersion()), recommendation.ProfileConfigHash(base, config.ServingEmbeddingVersion()); got != want {
+	if got, want := recommendation.ProfileConfigHash(mutated, "post_embedding_v1"), recommendation.ProfileConfigHash(base, "post_embedding_v1"); got != want {
 		t.Fatalf("profile hash changed with exploration settings: got=%q want=%q", got, want)
+	}
+}
+
+func TestRecommendationRankerConfigHashIncludesServingVersion(t *testing.T) {
+	cfg := defaultRecommendationConfig()
+	v1 := recommendationRankerConfigHash(cfg, "post_embedding_v1")
+	v2 := recommendationRankerConfigHash(cfg, "post_embedding_v2")
+	if v1 == v2 {
+		t.Fatalf("serving-version change did not change ranker hash: %q", v1)
 	}
 }
 
@@ -259,12 +268,16 @@ func TestAttachRecommendationTrackingUsesFinalPositionsAndReadClaims(t *testing.
 		{Post: models.Post{Model: gorm.Model{ID: 11}}, SelectionMode: recommendationResultSelectionRanked},
 		{Post: models.Post{Model: gorm.Model{ID: 12}}, ExplorationOpportunity: true, SelectionMode: recommendationResultSelectionExploration, ExplorationReason: recommendationExplorationReasonRecent, ExplorationSemantic: .8},
 	}
-	trackedCount, err := attachRecommendationTracking(7, requestID, userInterestProfile{}, selected, recommendations, now)
+	trackedCount, err := attachRecommendationTracking(7, requestID, "post_embedding_v1", userInterestProfile{}, selected, recommendations, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if trackedCount != len(recommendations) || recommendations[0].Tracking == nil || recommendations[1].Tracking == nil {
 		t.Fatalf("tracking count=%d recommendations=%#v", trackedCount, recommendations)
+	}
+	wantRankerHash := recommendationRankerConfigHash(normalizedRecommendationConfig(), "post_embedding_v1")
+	if recommendations[0].Tracking.RankerConfigHash != wantRankerHash || recommendations[1].Tracking.RankerConfigHash != wantRankerHash {
+		t.Fatalf("tracking ranker hashes=%q/%q want=%q", recommendations[0].Tracking.RankerConfigHash, recommendations[1].Tracking.RankerConfigHash, wantRankerHash)
 	}
 	if recommendations[0].Tracking.Position != 1 || recommendations[1].Tracking.Position != 2 {
 		t.Fatalf("unexpected positions: %#v %#v", recommendations[0].Tracking, recommendations[1].Tracking)
@@ -275,7 +288,7 @@ func TestAttachRecommendationTrackingUsesFinalPositionsAndReadClaims(t *testing.
 	}
 	if claims.PostID != 12 || claims.Position != 2 || claims.StrategyID != recommendationColdStartStrategyID ||
 		!claims.ExplorationOpportunity || claims.SelectionMode != string(recommendationResultSelectionExploration) || claims.ExplorationReason != recommendationExplorationReasonRecent ||
-		claims.EstimatedReadTimeMS <= 0 || claims.ReadPolicyVersion != recommendationReadPolicyVersion {
+		claims.EstimatedReadTimeMS <= 0 || claims.ReadPolicyVersion != recommendationReadPolicyVersion || claims.RankerConfigHash != wantRankerHash {
 		t.Fatalf("unexpected V3 claims: %#v", claims)
 	}
 }
