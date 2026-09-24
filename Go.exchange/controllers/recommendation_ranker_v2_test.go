@@ -189,6 +189,106 @@ func TestRecommendationRankerFallsBackToRecallSemanticWhenHydratedEmbeddingMissi
 	}
 }
 
+func TestRecommendationRankerKeepsNilEmbeddingWithNonSemanticScores(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	cfg.LanguageAffinity.Enabled = true
+	cfg.LanguageAffinity.Weight = 0.25
+	profile := userInterestProfile{
+		PositiveVector:     []float32{1, 0},
+		NegativeVector:     []float32{0, 1},
+		NegativeConfidence: 1,
+	}
+	candidate := hydratedRecommendationCandidate{
+		Candidate: embeddingCandidate{
+			PostID:       1,
+			FromTrending: true,
+		},
+		Post: models.Post{
+			Model:     gorm.Model{ID: 1, CreatedAt: now},
+			AuthorID:  10,
+			Language:  "en",
+			LikeCount: 3,
+		},
+		// Intentionally no embedding: this is not a semantic recall candidate.
+	}
+	languageContext := recommendationLanguageContext{
+		Combined: recommendationLanguagePrior{EN: 1},
+	}
+
+	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{candidate}, now, cfg, languageContext)
+	if len(ranked) != 1 {
+		t.Fatalf("ranked=%#v, want nil-embedding candidate to remain eligible", ranked)
+	}
+	got := ranked[0]
+	if got.Post.ID != candidate.Post.ID {
+		t.Fatalf("ranked post ID=%d want=%d", got.Post.ID, candidate.Post.ID)
+	}
+	if got.Breakdown.PositiveSemantic != 0 || got.Breakdown.NegativeSemantic != 0 || got.Breakdown.SemanticComponent != 0 {
+		t.Fatalf("nil embedding semantic breakdown=%#v, want all semantic scores to be zero", got.Breakdown)
+	}
+	if got.Breakdown.TrendingComponent <= 0 {
+		t.Fatalf("trending component=%v, want positive score", got.Breakdown.TrendingComponent)
+	}
+	if got.Breakdown.LanguageComponent <= 0 {
+		t.Fatalf("language component=%v, want positive score", got.Breakdown.LanguageComponent)
+	}
+	for name, score := range map[string]float64{
+		"base":  got.Breakdown.BaseScore,
+		"final": got.Breakdown.FinalScore,
+	} {
+		if math.IsNaN(score) || math.IsInf(score, 0) {
+			t.Errorf("%s score=%v, want finite score", name, score)
+		}
+	}
+	if math.IsNaN(got.ExplorationSemantic) || math.IsInf(got.ExplorationSemantic, 0) || got.ExplorationSemantic < 0 || got.ExplorationSemantic > 1 {
+		t.Fatalf("exploration semantic=%v, want finite value within [0,1]", got.ExplorationSemantic)
+	}
+}
+
+func TestRecommendationRankerKeepsEmbeddedAndNilEmbeddingCandidates(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cfg := defaultRecommendationConfig()
+	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
+	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
+		{
+			Candidate: embeddingCandidate{PostID: 1, FromRecent: true},
+			Post:      models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 10},
+			Embedding: []float32{1, 0},
+		},
+		{
+			Candidate: embeddingCandidate{PostID: 2, FromTrending: true},
+			Post:      models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 11, LikeCount: 3},
+			Embedding: nil,
+		},
+	}, now, cfg)
+	if len(ranked) != 2 {
+		t.Fatalf("ranked=%#v, want both candidates retained", ranked)
+	}
+
+	byPostID := make(map[uint]hydratedRecommendationCandidate, len(ranked))
+	for _, candidate := range ranked {
+		byPostID[candidate.Post.ID] = candidate
+	}
+	embedded, ok := byPostID[1]
+	if !ok {
+		t.Fatal("embedded post 1 missing from ranked result")
+	}
+	if math.Abs(embedded.Breakdown.PositiveSemantic-1) > 1e-9 || math.Abs(embedded.Breakdown.SemanticComponent-cfg.SemanticWeight) > 1e-9 {
+		t.Fatalf("embedded semantic breakdown=%#v, want similarity 1 and full semantic weight", embedded.Breakdown)
+	}
+	nonSemantic, ok := byPostID[2]
+	if !ok {
+		t.Fatal("nil-embedding post 2 missing from ranked result")
+	}
+	if nonSemantic.Breakdown.PositiveSemantic != 0 || nonSemantic.Breakdown.NegativeSemantic != 0 || nonSemantic.Breakdown.SemanticComponent != 0 {
+		t.Fatalf("nil-embedding semantic breakdown=%#v, want all semantic scores to be zero", nonSemantic.Breakdown)
+	}
+	if nonSemantic.Breakdown.TrendingComponent <= 0 {
+		t.Fatalf("nil-embedding trending component=%v, want positive score", nonSemantic.Breakdown.TrendingComponent)
+	}
+}
+
 func TestRecommendationRankerIgnoresFusionScore(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
