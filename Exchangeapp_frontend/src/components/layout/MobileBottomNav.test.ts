@@ -27,6 +27,9 @@ const mocks = vi.hoisted(() => ({
   notificationStore: {
     requestNotificationReselect: vi.fn(),
   },
+  profileSession: {
+    requestProfileReselect: vi.fn(),
+  },
   searchSession: {
     query: '',
     requestSearchReselect: vi.fn(),
@@ -43,6 +46,10 @@ vi.mock('../../store/homeTimeline', () => ({
 
 vi.mock('../../store/notification', () => ({
   useNotificationStore: () => mocks.notificationStore,
+}));
+
+vi.mock('../../store/profileSession', () => ({
+  useProfileSessionStore: () => mocks.profileSession,
 }));
 
 vi.mock('../../store/searchSession', () => ({
@@ -106,6 +113,7 @@ describe('MobileBottomNav', () => {
     mocks.homeTimeline.activeTab = 'for-you';
     mocks.homeTimeline.requestHomeReselect.mockClear();
     mocks.notificationStore.requestNotificationReselect.mockClear();
+    mocks.profileSession.requestProfileReselect.mockClear();
     mocks.searchSession.query = '';
     mocks.searchSession.requestSearchReselect.mockClear();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
@@ -368,7 +376,27 @@ describe('MobileBottomNav', () => {
     const event = dispatchClick(wrapper, 4);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(mocks.profileSession.requestProfileReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
+    expect(mocks.searchSession.requestSearchReselect).not.toHaveBeenCalled();
+    expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
+    expect(window.scrollTo).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Meta', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['Shift', { shiftKey: true }],
+    ['Alt', { altKey: true }],
+    ['middle', { button: 1 }],
+  ])('preserves %s-click link behavior on the own Profile root', (_label, init) => {
+    setState(true, 'UserProfile', { id: '123' });
+    const wrapper = mountNav();
+    const event = dispatchClick(wrapper, 4, init);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.profileSession.requestProfileReselect).not.toHaveBeenCalled();
+    expect(window.scrollTo).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -382,6 +410,7 @@ describe('MobileBottomNav', () => {
     const event = dispatchClick(wrapper, 4);
 
     expect(event.defaultPrevented).toBe(false);
+    expect(mocks.profileSession.requestProfileReselect).not.toHaveBeenCalled();
     expect(window.scrollTo).not.toHaveBeenCalled();
     expect(profile.attributes('data-route-name')).toBe('UserProfile');
     expect(profile.attributes('data-route-id')).toBe('123');
@@ -394,6 +423,7 @@ describe('MobileBottomNav', () => {
     const event = dispatchClick(wrapper, 4);
 
     expect(event.defaultPrevented).toBe(false);
+    expect(mocks.profileSession.requestProfileReselect).not.toHaveBeenCalled();
     expect(window.scrollTo).not.toHaveBeenCalled();
     expect(profile.attributes('data-route-name')).toBe('UserProfile');
     expect(profile.attributes('data-route-id')).toBe('123');

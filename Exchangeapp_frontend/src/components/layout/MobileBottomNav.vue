@@ -39,6 +39,7 @@ import { useRoute } from 'vue-router';
 import { useAuthStore } from '../../store/auth';
 import { useHomeTimelineStore } from '../../store/homeTimeline';
 import { useNotificationStore } from '../../store/notification';
+import { useProfileSessionStore } from '../../store/profileSession';
 import { useSearchSessionStore } from '../../store/searchSession';
 import AppIcon from '../icons/AppIcon.vue';
 
@@ -65,6 +66,7 @@ const props = withDefaults(defineProps<{
 const authStore = useAuthStore();
 const homeTimeline = useHomeTimelineStore();
 const notificationStore = useNotificationStore();
+const profileSession = useProfileSessionStore();
 const searchSession = useSearchSessionStore();
 const route = useRoute();
 
@@ -201,6 +203,10 @@ const handleNavigationClick = (event: MouseEvent, item: NavigationItem) => {
   }
 
   event.preventDefault();
+  if (item.routeName === 'UserProfile' && route.name === 'UserProfile') {
+    profileSession.requestProfileReselect();
+    return;
+  }
   if (item.routeName === 'UserSearch' && route.name === 'UserSearch') {
     searchSession.requestSearchReselect();
     return;

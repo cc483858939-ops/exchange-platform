@@ -166,6 +166,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const feedStore = useFeedStore();
   const viewerID = ref<number | null>(null);
   const viewerGeneration = ref(0);
+  const profileReselectVersion = ref(0);
   const sessions = reactive(new Map<number, ProfileSessionEntry>());
   const likePendingPostIds = reactive(new Set<number>());
   const repostPendingPostIds = reactive(new Set<number>());
@@ -1455,6 +1456,10 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     if (session) session.scrollTop = Number.isFinite(value) && value >= 0 ? value : 0;
   };
 
+  const requestProfileReselect = () => {
+    profileReselectVersion.value += 1;
+  };
+
   registerProfileSessionSync({
     applyLikeStateUpdateLocal,
     applyExternalLikeStateLocal,
@@ -1480,6 +1485,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   return {
     viewerID,
     viewerGeneration,
+    profileReselectVersion,
     sessions,
     maxProfileSessions,
     likePendingPostIds,
@@ -1518,6 +1524,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     updateUser,
     registerPublishedTimelinePost,
     setScrollTop,
+    requestProfileReselect,
     cancelPendingDeletesForProfile,
   };
 });

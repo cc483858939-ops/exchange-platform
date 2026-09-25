@@ -193,6 +193,29 @@ const restoreScrollY = (descriptor: PropertyDescriptor | undefined) => {
   }
 };
 
+const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+
+const restoreMatchMedia = () => {
+  if (originalMatchMedia) {
+    Object.defineProperty(window, 'matchMedia', originalMatchMedia);
+  } else {
+    Reflect.deleteProperty(window, 'matchMedia');
+  }
+};
+
+const stubViewportScrollTo = (viewport: HTMLElement) => {
+  const scrollTo = vi.fn((options: ScrollToOptions) => {
+    if (typeof options.top === 'number') {
+      viewport.scrollTop = options.top;
+    }
+  });
+  Object.defineProperty(viewport, 'scrollTo', {
+    configurable: true,
+    value: scrollTo,
+  });
+  return scrollTo;
+};
+
 describe('UserProfileView scroll viewport', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -252,6 +275,114 @@ describe('UserProfileView scroll viewport', () => {
       wrapper.unmount();
       scrollTo.mockRestore();
       restoreScrollY(scrollYDescriptor);
+    }
+  });
+
+  it('reselects the own Profile viewport, persists zero, and restores zero after KeepAlive return', async () => {
+    const { store, session } = prepareLoadedSession(7, 2400);
+    const { wrapper, state } = mountKeepAliveProfile();
+    const windowScrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      viewport.scrollTop = 2400;
+      const viewportScrollTo = stubViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+      expect(viewport.scrollTop).toBe(0);
+      expect(session.scrollTop).toBe(0);
+      expect(windowScrollTo).not.toHaveBeenCalled();
+
+      mocks.routeLeaveGuard?.();
+      state.showProfile = false;
+      await nextTick();
+      mocks.route.name = 'PostDetail';
+      mocks.route.params.id = '9999';
+      await settle();
+      setProfileRoute(7);
+      state.showProfile = true;
+      await settle();
+
+      expect(wrapper.get('.profile-scroll-viewport').element.scrollTop).toBe(0);
+      expect(session.scrollTop).toBe(0);
+    } finally {
+      wrapper.unmount();
+      windowScrollTo.mockRestore();
+    }
+  });
+
+  it('ignores own-Profile reselect signals while displaying another user Profile', async () => {
+    setProfileRoute(8);
+    const { store, session } = prepareLoadedSession(8, 1800);
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      viewport.scrollTop = 1800;
+      const viewportScrollTo = stubViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+
+      expect(viewportScrollTo).not.toHaveBeenCalled();
+      expect(viewport.scrollTop).toBe(1800);
+      expect(session.scrollTop).toBe(1800);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('ignores Profile reselect signals while the KeepAlive view is deactivated', async () => {
+    const { store } = prepareLoadedSession(7, 1800);
+    const { wrapper, state } = mountKeepAliveProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      viewport.scrollTop = 1800;
+      const viewportScrollTo = stubViewportScrollTo(viewport);
+
+      state.showProfile = false;
+      await nextTick();
+      store.requestProfileReselect();
+      await nextTick();
+
+      expect(viewportScrollTo).not.toHaveBeenCalled();
+      expect(viewport.scrollTop).toBe(1800);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('uses instant viewport scrolling when reduced motion is preferred', async () => {
+    const { store, session } = prepareLoadedSession(7, 1200);
+    const matchMedia = vi.fn().mockReturnValue({ matches: true });
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: matchMedia,
+    });
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      viewport.scrollTop = 1200;
+      const viewportScrollTo = stubViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+      expect(matchMedia).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
+      expect(session.scrollTop).toBe(0);
+    } finally {
+      wrapper.unmount();
+      restoreMatchMedia();
     }
   });
 

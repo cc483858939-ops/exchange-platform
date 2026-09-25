@@ -612,6 +612,39 @@ const isOwnProfile = computed(() => Boolean(
   && currentViewerID.value !== null
   && user.value.id === currentViewerID.value,
 ));
+const prefersReducedMotion = () => typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+watch(
+  () => profileStore.profileReselectVersion,
+  () => {
+    const targetUserID = numericUserID.value;
+    const routeUserID = Number(Array.isArray(route.params.id)
+      ? route.params.id[0]
+      : route.params.id);
+    const viewport = profileScrollViewportRef.value;
+    if (
+      !profileViewActive.value
+      || route.name !== 'UserProfile'
+      || targetUserID === null
+      || targetUserID !== currentViewerID.value
+      || (user.value !== null && user.value.id !== targetUserID)
+      || routeUserID !== targetUserID
+      || !viewport
+    ) {
+      return;
+    }
+
+    profileStore.setScrollTop(targetUserID, 0);
+    viewport.scrollTo({
+      top: 0,
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
+  },
+  { flush: 'sync' },
+);
+
 const socialReady = computed(() => Boolean(
   authStore.isAuthenticated
   && currentViewerID.value !== null
