@@ -39,8 +39,8 @@ import AppIcon from '../icons/AppIcon.vue';
 type BookmarkActionVariant = 'compact' | 'detail';
 type BookmarkMotion = 'idle' | 'bookmarking' | 'unbookmarking';
 
-const bookmarkMotionDurationMs = 280;
-const unbookmarkMotionDurationMs = 220;
+const bookmarkMotionDurationMs = 220;
+const unbookmarkMotionDurationMs = 180;
 
 const props = withDefaults(defineProps<{
   bookmarked: boolean;
@@ -259,12 +259,12 @@ onBeforeUnmount(clearMotionTimer);
     transform: scale(1);
   }
 
-  28% {
-    transform: scale(0.86);
+  32% {
+    transform: scale(0.95);
   }
 
-  62% {
-    transform: scale(1.1);
+  68% {
+    transform: scale(1.04);
   }
 
   100% {
@@ -277,12 +277,12 @@ onBeforeUnmount(clearMotionTimer);
     transform: scale(1);
   }
 
-  30% {
-    transform: scale(0.88);
+  35% {
+    transform: scale(0.97);
   }
 
-  68% {
-    transform: scale(1.06);
+  72% {
+    transform: scale(1.02);
   }
 
   100% {
@@ -293,17 +293,17 @@ onBeforeUnmount(clearMotionTimer);
 @keyframes nexus-bookmark-halo {
   0% {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.7);
+    transform: translate(-50%, -50%) scale(0.85);
   }
 
-  40% {
-    opacity: 0.14;
+  42% {
+    opacity: 0.09;
     transform: translate(-50%, -50%) scale(1);
   }
 
   100% {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(1.3);
+    transform: translate(-50%, -50%) scale(1.14);
   }
 }
 
