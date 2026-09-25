@@ -14,21 +14,16 @@
         >
           <AppIcon name="trash" :size="16" />
         </button>
-        <button
+        <BookmarkAction
           class="reply-item__bookmark"
-          type="button"
-          :disabled="bookmarkStatus !== 'ready' || bookmarkPending"
-          :aria-busy="bookmarkPending || bookmarkStatus === 'unknown' ? 'true' : undefined"
-          :aria-pressed="bookmarkStatus === 'ready' ? bookmarkState.bookmarked : false"
-          :aria-label="bookmarkLabel"
-          @click.stop="emit('toggleBookmark', reply.id)"
-        >
-          <AppIcon
-            name="bookmark"
-            :size="16"
-            :filled="bookmarkStatus === 'ready' && bookmarkState.bookmarked"
-          />
-        </button>
+          :bookmarked="bookmarkStatus === 'ready' && bookmarkState.bookmarked"
+          :disabled="bookmarkStatus === 'unavailable'"
+          :loading="bookmarkStatus === 'unknown'"
+          :pending="bookmarkPending"
+          :ariaLabel="bookmarkLabel"
+          variant="compact"
+          @toggle="emit('toggleBookmark', reply.id)"
+        />
       </div>
     </div>
     <div class="reply-item__content">
@@ -48,6 +43,7 @@
 import { computed } from 'vue';
 import type { Post } from '../../types/Post';
 import type { FeedBookmarkStatus } from '../../types/Feed';
+import BookmarkAction from '../engagement/BookmarkAction.vue';
 import AuthorIdentity from '../AuthorIdentity.vue';
 import LinkifiedText from '../content/LinkifiedText.vue';
 import PostMediaGrid from '../content/PostMediaGrid.vue';

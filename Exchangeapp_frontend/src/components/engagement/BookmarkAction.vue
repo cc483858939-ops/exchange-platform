@@ -1,0 +1,321 @@
+<template>
+  <button
+    type="button"
+    class="bookmark-action"
+    :class="{
+      'bookmark-action--compact': variant === 'compact',
+      'bookmark-action--detail': variant === 'detail',
+      'bookmark-action--bookmarked': visualBookmarked,
+      'bookmark-action--disabled': disabled,
+      'bookmark-action--loading': loading,
+      'bookmark-action--pending': pending,
+      'bookmark-action--bookmarking': motion === 'bookmarking',
+      'bookmark-action--unbookmarking': motion === 'unbookmarking',
+    }"
+    :disabled="effectivelyDisabled"
+    :aria-busy="loading || pending ? 'true' : undefined"
+    :aria-pressed="bookmarked"
+    :aria-label="ariaLabel"
+    :data-motion="motion"
+    :style="motionStyle"
+    @click.stop="activate"
+  >
+    <span class="bookmark-action__visual" aria-hidden="true">
+      <span class="bookmark-action__icon">
+        <AppIcon
+          name="bookmark"
+          :size="variant === 'detail' ? 20 : 18"
+          :filled="visualBookmarked"
+        />
+      </span>
+    </span>
+  </button>
+</template>
+
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import AppIcon from '../icons/AppIcon.vue';
+
+type BookmarkActionVariant = 'compact' | 'detail';
+type BookmarkMotion = 'idle' | 'bookmarking' | 'unbookmarking';
+
+const bookmarkMotionDurationMs = 280;
+const unbookmarkMotionDurationMs = 220;
+
+const props = withDefaults(defineProps<{
+  bookmarked: boolean;
+  loading?: boolean;
+  pending?: boolean;
+  disabled?: boolean;
+  ariaLabel: string;
+  variant?: BookmarkActionVariant;
+}>(), {
+  loading: false,
+  pending: false,
+  disabled: false,
+  variant: 'compact',
+});
+
+const emit = defineEmits<{
+  toggle: [];
+}>();
+
+const motion = ref<BookmarkMotion>('idle');
+const expectedBookmarked = ref<boolean | null>(null);
+const expectedStateObserved = ref(false);
+let motionTimer: ReturnType<typeof setTimeout> | null = null;
+
+const motionStyle = computed(() => ({
+  '--bookmark-motion-duration': `${bookmarkMotionDurationMs}ms`,
+  '--unbookmark-motion-duration': `${unbookmarkMotionDurationMs}ms`,
+}));
+
+const visualBookmarked = computed(() => {
+  if (motion.value === 'bookmarking') {
+    return true;
+  }
+
+  if (motion.value === 'unbookmarking') {
+    return false;
+  }
+
+  return props.bookmarked;
+});
+
+const effectivelyDisabled = computed(() => (
+  props.disabled || props.loading || props.pending
+));
+
+const clearMotionTimer = () => {
+  if (motionTimer !== null) {
+    clearTimeout(motionTimer);
+    motionTimer = null;
+  }
+};
+
+const cancelMotion = () => {
+  clearMotionTimer();
+  motion.value = 'idle';
+  expectedBookmarked.value = null;
+  expectedStateObserved.value = false;
+};
+
+const startMotion = (nextMotion: Exclude<BookmarkMotion, 'idle'>) => {
+  clearMotionTimer();
+  motion.value = nextMotion;
+  motionTimer = setTimeout(() => {
+    motion.value = 'idle';
+    motionTimer = null;
+    expectedBookmarked.value = null;
+    expectedStateObserved.value = false;
+  }, nextMotion === 'bookmarking'
+    ? bookmarkMotionDurationMs
+    : unbookmarkMotionDurationMs);
+};
+
+const activate = () => {
+  if (effectivelyDisabled.value) {
+    return;
+  }
+
+  const nextBookmarked = !props.bookmarked;
+  expectedBookmarked.value = nextBookmarked;
+  expectedStateObserved.value = false;
+
+  startMotion(nextBookmarked ? 'bookmarking' : 'unbookmarking');
+  emit('toggle');
+};
+
+watch(
+  () => props.bookmarked,
+  nextBookmarked => {
+    if (motion.value === 'idle' || expectedBookmarked.value === null) {
+      return;
+    }
+
+    if (nextBookmarked === expectedBookmarked.value) {
+      expectedStateObserved.value = true;
+      return;
+    }
+
+    if (expectedStateObserved.value) {
+      cancelMotion();
+    }
+  },
+);
+
+onBeforeUnmount(clearMotionTimer);
+</script>
+
+<style scoped>
+.bookmark-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-width: 40px;
+  min-height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  transition: color 140ms ease, background-color 140ms ease, opacity 140ms ease;
+}
+
+.bookmark-action--compact {
+  margin: -8px 0;
+}
+
+.bookmark-action--detail {
+  padding: 0 var(--space-3);
+}
+
+.bookmark-action--bookmarked {
+  color: var(--color-accent);
+}
+
+.bookmark-action:focus-visible {
+  background: var(--color-surface-subtle);
+  color: var(--color-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .bookmark-action:hover:not(:disabled) {
+    background: var(--color-surface-subtle);
+    color: var(--color-accent);
+  }
+}
+
+.bookmark-action:disabled {
+  cursor: default;
+}
+
+.bookmark-action--disabled,
+.bookmark-action--loading {
+  opacity: 0.64;
+}
+
+.bookmark-action--pending {
+  opacity: 1;
+}
+
+.bookmark-action__visual {
+  isolation: isolate;
+  position: relative;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.bookmark-action__visual::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.bookmark-action__icon {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  transform-origin: center;
+}
+
+.bookmark-action__icon :deep(.app-icon) {
+  display: block;
+}
+
+.bookmark-action--bookmarking .bookmark-action__icon {
+  animation: nexus-bookmark-in var(--bookmark-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.bookmark-action--unbookmarking .bookmark-action__icon {
+  animation: nexus-bookmark-out var(--unbookmark-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.bookmark-action--bookmarking .bookmark-action__visual::after {
+  animation: nexus-bookmark-halo var(--bookmark-motion-duration) ease-out both;
+}
+
+@keyframes nexus-bookmark-in {
+  0% {
+    transform: scale(1);
+  }
+
+  28% {
+    transform: scale(0.86);
+  }
+
+  62% {
+    transform: scale(1.1);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes nexus-bookmark-out {
+  0% {
+    transform: scale(1);
+  }
+
+  30% {
+    transform: scale(0.88);
+  }
+
+  68% {
+    transform: scale(1.06);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes nexus-bookmark-halo {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.7);
+  }
+
+  40% {
+    opacity: 0.14;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bookmark-action {
+    transition: none;
+  }
+
+  .bookmark-action--bookmarking .bookmark-action__icon,
+  .bookmark-action--unbookmarking .bookmark-action__icon,
+  .bookmark-action--bookmarking .bookmark-action__visual::after {
+    animation: none;
+  }
+}
+</style>

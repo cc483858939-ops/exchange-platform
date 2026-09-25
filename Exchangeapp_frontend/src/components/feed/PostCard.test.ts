@@ -647,7 +647,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       'post-card__metric post-card__reply',
       'repost-action repost-action--compact repost-action--reposted',
       'stub-like-action',
-      'post-card__metric post-card__bookmark',
+      'bookmark-action bookmark-action--compact post-card__metric post-card__bookmark',
       'post-card__metric post-card__views',
     ]);
 

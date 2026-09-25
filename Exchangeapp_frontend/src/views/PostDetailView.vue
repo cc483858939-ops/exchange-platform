@@ -152,18 +152,18 @@
               variant="detail"
               @toggle="toggleLike"
             />
-            <button
+            <BookmarkAction
+              :key="postId"
               class="post-detail__metric post-detail__bookmark"
               :class="{ 'post-detail__bookmark--active': bookmarked }"
-              type="button"
-              :disabled="bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
-              :aria-busy="bookmarkStateLoading || bookmarkSubmitting ? 'true' : undefined"
-              :aria-pressed="bookmarked"
-              :aria-label="detailBookmarkLabel"
-              @click="toggleBookmark"
-            >
-              <AppIcon name="bookmark" :size="20" :filled="bookmarked" />
-            </button>
+              :bookmarked="bookmarked"
+              :disabled="bookmarkStateUnavailable"
+              :loading="bookmarkStateLoading"
+              :pending="bookmarkSubmitting"
+              :ariaLabel="detailBookmarkLabel"
+              variant="detail"
+              @toggle="toggleBookmark"
+            />
           </template>
           <template v-else>
             <span
@@ -388,18 +388,18 @@
                 variant="detail"
                 @toggle="toggleLike"
               />
-              <button
+              <BookmarkAction
+                :key="postId"
                 class="post-detail__metric post-detail__bookmark"
                 :class="{ 'post-detail__bookmark--active': bookmarked }"
-                type="button"
-                :disabled="bookmarkStateUnavailable || bookmarkStateLoading || bookmarkSubmitting"
-                :aria-busy="bookmarkStateLoading || bookmarkSubmitting ? 'true' : undefined"
-                :aria-pressed="bookmarked"
-                :aria-label="detailBookmarkLabel"
-                @click="toggleBookmark"
-              >
-                <AppIcon name="bookmark" :size="20" :filled="bookmarked" />
-              </button>
+                :bookmarked="bookmarked"
+                :disabled="bookmarkStateUnavailable"
+                :loading="bookmarkStateLoading"
+                :pending="bookmarkSubmitting"
+                :ariaLabel="detailBookmarkLabel"
+                variant="detail"
+                @toggle="toggleBookmark"
+              />
             </template>
             <template v-else>
               <span
@@ -545,6 +545,7 @@ import LinkifiedText from '../components/content/LinkifiedText.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
 import PostMediaViewer from '../components/content/PostMediaViewer.vue';
 import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
+import BookmarkAction from '../components/engagement/BookmarkAction.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
 import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';

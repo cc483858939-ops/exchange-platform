@@ -202,22 +202,18 @@
         variant="compact"
         @toggle="handleLikeActivation"
       />
-      <button
+      <BookmarkAction
+        :key="post.id"
         class="post-card__metric post-card__bookmark"
         :class="{ 'post-card__bookmark--active': post.bookmarkStatus === 'ready' && post.bookmarked }"
-        type="button"
-        :disabled="bookmarkUnavailable || bookmarkLoading || bookmarkPending"
-        :aria-busy="bookmarkLoading || bookmarkPending ? 'true' : undefined"
-        :aria-pressed="post.bookmarkStatus === 'ready' ? post.bookmarked : false"
-        :aria-label="bookmarkLabel"
-        @click.stop="handleBookmarkActivation"
-      >
-        <AppIcon
-          name="bookmark"
-          :size="18"
-          :filled="post.bookmarkStatus === 'ready' && post.bookmarked"
-        />
-      </button>
+        :bookmarked="post.bookmarkStatus === 'ready' && post.bookmarked"
+        :disabled="bookmarkUnavailable"
+        :loading="bookmarkLoading"
+        :pending="bookmarkPending"
+        :ariaLabel="bookmarkLabel"
+        variant="compact"
+        @toggle="handleBookmarkActivation"
+      />
       <RouterLink
         class="post-card__metric post-card__views"
         :to="{
@@ -257,6 +253,7 @@ import AuthorIdentity from '../AuthorIdentity.vue';
 import LinkifiedText from '../content/LinkifiedText.vue';
 import PostMediaGrid from '../content/PostMediaGrid.vue';
 import ConfirmDialog from '../dialogs/ConfirmDialog.vue';
+import BookmarkAction from '../engagement/BookmarkAction.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
 import AppIcon from '../icons/AppIcon.vue';

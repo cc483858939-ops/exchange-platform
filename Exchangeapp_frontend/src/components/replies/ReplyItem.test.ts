@@ -84,6 +84,36 @@ describe('ReplyItem', () => {
     expect(wrapper.find('.reply-item__status').text()).toBe('Deleting...');
   });
 
+  it('uses BookmarkAction for reply bookmarks and forwards the reply ID', async () => {
+    const wrapper = mountReply({
+      bookmarkState: { bookmarked: true, status: 'ready' },
+    });
+    const bookmark = wrapper.get('.reply-item__bookmark');
+
+    expect(bookmark.classes()).toContain('bookmark-action');
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-label')).toBe('Remove bookmark');
+
+    await bookmark.trigger('click');
+
+    expect(wrapper.emitted('toggleBookmark')).toEqual([[42]]);
+  });
+
+  it('keeps reply bookmarks unavailable while loading or pending', () => {
+    const loading = mountReply({
+      bookmarkState: { bookmarked: false, status: 'unknown' },
+    }).get('.reply-item__bookmark');
+    const pending = mountReply({
+      bookmarkState: { bookmarked: false, status: 'ready' },
+      bookmarkPending: true,
+    }).get('.reply-item__bookmark');
+
+    expect(loading.attributes('disabled')).toBe('');
+    expect(loading.attributes('aria-busy')).toBe('true');
+    expect(pending.attributes('disabled')).toBe('');
+    expect(pending.attributes('aria-busy')).toBe('true');
+  });
+
   it('preserves reply media activation', async () => {
     const replyMedia = [{ type: 'image' as const, url: '/reply.png', large_url: '/reply-large.png', width: 1200, height: 800, position: 0 }];
     const wrapper = mountReply({ reply: makeReply({ media: replyMedia }) });
