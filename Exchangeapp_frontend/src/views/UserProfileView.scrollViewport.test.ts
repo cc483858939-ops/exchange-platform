@@ -422,6 +422,68 @@ describe('UserProfileView scroll viewport', () => {
     }
   });
 
+  it('clears old reselect state when viewer identity changes and saves the new session position', async () => {
+    const { store, session: oldSession } = prepareLoadedSession(7, 2000);
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      const viewportScrollTo = stubDeferredViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+      viewport.scrollTop = 1000;
+
+      mocks.authStore.currentIdentity = profile(8);
+      await nextTick();
+      await settle();
+
+      const newViewerSession = store.getSession(7);
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+      expect(newViewerSession).not.toBe(oldSession);
+      expect(newViewerSession).not.toBeNull();
+
+      viewport.scrollTop = 600;
+      mocks.routeLeaveGuard?.();
+
+      expect(newViewerSession?.scrollTop).toBe(600);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('clears pending reselect state when the viewer logs out', async () => {
+    const { store, session: oldSession } = prepareLoadedSession(7, 2000);
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      const viewportScrollTo = stubDeferredViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+      viewport.scrollTop = 1000;
+
+      mocks.authStore.isAuthenticated = false;
+      await nextTick();
+      await settle();
+
+      const anonymousSession = store.getSession(7);
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+      expect(anonymousSession).not.toBe(oldSession);
+      expect(anonymousSession).not.toBeNull();
+
+      viewport.scrollTop = 600;
+      mocks.routeLeaveGuard?.();
+
+      expect(anonymousSession?.scrollTop).toBe(600);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it('keeps zero through KeepAlive deactivation during smooth reselect and clears after restore', async () => {
     const { store, session } = prepareLoadedSession(7, 2000);
     const { wrapper, state } = mountKeepAliveProfile();

@@ -619,6 +619,11 @@ const prefersReducedMotion = () => typeof window !== 'undefined'
   && typeof window.matchMedia === 'function'
   && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+const clearProfileReselectTopPending = () => {
+  profileReselectTopPending.value = false;
+  profileReselectTopPendingUserID.value = null;
+};
+
 const completeProfileReselectTopIfReached = (
   targetUserID: number,
   viewport: HTMLElement | null,
@@ -632,8 +637,7 @@ const completeProfileReselectTopIfReached = (
     return false;
   }
 
-  profileReselectTopPending.value = false;
-  profileReselectTopPendingUserID.value = null;
+  clearProfileReselectTopPending();
   profileStore.setScrollTop(targetUserID, 0);
   return true;
 };
@@ -1390,8 +1394,7 @@ watch(userId, (nextID, previousID) => {
     saveCurrentScroll(previousNumericID);
     profileStore.cancelPendingDeletesForProfile(previousNumericID);
   }
-  profileReselectTopPending.value = false;
-  profileReselectTopPendingUserID.value = null;
+  clearProfileReselectTopPending();
   invalidProfileError.value = '';
   loadProfile();
 }, { immediate: true });
@@ -1400,6 +1403,7 @@ watch(
   [currentViewerID, () => authStore.isAuthenticated],
   ([nextViewerID, nextAuthenticated], [previousViewerID, previousAuthenticated]) => {
     if (nextViewerID === previousViewerID && nextAuthenticated === previousAuthenticated) return;
+    clearProfileReselectTopPending();
     beginProfileRestoreEpoch();
     forceCloseEditProfile();
     loadProfile();
@@ -1443,8 +1447,7 @@ onBeforeUnmount(() => {
   if (profileViewActive.value && numericUserID.value !== null) {
     saveCurrentScroll(numericUserID.value);
   }
-  profileReselectTopPending.value = false;
-  profileReselectTopPendingUserID.value = null;
+  clearProfileReselectTopPending();
   profileViewActive.value = false;
   resumeOnActivation = false;
   forceCloseEditProfile();
