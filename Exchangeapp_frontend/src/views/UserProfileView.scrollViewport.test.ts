@@ -216,6 +216,15 @@ const stubViewportScrollTo = (viewport: HTMLElement) => {
   return scrollTo;
 };
 
+const stubDeferredViewportScrollTo = (viewport: HTMLElement) => {
+  const scrollTo = vi.fn();
+  Object.defineProperty(viewport, 'scrollTo', {
+    configurable: true,
+    value: scrollTo,
+  });
+  return scrollTo;
+};
+
 describe('UserProfileView scroll viewport', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -315,6 +324,134 @@ describe('UserProfileView scroll viewport', () => {
     }
   });
 
+  it('preserves canonical zero when leaving before the smooth reselect finishes', async () => {
+    const { store, session } = prepareLoadedSession(7, 2400);
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      viewport.scrollTop = 2400;
+      const viewportScrollTo = stubDeferredViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+      expect(session.scrollTop).toBe(0);
+
+      viewport.scrollTop = 1400;
+      mocks.routeLeaveGuard?.();
+
+      expect(session.scrollTop).toBe(0);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('preserves canonical zero when unmounted before the smooth reselect finishes', async () => {
+    const { store, session } = prepareLoadedSession(7, 2400);
+    const wrapper = mountProfile();
+
+    await settle();
+    const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+    viewport.scrollTop = 2400;
+    const viewportScrollTo = stubDeferredViewportScrollTo(viewport);
+
+    store.requestProfileReselect();
+    await nextTick();
+    viewport.scrollTop = 1200;
+    wrapper.unmount();
+
+    expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(session.scrollTop).toBe(0);
+  });
+
+  it('clears the pending reselect when the viewport reaches top and saves later scrolling', async () => {
+    const { store, session } = prepareLoadedSession(7, 2000);
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      const viewportScrollTo = stubDeferredViewportScrollTo(viewport);
+      viewport.scrollTop = 100;
+
+      store.requestProfileReselect();
+      await nextTick();
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+
+      viewport.scrollTop = 0;
+      viewport.dispatchEvent(new Event('scroll'));
+      await nextTick();
+
+      viewport.scrollTop = 900;
+      mocks.routeLeaveGuard?.();
+
+      expect(session.scrollTop).toBe(900);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('saves zero for the old profile and clears pending state when the Profile ID changes', async () => {
+    const { store, session: session7 } = prepareLoadedSession(7, 2000);
+    const { session: session8 } = prepareLoadedSession(8, 650);
+    const wrapper = mountProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      const viewportScrollTo = stubDeferredViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+      viewport.scrollTop = 1000;
+      setProfileRoute(8);
+      await settle();
+
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+      expect(session7.scrollTop).toBe(0);
+      expect(viewport.scrollTop).toBe(650);
+
+      viewport.scrollTop = 900;
+      mocks.routeLeaveGuard?.();
+      expect(session8.scrollTop).toBe(900);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('keeps zero through KeepAlive deactivation during smooth reselect and clears after restore', async () => {
+    const { store, session } = prepareLoadedSession(7, 2000);
+    const { wrapper, state } = mountKeepAliveProfile();
+
+    try {
+      await settle();
+      const viewport = wrapper.get('.profile-scroll-viewport').element as HTMLElement;
+      const viewportScrollTo = stubDeferredViewportScrollTo(viewport);
+
+      store.requestProfileReselect();
+      await nextTick();
+      viewport.scrollTop = 1100;
+      state.showProfile = false;
+      await nextTick();
+
+      expect(session.scrollTop).toBe(0);
+      expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+
+      state.showProfile = true;
+      await settle();
+      expect(viewport.scrollTop).toBe(0);
+
+      viewport.scrollTop = 700;
+      mocks.routeLeaveGuard?.();
+      expect(session.scrollTop).toBe(700);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it('ignores own-Profile reselect signals while displaying another user Profile', async () => {
     setProfileRoute(8);
     const { store, session } = prepareLoadedSession(8, 1800);
@@ -380,6 +517,10 @@ describe('UserProfileView scroll viewport', () => {
       expect(viewportScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
       expect(matchMedia).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
       expect(session.scrollTop).toBe(0);
+
+      viewport.scrollTop = 600;
+      mocks.routeLeaveGuard?.();
+      expect(session.scrollTop).toBe(600);
     } finally {
       wrapper.unmount();
       restoreMatchMedia();

@@ -19,6 +19,7 @@
     <div
       ref="profileScrollViewportRef"
       class="profile-scroll-viewport"
+      @scroll="handleProfileScroll"
     >
     <section
       v-if="invalidProfileError"
@@ -551,6 +552,8 @@ const pendingDeletePostIds = profileStore.pendingDeletePostIds;
 const deleteErrors = profileStore.deleteErrors;
 
 const profileScrollViewportRef = ref<HTMLElement | null>(null);
+const profileReselectTopPending = ref(false);
+const profileReselectTopPendingUserID = ref<number | null>(null);
 const sentinelRef = ref<HTMLElement | null>(null);
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let observer: IntersectionObserver | null = null;
@@ -616,6 +619,34 @@ const prefersReducedMotion = () => typeof window !== 'undefined'
   && typeof window.matchMedia === 'function'
   && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+const completeProfileReselectTopIfReached = (
+  targetUserID: number,
+  viewport: HTMLElement | null,
+) => {
+  if (
+    !profileReselectTopPending.value
+    || profileReselectTopPendingUserID.value !== targetUserID
+    || !viewport
+    || viewport.scrollTop > 1
+  ) {
+    return false;
+  }
+
+  profileReselectTopPending.value = false;
+  profileReselectTopPendingUserID.value = null;
+  profileStore.setScrollTop(targetUserID, 0);
+  return true;
+};
+
+const handleProfileScroll = () => {
+  const targetUserID = profileReselectTopPendingUserID.value;
+  if (!profileReselectTopPending.value || targetUserID === null) {
+    return;
+  }
+
+  completeProfileReselectTopIfReached(targetUserID, profileScrollViewportRef.value);
+};
+
 watch(
   () => profileStore.profileReselectVersion,
   () => {
@@ -636,11 +667,14 @@ watch(
       return;
     }
 
+    profileReselectTopPending.value = true;
+    profileReselectTopPendingUserID.value = targetUserID;
     profileStore.setScrollTop(targetUserID, 0);
     viewport.scrollTo({
       top: 0,
       behavior: prefersReducedMotion() ? 'auto' : 'smooth',
     });
+    completeProfileReselectTopIfReached(targetUserID, viewport);
   },
   { flush: 'sync' },
 );
@@ -665,6 +699,13 @@ const canDeletePost = (post: { author: { id: number } }) =>
 const saveCurrentScroll = (targetUserID: number) => {
   const viewport = profileScrollViewportRef.value;
   if (!viewport) {
+    return;
+  }
+
+  if (profileReselectTopPending.value) {
+    if (profileReselectTopPendingUserID.value === targetUserID) {
+      profileStore.setScrollTop(targetUserID, 0);
+    }
     return;
   }
 
@@ -699,6 +740,7 @@ const restoreScrollOnce = async () => {
 
   viewport.scrollTop = session.scrollTop;
   restoredEntryVersion = entryVersion;
+  completeProfileReselectTopIfReached(targetUserID, viewport);
 };
 
 onBeforeRouteLeave(() => {
@@ -1348,6 +1390,8 @@ watch(userId, (nextID, previousID) => {
     saveCurrentScroll(previousNumericID);
     profileStore.cancelPendingDeletesForProfile(previousNumericID);
   }
+  profileReselectTopPending.value = false;
+  profileReselectTopPendingUserID.value = null;
   invalidProfileError.value = '';
   loadProfile();
 }, { immediate: true });
@@ -1399,6 +1443,8 @@ onBeforeUnmount(() => {
   if (profileViewActive.value && numericUserID.value !== null) {
     saveCurrentScroll(numericUserID.value);
   }
+  profileReselectTopPending.value = false;
+  profileReselectTopPendingUserID.value = null;
   profileViewActive.value = false;
   resumeOnActivation = false;
   forceCloseEditProfile();
