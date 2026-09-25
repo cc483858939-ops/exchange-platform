@@ -1,5 +1,11 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+import { createClientOperationID } from '../utils/clientOperationId';
+
+export type ReplySubmissionOperation = {
+  id: string;
+  content: string;
+};
 
 const normalizeViewerID = (value: number | null): number | null => (
   typeof value === 'number'
@@ -17,9 +23,11 @@ const normalizePostID = (value: number | string): number | null => {
 export const useReplyDraftStore = defineStore('replyDraft', () => {
   const viewerID = ref<number | null>(null);
   const drafts = ref<Record<string, string>>({});
+  const submissionOperations = ref<Record<string, ReplySubmissionOperation>>({});
 
   const clearAll = () => {
     drafts.value = {};
+    submissionOperations.value = {};
   };
 
   const setViewer = (nextViewerID: number | null): boolean => {
@@ -61,7 +69,12 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
       return;
     }
 
-    drafts.value[String(normalized)] = content;
+    const key = String(normalized);
+    const operation = submissionOperations.value[key];
+    if (operation && content.trim() !== operation.content) {
+      delete submissionOperations.value[key];
+    }
+    drafts.value[key] = content;
   };
 
   const clearDraft = (postID: number | string) => {
@@ -74,16 +87,66 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
       return;
     }
 
-    delete drafts.value[String(normalized)];
+    const key = String(normalized);
+    delete drafts.value[key];
+    delete submissionOperations.value[key];
+  };
+
+  const prepareSubmission = (
+    postID: number | string,
+    content: string,
+  ): ReplySubmissionOperation => {
+    const normalized = normalizePostID(postID);
+    if (viewerID.value === null || normalized === null) {
+      throw new Error('Reply submission requires an authenticated viewer and valid post ID');
+    }
+
+    const key = String(normalized);
+    const canonicalContent = content.trim();
+    const existing = submissionOperations.value[key];
+    if (existing?.content === canonicalContent) {
+      return existing;
+    }
+
+    const operation = {
+      id: createClientOperationID(),
+      content: canonicalContent,
+    };
+    submissionOperations.value[key] = operation;
+    return operation;
+  };
+
+  const clearSubmissionOperation = (
+    postID: number | string,
+    operationID?: string,
+  ) => {
+    if (viewerID.value === null) {
+      return;
+    }
+
+    const normalized = normalizePostID(postID);
+    if (normalized === null) {
+      return;
+    }
+
+    const key = String(normalized);
+    const existing = submissionOperations.value[key];
+    if (!existing || (operationID !== undefined && existing.id !== operationID)) {
+      return;
+    }
+    delete submissionOperations.value[key];
   };
 
   return {
     viewerID,
     drafts,
+    submissionOperations,
     setViewer,
     getDraft,
     setDraft,
     clearDraft,
+    prepareSubmission,
+    clearSubmissionOperation,
     clearAll,
   };
 });

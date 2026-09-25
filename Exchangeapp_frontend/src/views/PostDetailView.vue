@@ -1790,18 +1790,29 @@ const handleCreateReply = async (content: string) => {
   const id = postId.value;
   const numericPostID = Number(id);
   const submittingViewerID = currentViewerID.value;
+  if (
+    submittingViewerID === null
+    || !Number.isSafeInteger(numericPostID)
+    || numericPostID <= 0
+  ) {
+    return;
+  }
+  replyDraftStore.setViewer(submittingViewerID);
   const submittedDraftSnapshot = replyDraftStore.getDraft(numericPostID);
+  const replyOperation = replyDraftStore.prepareSubmission(numericPostID, content);
   const detailVersion = detailRequestVersion;
   replySubmitting.value = true;
   replyError.value = '';
 
   try {
-    const created = await createPostReply(id, content);
-    if (
-      replyDraftStore.viewerID === submittingViewerID
-      && replyDraftStore.getDraft(numericPostID) === submittedDraftSnapshot
-    ) {
-      replyDraftStore.clearDraft(numericPostID);
+    const created = await createPostReply(id, content, {
+      idempotencyKey: replyOperation.id,
+    });
+    if (replyDraftStore.viewerID === submittingViewerID) {
+      replyDraftStore.clearSubmissionOperation(numericPostID, replyOperation.id);
+      if (replyDraftStore.getDraft(numericPostID) === submittedDraftSnapshot) {
+        replyDraftStore.clearDraft(numericPostID);
+      }
     }
 
     if (detailVersion !== detailRequestVersion || postId.value !== id) {
@@ -1816,7 +1827,17 @@ const handleCreateReply = async (content: string) => {
       postId: Number(id),
       replyCount: replyCount.value,
     });
-  } catch {
+  } catch (error) {
+    const response = (error as {
+      response?: { status?: number; data?: { code?: string } };
+    } | null)?.response;
+    if (
+      response?.status === 409
+      && response.data?.code === 'POST_IDEMPOTENCY_CONFLICT'
+      && replyDraftStore.viewerID === submittingViewerID
+    ) {
+      replyDraftStore.clearSubmissionOperation(numericPostID, replyOperation.id);
+    }
     if (detailVersion === detailRequestVersion) {
       replyError.value = 'Reply failed. Please try again.';
     }

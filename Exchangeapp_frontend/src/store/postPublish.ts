@@ -11,6 +11,7 @@ import { useAuthStore } from './auth';
 import { useFeedStore } from './feed';
 import { usePostDraftStore } from './postDraft';
 import { useProfileSessionStore } from './profileSession';
+import { createClientOperationID } from '../utils/clientOperationId';
 import {
   captureBookmarkStateSyncVersion,
   syncHydratedPostBookmarkState,
@@ -59,29 +60,6 @@ const normalizeViewerID = (value: unknown): number | null => (
     ? value
     : null
 );
-
-const formatUUIDBytes = (bytes: Uint8Array): string => {
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0'));
-  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
-};
-
-const createPublishOperationID = (): string => {
-  const cryptoAPI = globalThis.crypto;
-  if (cryptoAPI && typeof cryptoAPI.randomUUID === 'function') {
-    return cryptoAPI.randomUUID();
-  }
-  const bytes = new Uint8Array(16);
-  if (cryptoAPI && typeof cryptoAPI.getRandomValues === 'function') {
-    cryptoAPI.getRandomValues(bytes);
-  } else {
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = Math.floor(Math.random() * 256);
-    }
-  }
-  return formatUUIDBytes(bytes);
-};
 
 export const usePostPublishStore = defineStore('postPublish', () => {
   const authStore = useAuthStore();
@@ -338,7 +316,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
 
     const operation: PublishOperation = {
-      id: createPublishOperationID(),
+      id: createClientOperationID(),
       publisherUserID,
       content: postDraft.content.trim(),
       media: postDraft.media.map(media => ({

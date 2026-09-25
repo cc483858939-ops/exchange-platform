@@ -258,7 +258,11 @@ describe('PostDetailView reply composer identity', () => {
     await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
 
-    expect(mocks.createPostReply).toHaveBeenCalledWith('42', 'reply without enrichment');
+    expect(mocks.createPostReply).toHaveBeenCalledWith(
+      '42',
+      'reply without enrichment',
+      { idempotencyKey: expect.any(String) },
+    );
     expect(mocks.getUser).not.toHaveBeenCalled();
   });
 

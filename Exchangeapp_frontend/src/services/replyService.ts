@@ -1,5 +1,6 @@
 import apiClient from '../axios';
 import type { Post, PostReplyPageResponse } from '../types/Post';
+import { createPost, type CreatePostOptions } from './postService';
 import { normalizeResourceID } from './resourceId';
 
 export type ReplyQuery = {
@@ -19,13 +20,13 @@ export async function getPostReplies(
 export async function createPostReply(
   postID: number | string,
   content: string,
+  options: CreatePostOptions = {},
 ): Promise<Post> {
   const id = normalizeResourceID(postID, 'post');
-  const response = await apiClient.post<Post>('/posts', {
+  return createPost({
     content,
     reply_to_post_id: Number(id),
-  });
-  return response.data;
+  }, options);
 }
 
 export async function deletePostReply(replyID: number | string): Promise<void> {

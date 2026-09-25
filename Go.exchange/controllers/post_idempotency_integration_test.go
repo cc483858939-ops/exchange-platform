@@ -213,6 +213,14 @@ func TestCreatePostIdempotencyReplyReplayDoesNotDuplicateSideEffectsIntegration(
 		t.Fatal(err)
 	}
 	trackIntegrationPost(fixture, parent.ID)
+	otherParent := models.Post{
+		Model:    gorm.Model{CreatedAt: now, UpdatedAt: now},
+		AuthorID: fixture.users[0].ID, Content: "other reply parent", Language: "und", Visibility: "public",
+	}
+	if err := db.Create(&otherParent).Error; err != nil {
+		t.Fatal(err)
+	}
+	trackIntegrationPost(fixture, otherParent.ID)
 
 	key := uuid.New()
 	body := `{"content":"reply once","reply_to_post_id":` + strconv.FormatUint(uint64(parent.ID), 10) + `}`
@@ -233,12 +241,39 @@ func TestCreatePostIdempotencyReplyReplayDoesNotDuplicateSideEffectsIntegration(
 	if replay.ID != first.ID || replay.ReplyToPostID == nil || *replay.ReplyToPostID != parent.ID {
 		t.Fatalf("reply replay=%#v first=%#v", replay, first)
 	}
+	conflictBodies := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "changed content",
+			body: `{"content":"changed reply","reply_to_post_id":` + strconv.FormatUint(uint64(parent.ID), 10) + `}`,
+		},
+		{
+			name: "changed parent",
+			body: `{"content":"reply once","reply_to_post_id":` + strconv.FormatUint(uint64(otherParent.ID), 10) + `}`,
+		},
+	}
+	for _, conflict := range conflictBodies {
+		ctx, recorder = newClientPublishIntegrationContext(conflict.body, fixture.users[1].ID, key)
+		createPost(ctx)
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"code":"POST_IDEMPOTENCY_CONFLICT"`) {
+			t.Fatalf("%s conflict status=%d body=%s", conflict.name, recorder.Code, recorder.Body.String())
+		}
+	}
 	var storedParent models.Post
 	if err := db.First(&storedParent, parent.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if storedParent.ReplyCount != 1 {
 		t.Fatalf("parent reply count=%d want=1", storedParent.ReplyCount)
+	}
+	var storedOtherParent models.Post
+	if err := db.First(&storedOtherParent, otherParent.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOtherParent.ReplyCount != 0 {
+		t.Fatalf("conflicting parent reply count=%d want=0", storedOtherParent.ReplyCount)
 	}
 	var behavior models.PostBehavior
 	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", fixture.users[1].ID, parent.ID, PostBehaviorActionReply).First(&behavior).Error; err != nil {
