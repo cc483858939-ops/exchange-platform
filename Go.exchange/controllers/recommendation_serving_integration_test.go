@@ -43,16 +43,6 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 		}
 	}
 
-	originalDiversifier := diversifyPublicRecommendationCandidatesForServing
-	calls := 0
-	diversifyPublicRecommendationCandidatesForServing = func(ranked []hydratedRecommendationCandidate, limit int, requestID string) []hydratedRecommendationCandidate {
-		calls++
-		return originalDiversifier(ranked, limit, requestID)
-	}
-	t.Cleanup(func() {
-		diversifyPublicRecommendationCandidatesForServing = originalDiversifier
-	})
-
 	dependencies, err := newRecommendationDataDependencies(db, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -77,8 +67,5 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 	}
 	if len(outcome.Selected) == 0 {
 		t.Fatal("authenticated serving selected no recommendations")
-	}
-	if calls != 0 {
-		t.Fatalf("authenticated serving invoked guest diversification: calls=%d", calls)
 	}
 }

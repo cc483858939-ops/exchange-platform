@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
@@ -29,6 +28,8 @@ func (p *recommendationTestPublisher) PublishBatch(_ context.Context, events []e
 	p.events = append([]eventing.Envelope(nil), events...)
 	return p.err
 }
+
+func allowRecommendationTelemetryTestRateLimit(uint, int) (bool, error) { return true, nil }
 
 func signTestRecommendationToken(t *testing.T, userID, postID uint, now time.Time, estimated int64, policy string) string {
 	t.Helper()
@@ -66,15 +67,11 @@ func TestRecommendationEventsHandlerPublishesOnlyValidEventsWithoutDB(t *testing
 	key := "0123456789abcdef0123456789abcdef"
 	t.Setenv("RECOMMENDATION_TELEMETRY_ENABLED", "true")
 	t.Setenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY", key)
-	originalAllow, originalNow, originalDB := allowRecommendationTelemetryEvents, recommendationTelemetryNow, global.Db
+	originalNow := recommendationTelemetryNow
 	t.Cleanup(func() {
-		allowRecommendationTelemetryEvents = originalAllow
 		recommendationTelemetryNow = originalNow
-		global.Db = originalDB
 	})
-	allowRecommendationTelemetryEvents = func(uint, int) (bool, error) { return true, nil }
 	recommendationTelemetryNow = func() time.Time { return now }
-	global.Db = nil
 
 	token := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
 	validID := uuid.NewString()
@@ -84,7 +81,7 @@ func TestRecommendationEventsHandlerPublishesOnlyValidEventsWithoutDB(t *testing
 	}}
 	publisher := &recommendationTestPublisher{}
 	ctx, recorder := recommendationTestContext(t, request, 7)
-	NewRecommendationEventsHandler(publisher)(ctx)
+	NewRecommendationEventsHandler(publisher, allowRecommendationTelemetryTestRateLimit)(ctx)
 
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -105,14 +102,11 @@ func TestRecommendationEventsHandlerPublishesOnlyValidEventsWithoutDB(t *testing
 func TestRecommendationEventsHandlerReturns422WithoutKafkaForAllInvalid(t *testing.T) {
 	t.Setenv("RECOMMENDATION_TELEMETRY_ENABLED", "true")
 	t.Setenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY", "0123456789abcdef0123456789abcdef")
-	originalAllow := allowRecommendationTelemetryEvents
-	t.Cleanup(func() { allowRecommendationTelemetryEvents = originalAllow })
-	allowRecommendationTelemetryEvents = func(uint, int) (bool, error) { return true, nil }
 	publisher := &recommendationTestPublisher{}
 	ctx, recorder := recommendationTestContext(t, recommendationEventBatchRequest{Events: []recommendationEventInput{{
 		EventID: "not-a-uuid", EventType: models.RecommendationEventTypeClick,
 	}}}, 7)
-	NewRecommendationEventsHandler(publisher)(ctx)
+	NewRecommendationEventsHandler(publisher, allowRecommendationTelemetryTestRateLimit)(ctx)
 	if recorder.Code != http.StatusUnprocessableEntity || publisher.calls != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}
@@ -122,16 +116,15 @@ func TestRecommendationEventsHandlerReturns503OnKafkaError(t *testing.T) {
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	t.Setenv("RECOMMENDATION_TELEMETRY_ENABLED", "true")
 	t.Setenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY", "0123456789abcdef0123456789abcdef")
-	originalAllow, originalNow := allowRecommendationTelemetryEvents, recommendationTelemetryNow
-	t.Cleanup(func() { allowRecommendationTelemetryEvents = originalAllow; recommendationTelemetryNow = originalNow })
-	allowRecommendationTelemetryEvents = func(uint, int) (bool, error) { return true, nil }
+	originalNow := recommendationTelemetryNow
+	t.Cleanup(func() { recommendationTelemetryNow = originalNow })
 	recommendationTelemetryNow = func() time.Time { return now }
 	token := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
 	publisher := &recommendationTestPublisher{err: errors.New("broker down")}
 	ctx, recorder := recommendationTestContext(t, recommendationEventBatchRequest{Events: []recommendationEventInput{{
 		EventID: uuid.NewString(), EventType: models.RecommendationEventTypeClick, TrackingToken: token, OccurredAt: now.Format(time.RFC3339Nano),
 	}}}, 7)
-	NewRecommendationEventsHandler(publisher)(ctx)
+	NewRecommendationEventsHandler(publisher, allowRecommendationTelemetryTestRateLimit)(ctx)
 	if recorder.Code != http.StatusServiceUnavailable || publisher.calls != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, publisher.calls, recorder.Body.String())
 	}
@@ -232,15 +225,11 @@ func TestRecommendationEventsHandlerUsesSignedProvenanceAgainstClientFields(t *t
 	key := "0123456789abcdef0123456789abcdef"
 	t.Setenv("RECOMMENDATION_TELEMETRY_ENABLED", "true")
 	t.Setenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY", key)
-	originalAllow, originalNow, originalDB := allowRecommendationTelemetryEvents, recommendationTelemetryNow, global.Db
+	originalNow := recommendationTelemetryNow
 	t.Cleanup(func() {
-		allowRecommendationTelemetryEvents = originalAllow
 		recommendationTelemetryNow = originalNow
-		global.Db = originalDB
 	})
-	allowRecommendationTelemetryEvents = func(uint, int) (bool, error) { return true, nil }
 	recommendationTelemetryNow = func() time.Time { return now }
-	global.Db = nil
 	claims := recommendationTrackingClaims{
 		UserID: 7, RequestID: uuid.NewString(), PostID: 11, Position: 1,
 		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
@@ -267,7 +256,7 @@ func TestRecommendationEventsHandlerUsesSignedProvenanceAgainstClientFields(t *t
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/recommendation-events", bytes.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	publisher := &recommendationTestPublisher{}
-	NewRecommendationEventsHandler(publisher)(ctx)
+	NewRecommendationEventsHandler(publisher, allowRecommendationTelemetryTestRateLimit)(ctx)
 	if recorder.Code != http.StatusAccepted || len(publisher.events) != 1 {
 		t.Fatalf("status=%d events=%d body=%s", recorder.Code, len(publisher.events), recorder.Body.String())
 	}

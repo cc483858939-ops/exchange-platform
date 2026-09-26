@@ -167,6 +167,12 @@ type DataDependencies struct {
 	Traces     TraceRepository
 }
 
+type ServiceDependencies struct {
+	DataDependencies
+	ServingVersions ServingVersionProvider
+	Metrics         Metrics
+}
+
 type SourceRepository interface {
 	LoadSourceSignals(ctx context.Context, userID uint, lookbackStart time.Time) (SourceSignals, error)
 }

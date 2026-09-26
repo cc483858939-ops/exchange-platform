@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"Go.exchange/controllers"
-	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -177,7 +177,7 @@ func VerifyCoreWithOptions(ctx context.Context, db *gorm.DB, registry SourceRegi
 		}
 	}
 
-	serving, err := verifyActualRecommendationServing(db, now)
+	serving, err := verifyActualRecommendationServing(ctx, db, now)
 	if err != nil {
 		return CoreVerification{}, err
 	}
@@ -204,31 +204,45 @@ func VerifyCoreWithOptions(ctx context.Context, db *gorm.DB, registry SourceRegi
 	return result, nil
 }
 
-func verifyActualRecommendationServing(db *gorm.DB, now time.Time) (controllers.RecommendationServingVerification, error) {
+func verifyActualRecommendationServing(ctx context.Context, db *gorm.DB, now time.Time) (recommendation.VerificationResult, error) {
 	if db == nil {
-		return controllers.RecommendationServingVerification{}, errors.New("database is not initialized")
+		return recommendation.VerificationResult{}, errors.New("database is not initialized")
 	}
-	previousDB := global.Db
-	global.Db = db
-	defer func() { global.Db = previousDB }()
 
 	verificationUser := models.User{
 		Username:    "x_devdata_verify_" + uuid.NewString(),
 		DisplayName: "DevData verification user",
 	}
 	if err := db.Create(&verificationUser).Error; err != nil {
-		return controllers.RecommendationServingVerification{}, fmt.Errorf("create isolated cold-start verification user: %w", err)
+		return recommendation.VerificationResult{}, fmt.Errorf("create isolated cold-start verification user: %w", err)
 	}
-	verification, verifyErr := controllers.VerifyRecommendationServing(verificationUser.ID, DefaultColdFeedLimit, now)
+	dependencies, err := recommendation.NewGormServiceDependencies(db, nil)
+	if err != nil {
+		return recommendation.VerificationResult{}, fmt.Errorf("initialize recommendation verification dependencies: %w", err)
+	}
+	dependencies.Metrics = recommendation.NoopMetrics{}
+	service, err := recommendation.NewService(dependencies, recommendation.ServiceConfig{
+		Recommendation: controllers.RecommendationConfigSnapshot(),
+	})
+	if err != nil {
+		return recommendation.VerificationResult{}, fmt.Errorf("initialize recommendation verification service: %w", err)
+	}
+	verificationService, ok := service.(recommendation.VerificationService)
+	if !ok {
+		return recommendation.VerificationResult{}, errors.New("recommendation service does not support verification")
+	}
+	verification, verifyErr := verificationService.Verify(ctx, recommendation.VerificationRequest{
+		UserID: verificationUser.ID, Limit: DefaultColdFeedLimit, Now: now,
+	})
 	cleanupErr := cleanupVerificationUser(db, verificationUser.ID)
 	if verifyErr != nil {
 		if cleanupErr != nil {
-			return controllers.RecommendationServingVerification{}, fmt.Errorf("actual recommendation serving verification: %v; cleanup: %w", verifyErr, cleanupErr)
+			return recommendation.VerificationResult{}, fmt.Errorf("actual recommendation serving verification: %v; cleanup: %w", verifyErr, cleanupErr)
 		}
-		return controllers.RecommendationServingVerification{}, fmt.Errorf("actual recommendation serving verification: %w", verifyErr)
+		return recommendation.VerificationResult{}, fmt.Errorf("actual recommendation serving verification: %w", verifyErr)
 	}
 	if cleanupErr != nil {
-		return controllers.RecommendationServingVerification{}, cleanupErr
+		return recommendation.VerificationResult{}, cleanupErr
 	}
 	return verification, nil
 }

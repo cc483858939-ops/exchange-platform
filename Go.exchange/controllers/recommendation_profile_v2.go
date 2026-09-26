@@ -326,6 +326,13 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	return cfg
 }
 
+// RecommendationConfigSnapshot exposes the normalized startup configuration
+// to the API composition root. Serving requests receive the resulting copy;
+// the recommendation Service never reads config.AppConfig.
+func RecommendationConfigSnapshot() config.RecommendationConfig {
+	return normalizedRecommendationConfig()
+}
+
 func recommendationSettingProvided(path string, legacyProvided bool) bool {
 	return legacyProvided || (config.AppConfig != nil && config.AppConfig.HasRecommendationSetting(path))
 }

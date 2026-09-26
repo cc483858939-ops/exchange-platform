@@ -268,12 +268,31 @@ func TestAttachRecommendationTrackingUsesFinalPositionsAndReadClaims(t *testing.
 		{Post: models.Post{Model: gorm.Model{ID: 11}}, SelectionMode: recommendationResultSelectionRanked},
 		{Post: models.Post{Model: gorm.Model{ID: 12}}, ExplorationOpportunity: true, SelectionMode: recommendationResultSelectionExploration, ExplorationReason: recommendationExplorationReasonRecent, ExplorationSemantic: .8},
 	}
-	trackedCount, err := attachRecommendationTracking(7, requestID, "post_embedding_v1", userInterestProfile{}, selected, recommendations, now)
+	trackingConfig := recommendation.TrackingConfig{
+		Enabled: true, RolloutPercent: 100,
+		SigningKey: []byte("0123456789abcdef0123456789abcdef"), TokenTTL: 24 * time.Hour,
+	}
+	profile := userInterestProfile{ProfileStatus: recommendation.ProfileStatusMiss}
+	servingResult := recommendation.ServeResult{
+		Viewer:    recommendation.Viewer{Kind: recommendation.ViewerAuthenticated, UserID: 7},
+		RequestID: requestID, Now: now, EmbeddingVersion: "post_embedding_v1",
+		StrategyID:       recommendation.StrategyID(profile),
+		RankerConfigHash: recommendation.RankerConfigHash(normalizedRecommendationConfig(), "post_embedding_v1"),
+		Selected:         selected,
+	}
+	facts, err := recommendation.BuildTrackingFacts(servingResult, trackingConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if trackedCount != len(recommendations) || recommendations[0].Tracking == nil || recommendations[1].Tracking == nil {
-		t.Fatalf("tracking count=%d recommendations=%#v", trackedCount, recommendations)
+	for _, fact := range facts {
+		recommendations[fact.Position-1].Tracking = &recommendationTrackingResponse{
+			RequestID: fact.RequestID, Position: fact.Position, Scene: fact.Scene,
+			RankerVersion: fact.RankerVersion, RankerConfigHash: fact.RankerConfigHash,
+			StrategyID: fact.StrategyID, Token: fact.Token, ExpiresAt: fact.ExpiresAt,
+		}
+	}
+	if len(facts) != len(recommendations) || recommendations[0].Tracking == nil || recommendations[1].Tracking == nil {
+		t.Fatalf("tracking count=%d recommendations=%#v", len(facts), recommendations)
 	}
 	wantRankerHash := recommendationRankerConfigHash(normalizedRecommendationConfig(), "post_embedding_v1")
 	if recommendations[0].Tracking.RankerConfigHash != wantRankerHash || recommendations[1].Tracking.RankerConfigHash != wantRankerHash {

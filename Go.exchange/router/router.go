@@ -18,14 +18,18 @@ import (
 )
 
 func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, nil, false, translationServices...)
+	return setupRouter(authController, verifier, publisher, readiness, nil, nil, nil, false, translationServices...)
 }
 
 func SetupRouterWithRateLimiter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, true, translationServices...)
+	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, nil, nil, true, translationServices...)
 }
 
-func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, enableApplicationRateLimit bool, translationServices ...translation.Service) (*gin.Engine, error) {
+func SetupRouterWithRecommendationHandler(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, translationServices ...translation.Service) (*gin.Engine, error) {
+	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, true, translationServices...)
+}
+
+func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, enableApplicationRateLimit bool, translationServices ...translation.Service) (*gin.Engine, error) {
 	trustedProxies, err := config.TrustedProxyCIDRs()
 	if err != nil {
 		return nil, err
@@ -57,6 +61,12 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	router.GET("/healthz", controllers.Healthz)
 	router.GET("/readyz", controllers.ReadyzWithProvider(readiness))
 	router.GET("/metrics", gin.WrapH(metrics.Handler()))
+	publicRecommendationHandler := gin.HandlerFunc(controllers.GetPublicPostRecommendations)
+	userRecommendationHandler := gin.HandlerFunc(controllers.GetPostRecommendations)
+	if recommendationHandler != nil {
+		publicRecommendationHandler = recommendationHandler.GetPublicPostRecommendations
+		userRecommendationHandler = recommendationHandler.GetPostRecommendations
+	}
 
 	authRoutes := router.Group("/api/auth")
 	{
@@ -70,7 +80,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	api.GET("/exchange/currencies", controllers.GetExchangeCurrencies)
 	api.GET("/exchange/quote", controllers.GetExchangeQuote)
 	api.GET("/files/*objectKey", controllers.GetFile)
-	api.GET("/public/recommendations/posts", controllers.GetPublicPostRecommendations)
+	api.GET("/public/recommendations/posts", publicRecommendationHandler)
 	api.GET("/posts/:id", controllers.GetPostByID)
 	api.GET("/posts/:id/replies", controllers.GetPostReplies)
 	api.GET("/topics", controllers.GetTopics)
@@ -84,8 +94,8 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		translationService = translationServices[0]
 	}
 	{
-		api.GET("/recommendations/posts", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionRecommendations, ratelimit.FailOpen, controllers.GetPostRecommendations)...)
-		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher))
+		api.GET("/recommendations/posts", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionRecommendations, ratelimit.FailOpen, userRecommendationHandler)...)
+		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher, telemetryRateLimiter))
 		api.POST("/post-view-events", controllers.NewPostViewEventsHandler(publisher))
 		api.POST("/uploads/post-media", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionMediaUpload, ratelimit.FailClosed, controllers.UploadPostMedia)...)
 		api.POST("/uploads/profile-avatar", controllers.UploadProfileAvatar)

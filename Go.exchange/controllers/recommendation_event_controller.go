@@ -10,7 +10,6 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
 
@@ -58,21 +57,35 @@ type validatedRecommendationEvent struct {
 	Payload    eventing.RecommendationBehaviorPayload
 }
 
-var (
-	recommendationTelemetryNow             = func() time.Time { return time.Now().UTC() }
-	allowRecommendationTelemetryEvents     = enforceRecommendationTelemetryRateLimit
-	recommendationTelemetryRateLimitScript = redis.NewScript(`
+var recommendationTelemetryNow = func() time.Time { return time.Now().UTC() }
+
+type RecommendationTelemetryRateLimiter func(userID uint, eventCount int) (bool, error)
+
+func NewRecommendationTelemetryRedisRateLimiter(client *redis.Client) RecommendationTelemetryRateLimiter {
+	script := redis.NewScript(`
 local current = redis.call('INCRBY', KEYS[1], ARGV[1])
 if current == tonumber(ARGV[1]) then
   redis.call('EXPIRE', KEYS[1], ARGV[2])
 end
 return current
 `)
-)
+	return func(userID uint, eventCount int) (bool, error) {
+		if client == nil {
+			return false, errors.New("redis is not initialized")
+		}
+		minute := time.Now().UTC().Unix() / 60
+		key := fmt.Sprintf("recommendation:telemetry:rate:%d:%d", userID, minute)
+		count, err := script.Run(client, []string{key}, strconv.Itoa(eventCount), "70").Int()
+		if err != nil {
+			return false, err
+		}
+		return count <= config.RecommendationTelemetryEventsPerMinute(), nil
+	}
+}
 
-func NewRecommendationEventsHandler(publisher eventing.BatchPublisher) gin.HandlerFunc {
+func NewRecommendationEventsHandler(publisher eventing.BatchPublisher, rateLimiter RecommendationTelemetryRateLimiter) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		recordRecommendationEvents(ctx, publisher)
+		recordRecommendationEvents(ctx, publisher, rateLimiter)
 	}
 }
 
@@ -80,10 +93,10 @@ func NewRecommendationEventsHandler(publisher eventing.BatchPublisher) gin.Handl
 // callers that do not use the router factory. Production routing injects the
 // process-lifetime publisher through NewRecommendationEventsHandler.
 func RecordRecommendationEvents(ctx *gin.Context) {
-	recordRecommendationEvents(ctx, nil)
+	recordRecommendationEvents(ctx, nil, nil)
 }
 
-func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublisher) {
+func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublisher, rateLimiter RecommendationTelemetryRateLimiter) {
 	started := time.Now()
 	defer func() { metrics.ObserveRecommendationTelemetryIngestDuration(time.Since(started)) }()
 
@@ -114,7 +127,11 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 	}
 	metrics.ObserveRecommendationTelemetryBatchSize(len(request.Events))
 
-	allowed, err := allowRecommendationTelemetryEvents(userID, len(request.Events))
+	if rateLimiter == nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation telemetry rate limiter unavailable"})
+		return
+	}
+	allowed, err := rateLimiter(userID, len(request.Events))
 	if err != nil {
 		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation telemetry rate limiter unavailable"})
 		return
@@ -245,24 +262,6 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 			ReadOutcome: readOutcome, FeedVisibleTimeMS: feedVisibleTimeMS,
 		},
 	}, ""
-}
-
-func enforceRecommendationTelemetryRateLimit(userID uint, eventCount int) (bool, error) {
-	if global.RedisDB == nil {
-		return false, errors.New("redis is not initialized")
-	}
-	minute := time.Now().UTC().Unix() / 60
-	key := fmt.Sprintf("recommendation:telemetry:rate:%d:%d", userID, minute)
-	count, err := recommendationTelemetryRateLimitScript.Run(
-		global.RedisDB,
-		[]string{key},
-		strconv.Itoa(eventCount),
-		"70",
-	).Int()
-	if err != nil {
-		return false, err
-	}
-	return count <= config.RecommendationTelemetryEventsPerMinute(), nil
 }
 
 func recommendationEventTypeMetricLabel(eventType string) string {

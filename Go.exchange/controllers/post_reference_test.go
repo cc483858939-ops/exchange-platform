@@ -11,6 +11,7 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -33,12 +34,8 @@ func TestLoadPostReferencePropagatesDatabaseInitializationError(t *testing.T) {
 }
 
 func TestSelectedRecommendationResponsesPropagatesReferenceHydrationError(t *testing.T) {
-	previousDB := global.Db
-	global.Db = nil
-	t.Cleanup(func() { global.Db = previousDB })
-
 	quoteID := uint(99)
-	_, err := selectedRecommendationResponses(context.Background(), []selectedRecommendation{{
+	_, err := selectedRecommendationResponsesFromDB(nil, []recommendation.SelectedCandidate{{
 		Post: models.Post{
 			Model:       gorm.Model{ID: 1},
 			AuthorID:    7,
@@ -46,7 +43,7 @@ func TestSelectedRecommendationResponsesPropagatesReferenceHydrationError(t *tes
 			Language:    "und",
 			QuotePostID: &quoteID,
 		},
-	}})
+	}}, time.Now().UTC())
 	if err == nil {
 		t.Fatal("expected recommendation response hydration error")
 	}

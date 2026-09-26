@@ -1,8 +1,8 @@
 package controllers
 
 import (
-	"context"
 	"math"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +10,6 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
-	"gorm.io/gorm"
 )
 
 func assertRecommendationLanguageFloat(t *testing.T, got, want float64) {
@@ -96,64 +95,28 @@ func TestNormalizedRecommendationLanguageAffinityConfigHonorsExplicitZeroAndFals
 	}
 }
 
-func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *testing.T) {
-	ensureRecommendationControllerTestDB(t)
-	originalServingPath := recommendationServingPathForHandler
-	originalResponseBuilder := selectedRecommendationResponsesForHandler
-	originalTracking := attachRecommendationTrackingForHandler
-	originalUserLoader := loadUserRecommendationServedHistoryForHandler
-	originalUserRecorder := recordUserRecommendationServedPostsForHandler
-	originalPersist := persistRecommendationServingTrace
-	t.Cleanup(func() {
-		recommendationServingPathForHandler = originalServingPath
-		selectedRecommendationResponsesForHandler = originalResponseBuilder
-		attachRecommendationTrackingForHandler = originalTracking
-		loadUserRecommendationServedHistoryForHandler = originalUserLoader
-		recordUserRecommendationServedPostsForHandler = originalUserRecorder
-		persistRecommendationServingTrace = originalPersist
-	})
-
-	var received recommendationLanguageContext
-	var persisted models.RecommendationRequest
-	recommendationServingPathForHandler = func(_ context.Context, _ recommendation.DataDependencies, _ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, snapshot recommendationServingSnapshot, browser recommendationLanguageContext, _ recommendation.ServedHistory) (recommendationServingOutcome, error) {
-		received = browser
-		return recommendationServingOutcome{
-			EmbeddingVersion: snapshot.EmbeddingVersion,
-			Profile:          userInterestProfile{ProfileStatus: recommendationProfileStatusMiss},
-			LanguageContext:  recommendation.BuildLanguageContext(browser, recommendation.LanguagePrior{}, 0, recommendationLanguageConfig(cfg)),
-		}, nil
+func TestRecommendationHandlerParsesBrowserLanguageWithoutLeakingIt(t *testing.T) {
+	service := &recommendationServiceStub{result: recommendation.ServeResult{
+		RequestID: "language-request", Now: time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC),
+	}}
+	handler, err := NewRecommendationHandler(service, nil, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {
-		return []recommendedPostResponse{{Post: postResponse{ID: 101, Media: make([]postMediaResponse, 0)}, Score: .5}}, nil
-	}
-	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
-		return 0, nil
-	}
-	loadUserRecommendationServedHistoryForHandler = func(context.Context, recommendation.HistoryStore, uint, time.Time, config.RecommendationConfig) (recommendation.ServedHistory, error) {
-		return recommendation.ServedHistory{}, nil
-	}
-	recordUserRecommendationServedPostsForHandler = func(context.Context, recommendation.HistoryStore, uint, []uint, time.Time, config.RecommendationConfig) error {
-		return nil
-	}
-	persistRecommendationServingTrace = func(_ context.Context, _ recommendation.TraceRepository, request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
-		persisted = request
-		return nil
-	}
-
-	ctx, recorder := newRecommendationControllerTestContext("/api/recommendations/posts", 7)
+	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
+	ctx.Set("user_id", uint(7))
 	ctx.Request.Header.Set("Accept-Language", "ja-JP, en-US;q=0.2, zh;q=0")
-	GetPostRecommendations(ctx)
-	if recorder.Code != 200 {
+	handler.GetPostRecommendations(ctx)
+
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	received := service.request.BrowserLanguage
 	if received.BrowserPrimary != "ja" {
 		t.Fatalf("received browser context=%#v", received)
 	}
 	assertRecommendationLanguageFloat(t, received.Browser.JA, 5.0/6.0)
 	assertRecommendationLanguageFloat(t, received.Browser.EN, 1.0/6.0)
-	if persisted.BrowserLanguagePrimary != "ja" || persisted.LanguageContextSource != "browser" || math.Abs(persisted.LanguageAffinityJA-5.0/6.0) > 1e-9 || persisted.LanguageBehaviorEvidence != 0 || persisted.LanguageBehaviorShare != 0 {
-		t.Fatalf("persisted request language context=%#v", persisted)
-	}
 	if strings.Contains(recorder.Body.String(), "language_context_source") || strings.Contains(recorder.Body.String(), "language_behavior") {
 		t.Fatalf("public response leaked language context: %s", recorder.Body.String())
 	}

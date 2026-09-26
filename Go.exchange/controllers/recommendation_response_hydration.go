@@ -1,16 +1,17 @@
 package controllers
 
 import (
-	"context"
 	"errors"
 	"time"
 
-	"Go.exchange/global"
 	"Go.exchange/recommendation"
 	"gorm.io/gorm"
 )
 
 func selectedRecommendationResponsesFromDB(db *gorm.DB, selected []recommendation.SelectedCandidate, now time.Time) ([]recommendedPostResponse, error) {
+	if len(selected) == 0 {
+		return []recommendedPostResponse{}, nil
+	}
 	if db == nil {
 		return nil, errors.New("database is not initialized")
 	}
@@ -47,12 +48,4 @@ func selectedRecommendationResponsesFromDB(db *gorm.DB, selected []recommendatio
 		})
 	}
 	return result, nil
-}
-
-func selectedRecommendationResponses(ctx context.Context, selected []recommendation.SelectedCandidate) ([]recommendedPostResponse, error) {
-	db := global.Db
-	if db != nil {
-		db = db.WithContext(ctx)
-	}
-	return selectedRecommendationResponsesFromDB(db, selected, time.Now().UTC())
 }

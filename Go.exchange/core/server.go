@@ -18,6 +18,7 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/ratelimit"
+	"Go.exchange/recommendation"
 	"Go.exchange/router"
 	"Go.exchange/runtimehealth"
 	"Go.exchange/translation"
@@ -64,7 +65,40 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 			BaseURL:        translationConfig.BaseURL,
 		},
 	)
-	handler, err := router.SetupRouterWithRateLimiter(authController, tokens, publisher, readiness, applicationLimiter, translationService)
+	apiDB := global.APIDb
+	if apiDB == nil {
+		apiDB = global.Db
+	}
+	recommendationDependencies, err := recommendation.NewGormServiceDependencies(apiDB, global.RedisDB)
+	if err != nil {
+		return nil, fmt.Errorf("initialize recommendation dependencies: %w", err)
+	}
+	recommendationConfig := controllers.RecommendationConfigSnapshot()
+	servingTimeout := 5 * time.Second
+	if recommendationConfig.ServingTimeoutMS > 0 {
+		servingTimeout = time.Duration(recommendationConfig.ServingTimeoutMS) * time.Millisecond
+	}
+	serviceConfig := recommendation.ServiceConfig{
+		Recommendation:      recommendationConfig,
+		TracePersistTimeout: 5 * time.Second,
+		Tracking: recommendation.TrackingConfig{
+			Enabled:        config.RecommendationTelemetryEnabled(),
+			RolloutPercent: config.RecommendationTelemetryRolloutPercent(),
+			SigningKey:     []byte(config.RecommendationTelemetrySigningKey()),
+			TokenTTL:       config.RecommendationTelemetryTokenTTL(),
+		},
+	}
+	recommendationDependencies.Metrics = recommendation.NewPrometheusMetrics()
+	recommendationService, err := recommendation.NewService(recommendationDependencies, serviceConfig)
+	if err != nil {
+		return nil, fmt.Errorf("initialize recommendation service: %w", err)
+	}
+	recommendationHandler, err := controllers.NewRecommendationHandler(recommendationService, apiDB, servingTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("initialize recommendation handler: %w", err)
+	}
+	telemetryRateLimiter := controllers.NewRecommendationTelemetryRedisRateLimiter(global.RedisDB)
+	handler, err := router.SetupRouterWithRecommendationHandler(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, translationService)
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}
