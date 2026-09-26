@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"math"
 	"time"
@@ -390,7 +391,7 @@ var loadRecommendationPostEmbeddings = func(db *gorm.DB, postIDs []uint, version
 	return result, nil
 }
 
-func buildEmbeddingInterestProfile(behaviors []postBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig, servingVersion string) (userInterestProfile, error) {
+func buildEmbeddingInterestProfile(ctx context.Context, behaviors []postBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig, servingVersion string) (userInterestProfile, error) {
 	profile := userInterestProfile{
 		InteractedPostIDs: make(map[uint]struct{}), PositiveContributions: make(map[uint]float64), PositiveAffinityContributions: make(map[uint]float64),
 	}
@@ -411,7 +412,11 @@ func buildEmbeddingInterestProfile(behaviors []postBehaviorSignal, feedback []re
 	}
 	canonical := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
 	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, servingVersion, func(ids []uint, version string) (map[uint][]float32, error) {
-		return loadRecommendationPostEmbeddings(global.Db, ids, version)
+		db := global.Db
+		if db != nil {
+			db = db.WithContext(ctx)
+		}
+		return loadRecommendationPostEmbeddings(db, ids, version)
 	})
 	if err != nil {
 		return profile, err

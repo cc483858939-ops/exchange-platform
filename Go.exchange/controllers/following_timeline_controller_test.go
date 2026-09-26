@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -34,13 +35,13 @@ func TestGetFollowingTimelineReturnsActivityResponse(t *testing.T) {
 		loadFollowingTimelinePage = originalLoader
 	})
 
-	loadActiveFollowingViewer = func(id uint) error {
+	loadActiveFollowingViewer = func(_ context.Context, id uint) error {
 		if id != viewerID {
 			t.Fatalf("active viewer id=%d", id)
 		}
 		return nil
 	}
-	loadFollowingTimelinePage = func(id uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
+	loadFollowingTimelinePage = func(_ context.Context, id uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
 		if id != viewerID || limit != 20 || cursor != nil {
 			t.Fatalf("loader args id=%d limit=%d cursor=%v", id, limit, cursor)
 		}
@@ -81,9 +82,9 @@ func TestFollowingTimelineDefaultsAndClampsLimit(t *testing.T) {
 		loadActiveFollowingViewer = originalActive
 		loadFollowingTimelinePage = originalLoader
 	})
-	loadActiveFollowingViewer = func(uint) error { return nil }
+	loadActiveFollowingViewer = func(context.Context, uint) error { return nil }
 	var limits []int
-	loadFollowingTimelinePage = func(_ uint, limit int, _ *timelineCursor) (timelinePageResponse, error) {
+	loadFollowingTimelinePage = func(_ context.Context, _ uint, limit int, _ *timelineCursor) (timelinePageResponse, error) {
 		limits = append(limits, limit)
 		return timelinePageResponse{Items: []timelineItem{}}, nil
 	}
@@ -111,8 +112,8 @@ func TestFollowingTimelineRejectsInvalidLimit(t *testing.T) {
 		loadActiveFollowingViewer = originalActive
 		loadFollowingTimelinePage = originalLoader
 	})
-	loadActiveFollowingViewer = func(uint) error { return nil }
-	loadFollowingTimelinePage = func(uint, int, *timelineCursor) (timelinePageResponse, error) {
+	loadActiveFollowingViewer = func(context.Context, uint) error { return nil }
+	loadFollowingTimelinePage = func(context.Context, uint, int, *timelineCursor) (timelinePageResponse, error) {
 		t.Fatal("timeline loader should not be called")
 		return timelinePageResponse{}, nil
 	}
@@ -134,14 +135,14 @@ func TestFollowingTimelineAcceptsValidCursor(t *testing.T) {
 		loadActiveFollowingViewer = originalActive
 		loadFollowingTimelinePage = originalLoader
 	})
-	loadActiveFollowingViewer = func(uint) error { return nil }
+	loadActiveFollowingViewer = func(context.Context, uint) error { return nil }
 	want := timelineCursor{ActivityAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC), ActivityType: string(timelineActivityRepost), SourceID: 42}
 	raw, err := encodeTimelineCursor(want)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var received *timelineCursor
-	loadFollowingTimelinePage = func(_ uint, _ int, cursor *timelineCursor) (timelinePageResponse, error) {
+	loadFollowingTimelinePage = func(_ context.Context, _ uint, _ int, cursor *timelineCursor) (timelinePageResponse, error) {
 		received = cursor
 		return timelinePageResponse{Items: []timelineItem{}}, nil
 	}
@@ -176,8 +177,8 @@ func TestFollowingTimelineRejectsInvalidCursor(t *testing.T) {
 		viewerID := uint(7)
 		originalActive := loadActiveFollowingViewer
 		originalLoader := loadFollowingTimelinePage
-		loadActiveFollowingViewer = func(uint) error { return nil }
-		loadFollowingTimelinePage = func(uint, int, *timelineCursor) (timelinePageResponse, error) {
+		loadActiveFollowingViewer = func(context.Context, uint) error { return nil }
+		loadFollowingTimelinePage = func(context.Context, uint, int, *timelineCursor) (timelinePageResponse, error) {
 			t.Fatal("timeline loader should not be called")
 			return timelinePageResponse{}, nil
 		}
@@ -198,7 +199,7 @@ func TestFollowingTimelineHandlesMissingInactiveAndFailedViewer(t *testing.T) {
 		loadActiveFollowingViewer = originalActive
 		loadFollowingTimelinePage = originalLoader
 	})
-	loadFollowingTimelinePage = func(uint, int, *timelineCursor) (timelinePageResponse, error) {
+	loadFollowingTimelinePage = func(context.Context, uint, int, *timelineCursor) (timelinePageResponse, error) {
 		t.Fatal("timeline loader should not be called")
 		return timelinePageResponse{}, nil
 	}
@@ -210,22 +211,22 @@ func TestFollowingTimelineHandlesMissingInactiveAndFailedViewer(t *testing.T) {
 	}
 
 	viewerID := uint(7)
-	loadActiveFollowingViewer = func(uint) error { return gorm.ErrRecordNotFound }
+	loadActiveFollowingViewer = func(context.Context, uint) error { return gorm.ErrRecordNotFound }
 	ctx, recorder = newFollowingTimelineTestContext("/api/feed/following", &viewerID)
 	GetFollowingTimeline(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("inactive viewer status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	loadActiveFollowingViewer = func(uint) error { return errors.New("database unavailable") }
+	loadActiveFollowingViewer = func(context.Context, uint) error { return errors.New("database unavailable") }
 	ctx, recorder = newFollowingTimelineTestContext("/api/feed/following", &viewerID)
 	GetFollowingTimeline(ctx)
 	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "database unavailable") {
 		t.Fatalf("viewer datastore failure status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	loadActiveFollowingViewer = func(uint) error { return nil }
-	loadFollowingTimelinePage = func(uint, int, *timelineCursor) (timelinePageResponse, error) {
+	loadActiveFollowingViewer = func(context.Context, uint) error { return nil }
+	loadFollowingTimelinePage = func(context.Context, uint, int, *timelineCursor) (timelinePageResponse, error) {
 		return timelinePageResponse{}, errors.New("query failed")
 	}
 	ctx, recorder = newFollowingTimelineTestContext("/api/feed/following", &viewerID)

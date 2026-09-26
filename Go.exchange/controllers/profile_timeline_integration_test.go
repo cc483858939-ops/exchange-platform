@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -167,7 +168,7 @@ func TestProfileTimelineActivityIntegration(t *testing.T) {
 		}
 	}
 
-	if _, err := mutatePostRepostFromDB(profileUser.ID, bCanonical.ID, false); err != nil {
+	if _, err := mutatePostRepostFromDB(context.Background(), profileUser.ID, bCanonical.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	page, status, body = profileTimelineRequest(t, profileUser.ID, "limit=50")

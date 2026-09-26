@@ -46,8 +46,9 @@ func GetPostReplies(ctx *gin.Context) {
 		return
 	}
 
+	db := global.Db.WithContext(ctx.Request.Context())
 	var post models.Post
-	if err := global.Db.
+	if err := db.
 		Select("id").
 		Scopes(func(tx *gorm.DB) *gorm.DB { return publicPostScope(tx, time.Now().UTC()) }).
 		First(&post, postID).Error; err != nil {
@@ -55,7 +56,7 @@ func GetPostReplies(ctx *gin.Context) {
 		return
 	}
 
-	query := publicPostScope(global.Db.Model(&models.Post{}), time.Now().UTC()).Where("posts.reply_to_post_id = ?", postID)
+	query := publicPostScope(db.Model(&models.Post{}), time.Now().UTC()).Where("posts.reply_to_post_id = ?", postID)
 	if cursor != nil {
 		query = query.Where(
 			"(created_at < ?) OR (created_at = ? AND id < ?)",
@@ -73,6 +74,9 @@ func GetPostReplies(ctx *gin.Context) {
 		Order("created_at DESC, id DESC").
 		Limit(limit + 1).
 		Find(&posts).Error; err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -83,18 +87,27 @@ func GetPostReplies(ctx *gin.Context) {
 	}
 	items := make([]replyResponse, 0, len(posts))
 	for _, reply := range posts {
-		response, err := newReplyResponse(reply)
+		response, err := newReplyResponse(db, reply)
 		if err != nil {
+			if handleRequestDBError(ctx, err) {
+				return
+			}
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		items = append(items, response)
 	}
-	if err := hydratePostResponsesMediaFromDB(global.Db, items); err != nil {
+	if err := hydratePostResponsesMediaFromDB(db, items); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := hydratePostResponseRepostCountsFromDB(global.Db, items); err != nil {
+	if err := hydratePostResponseRepostCountsFromDB(db, items); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -166,6 +179,9 @@ func decodeReplyCursor(raw string) (replyCursor, error) {
 }
 
 func writeReplyPostLookupError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return

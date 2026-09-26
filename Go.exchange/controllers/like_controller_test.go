@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,11 +18,12 @@ import (
 func TestLikePostReturnsMutationResult(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	setPostLikedState = func(uint, uint, bool) (postLikeMutationResult, error) {
+	setPostLikedState = func(context.Context, uint, uint, bool) (postLikeMutationResult, error) {
 		return postLikeMutationResult{Likes: 4, Liked: true, ChangedToLiked: true}, nil
 	}
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts/7/like", nil)
 	ctx.Params = gin.Params{{Key: "id", Value: "7"}}
 	ctx.Set("user_id", uint(11))
 	LikePost(ctx)
@@ -37,11 +39,12 @@ func TestLikePostReturnsMutationResult(t *testing.T) {
 func TestLikePostReturnsUnavailableUntilRedisBaselineReady(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	setPostLikedState = func(uint, uint, bool) (postLikeMutationResult, error) {
+	setPostLikedState = func(context.Context, uint, uint, bool) (postLikeMutationResult, error) {
 		return postLikeMutationResult{}, likes.ErrNotReady
 	}
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/posts/7/like", nil)
 	ctx.Params = gin.Params{{Key: "id", Value: "7"}}
 	ctx.Set("user_id", uint(11))
 	LikePost(ctx)
@@ -53,11 +56,12 @@ func TestLikePostReturnsUnavailableUntilRedisBaselineReady(t *testing.T) {
 func TestGetPostLikesReturnsRedisState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	loadPostLikeState = func(uint, uint) (postLikeStateResult, error) {
+	loadPostLikeState = func(context.Context, uint, uint) (postLikeStateResult, error) {
 		return postLikeStateResult{Likes: 9, Liked: true}, nil
 	}
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/posts/7/likes", nil)
 	ctx.Params = gin.Params{{Key: "id", Value: "7"}}
 	ctx.Set("user_id", uint(11))
 	GetPostLikes(ctx)
@@ -73,7 +77,7 @@ func TestGetPostLikesReturnsRedisState(t *testing.T) {
 func TestGetPostLikeStatesReturnsFullyReadyItems(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	loadPostLikeStates = func(userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
+	loadPostLikeStates = func(_ context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
 		if userID != 11 || !equalUintSlices(postIDs, []uint{7, 8}) {
 			t.Fatalf("loader args user=%d ids=%v", userID, postIDs)
 		}
@@ -102,7 +106,7 @@ func TestGetPostLikeStatesReturnsFullyReadyItems(t *testing.T) {
 func TestGetPostLikeStatesReturnsPartialAvailability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	loadPostLikeStates = func(uint, []uint) (postLikeStatesLoadResult, error) {
+	loadPostLikeStates = func(context.Context, uint, []uint) (postLikeStatesLoadResult, error) {
 		return postLikeStatesLoadResult{
 			States: map[uint]postLikeStateResult{
 				7: {Likes: 4, Liked: true},
@@ -128,7 +132,7 @@ func TestGetPostLikeStatesReturnsPartialAvailability(t *testing.T) {
 func TestGetPostLikeStatesReturnsAllUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	loadPostLikeStates = func(uint, []uint) (postLikeStatesLoadResult, error) {
+	loadPostLikeStates = func(context.Context, uint, []uint) (postLikeStatesLoadResult, error) {
 		return postLikeStatesLoadResult{
 			States:      map[uint]postLikeStateResult{},
 			Unavailable: []uint{7, 8},
@@ -149,7 +153,7 @@ func TestGetPostLikeStatesDeduplicatesBeforeLoading(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
 	var loadedIDs []uint
-	loadPostLikeStates = func(_ uint, postIDs []uint) (postLikeStatesLoadResult, error) {
+	loadPostLikeStates = func(_ context.Context, _ uint, postIDs []uint) (postLikeStatesLoadResult, error) {
 		loadedIDs = append([]uint(nil), postIDs...)
 		return postLikeStatesLoadResult{
 			States: map[uint]postLikeStateResult{
@@ -195,7 +199,7 @@ func TestGetPostLikeStatesRejectsInvalidRequests(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			restoreLikeControllerMocks(t)
-			loadPostLikeStates = func(uint, []uint) (postLikeStatesLoadResult, error) {
+			loadPostLikeStates = func(context.Context, uint, []uint) (postLikeStatesLoadResult, error) {
 				t.Fatal("loader should not be called")
 				return postLikeStatesLoadResult{}, nil
 			}
@@ -211,7 +215,7 @@ func TestGetPostLikeStatesRejectsInvalidRequests(t *testing.T) {
 func TestGetPostLikeStatesRequiresUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	loadPostLikeStates = func(uint, []uint) (postLikeStatesLoadResult, error) {
+	loadPostLikeStates = func(context.Context, uint, []uint) (postLikeStatesLoadResult, error) {
 		t.Fatal("loader should not be called")
 		return postLikeStatesLoadResult{}, nil
 	}
@@ -225,7 +229,7 @@ func TestGetPostLikeStatesRequiresUser(t *testing.T) {
 func TestGetPostLikeStatesReturnsGlobalError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreLikeControllerMocks(t)
-	loadPostLikeStates = func(uint, []uint) (postLikeStatesLoadResult, error) {
+	loadPostLikeStates = func(context.Context, uint, []uint) (postLikeStatesLoadResult, error) {
 		return postLikeStatesLoadResult{}, errors.New("redis unavailable")
 	}
 	ctx, recorder := newLikeStatesContext("{\"post_ids\":[7]}", uint(11))
@@ -239,6 +243,7 @@ func TestWritePostLikeErrorReturnsInternalError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/posts/7/likes", nil)
 	writePostLikeError(ctx, errors.New("redis unavailable"))
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d", recorder.Code)

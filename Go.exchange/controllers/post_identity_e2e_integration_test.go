@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -95,7 +96,7 @@ func TestCanonicalPostDeletePGRedisIdentityE2E(t *testing.T) {
 		p4.QuotePost == nil || p4.QuotePost.Deleted || p4.QuotePost.Content != p1Content {
 		t.Fatalf("P4 API graph=%#v", p4)
 	}
-	primedP4, err := loadPostDetail(strconvUint(p4.ID))
+	primedP4, err := loadPostDetail(context.Background(), strconvUint(p4.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestCanonicalPostDeletePGRedisIdentityE2E(t *testing.T) {
 		}
 	}
 
-	cachedP4, err := loadPostDetail(strconvUint(p4.ID))
+	cachedP4, err := loadPostDetail(context.Background(), strconvUint(p4.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,6 @@ func TestCanonicalPostDeletePGRedisIdentityE2E(t *testing.T) {
 		t.Fatalf("relational P1 reaction count=%d want 1", reactionCount)
 	}
 }
-
 func mutatePostRepostForIdentityE2E(t *testing.T, userID, postID uint, reposted bool) (postRepostStateResult, error) {
 	t.Helper()
 	method := http.MethodDelete

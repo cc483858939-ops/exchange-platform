@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
@@ -69,9 +70,8 @@ $$`).Error; err != nil {
 	if err := db.Exec(`CREATE TRIGGER trg_test_outbox_failure BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION reject_test_outbox_insert()`).Error; err != nil {
 		t.Fatal(err)
 	}
-
 	var reply models.Post
-	if err := persistPostGraph(&reply, commenter.ID, "should rollback", createPostRequest{
+	if err := persistPostGraph(context.Background(), &reply, commenter.ID, "should rollback", createPostRequest{
 		Content:       "should rollback",
 		ReplyToPostID: &article.ID,
 	}, nil, now); err == nil {
@@ -92,7 +92,7 @@ $$`).Error; err != nil {
 		t.Fatalf("comment_count=%d want=0", storedArticle.ReplyCount)
 	}
 
-	if _, err := followAndLoadStateFromDB(follower.ID, followed.ID); err == nil {
+	if _, err := followAndLoadStateFromDB(context.Background(), follower.ID, followed.ID); err == nil {
 		t.Fatal("follow unexpectedly succeeded with failing Outbox insert")
 	}
 	var followCount int64

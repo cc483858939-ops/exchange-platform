@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -91,7 +92,7 @@ func TestUpdateUserProfileAuthorizationOrder(t *testing.T) {
 	original := loadActiveProfileViewer
 	t.Cleanup(func() { loadActiveProfileViewer = original })
 
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		t.Fatal("active lookup should not run without viewer identity")
 		return models.User{}, nil
 	}
@@ -101,21 +102,21 @@ func TestUpdateUserProfileAuthorizationOrder(t *testing.T) {
 		t.Fatalf("missing viewer status=%d", recorder.Code)
 	}
 
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
 	ctx, recorder = newProfilePatchUnitContext("42", "{\"bio\":\"FX\"}", uint(42))
 	UpdateUserProfile(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("inactive viewer status=%d", recorder.Code)
 	}
 
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{Model: gorm.Model{ID: 42}}, nil }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{Model: gorm.Model{ID: 42}}, nil }
 	ctx, recorder = newProfilePatchUnitContext("43", "{}", uint(42))
 	UpdateUserProfile(ctx)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("target mismatch status=%d", recorder.Code)
 	}
 
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, errors.New("db unavailable") }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{}, errors.New("db unavailable") }
 	ctx, recorder = newProfilePatchUnitContext("42", "{\"bio\":\"FX\"}", uint(42))
 	UpdateUserProfile(ctx)
 	if recorder.Code != http.StatusInternalServerError {
@@ -138,12 +139,14 @@ func TestSearchUsersContract(t *testing.T) {
 	originalActive := loadActiveProfileViewer
 	originalSearch := searchUsers
 	t.Cleanup(func() { loadActiveProfileViewer = originalActive; searchUsers = originalSearch })
-	loadActiveProfileViewer = func(id uint) (models.User, error) { return models.User{Model: gorm.Model{ID: id}}, nil }
+	loadActiveProfileViewer = func(_ context.Context, id uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: id}}, nil
+	}
 
 	var receivedViewer uint
 	var receivedQuery string
 	var receivedLimit, receivedOffset int
-	searchUsers = func(viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
+	searchUsers = func(_ context.Context, viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
 		receivedViewer, receivedQuery, receivedLimit, receivedOffset = viewerID, query, limit, offset
 		return userConnectionPageResponse{Items: []userConnectionResponse{{User: publicUserSummaryResponse{ID: 7, Username: "alice", DisplayName: "Alice"}, Following: true}}, HasMore: true}, nil
 	}
@@ -189,7 +192,7 @@ func TestSearchUsersAuthenticationAndStoreErrors(t *testing.T) {
 	originalSearch := searchUsers
 	t.Cleanup(func() { loadActiveProfileViewer = originalActive; searchUsers = originalSearch })
 
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		t.Fatal("active lookup should not run without viewer")
 		return models.User{}, nil
 	}
@@ -199,15 +202,17 @@ func TestSearchUsersAuthenticationAndStoreErrors(t *testing.T) {
 		t.Fatalf("missing viewer status=%d", recorder.Code)
 	}
 
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
 	ctx, recorder = newUserSearchUnitContext("?q=alice", uint(9))
 	SearchUsers(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("inactive viewer status=%d", recorder.Code)
 	}
 
-	loadActiveProfileViewer = func(id uint) (models.User, error) { return models.User{Model: gorm.Model{ID: id}}, nil }
-	searchUsers = func(uint, string, int, int) (userConnectionPageResponse, error) {
+	loadActiveProfileViewer = func(_ context.Context, id uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: id}}, nil
+	}
+	searchUsers = func(context.Context, uint, string, int, int) (userConnectionPageResponse, error) {
 		return userConnectionPageResponse{}, errors.New("database exploded")
 	}
 	ctx, recorder = newUserSearchUnitContext("?q=alice", uint(9))
@@ -216,7 +221,7 @@ func TestSearchUsersAuthenticationAndStoreErrors(t *testing.T) {
 		t.Fatalf("store error status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	searchUsers = func(uint, string, int, int) (userConnectionPageResponse, error) {
+	searchUsers = func(context.Context, uint, string, int, int) (userConnectionPageResponse, error) {
 		return userConnectionPageResponse{}, nil
 	}
 	ctx, recorder = newUserSearchUnitContext("?q=alice", uint(9))

@@ -206,7 +206,7 @@ func TestHydratePostResponseAuthorsDeduplicatesAndPreservesPostFields(t *testing
 	originalLoader := loadPublicAuthorsByIDs
 	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
 	var requested []uint
-	loadPublicAuthorsByIDs = func(ids []uint) (map[uint]publicAuthorResponse, error) {
+	loadPublicAuthorsByIDs = func(_ context.Context, ids []uint) (map[uint]publicAuthorResponse, error) {
 		requested = append([]uint(nil), ids...)
 		return map[uint]publicAuthorResponse{
 			7: {ID: 7, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "new.jpg"},
@@ -220,7 +220,7 @@ func TestHydratePostResponseAuthorsDeduplicatesAndPreservesPostFields(t *testing
 		{ID: 103, Content: "three", LikeCount: 6, ReplyCount: 4, Author: publicAuthorResponse{ID: 8, Username: "bob", DisplayName: "Old Bob", AvatarURL: "old-bob.jpg"}},
 	}
 
-	if err := hydratePostResponseAuthors(responses); err != nil {
+	if err := hydratePostResponseAuthors(context.Background(), responses); err != nil {
 		t.Fatal(err)
 	}
 	if len(requested) != 2 || requested[0] != 7 || requested[1] != 8 {
@@ -238,7 +238,7 @@ func TestHydratePostResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
 	originalLoader := loadPublicAuthorsByIDs
 	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
 	var requested []uint
-	loadPublicAuthorsByIDs = func(ids []uint) (map[uint]publicAuthorResponse, error) {
+	loadPublicAuthorsByIDs = func(_ context.Context, ids []uint) (map[uint]publicAuthorResponse, error) {
 		requested = append([]uint(nil), ids...)
 		return map[uint]publicAuthorResponse{
 			7: {ID: 7, Username: "alice"},
@@ -250,7 +250,7 @@ func TestHydratePostResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
 		{Author: publicAuthorResponse{ID: 7}},
 		{Author: publicAuthorResponse{ID: 8}},
 	}
-	if err := hydratePostResponseAuthors(responses); err != nil {
+	if err := hydratePostResponseAuthors(context.Background(), responses); err != nil {
 		t.Fatal(err)
 	}
 	if len(requested) != 2 || requested[0] != 7 || requested[1] != 8 {
@@ -261,11 +261,11 @@ func TestHydratePostResponseAuthorsDeduplicatesLoaderInput(t *testing.T) {
 func TestHydratePostResponseAuthorsRejectsMissingAuthor(t *testing.T) {
 	originalLoader := loadPublicAuthorsByIDs
 	t.Cleanup(func() { loadPublicAuthorsByIDs = originalLoader })
-	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
+	loadPublicAuthorsByIDs = func(context.Context, []uint) (map[uint]publicAuthorResponse, error) {
 		return map[uint]publicAuthorResponse{}, nil
 	}
 	responses := []postResponse{{Author: publicAuthorResponse{ID: 7, Username: "stale"}}}
-	if err := hydratePostResponseAuthors(responses); err == nil {
+	if err := hydratePostResponseAuthors(context.Background(), responses); err == nil {
 		t.Fatal("expected missing author hydration to fail")
 	}
 	if responses[0].Author.Username != "stale" {
@@ -284,7 +284,7 @@ func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *
 	})
 
 	global.Db = nil
-	loadPublicAuthorsByIDs = func([]uint) (map[uint]publicAuthorResponse, error) {
+	loadPublicAuthorsByIDs = func(context.Context, []uint) (map[uint]publicAuthorResponse, error) {
 		t.Fatal("cache hit must not hydrate post authors")
 		return nil, nil
 	}
@@ -295,7 +295,7 @@ func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *
 		Visibility:  "public",
 		Author:      publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Cached Alice", AvatarURL: "cached.jpg"},
 	}
-	loadPostDetailCache = func(key string, loader func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(_ context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
 		if key != postDetailCacheKey("123") {
 			t.Fatalf("unexpected post detail cache key: %q", key)
 		}
@@ -312,7 +312,7 @@ func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *
 		)
 	}
 
-	returned, err := loadPostDetail("123")
+	returned, err := loadPostDetail(context.Background(), "123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 	postCacheGroup = singleflight.Group{}
 	cache := map[string]string{}
 	var writes int
-	loadPostDetailCache = func(key string, loader func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(_ context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
 		return loadJSONCacheWithStore(
 			key,
 			postCacheTTL,
@@ -362,11 +362,11 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 	}
 
 	id := strconv.FormatUint(uint64(fixture.Article.ID), 10)
-	first, err := loadPostDetail(id)
+	first, err := loadPostDetail(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := loadPostDetail(id)
+	second, err := loadPostDetail(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +478,7 @@ func TestLoadPostDetailRejectsInvalidCachedResponseAndBestEffortDeletes(t *testi
 	global.Db = nil
 	now := time.Now().UTC()
 	future := now.Add(time.Hour)
-	loadPostDetailCache = func(string, func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
 		return postResponse{
 			ID:          42,
 			PublishedAt: &future,
@@ -492,7 +492,7 @@ func TestLoadPostDetailRejectsInvalidCachedResponseAndBestEffortDeletes(t *testi
 		return gorm.ErrInvalidData
 	}
 
-	_, err := loadPostDetail("42")
+	_, err := loadPostDetail(context.Background(), "42")
 	if err != gorm.ErrRecordNotFound {
 		t.Fatalf("invalid cached response error=%v want=%v", err, gorm.ErrRecordNotFound)
 	}
@@ -546,12 +546,12 @@ func TestLoadPostDetailMissFiltersDeletedPostsIntegration(t *testing.T) {
 		global.Db = originalDB
 	})
 	global.Db = db
-	loadPostDetailCache = func(_ string, loader func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(_ context.Context, _ string, loader func() (postResponse, error)) (postResponse, error) {
 		return loader()
 	}
 
 	validID := strconv.FormatUint(uint64(posts[0].ID), 10)
-	response, err := loadPostDetail(validID)
+	response, err := loadPostDetail(context.Background(), validID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,14 +559,14 @@ func TestLoadPostDetailMissFiltersDeletedPostsIntegration(t *testing.T) {
 		t.Fatalf("valid detail response=%#v", response)
 	}
 	for _, index := range []int{1, 2, 3} {
-		response, err := loadPostDetail(strconv.FormatUint(uint64(posts[index].ID), 10))
+		response, err := loadPostDetail(context.Background(), strconv.FormatUint(uint64(posts[index].ID), 10))
 		if err != nil || response.ID != posts[index].ID {
 			t.Fatalf("active post %d error=%v response=%#v", posts[index].ID, err, response)
 		}
 	}
 	{
 		index := 4
-		_, err := loadPostDetail(strconv.FormatUint(uint64(posts[index].ID), 10))
+		_, err := loadPostDetail(context.Background(), strconv.FormatUint(uint64(posts[index].ID), 10))
 		if err != gorm.ErrRecordNotFound {
 			t.Fatalf("ineligible post %d error=%v want=%v", posts[index].ID, err, gorm.ErrRecordNotFound)
 		}

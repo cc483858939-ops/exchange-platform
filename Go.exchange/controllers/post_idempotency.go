@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -86,12 +87,12 @@ func createPostPayloadFingerprint(content string, req createPostRequest) (string
 
 var loadClientPublishPostFn = loadClientPublishPost
 
-func loadClientPublishPost(authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
+func loadClientPublishPost(ctx context.Context, authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
 	if global.Db == nil {
 		return models.Post{}, errors.New("database is not initialized")
 	}
 	var post models.Post
-	query := global.Db.Unscoped().Model(&models.Post{}).
+	query := global.Db.WithContext(ctx).Unscoped().Model(&models.Post{}).
 		Where("posts.author_id = ? AND posts.client_publish_id = ?", authorID, clientPublishID)
 	if err := preloadPostAuthor(query).First(&post).Error; err != nil {
 		return models.Post{}, err
@@ -99,20 +100,24 @@ func loadClientPublishPost(authorID uint, clientPublishID uuid.UUID) (models.Pos
 	return post, nil
 }
 
-func buildPostCreateResponse(post models.Post, media []postMediaResponse, now time.Time) (postResponse, error) {
+func buildPostCreateResponse(ctx context.Context, post models.Post, media []postMediaResponse, now time.Time) (postResponse, error) {
 	response, err := postResponseFromModel(post)
 	if err != nil {
 		return postResponse{}, err
 	}
 	response.Media = media
 	ensurePostResponseMedia(&response)
-	if err := hydratePostResponseReferences(&response, now); err != nil {
+	var db *gorm.DB
+	if global.Db != nil {
+		db = global.Db.WithContext(ctx)
+	}
+	if err := hydratePostResponseReferencesFromDB(db, &response, now); err != nil {
 		return postResponse{}, err
 	}
 	return response, nil
 }
 
-func buildStoredPostCreateResponse(post models.Post, now time.Time) (postResponse, error) {
+func buildStoredPostCreateResponse(ctx context.Context, post models.Post, now time.Time) (postResponse, error) {
 	if global.Db == nil {
 		return postResponse{}, errors.New("database is not initialized")
 	}
@@ -120,10 +125,11 @@ func buildStoredPostCreateResponse(post models.Post, now time.Time) (postRespons
 	if err != nil {
 		return postResponse{}, err
 	}
-	if err := hydratePostResponseMediaFromDB(global.Db, &response); err != nil {
+	db := global.Db.WithContext(ctx)
+	if err := hydratePostResponseMediaFromDB(db, &response); err != nil {
 		return postResponse{}, err
 	}
-	if err := hydratePostResponseReferences(&response, now); err != nil {
+	if err := hydratePostResponseReferencesFromDB(db, &response, now); err != nil {
 		return postResponse{}, err
 	}
 	return response, nil
@@ -140,8 +146,11 @@ func respondToExistingClientPublish(ctx *gin.Context, post models.Post, fingerpr
 		})
 		return true
 	}
-	response, err := buildStoredPostCreateResponseFn(post, now)
+	response, err := buildStoredPostCreateResponseFn(ctx.Request.Context(), post, now)
 	if err != nil {
+		if handleRequestDBError(ctx, err) {
+			return true
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return true
 	}

@@ -40,11 +40,11 @@ const (
 )
 
 var loadPostAuthorForCreate = loadPublicAuthorByID
-var initializePostLikeState = func(postID uint) error {
+var initializePostLikeState = func(ctx context.Context, postID uint) error {
 	if global.RedisDB == nil {
 		return nil
 	}
-	_, err := likes.NewStore(global.RedisDB).Initialize(context.Background(), postID, 0, 0, nil)
+	_, err := likes.NewStore(global.RedisDB).Initialize(ctx, postID, 0, 0, nil)
 	return err
 }
 
@@ -56,7 +56,7 @@ var invalidatePostCreateParentDetailCache = func(postID uint) error {
 }
 
 func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
-	if err := initializePostLikeState(postID); err != nil && global.Db != nil {
+	if err := initializePostLikeState(ctx, postID); err != nil && global.Db != nil {
 		global.Db.Logger.Error(ctx, "failed to initialize post like state", err)
 	}
 }
@@ -143,9 +143,12 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 		}
 		req.ClientPublishID = clientPublishID
 		req.ClientPublishFingerprint = &clientPublishFingerprint
-		existing, lookupErr := loadClientPublishPostFn(userID, *clientPublishID)
+		existing, lookupErr := loadClientPublishPostFn(ctx.Request.Context(), userID, *clientPublishID)
 		if lookupErr == nil {
 			respondToExistingClientPublish(ctx, existing, clientPublishFingerprint, now)
+			return
+		}
+		if handleRequestDBError(ctx, lookupErr) {
 			return
 		}
 		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -159,8 +162,11 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 	if enabled && !ratelimit.Enforce(ctx, limiter, ratelimit.ActionPostCreate, ratelimit.FailClosed) {
 		return
 	}
-	author, err := loadPostAuthorForCreate(userID)
+	author, err := loadPostAuthorForCreate(ctx.Request.Context(), userID)
 	if err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 			return
@@ -182,14 +188,20 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 	}
 
 	var post models.Post
-	err = persistPostGraphFn(&post, userID, content, req, media, now)
+	err = persistPostGraphFn(ctx.Request.Context(), &post, userID, content, req, media, now)
 	if err != nil {
 		if hasClientPublishID && isClientPublishUniqueViolation(err) {
-			existing, lookupErr := loadClientPublishPostFn(userID, *clientPublishID)
+			existing, lookupErr := loadClientPublishPostFn(ctx.Request.Context(), userID, *clientPublishID)
 			if lookupErr == nil {
 				respondToExistingClientPublish(ctx, existing, clientPublishFingerprint, now)
 				return
 			}
+			if handleRequestDBError(ctx, lookupErr) {
+				return
+			}
+		}
+		if handleRequestDBError(ctx, err) {
+			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "reply or quote target unavailable"})
@@ -211,19 +223,22 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 		DisplayName: author.DisplayName,
 		AvatarURL:   author.AvatarURL,
 	}
-	response, err := buildPostCreateResponse(post, postMediaResponsesFromValidated(media), now)
+	response, err := buildPostCreateResponse(ctx.Request.Context(), post, postMediaResponsesFromValidated(media), now)
 	if err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusCreated, response)
 }
 
-func persistPostGraph(post *models.Post, userID uint, content string, req createPostRequest, media []validatedPostMedia, now time.Time) error {
+func persistPostGraph(ctx context.Context, post *models.Post, userID uint, content string, req createPostRequest, media []validatedPostMedia, now time.Time) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	return global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var parentAuthor uint
 		*post = models.Post{
 			AuthorID: userID, Content: content, Language: postlanguage.Detect(content), ReplyToPostID: req.ReplyToPostID,
@@ -305,8 +320,11 @@ func persistPostGraph(post *models.Post, userID uint, content string, req create
 
 func GetPostByID(ctx *gin.Context) {
 	id := ctx.Param("id")
-	post, err := loadPostDetail(id)
+	post, err := loadPostDetail(ctx.Request.Context(), id)
 	if err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return

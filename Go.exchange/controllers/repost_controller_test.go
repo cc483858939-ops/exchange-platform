@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -54,7 +55,7 @@ func decodeRepostPayload(t *testing.T, recorder *httptest.ResponseRecorder) map[
 func TestGetPostRepostStateReturnsCurrentViewerState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restorePostRepostControllerMocks(t)
-	loadPostRepostState = func(userID, postID uint) (postRepostStateResult, error) {
+	loadPostRepostState = func(_ context.Context, userID, postID uint) (postRepostStateResult, error) {
 		if userID != 11 || postID != 42 {
 			t.Fatalf("loader args user=%d article=%d", userID, postID)
 		}
@@ -76,7 +77,7 @@ func TestRepostMutationsReturnServerStateAndAreIdempotentAtHandlerBoundary(t *te
 	gin.SetMode(gin.TestMode)
 	restorePostRepostControllerMocks(t)
 	var received []bool
-	mutatePostRepost = func(userID, postID uint, reposted bool) (postRepostMutationResult, error) {
+	mutatePostRepost = func(_ context.Context, userID, postID uint, reposted bool) (postRepostMutationResult, error) {
 		if userID != 11 || postID != 42 {
 			t.Fatalf("mutation args user=%d article=%d", userID, postID)
 		}
@@ -110,11 +111,11 @@ func TestRepostMutationsReturnServerStateAndAreIdempotentAtHandlerBoundary(t *te
 func TestPostRepostEndpointsRejectInvalidIDsAndMissingViewer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restorePostRepostControllerMocks(t)
-	loadPostRepostState = func(uint, uint) (postRepostStateResult, error) {
+	loadPostRepostState = func(context.Context, uint, uint) (postRepostStateResult, error) {
 		t.Fatal("state loader should not be called")
 		return postRepostStateResult{}, nil
 	}
-	mutatePostRepost = func(uint, uint, bool) (postRepostMutationResult, error) {
+	mutatePostRepost = func(context.Context, uint, uint, bool) (postRepostMutationResult, error) {
 		t.Fatal("mutation should not be called")
 		return postRepostMutationResult{}, nil
 	}
@@ -151,7 +152,7 @@ func TestPostRepostMapsUnavailableAndStoreErrors(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			restorePostRepostControllerMocks(t)
-			loadPostRepostState = func(uint, uint) (postRepostStateResult, error) {
+			loadPostRepostState = func(context.Context, uint, uint) (postRepostStateResult, error) {
 				return postRepostStateResult{}, testCase.err
 			}
 			ctx, recorder := newRepostTestContext(http.MethodGet, "/api/posts/42/repost", "", &viewerID)
@@ -169,7 +170,7 @@ func TestPostRepostMapsUnavailableAndStoreErrors(t *testing.T) {
 func TestGetPostRepostStatesDeduplicatesAndPreservesRequestOrder(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restorePostRepostControllerMocks(t)
-	loadPostRepostStates = func(userID uint, postIDs []uint) (postRepostStatesLoadResult, error) {
+	loadPostRepostStates = func(_ context.Context, userID uint, postIDs []uint) (postRepostStatesLoadResult, error) {
 		if userID != 11 || !equalUintSlices(postIDs, []uint{7, 8, 9}) {
 			t.Fatalf("loader args user=%d ids=%v", userID, postIDs)
 		}
@@ -217,7 +218,7 @@ func TestGetPostRepostStatesRejectsInvalidRequests(t *testing.T) {
 	} {
 		t.Run(body, func(t *testing.T) {
 			restorePostRepostControllerMocks(t)
-			loadPostRepostStates = func(uint, []uint) (postRepostStatesLoadResult, error) {
+			loadPostRepostStates = func(context.Context, uint, []uint) (postRepostStatesLoadResult, error) {
 				t.Fatal("batch loader should not be called")
 				return postRepostStatesLoadResult{}, nil
 			}

@@ -36,7 +36,7 @@ func TestUploadPostMediaStoresImageAndReturnsURL(t *testing.T) {
 		loadActiveProfileViewer = originalLoader
 		putStoredObject = originalPutStoredObject
 	}()
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 
@@ -108,7 +108,7 @@ func TestUploadPostMediaRejectsUnsupportedFile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalLoader := loadActiveProfileViewer
 	t.Cleanup(func() { loadActiveProfileViewer = originalLoader })
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 
@@ -134,7 +134,7 @@ func TestUploadPostMediaAcceptsOnlySupportedImageBytes(t *testing.T) {
 		loadActiveProfileViewer = originalLoader
 		putStoredObject = originalPut
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 	putStoredObject = func(context.Context, string, io.Reader, int64, string) error { return nil }
@@ -179,7 +179,7 @@ func TestUploadPostMediaReportsStorageUnavailableAndPreservesWriteOrder(t *testi
 		loadActiveProfileViewer = originalLoader
 		putStoredObject = originalPut
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 
@@ -242,7 +242,7 @@ func TestUploadProfileAvatarStoresAllowedFormats(t *testing.T) {
 		putStoredObject = originalPut
 		statProfileAvatarObject = originalStat
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 
@@ -321,7 +321,7 @@ func TestUploadProfileAvatarReusesExactDerivative(t *testing.T) {
 		putStoredObject = originalPut
 		statProfileAvatarObject = originalStat
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 	payload := profileJPEGFixture(t)
@@ -365,7 +365,7 @@ func TestUploadProfileAvatarReportsStorageUnavailable(t *testing.T) {
 		putStoredObject = originalPut
 		statProfileAvatarObject = originalStat
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 	statProfileAvatarObject = func(context.Context, string) (storedObjectInfo, bool, error) {
@@ -395,7 +395,7 @@ func TestUploadProfileAvatarRejectsInvalidInput(t *testing.T) {
 		loadActiveProfileViewer = originalLoader
 		putStoredObject = originalPut
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 	putStoredObject = func(context.Context, string, io.Reader, int64, string) error {
@@ -440,7 +440,7 @@ func TestUploadProfileAvatarRequiresActiveViewer(t *testing.T) {
 	originalLoader := loadActiveProfileViewer
 	t.Cleanup(func() { loadActiveProfileViewer = originalLoader })
 
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		t.Fatal("active lookup should not run without context identity")
 		return models.User{}, nil
 	}
@@ -461,7 +461,7 @@ func TestUploadProfileAvatarRequiresActiveViewer(t *testing.T) {
 		{name: "unexpected lookup failure", err: errors.New("db unavailable"), want: http.StatusInternalServerError},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			loadActiveProfileViewer = func(uint) (models.User, error) {
+			loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 				return models.User{}, testCase.err
 			}
 			recorder := httptest.NewRecorder()

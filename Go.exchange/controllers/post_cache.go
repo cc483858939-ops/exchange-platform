@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -49,17 +50,22 @@ func InvalidatePostDetailCacheByID(id uint) error {
 
 // loadJSONCache 默认使用全局 Redis 的缓存包装函数
 func loadJSONCache[T any](key string, loader func() (T, error)) (T, error) {
+	return loadJSONCacheWithContext(context.Background(), key, loader)
+}
+
+func loadJSONCacheWithContext[T any](ctx context.Context, key string, loader func() (T, error)) (T, error) {
 	if global.RedisDB == nil {
 		return loader()
 	}
-	return loadJSONCacheWithStore(
+	return loadJSONCacheWithStoreContext(
+		ctx,
 		key,
 		postCacheTTL,
 		func(key string) (string, error) {
-			return global.RedisDB.Get(key).Result()
+			return global.RedisDB.WithContext(ctx).Get(key).Result()
 		},
 		func(key string, payload []byte, expiration time.Duration) error {
-			return global.RedisDB.Set(key, payload, expiration).Err()
+			return global.RedisDB.WithContext(ctx).Set(key, payload, expiration).Err()
 		},
 		loader,
 	)
@@ -73,7 +79,24 @@ func loadJSONCacheWithStore[T any](
 	setter cacheSetter,
 	loader func() (T, error),
 ) (T, error) {
+	return loadJSONCacheWithStoreContext(context.Background(), key, expiration, getter, setter, loader)
+}
+
+func loadJSONCacheWithStoreContext[T any](
+	ctx context.Context,
+	key string,
+	expiration time.Duration,
+	getter cacheGetter,
+	setter cacheSetter,
+	loader func() (T, error),
+) (T, error) {
 	var zero T
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 
 	// 1. 第一层检查：直接尝试从缓存获取
 	cachedData, err := getter(key)
@@ -87,7 +110,10 @@ func loadJSONCacheWithStore[T any](
 	}
 
 	// 2. 缓存未命中，进入 Singleflight 控制
-	value, err, _ := postCacheGroup.Do(key, func() (interface{}, error) {
+	resultCh := postCacheGroup.DoChan(key, func() (interface{}, error) {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
 		// 2.1 二次检查：
 		// 当并发请求被 Do 阻塞再被唤醒时，之前的请求可能已经把缓存填上了，
 		// 所以在这里再查一次 Redis，如果命中了直接返回，避免再次打库。
@@ -116,8 +142,15 @@ func loadJSONCacheWithStore[T any](
 		}
 		return result, nil
 	})
-	if err != nil {
-		return zero, err
+	var value interface{}
+	select {
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case result := <-resultCh:
+		if result.Err != nil {
+			return zero, result.Err
+		}
+		value = result.Val
 	}
 
 	// 3. 将 Do 返回的 interface{} 转换为具体类型

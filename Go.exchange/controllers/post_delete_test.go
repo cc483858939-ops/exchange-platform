@@ -1,13 +1,16 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/models"
@@ -42,8 +45,8 @@ func stubPostDeleteDependencies(t *testing.T, transactionErr error) {
 		cleanupDeletedPostLikeState = originalLikes
 	})
 
-	loadPostDeleteViewer = func(uint) error { return nil }
-	deletePostInTransaction = func(uint, uint) (postDeleteResult, error) {
+	loadPostDeleteViewer = func(context.Context, uint) error { return nil }
+	deletePostInTransaction = func(context.Context, uint, uint) (postDeleteResult, error) {
 		return postDeleteResult{}, transactionErr
 	}
 	invalidatePostDeleteDetailCache = func(uint) error { return nil }
@@ -71,7 +74,7 @@ func TestDeletePostRejectsMissingAuthContext(t *testing.T) {
 func TestDeletePostRejectsMissingOrInactiveViewer(t *testing.T) {
 	originalViewer := loadPostDeleteViewer
 	t.Cleanup(func() { loadPostDeleteViewer = originalViewer })
-	loadPostDeleteViewer = func(uint) error { return gorm.ErrRecordNotFound }
+	loadPostDeleteViewer = func(context.Context, uint) error { return gorm.ErrRecordNotFound }
 
 	viewerID := uint(7)
 	ctx, recorder := newPostDeleteContext("42", &viewerID)
@@ -136,7 +139,7 @@ func TestDeletePostInvalidatesDeletedPostAndDirectParent(t *testing.T) {
 	viewerID := uint(7)
 	stubPostDeleteDependencies(t, nil)
 	parentID := uint(9)
-	deletePostInTransaction = func(uint, uint) (postDeleteResult, error) {
+	deletePostInTransaction = func(context.Context, uint, uint) (postDeleteResult, error) {
 		return postDeleteResult{ParentPostID: &parentID}, nil
 	}
 	var invalidated []uint
@@ -284,6 +287,124 @@ func TestDeletePostIntegration(t *testing.T) {
 		t.Fatalf("race successes=%d notFound=%d", successes, notFound)
 	}
 }
+
+func TestDeletePostCancellationRollsBackReplyAndRepostChanges(t *testing.T) {
+	db := openPostDeleteIntegrationDatabase(t)
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
+
+	owner := models.User{Username: "delete-cancel-owner-" + uuid.NewString(), Password: "test"}
+	reposter := models.User{Username: "delete-cancel-reposter-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&[]*models.User{&owner, &reposter}).Error; err != nil {
+		t.Fatal(err)
+	}
+	parent := models.Post{AuthorID: owner.ID, Content: "delete cancellation parent", Visibility: "public", ReplyCount: 1}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := models.Post{AuthorID: owner.ID, Content: "delete cancellation child", Visibility: "public", ReplyToPostID: &parent.ID, ConversationID: &parent.ID}
+	if err := db.Create(&child).Error; err != nil {
+		t.Fatal(err)
+	}
+	repost := models.PostRepost{UserID: reposter.ID, PostID: child.ID}
+	if err := db.Create(&repost).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("post_id IN ?", []uint{parent.ID, child.ID}).Delete(&models.PostRepost{})
+		db.Unscoped().Where("id IN ?", []uint{parent.ID, child.ID}).Delete(&models.Post{})
+		db.Unscoped().Where("id IN ?", []uint{owner.ID, reposter.ID}).Delete(&models.User{})
+	})
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	sequenceName := "post_delete_cancel_signal_" + suffix
+	functionName := "post_delete_cancel_delay_" + suffix
+	triggerName := "post_delete_cancel_trigger_" + suffix
+	if err := db.Exec("CREATE SEQUENCE " + sequenceName).Error; err != nil {
+		t.Fatalf("create trigger signal sequence: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Exec("DROP TRIGGER IF EXISTS " + triggerName + " ON posts").Error
+		_ = db.Exec("DROP FUNCTION IF EXISTS " + functionName + "()").Error
+		_ = db.Exec("DROP SEQUENCE IF EXISTS " + sequenceName).Error
+	})
+	functionSQL := "CREATE FUNCTION " + functionName + `() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
+    PERFORM nextval('` + sequenceName + `');
+    PERFORM pg_sleep(8);
+  END IF;
+  RETURN NEW;
+END;
+$$`
+	if err := db.Exec(functionSQL).Error; err != nil {
+		t.Fatalf("create soft-delete delay trigger function: %v", err)
+	}
+	if err := db.Exec("CREATE TRIGGER " + triggerName + " BEFORE UPDATE ON posts FOR EACH ROW EXECUTE FUNCTION " + functionName + "()").Error; err != nil {
+		t.Fatalf("create soft-delete delay trigger: %v", err)
+	}
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := deletePostInTransactionFromDB(requestContext, child.ID, owner.ID)
+		result <- err
+	}()
+
+	signalDeadline := time.Now().Add(5 * time.Second)
+	triggerEntered := false
+	for time.Now().Before(signalDeadline) {
+		var isCalled bool
+		if err := db.Raw("SELECT is_called FROM " + sequenceName).Scan(&isCalled).Error; err != nil {
+			cancel()
+			t.Fatalf("observe soft-delete trigger: %v", err)
+		}
+		if isCalled {
+			triggerEntered = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !triggerEntered {
+		cancel()
+		t.Fatal("delete transaction did not reach the soft-delete trigger")
+	}
+	cancel()
+
+	var deleteErr error
+	select {
+	case deleteErr = <-result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled delete transaction did not return promptly")
+	}
+	if deleteErr == nil || (!errors.Is(deleteErr, context.Canceled) && !isPostgresTimeoutError(deleteErr)) {
+		t.Fatalf("delete error=%v, want context cancellation or PostgreSQL query cancellation", deleteErr)
+	}
+
+	var storedChild models.Post
+	if err := db.Unscoped().First(&storedChild, child.ID).Error; err != nil {
+		t.Fatalf("reload child after rollback: %v", err)
+	}
+	if storedChild.DeletedAt.Valid {
+		t.Fatal("child post was deleted despite transaction cancellation")
+	}
+	var storedParent models.Post
+	if err := db.First(&storedParent, parent.ID).Error; err != nil {
+		t.Fatalf("reload parent after rollback: %v", err)
+	}
+	if storedParent.ReplyCount != 1 {
+		t.Fatalf("parent reply_count=%d after rollback, want 1", storedParent.ReplyCount)
+	}
+	var repostCount int64
+	if err := db.Model(&models.PostRepost{}).Where("post_id = ? AND user_id = ?", child.ID, reposter.ID).Count(&repostCount).Error; err != nil {
+		t.Fatalf("count repost after rollback: %v", err)
+	}
+	if repostCount != 1 {
+		t.Fatalf("repost rows=%d after rollback, want 1", repostCount)
+	}
+}
+
 func strconvPostID(id uint) string {
 	return strconv.FormatUint(uint64(id), 10)
 }

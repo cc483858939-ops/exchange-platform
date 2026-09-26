@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -54,7 +55,7 @@ func restorePostBookmarkControllerMocks(t *testing.T) {
 func TestGetPostBookmarkStatesDeduplicatesAndPreservesRequestOrder(t *testing.T) {
 	viewerID := uint(17)
 	restorePostBookmarkControllerMocks(t)
-	loadPostBookmarkStates = func(id uint, postIDs []uint) (postBookmarkStatesLoadResult, error) {
+	loadPostBookmarkStates = func(_ context.Context, id uint, postIDs []uint) (postBookmarkStatesLoadResult, error) {
 		if id != viewerID {
 			t.Fatalf("viewer id=%d", id)
 		}
@@ -88,7 +89,7 @@ func TestGetPostBookmarkStatesDeduplicatesAndPreservesRequestOrder(t *testing.T)
 
 func TestGetPostBookmarkStatesRejectsInvalidRequests(t *testing.T) {
 	restorePostBookmarkControllerMocks(t)
-	loadPostBookmarkStates = func(uint, []uint) (postBookmarkStatesLoadResult, error) {
+	loadPostBookmarkStates = func(context.Context, uint, []uint) (postBookmarkStatesLoadResult, error) {
 		t.Fatal("bookmark state loader should not be called")
 		return postBookmarkStatesLoadResult{}, nil
 	}
@@ -124,7 +125,7 @@ func TestPostBookmarkMutationsAreIdempotentAtTheHandlerBoundary(t *testing.T) {
 	viewerID := uint(17)
 	restorePostBookmarkControllerMocks(t)
 	var calls []bool
-	mutatePostBookmark = func(userID, postID uint, bookmarked bool) (postBookmarkMutationResult, error) {
+	mutatePostBookmark = func(_ context.Context, userID, postID uint, bookmarked bool) (postBookmarkMutationResult, error) {
 		if userID != viewerID || postID != 42 {
 			t.Fatalf("mutation args user=%d post=%d", userID, postID)
 		}
@@ -149,7 +150,7 @@ func TestPostBookmarkMutationsAreIdempotentAtTheHandlerBoundary(t *testing.T) {
 
 func TestPostBookmarkMutationErrorsAndInvalidIDs(t *testing.T) {
 	restorePostBookmarkControllerMocks(t)
-	mutatePostBookmark = func(uint, uint, bool) (postBookmarkMutationResult, error) {
+	mutatePostBookmark = func(context.Context, uint, uint, bool) (postBookmarkMutationResult, error) {
 		return postBookmarkMutationResult{}, errPostBookmarkUnavailable
 	}
 	ctx, recorder := newPostBookmarkMutationTestContext(http.MethodPut, "/api/posts/42/bookmark", uint(17))
@@ -158,7 +159,7 @@ func TestPostBookmarkMutationErrorsAndInvalidIDs(t *testing.T) {
 		t.Fatalf("unavailable status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	mutatePostBookmark = func(uint, uint, bool) (postBookmarkMutationResult, error) {
+	mutatePostBookmark = func(context.Context, uint, uint, bool) (postBookmarkMutationResult, error) {
 		return postBookmarkMutationResult{}, errors.New("storage unavailable")
 	}
 	ctx, recorder = newPostBookmarkMutationTestContext(http.MethodPut, "/api/posts/42/bookmark", uint(17))
@@ -180,14 +181,14 @@ func TestGetMyBookmarksCanonicalResponseAndLimits(t *testing.T) {
 	restorePostBookmarkControllerMocks(t)
 	originalActive := loadActiveProfileViewer
 	t.Cleanup(func() { loadActiveProfileViewer = originalActive })
-	loadActiveProfileViewer = func(id uint) (models.User, error) {
+	loadActiveProfileViewer = func(_ context.Context, id uint) (models.User, error) {
 		if id != viewerID {
 			t.Fatalf("active viewer id=%d", id)
 		}
 		return models.User{}, nil
 	}
 	var limits []int
-	loadPostBookmarkHistoryPage = func(id uint, limit int, cursor *bookmarkHistoryCursor) (postPageResponse, error) {
+	loadPostBookmarkHistoryPage = func(_ context.Context, id uint, limit int, cursor *bookmarkHistoryCursor) (postPageResponse, error) {
 		if id != viewerID || cursor != nil {
 			t.Fatalf("loader args id=%d limit=%d cursor=%v", id, limit, cursor)
 		}
@@ -240,7 +241,7 @@ func TestGetMyBookmarksAuthenticationAndLoaderErrors(t *testing.T) {
 	restorePostBookmarkControllerMocks(t)
 	originalActive := loadActiveProfileViewer
 	t.Cleanup(func() { loadActiveProfileViewer = originalActive })
-	loadPostBookmarkHistoryPage = func(uint, int, *bookmarkHistoryCursor) (postPageResponse, error) {
+	loadPostBookmarkHistoryPage = func(context.Context, uint, int, *bookmarkHistoryCursor) (postPageResponse, error) {
 		t.Fatal("bookmark history loader should not be called")
 		return postPageResponse{}, nil
 	}
@@ -251,15 +252,17 @@ func TestGetMyBookmarksAuthenticationAndLoaderErrors(t *testing.T) {
 	}
 
 	viewerID := uint(17)
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
 	ctx, recorder = newLikedHistoryTestContext("/api/me/bookmarks", viewerID)
 	GetMyBookmarks(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("inactive viewer status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	loadActiveProfileViewer = func(id uint) (models.User, error) { return models.User{Model: gorm.Model{ID: id}}, nil }
-	loadPostBookmarkHistoryPage = func(uint, int, *bookmarkHistoryCursor) (postPageResponse, error) {
+	loadActiveProfileViewer = func(_ context.Context, id uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: id}}, nil
+	}
+	loadPostBookmarkHistoryPage = func(context.Context, uint, int, *bookmarkHistoryCursor) (postPageResponse, error) {
 		return postPageResponse{}, errors.New("query failed")
 	}
 	ctx, recorder = newLikedHistoryTestContext("/api/me/bookmarks", viewerID)

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -25,14 +26,17 @@ func GetUserTimeline(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := loadUserTimelineUser(id); err != nil {
+	if err := loadUserTimelineUser(ctx.Request.Context(), id); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		writeUserAPIError(ctx, err)
 		return
 	}
 
-	response, err := loadUserTimelinePage(id, limit, cursor)
+	response, err := loadUserTimelinePage(ctx.Request.Context(), id, limit, cursor)
 	if err != nil {
-		writePostTimelineStoreError(ctx)
+		writePostTimelineStoreError(ctx, err)
 		return
 	}
 	if response.Items == nil {
@@ -41,13 +45,14 @@ func GetUserTimeline(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
-func loadUserTimelinePageFromDB(userID uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
+func loadUserTimelinePageFromDB(ctx context.Context, userID uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
 	if global.Db == nil {
 		return timelinePageResponse{}, errors.New("database is not initialized")
 	}
 	if limit <= 0 {
 		return timelinePageResponse{}, errors.New("invalid limit")
 	}
+	db := global.Db.WithContext(ctx)
 
 	now := time.Now().UTC()
 	query := `
@@ -107,7 +112,7 @@ LIMIT ?
 	args = append(args, limit+1)
 
 	var rows []timelineActivityQueryRow
-	if err := global.Db.Raw(query, args...).Scan(&rows).Error; err != nil {
+	if err := db.Raw(query, args...).Scan(&rows).Error; err != nil {
 		return timelinePageResponse{}, err
 	}
 
@@ -129,7 +134,7 @@ LIMIT ?
 	postsByID := make(map[uint]postResponse, len(postIDs))
 	if len(postIDs) > 0 {
 		postResponses, err := loadPostResponses(publicPostScope(
-			global.Db.Model(&models.Post{}).
+			db.Model(&models.Post{}).
 				Select(publicPostSelectColumns).
 				Where("posts.id IN ?", postIDs),
 			now,
@@ -141,7 +146,7 @@ LIMIT ?
 			postsByID[post.ID] = post
 		}
 	}
-	actorsByID, err := loadPublicAuthorsByIDs(actorIDs)
+	actorsByID, err := loadPublicAuthorsByIDs(ctx, actorIDs)
 	if err != nil {
 		return timelinePageResponse{}, err
 	}

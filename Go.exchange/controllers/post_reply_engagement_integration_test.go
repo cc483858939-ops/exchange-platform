@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -70,7 +71,7 @@ func TestReplyCountTransactionRollbackIntegration(t *testing.T) {
 		return nil
 	}
 	initializeCalls := 0
-	initializePostLikeState = func(uint) error {
+	initializePostLikeState = func(context.Context, uint) error {
 		initializeCalls++
 		return nil
 	}
@@ -283,7 +284,7 @@ func TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration(t *test
 	fixture := newReplyIntegrationFixture(t, db)
 	redisClient := openPostLikeIntegrationRedis(t)
 
-	initial, err := loadPostDetail(strconvUint(fixture.Article.ID))
+	initial, err := loadPostDetail(context.Background(), strconvUint(fixture.Article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,14 +311,14 @@ func TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration(t *test
 		}
 	})
 
-	reloaded, err := loadPostDetail(strconvUint(fixture.Article.ID))
+	reloaded, err := loadPostDetail(context.Background(), strconvUint(fixture.Article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reloaded.ReplyCount != 1 {
 		t.Fatalf("reloaded reply count=%d want 1", reloaded.ReplyCount)
 	}
-	cachedCountOne, err := loadPostDetail(strconvUint(fixture.Article.ID))
+	cachedCountOne, err := loadPostDetail(context.Background(), strconvUint(fixture.Article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,14 +334,14 @@ func TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration(t *test
 		t.Fatalf("delete status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
 	}
 
-	reloadedAfterDelete, err := loadPostDetail(strconvUint(fixture.Article.ID))
+	reloadedAfterDelete, err := loadPostDetail(context.Background(), strconvUint(fixture.Article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reloadedAfterDelete.ReplyCount != 0 {
 		t.Fatalf("reloaded reply count after delete=%d want 0", reloadedAfterDelete.ReplyCount)
 	}
-	cachedCountZero, err := loadPostDetail(strconvUint(fixture.Article.ID))
+	cachedCountZero, err := loadPostDetail(context.Background(), strconvUint(fixture.Article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}

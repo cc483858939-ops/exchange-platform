@@ -408,6 +408,24 @@ func ExchangeRateRequestTimeout() time.Duration {
 	return envDuration("EXCHANGE_RATE_REQUEST_TIMEOUT", 8*time.Second)
 }
 
+// APIRequestTimeout bounds ordinary HTTP API work. Specialized upload routes
+// use APIUploadRequestTimeout so larger media requests keep their own budget.
+func APIRequestTimeout() time.Duration {
+	return envDuration("API_REQUEST_TIMEOUT", 12*time.Second)
+}
+
+func APIUploadRequestTimeout() time.Duration {
+	return envDuration("API_UPLOAD_REQUEST_TIMEOUT", 55*time.Second)
+}
+
+func DBStatementTimeout() time.Duration {
+	return envDuration("DB_STATEMENT_TIMEOUT", 8*time.Second)
+}
+
+func DBLockTimeout() time.Duration {
+	return envDuration("DB_LOCK_TIMEOUT", 2*time.Second)
+}
+
 func envDuration(key string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

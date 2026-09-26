@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -68,7 +69,7 @@ func mutatePostBookmarkRequest(ctx *gin.Context, bookmarked bool) {
 		return
 	}
 
-	result, err := mutatePostBookmark(userID, postID, bookmarked)
+	result, err := mutatePostBookmark(ctx.Request.Context(), userID, postID, bookmarked)
 	if err != nil {
 		writePostBookmarkError(ctx, err)
 		return
@@ -106,7 +107,7 @@ func GetPostBookmarkStates(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	result, err := loadPostBookmarkStates(userID, uniqueIDs)
+	result, err := loadPostBookmarkStates(ctx.Request.Context(), userID, uniqueIDs)
 	if err != nil {
 		writePostBookmarkError(ctx, err)
 		return
@@ -138,6 +139,9 @@ func GetPostBookmarkStates(ctx *gin.Context) {
 }
 
 func writePostBookmarkError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	if errors.Is(err, errPostBookmarkUnavailable) ||
 		errors.Is(err, errPostRepostNotFound) ||
 		errors.Is(err, gorm.ErrRecordNotFound) {
@@ -147,19 +151,20 @@ func writePostBookmarkError(ctx *gin.Context, err error) {
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 
-func mutatePostBookmarkFromDB(userID, postID uint, bookmarked bool) (postBookmarkMutationResult, error) {
+func mutatePostBookmarkFromDB(ctx context.Context, userID, postID uint, bookmarked bool) (postBookmarkMutationResult, error) {
 	if global.Db == nil {
 		return postBookmarkMutationResult{}, errors.New("database is not initialized")
 	}
+	db := global.Db.WithContext(ctx)
 	if userID == 0 || postID == 0 {
 		return postBookmarkMutationResult{}, errPostBookmarkUnavailable
 	}
 
 	if bookmarked {
-		if err := requirePublicPost(global.Db, postID, time.Now().UTC()); err != nil {
+		if err := requirePublicPost(db, postID, time.Now().UTC()); err != nil {
 			return postBookmarkMutationResult{}, err
 		}
-		if err := global.Db.Clauses(clause.OnConflict{
+		if err := db.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "user_id"}, {Name: "post_id"}},
 			DoNothing: true,
 		}).Create(&models.PostBookmark{UserID: userID, PostID: postID}).Error; err != nil {
@@ -168,14 +173,14 @@ func mutatePostBookmarkFromDB(userID, postID uint, bookmarked bool) (postBookmar
 		return postBookmarkMutationResult{PostID: postID, Bookmarked: true}, nil
 	}
 
-	if err := global.Db.Where("user_id = ? AND post_id = ?", userID, postID).
+	if err := db.Where("user_id = ? AND post_id = ?", userID, postID).
 		Delete(&models.PostBookmark{}).Error; err != nil {
 		return postBookmarkMutationResult{}, err
 	}
 	return postBookmarkMutationResult{PostID: postID, Bookmarked: false}, nil
 }
 
-func loadPostBookmarkStatesFromDB(userID uint, postIDs []uint) (postBookmarkStatesLoadResult, error) {
+func loadPostBookmarkStatesFromDB(ctx context.Context, userID uint, postIDs []uint) (postBookmarkStatesLoadResult, error) {
 	result := postBookmarkStatesLoadResult{
 		States:      make(map[uint]postBookmarkStateResult, len(postIDs)),
 		Unavailable: make([]uint, 0),
@@ -183,6 +188,7 @@ func loadPostBookmarkStatesFromDB(userID uint, postIDs []uint) (postBookmarkStat
 	if global.Db == nil {
 		return result, errors.New("database is not initialized")
 	}
+	db := global.Db.WithContext(ctx)
 	if userID == 0 {
 		return result, errors.New("invalid bookmark viewer")
 	}
@@ -192,7 +198,7 @@ func loadPostBookmarkStatesFromDB(userID uint, postIDs []uint) (postBookmarkStat
 
 	now := time.Now().UTC()
 	var availableIDs []uint
-	if err := publicPostScope(global.Db.Model(&models.Post{}), now).
+	if err := publicPostScope(db.Model(&models.Post{}), now).
 		Where("posts.id IN ?", postIDs).
 		Pluck("posts.id", &availableIDs).Error; err != nil {
 		return postBookmarkStatesLoadResult{}, err
@@ -205,7 +211,7 @@ func loadPostBookmarkStatesFromDB(userID uint, postIDs []uint) (postBookmarkStat
 
 	if len(availableIDs) > 0 {
 		var bookmarkedIDs []uint
-		if err := global.Db.Model(&models.PostBookmark{}).
+		if err := db.Model(&models.PostBookmark{}).
 			Where("user_id = ? AND post_id IN ?", userID, availableIDs).
 			Pluck("post_id", &bookmarkedIDs).Error; err != nil {
 			return postBookmarkStatesLoadResult{}, err
@@ -225,7 +231,7 @@ func loadPostBookmarkStatesFromDB(userID uint, postIDs []uint) (postBookmarkStat
 	return result, nil
 }
 
-func loadPostBookmarkHistoryPageFromDB(viewerID uint, limit int, cursor *bookmarkHistoryCursor) (postPageResponse, error) {
+func loadPostBookmarkHistoryPageFromDB(ctx context.Context, viewerID uint, limit int, cursor *bookmarkHistoryCursor) (postPageResponse, error) {
 	if global.Db == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
 	}
@@ -234,7 +240,7 @@ func loadPostBookmarkHistoryPageFromDB(viewerID uint, limit int, cursor *bookmar
 	}
 
 	var response postPageResponse
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").Error; err != nil {
 			return err
 		}
@@ -330,9 +336,9 @@ func GetMyBookmarks(ctx *gin.Context) {
 		writeBookmarkHistoryQueryError(ctx, err)
 		return
 	}
-	response, err := loadPostBookmarkHistoryPage(viewerID, limit, cursor)
+	response, err := loadPostBookmarkHistoryPage(ctx.Request.Context(), viewerID, limit, cursor)
 	if err != nil {
-		writePostTimelineStoreError(ctx)
+		writePostTimelineStoreError(ctx, err)
 		return
 	}
 	if response.Items == nil {

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +38,7 @@ func TestSelectedRecommendationResponsesPropagatesReferenceHydrationError(t *tes
 	t.Cleanup(func() { global.Db = previousDB })
 
 	quoteID := uint(99)
-	_, err := selectedRecommendationResponses([]selectedRecommendation{{
+	_, err := selectedRecommendationResponses(context.Background(), []selectedRecommendation{{
 		Post: models.Post{
 			Model:       gorm.Model{ID: 1},
 			AuthorID:    7,
@@ -55,7 +56,7 @@ func TestGetPostByIDReturnsServerErrorForReferenceHydrationFailure(t *testing.T)
 	previousDB := global.Db
 	previousCache := loadPostDetailCache
 	global.Db = nil
-	loadPostDetailCache = func(string, func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
 		quoteID := uint(99)
 		publishedAt := time.Now().UTC()
 		return postResponse{
@@ -72,6 +73,7 @@ func TestGetPostByIDReturnsServerErrorForReferenceHydrationFailure(t *testing.T)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/posts/1", nil)
 	ctx.Params = gin.Params{{Key: "id", Value: "1"}}
 	GetPostByID(ctx)
 
@@ -85,10 +87,10 @@ func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) 
 	previousAuthorLoader := loadPostAuthorForCreate
 	previousPersist := persistPostGraphFn
 	global.Db = nil
-	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
+	loadPostAuthorForCreate = func(_ context.Context, id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "author"}, nil
 	}
-	persistPostGraphFn = func(post *models.Post, userID uint, content string, _ createPostRequest, _ []validatedPostMedia, now time.Time) error {
+	persistPostGraphFn = func(_ context.Context, post *models.Post, userID uint, content string, _ createPostRequest, _ []validatedPostMedia, now time.Time) error {
 		quoteID := uint(99)
 		*post = models.Post{
 			Model:       gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},

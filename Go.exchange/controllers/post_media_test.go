@@ -242,7 +242,7 @@ func TestPersistPostGraphRollsBackPostWhenMediaInsertFailsIntegration(t *testing
 	t.Cleanup(func() { global.Db = previousDB })
 	var post models.Post
 	media := []validatedPostMedia{{MediaType: "image", PublicURL: "/api/files/post-media/users/v1/1/550e8400-e29b-41d4-a716-446655440000/medium.jpg", LargeURL: "/api/files/post-media/users/v1/1/550e8400-e29b-41d4-a716-446655440000/large.jpg", Width: 1200, Height: 800, MediumObjectKey: "post-media/users/v1/1/550e8400-e29b-41d4-a716-446655440000/medium.jpg"}}
-	err := persistPostGraph(&post, fixture.Author.ID, "atomic media failure", createPostRequest{Content: "atomic media failure"}, media, time.Now().UTC())
+	err := persistPostGraph(context.Background(), &post, fixture.Author.ID, "atomic media failure", createPostRequest{Content: "atomic media failure"}, media, time.Now().UTC())
 	if err == nil {
 		t.Fatal("persist unexpectedly succeeded")
 	}

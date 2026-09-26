@@ -88,6 +88,9 @@ func (c *AuthController) Register(ctx *gin.Context) {
 	}
 	user := models.User{Username: request.Username, Password: hashedPassword}
 	if err := c.db.WithContext(ctx.Request.Context()).Create(&user).Error; err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		writeAuthError(ctx, http.StatusConflict, "AUTH_USERNAME_UNAVAILABLE", "Username is unavailable")
 		return
 	}
@@ -116,6 +119,9 @@ func (c *AuthController) Login(ctx *gin.Context) {
 
 	var user models.User
 	if err := c.db.WithContext(ctx.Request.Context()).Where("username = ?", request.Username).First(&user).Error; err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_CREDENTIALS_INVALID", "Invalid username or password")
 			return
@@ -167,6 +173,9 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 
 	var user models.User
 	if err := c.db.WithContext(ctx.Request.Context()).Select("id", "username", "display_name", "avatar_url").First(&user, pair.UserID).Error; err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
 		return
 	}

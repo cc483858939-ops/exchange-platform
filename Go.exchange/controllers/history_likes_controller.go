@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -32,9 +33,9 @@ func GetMyLikedHistory(ctx *gin.Context) {
 		return
 	}
 
-	response, err := loadLikedHistoryPage(viewerID, limit, cursor)
+	response, err := loadLikedHistoryPage(ctx.Request.Context(), viewerID, limit, cursor)
 	if err != nil {
-		writePostTimelineStoreError(ctx)
+		writePostTimelineStoreError(ctx, err)
 		return
 	}
 	if response.Items == nil {
@@ -43,7 +44,7 @@ func GetMyLikedHistory(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
-func loadLikedHistoryPageFromDB(viewerID uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
+func loadLikedHistoryPageFromDB(ctx context.Context, viewerID uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
 	if global.Db == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
 	}
@@ -52,7 +53,7 @@ func loadLikedHistoryPageFromDB(viewerID uint, limit int, cursor *likedHistoryCu
 	}
 
 	var response postPageResponse
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").Error; err != nil {
 			return err
 		}

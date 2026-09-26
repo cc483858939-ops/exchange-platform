@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -20,7 +21,7 @@ func TestGetUserTimelineUsesGenericPaginationAndActiveUserLookup(t *testing.T) {
 
 	const userID = uint(7)
 	userLoaderCalled := false
-	loadUserTimelineUser = func(id uint) error {
+	loadUserTimelineUser = func(_ context.Context, id uint) error {
 		userLoaderCalled = true
 		if id != userID {
 			t.Fatalf("profile id=%d", id)
@@ -32,7 +33,7 @@ func TestGetUserTimelineUsesGenericPaginationAndActiveUserLookup(t *testing.T) {
 		ActivityType: string(timelineActivityRepost),
 		SourceID:     42,
 	}
-	loadUserTimelinePage = func(id uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
+	loadUserTimelinePage = func(_ context.Context, id uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
 		if id != userID || limit != 5 || cursor == nil || !cursor.ActivityAt.Equal(wantCursor.ActivityAt) || cursor.ActivityType != wantCursor.ActivityType || cursor.SourceID != wantCursor.SourceID {
 			t.Fatalf("loader args id=%d limit=%d cursor=%#v", id, limit, cursor)
 		}
@@ -60,10 +61,10 @@ func TestGetUserTimelineRejectsInvalidIDCursorAndMissingUser(t *testing.T) {
 		loadUserTimelineUser = originalUserLoader
 		loadUserTimelinePage = originalTimelineLoader
 	})
-	loadUserTimelineUser = func(uint) error {
+	loadUserTimelineUser = func(context.Context, uint) error {
 		return errors.New("profile loader should not be called")
 	}
-	loadUserTimelinePage = func(uint, int, *timelineCursor) (timelinePageResponse, error) {
+	loadUserTimelinePage = func(context.Context, uint, int, *timelineCursor) (timelinePageResponse, error) {
 		t.Fatal("timeline loader should not be called")
 		return timelinePageResponse{}, nil
 	}
@@ -83,7 +84,7 @@ func TestGetUserTimelineRejectsInvalidIDCursorAndMissingUser(t *testing.T) {
 		}
 	}
 
-	loadUserTimelineUser = func(uint) error {
+	loadUserTimelineUser = func(context.Context, uint) error {
 		return gorm.ErrRecordNotFound
 	}
 	ctx, recorder := newUserControllerContext("/api/users/7/timeline", "7")

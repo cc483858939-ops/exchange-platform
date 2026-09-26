@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -50,13 +51,13 @@ func TestGetUserFollowStateReturnsCanonicalJSON(t *testing.T) {
 		loadActiveFollowUser = originalLoadUser
 		loadFollowState = originalLoadState
 	})
-	loadActiveFollowUser = func(id uint) error {
+	loadActiveFollowUser = func(_ context.Context, id uint) error {
 		if id != viewerID && id != 42 {
 			t.Fatalf("unexpected user id=%d", id)
 		}
 		return nil
 	}
-	loadFollowState = func(viewer, target uint) (userFollowState, error) {
+	loadFollowState = func(_ context.Context, viewer, target uint) (userFollowState, error) {
 		if viewer != viewerID || target != 42 {
 			t.Fatalf("unexpected state ids viewer=%d target=%d", viewer, target)
 		}
@@ -86,8 +87,8 @@ func TestFollowUserUsesAuthenticatedViewerAndReturnsState(t *testing.T) {
 		loadActiveFollowUser = originalLoadUser
 		followAndLoadState = originalFollow
 	})
-	loadActiveFollowUser = func(uint) error { return nil }
-	followAndLoadState = func(viewer, target uint) (userFollowState, error) {
+	loadActiveFollowUser = func(context.Context, uint) error { return nil }
+	followAndLoadState = func(_ context.Context, viewer, target uint) (userFollowState, error) {
 		gotViewerID, gotTargetID = viewer, target
 		return userFollowState{Following: true, FollowerCount: 1, FollowingCount: 3}, nil
 	}
@@ -119,8 +120,8 @@ func TestUnfollowUserReturnsState(t *testing.T) {
 		loadActiveFollowUser = originalLoadUser
 		unfollowAndLoadState = originalUnfollow
 	})
-	loadActiveFollowUser = func(uint) error { return nil }
-	unfollowAndLoadState = func(viewer, target uint) (userFollowState, error) {
+	loadActiveFollowUser = func(context.Context, uint) error { return nil }
+	unfollowAndLoadState = func(_ context.Context, viewer, target uint) (userFollowState, error) {
 		if viewer != viewerID || target != 42 {
 			t.Fatalf("unexpected mutation ids viewer=%d target=%d", viewer, target)
 		}
@@ -160,7 +161,7 @@ func TestFollowControllerMapsMissingViewerAndTarget(t *testing.T) {
 	originalLoadUser := loadActiveFollowUser
 	t.Cleanup(func() { loadActiveFollowUser = originalLoadUser })
 
-	loadActiveFollowUser = func(id uint) error {
+	loadActiveFollowUser = func(_ context.Context, id uint) error {
 		if id == viewerID {
 			return gorm.ErrRecordNotFound
 		}
@@ -172,7 +173,7 @@ func TestFollowControllerMapsMissingViewerAndTarget(t *testing.T) {
 		t.Fatalf("missing viewer status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	loadActiveFollowUser = func(id uint) error {
+	loadActiveFollowUser = func(_ context.Context, id uint) error {
 		if id == 42 {
 			return gorm.ErrRecordNotFound
 		}
@@ -195,12 +196,12 @@ func TestFollowControllerRejectsSelfMutations(t *testing.T) {
 		followAndLoadState = originalFollow
 		unfollowAndLoadState = originalUnfollow
 	})
-	loadActiveFollowUser = func(uint) error { return nil }
-	followAndLoadState = func(uint, uint) (userFollowState, error) {
+	loadActiveFollowUser = func(context.Context, uint) error { return nil }
+	followAndLoadState = func(context.Context, uint, uint) (userFollowState, error) {
 		t.Fatal("self follow must not mutate")
 		return userFollowState{}, nil
 	}
-	unfollowAndLoadState = func(uint, uint) (userFollowState, error) {
+	unfollowAndLoadState = func(context.Context, uint, uint) (userFollowState, error) {
 		t.Fatal("self unfollow must not mutate")
 		return userFollowState{}, nil
 	}
@@ -226,8 +227,8 @@ func TestFollowControllerMapsDatastoreFailureToGeneric500(t *testing.T) {
 		loadActiveFollowUser = originalLoadUser
 		loadFollowState = originalLoadState
 	})
-	loadActiveFollowUser = func(uint) error { return nil }
-	loadFollowState = func(uint, uint) (userFollowState, error) {
+	loadActiveFollowUser = func(context.Context, uint) error { return nil }
+	loadFollowState = func(context.Context, uint, uint) (userFollowState, error) {
 		return userFollowState{}, errors.New("database exploded")
 	}
 
@@ -261,7 +262,7 @@ func TestGetUserConnectionListsForwardArgumentsAndSerializePage(t *testing.T) {
 		loadActiveFollowUser = originalLoadUser
 		loadUserConnections = originalLoadConnections
 	})
-	loadActiveFollowUser = func(uint) error { return nil }
+	loadActiveFollowUser = func(context.Context, uint) error { return nil }
 
 	for _, testCase := range []struct {
 		name    string
@@ -272,7 +273,7 @@ func TestGetUserConnectionListsForwardArgumentsAndSerializePage(t *testing.T) {
 		{name: "following", kind: followConnectionFollowing, handler: GetUserFollowing},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			loadUserConnections = func(viewer, target uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
+			loadUserConnections = func(_ context.Context, viewer, target uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
 				if viewer != viewerID || target != 42 || kind != testCase.kind || limit != defaultFollowListLimit || offset != 0 {
 					t.Fatalf("loader args viewer=%d target=%d kind=%d limit=%d offset=%d", viewer, target, kind, limit, offset)
 				}
@@ -308,8 +309,8 @@ func TestGetUserConnectionsPaginationAndEmptyItems(t *testing.T) {
 		loadActiveFollowUser = originalLoadUser
 		loadUserConnections = originalLoadConnections
 	})
-	loadActiveFollowUser = func(uint) error { return nil }
-	loadUserConnections = func(viewer, target uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
+	loadActiveFollowUser = func(context.Context, uint) error { return nil }
+	loadUserConnections = func(_ context.Context, viewer, target uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
 		if viewer != viewerID || target != viewerID || kind != followConnectionFollowing || limit != maxFollowListLimit || offset != 13 {
 			t.Fatalf("loader args viewer=%d target=%d kind=%d limit=%d offset=%d", viewer, target, kind, limit, offset)
 		}
@@ -337,10 +338,10 @@ func TestGetUserConnectionsMapsParticipantsAndStoreFailure(t *testing.T) {
 		loadActiveFollowUser = originalLoadUser
 		loadUserConnections = originalLoadConnections
 	})
-	loadUserConnections = func(uint, uint, followConnectionKind, int, int) (userConnectionPageResponse, error) {
+	loadUserConnections = func(context.Context, uint, uint, followConnectionKind, int, int) (userConnectionPageResponse, error) {
 		return userConnectionPageResponse{}, errors.New("database exploded")
 	}
-	loadActiveFollowUser = func(id uint) error {
+	loadActiveFollowUser = func(_ context.Context, id uint) error {
 		if id == viewerID {
 			return gorm.ErrRecordNotFound
 		}
@@ -351,7 +352,7 @@ func TestGetUserConnectionsMapsParticipantsAndStoreFailure(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("missing viewer status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	loadActiveFollowUser = func(id uint) error {
+	loadActiveFollowUser = func(_ context.Context, id uint) error {
 		if id == 42 {
 			return gorm.ErrRecordNotFound
 		}
@@ -362,7 +363,7 @@ func TestGetUserConnectionsMapsParticipantsAndStoreFailure(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("missing target status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	loadActiveFollowUser = func(uint) error { return nil }
+	loadActiveFollowUser = func(context.Context, uint) error { return nil }
 	ctx, recorder = newFollowListControllerContext("42", &viewerID, "")
 	GetUserFollowers(ctx)
 	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "database exploded") {

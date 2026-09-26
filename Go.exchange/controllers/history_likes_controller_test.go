@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -35,14 +36,14 @@ func TestGetMyLikedHistoryCanonicalResponseAndLimits(t *testing.T) {
 		loadLikedHistoryPage = originalLoader
 	})
 
-	loadActiveProfileViewer = func(id uint) (models.User, error) {
+	loadActiveProfileViewer = func(_ context.Context, id uint) (models.User, error) {
 		if id != viewerID {
 			t.Fatalf("active viewer id=%d", id)
 		}
 		return models.User{}, nil
 	}
 	var limits []int
-	loadLikedHistoryPage = func(id uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
+	loadLikedHistoryPage = func(_ context.Context, id uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
 		if id != viewerID || cursor != nil {
 			t.Fatalf("loader args id=%d limit=%d cursor=%v", id, limit, cursor)
 		}
@@ -74,8 +75,8 @@ func TestGetMyLikedHistoryRejectsInvalidLimitAndCursor(t *testing.T) {
 		loadActiveProfileViewer = originalActive
 		loadLikedHistoryPage = originalLoader
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, nil }
-	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (postPageResponse, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{}, nil }
+	loadLikedHistoryPage = func(context.Context, uint, int, *likedHistoryCursor) (postPageResponse, error) {
 		t.Fatal("liked history loader should not be called")
 		return postPageResponse{}, nil
 	}
@@ -122,12 +123,12 @@ func TestGetMyLikedHistoryAuthenticationAndLoaderErrors(t *testing.T) {
 		loadActiveProfileViewer = originalActive
 		loadLikedHistoryPage = originalLoader
 	})
-	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (postPageResponse, error) {
+	loadLikedHistoryPage = func(context.Context, uint, int, *likedHistoryCursor) (postPageResponse, error) {
 		t.Fatal("liked history loader should not be called")
 		return postPageResponse{}, nil
 	}
 
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		t.Fatal("active lookup should not run without viewer identity")
 		return models.User{}, nil
 	}
@@ -138,22 +139,26 @@ func TestGetMyLikedHistoryAuthenticationAndLoaderErrors(t *testing.T) {
 	}
 
 	viewerID := uint(17)
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{}, gorm.ErrRecordNotFound }
 	ctx, recorder = newLikedHistoryTestContext("/api/me/history/likes", viewerID)
 	GetMyLikedHistory(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("inactive viewer status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, errors.New("database unavailable") }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
+		return models.User{}, errors.New("database unavailable")
+	}
 	ctx, recorder = newLikedHistoryTestContext("/api/me/history/likes", viewerID)
 	GetMyLikedHistory(ctx)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("viewer failure status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	loadActiveProfileViewer = func(id uint) (models.User, error) { return models.User{Model: gorm.Model{ID: id}}, nil }
-	loadLikedHistoryPage = func(uint, int, *likedHistoryCursor) (postPageResponse, error) {
+	loadActiveProfileViewer = func(_ context.Context, id uint) (models.User, error) {
+		return models.User{Model: gorm.Model{ID: id}}, nil
+	}
+	loadLikedHistoryPage = func(context.Context, uint, int, *likedHistoryCursor) (postPageResponse, error) {
 		return postPageResponse{}, errors.New("query failed")
 	}
 	ctx, recorder = newLikedHistoryTestContext("/api/me/history/likes", viewerID)
@@ -193,7 +198,7 @@ func TestGetMyLikedHistoryPassesDedicatedCursorToLoader(t *testing.T) {
 		loadActiveProfileViewer = originalActive
 		loadLikedHistoryPage = originalLoader
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) { return models.User{}, nil }
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{}, nil }
 	want := likedHistoryCursor{
 		Version:        likedHistoryCursorVersion,
 		StateChangedAt: time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC),
@@ -204,7 +209,7 @@ func TestGetMyLikedHistoryPassesDedicatedCursorToLoader(t *testing.T) {
 		t.Fatal(err)
 	}
 	var received *likedHistoryCursor
-	loadLikedHistoryPage = func(id uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
+	loadLikedHistoryPage = func(_ context.Context, id uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
 		if id != viewerID || limit != 20 {
 			t.Fatalf("loader args id=%d limit=%d", id, limit)
 		}

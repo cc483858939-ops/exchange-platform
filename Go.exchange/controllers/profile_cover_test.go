@@ -51,7 +51,7 @@ func TestUploadProfileCoverStoresDerivativeAndReusesExactObject(t *testing.T) {
 		putStoredObject = originalPut
 		statProfileCoverObject = originalStat
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 	payload := controllerProfileCoverJPEGFixture(t)
@@ -123,7 +123,7 @@ func TestUploadProfileCoverRejectsInvalidOrOversizedInput(t *testing.T) {
 		loadActiveProfileViewer = originalLoader
 		putStoredObject = originalPut
 	})
-	loadActiveProfileViewer = func(uint) (models.User, error) {
+	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) {
 		return models.User{Model: gorm.Model{ID: 42}}, nil
 	}
 	putStoredObject = func(context.Context, string, io.Reader, int64, string) error {

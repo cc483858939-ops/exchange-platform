@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	readOutcome := recommendationReadOutcomeQualified
 	profile, err := buildEmbeddingInterestProfile(
+		context.Background(),
 		[]postBehaviorSignal{
 			{Behavior: models.PostBehavior{Model: gorm.Model{ID: 1}, PostID: 1, Action: PostBehaviorActionView, LastSeenAt: now.Add(-time.Hour)}},
 			{Behavior: models.PostBehavior{Model: gorm.Model{ID: 3}, PostID: 3, Action: PostBehaviorActionView, LastSeenAt: now}},
@@ -53,6 +55,7 @@ func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) 
 
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	_, err := buildEmbeddingInterestProfile(
+		context.Background(),
 		[]postBehaviorSignal{{Behavior: models.PostBehavior{PostID: 1, Action: PostBehaviorActionView, LastSeenAt: now}}},
 		nil,
 		nil,

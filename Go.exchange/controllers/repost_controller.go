@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -64,7 +65,7 @@ func GetPostRepostState(ctx *gin.Context) {
 		return
 	}
 
-	result, err := loadPostRepostState(userID, postID)
+	result, err := loadPostRepostState(ctx.Request.Context(), userID, postID)
 	if err != nil {
 		writePostRepostError(ctx, err)
 		return
@@ -96,7 +97,7 @@ func mutatePostRepostRequest(ctx *gin.Context, reposted bool) {
 		return
 	}
 
-	result, err := mutatePostRepost(userID, postID, reposted)
+	result, err := mutatePostRepost(ctx.Request.Context(), userID, postID, reposted)
 	if err != nil {
 		writePostRepostError(ctx, err)
 		return
@@ -134,7 +135,7 @@ func GetPostRepostStates(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	result, err := loadPostRepostStates(userID, uniqueIDs)
+	result, err := loadPostRepostStates(ctx.Request.Context(), userID, uniqueIDs)
 	if err != nil {
 		writePostRepostError(ctx, err)
 		return
@@ -191,6 +192,9 @@ func activePostRepostScope(db *gorm.DB) *gorm.DB {
 }
 
 func writePostRepostError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	if errors.Is(err, errPostRepostNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return
@@ -198,11 +202,11 @@ func writePostRepostError(ctx *gin.Context, err error) {
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 
-func loadPostRepostStateFromDB(userID, postID uint) (postRepostStateResult, error) {
+func loadPostRepostStateFromDB(ctx context.Context, userID, postID uint) (postRepostStateResult, error) {
 	if global.Db == nil {
 		return postRepostStateResult{}, errors.New("database is not initialized")
 	}
-	return loadPostRepostStateWithDB(global.Db, userID, postID, time.Now().UTC())
+	return loadPostRepostStateWithDB(global.Db.WithContext(ctx), userID, postID, time.Now().UTC())
 }
 
 func loadPostRepostStateWithDB(db *gorm.DB, userID, postID uint, now time.Time) (postRepostStateResult, error) {
@@ -229,13 +233,13 @@ func loadPostRepostStateWithDB(db *gorm.DB, userID, postID uint, now time.Time) 
 	}, nil
 }
 
-func mutatePostRepostFromDB(userID, postID uint, reposted bool) (postRepostMutationResult, error) {
+func mutatePostRepostFromDB(ctx context.Context, userID, postID uint, reposted bool) (postRepostMutationResult, error) {
 	if global.Db == nil {
 		return postRepostMutationResult{}, errors.New("database is not initialized")
 	}
 
 	var result postRepostMutationResult
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := requirePublicPost(tx, postID, time.Now().UTC()); err != nil {
 			return err
 		}
@@ -259,7 +263,7 @@ func mutatePostRepostFromDB(userID, postID uint, reposted bool) (postRepostMutat
 	return result, err
 }
 
-func loadPostRepostStatesFromDB(userID uint, postIDs []uint) (postRepostStatesLoadResult, error) {
+func loadPostRepostStatesFromDB(ctx context.Context, userID uint, postIDs []uint) (postRepostStatesLoadResult, error) {
 	result := postRepostStatesLoadResult{
 		States:      make(map[uint]postRepostStateResult, len(postIDs)),
 		Unavailable: make([]uint, 0),
@@ -270,10 +274,11 @@ func loadPostRepostStatesFromDB(userID uint, postIDs []uint) (postRepostStatesLo
 	if len(postIDs) == 0 {
 		return result, nil
 	}
+	db := global.Db.WithContext(ctx)
 
 	now := time.Now().UTC()
 	var availableIDs []uint
-	if err := publicPostScope(global.Db.Model(&models.Post{}), now).
+	if err := publicPostScope(db.Model(&models.Post{}), now).
 		Where("posts.id IN ?", postIDs).
 		Pluck("posts.id", &availableIDs).Error; err != nil {
 		return postRepostStatesLoadResult{}, err
@@ -286,7 +291,7 @@ func loadPostRepostStatesFromDB(userID uint, postIDs []uint) (postRepostStatesLo
 
 	if len(availableIDs) > 0 {
 		var counts []postRepostCountRow
-		if err := activePostRepostScope(global.Db).
+		if err := activePostRepostScope(db).
 			Select("ar.post_id, COUNT(*) AS reposts").
 			Where("ar.post_id IN ?", availableIDs).
 			Group("ar.post_id").
@@ -300,7 +305,7 @@ func loadPostRepostStatesFromDB(userID uint, postIDs []uint) (postRepostStatesLo
 		}
 
 		var repostedIDs []uint
-		if err := global.Db.Model(&models.PostRepost{}).
+		if err := db.Model(&models.PostRepost{}).
 			Where("user_id = ? AND post_id IN ?", userID, availableIDs).
 			Pluck("post_id", &repostedIDs).Error; err != nil {
 			return postRepostStatesLoadResult{}, err

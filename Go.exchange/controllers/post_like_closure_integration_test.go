@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,11 +43,11 @@ func TestPostLikeHotPathDoesNotLoadPostgres(t *testing.T) {
 		loadPostLikeBaselineFromDB = originalBaselineLoader
 		loadPostLikeBaselinesFromDB = originalBatchBaselineLoader
 	})
-	loadPostLikeBaselineFromDB = func(uint) (postLikeBaseline, error) {
+	loadPostLikeBaselineFromDB = func(context.Context, uint) (postLikeBaseline, error) {
 		baselineCalls++
 		return postLikeBaseline{}, errors.New("unexpected PostgreSQL baseline load")
 	}
-	loadPostLikeBaselinesFromDB = func([]uint) (map[uint]postLikeBaseline, error) {
+	loadPostLikeBaselinesFromDB = func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
 		batchBaselineCalls++
 		return nil, errors.New("unexpected PostgreSQL batch baseline load")
 	}

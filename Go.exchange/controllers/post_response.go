@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -200,12 +201,12 @@ func hydratePostResponseRepostCountsFromDB(db *gorm.DB, responses []postResponse
 	return nil
 }
 
-func loadPublicAuthorByID(id uint) (publicAuthorResponse, error) {
+func loadPublicAuthorByID(ctx context.Context, id uint) (publicAuthorResponse, error) {
 	if id == 0 || global.Db == nil {
 		return publicAuthorResponse{}, errors.New("database is not initialized")
 	}
 	var user models.User
-	if err := global.Db.Select("id, username, display_name, avatar_url").First(&user, id).Error; err != nil {
+	if err := global.Db.WithContext(ctx).Select("id, username, display_name, avatar_url").First(&user, id).Error; err != nil {
 		return publicAuthorResponse{}, err
 	}
 	return publicAuthorFromUser(user), nil
@@ -213,7 +214,7 @@ func loadPublicAuthorByID(id uint) (publicAuthorResponse, error) {
 
 var loadPublicAuthorsByIDs = loadPublicAuthorsByIDsFromDB
 
-func loadPublicAuthorsByIDsFromDB(ids []uint) (map[uint]publicAuthorResponse, error) {
+func loadPublicAuthorsByIDsFromDB(ctx context.Context, ids []uint) (map[uint]publicAuthorResponse, error) {
 	uniqueIDs := make([]uint, 0, len(ids))
 	seen := make(map[uint]struct{}, len(ids))
 	for _, id := range ids {
@@ -234,7 +235,7 @@ func loadPublicAuthorsByIDsFromDB(ids []uint) (map[uint]publicAuthorResponse, er
 		return nil, errors.New("database is not initialized")
 	}
 	var users []models.User
-	if err := global.Db.Select("id, username, display_name, avatar_url").Where("id IN ?", uniqueIDs).Find(&users).Error; err != nil {
+	if err := global.Db.WithContext(ctx).Select("id, username, display_name, avatar_url").Where("id IN ?", uniqueIDs).Find(&users).Error; err != nil {
 		return nil, err
 	}
 	for _, user := range users {
@@ -243,7 +244,7 @@ func loadPublicAuthorsByIDsFromDB(ids []uint) (map[uint]publicAuthorResponse, er
 	return authors, nil
 }
 
-func hydratePostResponseAuthors(responses []postResponse) error {
+func hydratePostResponseAuthors(ctx context.Context, responses []postResponse) error {
 	if len(responses) == 0 {
 		return nil
 	}
@@ -259,7 +260,7 @@ func hydratePostResponseAuthors(responses []postResponse) error {
 		seenIDs[response.Author.ID] = struct{}{}
 		authorIDs = append(authorIDs, response.Author.ID)
 	}
-	authors, err := loadPublicAuthorsByIDs(authorIDs)
+	authors, err := loadPublicAuthorsByIDs(ctx, authorIDs)
 	if err != nil {
 		return err
 	}
@@ -273,15 +274,16 @@ func hydratePostResponseAuthors(responses []postResponse) error {
 	return nil
 }
 
-func loadPublicUserByID(id uint) (publicUserResponse, error) {
+func loadPublicUserByID(ctx context.Context, id uint) (publicUserResponse, error) {
 	if id == 0 || global.Db == nil {
 		return publicUserResponse{}, errors.New("database is not initialized")
 	}
+	db := global.Db.WithContext(ctx)
 	var user models.User
-	if err := global.Db.Select("id, username, display_name, bio, avatar_url, cover_image_url, created_at").First(&user, id).Error; err != nil {
+	if err := db.Select("id, username, display_name, bio, avatar_url, cover_image_url, created_at").First(&user, id).Error; err != nil {
 		return publicUserResponse{}, err
 	}
-	counts, err := readUserFollowCounts(global.Db, user.ID)
+	counts, err := readUserFollowCounts(db, user.ID)
 	if err != nil {
 		return publicUserResponse{}, err
 	}
@@ -292,12 +294,12 @@ func loadPublicUserByID(id uint) (publicUserResponse, error) {
 	}, nil
 }
 
-func loadActivePublicUserByID(id uint) error {
+func loadActivePublicUserByID(ctx context.Context, id uint) error {
 	if id == 0 || global.Db == nil {
 		return errors.New("database is not initialized")
 	}
 	var user models.User
-	return global.Db.Select("id").First(&user, id).Error
+	return global.Db.WithContext(ctx).Select("id").First(&user, id).Error
 }
 
 func preloadPostAuthor(query *gorm.DB) *gorm.DB {

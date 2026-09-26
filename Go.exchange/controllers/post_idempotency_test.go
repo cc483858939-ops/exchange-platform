@@ -21,7 +21,7 @@ import (
 func TestCreatePostRejectsInvalidIdempotencyKey(t *testing.T) {
 	originalPersist := persistPostGraphFn
 	called := false
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+	persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		called = true
 		return nil
 	}
@@ -57,7 +57,7 @@ func TestCreatePostRateLimitSkipsIdempotentReplay(t *testing.T) {
 	originalPersist := persistPostGraphFn
 	originalAuthor := loadPostAuthorForCreate
 	lookupCalls := 0
-	loadClientPublishPostFn = func(authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
+	loadClientPublishPostFn = func(_ context.Context, authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
 		lookupCalls++
 		if lookupCalls == 1 {
 			return models.Post{}, gorm.ErrRecordNotFound
@@ -69,10 +69,10 @@ func TestCreatePostRateLimitSkipsIdempotentReplay(t *testing.T) {
 			ClientPublishFingerprint: &fingerprint,
 		}, nil
 	}
-	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
+	loadPostAuthorForCreate = func(_ context.Context, id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "alice"}, nil
 	}
-	persistPostGraphFn = func(post *models.Post, userID uint, content string, _ createPostRequest, _ []validatedPostMedia, now time.Time) error {
+	persistPostGraphFn = func(_ context.Context, post *models.Post, userID uint, content string, _ createPostRequest, _ []validatedPostMedia, now time.Time) error {
 		*post = models.Post{
 			Model:      gorm.Model{ID: 71, CreatedAt: now, UpdatedAt: now},
 			AuthorID:   userID,
@@ -82,7 +82,7 @@ func TestCreatePostRateLimitSkipsIdempotentReplay(t *testing.T) {
 		}
 		return nil
 	}
-	buildStoredPostCreateResponseFn = func(post models.Post, _ time.Time) (postResponse, error) {
+	buildStoredPostCreateResponseFn = func(_ context.Context, post models.Post, _ time.Time) (postResponse, error) {
 		return postResponse{ID: post.ID, Content: "same post", Media: []postMediaResponse{}}, nil
 	}
 	t.Cleanup(func() {
@@ -111,14 +111,14 @@ func TestCreatePostPersistsCanonicalIdempotencyFieldsOnFirstCreate(t *testing.T)
 	lookupCalls := 0
 	var persisted models.Post
 	var persistedRequest createPostRequest
-	loadClientPublishPostFn = func(uint, uuid.UUID) (models.Post, error) {
+	loadClientPublishPostFn = func(context.Context, uint, uuid.UUID) (models.Post, error) {
 		lookupCalls++
 		return models.Post{}, gorm.ErrRecordNotFound
 	}
-	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
+	loadPostAuthorForCreate = func(_ context.Context, id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "alice"}, nil
 	}
-	persistPostGraphFn = func(post *models.Post, userID uint, content string, req createPostRequest, _ []validatedPostMedia, now time.Time) error {
+	persistPostGraphFn = func(_ context.Context, post *models.Post, userID uint, content string, req createPostRequest, _ []validatedPostMedia, now time.Time) error {
 		persistedRequest = req
 		*post = models.Post{
 			Model:      gorm.Model{ID: 71, CreatedAt: now, UpdatedAt: now},
@@ -173,7 +173,7 @@ func TestCreatePostReplaysSamePayloadWithoutCreateSideEffects(t *testing.T) {
 	persistCalls := 0
 	initializeCalls := 0
 	invalidateCalls := 0
-	loadClientPublishPostFn = func(authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
+	loadClientPublishPostFn = func(_ context.Context, authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
 		lookupCalls++
 		return models.Post{
 			Model:                    gorm.Model{ID: 72},
@@ -182,14 +182,14 @@ func TestCreatePostReplaysSamePayloadWithoutCreateSideEffects(t *testing.T) {
 			ClientPublishFingerprint: &fingerprintCopy,
 		}, nil
 	}
-	buildStoredPostCreateResponseFn = func(post models.Post, _ time.Time) (postResponse, error) {
+	buildStoredPostCreateResponseFn = func(_ context.Context, post models.Post, _ time.Time) (postResponse, error) {
 		return postResponse{ID: post.ID, Content: post.Content, Media: []postMediaResponse{}}, nil
 	}
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+	persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		persistCalls++
 		return nil
 	}
-	initializePostLikeState = func(uint) error {
+	initializePostLikeState = func(context.Context, uint) error {
 		initializeCalls++
 		return nil
 	}
@@ -219,8 +219,8 @@ func TestCreatePostRejectsIdempotencyPayloadConflictAndDeletedReplay(t *testing.
 	originalLookup := loadClientPublishPostFn
 	originalResponse := buildStoredPostCreateResponseFn
 	lookupPost := models.Post{}
-	loadClientPublishPostFn = func(uint, uuid.UUID) (models.Post, error) { return lookupPost, nil }
-	buildStoredPostCreateResponseFn = func(models.Post, time.Time) (postResponse, error) {
+	loadClientPublishPostFn = func(context.Context, uint, uuid.UUID) (models.Post, error) { return lookupPost, nil }
+	buildStoredPostCreateResponseFn = func(context.Context, models.Post, time.Time) (postResponse, error) {
 		t.Fatal("stored response should not be built for conflict")
 		return postResponse{}, nil
 	}
@@ -256,7 +256,7 @@ func TestCreatePostRetriesUniqueCollisionAsReplay(t *testing.T) {
 	originalAuthor := loadPostAuthorForCreate
 	lookupCalls := 0
 	persistCalls := 0
-	loadClientPublishPostFn = func(authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
+	loadClientPublishPostFn = func(_ context.Context, authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
 		lookupCalls++
 		if lookupCalls == 1 {
 			return models.Post{}, gorm.ErrRecordNotFound
@@ -268,14 +268,14 @@ func TestCreatePostRetriesUniqueCollisionAsReplay(t *testing.T) {
 			ClientPublishFingerprint: &fingerprintCopy,
 		}, nil
 	}
-	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
+	loadPostAuthorForCreate = func(_ context.Context, id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "alice"}, nil
 	}
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+	persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		persistCalls++
 		return &pgconn.PgError{Code: "23505", ConstraintName: "uidx_posts_author_client_publish_id"}
 	}
-	buildStoredPostCreateResponseFn = func(post models.Post, _ time.Time) (postResponse, error) {
+	buildStoredPostCreateResponseFn = func(_ context.Context, post models.Post, _ time.Time) (postResponse, error) {
 		return postResponse{ID: post.ID, Content: "concurrent", Media: []postMediaResponse{}}, nil
 	}
 	t.Cleanup(func() {

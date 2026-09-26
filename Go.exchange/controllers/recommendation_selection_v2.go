@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -479,6 +480,10 @@ func selectedRecommendationResponsesFromDB(db *gorm.DB, selected []selectedRecom
 	return result, nil
 }
 
-func selectedRecommendationResponses(selected []selectedRecommendation) ([]recommendedPostResponse, error) {
-	return selectedRecommendationResponsesFromDB(global.Db, selected, time.Now().UTC())
+func selectedRecommendationResponses(ctx context.Context, selected []selectedRecommendation) ([]recommendedPostResponse, error) {
+	db := global.Db
+	if db != nil {
+		db = db.WithContext(ctx)
+	}
+	return selectedRecommendationResponsesFromDB(db, selected, time.Now().UTC())
 }

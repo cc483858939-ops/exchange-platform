@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -43,6 +44,7 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	profile, err := buildEmbeddingInterestProfile(
+		context.Background(),
 		nil,
 		nil,
 		map[uint]recommendationReactionState{1: {Liked: true, StateChangedAt: now}},
@@ -72,6 +74,7 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	quick := recommendationReadOutcomeQuickBounce
 	profile, err := buildEmbeddingInterestProfile(
+		context.Background(),
 		nil,
 		[]recommendationFeedbackSignal{{Event: recommendationFeedbackEvent{
 			PostID: 1, EventID: "bounce", EventType: recommendationFeedbackEventTypeReadEnd,
@@ -103,6 +106,7 @@ func TestBuildEmbeddingInterestProfileCountsOnlyNonZeroEmbeddings(t *testing.T) 
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	profile, err := buildEmbeddingInterestProfile(
+		context.Background(),
 		nil,
 		nil,
 		map[uint]recommendationReactionState{

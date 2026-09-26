@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"Go.exchange/models"
+	"gorm.io/gorm"
 )
 
 type replyResponse = postResponse
@@ -13,13 +14,13 @@ type replyListResponse struct {
 	NextCursor *string         `json:"next_cursor"`
 }
 
-func newReplyResponse(post models.Post) (replyResponse, error) {
+func newReplyResponse(db *gorm.DB, post models.Post) (replyResponse, error) {
 	response, err := newPostResponse(post)
 	if err != nil {
 		return replyResponse{}, err
 	}
 	if post.ReplyToPostID != nil {
-		response.ReplyToPost, err = loadPostReference(post.ReplyToPostID, time.Now().UTC())
+		response.ReplyToPost, err = loadPostReferenceFromDB(db, post.ReplyToPostID, time.Now().UTC())
 		if err != nil {
 			return replyResponse{}, err
 		}

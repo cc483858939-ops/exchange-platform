@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -77,7 +78,7 @@ func TestGetTopicPostsParsesLimitsAndReturnsEmptyArray(t *testing.T) {
 	global.Db = &gorm.DB{}
 	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) { return topicTestCatalog(), nil }
 	var gotLimits []int
-	loadTopicPostsPage = func(_ config.CuratedTopic, limit int, cursor *topicPostCursor) (postPageResponse, error) {
+	loadTopicPostsPage = func(_ context.Context, _ config.CuratedTopic, limit int, cursor *topicPostCursor) (postPageResponse, error) {
 		if cursor != nil {
 			t.Fatalf("unexpected cursor: %+v", cursor)
 		}
@@ -111,7 +112,7 @@ func TestGetTopicPostsRejectsBadQueriesAndUnknownTopics(t *testing.T) {
 	originalDB := global.Db
 	global.Db = &gorm.DB{}
 	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) { return topicTestCatalog(), nil }
-	loadTopicPostsPage = func(config.CuratedTopic, int, *topicPostCursor) (postPageResponse, error) {
+	loadTopicPostsPage = func(context.Context, config.CuratedTopic, int, *topicPostCursor) (postPageResponse, error) {
 		t.Fatal("page loader should not run for invalid input")
 		return postPageResponse{}, nil
 	}

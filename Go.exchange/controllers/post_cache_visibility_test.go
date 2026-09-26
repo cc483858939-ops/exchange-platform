@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -42,7 +43,6 @@ func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 			},
 		},
 	}
-
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			originalCacheLoader := loadPostDetailCache
@@ -55,7 +55,7 @@ func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 			})
 
 			global.Db = nil
-			loadPostDetailCache = func(string, func() (postResponse, error)) (postResponse, error) {
+			loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
 				return testCase.response, nil
 			}
 			var deletedKey string
@@ -64,7 +64,7 @@ func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 				return errors.New("redis unavailable")
 			}
 
-			_, err := loadPostDetail("42")
+			_, err := loadPostDetail(context.Background(), "42")
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				t.Fatalf("error=%v want=%v", err, gorm.ErrRecordNotFound)
 			}

@@ -116,8 +116,15 @@ func translatePost(ctx *gin.Context, service translation.Service) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid target language"})
 		return
 	}
-	post, err := loadPostTranslationFields(global.Db, postID)
+	db := global.Db
+	if db != nil {
+		db = db.WithContext(ctx.Request.Context())
+	}
+	post, err := loadPostTranslationFields(db, postID)
 	if err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 			return
@@ -155,6 +162,11 @@ func translatePost(ctx *gin.Context, service translation.Service) {
 }
 
 func writePostTranslationError(ctx *gin.Context, err error) {
+	if ctx != nil && ctx.Request != nil && ctx.Request.Context().Err() != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
+	}
 	var providerError *translation.ProviderError
 	switch {
 	case errors.Is(err, translation.ErrSourceTooLong):

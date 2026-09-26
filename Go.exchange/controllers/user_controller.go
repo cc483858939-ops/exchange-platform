@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,13 +44,13 @@ type userSearchQueryRow struct {
 	ViewerFollowID *uint     `gorm:"column:viewer_follow_id"`
 }
 
-var loadActiveProfileViewer = func(userID uint) (models.User, error) {
+var loadActiveProfileViewer = func(ctx context.Context, userID uint) (models.User, error) {
 	if userID == 0 || global.Db == nil {
 		return models.User{}, errors.New("database is not initialized")
 	}
 
 	var user models.User
-	if err := global.Db.Select("id").First(&user, userID).Error; err != nil {
+	if err := global.Db.WithContext(ctx).Select("id").First(&user, userID).Error; err != nil {
 		return models.User{}, err
 	}
 	return user, nil
@@ -69,7 +70,10 @@ func requireActiveProfileViewerID(ctx *gin.Context) (uint, bool) {
 		return 0, false
 	}
 
-	if _, err := loadActiveProfileViewer(viewerID); err != nil {
+	if _, err := loadActiveProfileViewer(ctx.Request.Context(), viewerID); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return 0, false
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "viewer is no longer active"})
 		} else {
@@ -130,7 +134,7 @@ func escapeUserSearchLike(value string) string {
 	return strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(value)
 }
 
-func searchUsersFromDB(viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
+func searchUsersFromDB(ctx context.Context, viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
 	if global.Db == nil {
 		return userConnectionPageResponse{}, errors.New("database is not initialized")
 	}
@@ -148,7 +152,7 @@ func searchUsersFromDB(viewerID uint, query string, limit, offset int) (userConn
 		ELSE 6
 	END`
 	orderBy := clause.OrderBy{Expression: clause.Expr{SQL: rankSQL + ", LOWER(candidate.username) ASC, candidate.id ASC", Vars: []any{query, query, prefixPattern, prefixPattern, containsPattern, containsPattern}}}
-	queryDB := global.Db.Table("users AS candidate").
+	queryDB := global.Db.WithContext(ctx).Table("users AS candidate").
 		Select(`candidate.id AS user_id, candidate.username AS username, candidate.display_name AS display_name, candidate.bio AS bio, candidate.avatar_url AS avatar_url, candidate.created_at AS user_created_at, viewer_follow.id AS viewer_follow_id`).
 		Joins("LEFT JOIN user_follows AS viewer_follow ON viewer_follow.follower_id = ? AND viewer_follow.following_id = candidate.id", viewerID).
 		Where("candidate.deleted_at IS NULL").
@@ -176,6 +180,9 @@ func searchUsersFromDB(viewerID uint, query string, limit, offset int) (userConn
 }
 
 func writeUserAPIError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
@@ -329,13 +336,19 @@ func UpdateUserProfile(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
-	if result := global.Db.Model(&models.User{}).Where("id = ?", viewerID).Updates(updates); result.Error != nil {
+	if result := global.Db.WithContext(ctx.Request.Context()).Model(&models.User{}).Where("id = ?", viewerID).Updates(updates); result.Error != nil {
+		if handleRequestDBError(ctx, result.Error) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
 
-	updated, err := loadPublicUserByID(viewerID)
+	updated, err := loadPublicUserByID(ctx.Request.Context(), viewerID)
 	if err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -348,7 +361,7 @@ func GetUserByID(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	user, err := loadPublicUserByID(id)
+	user, err := loadPublicUserByID(ctx.Request.Context(), id)
 	if err != nil {
 		writeUserAPIError(ctx, err)
 		return
@@ -377,8 +390,11 @@ func SearchUsers(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	page, err := searchUsers(viewerID, query, limit, offset)
+	page, err := searchUsers(ctx.Request.Context(), viewerID, query, limit, offset)
 	if err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}

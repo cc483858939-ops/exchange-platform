@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"math"
 
@@ -8,12 +9,13 @@ import (
 	"Go.exchange/global"
 )
 
-func populateRecommendationAuthorContext(userID uint, profile *userInterestProfile, cfg config.RecommendationConfig) error {
+func populateRecommendationAuthorContext(ctx context.Context, userID uint, profile *userInterestProfile, cfg config.RecommendationConfig) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
 	profile.AuthorAffinity = make(map[uint]float64)
 	profile.FollowingAuthorIDs = make(map[uint]struct{})
+	db := global.Db.WithContext(ctx)
 
 	if len(profile.PositiveAffinityContributions) > 0 {
 		type postAuthorRow struct {
@@ -22,7 +24,7 @@ func populateRecommendationAuthorContext(userID uint, profile *userInterestProfi
 		}
 		ids := profile.PositiveAffinityContributionIDs()
 		var rows []postAuthorRow
-		if err := global.Db.Table("posts").Select("id AS post_id, author_id").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		if err := db.Table("posts").Select("id AS post_id, author_id").Where("id IN ?", ids).Find(&rows).Error; err != nil {
 			return err
 		}
 		raw := make(map[uint]float64)
@@ -36,7 +38,7 @@ func populateRecommendationAuthorContext(userID uint, profile *userInterestProfi
 		}
 	}
 	var followed []uint
-	if err := global.Db.Table("user_follows").Where("follower_id = ?", userID).Pluck("following_id", &followed).Error; err != nil {
+	if err := db.Table("user_follows").Where("follower_id = ?", userID).Pluck("following_id", &followed).Error; err != nil {
 		return err
 	}
 	for _, authorID := range followed {

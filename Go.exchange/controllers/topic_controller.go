@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -88,9 +89,11 @@ func GetTopicPosts(ctx *gin.Context) {
 		writeTopicInternalError(ctx)
 		return
 	}
-	page, err := loadTopicPostsPage(topic, limit, cursor)
+	page, err := loadTopicPostsPage(ctx.Request.Context(), topic, limit, cursor)
 	if err != nil {
-		writeTopicInternalError(ctx)
+		if !handleRequestDBError(ctx, err) {
+			writeTopicInternalError(ctx)
+		}
 		return
 	}
 	if page.Items == nil {
@@ -167,7 +170,7 @@ func decodeTopicPostCursor(raw string) (topicPostCursor, error) {
 	return cursor, nil
 }
 
-func loadTopicPostsPageFromDB(topic config.CuratedTopic, limit int, cursor *topicPostCursor) (postPageResponse, error) {
+func loadTopicPostsPageFromDB(ctx context.Context, topic config.CuratedTopic, limit int, cursor *topicPostCursor) (postPageResponse, error) {
 	db := global.Db
 	if db == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
@@ -175,6 +178,7 @@ func loadTopicPostsPageFromDB(topic config.CuratedTopic, limit int, cursor *topi
 	if limit <= 0 {
 		return postPageResponse{}, errors.New("invalid limit")
 	}
+	db = db.WithContext(ctx)
 	if len(topic.SourceKeys) == 0 {
 		return postPageResponse{Items: make([]postResponse, 0)}, nil
 	}

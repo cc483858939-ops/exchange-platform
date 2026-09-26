@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"time"
@@ -47,17 +48,18 @@ const (
 	recommendationFeedbackEventTypeNotInterested = models.RecommendationEventTypeNotInterested
 )
 
-var loadRecommendationBehaviorSignals = func(userID uint) ([]postBehaviorSignal, error) {
+var loadRecommendationBehaviorSignals = func(ctx context.Context, userID uint) ([]postBehaviorSignal, error) {
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
+	db := global.Db.WithContext(ctx)
 	var views []models.PostBehavior
-	if err := global.Db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionView).
+	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionView).
 		Order("last_seen_at DESC, id DESC").Limit(recommendationRecentViewPostLimit).Find(&views).Error; err != nil {
 		return nil, err
 	}
 	var replies []models.PostBehavior
-	if err := global.Db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionReply).
+	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionReply).
 		Order("last_seen_at DESC, id DESC").Limit(recommendationFeedbackPostLimit).Find(&replies).Error; err != nil {
 		return nil, err
 	}
@@ -75,10 +77,11 @@ var loadRecommendationBehaviorSignals = func(userID uint) ([]postBehaviorSignal,
 	return result, nil
 }
 
-var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Time) ([]recommendationFeedbackSignal, error) {
+var loadRecommendationFeedbackSignals = func(ctx context.Context, userID uint, lookbackStart time.Time) ([]recommendationFeedbackSignal, error) {
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
+	db := global.Db.WithContext(ctx)
 	actions := []string{
 		eventing.RecommendationBehaviorActionClick,
 		eventing.RecommendationBehaviorActionReadQualified,
@@ -86,7 +89,7 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 		eventing.RecommendationBehaviorActionReadNeutral,
 	}
 	var behaviors []models.PostBehavior
-	if err := global.Db.Where("user_id = ? AND ((action IN ? AND last_seen_at >= ?) OR action = ?)",
+	if err := db.Where("user_id = ? AND ((action IN ? AND last_seen_at >= ?) OR action = ?)",
 		userID, actions, lookbackStart, eventing.RecommendationBehaviorActionNotInterested).
 		Order("last_seen_at DESC, id DESC").Find(&behaviors).Error; err != nil {
 		return nil, err
@@ -128,12 +131,13 @@ var loadRecommendationFeedbackSignals = func(userID uint, lookbackStart time.Tim
 	return result, nil
 }
 
-var loadRecommendationReactionStates = func(userID uint) (map[uint]recommendationReactionState, error) {
+var loadRecommendationReactionStates = func(ctx context.Context, userID uint) (map[uint]recommendationReactionState, error) {
 	if global.Db == nil {
 		return nil, errors.New("database is not initialized")
 	}
+	db := global.Db.WithContext(ctx)
 	var reactions []models.PostReaction
-	if err := global.Db.Where("user_id = ?", userID).Order("post_id ASC").Find(&reactions).Error; err != nil {
+	if err := db.Where("user_id = ?", userID).Order("post_id ASC").Find(&reactions).Error; err != nil {
 		return nil, err
 	}
 	states := make(map[uint]recommendationReactionState, len(reactions))

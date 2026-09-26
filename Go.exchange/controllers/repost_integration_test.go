@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -186,7 +187,7 @@ func TestPublicPostRepostCountHydrationAndCacheFreshnessIntegration(t *testing.T
 
 	var cached postResponse
 	cachePrimed := false
-	loadPostDetailCache = func(_ string, loader func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(_ context.Context, _ string, loader func() (postResponse, error)) (postResponse, error) {
 		if cachePrimed {
 			return cached, nil
 		}
@@ -199,7 +200,7 @@ func TestPublicPostRepostCountHydrationAndCacheFreshnessIntegration(t *testing.T
 		return response, nil
 	}
 
-	first, err := loadPostDetail(strconvPostID(article.ID))
+	first, err := loadPostDetail(context.Background(), strconvPostID(article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func TestPublicPostRepostCountHydrationAndCacheFreshnessIntegration(t *testing.T
 	if err := db.Create(&models.PostRepost{UserID: deleted.ID, PostID: article.ID, CreatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	second, err := loadPostDetail(strconvPostID(article.ID))
+	second, err := loadPostDetail(context.Background(), strconvPostID(article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +222,7 @@ func TestPublicPostRepostCountHydrationAndCacheFreshnessIntegration(t *testing.T
 	if err := db.Delete(&deleted).Error; err != nil {
 		t.Fatal(err)
 	}
-	third, err := loadPostDetail(strconvPostID(article.ID))
+	third, err := loadPostDetail(context.Background(), strconvPostID(article.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +313,7 @@ func TestPublicPostRepostCountsHydrateTimelineRecommendationsAndRepliesIntegrati
 		t.Fatal(err)
 	}
 
-	timeline, err := loadUserTimelinePageFromDB(owner.ID, 20, nil)
+	timeline, err := loadUserTimelinePageFromDB(context.Background(), owner.ID, 20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +325,7 @@ func TestPublicPostRepostCountsHydrateTimelineRecommendationsAndRepliesIntegrati
 	if err := preloadPostAuthor(publicPostScope(db.Model(&models.Post{}), time.Now().UTC())).First(&rootWithAuthor, root.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	recommendations, err := selectedRecommendationResponses([]selectedRecommendation{{Post: rootWithAuthor}})
+	recommendations, err := selectedRecommendationResponses(context.Background(), []selectedRecommendation{{Post: rootWithAuthor}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
 	if state.Reposts != 1 {
 		t.Fatalf("single state before delete=%#v", state)
 	}
-	states, err := loadPostRepostStatesFromDB(viewer.ID, []uint{article.ID})
+	states, err := loadPostRepostStatesFromDB(context.Background(), viewer.ID, []uint{article.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +439,7 @@ func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
 	if state.Reposts != 0 {
 		t.Fatalf("single state after delete=%#v", state)
 	}
-	states, err = loadPostRepostStatesFromDB(viewer.ID, []uint{article.ID})
+	states, err = loadPostRepostStatesFromDB(context.Background(), viewer.ID, []uint{article.ID})
 	if err != nil {
 		t.Fatal(err)
 	}

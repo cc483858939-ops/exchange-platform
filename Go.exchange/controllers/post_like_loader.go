@@ -26,11 +26,19 @@ type postLikeBaseline struct {
 }
 
 var (
-	loadPostLikeBaselineFromDB = func(postID uint) (postLikeBaseline, error) {
-		return loadActivePostLikeBaselineFromDB(global.Db, postID)
+	loadPostLikeBaselineFromDB = func(ctx context.Context, postID uint) (postLikeBaseline, error) {
+		db := global.Db
+		if db != nil {
+			db = db.WithContext(ctx)
+		}
+		return loadActivePostLikeBaselineFromDB(db, postID)
 	}
-	loadPostLikeBaselinesFromDB = func(postIDs []uint) (map[uint]postLikeBaseline, error) {
-		return loadPostLikeBaselinesFromDBWithDB(global.Db, postIDs)
+	loadPostLikeBaselinesFromDB = func(ctx context.Context, postIDs []uint) (map[uint]postLikeBaseline, error) {
+		db := global.Db
+		if db != nil {
+			db = db.WithContext(ctx)
+		}
+		return loadPostLikeBaselinesFromDBWithDB(db, postIDs)
 	}
 )
 
@@ -169,7 +177,10 @@ func ensurePostLikeStateReady(ctx context.Context, postID uint) error {
 	if postID == 0 {
 		return likes.ErrPostLikeUnavailable
 	}
-	_, err, _ := postLikeRecoveryGroup.Do(strconv.FormatUint(uint64(postID), 10), func() (interface{}, error) {
+	resultCh := postLikeRecoveryGroup.DoChan(strconv.FormatUint(uint64(postID), 10), func() (interface{}, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		store := likes.NewStore(global.RedisDB)
 		if _, err := store.Get(ctx, 0, postID); err == nil {
 			return nil, nil
@@ -185,7 +196,7 @@ func ensurePostLikeStateReady(ctx context.Context, postID uint) error {
 		if err != nil {
 			return nil, err
 		}
-		baseline, err := loadPostLikeBaselineFromDB(postID)
+		baseline, err := loadPostLikeBaselineFromDB(ctx, postID)
 		if err != nil {
 			return nil, err
 		}
@@ -200,6 +211,13 @@ func ensurePostLikeStateReady(ctx context.Context, postID uint) error {
 		}
 		return nil, nil
 	})
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case result := <-resultCh:
+		err = result.Err
+	}
 	logPostLikeRecoveryOutcome(postID, err)
 	return err
 }
@@ -252,44 +270,44 @@ func isPostLikeBatchUnavailableError(err error) bool {
 		errors.Is(err, likes.ErrNotReady)
 }
 
-func setPostLikedStateWithRecovery(userID, postID uint, liked bool) (postLikeMutationResult, error) {
-	result, err := setPostLikedStateWithRedis(userID, postID, liked)
+func setPostLikedStateWithRecovery(ctx context.Context, userID, postID uint, liked bool) (postLikeMutationResult, error) {
+	result, err := setPostLikedStateWithRedis(ctx, userID, postID, liked)
 	if !errors.Is(err, likes.ErrNotReady) {
 		return result, err
 	}
-	if recoveryErr := ensurePostLikeStateReady(context.Background(), postID); recoveryErr != nil && !errors.Is(recoveryErr, likes.ErrLikeRecoveryFenceLost) {
+	if recoveryErr := ensurePostLikeStateReady(ctx, postID); recoveryErr != nil && !errors.Is(recoveryErr, likes.ErrLikeRecoveryFenceLost) {
 		return postLikeMutationResult{}, recoveryErr
 	}
-	return setPostLikedStateWithRedis(userID, postID, liked)
+	return setPostLikedStateWithRedis(ctx, userID, postID, liked)
 }
 
-func loadPostLikeStateWithRecovery(userID, postID uint) (postLikeStateResult, error) {
-	result, err := loadPostLikeStateFromRedis(userID, postID)
+func loadPostLikeStateWithRecovery(ctx context.Context, userID, postID uint) (postLikeStateResult, error) {
+	result, err := loadPostLikeStateFromRedis(ctx, userID, postID)
 	if !errors.Is(err, likes.ErrNotReady) {
 		return result, err
 	}
-	if recoveryErr := ensurePostLikeStateReady(context.Background(), postID); recoveryErr != nil && !errors.Is(recoveryErr, likes.ErrLikeRecoveryFenceLost) {
+	if recoveryErr := ensurePostLikeStateReady(ctx, postID); recoveryErr != nil && !errors.Is(recoveryErr, likes.ErrLikeRecoveryFenceLost) {
 		return postLikeStateResult{}, recoveryErr
 	}
-	return loadPostLikeStateFromRedis(userID, postID)
+	return loadPostLikeStateFromRedis(ctx, userID, postID)
 }
 
-func loadPostLikeStatesWithRecovery(userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
-	result, err := loadPostLikeStatesFromRedis(userID, postIDs)
+func loadPostLikeStatesWithRecovery(ctx context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
+	result, err := loadPostLikeStatesFromRedis(ctx, userID, postIDs)
 	if err != nil || len(result.Unavailable) == 0 {
 		return result, err
 	}
 
 	store := likes.NewStore(global.RedisDB)
-	registered, err := store.RegistryContainsMany(context.Background(), result.Unavailable)
+	registered, err := store.RegistryContainsMany(ctx, result.Unavailable)
 	if err != nil {
 		return postLikeStatesLoadResult{}, err
 	}
-	markers, err := store.GetRecoverableVersions(context.Background(), result.Unavailable)
+	markers, err := store.GetRecoverableVersions(ctx, result.Unavailable)
 	if err != nil {
 		return postLikeStatesLoadResult{}, err
 	}
-	baselines, err := loadPostLikeBaselinesFromDB(result.Unavailable)
+	baselines, err := loadPostLikeBaselinesFromDB(ctx, result.Unavailable)
 	if err != nil {
 		return postLikeStatesLoadResult{}, err
 	}
@@ -308,7 +326,7 @@ func loadPostLikeStatesWithRecovery(userID uint, postIDs []uint) (postLikeStates
 		if hasMarker {
 			markerPtr = &marker
 		}
-		recoverErr := recoverPostLikeStateFromBatchBaseline(context.Background(), store, postID, isRegistered, markerPtr, baseline)
+		recoverErr := recoverPostLikeStateFromBatchBaseline(ctx, store, postID, isRegistered, markerPtr, baseline)
 		if recoverErr != nil {
 			if isPostLikeBatchUnavailableError(recoverErr) {
 				unavailable[postID] = struct{}{}
@@ -327,7 +345,7 @@ func loadPostLikeStatesWithRecovery(userID uint, postIDs []uint) (postLikeStates
 		}
 	}
 	if len(recoveredIDs) > 0 {
-		readyStates, stillUnavailable, getErr := store.GetMany(context.Background(), userID, recoveredIDs)
+		readyStates, stillUnavailable, getErr := store.GetMany(ctx, userID, recoveredIDs)
 		if getErr != nil {
 			return postLikeStatesLoadResult{}, getErr
 		}

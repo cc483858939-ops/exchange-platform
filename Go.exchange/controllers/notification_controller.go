@@ -143,12 +143,16 @@ func GetMyNotifications(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
-	query := visibleNotificationsForViewer(global.Db, viewerID, time.Now().UTC())
+	db := global.Db.WithContext(ctx.Request.Context())
+	query := visibleNotificationsForViewer(db, viewerID, time.Now().UTC())
 	if cursor != nil {
 		query = query.Where("(n.activity_at < ?) OR (n.activity_at = ? AND n.id < ?)", cursor.ActivityAt, cursor.ActivityAt, cursor.ID)
 	}
 	var rows []notificationQueryRow
 	if err := query.Order("n.activity_at DESC, n.id DESC").Limit(limit + 1).Scan(&rows).Error; err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
@@ -186,8 +190,12 @@ func GetMyUnreadNotificationCount(ctx *gin.Context) {
 		return
 	}
 	var count int64
-	query := visibleNotificationsForViewer(global.Db, viewerID, time.Now().UTC())
+	db := global.Db.WithContext(ctx.Request.Context())
+	query := visibleNotificationsForViewer(db, viewerID, time.Now().UTC())
 	if err := query.Where("n.read_at IS NULL").Count(&count).Error; err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
@@ -210,21 +218,28 @@ func MarkMyNotificationRead(ctx *gin.Context) {
 		return
 	}
 	readAt := time.Now().UTC()
-	result := global.Db.Model(&models.Notification{}).
+	db := global.Db.WithContext(ctx.Request.Context())
+	result := db.Model(&models.Notification{}).
 		Where("id = ? AND recipient_id = ? AND read_at IS NULL", id, viewerID).
 		Updates(map[string]interface{}{"read_at": readAt, "updated_at": readAt})
 	if result.Error != nil {
+		if handleRequestDBError(ctx, result.Error) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 	if result.RowsAffected == 0 {
 		var exists bool
-		if err := global.Db.Raw(`
+		if err := db.Raw(`
 SELECT EXISTS (
     SELECT 1
     FROM notifications
     WHERE id = ? AND recipient_id = ?
 )`, id, viewerID).Scan(&exists).Error; err != nil {
+			if handleRequestDBError(ctx, err) {
+				return
+			}
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 			return
 		}
@@ -247,10 +262,13 @@ func MarkMyNotificationsReadAll(ctx *gin.Context) {
 		return
 	}
 	readAt := time.Now().UTC()
-	result := global.Db.Model(&models.Notification{}).
+	result := global.Db.WithContext(ctx.Request.Context()).Model(&models.Notification{}).
 		Where("recipient_id = ? AND read_at IS NULL", viewerID).
 		Updates(map[string]interface{}{"read_at": readAt, "updated_at": readAt})
 	if result.Error != nil {
+		if handleRequestDBError(ctx, result.Error) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}

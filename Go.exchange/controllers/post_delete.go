@@ -54,13 +54,13 @@ func parsePostDeleteID(raw string) (uint, error) {
 	return uint(id), nil
 }
 
-func deletePostInTransactionFromDB(postID, viewerID uint) (postDeleteResult, error) {
+func deletePostInTransactionFromDB(ctx context.Context, postID, viewerID uint) (postDeleteResult, error) {
 	var deleteResult postDeleteResult
 	if global.Db == nil {
 		return deleteResult, errors.New("database is not initialized")
 	}
 
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var post models.Post
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, postID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -109,7 +109,10 @@ func deletePostInTransactionFromDB(postID, viewerID uint) (postDeleteResult, err
 	return deleteResult, nil
 }
 
-func writePostDeleteStoreError(ctx *gin.Context) {
+func writePostDeleteStoreError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 
@@ -125,16 +128,19 @@ func DeletePost(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	if err := loadPostDeleteViewer(viewerID); err != nil {
+	if err := loadPostDeleteViewer(ctx.Request.Context(), viewerID); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 			return
 		}
-		writePostDeleteStoreError(ctx)
+		writePostDeleteStoreError(ctx, err)
 		return
 	}
 
-	deleteResult, err := deletePostInTransaction(postID, viewerID)
+	deleteResult, err := deletePostInTransaction(ctx.Request.Context(), postID, viewerID)
 	if err != nil {
 		switch {
 		case errors.Is(err, errPostDeleteNotFound):
@@ -142,7 +148,7 @@ func DeletePost(ctx *gin.Context) {
 		case errors.Is(err, errPostDeleteForbidden):
 			ctx.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		default:
-			writePostDeleteStoreError(ctx)
+			writePostDeleteStoreError(ctx, err)
 		}
 		return
 	}

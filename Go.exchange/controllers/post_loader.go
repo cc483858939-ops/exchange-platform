@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -48,17 +49,21 @@ func isPublicPostResponseAt(post postResponse, now time.Time) bool {
 	return true
 }
 
-var loadPostDetailCache = func(key string, loader func() (postResponse, error)) (postResponse, error) {
-	return loadJSONCache(key, loader)
+var loadPostDetailCache = func(ctx context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
+	return loadJSONCacheWithContext(ctx, key, loader)
 }
 
-func loadPostDetail(id string) (postResponse, error) {
+func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
+	db := global.Db
+	if db != nil {
+		db = db.WithContext(ctx)
+	}
 	key := postDetailCacheKey(id)
 	loader := func() (postResponse, error) {
-		if global.Db == nil {
+		if db == nil {
 			return postResponse{}, errors.New("database is not initialized")
 		}
-		post, err := loadPublicPost(global.Db, id, time.Now().UTC())
+		post, err := loadPublicPost(db, id, time.Now().UTC())
 		if err != nil {
 			return postResponse{}, err
 		}
@@ -66,27 +71,27 @@ func loadPostDetail(id string) (postResponse, error) {
 		if err != nil {
 			return postResponse{}, err
 		}
-		if err := hydratePostResponseMediaFromDB(global.Db, &response); err != nil {
+		if err := hydratePostResponseMediaFromDB(db, &response); err != nil {
 			return postResponse{}, err
 		}
 		return response, nil
 	}
 
-	response, err := loadPostDetailCache(key, loader)
+	response, err := loadPostDetailCache(ctx, key, loader)
 	if err != nil {
 		return postResponse{}, err
 	}
 	ensurePostResponseMedia(&response)
-	if global.Db != nil {
+	if db != nil {
 		responses := []postResponse{response}
-		if err := hydratePostResponseRepostCountsFromDB(global.Db, responses); err != nil {
+		if err := hydratePostResponseRepostCountsFromDB(db, responses); err != nil {
 			return postResponse{}, err
 		}
 		response = responses[0]
 	}
 	// Reference fields are always loaded after the viewer-independent base
 	// record, so a deleted target becomes a tombstone before the response.
-	if err := hydratePostResponseReferences(&response, time.Now().UTC()); err != nil {
+	if err := hydratePostResponseReferencesFromDB(db, &response, time.Now().UTC()); err != nil {
 		return postResponse{}, err
 	}
 	if isPublicPostResponseAt(response, time.Now().UTC()) {
@@ -106,10 +111,6 @@ func loadPublicPost(db *gorm.DB, rawID string, now time.Time) (models.Post, erro
 		return models.Post{}, err
 	}
 	return post, nil
-}
-
-func hydratePostResponseReferences(response *postResponse, now time.Time) error {
-	return hydratePostResponseReferencesFromDB(global.Db, response, now)
 }
 
 func hydratePostResponseReferencesFromDB(db *gorm.DB, response *postResponse, now time.Time) error {
@@ -135,10 +136,6 @@ func hydratePostResponseReferencesFromDB(db *gorm.DB, response *postResponse, no
 		response.QuotePost = nil
 	}
 	return nil
-}
-
-func loadPostReference(id *uint, now time.Time) (*postReferenceResponse, error) {
-	return loadPostReferenceFromDB(global.Db, id, now)
 }
 
 func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferenceResponse, error) {

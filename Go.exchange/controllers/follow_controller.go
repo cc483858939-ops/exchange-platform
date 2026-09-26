@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -73,12 +74,12 @@ var unfollowAndLoadState = unfollowAndLoadStateFromDB
 
 var loadUserConnections = loadUserConnectionsFromDB
 
-func loadActiveFollowUserFromDB(id uint) error {
+func loadActiveFollowUserFromDB(ctx context.Context, id uint) error {
 	if global.Db == nil {
 		return errors.New("database is not initialized")
 	}
 	var user models.User
-	return global.Db.Select("id").First(&user, id).Error
+	return global.Db.WithContext(ctx).Select("id").First(&user, id).Error
 }
 
 func readFollowState(db *gorm.DB, viewerID, targetID uint) (userFollowState, error) {
@@ -127,11 +128,14 @@ func readUserFollowCounts(db *gorm.DB, targetID uint) (userFollowCounts, error) 
 	return counts, nil
 }
 
-func loadFollowStateFromDB(viewerID, targetID uint) (userFollowState, error) {
-	return readFollowState(global.Db, viewerID, targetID)
+func loadFollowStateFromDB(ctx context.Context, viewerID, targetID uint) (userFollowState, error) {
+	if global.Db == nil {
+		return userFollowState{}, errors.New("database is not initialized")
+	}
+	return readFollowState(global.Db.WithContext(ctx), viewerID, targetID)
 }
 
-func loadUserConnectionsFromDB(viewerID, targetID uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
+func loadUserConnectionsFromDB(ctx context.Context, viewerID, targetID uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
 	if global.Db == nil {
 		return userConnectionPageResponse{}, errors.New("database is not initialized")
 	}
@@ -143,7 +147,7 @@ func loadUserConnectionsFromDB(viewerID, targetID uint, kind followConnectionKin
 	default:
 		return userConnectionPageResponse{}, errors.New("invalid follow connection kind")
 	}
-	query := global.Db.Table("user_follows AS target_follow").
+	query := global.Db.WithContext(ctx).Table("user_follows AS target_follow").
 		Select(`listed_user.id AS user_id, listed_user.username AS username, listed_user.display_name AS display_name, listed_user.bio AS bio, listed_user.avatar_url AS avatar_url, listed_user.created_at AS user_created_at, viewer_follow.id AS viewer_follow_id`).
 		Joins(listedUserJoin).
 		Joins("LEFT JOIN user_follows AS viewer_follow ON viewer_follow.follower_id = ? AND viewer_follow.following_id = listed_user.id", viewerID).
@@ -171,13 +175,13 @@ func loadUserConnectionsFromDB(viewerID, targetID uint, kind followConnectionKin
 	return page, nil
 }
 
-func followAndLoadStateFromDB(viewerID, targetID uint) (userFollowState, error) {
+func followAndLoadStateFromDB(ctx context.Context, viewerID, targetID uint) (userFollowState, error) {
 	if global.Db == nil {
 		return userFollowState{}, errors.New("database is not initialized")
 	}
 
 	var state userFollowState
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		follow := models.UserFollow{FollowerID: viewerID, FollowingID: targetID}
 		result := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "follower_id"}, {Name: "following_id"}},
@@ -211,13 +215,13 @@ func followAndLoadStateFromDB(viewerID, targetID uint) (userFollowState, error) 
 	return state, err
 }
 
-func unfollowAndLoadStateFromDB(viewerID, targetID uint) (userFollowState, error) {
+func unfollowAndLoadStateFromDB(ctx context.Context, viewerID, targetID uint) (userFollowState, error) {
 	if global.Db == nil {
 		return userFollowState{}, errors.New("database is not initialized")
 	}
 
 	var state userFollowState
-	err := global.Db.Transaction(func(tx *gorm.DB) error {
+	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where(
 			"follower_id = ? AND following_id = ?",
 			viewerID,
@@ -248,19 +252,25 @@ func validateFollowParticipants(ctx *gin.Context) (uint, uint, bool) {
 		return 0, 0, false
 	}
 
-	if err := loadActiveFollowUser(viewerID); err != nil {
+	if err := loadActiveFollowUser(ctx.Request.Context(), viewerID); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return 0, 0, false
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		} else {
-			writeFollowStoreError(ctx)
+			writeFollowStoreError(ctx, err)
 		}
 		return 0, 0, false
 	}
-	if err := loadActiveFollowUser(targetID); err != nil {
+	if err := loadActiveFollowUser(ctx.Request.Context(), targetID); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return 0, 0, false
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		} else {
-			writeFollowStoreError(ctx)
+			writeFollowStoreError(ctx, err)
 		}
 		return 0, 0, false
 	}
@@ -290,7 +300,10 @@ func parseFollowListPagination(ctx *gin.Context) (int, int, error) {
 	return limit, offset, nil
 }
 
-func writeFollowStoreError(ctx *gin.Context) {
+func writeFollowStoreError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 
@@ -308,9 +321,9 @@ func GetUserFollowState(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	state, err := loadFollowState(viewerID, targetID)
+	state, err := loadFollowState(ctx.Request.Context(), viewerID, targetID)
 	if err != nil {
-		writeFollowStoreError(ctx)
+		writeFollowStoreError(ctx, err)
 		return
 	}
 	if viewerID == targetID {
@@ -328,9 +341,9 @@ func FollowUser(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "cannot follow yourself"})
 		return
 	}
-	state, err := followAndLoadState(viewerID, targetID)
+	state, err := followAndLoadState(ctx.Request.Context(), viewerID, targetID)
 	if err != nil {
-		writeFollowStoreError(ctx)
+		writeFollowStoreError(ctx, err)
 		return
 	}
 	writeFollowState(ctx, targetID, state)
@@ -345,9 +358,9 @@ func UnfollowUser(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "cannot unfollow yourself"})
 		return
 	}
-	state, err := unfollowAndLoadState(viewerID, targetID)
+	state, err := unfollowAndLoadState(ctx.Request.Context(), viewerID, targetID)
 	if err != nil {
-		writeFollowStoreError(ctx)
+		writeFollowStoreError(ctx, err)
 		return
 	}
 	writeFollowState(ctx, targetID, state)
@@ -370,9 +383,9 @@ func getUserConnections(ctx *gin.Context, kind followConnectionKind) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	page, err := loadUserConnections(viewerID, targetID, kind, limit, offset)
+	page, err := loadUserConnections(ctx.Request.Context(), viewerID, targetID, kind, limit, offset)
 	if err != nil {
-		writeFollowStoreError(ctx)
+		writeFollowStoreError(ctx, err)
 		return
 	}
 	if page.Items == nil {

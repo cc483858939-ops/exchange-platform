@@ -107,6 +107,9 @@ func buildPostPageResponse(posts []postResponse, limit int) (postPageResponse, e
 	return response, nil
 }
 
-func writePostTimelineStoreError(ctx *gin.Context) {
+func writePostTimelineStoreError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }

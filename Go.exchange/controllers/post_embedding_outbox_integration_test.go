@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -155,7 +156,7 @@ func TestPostEmbeddingOutboxPersistsCanonicalRequestIntegration(t *testing.T) {
 	fixture := newPostEmbeddingOutboxFixture(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	var post models.Post
-	if err := persistPostGraph(&post, fixture.users[0].ID, "embedding root", createPostRequest{Content: "embedding root"}, nil, now); err != nil {
+	if err := persistPostGraph(context.Background(), &post, fixture.users[0].ID, "embedding root", createPostRequest{Content: "embedding root"}, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	fixture.posts = append(fixture.posts, post)
@@ -197,7 +198,7 @@ func TestPostEmbeddingOutboxInsertFailureRollsBackPostIntegration(t *testing.T) 
 	installRejectingOutboxInsertTrigger(t, db)
 
 	var post models.Post
-	err := persistPostGraph(&post, fixture.users[0].ID, "embedding rollback", createPostRequest{Content: "embedding rollback"}, nil, time.Now().UTC())
+	err := persistPostGraph(context.Background(), &post, fixture.users[0].ID, "embedding rollback", createPostRequest{Content: "embedding rollback"}, nil, time.Now().UTC())
 	if err == nil {
 		t.Fatal("persist unexpectedly succeeded with failing outbox insert")
 	}
@@ -230,7 +231,7 @@ func TestPostEmbeddingOutboxDisabledDoesNotPersistRequestIntegration(t *testing.
 	config.AppConfig.Embedding.Enabled = false
 
 	var post models.Post
-	if err := persistPostGraph(&post, fixture.users[0].ID, "embedding disabled", createPostRequest{Content: "embedding disabled"}, nil, time.Now().UTC()); err != nil {
+	if err := persistPostGraph(context.Background(), &post, fixture.users[0].ID, "embedding disabled", createPostRequest{Content: "embedding disabled"}, nil, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	fixture.posts = append(fixture.posts, post)
@@ -251,7 +252,7 @@ func TestPostEmbeddingOutboxRequiresTopicAndRollsBackPostIntegration(t *testing.
 	config.AppConfig.Kafka.PostEmbeddingTopic = ""
 
 	var post models.Post
-	err := persistPostGraph(&post, fixture.users[0].ID, "embedding topic missing", createPostRequest{Content: "embedding topic missing"}, nil, time.Now().UTC())
+	err := persistPostGraph(context.Background(), &post, fixture.users[0].ID, "embedding topic missing", createPostRequest{Content: "embedding topic missing"}, nil, time.Now().UTC())
 	if err == nil {
 		t.Fatal("persist unexpectedly succeeded without an embedding topic")
 	}
@@ -290,7 +291,7 @@ func TestReplyPersistsActivityAndEmbeddingOutboxesTogetherIntegration(t *testing
 	fixture.posts = append(fixture.posts, parent)
 	parentID := parent.ID
 	var reply models.Post
-	if err := persistPostGraph(&reply, fixture.users[1].ID, "embedding reply", createPostRequest{
+	if err := persistPostGraph(context.Background(), &reply, fixture.users[1].ID, "embedding reply", createPostRequest{
 		Content:       "embedding reply",
 		ReplyToPostID: &parentID,
 	}, nil, now); err != nil {

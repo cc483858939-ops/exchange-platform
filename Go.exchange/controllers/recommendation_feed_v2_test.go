@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -63,6 +64,7 @@ func TestRecommendationProfileCapsPositivePostAndSeparatesNegativeVector(t *test
 	cfg.PositivePostWeightCap = cfg.BehaviorWeights.Reply
 	quick := recommendationReadOutcomeQuickBounce
 	profile, err := buildEmbeddingInterestProfile(
+		context.Background(),
 		[]postBehaviorSignal{
 			{Behavior: models.PostBehavior{Model: gorm.Model{ID: 1}, PostID: 1, Action: PostBehaviorActionReply, LastSeenAt: now}},
 			{Behavior: models.PostBehavior{Model: gorm.Model{ID: 2}, PostID: 2, Action: PostBehaviorActionView, LastSeenAt: now}},

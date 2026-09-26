@@ -70,7 +70,7 @@ func mutatePostLike(ctx *gin.Context, liked bool) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user"})
 		return
 	}
-	result, err := setPostLikedState(userID, postID, liked)
+	result, err := setPostLikedState(ctx.Request.Context(), userID, postID, liked)
 	if err != nil {
 		writePostLikeError(ctx, err)
 		return
@@ -88,7 +88,7 @@ func GetPostLikes(ctx *gin.Context) {
 		return
 	}
 	userID, _ := userIDFromContext(ctx)
-	result, err := loadPostLikeState(userID, postID)
+	result, err := loadPostLikeState(ctx.Request.Context(), userID, postID)
 	if err != nil {
 		writePostLikeError(ctx, err)
 		return
@@ -126,7 +126,7 @@ func GetPostLikeStates(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user"})
 		return
 	}
-	result, err := loadPostLikeStates(userID, uniqueIDs)
+	result, err := loadPostLikeStates(ctx.Request.Context(), userID, uniqueIDs)
 	if err != nil {
 		writePostLikeError(ctx, err)
 		return
@@ -167,6 +167,9 @@ func postIDFromContext(ctx *gin.Context) (uint, bool) {
 }
 
 func writePostLikeError(ctx *gin.Context, err error) {
+	if handleRequestDBError(ctx, err) {
+		return
+	}
 	if errors.Is(err, likes.ErrPostLikeUnavailable) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return
@@ -186,8 +189,8 @@ func writePostLikeError(ctx *gin.Context, err error) {
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 }
 
-func setPostLikedStateWithRedis(userID uint, postID uint, liked bool) (postLikeMutationResult, error) {
-	state, err := likes.NewStore(global.RedisDB).Mutate(context.Background(), userID, postID, liked)
+func setPostLikedStateWithRedis(ctx context.Context, userID uint, postID uint, liked bool) (postLikeMutationResult, error) {
+	state, err := likes.NewStore(global.RedisDB).Mutate(ctx, userID, postID, liked)
 	if err != nil {
 		return postLikeMutationResult{}, err
 	}
@@ -202,13 +205,13 @@ func setPostLikedStateWithRedis(userID uint, postID uint, liked bool) (postLikeM
 	}, nil
 }
 
-func loadPostLikeStateFromRedis(userID uint, postID uint) (postLikeStateResult, error) {
-	state, err := likes.NewStore(global.RedisDB).Get(context.Background(), userID, postID)
+func loadPostLikeStateFromRedis(ctx context.Context, userID uint, postID uint) (postLikeStateResult, error) {
+	state, err := likes.NewStore(global.RedisDB).Get(ctx, userID, postID)
 	return postLikeStateResult{Likes: state.Count, Liked: state.Liked}, err
 }
 
-func loadPostLikeStatesFromRedis(userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
-	states, unavailable, err := likes.NewStore(global.RedisDB).GetMany(context.Background(), userID, postIDs)
+func loadPostLikeStatesFromRedis(ctx context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
+	states, unavailable, err := likes.NewStore(global.RedisDB).GetMany(ctx, userID, postIDs)
 	if err != nil {
 		return postLikeStatesLoadResult{}, err
 	}
@@ -222,6 +225,6 @@ func loadPostLikeStatesFromRedis(userID uint, postIDs []uint) (postLikeStatesLoa
 	return result, nil
 }
 func getPostLikeCount(postID uint) (int64, error) {
-	result, err := loadPostLikeStateFromRedis(0, postID)
+	result, err := loadPostLikeStateFromRedis(context.Background(), 0, postID)
 	return result.Likes, err
 }

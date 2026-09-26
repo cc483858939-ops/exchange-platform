@@ -20,7 +20,7 @@ import (
 func stubCreatePostAuthor(t *testing.T) {
 	original := loadPostAuthorForCreate
 	t.Cleanup(func() { loadPostAuthorForCreate = original })
-	loadPostAuthorForCreate = func(id uint) (publicAuthorResponse, error) {
+	loadPostAuthorForCreate = func(_ context.Context, id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "alice", DisplayName: "Alice Chen", AvatarURL: "/api/files/profile-avatars/7/avatar.jpg"}, nil
 	}
 }
@@ -28,7 +28,7 @@ func stubCreatePostAuthor(t *testing.T) {
 func stubPostCreatePersistence(t *testing.T, persisted *models.Post, id uint) {
 	original := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = original })
-	persistPostGraphFn = func(post *models.Post, userID uint, content string, req createPostRequest, _ []validatedPostMedia, now time.Time) error {
+	persistPostGraphFn = func(_ context.Context, post *models.Post, userID uint, content string, req createPostRequest, _ []validatedPostMedia, now time.Time) error {
 		*post = models.Post{Model: gorm.Model{ID: id, CreatedAt: now, UpdatedAt: now}, AuthorID: userID, Content: content, Language: "und", Visibility: "public"}
 		if persisted != nil {
 			*persisted = *post
@@ -111,7 +111,7 @@ func TestCreatePostRejectsMoreThanFourMediaBeforePersistence(t *testing.T) {
 	})
 	statStoredObject = func(context.Context, string) error { return nil }
 	persistCalled := false
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+	persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		persistCalled = true
 		return nil
 	}
@@ -166,7 +166,7 @@ func TestCreatePostRejectsWhitespaceOnlyContent(t *testing.T) {
 	originalCreate := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = originalCreate })
 	called := false
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+	persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		called = true
 		return errors.New("must not persist")
 	}
@@ -206,11 +206,11 @@ func TestCreatePostRejectsReplyAboveUnicodeRuneLimitBeforeSideEffects(t *testing
 	persistCalls := 0
 	initializeCalls := 0
 	invalidateCalls := 0
-	persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+	persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		persistCalls++
 		return nil
 	}
-	initializePostLikeState = func(uint) error {
+	initializePostLikeState = func(context.Context, uint) error {
 		initializeCalls++
 		return nil
 	}
@@ -290,11 +290,11 @@ func TestCreatePostRejectsOversizedAndMalformedJSONBeforeSideEffects(t *testing.
 			persistCalls := 0
 			initializeCalls := 0
 			invalidateCalls := 0
-			persistPostGraphFn = func(*models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+			persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 				persistCalls++
 				return nil
 			}
-			initializePostLikeState = func(uint) error {
+			initializePostLikeState = func(context.Context, uint) error {
 				initializeCalls++
 				return nil
 			}

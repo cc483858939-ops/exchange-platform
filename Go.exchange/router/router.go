@@ -52,6 +52,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		MaxAge:           12 * time.Hour,
 	}))
 	router.Use(metrics.Middleware())
+	router.Use(middlewares.RequestTimeout())
 
 	router.GET("/healthz", controllers.Healthz)
 	router.GET("/readyz", controllers.ReadyzWithProvider(readiness))
