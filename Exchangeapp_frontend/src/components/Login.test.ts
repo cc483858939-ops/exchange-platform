@@ -39,7 +39,7 @@ const mountLogin = () => mount(Login, {
     stubs: {
       RouterLink: {
         props: ['to'],
-        template: '<a><slot /></a>',
+        template: '<a :data-to="JSON.stringify(to)"><slot /></a>',
       },
     },
   },
@@ -127,6 +127,24 @@ describe('Login return navigation', () => {
     await submit();
 
     expect(mocks.router.replace).toHaveBeenCalledWith('/notifications');
+  });
+
+  it('carries only supported auth context into Register', () => {
+    mocks.route.query = {
+      returnTo: '/notifications',
+      intent: 'profile',
+      source: 'feed',
+      campaign: 'spring',
+    };
+    wrapper = mountLogin();
+
+    expect(JSON.parse(wrapper.get('.auth-switch a').attributes('data-to')!)).toEqual({
+      name: 'Register',
+      query: {
+        returnTo: '/notifications',
+        intent: 'profile',
+      },
+    });
   });
 
   it('falls back to Home for profile intent without a valid identity', async () => {

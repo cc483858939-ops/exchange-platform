@@ -58,7 +58,7 @@
 
       <p class="auth-switch">
         <span>Don't have an account?</span>
-        <RouterLink :to="{ name: 'Register' }">Sign up</RouterLink>
+        <RouterLink :to="{ name: 'Register', query: authFlowQuery }">Sign up</RouterLink>
       </p>
       </section>
 
@@ -72,7 +72,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { resolveSafeLoginReturnTarget } from '../router/loginReturnTarget';
+import { resolveAuthSuccessDestination } from '../router/authDestination';
+import { buildAuthFlowQuery } from '../router/authFlowQuery';
 import { useAuthStore } from '../store/auth';
 import { AuthRequestError } from '../utils/authError';
 import BrandMark from './brand/BrandMark.vue';
@@ -87,28 +88,10 @@ const formError = ref('');
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
-const returnTarget = computed(() =>
-  resolveSafeLoginReturnTarget(router, route.query.returnTo),
+const authFlowQuery = computed(() => buildAuthFlowQuery(route.query));
+const loginDestination = computed(() =>
+  resolveAuthSuccessDestination(router, route.query, authStore.currentIdentity),
 );
-
-const ownProfileDestination = computed(() => {
-  const id = authStore.currentIdentity?.id;
-  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0
-    ? { name: 'UserProfile', params: { id: String(id) } }
-    : { name: 'Home' };
-});
-
-const loginDestination = computed(() => {
-  if (returnTarget.value) {
-    return returnTarget.value;
-  }
-
-  if (route.query.intent === 'profile') {
-    return ownProfileDestination.value;
-  }
-
-  return { name: 'Home' };
-});
 
 const formatLoginError = (error: unknown) => {
   if (error instanceof AuthRequestError && error.code === 'AUTH_REQUEST_TIMEOUT') {

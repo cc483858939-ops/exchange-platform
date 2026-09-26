@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteLocationNormalized, type RouteLocationRaw, type RouteRecordRaw, type Router } from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { setPageTitle } from '../utils/pageTitle';
-import { resolveSafeLoginReturnTarget } from './loginReturnTarget';
+import { resolveAuthSuccessDestination } from './authDestination';
 import { routeScrollBehavior } from './scrollBehavior';
 
 const HomeView = () => import('../views/HomeView.vue');
@@ -83,18 +83,8 @@ export const resolveAuthenticatedGuestOnlyDestination = (
   to: Pick<RouteLocationNormalized, 'name' | 'query'>,
   currentIdentity: { id?: unknown } | null | undefined,
 ): RouteLocationRaw | string => {
-  if (to.name === 'Login') {
-    const returnTarget = resolveSafeLoginReturnTarget(routerInstance, to.query.returnTo);
-    if (returnTarget) {
-      return returnTarget;
-    }
-
-    if (to.query.intent === 'profile') {
-      const id = currentIdentity?.id;
-      if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
-        return { name: 'UserProfile', params: { id: String(id) } };
-      }
-    }
+  if (to.name === 'Login' || to.name === 'Register') {
+    return resolveAuthSuccessDestination(routerInstance, to.query, currentIdentity);
   }
 
   return { name: 'Home' };

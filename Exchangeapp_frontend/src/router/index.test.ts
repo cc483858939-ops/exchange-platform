@@ -206,6 +206,14 @@ describe('guest-only authentication routes', () => {
     expect(router.currentRoute.value.fullPath).toBe('/notifications');
   });
 
+  it('preserves a safe Register returnTo target for authenticated users', async () => {
+    setAuthenticatedState();
+
+    await router.push({ name: 'Register', query: { returnTo: '/notifications' } });
+
+    expect(router.currentRoute.value.fullPath).toBe('/notifications');
+  });
+
   it('preserves a safe PostDetail returnTo target for authenticated users', async () => {
     setAuthenticatedState();
 
@@ -228,6 +236,30 @@ describe('guest-only authentication routes', () => {
     await router.push({ name: 'Login', query: { intent: 'profile' } });
 
     expect(router.currentRoute.value.fullPath).toBe('/users/42');
+  });
+
+  it('routes authenticated Register profile intent to the current user profile', async () => {
+    setAuthenticatedState(42);
+
+    await router.push({ name: 'Register', query: { intent: 'profile' } });
+
+    expect(router.currentRoute.value.fullPath).toBe('/users/42');
+  });
+
+  it('rejects an external Register returnTo target for authenticated users', async () => {
+    setAuthenticatedState();
+
+    await router.push({ name: 'Register', query: { returnTo: 'https://evil.example' } });
+
+    expect(router.currentRoute.value.name).toBe('Home');
+  });
+
+  it('rejects an auth-route Register returnTo target for authenticated users', async () => {
+    setAuthenticatedState();
+
+    await router.push({ name: 'Register', query: { returnTo: '/login' } });
+
+    expect(router.currentRoute.value.name).toBe('Home');
   });
 
   it('falls back to Home when profile intent has no usable identity ID', () => {

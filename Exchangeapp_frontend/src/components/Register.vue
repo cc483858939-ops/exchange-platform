@@ -58,7 +58,7 @@
 
       <p class="auth-switch">
         <span>Already have an account?</span>
-        <RouterLink :to="{ name: 'Login' }">Log in</RouterLink>
+        <RouterLink :to="{ name: 'Login', query: authFlowQuery }">Log in</RouterLink>
       </p>
       </section>
 
@@ -70,8 +70,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { resolveAuthSuccessDestination } from '../router/authDestination';
+import { buildAuthFlowQuery } from '../router/authFlowQuery';
 import { useAuthStore } from '../store/auth';
 import { AuthRequestError } from '../utils/authError';
 import BrandMark from './brand/BrandMark.vue';
@@ -84,7 +86,12 @@ const submitting = ref(false);
 const formError = ref('');
 
 const authStore = useAuthStore();
+const route = useRoute();
 const router = useRouter();
+const authFlowQuery = computed(() => buildAuthFlowQuery(route.query));
+const registerDestination = computed(() =>
+  resolveAuthSuccessDestination(router, route.query, authStore.currentIdentity),
+);
 
 const formatRegisterError = (error: unknown) => {
   if (error instanceof AuthRequestError && error.code === 'AUTH_REQUEST_TIMEOUT') {
@@ -117,7 +124,7 @@ const register = async () => {
   submitting.value = true;
   try {
     await authStore.register(form.value.username, form.value.password);
-    void router.push({ name: 'Home' });
+    void router.replace(registerDestination.value);
   } catch (error) {
     formError.value = formatRegisterError(error);
   } finally {

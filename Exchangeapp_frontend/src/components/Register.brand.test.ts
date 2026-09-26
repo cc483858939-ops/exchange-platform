@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import Register from './Register.vue';
 
 const mocks = vi.hoisted(() => ({
+  route: { query: {} },
   authStore: {
     register: vi.fn(),
   },
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('vue-router', () => ({
+  useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));
 

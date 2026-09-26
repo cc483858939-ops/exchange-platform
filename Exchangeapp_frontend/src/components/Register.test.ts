@@ -6,15 +6,20 @@ import { AuthRequestError } from '../utils/authError';
 import Register from './Register.vue';
 
 const mocks = vi.hoisted(() => ({
+  route: { query: {} as Record<string, unknown> },
   authStore: {
+    currentIdentity: null as { id: number } | null,
     register: vi.fn(),
   },
   router: {
     push: vi.fn(),
+    replace: vi.fn(),
+    resolve: vi.fn(),
   },
 }));
 
 vi.mock('vue-router', () => ({
+  useRoute: () => mocks.route,
   useRouter: () => mocks.router,
 }));
 
@@ -28,18 +33,25 @@ const mountRegister = () => mount(Register, {
     stubs: {
       RouterLink: {
         props: ['to'],
-        template: '<a><slot /></a>',
+        template: '<a :data-to="JSON.stringify(to)"><slot /></a>',
       },
     },
   },
 });
 
-describe('Register errors', () => {
+describe('Register navigation and errors', () => {
   let wrapper: ReturnType<typeof mount> | null = null;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.route.query = {};
+    mocks.authStore.currentIdentity = null;
     mocks.authStore.register.mockResolvedValue(undefined);
+    mocks.router.resolve.mockImplementation((candidate: string) => ({
+      fullPath: candidate,
+      matched: candidate === '/notifications' ? [{}] : [],
+      meta: { layout: 'app' },
+    }));
   });
 
   afterEach(() => {
@@ -71,6 +83,56 @@ describe('Register errors', () => {
     expect((wrapper.get('#register-password').element as HTMLInputElement).value).toBe('secret123');
     expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('button[type="submit"]').text()).toBe('Sign up');
+  });
+
+  it('carries only supported auth context into Login', () => {
+    mocks.route.query = {
+      returnTo: '/notifications',
+      intent: 'profile',
+      source: 'feed',
+      campaign: 'spring',
+    };
+    wrapper = mountRegister();
+
+    expect(JSON.parse(wrapper.get('.auth-switch a').attributes('data-to')!)).toEqual({
+      name: 'Login',
+      query: {
+        returnTo: '/notifications',
+        intent: 'profile',
+      },
+    });
+  });
+
+  it('replaces to the preserved returnTo destination after successful registration', async () => {
+    mocks.route.query = { returnTo: '/notifications' };
+    wrapper = mountRegister();
+
+    await submit();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith('/notifications');
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it('uses the shared profile destination after registration', async () => {
+    mocks.route.query = { intent: 'profile' };
+    mocks.authStore.currentIdentity = { id: 42 };
+    wrapper = mountRegister();
+
+    await submit();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({
+      name: 'UserProfile',
+      params: { id: '42' },
+    });
+  });
+
+  it('replaces to Home after successful registration without supported context', async () => {
+    wrapper = mountRegister();
+
+    await submit();
+
+    expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'Home' });
+    expect(mocks.router.push).not.toHaveBeenCalled();
   });
 
   it('keeps unrelated registration failures generic', async () => {
