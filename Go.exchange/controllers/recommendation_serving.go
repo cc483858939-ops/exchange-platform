@@ -9,6 +9,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/embeddingstate"
 	"Go.exchange/global"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -28,8 +29,8 @@ type recommendationServingOutcome struct {
 	EmbeddingVersion string
 	FreshSet         recommendationCandidateSet
 	RecallSets       []recommendationCandidateSet
-	Selected         []selectedRecommendation
-	LanguageContext  recommendationLanguageContext
+	Selected         []recommendation.SelectedCandidate
+	LanguageContext  recommendation.LanguageContext
 }
 
 type recommendationServingSnapshot struct {
@@ -46,14 +47,14 @@ func (snapshot recommendationServingSnapshot) validate() error {
 var (
 	publicRecommendationCandidateSetForServing        = loadPublicRecommendationCandidateSet
 	publicRecommendationHydrateForServing             = hydrateRecommendationCandidates
-	diversifyPublicRecommendationCandidatesForServing = diversifyPublicRecommendationCandidates
+	diversifyPublicRecommendationCandidatesForServing = recommendation.DiversifyPublicCandidates
 )
 
 // servePublicRecommendationCandidatePath is the guest-safe variant of the
 // recommendation pipeline. It deliberately has no user identity, profile,
 // Redis access, semantic recall, social graph lookup, or author affinity
 // hydration. Guest served state is passed in by the controller.
-func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendation.LanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 	outcome := recommendationServingOutcome{Profile: userInterestProfile{}, EmbeddingVersion: snapshot.EmbeddingVersion}
 	if err := snapshot.validate(); err != nil {
 		return outcome, err
@@ -80,7 +81,7 @@ func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, li
 		requestID = uuid.NewString()
 	}
 
-	outcome.LanguageContext = buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg)
+	outcome.LanguageContext = recommendation.BuildLanguageContext(browser, recommendation.LanguagePrior{}, 0, recommendationLanguageConfig(cfg))
 	freshExcluded := guestFreshExcludedPostIDs(served)
 	publicSet, err := publicRecommendationCandidateSetForServing(db, snapshot.EmbeddingVersion, now, cfg, freshExcluded)
 	if err != nil {
@@ -96,9 +97,12 @@ func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, li
 	if err := ctx.Err(); err != nil {
 		return outcome, err
 	}
-	ranked := rankRecommendationCandidates(userInterestProfile{}, hydrated, now, cfg, outcome.LanguageContext)
+	ranked := recommendation.RankCandidates(recommendation.ProfileFeatures{}, hydrated, now, recommendationRankingConfig(cfg), outcome.LanguageContext)
 	diversified := diversifyPublicRecommendationCandidatesForServing(ranked, int(limit), requestID)
-	selected := selectRecommendationCandidates(diversified, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
+	selected := recommendation.SelectCandidates(recommendation.SelectionInput{
+		Candidates: diversified, Limit: int(limit), Now: now, Phase: recommendation.SelectionPhaseFresh,
+		RequestID: requestID, Config: recommendationSelectionConfig(cfg),
+	})
 	mergedSet := publicSet
 	if len(selected) < int(limit) {
 		if err := ctx.Err(); err != nil {
@@ -118,10 +122,16 @@ func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, li
 			return outcome, err
 		}
 		annotateGuestFallbackServedState(fallbackHydrated, served)
-		rankedFallback := rankRecommendationCandidates(userInterestProfile{}, fallbackHydrated, now, cfg, outcome.LanguageContext)
-		selected = selectRecommendationCandidates(rankedFallback, selected, int(limit), cfg, now, recommendationSelectionFresh, requestID)
+		rankedFallback := recommendation.RankCandidates(recommendation.ProfileFeatures{}, fallbackHydrated, now, recommendationRankingConfig(cfg), outcome.LanguageContext)
+		selected = recommendation.SelectCandidates(recommendation.SelectionInput{
+			Candidates: rankedFallback, Initial: selected, Limit: int(limit), Now: now, Phase: recommendation.SelectionPhaseFresh,
+			RequestID: requestID, Config: recommendationSelectionConfig(cfg),
+		})
 		if len(selected) < int(limit) {
-			selected = selectRecommendationCandidates(rankedFallback, selected, int(limit), cfg, now, recommendationSelectionSoft, requestID)
+			selected = recommendation.SelectCandidates(recommendation.SelectionInput{
+				Candidates: rankedFallback, Initial: selected, Limit: int(limit), Now: now, Phase: recommendation.SelectionPhaseSoft,
+				RequestID: requestID, Config: recommendationSelectionConfig(cfg),
+			})
 		}
 		mergedSet = mergeCandidateSets(publicSet, fallbackSet, cfg.Candidates.ColdStart.Merged)
 	} else {
@@ -142,7 +152,7 @@ func guestFreshExcludedPostIDs(served map[uint]servedPost) map[uint]struct{} {
 	return excluded
 }
 
-func guestFallbackExcludedPostIDs(served map[uint]servedPost, selected []selectedRecommendation) map[uint]struct{} {
+func guestFallbackExcludedPostIDs(served map[uint]servedPost, selected []recommendation.SelectedCandidate) map[uint]struct{} {
 	excluded := make(map[uint]struct{}, len(served)+len(selected))
 	for postID, item := range served {
 		if postID != 0 && item.Hard {
@@ -157,7 +167,7 @@ func guestFallbackExcludedPostIDs(served map[uint]servedPost, selected []selecte
 	return excluded
 }
 
-func annotateGuestFallbackServedState(candidates []hydratedRecommendationCandidate, served map[uint]servedPost) {
+func annotateGuestFallbackServedState(candidates []recommendation.RankedCandidate, served map[uint]servedPost) {
 	for index := range candidates {
 		item, ok := served[candidates[index].Post.ID]
 		if !ok || item.Hard || !item.Soft {
@@ -171,7 +181,7 @@ func annotateGuestFallbackServedState(candidates []hydratedRecommendationCandida
 // serveRecommendationCandidatePath is shared by GetPostRecommendations and
 // DevData verification. Keeping the path here prevents verification from
 // copying the recommender's SQL, ranking, or selection rules.
-func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendationLanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendation.LanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
 	outcome := recommendationServingOutcome{EmbeddingVersion: snapshot.EmbeddingVersion}
 	if err := snapshot.validate(); err != nil {
 		return outcome, err
@@ -209,11 +219,11 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 	if err := ctx.Err(); err != nil {
 		return outcome, err
 	}
-	languageContext := buildRecommendationLanguageContext(
+	languageContext := recommendation.BuildLanguageContext(
 		browser,
-		recommendationLanguagePrior{ZH: profile.LanguageZHWeight, JA: profile.LanguageJAWeight, EN: profile.LanguageENWeight},
+		recommendation.LanguagePrior{ZH: profile.LanguageZHWeight, JA: profile.LanguageJAWeight, EN: profile.LanguageENWeight},
 		profile.LanguageEvidence,
-		cfg,
+		recommendationLanguageConfig(cfg),
 	)
 	outcome.LanguageContext = languageContext
 	loadedAuthors := make(map[uint]struct{})
@@ -236,8 +246,11 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 	if err := loadMaterializedCandidateAuthorContext(db, userID, &profile, freshHydrated, loadedAuthors, cfg); err != nil {
 		return outcome, err
 	}
-	rankedFresh := rankRecommendationCandidates(profile, freshHydrated, now, cfg, languageContext)
-	selected := selectRecommendationCandidates(rankedFresh, nil, int(limit), cfg, now, recommendationSelectionFresh, requestID)
+	rankedFresh := recommendation.RankCandidates(recommendationProfileFeatures(profile), freshHydrated, now, recommendationRankingConfig(cfg), languageContext)
+	selected := recommendation.SelectCandidates(recommendation.SelectionInput{
+		Candidates: rankedFresh, Limit: int(limit), Now: now, Phase: recommendation.SelectionPhaseFresh,
+		RequestID: requestID, Config: recommendationSelectionConfig(cfg),
+	})
 
 	if len(selected) < int(limit) {
 		if err := ctx.Err(); err != nil {
@@ -258,8 +271,11 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 		if err := loadMaterializedCandidateAuthorContext(db, userID, &profile, softHydrated, loadedAuthors, cfg); err != nil {
 			return outcome, err
 		}
-		rankedSoft := rankRecommendationCandidates(profile, softHydrated, now, cfg, languageContext)
-		selected = selectRecommendationCandidates(rankedSoft, selected, int(limit), cfg, now, recommendationSelectionSoft, requestID)
+		rankedSoft := recommendation.RankCandidates(recommendationProfileFeatures(profile), softHydrated, now, recommendationRankingConfig(cfg), languageContext)
+		selected = recommendation.SelectCandidates(recommendation.SelectionInput{
+			Candidates: rankedSoft, Initial: selected, Limit: int(limit), Now: now, Phase: recommendation.SelectionPhaseSoft,
+			RequestID: requestID, Config: recommendationSelectionConfig(cfg),
+		})
 		freshSet = mergeCandidateSets(freshSet, softSet, recommendationCandidateCaps(profile, cfg).Merged)
 	}
 
@@ -287,7 +303,7 @@ func VerifyRecommendationServing(userID uint, limit int, now time.Time) (Recomme
 		return RecommendationServingVerification{}, err
 	}
 	snapshot := recommendationServingSnapshot{EmbeddingVersion: servingVersion}
-	outcome, err := serveRecommendationCandidatePath(ctx, db, userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString(), snapshot, recommendationLanguageContext{}, map[uint]servedPost{})
+	outcome, err := serveRecommendationCandidatePath(ctx, db, userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString(), snapshot, recommendation.LanguageContext{}, map[uint]servedPost{})
 	if err != nil {
 		return RecommendationServingVerification{}, err
 	}

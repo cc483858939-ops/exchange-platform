@@ -32,23 +32,6 @@ type postBehaviorSignal struct {
 	Behavior models.PostBehavior
 }
 
-type embeddingCandidate struct {
-	PostID                     uint
-	PositiveSemanticSimilarity float64
-	SemanticRank               int
-	FollowingRank              int
-	RecentRank                 int
-	TrendingRank               int
-	FusionScore                float64
-	SourceCount                int
-	FromSemantic               bool
-	FromFollowing              bool
-	FromRecent                 bool
-	FromTrending               bool
-	WasSoftServed              bool
-	LastServedAt               time.Time
-}
-
 type recommendedPostResponse struct {
 	Post     postResponse                    `json:"post"`
 	Score    float64                         `json:"score"`
@@ -107,7 +90,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 		served = loaded
 	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
-	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
+	browserLanguageContext := recommendation.LanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
 	if global.Db == nil {
 		recommendationErrorResponse(ctx, errors.New("database is not initialized"), recommendationStrategyID(userInterestProfile{}))
 		return
@@ -170,11 +153,11 @@ func GetPostRecommendations(ctx *gin.Context) {
 	metrics.ObserveRecommendationCandidateCount(len(freshSet.Candidates))
 	metrics.ObserveRecommendationResultCount(len(recommendations))
 	metrics.ObserveRecommendationGenerationDuration(strategyID, duration)
-	explorationCounts := recommendationExplorationCountsForSelection(selected, recommendationExplorationTarget(limit, cfg))
+	explorationCounts := recommendation.ExplorationCountsForSelection(selected, recommendation.ExplorationTarget(limit, recommendationSelectionConfig(cfg).Exploration))
 
 	requestRecord := models.RecommendationRequest{
 		RequestID: requestID, UserID: userID, Scene: recommendationScene, StrategyID: strategyID,
-		RankerVersion: recommendationRankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg, serving.EmbeddingVersion),
+		RankerVersion: recommendation.RankerVersion, RankerConfigHash: recommendationRankerConfigHash(cfg, serving.EmbeddingVersion),
 		ProfileVersion: profile.ProfileVersion, ProfileConfigHash: profile.ProfileConfigHash,
 		ProfileStatus: profile.ProfileStatus, ProfileAgeMS: profile.ProfileAgeMS,
 		BrowserLanguagePrimary: serving.LanguageContext.BrowserPrimary, LanguageContextSource: serving.LanguageContext.Source,
@@ -186,12 +169,12 @@ func GetPostRecommendations(ctx *gin.Context) {
 		SemanticCandidateCount: freshSet.SemanticCount, FollowingCandidateCount: freshSet.FollowingCount,
 		RecentCandidateCount: freshSet.RecentCount, TrendingCandidateCount: freshSet.TrendingCount,
 		MergedCandidateCount: len(freshSet.Candidates), PositiveSignalCount: profile.PositiveSignalCount,
-		NegativeSignalCount: profile.NegativeSignalCount, InNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsInNetwork }),
-		OutOfNetworkResultCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return !item.IsInNetwork }),
-		NovelAuthorResultCount:  countSelectedClass(selected, func(item selectedRecommendation) bool { return item.IsNovelAuthor }),
+		NegativeSignalCount: profile.NegativeSignalCount, InNetworkResultCount: countSelectedClass(selected, func(item recommendation.SelectedCandidate) bool { return item.IsInNetwork }),
+		OutOfNetworkResultCount: countSelectedClass(selected, func(item recommendation.SelectedCandidate) bool { return !item.IsInNetwork }),
+		NovelAuthorResultCount:  countSelectedClass(selected, func(item recommendation.SelectedCandidate) bool { return item.IsNovelAuthor }),
 		ExplorationTargetCount:  explorationCounts.Target, ExplorationOpportunityCount: explorationCounts.Opportunities,
 		ExplorationResultCount:  explorationCounts.Results,
-		SoftServedFallbackCount: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.Candidate.WasSoftServed }),
+		SoftServedFallbackCount: countSelectedClass(selected, func(item recommendation.SelectedCandidate) bool { return item.Candidate.WasSoftServed }),
 		PersonalizationMode:     recommendationPersonalizationMode(profile, freshSet.FollowingCount),
 		FallbackReason:          recommendationFallbackReason(profile.PositiveSignalCount, len(recommendations), limit),
 		GenerationLatencyMS:     duration.Milliseconds(), CreatedAt: now,
@@ -230,7 +213,7 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 		}
 	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
-	browserLanguageContext := recommendationLanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
+	browserLanguageContext := recommendation.LanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
 	if global.Db == nil {
 		recommendationErrorResponse(ctx, errors.New("database is not initialized"), recommendationColdStartStrategyID)
 		return
@@ -343,7 +326,7 @@ func recordRecallMetrics(set recommendationCandidateSet) {
 	metrics.AddRecommendationRecallCandidates("merged", len(set.Candidates))
 }
 
-func recordResultMetrics(selected []selectedRecommendation) {
+func recordResultMetrics(selected []recommendation.SelectedCandidate) {
 	for _, item := range selected {
 		if item.Candidate.FromSemantic {
 			metrics.AddRecommendationResultsBySource("semantic", 1)
@@ -368,15 +351,15 @@ func recordResultMetrics(selected []selectedRecommendation) {
 		if item.Candidate.WasSoftServed {
 			metrics.AddRecommendationResultsByClass("soft_served_fallback", 1)
 		}
-		if item.SelectionMode == recommendationResultSelectionExploration {
-			metrics.AddRecommendationResultsBySelection("exploration", item.ExplorationReason, 1)
+		if item.SelectionMode == recommendation.SelectionModeExploration {
+			metrics.AddRecommendationResultsBySelection("exploration", string(item.ExplorationReason), 1)
 		} else {
 			metrics.AddRecommendationResultsBySelection("ranked", "none", 1)
 		}
 	}
 }
 
-func countSelectedClass(items []selectedRecommendation, predicate func(selectedRecommendation) bool) int {
+func countSelectedClass(items []recommendation.SelectedCandidate, predicate func(recommendation.SelectedCandidate) bool) int {
 	count := 0
 	for _, item := range items {
 		if predicate(item) {
@@ -384,22 +367,6 @@ func countSelectedClass(items []selectedRecommendation, predicate func(selectedR
 		}
 	}
 	return count
-}
-
-type recommendationExplorationCounts struct {
-	Target        int
-	Opportunities int
-	Results       int
-}
-
-func recommendationExplorationCountsForSelection(selected []selectedRecommendation, target int) recommendationExplorationCounts {
-	return recommendationExplorationCounts{
-		Target:        target,
-		Opportunities: countSelectedClass(selected, func(item selectedRecommendation) bool { return item.ExplorationOpportunity }),
-		Results: countSelectedClass(selected, func(item selectedRecommendation) bool {
-			return item.SelectionMode == recommendationResultSelectionExploration
-		}),
-	}
 }
 
 func parseRecommendationLimit(raw string) int {

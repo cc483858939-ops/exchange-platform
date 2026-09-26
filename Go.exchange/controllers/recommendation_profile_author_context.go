@@ -6,6 +6,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"gorm.io/gorm"
 )
@@ -14,7 +15,7 @@ import (
 // following lookups to authors represented by the current candidate batch.
 // loadedAuthors is retained across the fresh and soft passes so the second
 // pass only queries newly encountered authors.
-func loadMaterializedCandidateAuthorContext(db *gorm.DB, userID uint, profile *userInterestProfile, candidates []hydratedRecommendationCandidate, loadedAuthors map[uint]struct{}, cfg config.RecommendationConfig) error {
+func loadMaterializedCandidateAuthorContext(db *gorm.DB, userID uint, profile *userInterestProfile, candidates []recommendation.RankedCandidate, loadedAuthors map[uint]struct{}, cfg config.RecommendationConfig) error {
 	if profile.AuthorAffinity == nil {
 		profile.AuthorAffinity = make(map[uint]float64)
 	}

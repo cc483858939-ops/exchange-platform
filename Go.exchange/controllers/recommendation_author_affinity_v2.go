@@ -7,6 +7,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/global"
+	"Go.exchange/recommendation"
 )
 
 func populateRecommendationAuthorContext(ctx context.Context, userID uint, profile *userInterestProfile, cfg config.RecommendationConfig) error {
@@ -33,7 +34,7 @@ func populateRecommendationAuthorContext(ctx context.Context, userID uint, profi
 		}
 		for authorID, value := range raw {
 			if cfg.AuthorAffinitySaturationScale > 0 {
-				profile.AuthorAffinity[authorID] = clampUnit(math.Tanh(value / cfg.AuthorAffinitySaturationScale))
+				profile.AuthorAffinity[authorID] = recommendation.ClampUnit(math.Tanh(value / cfg.AuthorAffinitySaturationScale))
 			}
 		}
 	}

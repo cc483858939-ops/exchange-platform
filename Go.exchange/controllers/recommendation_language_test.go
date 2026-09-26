@@ -9,6 +9,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 	"gorm.io/gorm"
 )
 
@@ -53,86 +54,6 @@ func TestParseRecommendationAcceptLanguageIsBounded(t *testing.T) {
 	}
 	if got := parseRecommendationAcceptLanguage(strings.Repeat("fr-FR,", recommendationAcceptLanguageMaxRanges) + ",zh"); got != (recommendationLanguagePrior{}) {
 		t.Fatalf("language after range cap unexpectedly found: %#v", got)
-	}
-}
-
-func TestRecommendationLanguageContextBlendsAndCapsBehaviorEvidence(t *testing.T) {
-	cfg := defaultRecommendationConfig()
-	browser := recommendationLanguageContext{Browser: recommendationLanguagePrior{ZH: 1}, BrowserPrimary: "zh"}
-	behavior := recommendationLanguagePrior{JA: 1}
-	context := buildRecommendationLanguageContext(browser, behavior, 5, cfg)
-	if context.Source != "blended" {
-		t.Fatalf("source=%q want blended", context.Source)
-	}
-	assertRecommendationLanguageFloat(t, context.BehaviorShare, .5)
-	assertRecommendationLanguageFloat(t, context.Combined.ZH, .5)
-	assertRecommendationLanguageFloat(t, context.Combined.JA, .5)
-	assertRecommendationLanguageFloat(t, context.Combined.EN, 0)
-
-	context = buildRecommendationLanguageContext(browser, behavior, 100, cfg)
-	assertRecommendationLanguageFloat(t, context.BehaviorShare, .95)
-	assertRecommendationLanguageFloat(t, context.Combined.ZH, .05)
-	assertRecommendationLanguageFloat(t, context.Combined.JA, .95)
-
-	behaviorOnly := buildRecommendationLanguageContext(recommendationLanguageContext{}, behavior, 5, cfg)
-	if behaviorOnly.Source != "behavior" || behaviorOnly.BehaviorShare != 1 {
-		t.Fatalf("behavior-only context=%#v", behaviorOnly)
-	}
-	browserOnly := buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg)
-	if browserOnly.Source != "browser" || browserOnly.BehaviorShare != 0 {
-		t.Fatalf("browser-only context=%#v", browserOnly)
-	}
-}
-
-func TestRecommendationLanguageContextSanitizesMaterializedProfileValues(t *testing.T) {
-	prior, evidence := normalizedMaterializedRecommendationLanguagePrior(math.NaN(), 2, 3, 5)
-	assertRecommendationLanguageFloat(t, prior.ZH, 0)
-	assertRecommendationLanguageFloat(t, prior.JA, .4)
-	assertRecommendationLanguageFloat(t, prior.EN, .6)
-	assertRecommendationLanguageFloat(t, evidence, 5)
-	prior, evidence = normalizedMaterializedRecommendationLanguagePrior(1, 1, 1, 0)
-	if prior != (recommendationLanguagePrior{}) || evidence != 0 {
-		t.Fatalf("zero evidence prior=%#v evidence=%v", prior, evidence)
-	}
-}
-
-func TestRecommendationRankerAppliesOnlyBoundedPositiveLanguageComponent(t *testing.T) {
-	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
-	context := recommendationLanguageContext{Combined: recommendationLanguagePrior{ZH: .8, EN: .2}}
-	ranked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{
-		{Post: models.Post{Language: "en"}},
-		{Post: models.Post{Language: "zh"}},
-		{Post: models.Post{Language: "und"}},
-	}, now, cfg, context)
-	if ranked[0].Post.Language != "zh" {
-		t.Fatalf("ranked languages=%q,%q,%q want zh first", ranked[0].Post.Language, ranked[1].Post.Language, ranked[2].Post.Language)
-	}
-	assertRecommendationLanguageFloat(t, ranked[0].Breakdown.LanguageAffinity, .8)
-	assertRecommendationLanguageFloat(t, ranked[0].Breakdown.LanguageComponent, .28)
-	assertRecommendationLanguageFloat(t, ranked[1].Breakdown.LanguageComponent, .07)
-	assertRecommendationLanguageFloat(t, ranked[2].Breakdown.LanguageAffinity, 0)
-
-	disabled := cfg
-	disabled.LanguageAffinity.Enabled = false
-	disabledRanked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{
-		{Post: models.Post{Language: "zh"}},
-		{Post: models.Post{Language: "en"}},
-	}, now, disabled, context)
-	if disabledRanked[0].Breakdown.LanguageComponent != 0 || disabledRanked[1].Breakdown.LanguageComponent != 0 {
-		t.Fatalf("disabled language components=%v,%v", disabledRanked[0].Breakdown.LanguageComponent, disabledRanked[1].Breakdown.LanguageComponent)
-	}
-}
-
-func TestRecommendationLanguageBonusDoesNotBeatStrongSemanticSignal(t *testing.T) {
-	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
-	ranked := rankRecommendationCandidates(userInterestProfile{PositiveVector: []float32{1, 0}}, []hydratedRecommendationCandidate{
-		{Post: models.Post{Language: "en"}, Embedding: []float32{1, 0}},
-		{Post: models.Post{Language: "zh"}, Embedding: []float32{0, 1}},
-	}, now, cfg, recommendationLanguageContext{Combined: recommendationLanguagePrior{ZH: 1, EN: 0}})
-	if ranked[0].Post.Language != "en" {
-		t.Fatalf("semantic winner language=%q want en", ranked[0].Post.Language)
 	}
 }
 
@@ -199,7 +120,7 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 		return recommendationServingOutcome{
 			EmbeddingVersion: snapshot.EmbeddingVersion,
 			Profile:          userInterestProfile{ProfileStatus: recommendationProfileStatusMiss},
-			LanguageContext:  buildRecommendationLanguageContext(browser, recommendationLanguagePrior{}, 0, cfg),
+			LanguageContext:  recommendation.BuildLanguageContext(browser, recommendation.LanguagePrior{}, 0, recommendationLanguageConfig(cfg)),
 		}, nil
 	}
 	selectedRecommendationResponsesForHandler = func(_ *gorm.DB, _ []selectedRecommendation, _ time.Time) ([]recommendedPostResponse, error) {

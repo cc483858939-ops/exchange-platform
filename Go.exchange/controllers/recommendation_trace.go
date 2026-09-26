@@ -1,21 +1,21 @@
 package controllers
 
 import (
-	"math"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 )
 
-func buildRecommendationResultTraces(request models.RecommendationRequest, selected []selectedRecommendation, now time.Time, cfg config.RecommendationConfig) []models.RecommendationResultTrace {
+func buildRecommendationResultTraces(request models.RecommendationRequest, selected []recommendation.SelectedCandidate, now time.Time, cfg config.RecommendationConfig) []models.RecommendationResultTrace {
 	expiresAt := now.AddDate(0, 0, cfg.Trace.ResultRetentionDays)
 	result := make([]models.RecommendationResultTrace, 0, len(selected))
 	for index, item := range selected {
 		breakdown := item.Breakdown
 		selectionMode := string(item.SelectionMode)
 		if selectionMode == "" {
-			selectionMode = string(recommendationResultSelectionRanked)
+			selectionMode = string(recommendation.SelectionModeRanked)
 		}
 		result = append(result, models.RecommendationResultTrace{
 			RequestID: request.RequestID, Position: index + 1, PostID: item.Post.ID, AuthorID: item.Post.AuthorID,
@@ -24,8 +24,8 @@ func buildRecommendationResultTraces(request models.RecommendationRequest, selec
 			FusionScore: item.Candidate.FusionScore, SourceCount: item.Candidate.SourceCount,
 			SemanticRank: item.Candidate.SemanticRank, FollowingRank: item.Candidate.FollowingRank,
 			RecentRank: item.Candidate.RecentRank, TrendingRank: item.Candidate.TrendingRank,
-			PostLanguage:     recommendationPostLanguage(item.Post.Language),
-			LanguageAffinity: clampUnit(breakdown.LanguageAffinity), LanguageComponent: nonNegativeRecommendationScore(breakdown.LanguageComponent),
+			PostLanguage:     recommendation.PostLanguage(item.Post.Language),
+			LanguageAffinity: recommendation.ClampUnit(breakdown.LanguageAffinity), LanguageComponent: recommendation.NonNegativeScore(breakdown.LanguageComponent),
 			IsInNetwork: item.IsInNetwork, IsNovelAuthor: item.IsNovelAuthor,
 			WasSoftServedFallback: item.Candidate.WasSoftServed,
 			PositiveSemantic:      breakdown.PositiveSemantic, NegativeSemantic: breakdown.NegativeSemantic,
@@ -35,16 +35,9 @@ func buildRecommendationResultTraces(request models.RecommendationRequest, selec
 			AuthorAffinityComponent: breakdown.AuthorAffinityComponent, DiversityPenalty: breakdown.DiversityPenalty,
 			BaseScore: breakdown.BaseScore, FinalScore: breakdown.FinalScore,
 			ExplorationOpportunity: item.ExplorationOpportunity, SelectionMode: selectionMode,
-			ExplorationReason: item.ExplorationReason, ExplorationSemantic: item.ExplorationSemantic,
+			ExplorationReason: string(item.ExplorationReason), ExplorationSemantic: item.ExplorationSemantic,
 			CreatedAt: now, ExpiresAt: expiresAt,
 		})
 	}
 	return result
-}
-
-func nonNegativeRecommendationScore(value float64) float64 {
-	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0
-	}
-	return value
 }

@@ -20,13 +20,11 @@ import (
 
 const (
 	recommendationScene                   = "recommendation_page"
-	recommendationRankerVersion           = "rules_v6"
 	recommendationPersonalizedStrategyID  = "for_you_materialized_profile_v6"
 	recommendationColdStartStrategyID     = "for_you_materialized_profile_v6"
 	recommendationTrackingTokenVersion    = "v3"
 	recommendationCanonicalOutcomeVersion = recommendation.CanonicalOutcomeVersion
 	recommendationPassiveRecencyPolicy    = "read_end_recency_v2"
-	recommendationSelectionPolicyVersion  = "network_balance_exploration_v2"
 	recommendationSigningKeyMinBytes      = 32
 )
 
@@ -60,7 +58,7 @@ type recommendationTrackingClaims struct {
 	ExplorationReason      string `json:"exploration_reason"`
 }
 
-func attachRecommendationTracking(userID uint, requestID, servingVersion string, profile userInterestProfile, selected []selectedRecommendation, recommendations []recommendedPostResponse, now time.Time) (int, error) {
+func attachRecommendationTracking(userID uint, requestID, servingVersion string, profile userInterestProfile, selected []recommendation.SelectedCandidate, recommendations []recommendedPostResponse, now time.Time) (int, error) {
 	if len(recommendations) == 0 || !config.RecommendationTelemetryEnabled() {
 		return 0, nil
 	}
@@ -89,17 +87,17 @@ func attachRecommendationTracking(userID uint, requestID, servingVersion string,
 		if selected[index].Post.ID != recommendations[index].Post.ID {
 			return 0, errors.New("recommendation tracking selection and response ids differ")
 		}
-		if err := eventing.ValidateRecommendationProvenance(selected[index].ExplorationOpportunity, string(selected[index].SelectionMode), selected[index].ExplorationReason); err != nil {
+		if err := eventing.ValidateRecommendationProvenance(selected[index].ExplorationOpportunity, string(selected[index].SelectionMode), string(selected[index].ExplorationReason)); err != nil {
 			return 0, err
 		}
 		claims := recommendationTrackingClaims{
 			UserID: userID, RequestID: requestID, PostID: recommendations[index].Post.ID,
 			Position: index + 1, Scene: recommendationScene,
-			RankerVersion: recommendationRankerVersion, RankerConfigHash: configHash,
+			RankerVersion: recommendation.RankerVersion, RankerConfigHash: configHash,
 			StrategyID: strategyID, IssuedAtUnix: issuedAt.Unix(), ExpiresAtUnix: expiresAt.Unix(),
 			EstimatedReadTimeMS: estimatePostReadTime(recommendations[index].Post.Content).Milliseconds(), ReadPolicyVersion: recommendationReadPolicyVersion,
 			ExplorationOpportunity: selected[index].ExplorationOpportunity,
-			SelectionMode:          string(selected[index].SelectionMode), ExplorationReason: selected[index].ExplorationReason,
+			SelectionMode:          string(selected[index].SelectionMode), ExplorationReason: string(selected[index].ExplorationReason),
 		}
 		token, err := signRecommendationTrackingClaims(claims, key)
 		if err != nil {
@@ -107,7 +105,7 @@ func attachRecommendationTracking(userID uint, requestID, servingVersion string,
 		}
 		recommendations[index].Tracking = &recommendationTrackingResponse{
 			RequestID: requestID, Position: index + 1, Scene: recommendationScene,
-			RankerVersion: recommendationRankerVersion, RankerConfigHash: configHash,
+			RankerVersion: recommendation.RankerVersion, RankerConfigHash: configHash,
 			StrategyID: strategyID, Token: token, ExpiresAt: expiresAt,
 		}
 	}
@@ -162,7 +160,7 @@ func recommendationRankerConfigCanonicalString(cfg config.RecommendationConfig, 
 		recommendationCandidateRetrievalVersion,
 		recommendation.MaterializedProfileVersion, recommendation.ProfileConfigHash(cfg, servingVersion),
 		recommendationCanonicalOutcomeVersion, recommendationPassiveRecencyPolicy,
-		recommendationReadPolicyVersion, recommendationSelectionPolicyVersion, servingVersion,
+		recommendationReadPolicyVersion, recommendation.SelectionPolicyVersion, servingVersion,
 	)
 }
 func signRecommendationTrackingClaims(claims recommendationTrackingClaims, key []byte) (string, error) {

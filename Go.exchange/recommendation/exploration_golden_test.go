@@ -1,4 +1,4 @@
-package controllers
+package recommendation
 
 import (
 	"math"
@@ -85,7 +85,7 @@ func TestRecommendationExplorationReasonsUseRecentAndNovelAgeCutoffs(t *testing.
 	cases := []struct {
 		name string
 		item hydratedRecommendationCandidate
-		want string
+		want ExplorationReason
 	}{
 		{name: "recent", item: makeCandidate(1, 7, true, false), want: recommendationExplorationReasonRecent},
 		{name: "novel", item: makeCandidate(2, 30, false, true), want: recommendationExplorationReasonNovelAuthor},

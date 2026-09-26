@@ -2,12 +2,12 @@ package controllers
 
 import (
 	"errors"
-	"math"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
@@ -21,22 +21,12 @@ type servedPost struct {
 }
 
 type recommendationCandidateSet struct {
-	Candidates     []embeddingCandidate
+	Candidates     []recommendation.Candidate
 	SemanticCount  int
 	FollowingCount int
 	RecentCount    int
 	RecentPostIDs  []uint
 	TrendingCount  int
-}
-
-type hydratedRecommendationCandidate struct {
-	Candidate           embeddingCandidate
-	Post                models.Post
-	Embedding           []float32
-	Breakdown           recommendationScoreBreakdown
-	ExplorationSemantic float64
-	IsInNetwork         bool
-	IsNovelAuthor       bool
 }
 
 // recommendationEligibilityQuery contains post and viewer eligibility shared
@@ -115,32 +105,12 @@ type semanticCandidateRow struct {
 	PositiveSemanticSimilarity float64
 }
 
-func recommendationSemanticQuota(cap int, recentRatio float64) (int, int) {
-	if cap <= 0 {
-		return 0, 0
-	}
-	if cap == 1 {
-		return 1, 0
-	}
-	if recentRatio <= 0 || recentRatio >= 1 {
-		recentRatio = 0.80
-	}
-	recentCap := int(math.Round(float64(cap) * recentRatio))
-	if recentCap < 1 {
-		recentCap = 1
-	}
-	if recentCap > cap-1 {
-		recentCap = cap - 1
-	}
-	return recentCap, cap - recentCap
-}
-
-func loadRecommendationSemanticCandidates(db *gorm.DB, servingVersion string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
+func loadRecommendationSemanticCandidates(db *gorm.DB, servingVersion string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]recommendation.Candidate, error) {
 	if len(profile.PositiveVector) == 0 || cap <= 0 {
 		return nil, nil
 	}
 
-	recentCap, evergreenCap := recommendationSemanticQuota(cap, cfg.SemanticRecall.RecentRatio)
+	recentCap, evergreenCap := recommendation.SemanticRecallQuota(cap, cfg.SemanticRecall.RecentRatio)
 	cutoff := now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays)
 	recent, err := loadRecommendationSemanticPool(db, servingVersion, userID, profile, served, now, softOnly, cutoff, ">=", recentCap, nil)
 	if err != nil {
@@ -155,7 +125,7 @@ func loadRecommendationSemanticCandidates(db *gorm.DB, servingVersion string, us
 	if err != nil {
 		return nil, err
 	}
-	result := make([]embeddingCandidate, 0, cap)
+	result := make([]recommendation.Candidate, 0, cap)
 	result = append(result, recent...)
 	for _, candidate := range evergreen {
 		selectedIDs[candidate.PostID] = struct{}{}
@@ -173,7 +143,7 @@ func loadRecommendationSemanticCandidates(db *gorm.DB, servingVersion string, us
 	return result, nil
 }
 
-func loadRecommendationSemanticPool(db *gorm.DB, servingVersion string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, softOnly bool, cutoff time.Time, comparison string, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+func loadRecommendationSemanticPool(db *gorm.DB, servingVersion string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, softOnly bool, cutoff time.Time, comparison string, cap int, excluded map[uint]struct{}) ([]recommendation.Candidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
@@ -203,14 +173,14 @@ func loadRecommendationSemanticPool(db *gorm.DB, servingVersion string, userID u
 	}).Limit(cap).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make([]embeddingCandidate, 0, len(rows))
+	result := make([]recommendation.Candidate, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, embeddingCandidate{PostID: row.PostID, PositiveSemanticSimilarity: clampRecommendationSimilarity(row.PositiveSemanticSimilarity), FromSemantic: true})
+		result = append(result, recommendation.Candidate{PostID: row.PostID, PositiveSemanticSimilarity: recommendation.ClampSemanticSimilarity(row.PositiveSemanticSimilarity), FromSemantic: true})
 	}
 	return result, nil
 }
 
-func loadRecommendationFollowingCandidates(db *gorm.DB, _ string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
+func loadRecommendationFollowingCandidates(db *gorm.DB, _ string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]recommendation.Candidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
@@ -226,14 +196,14 @@ func loadRecommendationFollowingCandidates(db *gorm.DB, _ string, userID uint, p
 	if err := query.Order("posts.created_at DESC, posts.id DESC").Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
 	}
-	result := make([]embeddingCandidate, 0, len(ids))
+	result := make([]recommendation.Candidate, 0, len(ids))
 	for _, id := range ids {
-		result = append(result, embeddingCandidate{PostID: id, FromFollowing: true})
+		result = append(result, recommendation.Candidate{PostID: id, FromFollowing: true})
 	}
 	return result, nil
 }
 
-func loadRecommendationSourceCandidates(db *gorm.DB, _ string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, order interface{}, cap int, source string) ([]embeddingCandidate, error) {
+func loadRecommendationSourceCandidates(db *gorm.DB, _ string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, order interface{}, cap int, source string) ([]recommendation.Candidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
@@ -243,9 +213,9 @@ func loadRecommendationSourceCandidates(db *gorm.DB, _ string, userID uint, prof
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
 	}
-	result := make([]embeddingCandidate, 0, len(ids))
+	result := make([]recommendation.Candidate, 0, len(ids))
 	for _, id := range ids {
-		candidate := embeddingCandidate{PostID: id}
+		candidate := recommendation.Candidate{PostID: id}
 		switch source {
 		case "recent":
 			candidate.FromRecent = true
@@ -277,13 +247,13 @@ func loadRecommendationCandidateSet(db *gorm.DB, servingVersion string, userID u
 		return recommendationCandidateSet{}, err
 	}
 
-	merged := fuseRecommendationCandidates(
+	merged := recommendation.FuseCandidates(
 		caps.Merged,
-		cfg.Fusion.RankConstant,
-		recommendationRecallList{Source: recommendationRecallSourceSemantic, Candidates: semantic},
-		recommendationRecallList{Source: recommendationRecallSourceFollowing, Candidates: following},
-		recommendationRecallList{Source: recommendationRecallSourceRecent, Candidates: recent},
-		recommendationRecallList{Source: recommendationRecallSourceTrending, Candidates: trending},
+		recommendationFusionConfig(cfg),
+		recommendation.CandidateSet{Source: recommendation.CandidateSourceSemantic, Candidates: semantic},
+		recommendation.CandidateSet{Source: recommendation.CandidateSourceFollowing, Candidates: following},
+		recommendation.CandidateSet{Source: recommendation.CandidateSourceRecent, Candidates: recent},
+		recommendation.CandidateSet{Source: recommendation.CandidateSourceTrending, Candidates: trending},
 	)
 	for index := range merged {
 		if item, ok := served[merged[index].PostID]; ok {
@@ -293,11 +263,11 @@ func loadRecommendationCandidateSet(db *gorm.DB, servingVersion string, userID u
 	}
 	return recommendationCandidateSet{
 		Candidates: merged, SemanticCount: len(semantic), FollowingCount: len(following),
-		RecentCount: len(recent), RecentPostIDs: recommendationCandidatePostIDs(recent), TrendingCount: len(trending),
+		RecentCount: len(recent), RecentPostIDs: recommendation.CandidatePostIDs(recent), TrendingCount: len(trending),
 	}, nil
 }
 
-func loadRecommendationTrendingCandidates(db *gorm.DB, _ string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]embeddingCandidate, error) {
+func loadRecommendationTrendingCandidates(db *gorm.DB, _ string, userID uint, profile userInterestProfile, served map[uint]servedPost, now time.Time, cfg config.RecommendationConfig, softOnly bool, cap int) ([]recommendation.Candidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
@@ -327,9 +297,9 @@ posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
 	}
-	result := make([]embeddingCandidate, 0, len(ids))
+	result := make([]recommendation.Candidate, 0, len(ids))
 	for _, id := range ids {
-		result = append(result, embeddingCandidate{PostID: id, FromTrending: true})
+		result = append(result, recommendation.Candidate{PostID: id, FromTrending: true})
 	}
 	return result, nil
 }
@@ -353,7 +323,7 @@ func publicRecommendationEligibilityQuery(query *gorm.DB, now time.Time, exclude
 	return query
 }
 
-func loadPublicRecommendationSourceCandidates(db *gorm.DB, _ string, now time.Time, cfg config.RecommendationConfig, order interface{}, cap int, source string, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+func loadPublicRecommendationSourceCandidates(db *gorm.DB, _ string, now time.Time, cfg config.RecommendationConfig, order interface{}, cap int, source string, excluded map[uint]struct{}) ([]recommendation.Candidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
@@ -362,9 +332,9 @@ func loadPublicRecommendationSourceCandidates(db *gorm.DB, _ string, now time.Ti
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
 	}
-	result := make([]embeddingCandidate, 0, len(ids))
+	result := make([]recommendation.Candidate, 0, len(ids))
 	for _, id := range ids {
-		candidate := embeddingCandidate{PostID: id}
+		candidate := recommendation.Candidate{PostID: id}
 		if source == "recent" {
 			candidate.FromRecent = true
 		}
@@ -373,7 +343,7 @@ func loadPublicRecommendationSourceCandidates(db *gorm.DB, _ string, now time.Ti
 	return result, nil
 }
 
-func loadPublicRecommendationTrendingCandidates(db *gorm.DB, _ string, now time.Time, cfg config.RecommendationConfig, cap int, excluded map[uint]struct{}) ([]embeddingCandidate, error) {
+func loadPublicRecommendationTrendingCandidates(db *gorm.DB, _ string, now time.Time, cfg config.RecommendationConfig, cap int, excluded map[uint]struct{}) ([]recommendation.Candidate, error) {
 	if cap <= 0 {
 		return nil, nil
 	}
@@ -399,9 +369,9 @@ posts.id DESC`, cfg.Trending.ReplyFactor, now.UTC(), cfg.Trending.HalfLifeHours)
 	if err := query.Order(order).Limit(cap).Pluck("posts.id", &ids).Error; err != nil {
 		return nil, err
 	}
-	result := make([]embeddingCandidate, 0, len(ids))
+	result := make([]recommendation.Candidate, 0, len(ids))
 	for _, id := range ids {
-		result = append(result, embeddingCandidate{PostID: id, FromTrending: true})
+		result = append(result, recommendation.Candidate{PostID: id, FromTrending: true})
 	}
 	return result, nil
 }
@@ -419,15 +389,15 @@ func loadPublicRecommendationCandidateSet(db *gorm.DB, servingVersion string, no
 	if err != nil {
 		return recommendationCandidateSet{}, err
 	}
-	merged := fuseRecommendationCandidates(
+	merged := recommendation.FuseCandidates(
 		caps.Merged,
-		cfg.Fusion.RankConstant,
-		recommendationRecallList{Source: recommendationRecallSourceRecent, Candidates: recent},
-		recommendationRecallList{Source: recommendationRecallSourceTrending, Candidates: trending},
+		recommendationFusionConfig(cfg),
+		recommendation.CandidateSet{Source: recommendation.CandidateSourceRecent, Candidates: recent},
+		recommendation.CandidateSet{Source: recommendation.CandidateSourceTrending, Candidates: trending},
 	)
 	return recommendationCandidateSet{
 		Candidates:  merged,
-		RecentCount: len(recent), RecentPostIDs: recommendationCandidatePostIDs(recent),
+		RecentCount: len(recent), RecentPostIDs: recommendation.CandidatePostIDs(recent),
 		TrendingCount: len(trending),
 	}, nil
 }
@@ -437,54 +407,6 @@ func recommendationCandidateCaps(profile userInterestProfile, cfg config.Recomme
 		return cfg.Candidates.ColdStart
 	}
 	return cfg.Candidates.Personalized
-}
-
-func mergeEmbeddingCandidates(limit int, sources ...[]embeddingCandidate) []embeddingCandidate {
-	// mergeEmbeddingCandidates performs stable candidate-set union.
-	// Recall-list fusion must use fuseRecommendationCandidates instead.
-	if limit <= 0 {
-		return nil
-	}
-	merged := make([]embeddingCandidate, 0, limit)
-	byID := make(map[uint]int, limit)
-	for _, source := range sources {
-		for _, candidate := range source {
-			if candidate.PostID == 0 {
-				continue
-			}
-			if index, ok := byID[candidate.PostID]; ok {
-				current := &merged[index]
-				current.FromSemantic = current.FromSemantic || candidate.FromSemantic
-				current.FromFollowing = current.FromFollowing || candidate.FromFollowing
-				current.FromRecent = current.FromRecent || candidate.FromRecent
-				current.FromTrending = current.FromTrending || candidate.FromTrending
-				current.SemanticRank = recommendationMinNonZeroRank(current.SemanticRank, candidate.SemanticRank)
-				current.FollowingRank = recommendationMinNonZeroRank(current.FollowingRank, candidate.FollowingRank)
-				current.RecentRank = recommendationMinNonZeroRank(current.RecentRank, candidate.RecentRank)
-				current.TrendingRank = recommendationMinNonZeroRank(current.TrendingRank, candidate.TrendingRank)
-				if candidate.FusionScore > current.FusionScore {
-					current.FusionScore = candidate.FusionScore
-				}
-				if candidate.SourceCount > current.SourceCount {
-					current.SourceCount = candidate.SourceCount
-				}
-				current.WasSoftServed = current.WasSoftServed || candidate.WasSoftServed
-				if current.LastServedAt.IsZero() || (!candidate.LastServedAt.IsZero() && candidate.LastServedAt.Before(current.LastServedAt)) {
-					current.LastServedAt = candidate.LastServedAt
-				}
-				if candidate.FromSemantic {
-					current.PositiveSemanticSimilarity = candidate.PositiveSemanticSimilarity
-				}
-				continue
-			}
-			if len(merged) >= limit {
-				continue
-			}
-			byID[candidate.PostID] = len(merged)
-			merged = append(merged, candidate)
-		}
-	}
-	return merged
 }
 
 func mergeCandidateSets(first, second recommendationCandidateSet, mergedLimit int) recommendationCandidateSet {
@@ -501,7 +423,7 @@ func mergeCandidateSets(first, second recommendationCandidateSet, mergedLimit in
 		recentPostIDs = append(recentPostIDs, postID)
 	}
 	return recommendationCandidateSet{
-		Candidates:     mergeEmbeddingCandidates(mergedLimit, first.Candidates, second.Candidates),
+		Candidates:     recommendation.MergeCandidates(mergedLimit, first.Candidates, second.Candidates),
 		SemanticCount:  first.SemanticCount + second.SemanticCount,
 		FollowingCount: first.FollowingCount + second.FollowingCount,
 		RecentCount:    first.RecentCount + second.RecentCount,
@@ -510,17 +432,7 @@ func mergeCandidateSets(first, second recommendationCandidateSet, mergedLimit in
 	}
 }
 
-func recommendationCandidatePostIDs(candidates []embeddingCandidate) []uint {
-	ids := make([]uint, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.PostID != 0 {
-			ids = append(ids, candidate.PostID)
-		}
-	}
-	return ids
-}
-
-func hydrateRecommendationCandidates(db *gorm.DB, servingVersion string, candidates []embeddingCandidate, now time.Time) ([]hydratedRecommendationCandidate, error) {
+func hydrateRecommendationCandidates(db *gorm.DB, servingVersion string, candidates []recommendation.Candidate, now time.Time) ([]recommendation.RankedCandidate, error) {
 	if db == nil {
 		return nil, errors.New("database is not initialized")
 	}
@@ -558,7 +470,7 @@ func hydrateRecommendationCandidates(db *gorm.DB, servingVersion string, candida
 	for _, post := range validPosts {
 		byID[post.ID] = post
 	}
-	result := make([]hydratedRecommendationCandidate, 0, len(candidates))
+	result := make([]recommendation.RankedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		post, ok := byID[candidate.PostID]
 		if !ok {
@@ -568,7 +480,7 @@ func hydrateRecommendationCandidates(db *gorm.DB, servingVersion string, candida
 		if len(embedding) == 0 {
 			embedding = nil
 		}
-		result = append(result, hydratedRecommendationCandidate{Candidate: candidate, Post: post, Embedding: embedding})
+		result = append(result, recommendation.RankedCandidate{Candidate: candidate, Post: post, Embedding: embedding})
 	}
 	return result, nil
 }
