@@ -294,7 +294,7 @@
               accept="image/jpeg,image/png,image/webp"
               :disabled="editSaving"
               @change="handleCoverSelection"
-              @cancel="handleCoverPickerCancel"
+              @cancel.stop="handleCoverPickerCancel"
             />
             <button
               ref="profileCoverChangeButtonRef"
@@ -338,7 +338,7 @@
               accept="image/jpeg,image/png,image/webp"
               :disabled="editSaving"
               @change="handleAvatarSelection"
-              @cancel="handleAvatarPickerCancel"
+              @cancel.stop="handleAvatarPickerCancel"
             />
             <button
               ref="profileAvatarChangeButtonRef"
@@ -792,8 +792,6 @@ const profileAvatarChangeButtonRef = ref<HTMLButtonElement | null>(null);
 const profileCoverChangeButtonRef = ref<HTMLButtonElement | null>(null);
 type ProfileFilePickerKind = 'avatar' | 'cover';
 const activeProfileFilePicker = ref<ProfileFilePickerKind | null>(null);
-let profileFilePickerGeneration = 0;
-let profileFilePickerReleaseTimer: number | null = null;
 const editOriginal = ref<ProfileEditSnapshot | null>(null);
 const editDraft = reactive<ProfileEditSnapshot>({
   display_name: '',
@@ -833,55 +831,12 @@ const restoreProfileMediaChangeFocus = (target: HTMLButtonElement | null) => {
   });
 };
 
-const cancelProfileFilePickerRelease = () => {
-  if (profileFilePickerReleaseTimer === null) {
-    return;
-  }
-
-  window.clearTimeout(profileFilePickerReleaseTimer);
-  profileFilePickerReleaseTimer = null;
-};
-
 const startProfileFilePicker = (kind: ProfileFilePickerKind) => {
-  cancelProfileFilePickerRelease();
-  profileFilePickerGeneration += 1;
   activeProfileFilePicker.value = kind;
-  return profileFilePickerGeneration;
-};
-
-const scheduleProfileFilePickerRelease = (kind: ProfileFilePickerKind) => {
-  if (activeProfileFilePicker.value !== kind) {
-    return;
-  }
-
-  const generation = profileFilePickerGeneration;
-  cancelProfileFilePickerRelease();
-
-  profileFilePickerReleaseTimer = window.setTimeout(() => {
-    if (profileFilePickerGeneration !== generation) {
-      return;
-    }
-
-    if (activeProfileFilePicker.value === kind) {
-      activeProfileFilePicker.value = null;
-    }
-    profileFilePickerReleaseTimer = null;
-  }, 0);
 };
 
 const resetProfileFilePickerState = () => {
-  cancelProfileFilePickerRelease();
   activeProfileFilePicker.value = null;
-  profileFilePickerGeneration += 1;
-};
-
-const handleProfileFilePickerWindowFocus = () => {
-  const kind = activeProfileFilePicker.value;
-  if (kind === null) {
-    return;
-  }
-
-  scheduleProfileFilePickerRelease(kind);
 };
 
 const editDisplayNameLength = computed(() => Array.from(editDraft.display_name.trim()).length);
@@ -1026,11 +981,12 @@ const requestCloseEditProfile = (event?: Event) => {
 };
 
 const handleDialogCancel = (event: Event) => {
-  event.preventDefault();
-  if (editSaving.value) {
+  if (event.target !== event.currentTarget) {
     return;
   }
-  if (activeProfileFilePicker.value !== null) {
+
+  event.preventDefault();
+  if (editSaving.value) {
     return;
   }
   requestCloseEditProfile(event);
@@ -1090,7 +1046,7 @@ const handleAvatarPickerCancel = () => {
     return;
   }
 
-  scheduleProfileFilePickerRelease('avatar');
+  activeProfileFilePicker.value = null;
   restoreProfileMediaChangeFocus(profileAvatarChangeButtonRef.value);
 };
 
@@ -1099,7 +1055,7 @@ const handleCoverPickerCancel = () => {
     return;
   }
 
-  scheduleProfileFilePickerRelease('cover');
+  activeProfileFilePicker.value = null;
   restoreProfileMediaChangeFocus(profileCoverChangeButtonRef.value);
 };
 
@@ -1114,7 +1070,7 @@ const handleAvatarSelection = (event: Event) => {
     handleAvatarPickerCancel();
     return;
   }
-  scheduleProfileFilePickerRelease('avatar');
+  activeProfileFilePicker.value = null;
   if (file.size <= 0) {
     editAvatarError.value = 'Photo must be between 1 byte and 10 MB.';
     return;
@@ -1168,7 +1124,7 @@ const handleCoverSelection = (event: Event) => {
     handleCoverPickerCancel();
     return;
   }
-  scheduleProfileFilePickerRelease('cover');
+  activeProfileFilePicker.value = null;
   if (file.size <= 0 || file.size > profileCoverMaxBytes) {
     editCoverError.value = 'Cover must be between 1 byte and 5 MiB.';
     return;
@@ -1546,7 +1502,6 @@ watch(
 );
 
 onMounted(() => {
-  window.addEventListener('focus', handleProfileFilePickerWindowFocus);
   void nextTick(updateObserver);
 });
 
@@ -1554,7 +1509,6 @@ onDeactivated(deactivateProfileView);
 onActivated(activateProfileView);
 
 onBeforeUnmount(() => {
-  window.removeEventListener('focus', handleProfileFilePickerWindowFocus);
   if (profileViewActive.value && numericUserID.value !== null) {
     saveCurrentScroll(numericUserID.value);
   }

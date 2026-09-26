@@ -246,8 +246,17 @@ const setAvatarFile = async (
 
 const cancelFilePicker = async (wrapper: VueWrapper, kind: 'avatar' | 'cover') => {
   const selector = kind === 'avatar' ? '#profile-avatar-input' : '#profile-cover-input';
-  wrapper.get(selector).element.dispatchEvent(new Event('cancel'));
+  const dialog = wrapper.get('.profile-edit-dialog').element;
+  let eventReachedDialog = false;
+  const observeDialogCancel = () => {
+    eventReachedDialog = true;
+  };
+  dialog.addEventListener('cancel', observeDialogCancel);
+  const event = new Event('cancel', { bubbles: true, cancelable: false });
+  wrapper.get(selector).element.dispatchEvent(event);
+  dialog.removeEventListener('cancel', observeDialogCancel);
   await nextTick();
+  return eventReachedDialog;
 };
 
 const cancelEditDialog = async (wrapper: VueWrapper) => {
@@ -353,7 +362,6 @@ describe('UserProfileView profile cover editor', () => {
     wrapper = null;
     attachedHost?.remove();
     attachedHost = null;
-    vi.useRealTimers();
   });
 
   it('initializes the current cover and does not upload before Save', async () => {
@@ -456,31 +464,43 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it.each([
-    { kind: 'avatar', button: '[aria-label="Change photo"]', input: '#profile-avatar-input' },
-    { kind: 'cover', button: '[aria-label="Change cover"]', input: '#profile-cover-input' },
-  ])('marks the $kind picker active before opening its native input', async ({ button, input }) => {
+    {
+      kind: 'avatar',
+      button: '[aria-label="Change photo"]',
+      input: '#profile-avatar-input',
+      cropDialog: '.avatar-crop-dialog',
+    },
+    {
+      kind: 'cover',
+      button: '[aria-label="Change cover"]',
+      input: '#profile-cover-input',
+      cropDialog: '.cover-crop-dialog',
+    },
+  ])('marks the $kind picker active before opening its native input', async ({ button, input, cropDialog }) => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
 
     const dialog = wrapper.get('.profile-edit-dialog');
     const nativeInput = wrapper.get(input).element as HTMLInputElement;
+    Object.defineProperty(nativeInput, 'files', {
+      configurable: true,
+      value: [new File(['selected'], 'selected.webp', { type: 'image/webp' })],
+    });
     const click = vi.spyOn(nativeInput, 'click').mockImplementation(() => {
-      const event = new Event('cancel', { cancelable: true });
-      dialog.element.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true);
+      nativeInput.dispatchEvent(new Event('change', { bubbles: true }));
     });
 
     await wrapper.get(button).trigger('click');
 
     expect(dialog.attributes('open')).toBeDefined();
     expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
+    expect(wrapper.find(cropDialog).exists()).toBe(true);
     click.mockRestore();
   });
 
   it.each(['avatar', 'cover'] as const)
-    ('keeps the clean editor open after %s picker cancel, then honors a later Escape', async (kind) => {
-      vi.useFakeTimers();
+    ('keeps the clean editor open after a bubbling %s input cancel, then honors a later Escape', async (kind) => {
       wrapper = mountAttachedProfile();
       await settle();
       await openEditor(wrapper);
@@ -489,10 +509,9 @@ describe('UserProfileView profile cover editor', () => {
       const button = wrapper.get(buttonSelector).element as HTMLButtonElement;
       const focus = vi.spyOn(button, 'focus');
       await wrapper.get(buttonSelector).trigger('click');
-      await cancelFilePicker(wrapper, kind);
-      const pickerReturnCancel = await cancelEditDialog(wrapper);
+      const eventReachedDialog = await cancelFilePicker(wrapper, kind);
 
-      expect(pickerReturnCancel.defaultPrevented).toBe(true);
+      expect(eventReachedDialog).toBe(false);
       expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
       expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
       expect(wrapper.get('.profile-edit-form button[type="submit"]').attributes('disabled')).toBeDefined();
@@ -500,7 +519,6 @@ describe('UserProfileView profile cover editor', () => {
       expect(wrapper.find('.profile-edit-cover__preview img').exists()).toBe(false);
       expect(focus).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(0);
       const laterEscape = await cancelEditDialog(wrapper);
       expect(laterEscape.defaultPrevented).toBe(true);
       expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
@@ -510,7 +528,6 @@ describe('UserProfileView profile cover editor', () => {
 
   it.each(['avatar', 'cover'] as const)
     ('preserves a dirty bio without discard confirmation during %s picker cancel', async (kind) => {
-      vi.useFakeTimers();
       wrapper = mountProfile();
       await settle();
       await openEditor(wrapper);
@@ -518,16 +535,15 @@ describe('UserProfileView profile cover editor', () => {
 
       const buttonSelector = kind === 'avatar' ? '[aria-label="Change photo"]' : '[aria-label="Change cover"]';
       await wrapper.get(buttonSelector).trigger('click');
-      await cancelFilePicker(wrapper, kind);
-      const pickerReturnCancel = await cancelEditDialog(wrapper);
+      const eventReachedDialog = await cancelFilePicker(wrapper, kind);
 
-      expect(pickerReturnCancel.defaultPrevented).toBe(true);
+      expect(eventReachedDialog).toBe(false);
       expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
       expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
       expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('draft bio');
 
-      await vi.advanceTimersByTimeAsync(0);
-      await cancelEditDialog(wrapper);
+      const genuineEscape = await cancelEditDialog(wrapper);
+      expect(genuineEscape.defaultPrevented).toBe(true);
       expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
       expect(wrapper.find('.confirm-dialog').text()).toContain('Discard changes?');
       expect((wrapper.get('#profile-bio').element as HTMLTextAreaElement).value).toBe('draft bio');
@@ -535,7 +551,6 @@ describe('UserProfileView profile cover editor', () => {
 
   it.each(['avatar', 'cover'] as const)
     ('treats an empty %s change as picker cancellation', async (kind) => {
-      vi.useFakeTimers();
       wrapper = mountProfile();
       await settle();
       await openEditor(wrapper);
@@ -550,14 +565,12 @@ describe('UserProfileView profile cover editor', () => {
       });
       await input.trigger('change');
 
-      const immediateCancel = await cancelEditDialog(wrapper);
-      expect(immediateCancel.defaultPrevented).toBe(true);
       expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
       expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
       expect(wrapper.get('.profile-edit-form button[type="submit"]').attributes('disabled')).toBeDefined();
 
-      await vi.advanceTimersByTimeAsync(0);
-      await cancelEditDialog(wrapper);
+      const genuineEscape = await cancelEditDialog(wrapper);
+      expect(genuineEscape.defaultPrevented).toBe(true);
       expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
     });
 
@@ -803,19 +816,17 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('preserves the selected avatar preview when replacing it is cancelled', async () => {
-    vi.useFakeTimers();
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
     await setAvatarFile(wrapper, new File(['first'], 'first.webp', { type: 'image/webp' }));
     await applyAvatarCrop(wrapper);
-    await vi.advanceTimersByTimeAsync(0);
     const preview = wrapper.get('.profile-avatar--edit img').attributes('src');
 
     await wrapper.get('[aria-label="Change photo"]').trigger('click');
-    await cancelFilePicker(wrapper, 'avatar');
-    await cancelEditDialog(wrapper);
+    const eventReachedDialog = await cancelFilePicker(wrapper, 'avatar');
 
+    expect(eventReachedDialog).toBe(false);
     expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
     expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
     expect(wrapper.get('.profile-avatar--edit img').attributes('src')).toBe(preview);
@@ -823,18 +834,16 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('preserves the selected cover preview when replacing it is cancelled', async () => {
-    vi.useFakeTimers();
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
     await setAndApplyCoverFile(wrapper, new File(['first'], 'first.webp', { type: 'image/webp' }));
-    await vi.advanceTimersByTimeAsync(0);
     const preview = wrapper.get('.profile-edit-cover__preview img').attributes('src');
 
     await wrapper.get('[aria-label="Change cover"]').trigger('click');
-    await cancelFilePicker(wrapper, 'cover');
-    await cancelEditDialog(wrapper);
+    const eventReachedDialog = await cancelFilePicker(wrapper, 'cover');
 
+    expect(eventReachedDialog).toBe(false);
     expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
     expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
     expect(wrapper.get('.profile-edit-cover__preview img').attributes('src')).toBe(preview);
@@ -842,8 +851,7 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it.each(['avatar', 'cover'] as const)
-    ('releases the %s picker guard after a valid selection', async (kind) => {
-      vi.useFakeTimers();
+    ('clears the %s picker state after a valid selection', async (kind) => {
       wrapper = mountAttachedProfile();
       await settle();
       await openEditor(wrapper);
@@ -863,7 +871,6 @@ describe('UserProfileView profile cover editor', () => {
       }
       expect(focus).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(0);
       if (kind === 'avatar') {
         await applyAvatarCrop(wrapper);
       } else {
@@ -1116,7 +1123,6 @@ describe('UserProfileView profile cover editor', () => {
     await settle();
     await openEditor(wrapper);
 
-    window.dispatchEvent(new Event('focus'));
     const event = await cancelEditDialog(wrapper);
 
     expect(event.defaultPrevented).toBe(true);
@@ -1124,55 +1130,21 @@ describe('UserProfileView profile cover editor', () => {
     expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
   });
 
-  it('releases the picker guard from the window focus fallback', async () => {
-    vi.useFakeTimers();
-    wrapper = mountProfile();
-    await settle();
-    await openEditor(wrapper);
-    await wrapper.get('[aria-label="Change photo"]').trigger('click');
-
-    window.dispatchEvent(new Event('focus'));
-    const pickerReturnCancel = await cancelEditDialog(wrapper);
-    expect(pickerReturnCancel.defaultPrevented).toBe(true);
-    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
-    expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(0);
-    await cancelEditDialog(wrapper);
-    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
-  });
-
-  it('does not let a stale picker release clear a newer picker kind', async () => {
-    vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+  it('ignores a bubbling cancel event from a dialog descendant', async () => {
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
 
-    await wrapper.get('[aria-label="Change photo"]').trigger('click');
-    await cancelFilePicker(wrapper, 'avatar');
-    const staleRelease = setTimeoutSpy.mock.calls[setTimeoutSpy.mock.calls.length - 1]?.[0];
-    if (typeof staleRelease !== 'function') {
-      throw new Error('Picker release callback was not scheduled');
-    }
+    const event = new Event('cancel', { bubbles: true, cancelable: true });
+    wrapper.get('#profile-bio').element.dispatchEvent(event);
+    await nextTick();
 
-    await wrapper.get('[aria-label="Change cover"]').trigger('click');
-    staleRelease();
-    const newerPickerCancel = await cancelEditDialog(wrapper);
-
-    expect(newerPickerCancel.defaultPrevented).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
     expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeDefined();
     expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
-
-    await cancelFilePicker(wrapper, 'cover');
-    await vi.advanceTimersByTimeAsync(0);
-    await cancelEditDialog(wrapper);
-    expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
-    setTimeoutSpy.mockRestore();
   });
 
   it('resets picker state when the editor is forcibly closed', async () => {
-    vi.useFakeTimers();
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
@@ -1187,32 +1159,6 @@ describe('UserProfileView profile cover editor', () => {
     expect(genuineEscape.defaultPrevented).toBe(true);
     expect(wrapper.find('.profile-edit-dialog').attributes('open')).toBeUndefined();
     expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
-  });
-
-  it('removes the window focus listener and cancels picker release work on unmount', async () => {
-    vi.useFakeTimers();
-    const removeEventListener = vi.spyOn(window, 'removeEventListener');
-    const clearTimeout = vi.spyOn(window, 'clearTimeout');
-    const setTimeout = vi.spyOn(window, 'setTimeout');
-    wrapper = mountProfile();
-    await settle();
-    await openEditor(wrapper);
-    await wrapper.get('[aria-label="Change photo"]').trigger('click');
-    await cancelFilePicker(wrapper, 'avatar');
-    const staleRelease = setTimeout.mock.calls[setTimeout.mock.calls.length - 1]?.[0];
-
-    wrapper.unmount();
-    wrapper = null;
-
-    expect(removeEventListener).toHaveBeenCalledWith('focus', expect.any(Function));
-    expect(clearTimeout).toHaveBeenCalled();
-    if (typeof staleRelease === 'function') {
-      expect(() => staleRelease()).not.toThrow();
-    }
-
-    removeEventListener.mockRestore();
-    clearTimeout.mockRestore();
-    setTimeout.mockRestore();
   });
 
   it('protects a changed bio when the close button is clicked', async () => {
@@ -1241,13 +1187,11 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('protects a pending avatar and preview when Escape triggers dialog cancel', async () => {
-    vi.useFakeTimers();
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
     await setAvatarFile(wrapper, new File(['avatar'], 'avatar.webp', { type: 'image/webp' }));
     await applyAvatarCrop(wrapper);
-    await vi.advanceTimersByTimeAsync(0);
 
     const event = new Event('cancel', { cancelable: true });
     wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
@@ -1260,12 +1204,10 @@ describe('UserProfileView profile cover editor', () => {
   });
 
   it('protects a pending cover and preview when Escape triggers dialog cancel', async () => {
-    vi.useFakeTimers();
     wrapper = mountProfile();
     await settle();
     await openEditor(wrapper);
     await setAndApplyCoverFile(wrapper, new File(['cover'], 'cover.webp', { type: 'image/webp' }));
-    await vi.advanceTimersByTimeAsync(0);
 
     const event = new Event('cancel', { cancelable: true });
     wrapper.get('.profile-edit-dialog').element.dispatchEvent(event);
