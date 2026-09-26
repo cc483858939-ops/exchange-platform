@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import UserAvatar from '../components/users/UserAvatar.vue';
 import UserProfileView from './UserProfileView.vue';
 
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+
 const mocks = vi.hoisted(() => ({
   route: null as any,
   authStore: null as any,

@@ -451,6 +451,8 @@ import {
   ref,
   watch,
 } from 'vue';
+import { ElMessage } from 'element-plus';
+import 'element-plus/es/components/message/style/css';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
 import PostCard from '../components/feed/PostCard.vue';
@@ -1267,20 +1269,26 @@ const handleDeletePost = async (postId: number) => {
   }
 };
 
-const handleLikeToggle = (postId: number) => {
+const handleLikeToggle = async (postId: number) => {
   if (!authStore.isAuthenticated) {
     navigateToLogin();
     return;
   }
-  void profileStore.toggleLike(postId, numericUserID.value ?? undefined);
+  const result = await profileStore.toggleLike(postId, numericUserID.value ?? undefined);
+  if (result === 'failed') {
+    ElMessage.error('Couldn’t update your like. Try again.');
+  }
 };
 
-const handleRepostToggle = (postId: number) => {
+const handleRepostToggle = async (postId: number) => {
   if (!authStore.isAuthenticated) {
     navigateToLogin();
     return;
   }
-  void profileStore.toggleRepost(postId, numericUserID.value ?? undefined);
+  const result = await profileStore.toggleRepost(postId, numericUserID.value ?? undefined);
+  if (result === 'failed') {
+    ElMessage.error('Couldn’t update your repost. Try again.');
+  }
 };
 
 const handleBookmarkToggle = (postId: number) => {

@@ -7,6 +7,8 @@ import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
 import { useProfileSessionStore } from '../store/profileSession';
 
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+
 const mocks = vi.hoisted(() => ({
   route: null as any,
   routeLeaveGuard: null as (() => void) | null,

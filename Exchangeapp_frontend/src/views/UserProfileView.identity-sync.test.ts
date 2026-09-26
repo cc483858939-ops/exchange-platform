@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
 
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+
 const mocks = vi.hoisted(() => ({
   route: { name: 'UserProfile', params: { id: '7' } },
   getUser: vi.fn(),

@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createPinia, setActivePinia } from 'pinia';
 import { useProfileSessionStore } from '../store/profileSession';
 
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+
 type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T) => void;

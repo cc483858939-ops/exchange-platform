@@ -104,6 +104,8 @@ export type ProfileSessionCapture = {
   profileRequestVersion: number;
 };
 
+export type ProfileEngagementMutationResult = 'succeeded' | 'failed' | 'ignored';
+
 const maxProfileSessions = 8;
 const pageSize = 20;
 
@@ -1023,9 +1025,12 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
-  const toggleLike = async (postId: number, rawUserID?: unknown) => {
+  const toggleLike = async (
+    postId: number,
+    rawUserID?: unknown,
+  ): Promise<ProfileEngagementMutationResult> => {
     const post = findPost(postId, rawUserID);
-    if (!post || post.likeStatus !== 'ready' || likePendingPostIds.has(postId)) return false;
+    if (!post || post.likeStatus !== 'ready' || likePendingPostIds.has(postId)) return 'ignored';
     const previousLiked = post.liked;
     const previousLikes = post.likeCount;
     const mutationVersion = (likeMutationVersions.get(postId) ?? 0) + 1;
@@ -1051,7 +1056,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       const result = previousLiked
         ? await unlikePost(postId)
         : await likePost(postId);
-      if (!isCurrent()) return false;
+      if (!isCurrent()) return 'ignored';
       const settledVersion = mutationVersion + 1;
       likeMutationVersions.set(postId, settledVersion);
       applyLikeStateUpdateEverywhere({
@@ -1061,9 +1066,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         status: 'ready',
       });
       likePendingPostIds.delete(postId);
-      return true;
+      return 'succeeded';
     } catch (error) {
-      if (!isCurrent()) return false;
+      if (!isCurrent()) return 'ignored';
       const settledVersion = mutationVersion + 1;
       likeMutationVersions.set(postId, settledVersion);
       applyLikeStateUpdateEverywhere({
@@ -1081,11 +1086,14 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         });
       }
       likePendingPostIds.delete(postId);
-      return false;
+      return 'failed';
     }
   };
 
-  const toggleRepost = async (postId: number, rawUserID?: unknown) => {
+  const toggleRepost = async (
+    postId: number,
+    rawUserID?: unknown,
+  ): Promise<ProfileEngagementMutationResult> => {
     const post = findPost(postId, rawUserID);
     const capturedViewerID = viewerID.value;
     if (
@@ -1094,7 +1102,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       || capturedViewerID === null
       || repostPendingPostIds.has(postId)
       || !authStore.isAuthenticated
-    ) return false;
+    ) return 'ignored';
 
     const previousReposted = post.reposted;
     const previousReposts = post.repostCount;
@@ -1122,7 +1130,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       const response = previousReposted
         ? await undoRepostPost(postId)
         : await repostPost(postId);
-      if (!isCurrent()) return false;
+      if (!isCurrent()) return 'ignored';
       repostMutationVersions.set(postId, mutationVersion + 1);
       applyRepostStateUpdateEverywhere({
         postId,
@@ -1133,9 +1141,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       repostPendingPostIds.delete(postId);
       markOwnProfileTimelineStale();
       if (previousReposted) removeOwnRepostActivityLocal(postId, capturedViewerID);
-      return true;
+      return 'succeeded';
     } catch {
-      if (!isCurrent()) return false;
+      if (!isCurrent()) return 'ignored';
       repostMutationVersions.set(postId, mutationVersion + 1);
       applyRepostStateUpdateEverywhere({
         postId,
@@ -1144,7 +1152,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         status: 'ready',
       }, mutationVersion + 1);
       repostPendingPostIds.delete(postId);
-      return false;
+      return 'failed';
     }
   };
 

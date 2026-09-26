@@ -6,6 +6,8 @@ import { defineComponent, nextTick, reactive, type PropType } from 'vue';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import UserProfileView from './UserProfileView.vue';
 
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+
 const mocks = vi.hoisted(() => ({
   route: null as any,
   authStore: null as any,

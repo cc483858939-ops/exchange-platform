@@ -165,6 +165,33 @@ const deferred = <T>() => {
   return { promise, resolve };
 };
 
+const readyProfilePost = (overrides: Partial<FeedPost> = {}): FeedPost => ({
+  id: 4,
+  author: author(8),
+  content: 'Post 4',
+  language: 'und',
+  media: [],
+  createdAt: '2026-08-24T00:00:00.000Z',
+  likeCount: 2,
+  replyCount: 0,
+  viewCount: 0,
+  liked: false,
+  likeStatus: 'ready',
+  repostCount: 8,
+  reposted: false,
+  repostStatus: 'ready',
+  bookmarked: false,
+  bookmarkStatus: 'ready',
+  ...overrides,
+});
+
+const addReadyProfilePost = (store: ReturnType<typeof useProfileSessionStore>) => {
+  const feedPost = readyProfilePost();
+  const session = store.ensureSession(7)!;
+  session.timelineItems = [profileTimelineItem(feedPost)];
+  return { feedPost, session };
+};
+
 describe('profile session store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -598,8 +625,96 @@ describe('profile session store', () => {
     expect(session.timelineItems[0].post.liked).toBe(true);
 
     resolveLike({ likes: 3, liked: true });
-    await localMutation;
+    await expect(localMutation).resolves.toBe('ignored');
     expect(session.timelineItems[0].post.likeCount).toBe(8);
+  });
+
+  it('returns succeeded after syncing a Profile Like response and clearing pending', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    mocks.likePost.mockResolvedValue({ likes: 3, liked: true });
+
+    const request = store.toggleLike(4, 7);
+    expect(feedPost.liked).toBe(true);
+    expect(feedPost.likeCount).toBe(3);
+    expect(store.likePendingPostIds.has(4)).toBe(true);
+
+    await expect(request).resolves.toBe('succeeded');
+
+    expect(feedPost).toMatchObject({ liked: true, likeCount: 3, likeStatus: 'ready' });
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+    expect(mocks.feedStore!.applyLikeStateUpdate).toHaveBeenLastCalledWith({
+      postId: 4,
+      likes: 3,
+      liked: true,
+      status: 'ready',
+    });
+  });
+
+  it('returns failed and rolls back a rejected current Profile Like', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    mocks.likePost.mockRejectedValue(new Error('offline'));
+
+    const request = store.toggleLike(4, 7);
+    expect(feedPost).toMatchObject({ liked: true, likeCount: 3 });
+
+    await expect(request).resolves.toBe('failed');
+
+    expect(feedPost).toMatchObject({ liked: false, likeCount: 2, likeStatus: 'ready' });
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+  });
+
+  it('returns failed and preserves the unavailable state after a Profile Like 503', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    mocks.likePost.mockRejectedValue({ response: { status: 503 } });
+
+    const request = store.toggleLike(4, 7);
+    expect(feedPost).toMatchObject({ liked: true, likeCount: 3 });
+
+    await expect(request).resolves.toBe('failed');
+
+    expect(feedPost).toMatchObject({ liked: false, likeCount: 2, likeStatus: 'unavailable' });
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+  });
+
+  it('returns ignored for a second Profile Like while the first mutation is pending', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    const pending = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValue(pending.promise);
+
+    const firstRequest = store.toggleLike(4, 7);
+    await expect(store.toggleLike(4, 7)).resolves.toBe('ignored');
+    expect(store.likePendingPostIds.has(4)).toBe(true);
+
+    pending.resolve({ likes: 3, liked: true });
+    await expect(firstRequest).resolves.toBe('succeeded');
+    expect(feedPost).toMatchObject({ liked: true, likeCount: 3 });
+  });
+
+  it('returns ignored when a rejected Profile Like becomes stale', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    let rejectLike!: (error: unknown) => void;
+    const pending = new Promise<{ likes: number; liked: boolean }>((_resolve, reject) => {
+      rejectLike = reject;
+    });
+    mocks.likePost.mockReturnValue(pending);
+
+    const localMutation = store.toggleLike(4, 7);
+    store.applyExternalLikeStateLocal({
+      postId: 4,
+      likes: 9,
+      liked: true,
+      status: 'ready',
+    });
+    rejectLike(new Error('obsolete failure'));
+
+    await expect(localMutation).resolves.toBe('ignored');
+    expect(feedPost).toMatchObject({ liked: true, likeCount: 9, likeStatus: 'ready' });
+    expect(store.likePendingPostIds.has(4)).toBe(false);
   });
 
   it('batch-hydrates Profile Repost state without changing authored membership', async () => {
@@ -674,9 +789,67 @@ describe('profile session store', () => {
     const request = store.toggleRepost(4, 7);
     expect(post.reposted).toBe(true);
     expect(post.repostCount).toBe(9);
-    expect(await request).toBe(false);
+    expect(await request).toBe('failed');
     expect(post.reposted).toBe(false);
     expect(post.repostCount).toBe(8);
+    expect(store.repostPendingPostIds.has(4)).toBe(false);
+  });
+
+  it('returns ignored for a second Profile Repost while the first mutation is pending', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    const pending = deferred<{ reposts: number; reposted: boolean }>();
+    mocks.repostPost.mockReturnValue(pending.promise);
+
+    const firstRequest = store.toggleRepost(4, 7);
+    await expect(store.toggleRepost(4, 7)).resolves.toBe('ignored');
+    expect(store.repostPendingPostIds.has(4)).toBe(true);
+
+    pending.resolve({ reposts: 9, reposted: true });
+    await expect(firstRequest).resolves.toBe('succeeded');
+    expect(feedPost).toMatchObject({ reposted: true, repostCount: 9 });
+  });
+
+  it('returns ignored when a successful Profile Repost becomes stale', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    const pending = deferred<{ reposts: number; reposted: boolean }>();
+    mocks.repostPost.mockReturnValue(pending.promise);
+
+    const localMutation = store.toggleRepost(4, 7);
+    store.applyExternalRepostStateLocal({
+      postId: 4,
+      reposts: 10,
+      reposted: true,
+      status: 'ready',
+    });
+    pending.resolve({ reposts: 9, reposted: true });
+
+    await expect(localMutation).resolves.toBe('ignored');
+    expect(feedPost).toMatchObject({ reposted: true, repostCount: 10, repostStatus: 'ready' });
+    expect(store.repostPendingPostIds.has(4)).toBe(false);
+  });
+
+  it('returns ignored when a rejected Profile Repost becomes stale', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    let rejectRepost!: (error: unknown) => void;
+    const pending = new Promise<{ reposts: number; reposted: boolean }>((_resolve, reject) => {
+      rejectRepost = reject;
+    });
+    mocks.repostPost.mockReturnValue(pending);
+
+    const localMutation = store.toggleRepost(4, 7);
+    store.applyExternalRepostStateLocal({
+      postId: 4,
+      reposts: 10,
+      reposted: true,
+      status: 'ready',
+    });
+    rejectRepost(new Error('obsolete failure'));
+
+    await expect(localMutation).resolves.toBe('ignored');
+    expect(feedPost).toMatchObject({ reposted: true, repostCount: 10, repostStatus: 'ready' });
     expect(store.repostPendingPostIds.has(4)).toBe(false);
   });
 
@@ -714,7 +887,7 @@ describe('profile session store', () => {
     session.loadedActivityKeys.add('repost:55');
     mocks.undoRepostPost.mockResolvedValue({ reposts: 0, reposted: false });
 
-    expect(await store.toggleRepost(4, 7)).toBe(true);
+    expect(await store.toggleRepost(4, 7)).toBe('succeeded');
     expect(session.timelineItems).toHaveLength(1);
     expect(session.timelineItems[0].activityType).toBe('post');
     expect(session.timelineItems[0].sourceId).toBe(4);
@@ -747,7 +920,7 @@ describe('profile session store', () => {
     session.timelineLoaded = true;
     mocks.repostPost.mockResolvedValue({ reposts: 1, reposted: true });
 
-    expect(await store.toggleRepost(4, 7)).toBe(true);
+    expect(await store.toggleRepost(4, 7)).toBe('succeeded');
     expect(session.timelineStale).toBe(true);
     expect(session.timelineItems).toHaveLength(1);
     expect(session.timelineItems[0].activityType).toBe('post');
