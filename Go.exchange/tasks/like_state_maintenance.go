@@ -49,7 +49,7 @@ func startLikeStateMaintenance(ctx context.Context, wg interface {
 		defer ticker.Stop()
 		var cursor uint64
 		for {
-			nextCursor, err := runLikeStateMaintenancePass(ctx, store, global.Db, cursor, time.Now().UTC())
+			nextCursor, err := runLikeStateMaintenancePass(ctx, store, global.WorkerDb, cursor, time.Now().UTC())
 			if err != nil && ctx.Err() == nil {
 				PipelineFailure(PipelineLikeStateMaintenance, "maintenance_failed", 0)
 				log.Printf("[LikeStateMaintenance] pass: %v", err)
@@ -67,17 +67,21 @@ func startLikeStateMaintenance(ctx context.Context, wg interface {
 }
 
 func runLikeStateMaintenance(ctx context.Context) error {
-	_, err := runLikeStateMaintenancePass(ctx, likes.NewStore(global.RedisDB), global.Db, 0, time.Now().UTC())
+	_, err := runLikeStateMaintenancePass(ctx, likes.NewStore(global.RedisDB), global.WorkerDb, 0, time.Now().UTC())
 	return err
 }
 
 func runLikeStateMaintenancePass(ctx context.Context, store *likes.Store, db *gorm.DB, registryCursor uint64, now time.Time) (uint64, error) {
+	if ctx == nil {
+		return registryCursor, errors.New("like state maintenance context is nil")
+	}
 	if store == nil {
 		return registryCursor, errors.New("like state store is not initialized")
 	}
 	if db == nil {
 		return registryCursor, errors.New("database is not initialized")
 	}
+	db = db.WithContext(ctx)
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}

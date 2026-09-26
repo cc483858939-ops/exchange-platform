@@ -63,7 +63,7 @@ func cleanupRecommendationTraceOnce(ctx context.Context, now time.Time, requestR
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if global.Db == nil {
+	if global.WorkerDb == nil {
 		return nil
 	}
 	if batchSize <= 0 {
@@ -71,7 +71,7 @@ func cleanupRecommendationTraceOnce(ctx context.Context, now time.Time, requestR
 	}
 	var rowsCleaned int64
 	expiredSQL := "WITH doomed AS (SELECT request_id, position FROM recommendation_result_traces WHERE expires_at <= ? ORDER BY expires_at ASC LIMIT ?) DELETE FROM recommendation_result_traces AS trace USING doomed WHERE trace.request_id = doomed.request_id AND trace.position = doomed.position"
-	expired := global.Db.WithContext(ctx).Exec(expiredSQL, now, batchSize)
+	expired := global.WorkerDb.WithContext(ctx).Exec(expiredSQL, now, batchSize)
 	if expired.Error != nil {
 		return expired.Error
 	}
@@ -81,7 +81,7 @@ func cleanupRecommendationTraceOnce(ctx context.Context, now time.Time, requestR
 	}
 	cutoff := now.AddDate(0, 0, -requestRetentionDays)
 	requestSQL := "WITH doomed AS (SELECT request_id FROM recommendation_requests WHERE created_at < ? ORDER BY created_at ASC LIMIT ?) DELETE FROM recommendation_requests AS request USING doomed WHERE request.request_id = doomed.request_id"
-	oldRequests := global.Db.WithContext(ctx).Exec(requestSQL, cutoff, batchSize)
+	oldRequests := global.WorkerDb.WithContext(ctx).Exec(requestSQL, cutoff, batchSize)
 	if oldRequests.Error != nil {
 		return oldRequests.Error
 	}

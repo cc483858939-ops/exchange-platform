@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"Go.exchange/config"
 	"Go.exchange/embeddingstate"
@@ -44,11 +47,14 @@ func main() {
 	if strings.TrimSpace(*version) == "" {
 		log.Fatal("--version must not be blank")
 	}
-	config.InitDatabaseConfig()
-	if global.Db == nil {
+	config.InitMaintenanceDatabaseConfig()
+	defer config.CloseDatabasePools()
+	if global.MaintenanceDb == nil {
 		log.Fatal("database is not initialized")
 	}
-	if err := updateServingVersion(context.Background(), global.Db, *version, log.Writer()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := updateServingVersion(ctx, global.MaintenanceDb, *version, log.Writer()); err != nil {
 		log.Fatal(err)
 	}
 }

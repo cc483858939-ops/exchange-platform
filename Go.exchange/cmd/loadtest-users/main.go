@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"Go.exchange/config"
@@ -34,21 +37,27 @@ func run(stdout io.Writer) error {
 		return err
 	}
 
-	config.InitDatabaseConfig()
-	if global.Db == nil {
+	config.InitMaintenanceDatabaseConfig()
+	defer config.CloseDatabasePools()
+	if global.MaintenanceDb == nil {
 		return errors.New("database is not initialized")
 	}
 
-	report, err := provisionSyntheticUsers(global.Db, userConfig)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report, err := provisionSyntheticUsers(ctx, global.MaintenanceDb, userConfig)
 	if err != nil {
 		return err
 	}
 	return writeProvisionReport(stdout, userConfig, report)
 }
 
-func provisionSyntheticUsers(db *gorm.DB, userConfig loadTestUserConfig) (provisionReport, error) {
+func provisionSyntheticUsers(ctx context.Context, db *gorm.DB, userConfig loadTestUserConfig) (provisionReport, error) {
 	if db == nil {
 		return provisionReport{}, errors.New("database is required")
+	}
+	if ctx == nil {
+		return provisionReport{}, errors.New("database context is required")
 	}
 	if userConfig.Password == "" {
 		return provisionReport{}, errors.New("LOADTEST_USER_PASSWORD is required")
@@ -61,7 +70,7 @@ func provisionSyntheticUsers(db *gorm.DB, userConfig loadTestUserConfig) (provis
 	}
 
 	var report provisionReport
-	err := db.Transaction(func(tx *gorm.DB) error {
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for index := 1; index <= userConfig.Count; index++ {
 			username := syntheticUserUsername(userConfig.Prefix, index)
 			displayName := syntheticUserDisplayName(index)

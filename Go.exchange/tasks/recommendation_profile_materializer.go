@@ -44,7 +44,7 @@ func startRecommendationProfileMaterializer(ctx context.Context, wg *sync.WaitGr
 		for {
 			settings := recommendationProfileMaterializerSettings()
 			now := time.Now().UTC()
-			if global.Db != nil {
+			if global.WorkerDb != nil {
 				if err := materializeDueRecommendationProfiles(ctx, now, settings); err != nil {
 					PipelineFailure(PipelineRecommendationProfile, "materialization_failed", 0)
 					log.Printf("[RecommendationProfile] materialize due profiles: %v", err)
@@ -52,7 +52,7 @@ func startRecommendationProfileMaterializer(ctx context.Context, wg *sync.WaitGr
 					PipelineSuccess(PipelineRecommendationProfile, 0)
 				}
 				if lastRebase.IsZero() || now.Sub(lastRebase) >= time.Duration(settings.StaleScanIntervalSeconds)*time.Second {
-					if err := enqueuePeriodicRecommendationProfileRebuilds(now, settings); err != nil {
+					if err := enqueuePeriodicRecommendationProfileRebuilds(ctx, now, settings); err != nil {
 						PipelineFailure(PipelineRecommendationProfile, "rebuild_enqueue_failed", 0)
 						log.Printf("[RecommendationProfile] enqueue periodic rebase: %v", err)
 					}
@@ -141,13 +141,13 @@ func materializeDueRecommendationProfiles(ctx context.Context, now time.Time, se
 	if ctx == nil {
 		return errors.New("materializer context is nil")
 	}
-	if global.Db == nil {
+	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
 	settings = settings.Normalized()
 	cutoff := now.Add(-time.Duration(settings.DebounceSeconds) * time.Second)
 	var dirty []models.UserRecoProfileDirty
-	if err := global.Db.WithContext(ctx).Where("dirty_at <= ? AND next_attempt_at <= ?", cutoff, now).
+	if err := global.WorkerDb.WithContext(ctx).Where("dirty_at <= ? AND next_attempt_at <= ?", cutoff, now).
 		Order("dirty_at ASC, user_id ASC").Limit(settings.BatchSize).Find(&dirty).Error; err != nil {
 		return err
 	}
@@ -170,7 +170,7 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 	if ctx == nil {
 		return errors.New("materializer context is nil")
 	}
-	if global.Db == nil {
+	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
 	started := time.Now()
@@ -180,7 +180,7 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 	}
 	var claim *recommendationProfileMaterializerClaim
 	lockSkipped := false
-	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := global.WorkerDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var acquired bool
 		if err := tx.Raw("SELECT pg_try_advisory_xact_lock(?)", recommendationProfileLockKey(userID)).Scan(&acquired).Error; err != nil {
 			return err
@@ -252,7 +252,7 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 	}
 	metrics.RecordRecommendationProfileMaterialization("error")
 	if claim != nil {
-		if retryErr := retryMaterializedProfileClaim(*claim, err, now); retryErr != nil {
+		if retryErr := retryMaterializedProfileClaim(ctx, *claim, err, now); retryErr != nil {
 			log.Printf("[RecommendationProfile] user=%d retry update: %v", userID, retryErr)
 		}
 	}
@@ -488,7 +488,13 @@ func replaceMaterializedAuthorAffinity(tx *gorm.DB, userID uint, affinities []ma
 	return tx.CreateInBatches(&rows, 200).Error
 }
 
-func retryMaterializedProfileClaim(claim recommendationProfileMaterializerClaim, materializationErr error, now time.Time) error {
+func retryMaterializedProfileClaim(ctx context.Context, claim recommendationProfileMaterializerClaim, materializationErr error, now time.Time) error {
+	if ctx == nil {
+		return errors.New("materializer retry context is nil")
+	}
+	if global.WorkerDb == nil {
+		return errors.New("database is not initialized")
+	}
 	attempt := claim.Attempts + 1
 	backoffSeconds := 2.0 * math.Pow(2, float64(attempt-1))
 	if backoffSeconds > 300 {
@@ -498,7 +504,7 @@ func retryMaterializedProfileClaim(claim recommendationProfileMaterializerClaim,
 	if len(lastError) > 512 {
 		lastError = lastError[:512]
 	}
-	result := global.Db.Model(&models.UserRecoProfileDirty{}).
+	result := global.WorkerDb.WithContext(ctx).Model(&models.UserRecoProfileDirty{}).
 		Where("user_id = ? AND dirty_version = ?", claim.UserID, claim.DirtyVersion).
 		Updates(map[string]interface{}{
 			"attempts": attempt, "next_attempt_at": now.Add(time.Duration(backoffSeconds * float64(time.Second))),
@@ -507,17 +513,21 @@ func retryMaterializedProfileClaim(claim recommendationProfileMaterializerClaim,
 	return result.Error
 }
 
-func enqueuePeriodicRecommendationProfileRebuilds(now time.Time, settings config.RecommendationProfileMaterializationConfig) error {
-	if global.Db == nil {
+func enqueuePeriodicRecommendationProfileRebuilds(ctx context.Context, now time.Time, settings config.RecommendationProfileMaterializationConfig) error {
+	if ctx == nil {
+		return errors.New("materializer enqueue context is nil")
+	}
+	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
 	settings = settings.Normalized()
 	var userIDs []uint
-	if err := global.Db.Model(&models.UserRecoProfile{}).
+	db := global.WorkerDb.WithContext(ctx)
+	if err := db.Model(&models.UserRecoProfile{}).
 		Where("next_rebuild_at <= ?", now).
 		Order("next_rebuild_at ASC, user_id ASC").Limit(settings.StaleEnqueueBatchSize).
 		Pluck("user_id", &userIDs).Error; err != nil {
 		return err
 	}
-	return recommendation.EnsureProfilesQueued(global.Db, userIDs, "periodic_rebase", now)
+	return recommendation.EnsureProfilesQueued(db, userIDs, "periodic_rebase", now)
 }

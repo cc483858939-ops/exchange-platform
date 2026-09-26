@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"Go.exchange/config"
@@ -31,6 +33,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: go run ./cmd/devdata <fetch|refresh|refresh-incremental|refresh-account|rebuild|verify|verify-avatars> [flags]")
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	defer config.CloseDatabasePools()
 	baseDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
@@ -49,7 +54,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		_, report, err := fetchSnapshotForCommand(context.Background(), client, registry, options, baseDir, stdout)
+		_, report, err := fetchSnapshotForCommand(ctx, client, registry, options, baseDir, stdout)
 		if err != nil {
 			return err
 		}
@@ -68,12 +73,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		lock, err := devdata.AcquireDevDataMutationLock(context.Background(), db)
+		lock, err := devdata.AcquireDevDataMutationLock(ctx, db)
 		if err != nil {
 			return err
 		}
 		defer func() {
-			if releaseErr := lock.Release(context.Background()); releaseErr != nil {
+			if releaseErr := releaseDevDataMutationLock(ctx, lock); releaseErr != nil {
 				fmt.Fprintf(stderr, "WARN: release DevData mutation lock: %v\n", releaseErr)
 			}
 		}()
@@ -85,7 +90,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		snapshot, report, err := fetchSnapshotForCommand(context.Background(), client, registry, options, baseDir, stdout)
+		snapshot, report, err := fetchSnapshotForCommand(ctx, client, registry, options, baseDir, stdout)
 		if err != nil {
 			return err
 		}
@@ -112,7 +117,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if avatarStore != nil {
 			avatarFetcher = devdata.NewAvatarDownloader()
 		}
-		resolutions, avatarReport, err := devdata.PrepareAvatarMirrors(context.Background(), registry, snapshot, avatarFetcher, avatarStore)
+		resolutions, avatarReport, err := devdata.PrepareAvatarMirrors(ctx, registry, snapshot, avatarFetcher, avatarStore)
 		if err != nil {
 			return err
 		}
@@ -121,7 +126,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if avatarStore != nil {
 			coverFetcher = devdata.NewCoverDownloader()
 		}
-		coverResolutions, coverReport, err := devdata.PrepareCoverMirrors(context.Background(), registry, snapshot, coverFetcher, avatarStore)
+		coverResolutions, coverReport, err := devdata.PrepareCoverMirrors(ctx, registry, snapshot, coverFetcher, avatarStore)
 		if err != nil {
 			return err
 		}
@@ -130,12 +135,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if avatarStore != nil {
 			postMediaFetcher = devdata.NewPostMediaDownloader()
 		}
-		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(context.Background(), registry, snapshot, postMediaFetcher, avatarStore)
+		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(ctx, registry, snapshot, postMediaFetcher, avatarStore)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
-		if err := syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
+		if err := syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
 			AvatarResolutions:                    resolutions,
 			CoverResolutions:                     coverResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
@@ -152,13 +157,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return runIncrementalRefresh(context.Background(), baseDir, options, stdout, stderr)
+		return runIncrementalRefresh(ctx, baseDir, options, stdout, stderr)
 	case "refresh-account":
 		options, err := parseCommandFlags("refresh-account", args[1:], stderr, false)
 		if err != nil {
 			return err
 		}
-		return runTargetedRefresh(context.Background(), baseDir, options, stdout, stderr)
+		return runTargetedRefresh(ctx, baseDir, options, stdout, stderr)
 	case "rebuild":
 		options, err := parseCommandFlags("rebuild", args[1:], stderr, true)
 		if err != nil {
@@ -168,12 +173,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		lock, err := devdata.AcquireDevDataMutationLock(context.Background(), db)
+		lock, err := devdata.AcquireDevDataMutationLock(ctx, db)
 		if err != nil {
 			return err
 		}
 		defer func() {
-			if releaseErr := lock.Release(context.Background()); releaseErr != nil {
+			if releaseErr := releaseDevDataMutationLock(ctx, lock); releaseErr != nil {
 				fmt.Fprintf(stderr, "WARN: release DevData mutation lock: %v\n", releaseErr)
 			}
 		}()
@@ -203,17 +208,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 			coverFetcher = devdata.NewCoverDownloader()
 			postMediaFetcher = devdata.NewPostMediaDownloader()
 		}
-		avatarResolutions, avatarReport, err := devdata.PrepareAvatarMirrors(context.Background(), registry, snapshot, avatarFetcher, mirrorStore)
+		avatarResolutions, avatarReport, err := devdata.PrepareAvatarMirrors(ctx, registry, snapshot, avatarFetcher, mirrorStore)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Avatars: attempted=%d uploaded=%d reused=%d failed=%d\n", avatarReport.Attempted, avatarReport.Uploaded, avatarReport.Reused, avatarReport.Failed)
-		coverResolutions, coverReport, err := devdata.PrepareCoverMirrors(context.Background(), registry, snapshot, coverFetcher, mirrorStore)
+		coverResolutions, coverReport, err := devdata.PrepareCoverMirrors(ctx, registry, snapshot, coverFetcher, mirrorStore)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Covers: attempted=%d uploaded=%d reused=%d cleared=%d failed=%d\n", coverReport.Attempted, coverReport.Uploaded, coverReport.Reused, coverReport.Cleared, coverReport.Failed)
-		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(context.Background(), registry, snapshot, postMediaFetcher, mirrorStore)
+		postMediaResolutions, postMediaReport, err := devdata.PreparePostMediaMirrors(ctx, registry, snapshot, postMediaFetcher, mirrorStore)
 		if err != nil {
 			return err
 		}
@@ -222,7 +227,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if redisClient != nil {
 			defer redisClient.Close()
 		}
-		if err := syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
+		if err := syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
 			AvatarResolutions:                    avatarResolutions,
 			CoverResolutions:                     coverResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
@@ -247,7 +252,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		verification, err := devdata.VerifyCoreWithOptions(context.Background(), db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
+		verification, err := devdata.VerifyCoreWithOptions(ctx, db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
 		if err != nil {
 			return err
 		}
@@ -274,7 +279,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				storageErr = errors.New("avatar storage adapter is unavailable")
 			}
 		}
-		verification, verifyErr := devdata.VerifyAvatars(context.Background(), db, registry, avatarStore)
+		verification, verifyErr := devdata.VerifyAvatars(ctx, db, registry, avatarStore)
 		fmt.Fprintf(stdout, "Avatar verification: enabled=%d local_urls=%d objects_present=%d invalid=%d\n", verification.Enabled, verification.LocalURLs, verification.ObjectsPresent, verification.Invalid)
 		if verifyErr != nil {
 			return verifyErr
@@ -511,7 +516,7 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 		return nil
 	}
 	defer func() {
-		if releaseErr := lock.Release(context.Background()); releaseErr != nil {
+		if releaseErr := releaseDevDataMutationLock(ctx, lock); releaseErr != nil {
 			fmt.Fprintf(stderr, "WARN: release DevData mutation lock: %v\n", releaseErr)
 		}
 	}()
@@ -627,11 +632,25 @@ func writeIncrementalSummary(stdout io.Writer, shard int, fetchReport devdata.In
 }
 
 func initDatabase() (*gorm.DB, error) {
-	config.InitDatabaseConfig()
-	if global.Db == nil {
+	config.InitWorkerDatabaseConfig()
+	if global.WorkerDb == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	return global.Db, nil
+	return global.WorkerDb, nil
+}
+
+func releaseDevDataMutationLock(ctx context.Context, lock interface {
+	Release(context.Context) error
+}) error {
+	if ctx == nil {
+		return errors.New("DevData mutation lock release context is nil")
+	}
+	if lock == nil {
+		return errors.New("DevData mutation lock is nil")
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	return lock.Release(releaseCtx)
 }
 
 func bestEffortRedis(stderr io.Writer) *redis.Client {
@@ -643,7 +662,7 @@ func bestEffortRedis(stderr io.Writer) *redis.Client {
 	return client
 }
 
-func syncAndVerify(stdout, stderr io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, options devdata.SyncOptions) error {
+func syncAndVerify(ctx context.Context, stdout, stderr io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, options devdata.SyncOptions) error {
 	db, err := initDatabase()
 	if err != nil {
 		return err
@@ -652,16 +671,16 @@ func syncAndVerify(stdout, stderr io.Writer, registry devdata.SourceRegistry, sn
 	if redisClient != nil {
 		defer redisClient.Close()
 	}
-	return syncAndVerifyWithDB(stdout, registry, snapshot, db, redisClient, options)
+	return syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, options)
 }
 
-func syncAndVerifyWithDB(stdout io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, db *gorm.DB, redisClient *redis.Client, options devdata.SyncOptions) error {
-	result, err := devdata.SyncSnapshotWithOptions(context.Background(), db, registry, snapshot, redisClient, time.Now().UTC(), options)
+func syncAndVerifyWithDB(ctx context.Context, stdout io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, db *gorm.DB, redisClient *redis.Client, options devdata.SyncOptions) error {
+	result, err := devdata.SyncSnapshotWithOptions(ctx, db, registry, snapshot, redisClient, time.Now().UTC(), options)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Sync: kept=%d reactivated=%d inserted=%d retired_soft=%d retired_hard=%d\n", result.Kept, result.Reactivated, result.Inserted, result.RetiredSoft, result.RetiredHard)
-	verification, err := devdata.VerifyCoreWithOptions(context.Background(), db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
+	verification, err := devdata.VerifyCoreWithOptions(ctx, db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
 	if err != nil {
 		return err
 	}

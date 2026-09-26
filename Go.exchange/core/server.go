@@ -30,7 +30,7 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth rate limiter: %w", err)
 	}
-	authController, err := controllers.NewAuthController(global.Db, tokens, limiter)
+	authController, err := controllers.NewAuthController(global.APIDb, tokens, limiter)
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth controller: %w", err)
 	}

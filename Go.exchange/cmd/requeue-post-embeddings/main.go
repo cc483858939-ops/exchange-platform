@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"Go.exchange/config"
@@ -59,7 +62,8 @@ func (s gormPostEmbeddingReconciliationScanner) ListPage(ctx context.Context, la
 }
 
 func main() {
-	config.InitDatabaseConfig()
+	config.InitWorkerDatabaseConfig()
+	defer config.CloseDatabasePools()
 
 	if config.AppConfig == nil || !config.AppConfig.Embedding.Enabled {
 		log.Printf("post embedding reconciliation skipped: embedding is disabled")
@@ -71,7 +75,9 @@ func main() {
 	}
 	defer publisher.Close()
 
-	stats, err := requeuePostEmbeddings(context.Background(), global.Db, publisher, config.BuildEmbeddingVersion(), time.Now().UTC())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	stats, err := requeuePostEmbeddings(ctx, global.WorkerDb, publisher, config.BuildEmbeddingVersion(), time.Now().UTC())
 	if err != nil {
 		log.Fatalf("failed to requeue post embeddings: %v", err)
 	}

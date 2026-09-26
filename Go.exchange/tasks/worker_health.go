@@ -106,10 +106,10 @@ func refreshWorkerReadiness(ctx context.Context) error {
 }
 
 func refreshDatabaseReadiness(ctx context.Context) error {
-	if global.Db == nil {
+	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
-	db, err := global.Db.DB()
+	db, err := global.WorkerDb.DB()
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func refreshDatabaseReadiness(ctx context.Context) error {
 }
 
 func refreshWorkerSchemaReadiness(ctx context.Context) error {
-	return initialize.CheckRuntimeSchema(ctx, global.Db, initialize.SchemaValidationOptions{
+	return initialize.CheckRuntimeSchema(ctx, global.WorkerDb, initialize.SchemaValidationOptions{
 		RequiredVersion:     initialize.RequiredSchemaVersion,
 		IncludeWorkerTables: true,
 		EmbeddingEnabled:    config.AppConfig != nil && config.AppConfig.Embedding.Enabled,
@@ -476,9 +476,9 @@ func evaluateWorkerReadiness(ctx context.Context) {
 
 func refreshWorkerBacklogs(ctx context.Context) {
 	now := time.Now().UTC()
-	if global.Db != nil {
+	if global.WorkerDb != nil {
 		var due int64
-		if err := global.Db.WithContext(ctx).Table("user_reco_profile_dirty").Where("next_attempt_at <= ?", now).Count(&due).Error; err == nil {
+		if err := global.WorkerDb.WithContext(ctx).Table("user_reco_profile_dirty").Where("next_attempt_at <= ?", now).Count(&due).Error; err == nil {
 			PipelineBacklogAt(PipelineRecommendationProfile, due, now)
 		}
 	}

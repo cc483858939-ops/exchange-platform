@@ -35,7 +35,7 @@ func startOutboxRetention(ctx context.Context, wg *sync.WaitGroup) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
-			if err := cleanupOutboxOnce(time.Now().UTC().Add(-retention), batchSize); err != nil && ctx.Err() == nil {
+			if err := cleanupOutboxOnce(ctx, time.Now().UTC().Add(-retention), batchSize); err != nil && ctx.Err() == nil {
 				log.Printf("[OutboxRetention] cleanup skipped: %v", err)
 			}
 			select {
@@ -47,19 +47,23 @@ func startOutboxRetention(ctx context.Context, wg *sync.WaitGroup) {
 	}()
 }
 
-func cleanupOutboxOnce(cutoff time.Time, batchSize int) error {
-	if global.Db == nil {
+func cleanupOutboxOnce(ctx context.Context, cutoff time.Time, batchSize int) error {
+	if ctx == nil {
+		return errors.New("outbox retention context is nil")
+	}
+	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
 	if batchSize <= 0 {
 		batchSize = 5000
 	}
+	db := global.WorkerDb.WithContext(ctx)
 	var slot struct {
 		Active      bool    `gorm:"column:active"`
 		Confirmed   *string `gorm:"column:confirmed_flush_lsn"`
 		WALLagBytes *int64  `gorm:"column:wal_lag_bytes"`
 	}
-	if err := global.Db.Raw(`
+	if err := db.Raw(`
 SELECT active, confirmed_flush_lsn::text,
        CASE WHEN confirmed_flush_lsn IS NULL THEN NULL ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)::bigint END AS wal_lag_bytes
 FROM pg_replication_slots
@@ -76,7 +80,7 @@ WHERE slot_name = 'goexchange_outbox_slot'
 	if cutoff.IsZero() {
 		return errors.New("outbox retention cutoff is required")
 	}
-	result := global.Db.Exec(`
+	result := db.Exec(`
 DELETE FROM outbox_events
 WHERE id IN (
   SELECT id FROM outbox_events

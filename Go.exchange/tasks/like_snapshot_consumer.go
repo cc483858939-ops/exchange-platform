@@ -66,7 +66,7 @@ func runLikeSnapshotProjectionConsumer(ctx context.Context) {
 	likeSnapshotConsumers.Add(1)
 	defer likeSnapshotConsumers.Add(-1)
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
-	_ = consumeLikeSnapshotMessages(ctx, reader, publisher, global.Db, kafkaConfig)
+	_ = consumeLikeSnapshotMessages(ctx, reader, publisher, global.WorkerDb, kafkaConfig)
 }
 
 func consumeLikeSnapshotMessages(ctx context.Context, reader likeSnapshotMessageReader, publisher rawKafkaMessagePublisher, db *gorm.DB, kafkaConfig config.KafkaConfig) error {

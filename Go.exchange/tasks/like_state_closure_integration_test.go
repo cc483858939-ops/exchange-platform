@@ -82,8 +82,9 @@ func openLikeStateClosureIntegration(t *testing.T) *likeStateClosureIntegration 
 		snapshotGroup: "like-state-closure-snapshot-" + uuid.NewString(),
 		behaviorGroup: "like-state-closure-behavior-" + uuid.NewString(),
 	}
-	originalDB, originalRedis, originalConfig := global.Db, global.RedisDB, config.AppConfig
+	originalDB, originalWorkerDB, originalRedis, originalConfig := global.Db, global.WorkerDb, global.RedisDB, config.AppConfig
 	global.Db = db
+	global.WorkerDb = db
 	global.RedisDB = redisClient
 	config.AppConfig = &config.Config{Kafka: config.KafkaConfig{
 		LikeSnapshotGroupID: env.snapshotGroup,
@@ -96,7 +97,7 @@ func openLikeStateClosureIntegration(t *testing.T) *likeStateClosureIntegration 
 		if err := cleanupLikeStateClosureIntegration(env); err != nil {
 			t.Errorf("cleanup Like state closure integration: %v", err)
 		}
-		global.Db, global.RedisDB, config.AppConfig = originalDB, originalRedis, originalConfig
+		global.Db, global.WorkerDb, global.RedisDB, config.AppConfig = originalDB, originalWorkerDB, originalRedis, originalConfig
 		if err := redisClient.Close(); err != nil {
 			t.Errorf("close Redis integration client: %v", err)
 		}

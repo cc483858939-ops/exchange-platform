@@ -499,5 +499,7 @@ func parsePositiveInt(raw string) int {
 }
 
 func InitDB() {
-	initDB()
+	if err := initDB(); err != nil {
+		log.Fatalf("failed to initialize database: %v", err)
+	}
 }

@@ -2,10 +2,13 @@ package config
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"testing"
 	"time"
+
+	"Go.exchange/global"
 )
 
 func TestPostgresRuntimeTimeoutsAndCancellation(t *testing.T) {
@@ -15,16 +18,17 @@ func TestPostgresRuntimeTimeoutsAndCancellation(t *testing.T) {
 	}
 	t.Setenv("DB_STATEMENT_TIMEOUT", "250ms")
 	t.Setenv("DB_LOCK_TIMEOUT", "100ms")
+	t.Setenv("API_DB_STATEMENT_TIMEOUT", "")
+	t.Setenv("API_DB_LOCK_TIMEOUT", "")
 
-	db, err := openDatabase(dsn)
+	db, err := openAPIDatabase(dsn, DatabasePoolOptions{MaxOpenConns: 4, MaxIdleConns: 4})
 	if err != nil {
-		t.Fatalf("openDatabase() error = %v", err)
+		t.Fatalf("openAPIDatabase() error = %v", err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
 		t.Fatalf("db.DB() error = %v", err)
 	}
-	sqlDB.SetMaxOpenConns(4)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	var settings []struct {
@@ -151,6 +155,229 @@ func TestPostgresRuntimeTimeoutsAndCancellation(t *testing.T) {
 		t.Errorf("lock timeout query took %s, want under 1s", elapsed)
 	}
 	assertPostgresSQLState(t, err, "55P03")
+}
+
+func TestPostgresDatabaseTimeoutProfilesAreIsolated(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL timeout profile isolation test")
+	}
+	t.Setenv("API_DB_STATEMENT_TIMEOUT", "250ms")
+	t.Setenv("API_DB_LOCK_TIMEOUT", "100ms")
+	t.Setenv("WORKER_DB_STATEMENT_TIMEOUT", "500ms")
+	t.Setenv("WORKER_DB_LOCK_TIMEOUT", "500ms")
+	t.Setenv("MAINTENANCE_DB_STATEMENT_TIMEOUT", "0")
+	t.Setenv("MAINTENANCE_DB_LOCK_TIMEOUT", "1s")
+
+	pool := DatabasePoolOptions{MaxOpenConns: 4, MaxIdleConns: 2}
+	apiDB, err := openAPIDatabase(dsn, pool)
+	if err != nil {
+		t.Fatalf("open API database: %v", err)
+	}
+	workerDB, err := openWorkerDatabase(dsn, pool)
+	if err != nil {
+		closeDatabaseHandle(apiDB)
+		t.Fatalf("open worker database: %v", err)
+	}
+	maintenanceDB, err := openMaintenanceDatabase(dsn, pool)
+	if err != nil {
+		closeDatabaseHandle(apiDB)
+		closeDatabaseHandle(workerDB)
+		t.Fatalf("open maintenance database: %v", err)
+	}
+	t.Cleanup(func() {
+		closeDatabaseHandle(apiDB)
+		closeDatabaseHandle(workerDB)
+		closeDatabaseHandle(maintenanceDB)
+	})
+
+	apiSQL, err := apiDB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerSQL, err := workerDB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenanceSQL, err := maintenanceDB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSetting := func(name string, db *sql.DB, setting, want string) {
+		t.Helper()
+		var got string
+		if err := db.QueryRowContext(context.Background(), "SHOW "+setting).Scan(&got); err != nil {
+			t.Fatalf("SHOW %s on %s database: %v", setting, name, err)
+		}
+		if got != want {
+			t.Errorf("%s %s=%q, want %q", name, setting, got, want)
+		}
+	}
+	assertSetting("API", apiSQL, "statement_timeout", "250ms")
+	assertSetting("API", apiSQL, "lock_timeout", "100ms")
+	assertSetting("worker", workerSQL, "statement_timeout", "500ms")
+	assertSetting("worker", workerSQL, "lock_timeout", "500ms")
+	assertSetting("maintenance", maintenanceSQL, "statement_timeout", "0")
+	assertSetting("maintenance", maintenanceSQL, "lock_timeout", "1s")
+
+	err = apiDB.WithContext(context.Background()).Exec("SELECT pg_sleep(0.5)").Error
+	if err == nil {
+		t.Fatal("API query longer than its timeout unexpectedly succeeded")
+	}
+	assertPostgresSQLState(t, err, "57014")
+	if err := workerDB.WithContext(context.Background()).Exec("SELECT pg_sleep(0.25)").Error; err != nil {
+		t.Fatalf("worker query within worker timeout failed: %v", err)
+	}
+	err = workerDB.WithContext(context.Background()).Exec("SELECT pg_sleep(1)").Error
+	if err == nil {
+		t.Fatal("worker query longer than its timeout unexpectedly succeeded")
+	}
+	assertPostgresSQLState(t, err, "57014")
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	queryDone := make(chan error, 1)
+	go func() {
+		queryDone <- workerDB.WithContext(cancelCtx).Exec("SELECT pg_sleep(5)").Error
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-queryDone:
+		if err == nil {
+			t.Fatal("worker query canceled by job context unexpectedly succeeded")
+		}
+		if !errors.Is(err, context.Canceled) {
+			assertPostgresSQLState(t, err, "57014")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker database query did not honor job context cancellation")
+	}
+
+	lockCtx, lockCancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer lockCancel()
+	ownerConn, err := maintenanceSQL.Conn(lockCtx)
+	if err != nil {
+		t.Fatalf("acquire advisory lock owner connection: %v", err)
+	}
+	defer ownerConn.Close()
+	lockID := time.Now().UnixNano()
+	ownerTx, err := ownerConn.BeginTx(lockCtx, nil)
+	if err != nil {
+		t.Fatalf("begin advisory lock owner transaction: %v", err)
+	}
+	defer ownerTx.Rollback()
+	if _, err := ownerTx.ExecContext(lockCtx, "SELECT pg_advisory_xact_lock($1)", lockID); err != nil {
+		t.Fatalf("acquire advisory lock: %v", err)
+	}
+	_, err = apiSQL.ExecContext(lockCtx, "SELECT pg_advisory_xact_lock($1)", lockID)
+	if err == nil {
+		t.Fatal("API advisory lock wait exceeded its lock timeout without an error")
+	}
+	assertPostgresSQLState(t, err, "55P03")
+
+	released := make(chan error, 1)
+	time.AfterFunc(250*time.Millisecond, func() { released <- ownerTx.Commit() })
+	if _, err := workerSQL.ExecContext(lockCtx, "SELECT pg_advisory_xact_lock($1)", lockID); err != nil {
+		t.Fatalf("worker advisory lock wait should fit its independent 500ms budget: %v", err)
+	}
+	if err := <-released; err != nil {
+		t.Fatalf("release advisory lock owner: %v", err)
+	}
+
+	migrationLockID := lockID + 1
+	migrationOwner, err := maintenanceSQL.Conn(lockCtx)
+	if err != nil {
+		t.Fatalf("acquire migration advisory lock owner connection: %v", err)
+	}
+	defer migrationOwner.Close()
+	migrationTx, err := migrationOwner.BeginTx(lockCtx, nil)
+	if err != nil {
+		t.Fatalf("begin migration advisory lock owner transaction: %v", err)
+	}
+	defer migrationTx.Rollback()
+	if _, err := migrationTx.ExecContext(lockCtx, "SELECT pg_advisory_xact_lock($1)", migrationLockID); err != nil {
+		t.Fatalf("acquire migration advisory lock: %v", err)
+	}
+	time.AfterFunc(250*time.Millisecond, func() { _ = migrationTx.Commit() })
+	if _, err := maintenanceSQL.ExecContext(lockCtx, "SELECT pg_advisory_xact_lock($1)", migrationLockID); err != nil {
+		t.Fatalf("maintenance advisory lock should wait within its separate 1s budget: %v", err)
+	}
+}
+
+func TestPostgresRuntimeAllInitializesIndependentAPIsAndWorkerPools(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL runtime=all pool isolation test")
+	}
+	t.Setenv("APP_RUNTIME_ROLE", RuntimeRoleAll)
+	t.Setenv("DATABASE_DSN", dsn)
+	t.Setenv("API_DB_STATEMENT_TIMEOUT", "250ms")
+	t.Setenv("API_DB_LOCK_TIMEOUT", "100ms")
+	t.Setenv("WORKER_DB_STATEMENT_TIMEOUT", "500ms")
+	t.Setenv("WORKER_DB_LOCK_TIMEOUT", "500ms")
+	t.Setenv("API_DB_MAX_OPEN_CONNS", "")
+	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "")
+
+	previousConfig := AppConfig
+	previousDB, previousAPIDB, previousWorkerDB := global.Db, global.APIDb, global.WorkerDb
+	AppConfig = &Config{}
+	AppConfig.Database.Dsn = dsn
+	AppConfig.Database.MaxOpenConns = 4
+	AppConfig.Database.MaxIdleconns = 2
+	var openedAPI, openedWorker interface{ DB() (*sql.DB, error) }
+	t.Cleanup(func() {
+		if openedAPI != nil {
+			if db, err := openedAPI.DB(); err == nil {
+				_ = db.Close()
+			}
+		}
+		if openedWorker != nil {
+			if db, err := openedWorker.DB(); err == nil {
+				_ = db.Close()
+			}
+		}
+		global.Db, global.APIDb, global.WorkerDb = previousDB, previousAPIDB, previousWorkerDB
+		AppConfig = previousConfig
+	})
+
+	if err := initDB(); err != nil {
+		t.Fatalf("initialize runtime=all databases: %v", err)
+	}
+	openedAPI, openedWorker = global.APIDb, global.WorkerDb
+	if global.APIDb == nil || global.WorkerDb == nil || global.APIDb == global.WorkerDb {
+		t.Fatal("runtime=all must create distinct API and Worker handles")
+	}
+	if global.Db != global.APIDb {
+		t.Fatal("global.Db must remain an alias for the API database")
+	}
+
+	apiSQL, err := global.APIDb.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerSQL, err := global.WorkerDb.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := apiSQL.Stats().MaxOpenConnections; got != 3 {
+		t.Errorf("API max open connections=%d, want 3", got)
+	}
+	if got := workerSQL.Stats().MaxOpenConnections; got != 1 {
+		t.Errorf("worker max open connections=%d, want 1", got)
+	}
+	if apiSQL.Stats().MaxOpenConnections+workerSQL.Stats().MaxOpenConnections > AppConfig.Database.MaxOpenConns {
+		t.Fatal("runtime=all pool caps exceed configured total connection budget")
+	}
+	var apiStatement, workerStatement string
+	if err := apiSQL.QueryRowContext(context.Background(), "SHOW statement_timeout").Scan(&apiStatement); err != nil {
+		t.Fatal(err)
+	}
+	if err := workerSQL.QueryRowContext(context.Background(), "SHOW statement_timeout").Scan(&workerStatement); err != nil {
+		t.Fatal(err)
+	}
+	if apiStatement != "250ms" || workerStatement != "500ms" {
+		t.Fatalf("runtime=all statement profiles API=%q worker=%q", apiStatement, workerStatement)
+	}
 }
 
 func assertPostgresSQLState(t *testing.T, err error, want string) {

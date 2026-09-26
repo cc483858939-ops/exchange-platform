@@ -105,7 +105,7 @@ func runUserBehaviorProjectionConsumer(ctx context.Context) {
 	defer userBehaviorConsumers.Add(-1)
 	defer reader.Close()
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
-	if err := consumeUserBehaviorMessages(ctx, reader, publisher, global.Db, kafkaConfig); err != nil && ctx.Err() == nil {
+	if err := consumeUserBehaviorMessages(ctx, reader, publisher, global.WorkerDb, kafkaConfig); err != nil && ctx.Err() == nil {
 		PipelineFailure(PipelineUserBehaviorProjection, "projection_failed", 0)
 		log.Printf("[BehaviorProjection] consumer stopped: %v", err)
 	}

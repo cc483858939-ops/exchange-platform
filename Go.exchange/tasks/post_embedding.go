@@ -178,7 +178,7 @@ func runPostEmbeddingConsumer(ctx context.Context) {
 	}
 	kafkaConfig := appConfig.Kafka
 	embeddingConfig := appConfig.Embedding
-	db := global.Db
+	db := global.WorkerDb
 	if db == nil {
 		PipelineFailure(PipelinePostEmbedding, "database_unavailable", 0)
 		log.Printf("[PostEmbedding] consumer disabled: database is not initialized")

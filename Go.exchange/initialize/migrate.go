@@ -1,6 +1,7 @@
 package initialize
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,11 +16,22 @@ import (
 const migrationAdvisoryLockKey int64 = 525716197623
 
 func RunMigrations() error {
-	if global.Db == nil {
+	db := global.MaintenanceDb
+	if db == nil {
+		db = global.Db
+	}
+	return RunMigrationsWithDB(context.Background(), db)
+}
+
+func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
+	if ctx == nil {
+		return errors.New("migration context is nil")
+	}
+	if db == nil {
 		return errors.New("database is not initialized")
 	}
 
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockKey).Error; err != nil {
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}

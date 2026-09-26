@@ -13,10 +13,11 @@ import (
 )
 
 func main() {
-	config.InitDatabaseConfig()
+	config.InitMaintenanceDatabaseConfig()
+	defer config.CloseDatabasePools()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	db, err := global.Db.DB()
+	db, err := global.MaintenanceDb.DB()
 	if err != nil {
 		log.Fatalf("open CDC database connection: %v", err)
 	}

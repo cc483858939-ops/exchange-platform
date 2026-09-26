@@ -1,6 +1,7 @@
 package initialize
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -151,17 +152,25 @@ func OutboxCutoverConfirmed() bool {
 // It is separate from RunMigrations so a normal service startup can never
 // erase an Outbox table implicitly.
 func RunOutboxCutover() error {
-	if global.Db == nil {
-		return errors.New("database is not initialized")
+	db := global.MaintenanceDb
+	if db == nil {
+		db = global.Db
 	}
-	return CutoverLegacyOutbox(global.Db, OutboxCutoverConfirmed())
+	return CutoverLegacyOutboxWithContext(context.Background(), db, OutboxCutoverConfirmed())
 }
 
 func CutoverLegacyOutbox(db *gorm.DB, confirmed bool) error {
+	return CutoverLegacyOutboxWithContext(context.Background(), db, confirmed)
+}
+
+func CutoverLegacyOutboxWithContext(ctx context.Context, db *gorm.DB, confirmed bool) error {
 	if db == nil {
 		return errors.New("database is not initialized")
 	}
-	return db.Transaction(func(tx *gorm.DB) error {
+	if ctx == nil {
+		return errors.New("outbox cutover context is nil")
+	}
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return cutoverLegacyOutboxTx(tx, confirmed)
 	})
 }

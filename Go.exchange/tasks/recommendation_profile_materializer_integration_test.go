@@ -39,15 +39,16 @@ func openRecommendationProfileMaterializerIntegrationDB(t *testing.T) *gorm.DB {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalConfig := global.Db, config.AppConfig
+	originalDB, originalWorkerDB, originalConfig := global.Db, global.WorkerDb, config.AppConfig
 	global.Db = db
+	global.WorkerDb = db
 	config.AppConfig = &config.Config{
 		Embedding: config.EmbeddingConfig{
 			BuildVersion: "post_embedding_v2",
 		},
 	}
 	t.Cleanup(func() {
-		global.Db = originalDB
+		global.Db, global.WorkerDb = originalDB, originalWorkerDB
 		config.AppConfig = originalConfig
 	})
 	if err := initialize.RunMigrations(); err != nil {
@@ -318,6 +319,7 @@ func TestRecommendationProfileRetryRaceIntegration(t *testing.T) {
 		t.Fatalf("new dirty generation before stale retry=%+v", before)
 	}
 	if err := retryMaterializedProfileClaim(
+		context.Background(),
 		recommendationProfileMaterializerClaim{UserID: user.ID, DirtyVersion: 1, Attempts: 0},
 		errors.New("stale failure"),
 		second.Add(time.Minute),

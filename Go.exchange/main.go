@@ -25,6 +25,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	gin.DefaultWriter = ioutil.Discard
 	initialize.InitAll()
+	defer config.CloseDatabasePools()
 
 	role := config.RuntimeRole()
 	if err := config.ValidateRuntimeEventingConfig(role); err != nil {

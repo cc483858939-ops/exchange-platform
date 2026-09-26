@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"Go.exchange/avatarbackfill"
 	"Go.exchange/config"
@@ -37,15 +39,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("--batch-size must be at least 1")
 	}
 
-	config.InitDatabaseConfig()
-	if global.Db == nil {
+	config.InitWorkerDatabaseConfig()
+	defer config.CloseDatabasePools()
+	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
 	store, err := avatarbackfill.NewConfiguredMinioObjectStore()
 	if err != nil {
 		return err
 	}
-	report, err := avatarbackfill.Run(context.Background(), global.Db, store, avatarbackfill.Options{Apply: apply, BatchSize: batchSize})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report, err := avatarbackfill.Run(ctx, global.WorkerDb, store, avatarbackfill.Options{Apply: apply, BatchSize: batchSize})
 	if err != nil {
 		return err
 	}

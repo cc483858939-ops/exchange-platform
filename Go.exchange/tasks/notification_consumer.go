@@ -192,7 +192,7 @@ func processNotificationBatch(ctx context.Context, messages []kafka.Message, pub
 	if len(records) == 0 {
 		return nil
 	}
-	if err := applyNotificationRecords(records); err != nil {
+	if err := applyNotificationRecords(ctx, records); err != nil {
 		metrics.RecordNotificationProjectionFailure("database")
 		return err
 	}
@@ -281,7 +281,7 @@ func decodeNotificationActivity(message kafka.Message) (notificationActivityReco
 	return record, nil
 }
 
-func applyNotificationBatch(messages []kafka.Message) error {
+func applyNotificationBatch(ctx context.Context, messages []kafka.Message) error {
 	records := make([]notificationActivityRecord, 0, len(messages))
 	for _, message := range messages {
 		record, err := decodeNotificationActivity(message)
@@ -290,17 +290,20 @@ func applyNotificationBatch(messages []kafka.Message) error {
 		}
 		records = append(records, record)
 	}
-	return applyNotificationRecords(records)
+	return applyNotificationRecords(ctx, records)
 }
 
-func applyNotificationRecords(records []notificationActivityRecord) error {
-	if global.Db == nil {
+func applyNotificationRecords(ctx context.Context, records []notificationActivityRecord) error {
+	if ctx == nil {
+		return errors.New("notification apply context is nil")
+	}
+	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
 	if config.AppConfig == nil || strings.TrimSpace(config.AppConfig.Kafka.NotificationGroupID) == "" {
 		return errors.New("notification consumer group is not configured")
 	}
-	return global.Db.Transaction(func(tx *gorm.DB) error {
+	return global.WorkerDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		eventIDs := make([]string, 0, len(records))
 		for _, record := range records {
 			eventIDs = append(eventIDs, record.Envelope.ID)

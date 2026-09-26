@@ -113,7 +113,7 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 	defer recommendationMetricsConsumers.Add(-1)
 	defer reader.Close()
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
-	if err := consumeRecommendationMetricsMessages(ctx, reader, publisher, global.Db, kafkaConfig); err != nil && ctx.Err() == nil {
+	if err := consumeRecommendationMetricsMessages(ctx, reader, publisher, global.WorkerDb, kafkaConfig); err != nil && ctx.Err() == nil {
 		PipelineFailure(PipelineRecommendationMetrics, "projection_failed", 0)
 		log.Printf("[RecommendationMetrics] consumer stopped: %v", err)
 	}

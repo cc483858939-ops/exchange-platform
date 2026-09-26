@@ -7,7 +7,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"Go.exchange/config"
 	"Go.exchange/global"
@@ -114,10 +116,13 @@ func writePostEmbeddingCoverage(w io.Writer, coverage postEmbeddingCoverage) err
 }
 
 func run(w io.Writer) error {
-	config.InitDatabaseConfig()
+	config.InitWorkerDatabaseConfig()
+	defer config.CloseDatabasePools()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	coverage, err := calculatePostEmbeddingCoverage(
-		context.Background(),
-		gormPostEmbeddingCoverageScanner{db: global.Db},
+		ctx,
+		gormPostEmbeddingCoverageScanner{db: global.WorkerDb},
 		config.BuildEmbeddingVersion(),
 	)
 	if err != nil {

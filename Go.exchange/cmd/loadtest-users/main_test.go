@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -112,7 +113,7 @@ func TestProvisionSyntheticUsersIntegration(t *testing.T) {
 		_ = db.Unscoped().Where("username IN ?", append(targetUsernames, ordinaryUsername)).Delete(&models.User{}).Error
 	})
 
-	first, err := provisionSyntheticUsers(db, userConfig)
+	first, err := provisionSyntheticUsers(context.Background(), db, userConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,7 @@ func TestProvisionSyntheticUsersIntegration(t *testing.T) {
 		t.Fatalf("first report=%+v", first)
 	}
 
-	second, err := provisionSyntheticUsers(db, userConfig)
+	second, err := provisionSyntheticUsers(context.Background(), db, userConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestProvisionSyntheticUsersIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	third, err := provisionSyntheticUsers(db, userConfig)
+	third, err := provisionSyntheticUsers(context.Background(), db, userConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

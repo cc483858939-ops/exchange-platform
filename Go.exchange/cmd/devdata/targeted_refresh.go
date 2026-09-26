@@ -21,7 +21,7 @@ func runTargetedRefresh(ctx context.Context, baseDir string, options commandOpti
 		return err
 	}
 	defer func() {
-		if releaseErr := lock.Release(context.Background()); releaseErr != nil {
+		if releaseErr := releaseDevDataMutationLock(ctx, lock); releaseErr != nil {
 			fmt.Fprintf(stderr, "WARN: release DevData mutation lock: %v\n", releaseErr)
 		}
 	}()

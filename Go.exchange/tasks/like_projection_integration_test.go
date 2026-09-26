@@ -27,11 +27,12 @@ func TestLikeProjectionRejectsStaleVersionsIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.ConsumerInbox{}, &models.PostReaction{}, &models.PostBehavior{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalConfig := global.Db, config.AppConfig
+	originalDB, originalWorkerDB, originalConfig := global.Db, global.WorkerDb, config.AppConfig
 	global.Db = db
+	global.WorkerDb = db
 	config.AppConfig = &config.Config{}
 	config.AppConfig.Kafka.LikeSnapshotGroupID = "like-snapshot-integration"
-	defer func() { global.Db = originalDB; config.AppConfig = originalConfig }()
+	defer func() { global.Db, global.WorkerDb = originalDB, originalWorkerDB; config.AppConfig = originalConfig }()
 
 	userA := models.User{Username: "like-projection-a-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&userA).Error; err != nil {

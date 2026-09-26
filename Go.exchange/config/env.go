@@ -426,6 +426,57 @@ func DBLockTimeout() time.Duration {
 	return envDuration("DB_LOCK_TIMEOUT", 2*time.Second)
 }
 
+func APIDatabaseTimeoutProfile() (DatabaseTimeoutProfile, error) {
+	statementTimeout, err := configuredDatabaseTimeout("API_DB_STATEMENT_TIMEOUT", DBStatementTimeout(), false)
+	if err != nil {
+		return DatabaseTimeoutProfile{}, err
+	}
+	lockTimeout, err := configuredDatabaseTimeout("API_DB_LOCK_TIMEOUT", DBLockTimeout(), false)
+	if err != nil {
+		return DatabaseTimeoutProfile{}, err
+	}
+	return DatabaseTimeoutProfile{StatementTimeout: statementTimeout, LockTimeout: lockTimeout}, nil
+}
+
+func WorkerDatabaseTimeoutProfile() (DatabaseTimeoutProfile, error) {
+	statementTimeout, err := configuredDatabaseTimeout("WORKER_DB_STATEMENT_TIMEOUT", 30*time.Second, false)
+	if err != nil {
+		return DatabaseTimeoutProfile{}, err
+	}
+	lockTimeout, err := configuredDatabaseTimeout("WORKER_DB_LOCK_TIMEOUT", 5*time.Second, false)
+	if err != nil {
+		return DatabaseTimeoutProfile{}, err
+	}
+	return DatabaseTimeoutProfile{StatementTimeout: statementTimeout, LockTimeout: lockTimeout}, nil
+}
+
+func MaintenanceDatabaseTimeoutProfile() (DatabaseTimeoutProfile, error) {
+	statementTimeout, err := configuredDatabaseTimeout("MAINTENANCE_DB_STATEMENT_TIMEOUT", 0, true)
+	if err != nil {
+		return DatabaseTimeoutProfile{}, err
+	}
+	lockTimeout, err := configuredDatabaseTimeout("MAINTENANCE_DB_LOCK_TIMEOUT", 10*time.Second, false)
+	if err != nil {
+		return DatabaseTimeoutProfile{}, err
+	}
+	return DatabaseTimeoutProfile{StatementTimeout: statementTimeout, LockTimeout: lockTimeout}, nil
+}
+
+func configuredDatabaseTimeout(key string, fallback time.Duration, allowZero bool) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid duration: %w", key, err)
+	}
+	if parsed < 0 || (!allowZero && parsed == 0) {
+		return 0, fmt.Errorf("%s must be %s", key, map[bool]string{true: "non-negative", false: "positive"}[allowZero])
+	}
+	return parsed, nil
+}
+
 func envDuration(key string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

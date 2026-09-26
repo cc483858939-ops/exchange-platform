@@ -39,9 +39,10 @@ func openPostEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
+	originalDB, originalWorkerDB := global.Db, global.WorkerDb
 	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	global.WorkerDb = db
+	t.Cleanup(func() { global.Db, global.WorkerDb = originalDB, originalWorkerDB })
 	if err := initialize.RunMigrations(); err != nil {
 		t.Fatal(err)
 	}
