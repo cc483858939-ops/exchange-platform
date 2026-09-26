@@ -838,15 +838,54 @@ describe('PostMediaViewer', () => {
     expect(createdImages).toHaveLength(1);
   });
 
-  it('shows the existing placeholder only when Medium fails', async () => {
+  it('shows a retryable placeholder when Medium fails and keeps the viewer open', async () => {
     const wrapper = mountViewer(1);
 
     await wrapper.get('img').trigger('error');
-    await wrapper.get('[role="img"]').trigger('click');
+    const placeholder = wrapper.get('[role="group"]');
 
     expect(wrapper.find('img').exists()).toBe(false);
-    expect(wrapper.get('[role="img"]').text()).toContain('Image unavailable');
+    expect(placeholder.attributes('aria-label')).toBe('Image unavailable');
+    expect(placeholder.text()).toContain('Image unavailable');
+    expect(wrapper.get('[aria-label="Retry image"]').text()).toBe('Retry');
+
+    await wrapper.get('[aria-label="Retry image"]').trigger('click');
+
+    expect(wrapper.get('dialog').attributes('open')).toBe('');
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
     expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('allows a failed Medium retry to fail again and keeps Retry available', async () => {
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('error');
+    await wrapper.get('[aria-label="Retry image"]').trigger('click');
+    const retriedImage = wrapper.get('img');
+    expect(retriedImage.attributes('src')).toBe('/media/0-medium.jpg');
+
+    await retriedImage.trigger('error');
+
+    expect(wrapper.find('img').exists()).toBe(false);
+    expect(wrapper.get('[role="group"]').text()).toContain('Image unavailable');
+    expect(wrapper.find('[aria-label="Retry image"]').exists()).toBe(true);
+  });
+
+  it('retries only the active failed Medium image', async () => {
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('img').trigger('error');
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+    await wrapper.get('img').trigger('error');
+    await wrapper.get('[aria-label="Retry image"]').trigger('click');
+
+    expect(wrapper.get('img').attributes('src')).toBe('/media/1-medium.jpg');
+
+    await wrapper.get('[aria-label="Previous image"]').trigger('click');
+
+    expect(wrapper.find('img').exists()).toBe(false);
+    expect(wrapper.get('[role="group"]').text()).toContain('Image unavailable');
+    expect(wrapper.find('[aria-label="Retry image"]').exists()).toBe(true);
   });
 
   it('does not close when the counter is clicked', async () => {
@@ -1079,6 +1118,28 @@ describe('PostMediaViewer', () => {
     expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
   });
 
+  it('allows an explicit Medium retry to preload Large again after a Large failure', async () => {
+    vi.useFakeTimers();
+    setDecodeMode('/media/0-large.jpg', 'reject');
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+
+    await wrapper.get('img').trigger('error');
+    await wrapper.get('[aria-label="Retry image"]').trigger('click');
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+
+    await wrapper.get('img').trigger('load');
+    await advanceTimers(250);
+
+    expect(decodeCalls).toEqual([
+      '/media/0-large.jpg',
+      '/media/0-large.jpg',
+    ]);
+  });
+
   it('accelerates Large loading on zoom intent after Medium is ready', async () => {
     vi.useFakeTimers();
     const wrapper = mountViewer(1);
@@ -1105,20 +1166,63 @@ describe('PostMediaViewer', () => {
 
     await wrapper.get('img').trigger('error');
     expect(wrapper.find('img').exists()).toBe(false);
-    expect(wrapper.get('[role="img"]').attributes('aria-label')).toBe('Image unavailable');
-    expect(wrapper.get('[role="img"]').text()).toContain('Image unavailable');
+    expect(wrapper.get('[role="group"]').attributes('aria-label')).toBe('Image unavailable');
+    expect(wrapper.get('[role="group"]').text()).toContain('Image unavailable');
+    expect(wrapper.find('[aria-label="Retry image"]').exists()).toBe(true);
 
     await wrapper.get('[aria-label="Next image"]').trigger('click');
     expect(wrapper.get('.post-media-viewer__image').attributes('src')).toBe('/media/1-medium.jpg');
   });
 
-  it('removes the global keyboard listener on unmount', () => {
+  it('retries the current failed Medium when the browser comes online', async () => {
+    const wrapper = mountViewer(1);
+
+    await wrapper.get('img').trigger('error');
+    window.dispatchEvent(new Event('online'));
+    await nextTick();
+
+    expect(wrapper.find('[role="group"]').exists()).toBe(false);
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0-medium.jpg');
+  });
+
+  it('does not restart a healthy Medium or its pending Large dwell on online', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountViewer(1);
+    await wrapper.get('img').trigger('load');
+    const image = wrapper.get('img').element;
+
+    await advanceTimers(100);
+    window.dispatchEvent(new Event('online'));
+    await advanceTimers(150);
+
+    expect(wrapper.get('img').element).toBe(image);
+    expect(decodeCalls).toEqual(['/media/0-large.jpg']);
+  });
+
+  it('does not retry a non-active failed Medium when the browser comes online', async () => {
+    const wrapper = mountViewer(2);
+
+    await wrapper.get('img').trigger('error');
+    await wrapper.get('[aria-label="Next image"]').trigger('click');
+    const activeImage = wrapper.get('img').element;
+    window.dispatchEvent(new Event('online'));
+    await nextTick();
+
+    expect(wrapper.get('img').element).toBe(activeImage);
+    expect(wrapper.get('img').attributes('src')).toBe('/media/1-medium.jpg');
+
+    await wrapper.get('[aria-label="Previous image"]').trigger('click');
+    expect(wrapper.get('[role="group"]').text()).toContain('Image unavailable');
+  });
+
+  it('removes the global keyboard and online listeners on unmount', () => {
     const removeEventListener = vi.spyOn(window, 'removeEventListener');
     const wrapper = mountViewer();
 
     wrapper.unmount();
 
     expect(removeEventListener).toHaveBeenCalledWith('keydown', expect.any(Function));
+    expect(removeEventListener).toHaveBeenCalledWith('online', expect.any(Function));
     removeEventListener.mockRestore();
   });
 });

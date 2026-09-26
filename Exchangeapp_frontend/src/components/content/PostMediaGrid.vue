@@ -58,10 +58,18 @@
       <div
         v-else
         class="post-media-grid__placeholder"
-        role="img"
+        role="group"
         :aria-label="`Post image ${index + 1} unavailable`"
       >
         <AppIcon name="image-off" :size="22" />
+        <button
+          type="button"
+          class="post-media-grid__retry"
+          :aria-label="`Retry post image ${index + 1}`"
+          @click.stop="retryImage(item)"
+        >
+          Retry
+        </button>
       </div>
       <button
         v-if="removable"
@@ -156,6 +164,16 @@ const singleMediaStyle = computed(() => {
 
 const markFailed = (url: string) => {
   failedURLs.value = new Set([...failedURLs.value, url]);
+};
+
+const withoutURL = (source: Set<string>, url: string) => {
+  const next = new Set(source);
+  next.delete(url);
+  return next;
+};
+
+const retryImage = (item: PostMedia) => {
+  failedURLs.value = withoutURL(failedURLs.value, item.url);
 };
 
 const handleImageError = (item: PostMedia) => {
@@ -270,10 +288,34 @@ const openImageLabel = (index: number) => (
 }
 
 .post-media-grid__placeholder {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
   min-height: 96px;
-  place-items: center;
+  padding: var(--space-2);
   color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.post-media-grid__retry {
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.post-media-grid__retry:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .post-media-grid--count-2 .post-media-grid__item,

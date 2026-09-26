@@ -65,11 +65,19 @@
           <div
             v-else
             class="post-media-viewer__placeholder"
-            role="img"
+            role="group"
             aria-label="Image unavailable"
           >
             <AppIcon name="image-off" :size="28" />
             <span>Image unavailable</span>
+            <button
+              type="button"
+              class="post-media-viewer__retry"
+              aria-label="Retry image"
+              @click.stop="retryActiveImage"
+            >
+              Retry
+            </button>
           </div>
         </div>
 
@@ -535,6 +543,28 @@ const markMediumFailed = (url: string) => {
   failedMediumURLs.value = new Set([...failedMediumURLs.value, url]);
 };
 
+const withoutURL = (source: Set<string>, url: string) => {
+  const next = new Set(source);
+  next.delete(url);
+  return next;
+};
+
+const retryActiveImage = () => {
+  const media = activeMedia.value;
+  if (!media || closeRequested) {
+    return;
+  }
+
+  invalidateLargeUpgradeWork();
+  failedMediumURLs.value = withoutURL(failedMediumURLs.value, media.url);
+  if (media.large_url) {
+    failedLargeURLs.value = withoutURL(failedLargeURLs.value, media.large_url);
+  }
+
+  resolvedImageURL.value = media.url;
+  resetTransform();
+};
+
 const markLargeFailed = (url: string) => {
   failedLargeURLs.value = new Set([...failedLargeURLs.value, url]);
 };
@@ -717,6 +747,19 @@ const handleImageLoad = () => {
 
   mediumReadyVersion = largeUpgradeVersion;
   scheduleLargeUpgrade(media, largeUpgradeVersion);
+};
+
+const handleOnline = () => {
+  const media = activeMedia.value;
+  if (
+    !media
+    || closeRequested
+    || !failedMediumURLs.value.has(media.url)
+  ) {
+    return;
+  }
+
+  retryActiveImage();
 };
 
 let imageFrameResizeObserver: ResizeObserver | null = null;
@@ -940,6 +983,7 @@ watch(
 
 onMounted(async () => {
   startDesktopSplitTracking();
+  window.addEventListener('online', handleOnline);
   const dialog = dialogRef.value;
   if (!dialog) {
     return;
@@ -970,6 +1014,7 @@ onBeforeUnmount(() => {
   stopGeometryTracking();
   resetGestureBookkeeping();
   window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('online', handleOnline);
   const dialog = dialogRef.value;
   if (!dialog) {
     return;
@@ -1099,6 +1144,22 @@ onBeforeUnmount(() => {
   background: rgb(255 255 255 / 8%);
   color: rgb(255 255 255 / 76%);
   text-align: center;
+}
+
+.post-media-viewer__retry {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid rgb(255 255 255 / 44%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 16%);
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.post-media-viewer__retry:focus-visible {
+  outline: 2px solid rgb(255 255 255 / 92%);
+  outline-offset: 2px;
 }
 
 .post-media-viewer__close,

@@ -201,7 +201,7 @@ describe('PostMediaGrid', () => {
     expect(wrapper.get('img').attributes('srcset')).toBeUndefined();
   });
 
-  it('shows a placeholder immediately when the Medium image fails', async () => {
+  it('shows a retryable placeholder immediately when the Medium image fails', async () => {
     const wrapper = mount(PostMediaGrid, {
       props: { media: [singleMedia()] },
       global: { stubs: { AppIcon: { template: '<span class="icon-stub" />' } } },
@@ -209,8 +209,19 @@ describe('PostMediaGrid', () => {
 
     await wrapper.get('img').trigger('error');
     expect(wrapper.find('img').exists()).toBe(false);
-    expect(wrapper.get('[role="img"]').attributes('aria-label'))
+    expect(wrapper.get('.post-media-grid__placeholder').attributes('aria-label'))
       .toBe('Post image 1 unavailable');
+    expect(wrapper.get('[aria-label="Retry post image 1"]').text()).toBe('Retry');
+  });
+
+  it('recreates a non-interactive image with its original URL on Retry', async () => {
+    const wrapper = mountGrid(1);
+
+    await wrapper.get('img').trigger('error');
+    await wrapper.get('[aria-label="Retry post image 1"]').trigger('click');
+
+    expect(wrapper.get('img').attributes('src')).toBe('/media/0.jpg');
+    expect(wrapper.find('.post-media-grid__open').exists()).toBe(false);
   });
 
   it.each([
@@ -326,13 +337,25 @@ describe('PostMediaGrid', () => {
     expect(thirdWrapper.emitted('open')).toEqual([[2]]);
   });
 
-  it('does not make a failed image activatable', async () => {
+  it('isolates Retry to one failed image and does not emit open', async () => {
     const wrapper = mountGrid(2, false, true);
-    await wrapper.findAll('img')[1].trigger('error');
+    await wrapper.findAll('img')[0].trigger('error');
+    await wrapper.get('.post-media-grid__open img').trigger('error');
 
-    expect(wrapper.findAll('.post-media-grid__open')).toHaveLength(1);
-    expect(wrapper.get('[role="img"]').attributes('aria-label'))
+    expect(wrapper.findAll('.post-media-grid__open')).toHaveLength(0);
+    expect(wrapper.findAll('.post-media-grid__placeholder')).toHaveLength(2);
+
+    await wrapper.get('[aria-label="Retry post image 1"]').trigger('click');
+
+    const restoredButton = wrapper.get('.post-media-grid__open');
+    expect(restoredButton.get('img').attributes('src')).toBe('/media/0.jpg');
+    expect(wrapper.get('.post-media-grid__placeholder').attributes('aria-label'))
       .toBe('Post image 2 unavailable');
+    expect(wrapper.emitted('open')).toBeUndefined();
+
+    await restoredButton.trigger('click');
+
+    expect(wrapper.emitted('open')).toEqual([[0]]);
   });
 
   it('emits the selected index only when the composer enables removal', async () => {
@@ -344,12 +367,17 @@ describe('PostMediaGrid', () => {
     expect(composerWrapper.emitted('remove')).toEqual([[1]]);
   });
 
-  it('shows an accessible placeholder after a Medium image fails', async () => {
-    const wrapper = mountGrid(1);
+  it('keeps Retry and Remove available together after an image fails', async () => {
+    const wrapper = mountGrid(1, true);
     await wrapper.get('img').trigger('error');
 
     expect(wrapper.find('img').exists()).toBe(false);
-    expect(wrapper.get('[role="img"]').attributes('aria-label'))
+    expect(wrapper.get('.post-media-grid__placeholder').attributes('aria-label'))
       .toBe('Post image 1 unavailable');
+    expect(wrapper.find('[aria-label="Retry post image 1"]').exists()).toBe(true);
+
+    await wrapper.get('[aria-label="Remove image 1"]').trigger('click');
+
+    expect(wrapper.emitted('remove')).toEqual([[0]]);
   });
 });
