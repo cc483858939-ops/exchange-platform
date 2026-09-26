@@ -1,6 +1,7 @@
 import apiClient from '../axios';
 import type { PublicAuthor } from '../types/User';
 import type { Post } from '../types/Post';
+import { UPLOAD_REQUEST_TIMEOUT_MS } from '../utils/requestTimeout';
 import { normalizeResourceID } from './resourceId';
 
 export type CreatePostMediaPayload = {
@@ -78,6 +79,7 @@ export async function uploadPostMedia(file: File): Promise<string> {
   const response = await apiClient.post<{ media_url: string }>(
     '/uploads/post-media',
     formData,
+    { timeout: UPLOAD_REQUEST_TIMEOUT_MS },
   );
   return response.data.media_url;
 }

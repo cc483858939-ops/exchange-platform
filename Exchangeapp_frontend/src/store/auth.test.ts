@@ -2,15 +2,28 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { apiBaseUrl } from '../api';
 import { AuthRequestError } from '../utils/authError';
+import { AUTH_REQUEST_TIMEOUT_MS } from '../utils/requestTimeout';
 
-const mocks = vi.hoisted(() => ({
-  post: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const client = { post: vi.fn() };
+  return {
+    client,
+    post: client.post,
+    create: vi.fn(() => client),
+  };
+});
 
 vi.mock('axios', () => ({
   default: {
-    create: vi.fn(() => ({ post: mocks.post })),
+    create: mocks.create,
+    isAxiosError: (error: unknown) => Boolean(
+      error
+      && typeof error === 'object'
+      && 'isAxiosError' in error
+      && error.isAxiosError === true,
+    ),
   },
 }));
 
@@ -43,6 +56,12 @@ const authResponse = (
   user: identity,
 });
 
+const seedStoredAuth = () => {
+  localStorage.setItem('token', 'alice-access');
+  localStorage.setItem('refresh_token', 'alice-refresh');
+  localStorage.setItem('auth_user', JSON.stringify(fullIdentity));
+};
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -59,7 +78,14 @@ describe('auth store identity persistence', () => {
   beforeEach(() => {
     localStorage.clear();
     setActivePinia(createPinia());
-    vi.clearAllMocks();
+    mocks.post.mockReset();
+  });
+
+  it('configures the auth client with its bounded timeout', () => {
+    expect(mocks.create).toHaveBeenCalledWith({
+      baseURL: apiBaseUrl,
+      timeout: AUTH_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it('restores legacy storage without logging out', () => {
@@ -159,6 +185,30 @@ describe('auth store identity persistence', () => {
     expect((error as AuthRequestError).message).toBe('注册失败，请稍后重试');
   });
 
+  it('maps login and register timeouts to a structured auth error', async () => {
+    const timeoutError = () => Object.assign(new Error('timeout'), {
+      isAxiosError: true,
+      code: 'ECONNABORTED',
+    });
+    const store = useAuthStore();
+
+    mocks.post.mockRejectedValueOnce(timeoutError());
+    const loginError = await store.login('alice', 'secret123').catch((error: unknown) => error);
+    expect(loginError).toBeInstanceOf(AuthRequestError);
+    expect(loginError).toMatchObject({
+      code: 'AUTH_REQUEST_TIMEOUT',
+      message: 'Request timed out. Check your connection and try again.',
+    });
+
+    mocks.post.mockRejectedValueOnce(timeoutError());
+    const registerError = await store.register('alice', 'secret123').catch((error: unknown) => error);
+    expect(registerError).toBeInstanceOf(AuthRequestError);
+    expect(registerError).toMatchObject({
+      code: 'AUTH_REQUEST_TIMEOUT',
+      message: 'Request timed out. Check your connection and try again.',
+    });
+  });
+
   it('replaces identity state and storage with refresh metadata', async () => {
     localStorage.setItem('token', 'old-access');
     localStorage.setItem('refresh_token', 'old-refresh');
@@ -180,6 +230,71 @@ describe('auth store identity persistence', () => {
     expect(store.sessionVersion).toBe(0);
     expect(store.currentIdentity).toEqual(refreshedIdentity);
     expect(JSON.parse(localStorage.getItem('auth_user') || 'null')).toEqual(refreshedIdentity);
+  });
+
+  it('preserves the current session when refresh times out', async () => {
+    seedStoredAuth();
+    const store = useAuthStore();
+    const timeoutError = Object.assign(new Error('Request timed out'), {
+      isAxiosError: true,
+      code: 'ECONNABORTED',
+    });
+    mocks.post.mockRejectedValueOnce(timeoutError);
+
+    await expect(store.refreshAccessToken()).rejects.toBe(timeoutError);
+
+    expect(store.token).toBe('Bearer alice-access');
+    expect(store.refreshToken).toBe('alice-refresh');
+    expect(store.currentIdentity).toEqual(fullIdentity);
+    expect(localStorage.getItem('token')).toBe('alice-access');
+    expect(localStorage.getItem('refresh_token')).toBe('alice-refresh');
+    expect(JSON.parse(localStorage.getItem('auth_user') || 'null')).toEqual(fullIdentity);
+  });
+
+  it.each([
+    ['network failure', () => new Error('Network Error')],
+    ['server failure', () => ({
+      isAxiosError: true,
+      response: { status: 503, data: { code: 'AUTH_INTERNAL' } },
+    })],
+  ])('preserves the current session after a transient %s', async (_name, makeError) => {
+    seedStoredAuth();
+    const store = useAuthStore();
+    const error = makeError();
+    mocks.post.mockRejectedValueOnce(error);
+
+    await expect(store.refreshAccessToken()).rejects.toBe(error);
+
+    expect(store.token).toBe('Bearer alice-access');
+    expect(store.refreshToken).toBe('alice-refresh');
+    expect(store.currentIdentity).toEqual(fullIdentity);
+    expect(localStorage.getItem('token')).toBe('alice-access');
+    expect(localStorage.getItem('refresh_token')).toBe('alice-refresh');
+    expect(localStorage.getItem('auth_user')).not.toBeNull();
+  });
+
+  it.each([
+    'AUTH_REFRESH_INVALID',
+    'AUTH_REFRESH_EXPIRED',
+    'AUTH_REFRESH_REUSED',
+  ])('clears auth after a definitive refresh rejection with %s', async code => {
+    seedStoredAuth();
+    const store = useAuthStore();
+    mocks.post.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 401, data: { code } },
+    });
+
+    await expect(store.refreshAccessToken()).rejects.toMatchObject({
+      response: { status: 401, data: { code } },
+    });
+
+    expect(store.token).toBeNull();
+    expect(store.refreshToken).toBeNull();
+    expect(store.currentIdentity).toBeNull();
+    expect(localStorage.getItem('token')).toBeNull();
+    expect(localStorage.getItem('refresh_token')).toBeNull();
+    expect(localStorage.getItem('auth_user')).toBeNull();
   });
 
   it('does not restore authentication after a refresh completes following logout', async () => {

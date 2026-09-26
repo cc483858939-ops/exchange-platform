@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { apiBaseUrl } from './api';
+import { API_REQUEST_TIMEOUT_MS } from './utils/requestTimeout';
 import { AuthSessionChangedError, useAuthStore } from './store/auth';
 
 type RetryableRequestConfig = InternalAxiosRequestConfig & {
@@ -15,6 +16,7 @@ type RefreshState = {
 
 const instance = axios.create({
   baseURL: apiBaseUrl,
+  timeout: API_REQUEST_TIMEOUT_MS,
 });
 
 let refreshState: RefreshState | null = null;

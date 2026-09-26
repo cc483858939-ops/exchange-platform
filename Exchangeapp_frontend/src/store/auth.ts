@@ -5,9 +5,11 @@ import { apiBaseUrl } from '../api';
 import { decodeAuthIdentity, normalizeAuthIdentity } from '../utils/authIdentity';
 import type { AuthIdentity } from '../utils/authIdentity';
 import { AuthRequestError } from '../utils/authError';
+import { AUTH_REQUEST_TIMEOUT_MS, isRequestTimeoutError } from '../utils/requestTimeout';
 
 const authClient = axios.create({
   baseURL: apiBaseUrl,
+  timeout: AUTH_REQUEST_TIMEOUT_MS,
 });
 
 const accessTokenKey = 'token';
@@ -37,6 +39,13 @@ export class AuthSessionChangedError extends Error {
 }
 
 const toAuthRequestError = (error: unknown, fallback: string): AuthRequestError => {
+  if (isRequestTimeoutError(error)) {
+    return new AuthRequestError(
+      'Request timed out. Check your connection and try again.',
+      'AUTH_REQUEST_TIMEOUT',
+    );
+  }
+
   const data = (error as { response?: { data?: AuthErrorResponse } }).response?.data;
   const code = typeof data?.code === 'string' && data.code.trim() ? data.code.trim() : null;
   const message = typeof data?.message === 'string' && data.message.trim()
@@ -45,6 +54,21 @@ const toAuthRequestError = (error: unknown, fallback: string): AuthRequestError 
       ? data.error.trim()
       : fallback;
   return new AuthRequestError(message, code);
+};
+
+const shouldClearAuthAfterRefreshFailure = (error: unknown): boolean => {
+  if (
+    isRequestTimeoutError(error)
+    || !axios.isAxiosError(error)
+    || error.response?.status !== 401
+  ) {
+    return false;
+  }
+
+  const data = error.response.data as AuthErrorResponse | undefined;
+  return data?.code === 'AUTH_REFRESH_INVALID'
+    || data?.code === 'AUTH_REFRESH_EXPIRED'
+    || data?.code === 'AUTH_REFRESH_REUSED';
 };
 
 const asAuthorizationHeader = (rawToken: string | null): string | null => {
@@ -190,7 +214,8 @@ export const useAuthStore = defineStore('auth', () => {
 
       if (
         sessionVersion.value === versionAtStart &&
-        refreshToken.value === refreshTokenAtStart
+        refreshToken.value === refreshTokenAtStart &&
+        shouldClearAuthAfterRefreshFailure(error)
       ) {
         clearAuth();
       }

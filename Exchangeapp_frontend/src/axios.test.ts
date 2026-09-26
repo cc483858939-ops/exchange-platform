@@ -2,6 +2,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { apiBaseUrl } from './api';
+import { API_REQUEST_TIMEOUT_MS } from './utils/requestTimeout';
 
 const mocks = vi.hoisted(() => {
   const requestHandlers: unknown[] = [];
@@ -39,10 +41,12 @@ const mocks = vi.hoisted(() => {
       },
     },
   );
+  const create = vi.fn(() => instance);
 
   return {
     authStore,
     instance,
+    create,
     requestHandlers,
     responseErrorHandlers,
   };
@@ -50,17 +54,25 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('axios', () => ({
   default: {
-    create: vi.fn(() => mocks.instance),
+    create: mocks.create,
+    isAxiosError: (error: unknown) => Boolean(
+      error
+      && typeof error === 'object'
+      && 'isAxiosError' in error
+      && error.isAxiosError === true,
+    ),
   },
 }));
 
-vi.mock('./store/auth', async importOriginal => {
-  const actual = await importOriginal<typeof import('./store/auth')>();
-  return {
-    ...actual,
-    useAuthStore: () => mocks.authStore,
-  };
-});
+vi.mock('./store/auth', () => ({
+  AuthSessionChangedError: class AuthSessionChangedError extends Error {
+    constructor() {
+      super('Authentication session changed');
+      this.name = 'AuthSessionChangedError';
+    }
+  },
+  useAuthStore: () => mocks.authStore,
+}));
 
 type TestRequestConfig = InternalAxiosRequestConfig & {
   _retry?: boolean;
@@ -114,6 +126,14 @@ describe('Axios authentication session handling', () => {
     mocks.authStore.clearAuth.mockReset();
 
     await import('./axios');
+  });
+
+  it('configures the main API client with the bounded default timeout', () => {
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(mocks.create).toHaveBeenCalledWith({
+      baseURL: apiBaseUrl,
+      timeout: API_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it('captures the current generation on authenticated and guest requests', async () => {
@@ -287,6 +307,40 @@ describe('Axios authentication session handling', () => {
 
     expect(mocks.authStore.clearAuth).not.toHaveBeenCalled();
     expect(mocks.instance).not.toHaveBeenCalled();
+  });
+
+  it('propagates a request timeout without entering refresh or retry handling', async () => {
+    mocks.authStore.sessionVersion = 6;
+    mocks.authStore.refreshToken = 'A refresh';
+    const error = {
+      config: makeRequest(6),
+      code: 'ECONNABORTED',
+    } as AxiosError;
+
+    await expect(responseErrorInterceptor()(error)).rejects.toBe(error);
+
+    expect(mocks.authStore.refreshAccessToken).not.toHaveBeenCalled();
+    expect(mocks.instance).not.toHaveBeenCalled();
+  });
+
+  it('clears the shared refresh state after timeout so a later 401 can retry', async () => {
+    const timeoutError = Object.assign(new Error('Request timed out'), {
+      isAxiosError: true,
+      code: 'ECONNABORTED',
+    });
+    mocks.authStore.sessionVersion = 6;
+    mocks.authStore.refreshToken = 'A refresh';
+    mocks.authStore.refreshAccessToken
+      .mockRejectedValueOnce(timeoutError)
+      .mockResolvedValueOnce('Bearer refreshed');
+
+    const firstRetry = responseErrorInterceptor()(makeUnauthorizedError(makeRequest(6)));
+    await expect(firstRetry).rejects.toBe(timeoutError);
+    expect(mocks.authStore.refreshAccessToken).toHaveBeenCalledTimes(1);
+
+    await responseErrorInterceptor()(makeUnauthorizedError(makeRequest(6)));
+
+    expect(mocks.authStore.refreshAccessToken).toHaveBeenCalledTimes(2);
   });
 
   it('keeps auth endpoint 401s out of refresh handling', async () => {

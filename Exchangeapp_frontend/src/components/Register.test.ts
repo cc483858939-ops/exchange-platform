@@ -95,4 +95,21 @@ describe('Register errors', () => {
 
     expect(wrapper.get('.auth-error').text()).toBe('Enter a username and password.');
   });
+
+  it('releases the submit button and shows retry guidance after a timeout', async () => {
+    mocks.authStore.register.mockRejectedValueOnce(
+      new AuthRequestError(
+        'Request timed out. Check your connection and try again.',
+        'AUTH_REQUEST_TIMEOUT',
+      ),
+    );
+    wrapper = mountRegister();
+
+    await submit();
+
+    expect(wrapper.get('.auth-error').text()).toBe('Request timed out. Check your connection and try again.');
+    expect(wrapper.get('button[type="submit"]').text()).toBe('Sign up');
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
 });

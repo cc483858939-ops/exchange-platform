@@ -74,6 +74,7 @@ import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { resolveSafeLoginReturnTarget } from '../router/loginReturnTarget';
 import { useAuthStore } from '../store/auth';
+import { AuthRequestError } from '../utils/authError';
 import BrandMark from './brand/BrandMark.vue';
 
 const form = ref({
@@ -110,6 +111,10 @@ const loginDestination = computed(() => {
 });
 
 const formatLoginError = (error: unknown) => {
+  if (error instanceof AuthRequestError && error.code === 'AUTH_REQUEST_TIMEOUT') {
+    return 'Request timed out. Check your connection and try again.';
+  }
+
   const message = error instanceof Error ? error.message : '';
   if (message === 'Invalid username or password') {
     return 'Invalid username or password.';

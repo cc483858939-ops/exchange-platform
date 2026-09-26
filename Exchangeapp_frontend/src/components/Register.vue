@@ -87,6 +87,9 @@ const authStore = useAuthStore();
 const router = useRouter();
 
 const formatRegisterError = (error: unknown) => {
+  if (error instanceof AuthRequestError && error.code === 'AUTH_REQUEST_TIMEOUT') {
+    return 'Request timed out. Check your connection and try again.';
+  }
   if (error instanceof AuthRequestError && error.code === 'AUTH_USERNAME_UNAVAILABLE') {
     return 'That username is already in use. Choose another username.';
   }

@@ -1,6 +1,7 @@
 import apiClient from '../axios';
 import type { PublicUser, PublicUserSummary } from '../types/User';
 import type { TimelineResponse } from './postService';
+import { UPLOAD_REQUEST_TIMEOUT_MS } from '../utils/requestTimeout';
 import { normalizeResourceID } from './resourceId';
 
 export type UserTimelineQuery = {
@@ -63,14 +64,22 @@ export async function updateUserProfile(
 export async function uploadProfileAvatar(file: File): Promise<string> {
   const data = new FormData();
   data.append('image', file);
-  const response = await apiClient.post<{ avatar_url: string }>('/uploads/profile-avatar', data);
+  const response = await apiClient.post<{ avatar_url: string }>(
+    '/uploads/profile-avatar',
+    data,
+    { timeout: UPLOAD_REQUEST_TIMEOUT_MS },
+  );
   return response.data.avatar_url;
 }
 
 export async function uploadProfileCover(file: File): Promise<string> {
   const data = new FormData();
   data.append('image', file);
-  const response = await apiClient.post<{ cover_image_url: string }>('/uploads/profile-cover', data);
+  const response = await apiClient.post<{ cover_image_url: string }>(
+    '/uploads/profile-cover',
+    data,
+    { timeout: UPLOAD_REQUEST_TIMEOUT_MS },
+  );
   return response.data.cover_image_url;
 }
 export type UserFollowState = {

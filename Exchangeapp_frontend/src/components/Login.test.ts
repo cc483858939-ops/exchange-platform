@@ -2,6 +2,7 @@
 
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AuthRequestError } from '../utils/authError';
 import Login from './Login.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -156,6 +157,23 @@ describe('Login return navigation', () => {
     expect(mocks.router.replace).not.toHaveBeenCalled();
     expect(wrapper.find('.auth-error').text()).toBe('Invalid username or password.');
     expect(mocks.route.query.returnTo).toBe('/notifications');
+  });
+
+  it('releases the submit button and shows retry guidance after a timeout', async () => {
+    mocks.authStore.login.mockRejectedValueOnce(
+      new AuthRequestError(
+        'Request timed out. Check your connection and try again.',
+        'AUTH_REQUEST_TIMEOUT',
+      ),
+    );
+    wrapper = mountLogin();
+
+    await submit();
+
+    expect(wrapper.get('.auth-error').text()).toBe('Request timed out. Check your connection and try again.');
+    expect(wrapper.get('button[type="submit"]').text()).toBe('Log in');
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
+    expect(mocks.router.replace).not.toHaveBeenCalled();
   });
 
   it('falls back to Home for an invalid return target', async () => {

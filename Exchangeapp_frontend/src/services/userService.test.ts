@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { UPLOAD_REQUEST_TIMEOUT_MS } from '../utils/requestTimeout';
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -9,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../axios', () => ({ default: mocks }));
 
-import { updateUserProfile, uploadProfileCover } from './userService';
+import { updateUserProfile, uploadProfileAvatar, uploadProfileCover } from './userService';
 
 describe('userService profile cover contract', () => {
   beforeEach(() => {
@@ -28,6 +29,29 @@ describe('userService profile cover contract', () => {
     expect(path).toBe('/uploads/profile-cover');
     expect(body).toBeInstanceOf(FormData);
     expect(body.get('image')).toBe(file);
+    expect(mocks.post).toHaveBeenCalledWith(
+      '/uploads/profile-cover',
+      body,
+      { timeout: UPLOAD_REQUEST_TIMEOUT_MS },
+    );
+  });
+
+  it('uploads an avatar with the extended timeout', async () => {
+    mocks.post.mockResolvedValue({ data: { avatar_url: '/api/files/profile-avatars/users/v1/42/hash.jpg' } });
+    const file = new File(['avatar'], 'avatar.png', { type: 'image/png' });
+
+    await expect(uploadProfileAvatar(file)).resolves.toBe('/api/files/profile-avatars/users/v1/42/hash.jpg');
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    const [path, body] = mocks.post.mock.calls[0] as [string, FormData];
+    expect(path).toBe('/uploads/profile-avatar');
+    expect(body).toBeInstanceOf(FormData);
+    expect(body.get('image')).toBe(file);
+    expect(mocks.post).toHaveBeenCalledWith(
+      '/uploads/profile-avatar',
+      body,
+      { timeout: UPLOAD_REQUEST_TIMEOUT_MS },
+    );
   });
 
   it('accepts cover_image_url in the profile PATCH payload', async () => {

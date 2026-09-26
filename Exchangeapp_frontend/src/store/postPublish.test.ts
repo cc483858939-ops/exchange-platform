@@ -236,9 +236,12 @@ describe('postPublish store', () => {
     await flushPromises();
   });
 
-  it('retries an ambiguous failure with the same operation id and key', async () => {
+  it('retries a timed-out publish with the same operation id and key', async () => {
     mocks.createPost
-      .mockRejectedValueOnce(new Error('timeout'))
+      .mockRejectedValueOnce(Object.assign(new Error('Request timed out'), {
+        isAxiosError: true,
+        code: 'ECONNABORTED',
+      }))
       .mockResolvedValueOnce(publishedPost());
     const draft = usePostDraftStore();
     draft.setContent('Retry me');

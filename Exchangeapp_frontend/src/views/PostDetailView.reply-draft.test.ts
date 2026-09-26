@@ -446,6 +446,44 @@ describe('PostDetailView persistent reply drafts', () => {
     expect(mocks.externalReplyCount).toHaveBeenCalledWith({ postId: 42, replyCount: 1 });
   });
 
+  it('preserves the reply operation after timeout and retries with the same key', async () => {
+    mocks.createPostReply
+      .mockRejectedValueOnce(Object.assign(new Error('Request timed out'), {
+        isAxiosError: true,
+        code: 'ECONNABORTED',
+      }))
+      .mockResolvedValueOnce(reply(121));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    const textarea = wrapper.get('.reply-composer__textarea');
+    await textarea.setValue('keep my timeout reply');
+    await wrapper.get('.reply-composer').trigger('submit');
+    await flushPromises();
+
+    expect(draftStore().getDraft(42)).toBe('keep my timeout reply');
+    expect(draftStore().submissionOperations['42']).toEqual({
+      id: operationUUID(1),
+      content: 'keep my timeout reply',
+    });
+    expect(wrapper.get('.reply-error').text()).toBe('Reply failed. Please try again.');
+    expect(wrapper.get('.reply-composer__submit').attributes('disabled')).toBeUndefined();
+
+    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
+    await wrapper.get('.reply-composer').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(1, '42', 'keep my timeout reply', {
+      idempotencyKey: operationUUID(1),
+    });
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'keep my timeout reply', {
+      idempotencyKey: operationUUID(1),
+    });
+    expect(draftStore().getDraft(42)).toBe('');
+    expect(draftStore().submissionOperations).toEqual({});
+    expect(wrapper.get('.reply-composer__submit').text()).toBe('Reply');
+  });
+
   it('uses a new operation after editing a failed reply', async () => {
     mocks.createPostReply
       .mockRejectedValueOnce(new Error('offline'))
