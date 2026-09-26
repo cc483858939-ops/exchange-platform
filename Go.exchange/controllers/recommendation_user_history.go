@@ -3,25 +3,17 @@ package controllers
 import (
 	"context"
 	"errors"
-	"strconv"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/recommendation"
-
-	"github.com/go-redis/redis/v7"
 )
 
 const (
-	userRecommendationHistoryPrefix = "recommendation:user:served:v1:"
 	defaultUserServedHistoryLimit   = 1000
 	defaultUserHardExclusionMinutes = 30
 	defaultUserSoftLookbackDays     = 7
 )
-
-func userRecommendationHistoryKey(userID uint) string {
-	return userRecommendationHistoryPrefix + strconv.FormatUint(uint64(userID), 10)
-}
 
 func effectiveUserServedHistoryLimit(cfg config.RecommendationConfig) int {
 	if cfg.ServedHistoryLimit > 0 {
@@ -82,28 +74,12 @@ func classifyUserRecommendationServedAt(lastServedAt, now time.Time, cfg config.
 	return servedPost{}, false
 }
 
-func userRecommendationHistoryMembers(postIDs []uint, score float64) []*redis.Z {
-	seen := make(map[uint]struct{}, len(postIDs))
-	members := make([]*redis.Z, 0, len(postIDs))
-	for _, postID := range postIDs {
-		if postID == 0 {
-			continue
-		}
-		if _, exists := seen[postID]; exists {
-			continue
-		}
-		seen[postID] = struct{}{}
-		members = append(members, &redis.Z{Score: score, Member: strconv.FormatUint(uint64(postID), 10)})
-	}
-	return members
-}
-
 func loadUserRecommendationServedHistory(ctx context.Context, store recommendation.HistoryStore, userID uint, now time.Time, cfg config.RecommendationConfig) (recommendation.ServedHistory, error) {
 	if userID == 0 {
 		return recommendation.ServedHistory{}, nil
 	}
 	if store == nil {
-		return nil, errors.New("redis is not initialized")
+		return nil, errors.New("recommendation history store is not initialized")
 	}
 	return store.LoadUserHistory(ctx, userID, userHistoryWindow(now, cfg))
 }
@@ -113,7 +89,7 @@ func recordUserRecommendationServedPosts(ctx context.Context, store recommendati
 		return nil
 	}
 	if store == nil {
-		return errors.New("redis is not initialized")
+		return errors.New("recommendation history store is not initialized")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()

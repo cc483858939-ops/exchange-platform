@@ -1,33 +1,13 @@
 package controllers
 
 import (
-	"strings"
+	"context"
 	"testing"
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/recommendation"
 )
-
-func TestGuestRecommendationHistoryKeyHashesSessionID(t *testing.T) {
-	sessionID := "4ca3706b-197e-4f63-8f51-f99176f8b61c"
-	key := guestRecommendationHistoryKey(sessionID)
-
-	if !strings.HasPrefix(key, guestRecommendationHistoryPrefix) {
-		t.Fatalf("key=%q does not use the expected prefix", key)
-	}
-	if len(key) != len(guestRecommendationHistoryPrefix)+64 {
-		t.Fatalf("key length=%d want %d", len(key), len(guestRecommendationHistoryPrefix)+64)
-	}
-	if strings.Contains(key, sessionID) {
-		t.Fatalf("raw session ID leaked into Redis key: %q", key)
-	}
-	if key != guestRecommendationHistoryKey(sessionID) {
-		t.Fatal("same session ID did not produce a stable key")
-	}
-	if key == guestRecommendationHistoryKey("4ca3706b-197e-4f63-8f51-f99176f8b62c") {
-		t.Fatal("different session IDs produced the same key")
-	}
-}
 
 func TestClassifyGuestRecommendationServedAtUsesHardAndInclusiveSoftBoundaries(t *testing.T) {
 	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
@@ -61,18 +41,6 @@ func TestClassifyGuestRecommendationServedAtUsesHardAndInclusiveSoftBoundaries(t
 	}
 }
 
-func TestGuestRecommendationHistoryMembersDeduplicateAndIgnoreZeroIDs(t *testing.T) {
-	members := guestRecommendationHistoryMembers([]uint{0, 10, 10, 3, 0, 7}, 123)
-	if len(members) != 3 {
-		t.Fatalf("members=%d want 3", len(members))
-	}
-	for index, want := range []string{"10", "3", "7"} {
-		if members[index].Member != want || members[index].Score != 123 {
-			t.Fatalf("member[%d]=%#v want %s@123", index, members[index], want)
-		}
-	}
-}
-
 func TestGuestRecommendationHistoryTTLDefaultsTo24HoursIndependentOfSoftLookback(t *testing.T) {
 	for _, softLookbackDays := range []int{1, 7, 30} {
 		cfg := config.RecommendationConfig{ServedSoftLookbackDays: softLookbackDays}
@@ -89,5 +57,78 @@ func TestGuestRecommendationHistoryTTLUsesConfiguredHours(t *testing.T) {
 	}
 	if got, want := guestRecommendationHistoryTTL(cfg), 48*time.Hour; got != want {
 		t.Fatalf("ttl=%s want %s", got, want)
+	}
+}
+
+func TestGuestHistoryWindowUsesConfiguredPolicyAndDefaults(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.FixedZone("UTC-5", -5*60*60))
+	window := guestHistoryWindow(now, config.RecommendationConfig{
+		GuestServedHistoryLimit:    25,
+		ServedHardExclusionMinutes: 12,
+		ServedSoftLookbackDays:     2,
+		GuestServedHistoryTTLHours: 36,
+	})
+	wantNow := now.UTC()
+	want := recommendation.HistoryWindow{
+		Now:       wantNow,
+		HardStart: wantNow.Add(-12 * time.Minute),
+		SoftStart: wantNow.AddDate(0, 0, -2),
+		Limit:     25,
+		TTL:       36 * time.Hour,
+	}
+	if window != want {
+		t.Fatalf("window=%#v want %#v", window, want)
+	}
+
+	defaults := guestHistoryWindow(wantNow, config.RecommendationConfig{})
+	if defaults.Limit != defaultGuestServedHistoryLimit || defaults.HardStart != wantNow.Add(-30*time.Minute) || defaults.SoftStart != wantNow.AddDate(0, 0, -7) || defaults.TTL != 24*time.Hour {
+		t.Fatalf("default guest history window=%#v", defaults)
+	}
+}
+
+func TestGuestRecommendationHistoryHelpersInvokeStore(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	cfg := config.RecommendationConfig{GuestServedHistoryLimit: 11, ServedHardExclusionMinutes: 15, ServedSoftLookbackDays: 3, GuestServedHistoryTTLHours: 48}
+	wantHistory := recommendation.ServedHistory{42: {PostID: 42, Hard: true}}
+	store := &recommendationHistoryStoreRecorder{guestHistory: wantHistory}
+	sessionID := "guest-session"
+
+	history, err := loadGuestRecommendationServedHistory(context.Background(), store, sessionID, now, cfg)
+	if err != nil {
+		t.Fatalf("load guest history: %v", err)
+	}
+	if store.guestLoadCalls != 1 || store.lastGuestSession != sessionID || store.lastGuestWindow != guestHistoryWindow(now, cfg) {
+		t.Fatalf("guest load call: calls=%d session=%q window=%#v", store.guestLoadCalls, store.lastGuestSession, store.lastGuestWindow)
+	}
+	if history[42] != wantHistory[42] {
+		t.Fatalf("loaded history=%#v want %#v", history, wantHistory)
+	}
+
+	postIDs := []uint{4, 5}
+	if err := recordGuestRecommendationServedPosts(context.Background(), store, sessionID, postIDs, now, cfg); err != nil {
+		t.Fatalf("record guest history: %v", err)
+	}
+	if store.guestRecordCalls != 1 || store.lastGuestSession != sessionID || store.lastGuestWindow != guestHistoryWindow(now, cfg) || len(store.lastGuestPostIDs) != len(postIDs) || store.lastGuestPostIDs[0] != 4 || store.lastGuestPostIDs[1] != 5 {
+		t.Fatalf("guest record call: calls=%d session=%q postIDs=%v window=%#v", store.guestRecordCalls, store.lastGuestSession, store.lastGuestPostIDs, store.lastGuestWindow)
+	}
+}
+
+func TestGuestRecommendationServedHistoryEmptyInputsAreNoOp(t *testing.T) {
+	store := &recommendationHistoryStoreRecorder{}
+	history, err := loadGuestRecommendationServedHistory(context.Background(), store, "  ", time.Time{}, config.RecommendationConfig{})
+	if err != nil {
+		t.Fatalf("load empty guest history: %v", err)
+	}
+	if history == nil || len(history) != 0 {
+		t.Fatalf("empty guest history=%#v want empty map", history)
+	}
+	if err := recordGuestRecommendationServedPosts(context.Background(), store, "  ", []uint{101}, time.Time{}, config.RecommendationConfig{}); err != nil {
+		t.Fatalf("record empty guest session: %v", err)
+	}
+	if err := recordGuestRecommendationServedPosts(context.Background(), store, "guest", []uint{0, 0}, time.Time{}, config.RecommendationConfig{}); err != nil {
+		t.Fatalf("record zero post IDs: %v", err)
+	}
+	if store.guestLoadCalls != 0 || store.guestRecordCalls != 0 {
+		t.Fatalf("empty guest history operations reached store: load=%d record=%d", store.guestLoadCalls, store.guestRecordCalls)
 	}
 }

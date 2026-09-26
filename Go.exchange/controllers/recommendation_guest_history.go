@@ -2,23 +2,18 @@ package controllers
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/recommendation"
 
-	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
 )
 
 const (
 	guestRecommendationSessionHeader  = "X-Guest-Recommendation-Session"
-	guestRecommendationHistoryPrefix  = "recommendation:guest:served:v1:"
 	defaultGuestServedHistoryLimit    = 2000
 	defaultGuestHardExclusionMinutes  = 30
 	defaultGuestSoftLookbackDays      = 7
@@ -35,11 +30,6 @@ func parseGuestRecommendationSessionID(raw string) (string, bool) {
 		return "", false
 	}
 	return parsed.String(), true
-}
-
-func guestRecommendationHistoryKey(sessionID string) string {
-	digest := sha256.Sum256([]byte(sessionID))
-	return guestRecommendationHistoryPrefix + hex.EncodeToString(digest[:])
 }
 
 func effectiveGuestServedHistoryLimit(cfg config.RecommendationConfig) int {
@@ -87,22 +77,6 @@ func guestHistoryWindow(now time.Time, cfg config.RecommendationConfig) recommen
 	}
 }
 
-func guestRecommendationHistoryMembers(postIDs []uint, score float64) []*redis.Z {
-	seen := make(map[uint]struct{}, len(postIDs))
-	members := make([]*redis.Z, 0, len(postIDs))
-	for _, postID := range postIDs {
-		if postID == 0 {
-			continue
-		}
-		if _, exists := seen[postID]; exists {
-			continue
-		}
-		seen[postID] = struct{}{}
-		members = append(members, &redis.Z{Score: score, Member: strconv.FormatUint(uint64(postID), 10)})
-	}
-	return members
-}
-
 func guestServedHistoryWindows(now time.Time, cfg config.RecommendationConfig) (time.Time, time.Time) {
 	window := guestHistoryWindow(now, cfg)
 	return window.HardStart, window.SoftStart
@@ -118,7 +92,7 @@ func loadGuestRecommendationServedHistory(ctx context.Context, store recommendat
 		return recommendation.ServedHistory{}, nil
 	}
 	if store == nil {
-		return nil, errors.New("redis is not initialized")
+		return nil, errors.New("recommendation history store is not initialized")
 	}
 	return store.LoadGuestHistory(ctx, sessionID, guestHistoryWindow(now, cfg))
 }
@@ -128,7 +102,7 @@ func recordGuestRecommendationServedPosts(ctx context.Context, store recommendat
 		return nil
 	}
 	if store == nil {
-		return errors.New("redis is not initialized")
+		return errors.New("recommendation history store is not initialized")
 	}
 	return store.RecordGuestServed(ctx, sessionID, postIDs, guestHistoryWindow(now, cfg))
 }

@@ -6,32 +6,8 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/recommendation"
 )
-
-func TestUserRecommendationHistoryKeyUsesStableUserID(t *testing.T) {
-	key := userRecommendationHistoryKey(42)
-	if want := userRecommendationHistoryPrefix + "42"; key != want {
-		t.Fatalf("key=%q want %q", key, want)
-	}
-	if userRecommendationHistoryKey(42) != key {
-		t.Fatal("same user ID did not produce a stable key")
-	}
-	if userRecommendationHistoryKey(43) == key {
-		t.Fatal("different user IDs produced the same key")
-	}
-}
-
-func TestUserRecommendationHistoryMembersDeduplicateAndIgnoreZeroIDs(t *testing.T) {
-	members := userRecommendationHistoryMembers([]uint{0, 10, 10, 3, 0, 7}, 123)
-	if len(members) != 3 {
-		t.Fatalf("members=%d want 3", len(members))
-	}
-	for index, want := range []string{"10", "3", "7"} {
-		if members[index].Member != want || members[index].Score != 123 {
-			t.Fatalf("member[%d]=%#v want %s@123", index, members[index], want)
-		}
-	}
-}
 
 func TestClassifyUserRecommendationServedAtUsesExclusiveSoftBoundary(t *testing.T) {
 	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
@@ -77,18 +53,118 @@ func TestUserRecommendationHistoryTTLUsesSoftLookbackPlusGrace(t *testing.T) {
 	}
 }
 
+func TestUserHistoryWindowUsesConfiguredPolicyAndDefaults(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	window := userHistoryWindow(now, config.RecommendationConfig{
+		ServedHistoryLimit:         25,
+		ServedHardExclusionMinutes: 12,
+		ServedSoftLookbackDays:     2,
+	})
+	wantNow := now.UTC()
+	want := recommendation.HistoryWindow{
+		Now:       wantNow,
+		HardStart: wantNow.Add(-12 * time.Minute),
+		SoftStart: wantNow.AddDate(0, 0, -2),
+		Limit:     25,
+		TTL:       3 * 24 * time.Hour,
+	}
+	if window != want {
+		t.Fatalf("window=%#v want %#v", window, want)
+	}
+
+	defaults := userHistoryWindow(wantNow, config.RecommendationConfig{})
+	if defaults.Limit != defaultUserServedHistoryLimit || defaults.HardStart != wantNow.Add(-30*time.Minute) || defaults.SoftStart != wantNow.AddDate(0, 0, -7) || defaults.TTL != 8*24*time.Hour {
+		t.Fatalf("default user history window=%#v", defaults)
+	}
+}
+
+func TestUserRecommendationHistoryHelpersInvokeStore(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	cfg := config.RecommendationConfig{ServedHistoryLimit: 11, ServedHardExclusionMinutes: 15, ServedSoftLookbackDays: 3}
+	wantHistory := recommendation.ServedHistory{42: {PostID: 42, Hard: true}}
+	store := &recommendationHistoryStoreRecorder{userHistory: wantHistory}
+
+	history, err := loadUserRecommendationServedHistory(context.Background(), store, 9, now, cfg)
+	if err != nil {
+		t.Fatalf("load user history: %v", err)
+	}
+	if store.userLoadCalls != 1 || store.lastUserID != 9 || store.lastUserWindow != userHistoryWindow(now, cfg) {
+		t.Fatalf("user load call: calls=%d id=%d window=%#v", store.userLoadCalls, store.lastUserID, store.lastUserWindow)
+	}
+	if history[42] != wantHistory[42] {
+		t.Fatalf("loaded history=%#v want %#v", history, wantHistory)
+	}
+
+	postIDs := []uint{4, 5}
+	if err := recordUserRecommendationServedPosts(context.Background(), store, 9, postIDs, now, cfg); err != nil {
+		t.Fatalf("record user history: %v", err)
+	}
+	if store.userRecordCalls != 1 || store.lastUserID != 9 || store.lastUserWindow != userHistoryWindow(now, cfg) || len(store.lastUserPostIDs) != len(postIDs) || store.lastUserPostIDs[0] != 4 || store.lastUserPostIDs[1] != 5 {
+		t.Fatalf("user record call: calls=%d id=%d postIDs=%v window=%#v", store.userRecordCalls, store.lastUserID, store.lastUserPostIDs, store.lastUserWindow)
+	}
+}
+
 func TestUserRecommendationServedHistoryZeroUserIsNoOp(t *testing.T) {
-	history, err := loadUserRecommendationServedHistory(context.Background(), nil, 0, time.Time{}, config.RecommendationConfig{})
+	store := &recommendationHistoryStoreRecorder{}
+	history, err := loadUserRecommendationServedHistory(context.Background(), store, 0, time.Time{}, config.RecommendationConfig{})
 	if err != nil {
 		t.Fatalf("load zero user: %v", err)
 	}
 	if history == nil || len(history) != 0 {
 		t.Fatalf("zero user history=%#v want empty map", history)
 	}
-	if err := recordUserRecommendationServedPosts(context.Background(), nil, 0, []uint{101}, time.Time{}, config.RecommendationConfig{}); err != nil {
+	if err := recordUserRecommendationServedPosts(context.Background(), store, 0, []uint{101}, time.Time{}, config.RecommendationConfig{}); err != nil {
 		t.Fatalf("record zero user: %v", err)
 	}
-	if err := recordUserRecommendationServedPosts(context.Background(), nil, 42, []uint{0, 0}, time.Time{}, config.RecommendationConfig{}); err != nil {
+	if err := recordUserRecommendationServedPosts(context.Background(), store, 42, []uint{0, 0}, time.Time{}, config.RecommendationConfig{}); err != nil {
 		t.Fatalf("record zero post IDs: %v", err)
 	}
+	if store.userLoadCalls != 0 || store.userRecordCalls != 0 {
+		t.Fatalf("empty user history operations reached store: load=%d record=%d", store.userLoadCalls, store.userRecordCalls)
+	}
+}
+
+type recommendationHistoryStoreRecorder struct {
+	userLoadCalls    int
+	userRecordCalls  int
+	guestLoadCalls   int
+	guestRecordCalls int
+	lastUserID       uint
+	lastGuestSession string
+	lastUserPostIDs  []uint
+	lastGuestPostIDs []uint
+	lastUserWindow   recommendation.HistoryWindow
+	lastGuestWindow  recommendation.HistoryWindow
+	userHistory      recommendation.ServedHistory
+	guestHistory     recommendation.ServedHistory
+}
+
+func (store *recommendationHistoryStoreRecorder) LoadUserHistory(_ context.Context, userID uint, window recommendation.HistoryWindow) (recommendation.ServedHistory, error) {
+	store.userLoadCalls++
+	store.lastUserID = userID
+	store.lastUserWindow = window
+	return store.userHistory, nil
+}
+
+func (store *recommendationHistoryStoreRecorder) RecordUserServed(_ context.Context, userID uint, postIDs []uint, window recommendation.HistoryWindow) error {
+	store.userRecordCalls++
+	store.lastUserID = userID
+	store.lastUserPostIDs = append([]uint(nil), postIDs...)
+	store.lastUserWindow = window
+	return nil
+}
+
+func (store *recommendationHistoryStoreRecorder) LoadGuestHistory(_ context.Context, sessionID string, window recommendation.HistoryWindow) (recommendation.ServedHistory, error) {
+	store.guestLoadCalls++
+	store.lastGuestSession = sessionID
+	store.lastGuestWindow = window
+	return store.guestHistory, nil
+}
+
+func (store *recommendationHistoryStoreRecorder) RecordGuestServed(_ context.Context, sessionID string, postIDs []uint, window recommendation.HistoryWindow) error {
+	store.guestRecordCalls++
+	store.lastGuestSession = sessionID
+	store.lastGuestPostIDs = append([]uint(nil), postIDs...)
+	store.lastGuestWindow = window
+	return nil
 }
