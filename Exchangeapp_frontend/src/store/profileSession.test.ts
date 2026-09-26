@@ -651,6 +651,36 @@ describe('profile session store', () => {
     });
   });
 
+  it('ignores an unauthenticated Profile Like before optimistic mutation or request', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    expect(store.viewerID).toBe(7);
+    mocks.authStore!.isAuthenticated = false;
+
+    await expect(store.toggleLike(4, 7)).resolves.toBe('ignored');
+
+    expect(mocks.likePost).not.toHaveBeenCalled();
+    expect(mocks.unlikePost).not.toHaveBeenCalled();
+    expect(feedPost).toMatchObject({ liked: false, likeCount: 2, likeStatus: 'ready' });
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+    expect(mocks.feedStore!.applyLikeStateUpdate).not.toHaveBeenCalled();
+  });
+
+  it('ignores a Profile Like when the authenticated viewer ID is missing', async () => {
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+
+    await expect(store.toggleLike(4, 7)).resolves.toBe('ignored');
+
+    expect(mocks.likePost).not.toHaveBeenCalled();
+    expect(mocks.unlikePost).not.toHaveBeenCalled();
+    expect(feedPost).toMatchObject({ liked: false, likeCount: 2, likeStatus: 'ready' });
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+    expect(mocks.feedStore!.applyLikeStateUpdate).not.toHaveBeenCalled();
+  });
+
   it('returns failed and rolls back a rejected current Profile Like', async () => {
     const store = useProfileSessionStore();
     const { feedPost } = addReadyProfilePost(store);

@@ -1030,13 +1030,19 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     rawUserID?: unknown,
   ): Promise<ProfileEngagementMutationResult> => {
     const post = findPost(postId, rawUserID);
-    if (!post || post.likeStatus !== 'ready' || likePendingPostIds.has(postId)) return 'ignored';
+    const capturedViewerID = viewerID.value;
+    if (
+      !post
+      || post.likeStatus !== 'ready'
+      || capturedViewerID === null
+      || likePendingPostIds.has(postId)
+      || !authStore.isAuthenticated
+    ) return 'ignored';
     const previousLiked = post.liked;
     const previousLikes = post.likeCount;
     const mutationVersion = (likeMutationVersions.get(postId) ?? 0) + 1;
     likeMutationVersions.set(postId, mutationVersion);
     const capturedLikeGeneration = likeGeneration;
-    const capturedViewerID = viewerID.value;
     const capturedViewerGeneration = viewerGeneration.value;
     likePendingPostIds.add(postId);
     applyLikeStateUpdateEverywhere({

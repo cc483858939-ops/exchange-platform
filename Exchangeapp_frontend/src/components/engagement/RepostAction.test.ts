@@ -62,6 +62,10 @@ describe('RepostAction', () => {
 
     expect(wrapper.findAll('.repost-action__visual')).toHaveLength(1);
     expect(wrapper.findAll('.repost-action__icon')).toHaveLength(1);
+    expect(wrapper.findAll('.repost-action__icon-glyph')).toHaveLength(1);
+    expect(wrapper.get('.repost-action__icon').element.contains(
+      wrapper.get('.repost-action__icon-glyph').element,
+    )).toBe(true);
     expect(wrapper.findAll('.repost-action__count-window')).toHaveLength(1);
     expect(wrapper.findAll('.repost-action__count')).toHaveLength(1);
     expect(wrapper.find('.repost-action__visual').attributes('aria-hidden')).toBe('true');

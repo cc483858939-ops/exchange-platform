@@ -22,10 +22,12 @@
   >
     <span class="repost-action__visual" aria-hidden="true">
       <span class="repost-action__icon">
-        <AppIcon
-          name="repost"
-          :size="variant === 'detail' ? 20 : 18"
-        />
+        <span class="repost-action__icon-glyph">
+          <AppIcon
+            name="repost"
+            :size="variant === 'detail' ? 20 : 18"
+          />
+        </span>
       </span>
     </span>
 
@@ -297,16 +299,29 @@ onBeforeUnmount(() => {
   transform-origin: center;
 }
 
+.repost-action__icon-glyph {
+  display: inline-flex;
+  transform-origin: center;
+}
+
 .repost-action__icon :deep(.app-icon) {
   display: block;
 }
 
 .repost-action--reposting .repost-action__icon {
-  animation: nexus-repost-in var(--repost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
+  animation: nexus-repost-rotate-in var(--repost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
+}
+
+.repost-action--reposting .repost-action__icon-glyph {
+  animation: nexus-repost-scale-in var(--repost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
 }
 
 .repost-action--unreposting .repost-action__icon {
-  animation: nexus-repost-out var(--unrepost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
+  animation: nexus-repost-rotate-out var(--unrepost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
+}
+
+.repost-action--unreposting .repost-action__icon-glyph {
+  animation: nexus-repost-scale-out var(--unrepost-motion-duration) cubic-bezier(0.25, 0.6, 0.35, 1) both;
 }
 
 .repost-action--reposting .repost-action__visual::after {
@@ -339,31 +354,63 @@ onBeforeUnmount(() => {
   opacity: 0.64;
 }
 
-@keyframes nexus-repost-in {
+@keyframes nexus-repost-rotate-in {
   0% {
-    transform: rotate(0deg) scale(1);
+    transform: rotate(0turn);
   }
 
   18% {
-    transform: rotate(55deg) scale(0.96);
+    transform: rotate(0.16turn);
   }
 
   100% {
-    transform: rotate(360deg) scale(1);
+    transform: rotate(1turn);
   }
 }
 
-@keyframes nexus-repost-out {
+@keyframes nexus-repost-rotate-out {
   0% {
-    transform: rotate(0deg) scale(1);
+    transform: rotate(0turn);
   }
 
-  15% {
-    transform: rotate(45deg) scale(0.97);
+  25% {
+    transform: rotate(0.18turn);
   }
 
   100% {
-    transform: rotate(360deg) scale(1);
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes nexus-repost-scale-in {
+  0% {
+    transform: scale(1);
+  }
+
+  20% {
+    transform: scale(0.96);
+  }
+
+  55% {
+    transform: scale(1.03);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes nexus-repost-scale-out {
+  0% {
+    transform: scale(1);
+  }
+
+  25% {
+    transform: scale(0.97);
+  }
+
+  100% {
+    transform: scale(1);
   }
 }
 
@@ -432,6 +479,8 @@ onBeforeUnmount(() => {
 
   .repost-action--reposting .repost-action__icon,
   .repost-action--unreposting .repost-action__icon,
+  .repost-action--reposting .repost-action__icon-glyph,
+  .repost-action--unreposting .repost-action__icon-glyph,
   .repost-action--reposting .repost-action__visual::after {
     animation: none;
   }
