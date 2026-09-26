@@ -57,6 +57,7 @@ describe('BookmarkAction', () => {
     expect(button.attributes('aria-label')).toBe('Bookmark post');
     expect(button.attributes('data-motion')).toBe('idle');
     expect(button.classes()).not.toContain('bookmark-action--bookmarked');
+    expect(wrapper.find('.bookmark-action__visual').exists()).toBe(true);
     expect(wrapper.findAll('.bookmark-action__icon--outline')).toHaveLength(1);
     expect(wrapper.findAll('.bookmark-action__icon--filled')).toHaveLength(1);
     expectBookmarkLayers(wrapper);
@@ -106,12 +107,12 @@ describe('BookmarkAction', () => {
     expectBookmarkLayers(wrapper);
   });
 
-  it('keeps bookmark motion through 299ms and settles at 300ms', async () => {
+  it('keeps bookmark motion through 289ms and settles at 290ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountBookmarkAction();
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(299);
+    vi.advanceTimersByTime(289);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('bookmarking');
 
@@ -120,12 +121,12 @@ describe('BookmarkAction', () => {
     expect(wrapper.get('button').attributes('data-motion')).toBe('idle');
   });
 
-  it('keeps unbookmark motion through 189ms and settles at 190ms', async () => {
+  it('keeps unbookmark motion through 169ms and settles at 170ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountBookmarkAction({ bookmarked: true });
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(189);
+    vi.advanceTimersByTime(169);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('unbookmarking');
 

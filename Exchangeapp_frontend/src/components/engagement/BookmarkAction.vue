@@ -46,8 +46,8 @@ import AppIcon from '../icons/AppIcon.vue';
 type BookmarkActionVariant = 'compact' | 'detail';
 type BookmarkMotion = 'idle' | 'bookmarking' | 'unbookmarking';
 
-const bookmarkMotionDurationMs = 300;
-const unbookmarkMotionDurationMs = 190;
+const bookmarkMotionDurationMs = 290;
+const unbookmarkMotionDurationMs = 170;
 
 const props = withDefaults(defineProps<{
   bookmarked: boolean;
@@ -220,7 +220,7 @@ onBeforeUnmount(clearMotionTimer);
   align-items: center;
   justify-content: center;
   overflow: visible;
-  perspective: 80px;
+  isolation: isolate;
 }
 
 .bookmark-action__icon {
@@ -229,8 +229,23 @@ onBeforeUnmount(clearMotionTimer);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transform-origin: 50% 0%;
-  backface-visibility: hidden;
+  z-index: 1;
+}
+
+.bookmark-action__visual::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 0;
+  width: 30px;
+  height: 30px;
+  box-sizing: border-box;
+  border: 2px solid var(--color-accent);
+  border-radius: 50%;
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.45);
 }
 
 .bookmark-action__icon--outline {
@@ -240,7 +255,6 @@ onBeforeUnmount(clearMotionTimer);
 
 .bookmark-action__icon--filled {
   opacity: 0;
-  transform-origin: 50% 0%;
 }
 
 .bookmark-action--bookmarked .bookmark-action__icon--outline {
@@ -252,11 +266,15 @@ onBeforeUnmount(clearMotionTimer);
 }
 
 .bookmark-action--bookmarking .bookmark-action__icon--outline {
-  opacity: 0;
+  animation: nexus-bookmark-outline-press 85ms ease-out both;
 }
 
 .bookmark-action--bookmarking .bookmark-action__icon--filled {
-  animation: nexus-bookmark-ribbon-in var(--bookmark-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: nexus-bookmark-pop-in var(--bookmark-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.bookmark-action--bookmarking .bookmark-action__visual::after {
+  animation: nexus-bookmark-ring 210ms ease-out both;
 }
 
 .bookmark-action--unbookmarking .bookmark-action__icon--outline {
@@ -267,49 +285,87 @@ onBeforeUnmount(clearMotionTimer);
 .bookmark-action--unbookmarking .bookmark-action__icon--filled {
   color: var(--color-accent);
   opacity: 1;
-  animation: nexus-bookmark-ribbon-out var(--unbookmark-motion-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: nexus-bookmark-pop-out var(--unbookmark-motion-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 .bookmark-action__icon :deep(.app-icon) {
   display: block;
 }
 
-@keyframes nexus-bookmark-ribbon-in {
+@keyframes nexus-bookmark-outline-press {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  55% {
+    opacity: 1;
+    transform: translateY(1px) scale(0.78);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(1px) scale(0.78);
+  }
+}
+
+@keyframes nexus-bookmark-pop-in {
   0% {
     opacity: 0;
-    transform: translateY(-4px) rotateX(72deg) scaleY(0.84);
+    transform: translateY(1px) scale(0.78);
   }
 
   38% {
     opacity: 1;
-    transform: translateY(1px) rotateX(-10deg) scaleY(1.06);
+    transform: translateY(-2px) scale(1.24);
   }
 
   68% {
     opacity: 1;
-    transform: translateY(-0.5px) rotateX(4deg) scaleY(0.99);
+    transform: translateY(1px) scale(0.95);
+  }
+
+  84% {
+    opacity: 1;
+    transform: translateY(-0.5px) scale(1.04);
   }
 
   100% {
     opacity: 1;
-    transform: translateY(0) rotateX(0deg) scaleY(1);
+    transform: translateY(0) scale(1);
   }
 }
 
-@keyframes nexus-bookmark-ribbon-out {
+@keyframes nexus-bookmark-pop-out {
   0% {
     opacity: 1;
-    transform: translateY(0) rotateX(0deg) scaleY(1);
+    transform: scale(1);
   }
 
-  38% {
+  55% {
     opacity: 1;
-    transform: translateY(1px) rotateX(-10deg) scaleY(0.98);
+    transform: translateY(1px) scale(0.86);
   }
 
   100% {
     opacity: 0;
-    transform: translateY(-3px) rotateX(68deg) scaleY(0.86);
+    transform: translateY(0) scale(0.9);
+  }
+}
+
+@keyframes nexus-bookmark-ring {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.45);
+  }
+
+  20% {
+    opacity: 0.22;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.35);
   }
 }
 
@@ -334,6 +390,12 @@ onBeforeUnmount(clearMotionTimer);
 
   .bookmark-action--bookmarking .bookmark-action__icon--filled {
     opacity: 1;
+  }
+
+  .bookmark-action--bookmarking .bookmark-action__visual::after {
+    animation: none;
+    opacity: 0;
+    transform: none;
   }
 
   .bookmark-action--unbookmarking .bookmark-action__icon--outline {
