@@ -21,11 +21,18 @@
     @click.stop="activate"
   >
     <span class="bookmark-action__visual" aria-hidden="true">
-      <span class="bookmark-action__icon">
+      <span class="bookmark-action__icon bookmark-action__icon--outline">
         <AppIcon
           name="bookmark"
           :size="variant === 'detail' ? 20 : 18"
-          :filled="visualBookmarked"
+          :filled="false"
+        />
+      </span>
+      <span class="bookmark-action__icon bookmark-action__icon--filled">
+        <AppIcon
+          name="bookmark"
+          :size="variant === 'detail' ? 20 : 18"
+          :filled="true"
         />
       </span>
     </span>
@@ -39,8 +46,8 @@ import AppIcon from '../icons/AppIcon.vue';
 type BookmarkActionVariant = 'compact' | 'detail';
 type BookmarkMotion = 'idle' | 'bookmarking' | 'unbookmarking';
 
-const bookmarkMotionDurationMs = 220;
-const unbookmarkMotionDurationMs = 180;
+const bookmarkMotionDurationMs = 300;
+const unbookmarkMotionDurationMs = 190;
 
 const props = withDefaults(defineProps<{
   bookmarked: boolean;
@@ -205,7 +212,6 @@ onBeforeUnmount(clearMotionTimer);
 }
 
 .bookmark-action__visual {
-  isolation: isolate;
   position: relative;
   display: inline-flex;
   width: 20px;
@@ -214,96 +220,95 @@ onBeforeUnmount(clearMotionTimer);
   align-items: center;
   justify-content: center;
   overflow: visible;
-}
-
-.bookmark-action__visual::after {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  z-index: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  content: '';
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
+  perspective: 80px;
 }
 
 .bookmark-action__icon {
-  position: relative;
-  z-index: 1;
+  position: absolute;
+  inset: 0;
   display: inline-flex;
-  transform-origin: center;
+  align-items: center;
+  justify-content: center;
+  transform-origin: 50% 0%;
+  backface-visibility: hidden;
+}
+
+.bookmark-action__icon--outline {
+  opacity: 1;
+  transition: opacity 70ms ease;
+}
+
+.bookmark-action__icon--filled {
+  opacity: 0;
+  transform-origin: 50% 0%;
+}
+
+.bookmark-action--bookmarked .bookmark-action__icon--outline {
+  opacity: 0;
+}
+
+.bookmark-action--bookmarked .bookmark-action__icon--filled {
+  opacity: 1;
+}
+
+.bookmark-action--bookmarking .bookmark-action__icon--outline {
+  opacity: 0;
+}
+
+.bookmark-action--bookmarking .bookmark-action__icon--filled {
+  animation: nexus-bookmark-ribbon-in var(--bookmark-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.bookmark-action--unbookmarking .bookmark-action__icon--outline {
+  opacity: 1;
+  transition: opacity 80ms ease 70ms;
+}
+
+.bookmark-action--unbookmarking .bookmark-action__icon--filled {
+  opacity: 1;
+  animation: nexus-bookmark-ribbon-out var(--unbookmark-motion-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 .bookmark-action__icon :deep(.app-icon) {
   display: block;
 }
 
-.bookmark-action--bookmarking .bookmark-action__icon {
-  animation: nexus-bookmark-in var(--bookmark-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.bookmark-action--unbookmarking .bookmark-action__icon {
-  animation: nexus-bookmark-out var(--unbookmark-motion-duration) cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.bookmark-action--bookmarking .bookmark-action__visual::after {
-  animation: nexus-bookmark-halo var(--bookmark-motion-duration) ease-out both;
-}
-
-@keyframes nexus-bookmark-in {
+@keyframes nexus-bookmark-ribbon-in {
   0% {
-    transform: scale(1);
+    opacity: 0;
+    transform: translateY(-4px) rotateX(72deg) scaleY(0.84);
   }
 
-  32% {
-    transform: scale(0.95);
+  38% {
+    opacity: 1;
+    transform: translateY(1px) rotateX(-10deg) scaleY(1.06);
   }
 
   68% {
-    transform: scale(1.04);
+    opacity: 1;
+    transform: translateY(-0.5px) rotateX(4deg) scaleY(0.99);
   }
 
   100% {
-    transform: scale(1);
+    opacity: 1;
+    transform: translateY(0) rotateX(0deg) scaleY(1);
   }
 }
 
-@keyframes nexus-bookmark-out {
+@keyframes nexus-bookmark-ribbon-out {
   0% {
-    transform: scale(1);
+    opacity: 1;
+    transform: translateY(0) rotateX(0deg) scaleY(1);
   }
 
-  35% {
-    transform: scale(0.97);
-  }
-
-  72% {
-    transform: scale(1.02);
-  }
-
-  100% {
-    transform: scale(1);
-  }
-}
-
-@keyframes nexus-bookmark-halo {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.85);
-  }
-
-  42% {
-    opacity: 0.09;
-    transform: translate(-50%, -50%) scale(1);
+  38% {
+    opacity: 1;
+    transform: translateY(1px) rotateX(-10deg) scaleY(0.98);
   }
 
   100% {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(1.14);
+    transform: translateY(-3px) rotateX(68deg) scaleY(0.86);
   }
 }
 
@@ -312,9 +317,12 @@ onBeforeUnmount(clearMotionTimer);
     transition: none;
   }
 
-  .bookmark-action--bookmarking .bookmark-action__icon,
-  .bookmark-action--unbookmarking .bookmark-action__icon,
-  .bookmark-action--bookmarking .bookmark-action__visual::after {
+  .bookmark-action__icon,
+  .bookmark-action--unbookmarking .bookmark-action__icon--outline,
+  .bookmark-action--bookmarking .bookmark-action__icon--filled,
+  .bookmark-action--unbookmarking .bookmark-action__icon--filled {
+    transform: none;
+    transition: none;
     animation: none;
   }
 }
