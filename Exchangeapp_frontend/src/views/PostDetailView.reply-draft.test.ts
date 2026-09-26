@@ -385,9 +385,10 @@ describe('PostDetailView persistent reply drafts', () => {
     expect(textareaValue(wrapper)).toBe('warm-hidden draft');
   });
 
-  it('clears only the submitted draft after a successful reply', async () => {
+  it('increments locally after a fresh reply without an extra parent fetch', async () => {
     const request = deferred<Post>();
     mocks.createPostReply.mockReturnValueOnce(request.promise);
+    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 3 }));
     wrapper = mountDetail();
     await flushPromises();
 
@@ -404,9 +405,11 @@ describe('PostDetailView persistent reply drafts', () => {
 
     expect(draftStore().getDraft(42)).toBe('');
     expect(textareaValue(wrapper)).toBe('');
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('4');
+    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
     expect(mocks.externalReplyCount).toHaveBeenCalledWith({
       postId: 42,
-      replyCount: 1,
+      replyCount: 4,
     });
   });
 
@@ -428,6 +431,7 @@ describe('PostDetailView persistent reply drafts', () => {
     });
     expect(wrapper.get('.reply-error').text()).toBe('Reply failed. Please try again.');
 
+    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
     await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
 
@@ -436,6 +440,10 @@ describe('PostDetailView persistent reply drafts', () => {
     });
     expect(draftStore().getDraft(42)).toBe('');
     expect(draftStore().submissionOperations).toEqual({});
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
+    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
+    expect(mocks.externalReplyCount).toHaveBeenCalledTimes(1);
+    expect(mocks.externalReplyCount).toHaveBeenCalledWith({ postId: 42, replyCount: 1 });
   });
 
   it('uses a new operation after editing a failed reply', async () => {
@@ -464,6 +472,8 @@ describe('PostDetailView persistent reply drafts', () => {
     });
     expect(draftStore().getDraft(42)).toBe('');
     expect(failedOperation?.id).not.toBe(operationUUID(2));
+    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
   });
 
   it('uses a fresh operation when the same text is submitted after success', async () => {
@@ -478,6 +488,7 @@ describe('PostDetailView persistent reply drafts', () => {
     await textarea.setValue('same reply');
     await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
+    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
     await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
     await textarea.setValue('same reply');
@@ -493,6 +504,10 @@ describe('PostDetailView persistent reply drafts', () => {
     expect(mocks.createPostReply).toHaveBeenNthCalledWith(3, '42', 'same reply', {
       idempotencyKey: operationUUID(2),
     });
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('2');
+    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
+    expect(mocks.externalReplyCount).toHaveBeenNthCalledWith(1, { postId: 42, replyCount: 1 });
+    expect(mocks.externalReplyCount).toHaveBeenNthCalledWith(2, { postId: 42, replyCount: 2 });
   });
 
   it('reuses the failed operation after leaving and returning to the post', async () => {
@@ -502,12 +517,22 @@ describe('PostDetailView persistent reply drafts', () => {
     await wrapper.get('.reply-composer__textarea').setValue('retry after return');
     await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
+    const firstOperationID = draftStore().submissionOperations['42']?.id;
+    expect(firstOperationID).toBe(operationUUID(1));
 
     wrapper.unmount();
     wrapper = null;
     mocks.createPostReply.mockResolvedValueOnce(reply(113));
+    mocks.getPostById.mockReset().mockImplementation(() => (
+      Promise.resolve(post(42, { reply_count: 1 }))
+    ));
+    mocks.getPostReplies.mockReset().mockResolvedValue({
+      items: [reply(113)],
+      next_cursor: null,
+    });
     wrapper = mountDetail();
     await flushPromises();
+    expect(draftStore().submissionOperations['42']?.id).toBe(firstOperationID);
     await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
 
@@ -517,6 +542,64 @@ describe('PostDetailView persistent reply drafts', () => {
     expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'retry after return', {
       idempotencyKey: operationUUID(1),
     });
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
+    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
+    expect(mocks.externalReplyCount).toHaveBeenCalledWith({ postId: 42, replyCount: 1 });
+    expect(wrapper.findAll('.test-reply-item')).toHaveLength(1);
+    expect(wrapper.find('.test-reply-item').attributes('data-reply-id')).toBe('113');
+  });
+
+  it('keeps a successful reply when retry count reconciliation fails', async () => {
+    mocks.createPostReply
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(reply(115));
+    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 3 }));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.reply-composer__textarea').setValue('count refresh failure');
+    await wrapper.get('.reply-composer').trigger('submit');
+    await flushPromises();
+    mocks.getPostById.mockRejectedValueOnce(new Error('refresh offline'));
+
+    await wrapper.get('.reply-composer').trigger('submit');
+    await flushPromises();
+
+    expect(wrapper.find('.test-reply-item').attributes('data-reply-id')).toBe('115');
+    expect(draftStore().getDraft(42)).toBe('');
+    expect(draftStore().submissionOperations).toEqual({});
+    expect(wrapper.find('.reply-error').exists()).toBe(false);
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('3');
+    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
+    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
+  });
+
+  it('does not apply retry reconciliation after navigating to a different post', async () => {
+    const countRequest = deferred<Post>();
+    const retryRequest = deferred<Post>();
+    mocks.createPostReply
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockReturnValueOnce(retryRequest.promise);
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.reply-composer__textarea').setValue('retry then navigate');
+    await wrapper.get('.reply-composer').trigger('submit');
+    await flushPromises();
+    mocks.getPostById.mockReturnValueOnce(countRequest.promise);
+
+    await wrapper.get('.reply-composer').trigger('submit');
+    retryRequest.resolve(reply(116));
+    await flushPromises();
+    await nextTick();
+    mocks.route.params.id = '43';
+    await flushPromises();
+
+    countRequest.resolve(post(42, { reply_count: 99 }));
+    await flushPromises();
+
+    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('0');
+    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
   });
 
   it('retires a conflicting operation but preserves the draft for a new retry', async () => {
@@ -561,7 +644,8 @@ describe('PostDetailView persistent reply drafts', () => {
 
     expect(draftStore().getDraft(42)).toBe('draft B');
     expect(textareaValue(wrapper)).toBe('draft B');
-    expect(draftStore().submissionOperations['42']).toEqual(newerOperation);
+    expect(newerOperation.reused).toBe(false);
+    expect(draftStore().submissionOperations['42']).toEqual(newerOperation.operation);
   });
 
   it('clears a late successful Post A reply without mutating Post B', async () => {
@@ -813,6 +897,7 @@ describe('PostDetailView persistent reply drafts', () => {
     expect(wrapper.find('.test-reply-item').exists()).toBe(false);
     expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
 
+    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
     await wrapper.get('.test-close-media-viewer').trigger('click');
     await nextTick();
     await wrapper.get('.reply-composer').trigger('submit');

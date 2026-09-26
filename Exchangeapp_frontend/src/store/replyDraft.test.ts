@@ -39,11 +39,14 @@ describe('replyDraft store', () => {
 
     expect(store.setViewer(7)).toBe(true);
     store.setDraft(42, 'hello');
-    const operation = store.prepareSubmission(42, 'hello');
+    const prepared = store.prepareSubmission(42, 'hello');
 
     expect(store.setViewer(7)).toBe(false);
     expect(store.getDraft(42)).toBe('hello');
-    expect(store.prepareSubmission(42, 'hello')).toEqual(operation);
+    expect(prepared.reused).toBe(false);
+    const retry = store.prepareSubmission(42, 'hello');
+    expect(retry.reused).toBe(true);
+    expect(retry.operation).toEqual(prepared.operation);
   });
 
   it('keeps drafts isolated per post', () => {
@@ -94,8 +97,10 @@ describe('replyDraft store', () => {
     store.setDraft(42, '  hello  ');
     const retry = store.prepareSubmission('42', ' hello ');
 
-    expect(retry).toEqual(first);
-    expect(retry.content).toBe('hello');
+    expect(first.reused).toBe(false);
+    expect(retry.reused).toBe(true);
+    expect(retry.operation).toEqual(first.operation);
+    expect(retry.operation.content).toBe('hello');
     expect(mocks.createClientOperationID).toHaveBeenCalledTimes(1);
   });
 
@@ -110,10 +115,16 @@ describe('replyDraft store', () => {
     const edited = store.prepareSubmission(42, 'hello again');
     const otherPost = store.prepareSubmission(43, 'hello again');
 
-    expect(edited.id).not.toBe(first.id);
-    expect(edited.content).toBe('hello again');
-    expect(otherPost.id).not.toBe(edited.id);
-    expect(store.submissionOperations).toEqual({ '42': edited, '43': otherPost });
+    expect(first.reused).toBe(false);
+    expect(edited.reused).toBe(false);
+    expect(edited.operation.id).not.toBe(first.operation.id);
+    expect(edited.operation.content).toBe('hello again');
+    expect(otherPost.reused).toBe(false);
+    expect(otherPost.operation.id).not.toBe(edited.operation.id);
+    expect(store.submissionOperations).toEqual({
+      '42': edited.operation,
+      '43': otherPost.operation,
+    });
   });
 
   it('clears submission operations with drafts, clearAll, and viewer changes', () => {
@@ -143,9 +154,9 @@ describe('replyDraft store', () => {
     store.setViewer(7);
     const first = store.prepareSubmission(42, 'draft A');
     store.clearSubmissionOperation(42, 'stale-operation');
-    expect(store.submissionOperations['42']).toEqual(first);
+    expect(store.submissionOperations['42']).toEqual(first.operation);
 
-    store.clearSubmissionOperation(42, first.id);
+    store.clearSubmissionOperation(42, first.operation.id);
     expect(store.submissionOperations).toEqual({});
   });
 

@@ -7,6 +7,11 @@ export type ReplySubmissionOperation = {
   content: string;
 };
 
+export type PreparedReplySubmission = {
+  operation: ReplySubmissionOperation;
+  reused: boolean;
+};
+
 const normalizeViewerID = (value: number | null): number | null => (
   typeof value === 'number'
   && Number.isSafeInteger(value)
@@ -95,7 +100,7 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
   const prepareSubmission = (
     postID: number | string,
     content: string,
-  ): ReplySubmissionOperation => {
+  ): PreparedReplySubmission => {
     const normalized = normalizePostID(postID);
     if (viewerID.value === null || normalized === null) {
       throw new Error('Reply submission requires an authenticated viewer and valid post ID');
@@ -105,7 +110,7 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     const canonicalContent = content.trim();
     const existing = submissionOperations.value[key];
     if (existing?.content === canonicalContent) {
-      return existing;
+      return { operation: existing, reused: true };
     }
 
     const operation = {
@@ -113,7 +118,7 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
       content: canonicalContent,
     };
     submissionOperations.value[key] = operation;
-    return operation;
+    return { operation, reused: false };
   };
 
   const clearSubmissionOperation = (

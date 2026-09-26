@@ -1799,7 +1799,9 @@ const handleCreateReply = async (content: string) => {
   }
   replyDraftStore.setViewer(submittingViewerID);
   const submittedDraftSnapshot = replyDraftStore.getDraft(numericPostID);
-  const replyOperation = replyDraftStore.prepareSubmission(numericPostID, content);
+  const preparedSubmission = replyDraftStore.prepareSubmission(numericPostID, content);
+  const replyOperation = preparedSubmission.operation;
+  const isReplyRetry = preparedSubmission.reused;
   const detailVersion = detailRequestVersion;
   replySubmitting.value = true;
   replyError.value = '';
@@ -1822,11 +1824,27 @@ const handleCreateReply = async (content: string) => {
     replies.value = mergeReplies([created].concat(replies.value));
     void hydrateReplyBookmarkStates([created], detailVersion);
     repliesError.value = '';
-    replyCount.value = clampCount(replyCount.value + 1);
-    syncExternalReplyCount({
-      postId: Number(id),
-      replyCount: replyCount.value,
-    });
+    if (isReplyRetry) {
+      try {
+        const refreshedParent = await getPostById(id);
+        if (detailVersion !== detailRequestVersion || postId.value !== id) {
+          return;
+        }
+        replyCount.value = clampCount(refreshedParent.reply_count);
+        syncExternalReplyCount({
+          postId: numericPostID,
+          replyCount: replyCount.value,
+        });
+      } catch {
+        // The reply succeeded; keep the last known count until a later refresh.
+      }
+    } else {
+      replyCount.value = clampCount(replyCount.value + 1);
+      syncExternalReplyCount({
+        postId: numericPostID,
+        replyCount: replyCount.value,
+      });
+    }
   } catch (error) {
     const response = (error as {
       response?: { status?: number; data?: { code?: string } };
