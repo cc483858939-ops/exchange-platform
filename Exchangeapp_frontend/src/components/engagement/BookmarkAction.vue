@@ -265,6 +265,7 @@ onBeforeUnmount(clearMotionTimer);
 }
 
 .bookmark-action--unbookmarking .bookmark-action__icon--filled {
+  color: var(--color-accent);
   opacity: 1;
   animation: nexus-bookmark-ribbon-out var(--unbookmark-motion-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
 }
@@ -318,12 +319,29 @@ onBeforeUnmount(clearMotionTimer);
   }
 
   .bookmark-action__icon,
-  .bookmark-action--unbookmarking .bookmark-action__icon--outline,
+  .bookmark-action--bookmarking .bookmark-action__icon--outline,
   .bookmark-action--bookmarking .bookmark-action__icon--filled,
+  .bookmark-action--unbookmarking .bookmark-action__icon--outline,
   .bookmark-action--unbookmarking .bookmark-action__icon--filled {
     transform: none;
     transition: none;
     animation: none;
+  }
+
+  .bookmark-action--bookmarking .bookmark-action__icon--outline {
+    opacity: 0;
+  }
+
+  .bookmark-action--bookmarking .bookmark-action__icon--filled {
+    opacity: 1;
+  }
+
+  .bookmark-action--unbookmarking .bookmark-action__icon--outline {
+    opacity: 1;
+  }
+
+  .bookmark-action--unbookmarking .bookmark-action__icon--filled {
+    opacity: 0;
   }
 }
 </style>
