@@ -13,7 +13,7 @@ const (
 	publicDiversificationMinWindow        = 60
 	publicDiversificationSubsetMultiplier = 2
 	publicDiversificationMinSubset        = 40
-	PublicDiversificationVersion           = "guest_public_diversification_v1"
+	PublicDiversificationVersion          = "guest_public_diversification_v1"
 )
 
 type publicDiversificationCandidate struct {

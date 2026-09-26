@@ -17,17 +17,17 @@ const (
 	recommendationSelectionFresh = recommendation.SelectionPhaseFresh
 	recommendationSelectionSoft  = recommendation.SelectionPhaseSoft
 
-	recommendationResultSelectionRanked      = recommendation.SelectionModeRanked
-	recommendationResultSelectionExploration = recommendation.SelectionModeExploration
+	recommendationResultSelectionRanked              = recommendation.SelectionModeRanked
+	recommendationResultSelectionExploration         = recommendation.SelectionModeExploration
 	recommendationExplorationReasonRecent            = recommendation.ExplorationReasonRecent
 	recommendationExplorationReasonNovelAuthor       = recommendation.ExplorationReasonNovelAuthor
 	recommendationExplorationReasonRecentNovelAuthor = recommendation.ExplorationReasonRecentNovelAuthor
 
-	recommendationRecallSourceSemantic  = recommendation.CandidateSourceSemantic
-	recommendationRecallSourceFollowing = recommendation.CandidateSourceFollowing
-	recommendationRecallSourceRecent    = recommendation.CandidateSourceRecent
-	recommendationRecallSourceTrending  = recommendation.CandidateSourceTrending
-	recommendationLanguageUnd           = recommendation.LanguageUnd
+	recommendationRecallSourceSemantic   = recommendation.CandidateSourceSemantic
+	recommendationRecallSourceFollowing  = recommendation.CandidateSourceFollowing
+	recommendationRecallSourceRecent     = recommendation.CandidateSourceRecent
+	recommendationRecallSourceTrending   = recommendation.CandidateSourceTrending
+	recommendationLanguageUnd            = recommendation.LanguageUnd
 	recommendationRankerVersion          = recommendation.RankerVersion
 	recommendationSelectionPolicyVersion = recommendation.SelectionPolicyVersion
 )

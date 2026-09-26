@@ -29,13 +29,13 @@ func recommendationSelectionConfig(cfg config.RecommendationConfig) recommendati
 		OutOfNetworkMinRatio: cfg.OutOfNetworkMinRatio,
 		Diversity: recommendation.DiversityConfig{
 			Enabled: cfg.Diversity.Enabled, AuthorWindowSize: cfg.Diversity.AuthorWindowSize,
-			MaxSameAuthorInWindow: cfg.Diversity.MaxSameAuthorInWindow,
+			MaxSameAuthorInWindow:      cfg.Diversity.MaxSameAuthorInWindow,
 			SemanticDuplicateThreshold: cfg.Diversity.SemanticDuplicateThreshold,
-			SemanticDuplicatePenalty:  cfg.Diversity.SemanticDuplicatePenalty,
+			SemanticDuplicatePenalty:   cfg.Diversity.SemanticDuplicatePenalty,
 		},
 		Exploration: recommendation.ExplorationConfig{
 			Ratio: cfg.Exploration.Ratio, MaxSlots: cfg.Exploration.MaxSlots,
-			RecentWindowDays: cfg.Exploration.RecentWindowDays,
+			RecentWindowDays:    cfg.Exploration.RecentWindowDays,
 			NovelPostMaxAgeDays: cfg.Exploration.NovelPostMaxAgeDays,
 		},
 	}
@@ -45,7 +45,7 @@ func recommendationLanguageConfig(cfg config.RecommendationConfig) recommendatio
 	return recommendation.LanguageConfig{
 		Enabled: cfg.LanguageAffinity.Enabled, Weight: cfg.LanguageAffinity.Weight,
 		EvidenceSaturationScale: cfg.LanguageAffinity.EvidenceSaturationScale,
-		MaxBehaviorShare: cfg.LanguageAffinity.MaxBehaviorShare,
+		MaxBehaviorShare:        cfg.LanguageAffinity.MaxBehaviorShare,
 	}
 }
 

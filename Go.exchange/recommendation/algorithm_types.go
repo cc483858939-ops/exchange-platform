@@ -123,13 +123,13 @@ type LanguageConfig struct {
 }
 
 type RankingConfig struct {
-	SemanticWeight       float64
+	SemanticWeight         float64
 	NegativeSemanticWeight float64
-	TrendingWeight       float64
-	AuthorAffinityWeight float64
-	FollowingBonus       float64
-	Trending             TrendingConfig
-	Language             LanguageConfig
+	TrendingWeight         float64
+	AuthorAffinityWeight   float64
+	FollowingBonus         float64
+	Trending               TrendingConfig
+	Language               LanguageConfig
 }
 
 type FusionConfig struct {
@@ -141,7 +141,7 @@ type DiversityConfig struct {
 	AuthorWindowSize           int
 	MaxSameAuthorInWindow      int
 	SemanticDuplicateThreshold float64
-	SemanticDuplicatePenalty  float64
+	SemanticDuplicatePenalty   float64
 }
 
 type ExplorationConfig struct {
@@ -190,10 +190,10 @@ type LanguageContext struct {
 }
 
 const (
-	LanguageZH  = "zh"
-	LanguageJA  = "ja"
-	LanguageEN  = "en"
-	LanguageUnd = "und"
-	RankerVersion = "rules_v6"
+	LanguageZH             = "zh"
+	LanguageJA             = "ja"
+	LanguageEN             = "en"
+	LanguageUnd            = "und"
+	RankerVersion          = "rules_v6"
 	SelectionPolicyVersion = "network_balance_exploration_v2"
 )

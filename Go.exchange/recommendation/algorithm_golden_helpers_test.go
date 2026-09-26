@@ -24,8 +24,8 @@ const (
 	recommendationSelectionFresh = SelectionPhaseFresh
 	recommendationSelectionSoft  = SelectionPhaseSoft
 
-	recommendationResultSelectionRanked      = SelectionModeRanked
-	recommendationResultSelectionExploration = SelectionModeExploration
+	recommendationResultSelectionRanked              = SelectionModeRanked
+	recommendationResultSelectionExploration         = SelectionModeExploration
 	recommendationExplorationReasonRecent            = ExplorationReasonRecent
 	recommendationExplorationReasonNovelAuthor       = ExplorationReasonNovelAuthor
 	recommendationExplorationReasonRecentNovelAuthor = ExplorationReasonRecentNovelAuthor
@@ -38,8 +38,8 @@ const (
 
 func defaultRecommendationConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
-		Fusion: config.RecommendationFusionConfig{RankConstant: 60},
-		Trending: config.RecommendationTrendingConfig{MaxAgeDays: 3, HalfLifeHours: 12, ReplyFactor: 1.5},
+		Fusion:      config.RecommendationFusionConfig{RankConstant: 60},
+		Trending:    config.RecommendationTrendingConfig{MaxAgeDays: 3, HalfLifeHours: 12, ReplyFactor: 1.5},
 		Exploration: config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30},
 		LanguageAffinity: config.RecommendationLanguageAffinityConfig{
 			Enabled: true, Weight: 0.35, EvidenceSaturationScale: 5, MaxBehaviorShare: 0.95,
@@ -69,7 +69,7 @@ func testRankingConfig(cfg config.RecommendationConfig) RankingConfig {
 		Language: LanguageConfig{
 			Enabled: cfg.LanguageAffinity.Enabled, Weight: cfg.LanguageAffinity.Weight,
 			EvidenceSaturationScale: cfg.LanguageAffinity.EvidenceSaturationScale,
-			MaxBehaviorShare: cfg.LanguageAffinity.MaxBehaviorShare,
+			MaxBehaviorShare:        cfg.LanguageAffinity.MaxBehaviorShare,
 		},
 	}
 }
@@ -79,13 +79,13 @@ func testSelectionConfig(cfg config.RecommendationConfig) SelectionConfig {
 		OutOfNetworkMinRatio: cfg.OutOfNetworkMinRatio,
 		Diversity: DiversityConfig{
 			Enabled: cfg.Diversity.Enabled, AuthorWindowSize: cfg.Diversity.AuthorWindowSize,
-			MaxSameAuthorInWindow: cfg.Diversity.MaxSameAuthorInWindow,
+			MaxSameAuthorInWindow:      cfg.Diversity.MaxSameAuthorInWindow,
 			SemanticDuplicateThreshold: cfg.Diversity.SemanticDuplicateThreshold,
-			SemanticDuplicatePenalty:  cfg.Diversity.SemanticDuplicatePenalty,
+			SemanticDuplicatePenalty:   cfg.Diversity.SemanticDuplicatePenalty,
 		},
 		Exploration: ExplorationConfig{
 			Ratio: cfg.Exploration.Ratio, MaxSlots: cfg.Exploration.MaxSlots,
-			RecentWindowDays: cfg.Exploration.RecentWindowDays,
+			RecentWindowDays:    cfg.Exploration.RecentWindowDays,
 			NovelPostMaxAgeDays: cfg.Exploration.NovelPostMaxAgeDays,
 		},
 	}
