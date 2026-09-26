@@ -12,11 +12,6 @@ import (
 )
 
 func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVectors(t *testing.T) {
-	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, ids []uint, version string) (map[uint][]float32, error) {
-		return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
-	}
-	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	readOutcome := recommendationReadOutcomeQualified
 	profile, err := buildEmbeddingInterestProfile(
@@ -27,6 +22,9 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 		},
 		[]recommendationFeedbackSignal{{Event: recommendationFeedbackEvent{EventID: "2", PostID: 2, EventType: recommendationFeedbackEventTypeReadEnd, OccurredAt: now, ReadOutcome: &readOutcome}}},
 		map[uint]recommendationReactionState{3: {Liked: false, StateChangedAt: now}}, now, defaultRecommendationConfig(), "post_embedding_v1",
+		func(context.Context, []uint, string) (map[uint][]float32, error) {
+			return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -43,15 +41,7 @@ func TestBuildEmbeddingInterestProfileUsesCanonicalSignalsAndExcludesMissingVect
 }
 
 func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) {
-	originalLoader := loadRecommendationPostEmbeddings
 	var gotVersion string
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, version string) (map[uint][]float32, error) {
-		gotVersion = version
-		return map[uint][]float32{1: {1, 0}}, nil
-	}
-	t.Cleanup(func() {
-		loadRecommendationPostEmbeddings = originalLoader
-	})
 
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	_, err := buildEmbeddingInterestProfile(
@@ -62,6 +52,10 @@ func TestBuildEmbeddingInterestProfilePassesActiveVersionToLoader(t *testing.T) 
 		now,
 		defaultRecommendationConfig(),
 		"v2",
+		func(_ context.Context, _ []uint, version string) (map[uint][]float32, error) {
+			gotVersion = version
+			return map[uint][]float32{1: {1, 0}}, nil
+		},
 	)
 	if err != nil {
 		t.Fatal(err)

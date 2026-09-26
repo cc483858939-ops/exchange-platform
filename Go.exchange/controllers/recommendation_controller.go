@@ -82,7 +82,11 @@ func GetPostRecommendations(ctx *gin.Context) {
 		return
 	}
 	served := map[uint]servedPost{}
-	loaded, historyErr := loadUserRecommendationServedHistoryForHandler(requestCtx, userID, now, cfg)
+	historyStore, historyErr := newRecommendationHistoryStore(global.RedisDB)
+	if historyErr != nil {
+		log.Printf("[Recommendation] user served-history store: %v", historyErr)
+	}
+	loaded, historyErr := loadUserRecommendationServedHistoryForHandler(requestCtx, historyStore, userID, now, cfg)
 	if historyErr != nil {
 		log.Printf("[Recommendation] served history for user %d: %v", userID, historyErr)
 		metrics.RecordRecommendationServedHistoryLoadFailure()
@@ -91,13 +95,19 @@ func GetPostRecommendations(ctx *gin.Context) {
 	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
 	browserLanguageContext := recommendation.LanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
-	if global.Db == nil {
-		recommendationErrorResponse(ctx, errors.New("database is not initialized"), recommendationStrategyID(userInterestProfile{}))
+	apiDB, dbErr := recommendationAPIDatabase()
+	if dbErr != nil {
+		recommendationErrorResponse(ctx, dbErr, recommendationStrategyID(userInterestProfile{}))
 		return
 	}
 	servingCtx, cancel := context.WithTimeout(requestCtx, recommendationServingTimeout(cfg))
 	defer cancel()
-	servingDB := global.Db.WithContext(servingCtx)
+	dependencies, err := newRecommendationDataDependencies(apiDB, global.RedisDB)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationStrategyID(userInterestProfile{}))
+		return
+	}
+	servingDB := apiDB.WithContext(servingCtx)
 	servingVersion, err := loadRecommendationServingVersionForHandler(servingCtx, servingDB)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(userInterestProfile{}))
@@ -105,7 +115,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 	}
 	snapshot := recommendationServingSnapshot{EmbeddingVersion: servingVersion}
 
-	serving, err := recommendationServingPathForHandler(servingCtx, servingDB, userID, uint(limit), cfg, now, requestID, snapshot, browserLanguageContext, served)
+	serving, err := recommendationServingPathForHandler(servingCtx, dependencies, userID, uint(limit), cfg, now, requestID, snapshot, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationStrategyID(serving.Profile))
 		return
@@ -139,7 +149,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 			finalIDs = append(finalIDs, recommendation.Post.ID)
 		}
 	}
-	if err := recordUserRecommendationServedPostsForHandler(requestCtx, userID, finalIDs, now, cfg); err != nil {
+	if err := recordUserRecommendationServedPostsForHandler(requestCtx, historyStore, userID, finalIDs, now, cfg); err != nil {
 		log.Printf("[Recommendation] user served-history persist failed for user %d: %v", userID, err)
 	}
 
@@ -180,7 +190,7 @@ func GetPostRecommendations(ctx *gin.Context) {
 		GenerationLatencyMS:     duration.Milliseconds(), CreatedAt: now,
 	}
 	traces := buildRecommendationResultTraces(requestRecord, selected, now, cfg)
-	if err := persistRecommendationServingTrace(requestCtx, requestRecord, traces); err != nil {
+	if err := persistRecommendationServingTrace(requestCtx, dependencies.Traces, requestRecord, traces); err != nil {
 		log.Printf("[RecommendationTelemetry] persist serving trace %s: %v", requestID, err)
 		metrics.RecordRecommendationTracePersistFailure()
 	}
@@ -202,9 +212,13 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 		ctx.GetHeader(guestRecommendationSessionHeader),
 	)
 	served := map[uint]servedPost{}
+	historyStore, historyErr := newRecommendationHistoryStore(global.RedisDB)
+	if historyErr != nil {
+		log.Printf("[Recommendation] guest served-history store: %v", historyErr)
+	}
 	if hasGuestSession {
 		loaded, err := loadGuestRecommendationServedHistoryForHandler(
-			requestCtx, guestSessionID, now, cfg,
+			requestCtx, historyStore, guestSessionID, now, cfg,
 		)
 		if err != nil {
 			log.Printf("[Recommendation] guest served-history load failed: %v", err)
@@ -214,13 +228,19 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	}
 	browserPrior, browserPrimary := parseRecommendationAcceptLanguageWithPrimary(ctx.GetHeader("Accept-Language"))
 	browserLanguageContext := recommendation.LanguageContext{Browser: browserPrior, BrowserPrimary: browserPrimary}
-	if global.Db == nil {
-		recommendationErrorResponse(ctx, errors.New("database is not initialized"), recommendationColdStartStrategyID)
+	apiDB, dbErr := recommendationAPIDatabase()
+	if dbErr != nil {
+		recommendationErrorResponse(ctx, dbErr, recommendationColdStartStrategyID)
 		return
 	}
 	servingCtx, cancel := context.WithTimeout(requestCtx, recommendationServingTimeout(cfg))
 	defer cancel()
-	servingDB := global.Db.WithContext(servingCtx)
+	dependencies, err := newRecommendationDataDependencies(apiDB, global.RedisDB)
+	if err != nil {
+		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
+		return
+	}
+	servingDB := apiDB.WithContext(servingCtx)
 	servingVersion, err := loadRecommendationServingVersionForHandler(servingCtx, servingDB)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
@@ -228,7 +248,7 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 	}
 	snapshot := recommendationServingSnapshot{EmbeddingVersion: servingVersion}
 
-	serving, err := publicRecommendationServingPathForHandler(servingCtx, servingDB, uint(limit), cfg, now, requestID, snapshot, browserLanguageContext, served)
+	serving, err := publicRecommendationServingPathForHandler(servingCtx, dependencies, uint(limit), cfg, now, requestID, snapshot, browserLanguageContext, served)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, recommendationColdStartStrategyID)
 		return
@@ -256,7 +276,7 @@ func GetPublicPostRecommendations(ctx *gin.Context) {
 			}
 		}
 		if err := recordGuestRecommendationServedPostsForHandler(
-			requestCtx, guestSessionID, finalIDs, now, cfg,
+			requestCtx, historyStore, guestSessionID, finalIDs, now, cfg,
 		); err != nil {
 			log.Printf("[Recommendation] guest served-history persist failed: %v", err)
 		}

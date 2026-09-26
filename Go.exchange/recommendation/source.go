@@ -1,7 +1,9 @@
 package recommendation
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -38,22 +40,34 @@ type SourceSignals struct {
 	Reactions map[uint]ReactionState
 }
 
+type GormSourceRepository struct {
+	db *gorm.DB
+}
+
+func NewGormSourceRepository(db *gorm.DB) (*GormSourceRepository, error) {
+	if db == nil {
+		return nil, errors.New("recommendation source repository database is nil")
+	}
+	return &GormSourceRepository{db: db}, nil
+}
+
 // LoadSourceSignals reads exactly the bounded source windows used by the
 // canonical profile builder. Not-interested history is intentionally not
 // bounded by the feedback lookback.
-func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (SourceSignals, error) {
-	if db == nil {
-		return SourceSignals{}, errors.New("database is not initialized")
+func (r *GormSourceRepository) LoadSourceSignals(ctx context.Context, userID uint, lookbackStart time.Time) (SourceSignals, error) {
+	db, err := recommendationContextDB(ctx, r.db)
+	if err != nil {
+		return SourceSignals{}, fmt.Errorf("load recommendation source signals: %w", err)
 	}
 	var views []models.PostBehavior
 	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorView).
 		Order("last_seen_at DESC, id DESC").Limit(ProfileRecentViewLimit).Find(&views).Error; err != nil {
-		return SourceSignals{}, err
+		return SourceSignals{}, fmt.Errorf("load recommendation views: %w", err)
 	}
 	var replies []models.PostBehavior
 	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorReply).
 		Order("last_seen_at DESC, id DESC").Limit(ProfileReplyLimit).Find(&replies).Error; err != nil {
-		return SourceSignals{}, err
+		return SourceSignals{}, fmt.Errorf("load recommendation replies: %w", err)
 	}
 	behaviors := make([]models.PostBehavior, 0, len(views)+len(replies))
 	for _, row := range views {
@@ -77,7 +91,7 @@ func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (Sourc
 	if err := db.Where("user_id = ? AND ((action IN ? AND last_seen_at >= ?) OR action = ?)",
 		userID, actions, lookbackStart, eventing.RecommendationBehaviorActionNotInterested).
 		Order("last_seen_at DESC, id DESC").Find(&feedbackRows).Error; err != nil {
-		return SourceSignals{}, err
+		return SourceSignals{}, fmt.Errorf("load recommendation feedback: %w", err)
 	}
 	feedback := make([]FeedbackEvent, 0, len(feedbackRows))
 	for _, row := range feedbackRows {
@@ -116,7 +130,7 @@ func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (Sourc
 
 	var reactionRows []models.PostReaction
 	if err := db.Where("user_id = ?", userID).Order("post_id ASC").Find(&reactionRows).Error; err != nil {
-		return SourceSignals{}, err
+		return SourceSignals{}, fmt.Errorf("load recommendation reactions: %w", err)
 	}
 	reactions := make(map[uint]ReactionState, len(reactionRows))
 	for _, row := range reactionRows {
@@ -126,3 +140,5 @@ func LoadSourceSignals(db *gorm.DB, userID uint, lookbackStart time.Time) (Sourc
 	}
 	return SourceSignals{Behaviors: behaviors, Feedback: feedback, Reactions: reactions}, nil
 }
+
+var _ SourceRepository = (*GormSourceRepository)(nil)

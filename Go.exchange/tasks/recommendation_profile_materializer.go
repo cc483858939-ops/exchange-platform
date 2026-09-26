@@ -146,9 +146,12 @@ func materializeDueRecommendationProfiles(ctx context.Context, now time.Time, se
 	}
 	settings = settings.Normalized()
 	cutoff := now.Add(-time.Duration(settings.DebounceSeconds) * time.Second)
-	var dirty []models.UserRecoProfileDirty
-	if err := global.WorkerDb.WithContext(ctx).Where("dirty_at <= ? AND next_attempt_at <= ?", cutoff, now).
-		Order("dirty_at ASC, user_id ASC").Limit(settings.BatchSize).Find(&dirty).Error; err != nil {
+	dirtyRepository, err := recommendation.NewGormDirtyProfileRepository(global.WorkerDb)
+	if err != nil {
+		return err
+	}
+	dirty, err := dirtyRepository.ListDue(ctx, cutoff, now, settings.BatchSize)
+	if err != nil {
 		return err
 	}
 	for _, row := range dirty {
@@ -189,8 +192,12 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 			lockSkipped = true
 			return errRecommendationProfileLockSkipped
 		}
-		var dirty models.UserRecoProfileDirty
-		if err := tx.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
+		dirtyRepository, err := recommendation.NewGormDirtyProfileRepository(tx)
+		if err != nil {
+			return err
+		}
+		dirty, err := dirtyRepository.Load(ctx, userID)
+		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			}
@@ -209,13 +216,21 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 		if cfg.FeedbackLookbackDays <= 0 {
 			cfg.FeedbackLookbackDays = 90
 		}
-		sources, err := recommendation.LoadSourceSignals(tx, userID, now.AddDate(0, 0, -cfg.FeedbackLookbackDays))
+		sourceRepository, err := recommendation.NewGormSourceRepository(tx)
+		if err != nil {
+			return err
+		}
+		sources, err := sourceRepository.LoadSourceSignals(ctx, userID, now.AddDate(0, 0, -cfg.FeedbackLookbackDays))
 		if err != nil {
 			return err
 		}
 		canonical := recommendation.CanonicalizeOutcomes(sources.Behaviors, sources.Feedback, sources.Reactions)
 		embeddingVersion := servingVersion
-		embeddings, err := loadMaterializerEmbeddings(tx, canonical.Outcomes, embeddingVersion)
+		candidateRepository, err := recommendation.NewGormCandidateRepository(tx)
+		if err != nil {
+			return err
+		}
+		embeddings, err := loadMaterializerEmbeddings(ctx, candidateRepository, canonical.Outcomes, embeddingVersion)
 		if err != nil {
 			return err
 		}
@@ -225,7 +240,11 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 		if err != nil {
 			return err
 		}
-		affinity, languageAffinity, err := loadMaterializerAffinities(tx, built.PositiveAffinityContributions)
+		profileRepository, err := recommendation.NewGormProfileRepository(tx)
+		if err != nil {
+			return err
+		}
+		affinity, languageAffinity, err := loadMaterializerAffinities(ctx, profileRepository, built.PositiveAffinityContributions)
 		if err != nil {
 			return err
 		}
@@ -238,7 +257,7 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 		if err := replaceMaterializedAuthorAffinity(tx, userID, affinity, now); err != nil {
 			return err
 		}
-		_, err = deleteMaterializedProfileClaim(tx, userID, dirty.DirtyVersion)
+		_, err = dirtyRepository.DeleteClaim(ctx, userID, dirty.DirtyVersion)
 		return err
 	})
 	metrics.ObserveRecommendationProfileMaterializationDuration(time.Since(started))
@@ -259,15 +278,7 @@ func materializeRecommendationProfileUser(ctx context.Context, userID uint, now 
 	return err
 }
 
-func deleteMaterializedProfileClaim(tx *gorm.DB, userID uint, dirtyVersion int64) (int64, error) {
-	if tx == nil {
-		return 0, errors.New("database is not initialized")
-	}
-	result := tx.Where("user_id = ? AND dirty_version = ?", userID, dirtyVersion).Delete(&models.UserRecoProfileDirty{})
-	return result.RowsAffected, result.Error
-}
-
-func loadMaterializerEmbeddings(tx *gorm.DB, outcomes []recommendation.UserPostOutcome, version string) (map[uint][]float32, error) {
+func loadMaterializerEmbeddings(ctx context.Context, repository recommendation.CandidateRepository, outcomes []recommendation.UserPostOutcome, version string) (map[uint][]float32, error) {
 	ids := make([]uint, 0, len(outcomes))
 	seen := make(map[uint]struct{}, len(outcomes))
 	for _, outcome := range outcomes {
@@ -278,18 +289,13 @@ func loadMaterializerEmbeddings(tx *gorm.DB, outcomes []recommendation.UserPostO
 			}
 		}
 	}
-	result := make(map[uint][]float32, len(ids))
 	if len(ids) == 0 {
-		return result, nil
+		return map[uint][]float32{}, nil
 	}
-	var rows []models.PostEmbedding
-	if err := tx.Select("post_id, embedding").Where("post_id IN ? AND version = ?", ids, version).Find(&rows).Error; err != nil {
-		return nil, err
+	if repository == nil {
+		return nil, errors.New("recommendation candidate repository is nil")
 	}
-	for _, row := range rows {
-		result[row.PostID] = append([]float32(nil), row.Embedding.Slice()...)
-	}
-	return result, nil
+	return repository.LoadPostEmbeddings(ctx, ids, version)
 }
 
 type materializedAuthorAffinity struct {
@@ -304,13 +310,9 @@ type materializedLanguageAffinity struct {
 	LanguageEvidence float64
 }
 
-type materializerPostMetadata struct {
-	PostID   uint
-	AuthorID uint
-	Language string
-}
+type materializerPostMetadata = recommendation.PostAffinityInput
 
-func loadMaterializerAffinities(tx *gorm.DB, contributions map[uint]float64) ([]materializedAuthorAffinity, materializedLanguageAffinity, error) {
+func loadMaterializerAffinities(ctx context.Context, repository recommendation.ProfileRepository, contributions map[uint]float64) ([]materializedAuthorAffinity, materializedLanguageAffinity, error) {
 	postIDs := make([]uint, 0, len(contributions))
 	for postID := range contributions {
 		if postID != 0 {
@@ -321,17 +323,15 @@ func loadMaterializerAffinities(tx *gorm.DB, contributions map[uint]float64) ([]
 	if len(postIDs) == 0 {
 		return nil, materializedLanguageAffinity{}, nil
 	}
-	var rows []materializerPostMetadata
-	if err := tx.Table("posts").Select("id AS post_id, author_id, language").Where("id IN ?", postIDs).Find(&rows).Error; err != nil {
+	if repository == nil {
+		return nil, materializedLanguageAffinity{}, errors.New("recommendation profile repository is nil")
+	}
+	rows, err := repository.LoadPostAffinityInputs(ctx, postIDs)
+	if err != nil {
 		return nil, materializedLanguageAffinity{}, err
 	}
 	affinities, languageAffinity := aggregateMaterializerAffinities(contributions, rows)
 	return affinities, languageAffinity, nil
-}
-
-func loadMaterializerAuthorAffinity(tx *gorm.DB, contributions map[uint]float64) ([]materializedAuthorAffinity, error) {
-	affinities, _, err := loadMaterializerAffinities(tx, contributions)
-	return affinities, err
 }
 
 func aggregateMaterializerAffinities(contributions map[uint]float64, rows []materializerPostMetadata) ([]materializedAuthorAffinity, materializedLanguageAffinity) {
@@ -495,22 +495,13 @@ func retryMaterializedProfileClaim(ctx context.Context, claim recommendationProf
 	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
 	}
-	attempt := claim.Attempts + 1
-	backoffSeconds := 2.0 * math.Pow(2, float64(attempt-1))
-	if backoffSeconds > 300 {
-		backoffSeconds = 300
+	repository, err := recommendation.NewGormDirtyProfileRepository(global.WorkerDb)
+	if err != nil {
+		return err
 	}
-	lastError := strings.TrimSpace(materializationErr.Error())
-	if len(lastError) > 512 {
-		lastError = lastError[:512]
-	}
-	result := global.WorkerDb.WithContext(ctx).Model(&models.UserRecoProfileDirty{}).
-		Where("user_id = ? AND dirty_version = ?", claim.UserID, claim.DirtyVersion).
-		Updates(map[string]interface{}{
-			"attempts": attempt, "next_attempt_at": now.Add(time.Duration(backoffSeconds * float64(time.Second))),
-			"last_error": lastError, "updated_at": now,
-		})
-	return result.Error
+	return repository.RetryClaim(ctx, recommendation.DirtyProfile{
+		UserID: claim.UserID, DirtyVersion: claim.DirtyVersion, Attempts: claim.Attempts,
+	}, materializationErr, now)
 }
 
 func enqueuePeriodicRecommendationProfileRebuilds(ctx context.Context, now time.Time, settings config.RecommendationProfileMaterializationConfig) error {
@@ -529,5 +520,9 @@ func enqueuePeriodicRecommendationProfileRebuilds(ctx context.Context, now time.
 		Pluck("user_id", &userIDs).Error; err != nil {
 		return err
 	}
-	return recommendation.EnsureProfilesQueued(db, userIDs, "periodic_rebase", now)
+	repository, err := recommendation.NewGormDirtyProfileRepository(db)
+	if err != nil {
+		return err
+	}
+	return repository.EnsureProfilesQueued(ctx, userIDs, "periodic_rebase", now)
 }

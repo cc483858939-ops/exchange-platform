@@ -5,33 +5,24 @@ import (
 	"errors"
 	"time"
 
-	"Go.exchange/global"
 	"Go.exchange/models"
-	"gorm.io/gorm"
+	"Go.exchange/recommendation"
 )
 
 const recommendationTracePersistTimeout = 5 * time.Second
 
-var persistRecommendationServingTrace = persistRecommendationServingTraceToDB
+var persistRecommendationServingTrace = persistRecommendationServingTraceViaRepository
 
-func persistRecommendationServingTraceToDB(parent context.Context, request models.RecommendationRequest, results []models.RecommendationResultTrace) error {
-	if global.Db == nil {
-		return errors.New("database is not initialized")
+func persistRecommendationServingTraceViaRepository(parent context.Context, repository recommendation.TraceRepository, request models.RecommendationRequest, results []models.RecommendationResultTrace) error {
+	if repository == nil {
+		return errors.New("recommendation trace repository is nil")
 	}
 	if parent == nil {
-		parent = context.Background()
+		return errors.New("recommendation trace context is nil")
 	}
 	ctx, cancel := context.WithTimeout(parent, recommendationTracePersistTimeout)
 	defer cancel()
-	return global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&request).Error; err != nil {
-			return err
-		}
-		if len(results) == 0 {
-			return nil
-		}
-		return tx.Create(&results).Error
-	})
+	return repository.PersistServing(ctx, request, results)
 }
 
 func recommendationFallbackReason(signalCount, resultCount, requestedLimit int) string {

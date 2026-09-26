@@ -115,7 +115,7 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 
 	var received recommendationLanguageContext
 	var persisted models.RecommendationRequest
-	recommendationServingPathForHandler = func(_ context.Context, _ *gorm.DB, _ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, snapshot recommendationServingSnapshot, browser recommendationLanguageContext, _ map[uint]servedPost) (recommendationServingOutcome, error) {
+	recommendationServingPathForHandler = func(_ context.Context, _ recommendation.DataDependencies, _ uint, _ uint, cfg config.RecommendationConfig, _ time.Time, _ string, snapshot recommendationServingSnapshot, browser recommendationLanguageContext, _ recommendation.ServedHistory) (recommendationServingOutcome, error) {
 		received = browser
 		return recommendationServingOutcome{
 			EmbeddingVersion: snapshot.EmbeddingVersion,
@@ -129,13 +129,13 @@ func TestGetPostRecommendationsNormalizesBrowserLanguageWithoutPublicContext(t *
 	attachRecommendationTrackingForHandler = func(_ uint, _ string, _ string, _ userInterestProfile, _ []selectedRecommendation, _ []recommendedPostResponse, _ time.Time) (int, error) {
 		return 0, nil
 	}
-	loadUserRecommendationServedHistoryForHandler = func(context.Context, uint, time.Time, config.RecommendationConfig) (map[uint]servedPost, error) {
-		return map[uint]servedPost{}, nil
+	loadUserRecommendationServedHistoryForHandler = func(context.Context, recommendation.HistoryStore, uint, time.Time, config.RecommendationConfig) (recommendation.ServedHistory, error) {
+		return recommendation.ServedHistory{}, nil
 	}
-	recordUserRecommendationServedPostsForHandler = func(context.Context, uint, []uint, time.Time, config.RecommendationConfig) error {
+	recordUserRecommendationServedPostsForHandler = func(context.Context, recommendation.HistoryStore, uint, []uint, time.Time, config.RecommendationConfig) error {
 		return nil
 	}
-	persistRecommendationServingTrace = func(_ context.Context, request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
+	persistRecommendationServingTrace = func(_ context.Context, _ recommendation.TraceRepository, request models.RecommendationRequest, _ []models.RecommendationResultTrace) error {
 		persisted = request
 		return nil
 	}

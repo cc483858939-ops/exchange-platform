@@ -1,21 +1,18 @@
 package controllers
 
 import (
+	"context"
 	"errors"
-	"math"
 
 	"Go.exchange/config"
-	"Go.exchange/models"
 	"Go.exchange/recommendation"
-
-	"gorm.io/gorm"
 )
 
 // loadMaterializedCandidateAuthorContext scopes both profile affinity and
 // following lookups to authors represented by the current candidate batch.
 // loadedAuthors is retained across the fresh and soft passes so the second
 // pass only queries newly encountered authors.
-func loadMaterializedCandidateAuthorContext(db *gorm.DB, userID uint, profile *userInterestProfile, candidates []recommendation.RankedCandidate, loadedAuthors map[uint]struct{}, cfg config.RecommendationConfig) error {
+func loadMaterializedCandidateAuthorContext(ctx context.Context, repository recommendation.ProfileRepository, userID uint, profile *userInterestProfile, candidates []recommendation.RankedCandidate, loadedAuthors map[uint]struct{}, cfg config.RecommendationConfig) error {
 	if profile.AuthorAffinity == nil {
 		profile.AuthorAffinity = make(map[uint]float64)
 	}
@@ -44,36 +41,24 @@ func loadMaterializedCandidateAuthorContext(db *gorm.DB, userID uint, profile *u
 	for _, authorID := range authorIDs {
 		loadedAuthors[authorID] = struct{}{}
 	}
-	if db == nil {
-		return errors.New("database is not initialized")
-	}
 	if len(authorIDs) == 0 {
 		return nil
 	}
-
-	if profile.MaterializedInteractionsReady {
-		var affinities []models.UserAuthorAffinity
-		if err := db.Where("user_id = ? AND author_id IN ?", userID, authorIDs).Find(&affinities).Error; err != nil {
-			return err
-		}
-		scale := cfg.AuthorAffinitySaturationScale
-		if scale <= 0 {
-			scale = 6
-		}
-		for _, affinity := range affinities {
-			if affinity.RawAffinity > 0 {
-				profile.AuthorAffinity[affinity.AuthorID] = math.Max(0, math.Min(1, math.Tanh(affinity.RawAffinity/scale)))
-			}
-		}
+	if repository == nil {
+		return errors.New("recommendation profile repository is nil")
 	}
-	var follows []uint
-	if err := db.Table("user_follows").Where("follower_id = ? AND following_id IN ?", userID, authorIDs).Pluck("following_id", &follows).Error; err != nil {
+	contextResult, err := repository.LoadAuthorContext(ctx, recommendation.AuthorContextQuery{
+		UserID: userID, AuthorIDs: authorIDs, LoadAffinity: profile.MaterializedInteractionsReady,
+		AffinitySaturationScale: cfg.AuthorAffinitySaturationScale,
+	})
+	if err != nil {
 		return err
 	}
-	for _, authorID := range follows {
-		if authorID != 0 {
-			profile.FollowingAuthorIDs[authorID] = struct{}{}
-		}
+	for authorID, affinity := range contextResult.Affinity {
+		profile.AuthorAffinity[authorID] = affinity
+	}
+	for authorID := range contextResult.FollowingAuthorIDs {
+		profile.FollowingAuthorIDs[authorID] = struct{}{}
 	}
 	return nil
 }

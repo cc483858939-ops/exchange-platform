@@ -78,17 +78,17 @@ func TestUserRecommendationHistoryTTLUsesSoftLookbackPlusGrace(t *testing.T) {
 }
 
 func TestUserRecommendationServedHistoryZeroUserIsNoOp(t *testing.T) {
-	history, err := loadUserRecommendationServedHistory(context.Background(), 0, time.Time{}, config.RecommendationConfig{})
+	history, err := loadUserRecommendationServedHistory(context.Background(), nil, 0, time.Time{}, config.RecommendationConfig{})
 	if err != nil {
 		t.Fatalf("load zero user: %v", err)
 	}
 	if history == nil || len(history) != 0 {
 		t.Fatalf("zero user history=%#v want empty map", history)
 	}
-	if err := recordUserRecommendationServedPosts(context.Background(), 0, []uint{101}, time.Time{}, config.RecommendationConfig{}); err != nil {
+	if err := recordUserRecommendationServedPosts(context.Background(), nil, 0, []uint{101}, time.Time{}, config.RecommendationConfig{}); err != nil {
 		t.Fatalf("record zero user: %v", err)
 	}
-	if err := recordUserRecommendationServedPosts(context.Background(), 42, []uint{0, 0}, time.Time{}, config.RecommendationConfig{}); err != nil {
+	if err := recordUserRecommendationServedPosts(context.Background(), nil, 42, []uint{0, 0}, time.Time{}, config.RecommendationConfig{}); err != nil {
 		t.Fatalf("record zero post IDs: %v", err)
 	}
 }

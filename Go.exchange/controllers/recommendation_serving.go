@@ -12,7 +12,6 @@ import (
 	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // RecommendationServingVerification is the observable result of the same
@@ -45,8 +44,10 @@ func (snapshot recommendationServingSnapshot) validate() error {
 }
 
 var (
-	publicRecommendationCandidateSetForServing        = loadPublicRecommendationCandidateSet
-	publicRecommendationHydrateForServing             = hydrateRecommendationCandidates
+	publicRecommendationCandidateSetForServing = buildPublicRecommendationCandidateSet
+	publicRecommendationHydrateForServing      = func(ctx context.Context, repository recommendation.CandidateRepository, version string, candidates []recommendation.Candidate, now time.Time) ([]recommendation.RankedCandidate, error) {
+		return repository.HydrateCandidates(ctx, version, candidates, now)
+	}
 	diversifyPublicRecommendationCandidatesForServing = recommendation.DiversifyPublicCandidates
 )
 
@@ -54,7 +55,7 @@ var (
 // recommendation pipeline. It deliberately has no user identity, profile,
 // Redis access, semantic recall, social graph lookup, or author affinity
 // hydration. Guest served state is passed in by the controller.
-func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendation.LanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+func servePublicRecommendationCandidatePath(ctx context.Context, dependencies recommendation.DataDependencies, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendation.LanguageContext, served recommendation.ServedHistory) (recommendationServingOutcome, error) {
 	outcome := recommendationServingOutcome{Profile: userInterestProfile{}, EmbeddingVersion: snapshot.EmbeddingVersion}
 	if err := snapshot.validate(); err != nil {
 		return outcome, err
@@ -62,8 +63,8 @@ func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, li
 	if ctx == nil {
 		return outcome, errors.New("recommendation context is nil")
 	}
-	if db == nil {
-		return outcome, errors.New("database is not initialized")
+	if dependencies.Candidates == nil {
+		return outcome, errors.New("recommendation candidate repository is nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return outcome, err
@@ -83,14 +84,14 @@ func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, li
 
 	outcome.LanguageContext = recommendation.BuildLanguageContext(browser, recommendation.LanguagePrior{}, 0, recommendationLanguageConfig(cfg))
 	freshExcluded := guestFreshExcludedPostIDs(served)
-	publicSet, err := publicRecommendationCandidateSetForServing(db, snapshot.EmbeddingVersion, now, cfg, freshExcluded)
+	publicSet, err := publicRecommendationCandidateSetForServing(ctx, dependencies.Candidates, now, cfg, freshExcluded)
 	if err != nil {
 		return outcome, err
 	}
 	if err := ctx.Err(); err != nil {
 		return outcome, err
 	}
-	hydrated, err := publicRecommendationHydrateForServing(db, snapshot.EmbeddingVersion, publicSet.Candidates, now)
+	hydrated, err := publicRecommendationHydrateForServing(ctx, dependencies.Candidates, snapshot.EmbeddingVersion, publicSet.Candidates, now)
 	if err != nil {
 		return outcome, err
 	}
@@ -109,12 +110,12 @@ func servePublicRecommendationCandidatePath(ctx context.Context, db *gorm.DB, li
 			return outcome, err
 		}
 		fallbackExcluded := guestFallbackExcludedPostIDs(served, selected)
-		fallbackSet, fallbackErr := publicRecommendationCandidateSetForServing(db, snapshot.EmbeddingVersion, now, cfg, fallbackExcluded)
+		fallbackSet, fallbackErr := publicRecommendationCandidateSetForServing(ctx, dependencies.Candidates, now, cfg, fallbackExcluded)
 		if fallbackErr != nil {
 			return outcome, fallbackErr
 		}
 		outcome.RecallSets = []recommendationCandidateSet{publicSet, fallbackSet}
-		fallbackHydrated, fallbackErr := publicRecommendationHydrateForServing(db, snapshot.EmbeddingVersion, fallbackSet.Candidates, now)
+		fallbackHydrated, fallbackErr := publicRecommendationHydrateForServing(ctx, dependencies.Candidates, snapshot.EmbeddingVersion, fallbackSet.Candidates, now)
 		if fallbackErr != nil {
 			return outcome, fallbackErr
 		}
@@ -181,7 +182,7 @@ func annotateGuestFallbackServedState(candidates []recommendation.RankedCandidat
 // serveRecommendationCandidatePath is shared by GetPostRecommendations and
 // DevData verification. Keeping the path here prevents verification from
 // copying the recommender's SQL, ranking, or selection rules.
-func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendation.LanguageContext, served map[uint]servedPost) (recommendationServingOutcome, error) {
+func serveRecommendationCandidatePath(ctx context.Context, dependencies recommendation.DataDependencies, userID, limit uint, cfg config.RecommendationConfig, now time.Time, requestID string, snapshot recommendationServingSnapshot, browser recommendation.LanguageContext, served recommendation.ServedHistory) (recommendationServingOutcome, error) {
 	outcome := recommendationServingOutcome{EmbeddingVersion: snapshot.EmbeddingVersion}
 	if err := snapshot.validate(); err != nil {
 		return outcome, err
@@ -189,8 +190,8 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 	if ctx == nil {
 		return outcome, errors.New("recommendation context is nil")
 	}
-	if db == nil {
-		return outcome, errors.New("database is not initialized")
+	if dependencies.Candidates == nil || dependencies.Profiles == nil {
+		return outcome, errors.New("recommendation serving repositories are not initialized")
 	}
 	if err := ctx.Err(); err != nil {
 		return outcome, err
@@ -211,7 +212,7 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 		requestID = uuid.NewString()
 	}
 
-	profile, err := loadMaterializedUserInterestProfile(db, userID, snapshot.EmbeddingVersion, now, cfg)
+	profile, err := loadRecommendationProfile(ctx, dependencies.Profiles, userID, snapshot.EmbeddingVersion, now, cfg)
 	outcome.Profile = profile
 	if err != nil {
 		return outcome, err
@@ -228,7 +229,7 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 	outcome.LanguageContext = languageContext
 	loadedAuthors := make(map[uint]struct{})
 
-	freshSet, err := loadRecommendationCandidateSet(db, snapshot.EmbeddingVersion, userID, profile, served, now, cfg, false)
+	freshSet, err := buildRecommendationCandidateSet(ctx, dependencies.Candidates, snapshot.EmbeddingVersion, userID, profile, served, now, cfg, false)
 	if err != nil {
 		return outcome, err
 	}
@@ -236,14 +237,14 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 	if err := ctx.Err(); err != nil {
 		return outcome, err
 	}
-	freshHydrated, err := hydrateRecommendationCandidates(db, snapshot.EmbeddingVersion, freshSet.Candidates, now)
+	freshHydrated, err := dependencies.Candidates.HydrateCandidates(ctx, snapshot.EmbeddingVersion, freshSet.Candidates, now)
 	if err != nil {
 		return outcome, err
 	}
 	if err := ctx.Err(); err != nil {
 		return outcome, err
 	}
-	if err := loadMaterializedCandidateAuthorContext(db, userID, &profile, freshHydrated, loadedAuthors, cfg); err != nil {
+	if err := loadMaterializedCandidateAuthorContext(ctx, dependencies.Profiles, userID, &profile, freshHydrated, loadedAuthors, cfg); err != nil {
 		return outcome, err
 	}
 	rankedFresh := recommendation.RankCandidates(recommendationProfileFeatures(profile), freshHydrated, now, recommendationRankingConfig(cfg), languageContext)
@@ -256,19 +257,19 @@ func serveRecommendationCandidatePath(ctx context.Context, db *gorm.DB, userID, 
 		if err := ctx.Err(); err != nil {
 			return outcome, err
 		}
-		softSet, softErr := loadRecommendationCandidateSet(db, snapshot.EmbeddingVersion, userID, profile, served, now, cfg, true)
+		softSet, softErr := buildRecommendationCandidateSet(ctx, dependencies.Candidates, snapshot.EmbeddingVersion, userID, profile, served, now, cfg, true)
 		if softErr != nil {
 			return outcome, softErr
 		}
 		outcome.RecallSets = append(outcome.RecallSets, softSet)
-		softHydrated, softErr := hydrateRecommendationCandidates(db, snapshot.EmbeddingVersion, softSet.Candidates, now)
+		softHydrated, softErr := dependencies.Candidates.HydrateCandidates(ctx, snapshot.EmbeddingVersion, softSet.Candidates, now)
 		if softErr != nil {
 			return outcome, softErr
 		}
 		if err := ctx.Err(); err != nil {
 			return outcome, err
 		}
-		if err := loadMaterializedCandidateAuthorContext(db, userID, &profile, softHydrated, loadedAuthors, cfg); err != nil {
+		if err := loadMaterializedCandidateAuthorContext(ctx, dependencies.Profiles, userID, &profile, softHydrated, loadedAuthors, cfg); err != nil {
 			return outcome, err
 		}
 		rankedSoft := recommendation.RankCandidates(recommendationProfileFeatures(profile), softHydrated, now, recommendationRankingConfig(cfg), languageContext)
@@ -293,17 +294,24 @@ func VerifyRecommendationServing(userID uint, limit int, now time.Time) (Recomme
 	if limit <= 0 {
 		limit = defaultRecommendationLimit
 	}
-	if global.Db == nil {
+	db := global.APIDb
+	if db == nil {
+		db = global.Db
+	}
+	if db == nil {
 		return RecommendationServingVerification{}, errors.New("database is not initialized")
 	}
 	ctx := context.Background()
-	db := global.Db.WithContext(ctx)
-	servingVersion, err := embeddingstate.LoadServingVersion(ctx, db)
+	servingVersion, err := embeddingstate.LoadServingVersion(ctx, db.WithContext(ctx))
+	if err != nil {
+		return RecommendationServingVerification{}, err
+	}
+	dependencies, err := newRecommendationDataDependencies(db, nil)
 	if err != nil {
 		return RecommendationServingVerification{}, err
 	}
 	snapshot := recommendationServingSnapshot{EmbeddingVersion: servingVersion}
-	outcome, err := serveRecommendationCandidatePath(ctx, db, userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString(), snapshot, recommendation.LanguageContext{}, map[uint]servedPost{})
+	outcome, err := serveRecommendationCandidatePath(ctx, dependencies, userID, uint(limit), normalizedRecommendationConfig(), now, uuid.NewString(), snapshot, recommendation.LanguageContext{}, recommendation.ServedHistory{})
 	if err != nil {
 		return RecommendationServingVerification{}, err
 	}

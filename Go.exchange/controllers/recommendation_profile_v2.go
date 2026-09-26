@@ -7,10 +7,8 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/global"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
-	"gorm.io/gorm"
 )
 
 const defaultRecommendationServingTimeout = 5 * time.Second
@@ -350,48 +348,9 @@ func applyCandidateCaps(target *config.RecommendationCandidateCaps, set config.R
 	}
 }
 
-type userInterestProfile struct {
-	PositiveVector                []float32
-	NegativeVector                []float32
-	NegativeConfidence            float64
-	InteractedPostIDs             map[uint]struct{}
-	PositiveSignalCount           int
-	NegativeSignalCount           int
-	PersonalizedSignalCount       int
-	LanguageZHWeight              float64
-	LanguageJAWeight              float64
-	LanguageENWeight              float64
-	LanguageEvidence              float64
-	PositiveContributions         map[uint]float64
-	PositiveAffinityContributions map[uint]float64
-	AuthorAffinity                map[uint]float64
-	FollowingAuthorIDs            map[uint]struct{}
-	ProfileVersion                string
-	ProfileConfigHash             string
-	ProfileStatus                 string
-	ProfileAgeMS                  int64
-	MaterializedInteractionsReady bool
-}
+type userInterestProfile = recommendation.Profile
 
-var loadRecommendationPostEmbeddings = func(db *gorm.DB, postIDs []uint, version string) (map[uint][]float32, error) {
-	result := make(map[uint][]float32)
-	if len(postIDs) == 0 {
-		return result, nil
-	}
-	if db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-	var rows []models.PostEmbedding
-	if err := db.Select("post_id, embedding").Where("post_id IN ? AND version = ?", postIDs, version).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		result[row.PostID] = append([]float32(nil), row.Embedding.Slice()...)
-	}
-	return result, nil
-}
-
-func buildEmbeddingInterestProfile(ctx context.Context, behaviors []postBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig, servingVersion string) (userInterestProfile, error) {
+func buildEmbeddingInterestProfile(ctx context.Context, behaviors []postBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig, servingVersion string, loadEmbeddings func(context.Context, []uint, string) (map[uint][]float32, error)) (userInterestProfile, error) {
 	profile := userInterestProfile{
 		InteractedPostIDs: make(map[uint]struct{}), PositiveContributions: make(map[uint]float64), PositiveAffinityContributions: make(map[uint]float64),
 	}
@@ -411,12 +370,11 @@ func buildEmbeddingInterestProfile(ctx context.Context, behaviors []postBehavior
 		reactionRows[postID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
 	}
 	canonical := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
+	if loadEmbeddings == nil {
+		return profile, errors.New("recommendation embedding loader is nil")
+	}
 	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, servingVersion, func(ids []uint, version string) (map[uint][]float32, error) {
-		db := global.Db
-		if db != nil {
-			db = db.WithContext(ctx)
-		}
-		return loadRecommendationPostEmbeddings(db, ids, version)
+		return loadEmbeddings(ctx, ids, version)
 	})
 	if err != nil {
 		return profile, err

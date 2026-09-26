@@ -26,6 +26,30 @@ import (
 
 const recommendationProfileIntegrationEmbeddingVersion = "p1a-follow-up-embedding-v1"
 
+func invalidateRecommendationProfilesForIntegration(db *gorm.DB, userIDs []uint, reason string, now time.Time) error {
+	repository, err := recommendation.NewGormDirtyProfileRepository(db)
+	if err != nil {
+		return err
+	}
+	return repository.InvalidateProfiles(context.Background(), userIDs, reason, now)
+}
+
+func ensureRecommendationProfilesQueuedForIntegration(db *gorm.DB, userIDs []uint, reason string, now time.Time) error {
+	repository, err := recommendation.NewGormDirtyProfileRepository(db)
+	if err != nil {
+		return err
+	}
+	return repository.EnsureProfilesQueued(context.Background(), userIDs, reason, now)
+}
+
+func deleteRecommendationProfileClaimForIntegration(db *gorm.DB, userID uint, dirtyVersion int64) (int64, error) {
+	repository, err := recommendation.NewGormDirtyProfileRepository(db)
+	if err != nil {
+		return 0, err
+	}
+	return repository.DeleteClaim(context.Background(), userID, dirtyVersion)
+}
+
 func openRecommendationProfileMaterializerIntegrationDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
@@ -187,7 +211,7 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "integration_source_change", now.Add(-10*time.Minute)); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "integration_source_change", now.Add(-10*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -253,7 +277,7 @@ func TestRecommendationProfileMaterializerIntegration(t *testing.T) {
 	if err := embeddingstate.SetServingVersion(context.Background(), db, config.BuildEmbeddingVersion()); err != nil {
 		t.Fatalf("switch serving version without process restart: %v", err)
 	}
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "serving_version_switch", switchAt); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "serving_version_switch", switchAt); err != nil {
 		t.Fatal(err)
 	}
 	runAt := switchAt.Add(time.Duration(settings.DebounceSeconds+1) * time.Second)
@@ -277,13 +301,13 @@ func TestRecommendationProfileDirtyVersionDeleteRaceIntegration(t *testing.T) {
 	t.Cleanup(func() { cleanupRecommendationProfileIntegrationData(db, nil, []uint{user.ID}) })
 	first := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	second := first.Add(time.Minute)
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "first", first); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "first", first); err != nil {
 		t.Fatal(err)
 	}
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "newer", second); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "newer", second); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := deleteMaterializedProfileClaim(db, user.ID, 1)
+	rows, err := deleteRecommendationProfileClaimForIntegration(db, user.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,10 +329,10 @@ func TestRecommendationProfileRetryRaceIntegration(t *testing.T) {
 	t.Cleanup(func() { cleanupRecommendationProfileIntegrationData(db, nil, []uint{user.ID}) })
 	first := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	second := first.Add(time.Minute)
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "first", first); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "first", first); err != nil {
 		t.Fatal(err)
 	}
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "newer", second); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "newer", second); err != nil {
 		t.Fatal(err)
 	}
 	var before models.UserRecoProfileDirty
@@ -341,10 +365,10 @@ func TestRecommendationProfileQueueSemanticsIntegration(t *testing.T) {
 	t.Cleanup(func() { cleanupRecommendationProfileIntegrationData(db, nil, []uint{user.ID}) })
 	first := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	second := first.Add(time.Minute)
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "source-change", first); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "source-change", first); err != nil {
 		t.Fatal(err)
 	}
-	if err := recommendation.EnsureProfilesQueued(db, []uint{user.ID}, "serving-stale", second); err != nil {
+	if err := ensureRecommendationProfilesQueuedForIntegration(db, []uint{user.ID}, "serving-stale", second); err != nil {
 		t.Fatal(err)
 	}
 	var queued models.UserRecoProfileDirty
@@ -354,7 +378,7 @@ func TestRecommendationProfileQueueSemanticsIntegration(t *testing.T) {
 	if queued.DirtyVersion != 1 || queued.Reason != "source-change" || queued.Attempts != 0 || queued.LastError != "" || !queued.NextAttemptAt.Equal(first) {
 		t.Fatalf("EnsureProfilesQueued changed an existing generation: %+v", queued)
 	}
-	if err := recommendation.InvalidateProfiles(db, []uint{user.ID}, "new-source-change", second); err != nil {
+	if err := invalidateRecommendationProfilesForIntegration(db, []uint{user.ID}, "new-source-change", second); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.First(&queued, "user_id = ?", user.ID).Error; err != nil {

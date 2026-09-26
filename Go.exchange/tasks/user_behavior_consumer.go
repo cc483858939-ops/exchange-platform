@@ -349,7 +349,11 @@ func applyUserBehaviorRecords(ctx context.Context, db *gorm.DB, consumerName str
 		if err := appendAppliedReactionActivities(tx, kafkaConfig, applied); err != nil {
 			return err
 		}
-		return recommendation.InvalidateProfiles(tx, userBehaviorProfileInvalidationUsers(records, firstDelivery), "user_behavior_projection", time.Now().UTC())
+		dirtyProfiles, err := recommendation.NewGormDirtyProfileRepository(tx)
+		if err != nil {
+			return err
+		}
+		return dirtyProfiles.InvalidateProfiles(ctx, userBehaviorProfileInvalidationUsers(records, firstDelivery), "user_behavior_projection", time.Now().UTC())
 	})
 	if err != nil {
 		if ctx.Err() != nil {

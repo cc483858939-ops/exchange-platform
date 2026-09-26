@@ -5,13 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/global"
+	"Go.exchange/recommendation"
 
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
@@ -31,7 +30,6 @@ func parseGuestRecommendationSessionID(raw string) (string, bool) {
 	if raw == "" {
 		return "", false
 	}
-
 	parsed, err := uuid.Parse(raw)
 	if err != nil || parsed == uuid.Nil {
 		return "", false
@@ -76,6 +74,19 @@ func guestRecommendationHistoryTTL(cfg config.RecommendationConfig) time.Duratio
 	return time.Duration(effectiveGuestServedHistoryTTLHours(cfg)) * time.Hour
 }
 
+func guestHistoryWindow(now time.Time, cfg config.RecommendationConfig) recommendation.HistoryWindow {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	return recommendation.HistoryWindow{
+		Now:       now,
+		HardStart: now.Add(-time.Duration(effectiveGuestHardExclusionMinutes(cfg)) * time.Minute),
+		SoftStart: now.AddDate(0, 0, -effectiveGuestSoftLookbackDays(cfg)),
+		Limit:     effectiveGuestServedHistoryLimit(cfg), TTL: guestRecommendationHistoryTTL(cfg),
+	}
+}
+
 func guestRecommendationHistoryMembers(postIDs []uint, score float64) []*redis.Z {
 	seen := make(map[uint]struct{}, len(postIDs))
 	members := make([]*redis.Z, 0, len(postIDs))
@@ -87,111 +98,37 @@ func guestRecommendationHistoryMembers(postIDs []uint, score float64) []*redis.Z
 			continue
 		}
 		seen[postID] = struct{}{}
-		members = append(members, &redis.Z{
-			Score:  score,
-			Member: strconv.FormatUint(uint64(postID), 10),
-		})
+		members = append(members, &redis.Z{Score: score, Member: strconv.FormatUint(uint64(postID), 10)})
 	}
 	return members
 }
 
 func guestServedHistoryWindows(now time.Time, cfg config.RecommendationConfig) (time.Time, time.Time) {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	now = now.UTC()
-	hardStart := now.Add(-time.Duration(effectiveGuestHardExclusionMinutes(cfg)) * time.Minute)
-	softStart := now.AddDate(0, 0, -effectiveGuestSoftLookbackDays(cfg))
-	return hardStart, softStart
+	window := guestHistoryWindow(now, cfg)
+	return window.HardStart, window.SoftStart
 }
 
 func classifyGuestRecommendationServedAt(lastServedAt, now time.Time, cfg config.RecommendationConfig) (servedPost, bool) {
-	hardStart, softStart := guestServedHistoryWindows(now, cfg)
-	lastServedAt = lastServedAt.UTC()
-	if !lastServedAt.Before(hardStart) {
-		return servedPost{LastServedAt: lastServedAt, Hard: true}, true
-	}
-	if !lastServedAt.Before(softStart) {
-		return servedPost{LastServedAt: lastServedAt, Soft: true}, true
-	}
-	return servedPost{}, false
+	window := guestHistoryWindow(now, cfg)
+	return recommendation.ClassifyServedAt(0, lastServedAt, window)
 }
 
-func loadGuestRecommendationServedHistory(ctx context.Context, sessionID string, now time.Time, cfg config.RecommendationConfig) (map[uint]servedPost, error) {
-	history := make(map[uint]servedPost)
+func loadGuestRecommendationServedHistory(ctx context.Context, store recommendation.HistoryStore, sessionID string, now time.Time, cfg config.RecommendationConfig) (recommendation.ServedHistory, error) {
 	if strings.TrimSpace(sessionID) == "" {
-		return history, nil
+		return recommendation.ServedHistory{}, nil
 	}
-	if global.RedisDB == nil {
+	if store == nil {
 		return nil, errors.New("redis is not initialized")
 	}
-
-	_, softStart := guestServedHistoryWindows(now, cfg)
-	limit := effectiveGuestServedHistoryLimit(cfg)
-	entries, err := global.RedisDB.WithContext(ctx).ZRevRangeByScoreWithScores(
-		guestRecommendationHistoryKey(sessionID),
-		&redis.ZRangeBy{
-			Min:   strconv.FormatInt(softStart.Unix(), 10),
-			Max:   "+inf",
-			Count: int64(limit),
-		},
-	).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, entry := range entries {
-		postID, err := strconv.ParseUint(strings.TrimSpace(fmt.Sprint(entry.Member)), 10, 64)
-		if err != nil || postID == 0 || uint64(uint(postID)) != postID {
-			continue
-		}
-		lastServedAt := time.Unix(int64(entry.Score), 0).UTC()
-		classified, active := classifyGuestRecommendationServedAt(lastServedAt, now, cfg)
-		if active {
-			history[uint(postID)] = classified
-		}
-	}
-	return history, nil
+	return store.LoadGuestHistory(ctx, sessionID, guestHistoryWindow(now, cfg))
 }
 
-func recordGuestRecommendationServedPosts(ctx context.Context, sessionID string, postIDs []uint, now time.Time, cfg config.RecommendationConfig) error {
-	if strings.TrimSpace(sessionID) == "" || len(postIDs) == 0 {
+func recordGuestRecommendationServedPosts(ctx context.Context, store recommendation.HistoryStore, sessionID string, postIDs []uint, now time.Time, cfg config.RecommendationConfig) error {
+	if strings.TrimSpace(sessionID) == "" || !hasRecommendationHistoryPostIDs(postIDs) {
 		return nil
 	}
-	if global.RedisDB == nil {
+	if store == nil {
 		return errors.New("redis is not initialized")
 	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	now = now.UTC()
-
-	members := guestRecommendationHistoryMembers(postIDs, float64(now.Unix()))
-	if len(members) == 0 {
-		return nil
-	}
-
-	key := guestRecommendationHistoryKey(sessionID)
-	_, softStart := guestServedHistoryWindows(now, cfg)
-	limit := int64(effectiveGuestServedHistoryLimit(cfg))
-	ttl := guestRecommendationHistoryTTL(cfg)
-	client := global.RedisDB.WithContext(ctx)
-	pipe := client.TxPipeline()
-	pipe.ZAdd(key, members...)
-	pipe.ZRemRangeByScore(key, "-inf", "("+strconv.FormatInt(softStart.Unix(), 10))
-	cardinality := pipe.ZCard(key)
-	pipe.Expire(key, ttl)
-	if _, err := pipe.ExecContext(ctx); err != nil {
-		return err
-	}
-
-	if cardinality.Val() > limit {
-		if err := client.ZRemRangeByRank(key, 0, cardinality.Val()-limit-1).Err(); err != nil {
-			return err
-		}
-		if err := client.Expire(key, ttl).Err(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return store.RecordGuestServed(ctx, sessionID, postIDs, guestHistoryWindow(now, cfg))
 }

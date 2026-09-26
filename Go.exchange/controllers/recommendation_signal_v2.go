@@ -3,11 +3,8 @@ package controllers
 import (
 	"context"
 	"errors"
-	"strconv"
 	"time"
 
-	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 )
@@ -48,102 +45,51 @@ const (
 	recommendationFeedbackEventTypeNotInterested = models.RecommendationEventTypeNotInterested
 )
 
-var loadRecommendationBehaviorSignals = func(ctx context.Context, userID uint) ([]postBehaviorSignal, error) {
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
+var loadRecommendationBehaviorSignals = func(ctx context.Context, repository recommendation.SourceRepository, userID uint) ([]postBehaviorSignal, error) {
+	if repository == nil {
+		return nil, errors.New("recommendation source repository is nil")
 	}
-	db := global.Db.WithContext(ctx)
-	var views []models.PostBehavior
-	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionView).
-		Order("last_seen_at DESC, id DESC").Limit(recommendationRecentViewPostLimit).Find(&views).Error; err != nil {
+	sources, err := repository.LoadSourceSignals(ctx, userID, time.Time{})
+	if err != nil {
 		return nil, err
 	}
-	var replies []models.PostBehavior
-	if err := db.Where("user_id = ? AND action = ?", userID, PostBehaviorActionReply).
-		Order("last_seen_at DESC, id DESC").Limit(recommendationFeedbackPostLimit).Find(&replies).Error; err != nil {
-		return nil, err
-	}
-	result := make([]postBehaviorSignal, 0, len(views)+len(replies))
-	for _, behavior := range views {
-		if behavior.PostID != 0 {
-			result = append(result, postBehaviorSignal{Behavior: behavior})
-		}
-	}
-	for _, behavior := range replies {
-		if behavior.PostID != 0 {
-			result = append(result, postBehaviorSignal{Behavior: behavior})
-		}
+	result := make([]postBehaviorSignal, 0, len(sources.Behaviors))
+	for _, behavior := range sources.Behaviors {
+		result = append(result, postBehaviorSignal{Behavior: behavior})
 	}
 	return result, nil
 }
 
-var loadRecommendationFeedbackSignals = func(ctx context.Context, userID uint, lookbackStart time.Time) ([]recommendationFeedbackSignal, error) {
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
+var loadRecommendationFeedbackSignals = func(ctx context.Context, repository recommendation.SourceRepository, userID uint, lookbackStart time.Time) ([]recommendationFeedbackSignal, error) {
+	if repository == nil {
+		return nil, errors.New("recommendation source repository is nil")
 	}
-	db := global.Db.WithContext(ctx)
-	actions := []string{
-		eventing.RecommendationBehaviorActionClick,
-		eventing.RecommendationBehaviorActionReadQualified,
-		eventing.RecommendationBehaviorActionReadQuickBounce,
-		eventing.RecommendationBehaviorActionReadNeutral,
-	}
-	var behaviors []models.PostBehavior
-	if err := db.Where("user_id = ? AND ((action IN ? AND last_seen_at >= ?) OR action = ?)",
-		userID, actions, lookbackStart, eventing.RecommendationBehaviorActionNotInterested).
-		Order("last_seen_at DESC, id DESC").Find(&behaviors).Error; err != nil {
+	sources, err := repository.LoadSourceSignals(ctx, userID, lookbackStart)
+	if err != nil {
 		return nil, err
 	}
-	result := make([]recommendationFeedbackSignal, 0, len(behaviors))
-	for _, behavior := range behaviors {
-		if behavior.PostID == 0 {
-			continue
-		}
-		event := recommendationFeedbackEvent{
-			EventID: strconv.FormatUint(uint64(behavior.ID), 10), PostID: behavior.PostID,
-			OccurredAt: behavior.LastSeenAt, ReceivedAt: behavior.UpdatedAt,
-		}
-		if event.ReceivedAt.IsZero() {
-			event.ReceivedAt = event.OccurredAt
-		}
-		switch behavior.Action {
-		case eventing.RecommendationBehaviorActionClick:
-			event.EventType = recommendationFeedbackEventTypeClick
-		case eventing.RecommendationBehaviorActionReadQualified,
-			eventing.RecommendationBehaviorActionReadQuickBounce,
-			eventing.RecommendationBehaviorActionReadNeutral:
-			event.EventType = recommendationFeedbackEventTypeReadEnd
-			outcome := recommendationReadOutcomeNeutral
-			switch behavior.Action {
-			case eventing.RecommendationBehaviorActionReadQualified:
-				outcome = recommendationReadOutcomeQualified
-			case eventing.RecommendationBehaviorActionReadQuickBounce:
-				outcome = recommendationReadOutcomeQuickBounce
-			}
-			event.ReadOutcome = &outcome
-		case eventing.RecommendationBehaviorActionNotInterested:
-			event.EventType = recommendationFeedbackEventTypeNotInterested
-		default:
-			continue
-		}
-		result = append(result, recommendationFeedbackSignal{Event: event})
+	result := make([]recommendationFeedbackSignal, 0, len(sources.Feedback))
+	for _, source := range sources.Feedback {
+		result = append(result, recommendationFeedbackSignal{Event: recommendationFeedbackEvent{
+			EventID: source.EventID, PostID: source.PostID, EventType: source.EventType,
+			OccurredAt: source.OccurredAt, ReceivedAt: source.ReceivedAt, ReadOutcome: source.ReadOutcome,
+		}})
 	}
 	return result, nil
 }
 
-var loadRecommendationReactionStates = func(ctx context.Context, userID uint) (map[uint]recommendationReactionState, error) {
-	if global.Db == nil {
-		return nil, errors.New("database is not initialized")
+var loadRecommendationReactionStates = func(ctx context.Context, repository recommendation.SourceRepository, userID uint) (map[uint]recommendationReactionState, error) {
+	if repository == nil {
+		return nil, errors.New("recommendation source repository is nil")
 	}
-	db := global.Db.WithContext(ctx)
-	var reactions []models.PostReaction
-	if err := db.Where("user_id = ?", userID).Order("post_id ASC").Find(&reactions).Error; err != nil {
+	sources, err := repository.LoadSourceSignals(ctx, userID, time.Time{})
+	if err != nil {
 		return nil, err
 	}
-	states := make(map[uint]recommendationReactionState, len(reactions))
-	for _, reaction := range reactions {
-		if reaction.PostID != 0 {
-			states[reaction.PostID] = recommendationReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
+	states := make(map[uint]recommendationReactionState, len(sources.Reactions))
+	for postID, reaction := range sources.Reactions {
+		if postID != 0 {
+			states[postID] = recommendationReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
 		}
 	}
 	return states, nil

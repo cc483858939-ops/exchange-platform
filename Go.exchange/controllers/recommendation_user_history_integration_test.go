@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/global"
+	"Go.exchange/recommendation"
 
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
@@ -19,11 +19,10 @@ import (
 
 func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 	client := openUserRecommendationHistoryIntegrationRedis(t)
-	previousRedis := global.RedisDB
-	global.RedisDB = client
-	t.Cleanup(func() {
-		global.RedisDB = previousRedis
-	})
+	store, err := recommendation.NewRedisHistoryStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := config.RecommendationConfig{
 		ServedHardExclusionMinutes: 30,
@@ -34,7 +33,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 	t.Run("write read round trip and deduplication", func(t *testing.T) {
 		userID, key := newUserRecommendationHistoryIntegrationUser(t, client)
 		now := time.Now().UTC().Truncate(time.Second)
-		if err := recordUserRecommendationServedPosts(context.Background(), userID, []uint{101, 102, 102, 0}, now, cfg); err != nil {
+		if err := recordUserRecommendationServedPosts(context.Background(), store, userID, []uint{101, 102, 102, 0}, now, cfg); err != nil {
 			t.Fatalf("record served history: %v", err)
 		}
 		cardinality, err := client.ZCard(key).Result()
@@ -57,7 +56,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 			t.Fatalf("round-trip zero member score error=%v want redis.Nil", err)
 		}
 
-		history, err := loadUserRecommendationServedHistory(context.Background(), userID, now, cfg)
+		history, err := loadUserRecommendationServedHistory(context.Background(), store, userID, now, cfg)
 		if err != nil {
 			t.Fatalf("load served history: %v", err)
 		}
@@ -86,7 +85,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 			t.Fatalf("seed served history: %v", err)
 		}
 
-		history, err := loadUserRecommendationServedHistory(context.Background(), userID, now, cfg)
+		history, err := loadUserRecommendationServedHistory(context.Background(), store, userID, now, cfg)
 		if err != nil {
 			t.Fatalf("load served history: %v", err)
 		}
@@ -108,10 +107,10 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		userID, key := newUserRecommendationHistoryIntegrationUser(t, client)
 		now := time.Now().UTC().Truncate(time.Second)
 		softTime := now.Add(-2 * time.Hour)
-		if err := recordUserRecommendationServedPosts(context.Background(), userID, []uint{301}, softTime, cfg); err != nil {
+		if err := recordUserRecommendationServedPosts(context.Background(), store, userID, []uint{301}, softTime, cfg); err != nil {
 			t.Fatalf("record soft served history: %v", err)
 		}
-		history, err := loadUserRecommendationServedHistory(context.Background(), userID, now, cfg)
+		history, err := loadUserRecommendationServedHistory(context.Background(), store, userID, now, cfg)
 		if err != nil {
 			t.Fatalf("load soft served history: %v", err)
 		}
@@ -119,11 +118,11 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 			t.Fatalf("initial classification=%#v want soft only", served)
 		}
 
-		if err := recordUserRecommendationServedPosts(context.Background(), userID, []uint{301}, now, cfg); err != nil {
+		if err := recordUserRecommendationServedPosts(context.Background(), store, userID, []uint{301}, now, cfg); err != nil {
 			t.Fatalf("refresh served history: %v", err)
 		}
 		assertUserRecommendationHistoryScore(t, client, key, "301", now)
-		history, err = loadUserRecommendationServedHistory(context.Background(), userID, now, cfg)
+		history, err = loadUserRecommendationServedHistory(context.Background(), store, userID, now, cfg)
 		if err != nil {
 			t.Fatalf("load refreshed served history: %v", err)
 		}
@@ -141,7 +140,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		}).Result(); err != nil {
 			t.Fatalf("seed expired served history: %v", err)
 		}
-		if err := recordUserRecommendationServedPosts(context.Background(), userID, []uint{402}, now, cfg); err != nil {
+		if err := recordUserRecommendationServedPosts(context.Background(), store, userID, []uint{402}, now, cfg); err != nil {
 			t.Fatalf("record served history with expired entry: %v", err)
 		}
 		if _, err := client.ZScore(key, "401").Result(); !errors.Is(err, redis.Nil) {
@@ -149,7 +148,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		}
 
 		for index, postID := range []uint{501, 502, 503, 504} {
-			if err := recordUserRecommendationServedPosts(context.Background(), userID, []uint{postID}, now.Add(time.Duration(index)*time.Second), cfg); err != nil {
+			if err := recordUserRecommendationServedPosts(context.Background(), store, userID, []uint{postID}, now.Add(time.Duration(index)*time.Second), cfg); err != nil {
 				t.Fatalf("record post %d: %v", postID, err)
 			}
 		}
@@ -179,7 +178,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 			t.Fatalf("seed bounded history: %v", err)
 		}
 
-		history, err := loadUserRecommendationServedHistory(context.Background(), userID, now, cfg)
+		history, err := loadUserRecommendationServedHistory(context.Background(), store, userID, now, cfg)
 		if err != nil {
 			t.Fatalf("load bounded served history: %v", err)
 		}
@@ -201,7 +200,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 	t.Run("ttl and ttl refresh", func(t *testing.T) {
 		userID, key := newUserRecommendationHistoryIntegrationUser(t, client)
 		now := time.Now().UTC().Truncate(time.Second)
-		if err := recordUserRecommendationServedPosts(context.Background(), userID, []uint{701}, now, cfg); err != nil {
+		if err := recordUserRecommendationServedPosts(context.Background(), store, userID, []uint{701}, now, cfg); err != nil {
 			t.Fatalf("record served history: %v", err)
 		}
 		wantTTL := userRecommendationHistoryTTL(cfg)
@@ -210,7 +209,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		if err := client.Expire(key, time.Hour).Err(); err != nil {
 			t.Fatalf("shorten served history ttl: %v", err)
 		}
-		if err := recordUserRecommendationServedPosts(context.Background(), userID, []uint{702}, now.Add(time.Minute), cfg); err != nil {
+		if err := recordUserRecommendationServedPosts(context.Background(), store, userID, []uint{702}, now.Add(time.Minute), cfg); err != nil {
 			t.Fatalf("record refreshed served history: %v", err)
 		}
 		assertUserRecommendationHistoryTTL(t, client, key, wantTTL)
@@ -220,7 +219,7 @@ func TestUserRecommendationServedHistoryRedisIntegration(t *testing.T) {
 		userID, _ := newUserRecommendationHistoryIntegrationUser(t, client)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, err := loadUserRecommendationServedHistory(ctx, userID, time.Now().UTC(), cfg); err == nil {
+		if _, err := loadUserRecommendationServedHistory(ctx, store, userID, time.Now().UTC(), cfg); err == nil {
 			t.Fatal("canceled context unexpectedly loaded served history")
 		}
 	})

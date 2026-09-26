@@ -3,13 +3,11 @@ package controllers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/global"
+	"Go.exchange/recommendation"
 
 	"github.com/go-redis/redis/v7"
 )
@@ -55,9 +53,21 @@ func userServedHistoryWindows(now time.Time, cfg config.RecommendationConfig) (t
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	hardStart := now.Add(-time.Duration(effectiveUserHardExclusionMinutes(cfg)) * time.Minute)
-	softStart := now.AddDate(0, 0, -effectiveUserSoftLookbackDays(cfg))
-	return hardStart, softStart
+	return now.Add(-time.Duration(effectiveUserHardExclusionMinutes(cfg)) * time.Minute), now.AddDate(0, 0, -effectiveUserSoftLookbackDays(cfg))
+}
+
+func userHistoryWindow(now time.Time, cfg config.RecommendationConfig) recommendation.HistoryWindow {
+	hardStart, softStart := userServedHistoryWindows(now, cfg)
+	return recommendation.HistoryWindow{Now: now.UTC(), HardStart: hardStart, SoftStart: softStart, Limit: effectiveUserServedHistoryLimit(cfg), TTL: userRecommendationHistoryTTL(cfg)}
+}
+
+func hasRecommendationHistoryPostIDs(postIDs []uint) bool {
+	for _, postID := range postIDs {
+		if postID != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyUserRecommendationServedAt(lastServedAt, now time.Time, cfg config.RecommendationConfig) (servedPost, bool) {
@@ -83,87 +93,30 @@ func userRecommendationHistoryMembers(postIDs []uint, score float64) []*redis.Z 
 			continue
 		}
 		seen[postID] = struct{}{}
-		members = append(members, &redis.Z{
-			Score:  score,
-			Member: strconv.FormatUint(uint64(postID), 10),
-		})
+		members = append(members, &redis.Z{Score: score, Member: strconv.FormatUint(uint64(postID), 10)})
 	}
 	return members
 }
 
-func loadUserRecommendationServedHistory(ctx context.Context, userID uint, now time.Time, cfg config.RecommendationConfig) (map[uint]servedPost, error) {
-	history := make(map[uint]servedPost)
+func loadUserRecommendationServedHistory(ctx context.Context, store recommendation.HistoryStore, userID uint, now time.Time, cfg config.RecommendationConfig) (recommendation.ServedHistory, error) {
 	if userID == 0 {
-		return history, nil
+		return recommendation.ServedHistory{}, nil
 	}
-	if global.RedisDB == nil {
+	if store == nil {
 		return nil, errors.New("redis is not initialized")
 	}
-
-	_, softStart := userServedHistoryWindows(now, cfg)
-	entries, err := global.RedisDB.WithContext(ctx).ZRevRangeByScoreWithScores(
-		userRecommendationHistoryKey(userID),
-		&redis.ZRangeBy{
-			Min:   "(" + strconv.FormatInt(softStart.Unix(), 10),
-			Max:   "+inf",
-			Count: int64(effectiveUserServedHistoryLimit(cfg)),
-		},
-	).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, entry := range entries {
-		postID, err := strconv.ParseUint(strings.TrimSpace(fmt.Sprint(entry.Member)), 10, 64)
-		if err != nil || postID == 0 || uint64(uint(postID)) != postID {
-			continue
-		}
-		lastServedAt := time.Unix(int64(entry.Score), 0).UTC()
-		classified, active := classifyUserRecommendationServedAt(lastServedAt, now, cfg)
-		if active {
-			history[uint(postID)] = classified
-		}
-	}
-	return history, nil
+	return store.LoadUserHistory(ctx, userID, userHistoryWindow(now, cfg))
 }
 
-func recordUserRecommendationServedPosts(ctx context.Context, userID uint, postIDs []uint, now time.Time, cfg config.RecommendationConfig) error {
-	if userID == 0 || len(postIDs) == 0 {
+func recordUserRecommendationServedPosts(ctx context.Context, store recommendation.HistoryStore, userID uint, postIDs []uint, now time.Time, cfg config.RecommendationConfig) error {
+	if userID == 0 || !hasRecommendationHistoryPostIDs(postIDs) {
 		return nil
+	}
+	if store == nil {
+		return errors.New("redis is not initialized")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	now = now.UTC()
-	members := userRecommendationHistoryMembers(postIDs, float64(now.Unix()))
-	if len(members) == 0 {
-		return nil
-	}
-	if global.RedisDB == nil {
-		return errors.New("redis is not initialized")
-	}
-
-	key := userRecommendationHistoryKey(userID)
-	_, softStart := userServedHistoryWindows(now, cfg)
-	limit := int64(effectiveUserServedHistoryLimit(cfg))
-	ttl := userRecommendationHistoryTTL(cfg)
-	client := global.RedisDB.WithContext(ctx)
-	pipe := client.TxPipeline()
-	pipe.ZAdd(key, members...)
-	pipe.ZRemRangeByScore(key, "-inf", strconv.FormatInt(softStart.Unix(), 10))
-	cardinality := pipe.ZCard(key)
-	pipe.Expire(key, ttl)
-	if _, err := pipe.ExecContext(ctx); err != nil {
-		return err
-	}
-
-	if cardinality.Val() > limit {
-		if err := client.ZRemRangeByRank(key, 0, cardinality.Val()-limit-1).Err(); err != nil {
-			return err
-		}
-		if err := client.Expire(key, ttl).Err(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return store.RecordUserServed(ctx, userID, postIDs, userHistoryWindow(now, cfg))
 }

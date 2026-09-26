@@ -481,16 +481,6 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalLoader := loadRecommendationPostEmbeddings
-	var embeddingPostIDs []uint
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, postIDs []uint, _ string) (map[uint][]float32, error) {
-		embeddingPostIDs = append([]uint(nil), postIDs...)
-		return map[uint][]float32{validArticle.ID: {1, 0}}, nil
-	}
-	t.Cleanup(func() {
-		loadRecommendationPostEmbeddings = originalLoader
-	})
-
 	hydrated, err := hydrateRecommendationCandidates(
 		db,
 		"post_embedding_v1",
@@ -512,8 +502,8 @@ func TestRecommendationHydrationDiscardsDeletedAuthorIntegration(t *testing.T) {
 	if hydrated[0].Post.Author.ID != validAuthor.ID || hydrated[0].Post.Author.ID != hydrated[0].Post.AuthorID {
 		t.Fatalf("hydrated author=%#v author_id=%d", hydrated[0].Post.Author, hydrated[0].Post.AuthorID)
 	}
-	if len(embeddingPostIDs) != 1 || embeddingPostIDs[0] != validArticle.ID {
-		t.Fatalf("embedding article IDs=%v, want [%d]", embeddingPostIDs, validArticle.ID)
+	if len(hydrated[0].Embedding) != 2 || hydrated[0].Embedding[0] != 1 {
+		t.Fatalf("hydrated embedding=%v, want the valid candidate embedding", hydrated[0].Embedding)
 	}
 }
 
@@ -532,16 +522,6 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 		t.Fatal(err)
 	}
 
-	originalLoader := loadRecommendationPostEmbeddings
-	called := false
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
-		called = true
-		return nil, nil
-	}
-	t.Cleanup(func() {
-		loadRecommendationPostEmbeddings = originalLoader
-	})
-
 	hydrated, err := hydrateRecommendationCandidates(
 		db,
 		"post_embedding_v1",
@@ -554,34 +534,23 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 	if len(hydrated) != 0 {
 		t.Fatalf("hydrated count=%d, want 0", len(hydrated))
 	}
-	if called {
-		t.Fatal("embedding loader was called for all-invalid candidates")
-	}
 }
 
 func TestRecommendationHydrationRetainsCandidateWithoutServingEmbeddingIntegration(t *testing.T) {
 	db := openRecommendationCandidateIntegrationDB(t)
 	author := newRecommendationCandidateIntegrationUser(t, db, "missing-serving-embedding")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	article := newRecommendationCandidateIntegrationPost(t, db, author, "missing-serving-embedding", now)
+	article := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "missing-serving-embedding", now)
 	postIDs := []uint{article.ID}
 	userIDs := []uint{author.ID}
 	t.Cleanup(func() { cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs) })
-
-	originalLoader := loadRecommendationPostEmbeddings
-	var requestedVersion string
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, version string) (map[uint][]float32, error) {
-		requestedVersion = version
-		return map[uint][]float32{}, nil
-	}
-	t.Cleanup(func() { loadRecommendationPostEmbeddings = originalLoader })
 
 	hydrated, err := hydrateRecommendationCandidates(db, "post_embedding_v1", []embeddingCandidate{{PostID: article.ID}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hydrated) != 1 || hydrated[0].Post.ID != article.ID || hydrated[0].Embedding != nil || requestedVersion != "post_embedding_v1" {
-		t.Fatalf("hydrated=%+v requested_version=%q want retained post %d with nil embedding using %q", hydrated, requestedVersion, article.ID, "post_embedding_v1")
+	if len(hydrated) != 1 || hydrated[0].Post.ID != article.ID || hydrated[0].Embedding != nil {
+		t.Fatalf("hydrated=%+v want retained post %d with nil embedding", hydrated, article.ID)
 	}
 }
 
@@ -596,25 +565,16 @@ func TestRecommendationHydrationPropagatesEmbeddingErrorIntegration(t *testing.T
 		cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs)
 	})
 
-	sentinel := errors.New("embedding load failure")
-	originalLoader := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, postIDs []uint, _ string) (map[uint][]float32, error) {
-		if len(postIDs) != 1 || postIDs[0] != validArticle.ID {
-			t.Fatalf("embedding article IDs=%v, want [%d]", postIDs, validArticle.ID)
-		}
-		return nil, sentinel
-	}
-	t.Cleanup(func() {
-		loadRecommendationPostEmbeddings = originalLoader
-	})
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	_, err := hydrateRecommendationCandidates(
-		db,
+		db.WithContext(canceled),
 		"post_embedding_v1",
 		[]embeddingCandidate{{PostID: validArticle.ID}},
 		now,
 	)
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("error=%v, want sentinel", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v, want context.Canceled", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 )
@@ -36,7 +37,11 @@ func TestRecommendationOnlineDBOperationsHonorCanceledContextIntegration(t *test
 		RankerVersion: recommendationRankerVersion, RankerConfigHash: "canceled-context-test", RequestedLimit: 1,
 		PersonalizationMode: "cold_start", CreatedAt: now,
 	}
-	if err := persistRecommendationServingTraceToDB(canceled, canceledRequest, nil); !errors.Is(err, context.Canceled) {
+	traceRepository, err := recommendation.NewGormTraceRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persistRecommendationServingTraceViaRepository(canceled, traceRepository, canceledRequest, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("trace persistence error=%v, want context.Canceled", err)
 	}
 	var persisted int64
@@ -50,7 +55,7 @@ func TestRecommendationOnlineDBOperationsHonorCanceledContextIntegration(t *test
 	liveRequestID := uuid.NewString()
 	liveRequest := canceledRequest
 	liveRequest.RequestID = liveRequestID
-	if err := persistRecommendationServingTraceToDB(context.Background(), liveRequest, nil); err != nil {
+	if err := persistRecommendationServingTraceViaRepository(context.Background(), traceRepository, liveRequest, nil); err != nil {
 		t.Fatalf("live trace persistence failed: %v", err)
 	}
 	if err := db.Model(&models.RecommendationRequest{}).Where("request_id = ?", liveRequestID).Count(&persisted).Error; err != nil {

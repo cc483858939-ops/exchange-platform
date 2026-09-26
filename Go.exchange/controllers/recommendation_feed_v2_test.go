@@ -53,12 +53,6 @@ func TestCanonicalV2PreservesLikeReplyAndNIPrecedence(t *testing.T) {
 }
 
 func TestRecommendationProfileCapsPositivePostAndSeparatesNegativeVector(t *testing.T) {
-	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
-		return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
-	}
-	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
-
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	cfg := normalizedRecommendationConfig()
 	cfg.PositivePostWeightCap = cfg.BehaviorWeights.Reply
@@ -74,6 +68,9 @@ func TestRecommendationProfileCapsPositivePostAndSeparatesNegativeVector(t *test
 		},
 		map[uint]recommendationReactionState{1: {Liked: true, StateChangedAt: now}},
 		now, cfg, "post_embedding_v1",
+		func(context.Context, []uint, string) (map[uint][]float32, error) {
+			return map[uint][]float32{1: {1, 0}, 2: {0, 1}}, nil
+		},
 	)
 	if err != nil {
 		t.Fatal(err)

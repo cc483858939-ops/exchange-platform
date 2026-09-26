@@ -139,7 +139,11 @@ UNION
 SELECT user_id FROM post_reaction WHERE post_id = ?`, embedding.PostID, embedding.PostID).Scan(&users).Error; err != nil {
 				return err
 			}
-			if err := recommendation.InvalidateProfiles(tx, users, "post_embedding_changed", now); err != nil {
+			dirtyProfiles, err := recommendation.NewGormDirtyProfileRepository(tx)
+			if err != nil {
+				return err
+			}
+			if err := dirtyProfiles.InvalidateProfiles(ctx, users, "post_embedding_changed", now); err != nil {
 				return err
 			}
 		}

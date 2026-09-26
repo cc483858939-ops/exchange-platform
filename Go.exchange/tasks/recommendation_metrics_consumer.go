@@ -349,7 +349,11 @@ func applyRecommendationMetricRecords(ctx context.Context, db *gorm.DB, consumer
 		if err := bulkUpsertRecommendationBehavior(tx, behaviorAggregates); err != nil {
 			return err
 		}
-		return recommendation.InvalidateProfiles(tx, recommendationMetricProfileInvalidationUsers(records, firstDelivery), "recommendation_feedback_projection", time.Now().UTC())
+		dirtyProfiles, err := recommendation.NewGormDirtyProfileRepository(tx)
+		if err != nil {
+			return err
+		}
+		return dirtyProfiles.InvalidateProfiles(ctx, recommendationMetricProfileInvalidationUsers(records, firstDelivery), "recommendation_feedback_projection", time.Now().UTC())
 	})
 	if err != nil {
 		if ctx.Err() != nil {

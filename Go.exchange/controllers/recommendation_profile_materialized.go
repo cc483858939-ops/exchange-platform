@@ -1,138 +1,52 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"log"
-	"math"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/metrics"
-	"Go.exchange/models"
 	"Go.exchange/recommendation"
-
-	"gorm.io/gorm"
 )
 
 const (
-	recommendationProfileStatusHit          = "hit"
-	recommendationProfileStatusStale        = "stale"
-	recommendationProfileStatusMiss         = "miss"
-	recommendationProfileStatusIncompatible = "incompatible"
+	recommendationProfileStatusHit          = recommendation.ProfileStatusHit
+	recommendationProfileStatusStale        = recommendation.ProfileStatusStale
+	recommendationProfileStatusMiss         = recommendation.ProfileStatusMiss
+	recommendationProfileStatusIncompatible = recommendation.ProfileStatusIncompatible
 )
 
-func loadMaterializedUserInterestProfile(db *gorm.DB, userID uint, servingVersion string, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
-	if db == nil {
+func loadRecommendationProfile(ctx context.Context, repository recommendation.ProfileRepository, userID uint, servingVersion string, now time.Time, cfg config.RecommendationConfig) (userInterestProfile, error) {
+	if repository == nil {
 		metrics.RecordRecommendationProfileLoad("error")
-		return userInterestProfile{}, errors.New("database is not initialized")
+		return userInterestProfile{}, errors.New("recommendation profile repository is nil")
 	}
-	profile := userInterestProfile{
-		AuthorAffinity:     make(map[uint]float64),
-		FollowingAuthorIDs: make(map[uint]struct{}),
-		InteractedPostIDs:  nil,
-		ProfileStatus:      recommendationProfileStatusMiss,
+	result, err := repository.Load(ctx, recommendation.ProfileLoadQuery{
+		UserID: userID, EmbeddingVersion: servingVersion,
+		ExpectedProfileVersion:    recommendation.MaterializedProfileVersion,
+		ExpectedProfileConfigHash: recommendation.ProfileConfigHash(cfg, servingVersion),
+		Now:                       now, NegativeConfidenceHalfLifeDays: cfg.SignalHalfLifeDays,
+		NegativeConfidenceSaturation: cfg.NegativeConfidenceSaturationScale,
+	})
+	if err != nil {
+		metrics.RecordRecommendationProfileLoad("error")
+		return result.Profile, err
 	}
-	var row models.UserRecoProfile
-	if err := db.Where("user_id = ?", userID).First(&row).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			metrics.RecordRecommendationProfileLoad("error")
-			return profile, err
-		}
-		metrics.RecordRecommendationProfileLoad(recommendationProfileStatusMiss)
-		queueMaterializedProfileRecovery(db, userID, "serving_miss", now)
-		return profile, nil
-	}
-
-	expectedHash := recommendation.ProfileConfigHash(cfg, servingVersion)
-	compatible := row.ProfileVersion == recommendation.MaterializedProfileVersion &&
-		row.ProfileConfigHash == expectedHash && row.EmbeddingVersion == servingVersion
-	if !compatible {
-		profile.ProfileStatus = recommendationProfileStatusIncompatible
-		metrics.RecordRecommendationProfileLoad(recommendationProfileStatusIncompatible)
-		queueMaterializedProfileRecovery(db, userID, "profile_incompatible", now)
-		return profile, nil
-	}
-	profile.ProfileStatus = recommendationProfileStatusHit
-	if !row.NextRebuildAt.After(now) {
-		profile.ProfileStatus = recommendationProfileStatusStale
-	}
-	profile.ProfileVersion = row.ProfileVersion
-	profile.ProfileConfigHash = row.ProfileConfigHash
-	profile.MaterializedInteractionsReady = true
-	profile.PositiveSignalCount = row.PositiveSignalCount
-	profile.NegativeSignalCount = row.NegativeSignalCount
-	profile.PersonalizedSignalCount = row.PersonalizedSignalCount
-	profile.LanguageZHWeight = row.LanguageZHWeight
-	profile.LanguageJAWeight = row.LanguageJAWeight
-	profile.LanguageENWeight = row.LanguageENWeight
-	profile.LanguageEvidence = row.LanguageEvidence
-	if row.PositiveVector != nil {
-		profile.PositiveVector = append([]float32(nil), row.PositiveVector.Slice()...)
-	}
-	if row.NegativeVector != nil {
-		profile.NegativeVector = append([]float32(nil), row.NegativeVector.Slice()...)
-	}
-	profile.NegativeConfidence = materializedNegativeConfidence(
-		row.NegativeEvidence,
-		row.ComputedAt,
-		now,
-		cfg.SignalHalfLifeDays,
-		cfg.NegativeConfidenceSaturationScale,
-		len(profile.NegativeVector) > 0,
-	)
-	age := now.Sub(row.ComputedAt)
-	if age < 0 {
-		age = 0
-	}
-	profile.ProfileAgeMS = age.Milliseconds()
+	profile := result.Profile
 	metrics.RecordRecommendationProfileLoad(profile.ProfileStatus)
-	metrics.ObserveRecommendationProfileAge(age)
-	if profile.ProfileStatus == recommendationProfileStatusStale {
-		queueMaterializedProfileRecovery(db, userID, "serving_stale", now)
+	if result.RecoveryError != nil {
+		log.Printf("[RecommendationProfile] queue recovery user=%d reason=%s: %v", userID, result.RecoveryReason, result.RecoveryError)
+		metrics.RecordRecommendationProfileLoad("error")
+	}
+	if profile.ProfileStatus == recommendation.ProfileStatusHit || profile.ProfileStatus == recommendation.ProfileStatusStale {
+		age := time.Duration(profile.ProfileAgeMS) * time.Millisecond
+		metrics.ObserveRecommendationProfileAge(age)
 	}
 	return profile, nil
 }
 
-func materializedNegativeConfidence(
-	negativeEvidence float64,
-	computedAt time.Time,
-	now time.Time,
-	signalHalfLifeDays float64,
-	saturationScale float64,
-	hasNegativeVector bool,
-) float64 {
-	if !hasNegativeVector || negativeEvidence <= 0 ||
-		math.IsNaN(negativeEvidence) || math.IsInf(negativeEvidence, 0) ||
-		computedAt.IsZero() || now.IsZero() ||
-		signalHalfLifeDays <= 0 || math.IsNaN(signalHalfLifeDays) || math.IsInf(signalHalfLifeDays, 0) ||
-		saturationScale <= 0 || math.IsNaN(saturationScale) || math.IsInf(saturationScale, 0) {
-		return 0
-	}
-
-	elapsedDays := 0.0
-	if computedAt.Before(now) {
-		elapsedDays = now.Sub(computedAt).Hours() / 24
-		if elapsedDays < 0 || math.IsNaN(elapsedDays) || math.IsInf(elapsedDays, 0) {
-			return 0
-		}
-	}
-	currentNegativeEvidence := negativeEvidence * math.Exp(-math.Ln2*elapsedDays/signalHalfLifeDays)
-	if currentNegativeEvidence <= 0 || math.IsNaN(currentNegativeEvidence) || math.IsInf(currentNegativeEvidence, 0) {
-		return 0
-	}
-	confidence := math.Tanh(currentNegativeEvidence / saturationScale)
-	if math.IsNaN(confidence) || math.IsInf(confidence, 0) || confidence < 0 {
-		return 0
-	}
-	if confidence >= 1 {
-		return math.Nextafter(1, 0)
-	}
-	return confidence
-}
-
-func queueMaterializedProfileRecovery(db *gorm.DB, userID uint, reason string, now time.Time) {
-	if err := recommendation.EnsureProfilesQueued(db, []uint{userID}, reason, now); err != nil {
-		log.Printf("[RecommendationProfile] queue recovery user=%d reason=%s: %v", userID, reason, err)
-		metrics.RecordRecommendationProfileLoad("error")
-	}
+func materializedNegativeConfidence(negativeEvidence float64, computedAt, now time.Time, signalHalfLifeDays, saturationScale float64, hasNegativeVector bool) float64 {
+	return recommendation.MaterializedNegativeConfidence(negativeEvidence, computedAt, now, signalHalfLifeDays, saturationScale, hasNegativeVector)
 }

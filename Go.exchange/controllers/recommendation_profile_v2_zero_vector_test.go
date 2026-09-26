@@ -4,17 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"gorm.io/gorm"
 )
 
 func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.T) {
-	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
-		return map[uint][]float32{1: {0, 0}}, nil
-	}
-	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
-
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	profile, err := buildEmbeddingInterestProfile(
 		context.Background(),
@@ -24,6 +16,9 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.
 		now,
 		defaultRecommendationConfig(),
 		"post_embedding_v1",
+		func(context.Context, []uint, string) (map[uint][]float32, error) {
+			return map[uint][]float32{1: {0, 0}}, nil
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -38,12 +33,6 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroPositiveVector(t *testing.
 }
 
 func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.T) {
-	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
-		return map[uint][]float32{1: {0, 0}}, nil
-	}
-	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
-
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	quick := recommendationReadOutcomeQuickBounce
 	profile, err := buildEmbeddingInterestProfile(
@@ -57,6 +46,9 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.
 		now,
 		defaultRecommendationConfig(),
 		"post_embedding_v1",
+		func(context.Context, []uint, string) (map[uint][]float32, error) {
+			return map[uint][]float32{1: {0, 0}}, nil
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -71,12 +63,6 @@ func TestBuildEmbeddingInterestProfileDoesNotCountZeroNegativeVector(t *testing.
 }
 
 func TestBuildEmbeddingInterestProfileCountsOnlyNonZeroEmbeddings(t *testing.T) {
-	original := loadRecommendationPostEmbeddings
-	loadRecommendationPostEmbeddings = func(_ *gorm.DB, _ []uint, _ string) (map[uint][]float32, error) {
-		return map[uint][]float32{1: {0, 0}, 2: {1, 0}}, nil
-	}
-	t.Cleanup(func() { loadRecommendationPostEmbeddings = original })
-
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	profile, err := buildEmbeddingInterestProfile(
 		context.Background(),
@@ -89,6 +75,9 @@ func TestBuildEmbeddingInterestProfileCountsOnlyNonZeroEmbeddings(t *testing.T) 
 		now,
 		defaultRecommendationConfig(),
 		"post_embedding_v1",
+		func(context.Context, []uint, string) (map[uint][]float32, error) {
+			return map[uint][]float32{1: {0, 0}, 2: {1, 0}}, nil
+		},
 	)
 	if err != nil {
 		t.Fatal(err)

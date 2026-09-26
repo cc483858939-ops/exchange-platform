@@ -53,9 +53,13 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 		diversifyPublicRecommendationCandidatesForServing = originalDiversifier
 	})
 
+	dependencies, err := newRecommendationDataDependencies(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	outcome, err := serveRecommendationCandidatePath(
 		context.Background(),
-		db,
+		dependencies,
 		viewer.ID,
 		20,
 		cfg,
@@ -63,7 +67,7 @@ func TestAuthenticatedRecommendationServingDoesNotUseGuestDiversificationIntegra
 		"authenticated-boundary",
 		recommendationServingSnapshot{EmbeddingVersion: "p1a-follow-up-controller-v1"},
 		recommendationLanguageContext{},
-		map[uint]servedPost{},
+		recommendation.ServedHistory{},
 	)
 	if err != nil {
 		t.Fatal(err)

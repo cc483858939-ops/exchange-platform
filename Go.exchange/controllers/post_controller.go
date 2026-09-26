@@ -288,7 +288,11 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 			if err := upsertReplyPostBehavior(tx, userID, rootID, now); err != nil {
 				return err
 			}
-			if err := recommendation.InvalidateProfiles(tx, []uint{userID}, "reply_created", now); err != nil {
+			dirtyProfiles, err := recommendation.NewGormDirtyProfileRepository(tx)
+			if err != nil {
+				return err
+			}
+			if err := dirtyProfiles.InvalidateProfiles(ctx, []uint{userID}, "reply_created", now); err != nil {
 				return err
 			}
 			activity, err := eventing.NewReplyCreatedEnvelope(uuid.NewString(), eventing.ReplyCreatedPayload{
