@@ -195,7 +195,10 @@ const mountDetail = () => mount(PostDetailView, {
         },
         template: '<div class="test-composer" />',
       },
-      ReplyList: { template: '<div class="test-comment-list" />' },
+      ReplyList: {
+        props: ['replies'],
+        template: '<div class="test-comment-list"><span v-for="reply in replies" :key="reply.id" class="test-reply">{{ reply.id }} {{ reply.content }}</span></div>',
+      },
       RouterLink: { template: '<a class="test-link"><slot /></a>' },
     },
   },
@@ -362,8 +365,9 @@ describe('PostDetailView warm and cold transition', () => {
 
   it('keeps reply intent in the URL during warm loading and consumes it after success', async () => {
     const request = deferred<Post>();
+    mocks.route.params.id = '101';
     mocks.route.query.reply = '1';
-    mocks.consumeHandoff.mockReturnValueOnce(post());
+    mocks.consumeHandoff.mockReturnValueOnce(post({ id: 101 }));
     mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
@@ -375,17 +379,58 @@ describe('PostDetailView warm and cold transition', () => {
     expect(mocks.router.replace).not.toHaveBeenCalled();
     expect(mocks.getPostReplies).not.toHaveBeenCalled();
 
-    request.resolve(canonicalPost());
+    request.resolve(canonicalPost({
+      id: 101,
+      conversation_id: 42,
+      reply_to_post_id: 42,
+      reply_count: 1,
+    }));
     await flushPromises();
 
     expect(mounted.find('.test-composer').exists()).toBe(true);
     expect(mocks.composerFocus).toHaveBeenCalledTimes(1);
     expect(mocks.router.replace).toHaveBeenCalledWith({
       name: 'PostDetail',
-      params: { id: '42' },
+      params: { id: '101' },
       query: {},
       hash: '',
     });
+  });
+
+  it('loads a reply Post and its direct replies after a PostDetail route-param transition', async () => {
+    const replyA = canonicalPost({
+      id: 101,
+      content: 'Reply 101',
+      conversation_id: 42,
+      reply_to_post_id: 42,
+      reply_count: 1,
+    });
+    const replyB = canonicalPost({
+      id: 201,
+      content: 'Reply 201',
+      conversation_id: 42,
+      reply_to_post_id: 101,
+    });
+    mocks.getPostById
+      .mockResolvedValueOnce(canonicalPost({ content: 'Root post 42' }))
+      .mockResolvedValueOnce(replyA);
+    mocks.getPostReplies
+      .mockResolvedValueOnce({ items: [replyA], next_cursor: null })
+      .mockResolvedValueOnce({ items: [replyB], next_cursor: null });
+
+    mounted = mountDetail();
+    await flushPromises();
+
+    expect(mounted.get('.test-comment-list').text()).toContain('101 Reply 101');
+
+    mocks.route.params.id = '101';
+    await flushPromises();
+
+    expect(mocks.getPostById).toHaveBeenNthCalledWith(2, '101');
+    expect(mocks.getPostReplies).toHaveBeenNthCalledWith(2, '101', { limit: 20 });
+    expect(mounted.get('.post-detail__body').text()).toBe('Reply 101');
+    expect(mounted.findAll('.test-reply')).toHaveLength(1);
+    expect(mounted.get('.test-comment-list').text()).toBe('201 Reply 201');
   });
 
   it('keeps the current route presentation when an older detail request resolves last', async () => {

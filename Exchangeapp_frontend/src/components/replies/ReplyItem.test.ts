@@ -43,7 +43,16 @@ const mountReply = (props: Record<string, unknown> = {}) => mount(ReplyItem, {
   global: {
     stubs: {
       AuthorIdentity: { template: '<span class="test-author" />' },
-      LinkifiedText: { props: ['text'], template: '<span>{{ text }}</span>' },
+      LinkifiedText: {
+        name: 'LinkifiedTextStub',
+        props: ['text', 'to'],
+        template: '<span class="test-linkified-text">{{ text }}</span>',
+      },
+      RouterLink: {
+        name: 'RouterLinkStub',
+        props: ['to'],
+        template: '<a class="test-router-link"><slot /></a>',
+      },
       AppIcon: { props: ['name'], template: '<span class="test-icon" :data-icon="name" />' },
       PostMediaGrid: {
         props: ['media', 'interactive'],
@@ -55,6 +64,45 @@ const mountReply = (props: Record<string, unknown> = {}) => mount(ReplyItem, {
 });
 
 describe('ReplyItem', () => {
+  it('links ordinary reply text to its PostDetail without a reply intent', () => {
+    const wrapper = mountReply();
+
+    expect(wrapper.getComponent({ name: 'LinkifiedTextStub' }).props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '42' },
+    });
+  });
+
+  it('shows a Reply action for zero children and links with reply intent', () => {
+    const wrapper = mountReply({ reply: makeReply({ reply_count: 0 }) });
+    const action = wrapper.get('.reply-item__reply-action');
+
+    expect(action.text()).toBe('Reply');
+    expect(action.attributes('aria-label')).toBe('Reply to this reply');
+    expect(wrapper.getComponent({ name: 'RouterLinkStub' }).props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '42' },
+      query: { reply: '1' },
+    });
+    expect(action.find('.test-icon').attributes('data-icon')).toBe('reply');
+  });
+
+  it('shows the direct reply count with a plural accessible label', () => {
+    const wrapper = mountReply({ reply: makeReply({ reply_count: 3 }) });
+
+    expect(wrapper.get('.reply-item__reply-action').text()).toBe('3');
+    expect(wrapper.get('.reply-item__reply-action').attributes('aria-label'))
+      .toBe('3 replies. Continue discussion');
+  });
+
+  it('uses a singular accessible label for one direct reply', () => {
+    const wrapper = mountReply({ reply: makeReply({ reply_count: 1 }) });
+
+    expect(wrapper.get('.reply-item__reply-action').text()).toBe('1');
+    expect(wrapper.get('.reply-item__reply-action').attributes('aria-label'))
+      .toBe('1 reply. Continue discussion');
+  });
+
   it('only renders the delete trigger for an owned reply', () => {
     expect(mountReply({ canDelete: true }).find('.reply-item__delete').exists()).toBe(true);
     expect(mountReply({ canDelete: false }).find('.reply-item__delete').exists()).toBe(false);
