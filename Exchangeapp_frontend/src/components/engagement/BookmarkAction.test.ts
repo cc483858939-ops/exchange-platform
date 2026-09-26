@@ -19,9 +19,9 @@ const mountBookmarkAction = (props: Partial<{
   },
   global: {
     stubs: {
-      AppIcon: {
-        props: ['name', 'size', 'filled'],
-        template: '<span class="test-icon" :data-name="name" :data-size="size" :data-filled="String(filled)" />',
+      BookmarkMorphIcon: {
+        props: ['size', 'bookmarked', 'motion'],
+        template: '<span class="test-bookmark-morph-icon" :data-size="size" :data-bookmarked="String(bookmarked)" :data-motion="motion" />',
       },
     },
   },
@@ -32,22 +32,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const expectBookmarkLayers = (wrapper: ReturnType<typeof mountBookmarkAction>) => {
-  const outline = wrapper.get('.bookmark-action__icon--outline .test-icon');
-  const filled = wrapper.get('.bookmark-action__icon--filled .test-icon');
-
-  expect(outline.attributes()).toMatchObject({
-    'data-name': 'bookmark',
-    'data-filled': 'false',
-  });
-  expect(filled.attributes()).toMatchObject({
-    'data-name': 'bookmark',
-    'data-filled': 'true',
-  });
-
-  return { outline, filled };
-};
-
 describe('BookmarkAction', () => {
   it('renders the inactive state with parent-controlled accessibility', () => {
     const wrapper = mountBookmarkAction();
@@ -57,12 +41,11 @@ describe('BookmarkAction', () => {
     expect(button.attributes('aria-label')).toBe('Bookmark post');
     expect(button.attributes('data-motion')).toBe('idle');
     expect(button.classes()).not.toContain('bookmark-action--bookmarked');
-    expect(wrapper.find('.bookmark-action__visual').exists()).toBe(true);
-    expect(wrapper.findAll('.bookmark-action__icon--outline')).toHaveLength(1);
-    expect(wrapper.findAll('.bookmark-action__icon--filled')).toHaveLength(1);
-    expectBookmarkLayers(wrapper);
-    expect(wrapper.get('.bookmark-action__icon--outline .test-icon').attributes('data-size')).toBe('18');
-    expect(wrapper.get('.bookmark-action__icon--filled .test-icon').attributes('data-size')).toBe('18');
+    expect(wrapper.get('.test-bookmark-morph-icon').attributes()).toMatchObject({
+      'data-size': '18',
+      'data-bookmarked': 'false',
+      'data-motion': 'idle',
+    });
   });
 
   it('renders the active state and the larger detail icon', () => {
@@ -76,9 +59,11 @@ describe('BookmarkAction', () => {
     expect(button.classes()).toContain('bookmark-action--bookmarked');
     expect(button.attributes('aria-pressed')).toBe('true');
     expect(button.attributes('data-motion')).toBe('idle');
-    expectBookmarkLayers(wrapper);
-    expect(wrapper.get('.bookmark-action__icon--outline .test-icon').attributes('data-size')).toBe('20');
-    expect(wrapper.get('.bookmark-action__icon--filled .test-icon').attributes('data-size')).toBe('20');
+    expect(wrapper.get('.test-bookmark-morph-icon').attributes()).toMatchObject({
+      'data-size': '20',
+      'data-bookmarked': 'true',
+      'data-motion': 'idle',
+    });
   });
 
   it('shows immediate bookmark feedback without changing aria-pressed before parent confirmation', async () => {
@@ -91,7 +76,10 @@ describe('BookmarkAction', () => {
     expect(wrapper.get('button').classes()).toContain('bookmark-action--bookmarking');
     expect(wrapper.get('button').classes()).toContain('bookmark-action--bookmarked');
     expect(wrapper.get('button').attributes('aria-pressed')).toBe('false');
-    expectBookmarkLayers(wrapper);
+    expect(wrapper.get('.test-bookmark-morph-icon').attributes()).toMatchObject({
+      'data-bookmarked': 'true',
+      'data-motion': 'bookmarking',
+    });
   });
 
   it('shows immediate unbookmark feedback while keeping aria-pressed parent-controlled', async () => {
@@ -104,15 +92,18 @@ describe('BookmarkAction', () => {
     expect(wrapper.get('button').classes()).toContain('bookmark-action--unbookmarking');
     expect(wrapper.get('button').classes()).not.toContain('bookmark-action--bookmarked');
     expect(wrapper.get('button').attributes('aria-pressed')).toBe('true');
-    expectBookmarkLayers(wrapper);
+    expect(wrapper.get('.test-bookmark-morph-icon').attributes()).toMatchObject({
+      'data-bookmarked': 'false',
+      'data-motion': 'unbookmarking',
+    });
   });
 
-  it('keeps bookmark motion through 289ms and settles at 290ms', async () => {
+  it('keeps bookmark motion through 539ms and settles at 540ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountBookmarkAction();
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(289);
+    vi.advanceTimersByTime(539);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('bookmarking');
 
@@ -121,12 +112,12 @@ describe('BookmarkAction', () => {
     expect(wrapper.get('button').attributes('data-motion')).toBe('idle');
   });
 
-  it('keeps unbookmark motion through 169ms and settles at 170ms', async () => {
+  it('keeps unbookmark motion through 299ms and settles at 300ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountBookmarkAction({ bookmarked: true });
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(169);
+    vi.advanceTimersByTime(299);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('unbookmarking');
 
@@ -162,7 +153,10 @@ describe('BookmarkAction', () => {
     expect(wrapper.get('button').attributes('data-motion')).toBe('idle');
     expect(wrapper.get('button').classes()).not.toContain('bookmark-action--bookmarking');
     expect(wrapper.get('button').classes()).not.toContain('bookmark-action--unbookmarking');
-    expectBookmarkLayers(wrapper);
+    expect(wrapper.get('.test-bookmark-morph-icon').attributes()).toMatchObject({
+      'data-bookmarked': 'false',
+      'data-motion': 'idle',
+    });
   });
 
   it('cancels unbookmark motion on rollback without starting bookmark motion', async () => {
@@ -178,7 +172,10 @@ describe('BookmarkAction', () => {
     expect(wrapper.get('button').classes()).not.toContain('bookmark-action--bookmarking');
     expect(wrapper.get('button').classes()).not.toContain('bookmark-action--unbookmarking');
     expect(wrapper.get('button').classes()).toContain('bookmark-action--bookmarked');
-    expectBookmarkLayers(wrapper);
+    expect(wrapper.get('.test-bookmark-morph-icon').attributes()).toMatchObject({
+      'data-bookmarked': 'true',
+      'data-motion': 'idle',
+    });
   });
 
   it('does not animate prop-only bookmark changes', async () => {
