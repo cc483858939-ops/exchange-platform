@@ -143,4 +143,55 @@ describe('engagement mutation coordinator', () => {
     expect(second.likePendingPostIDs.size).toBe(0);
     expect(first.likePendingPostIDs).not.toBe(second.likePendingPostIDs);
   });
+
+  it('captures a generation and version revision for hydration checks', () => {
+    const mutations = createEngagementMutationCoordinator();
+    const revision = mutations.captureRevision('like', 9);
+
+    expect(revision).toEqual({ generation: 0, version: 0 });
+    expect(mutations.isRevisionCurrent('like', 9, revision)).toBe(true);
+  });
+
+  it('invalidates a hydration revision when a mutation begins', () => {
+    const mutations = createEngagementMutationCoordinator();
+    const revision = mutations.captureRevision('like', 1);
+
+    mutations.begin('like', 1);
+
+    expect(mutations.isRevisionCurrent('like', 1, revision)).toBe(false);
+  });
+
+  it('does not treat pending membership as part of a hydration revision', () => {
+    const mutations = createEngagementMutationCoordinator();
+    const revision = mutations.captureRevision('like', 1);
+
+    mutations.likePendingPostIDs.add(1);
+
+    expect(mutations.isRevisionCurrent('like', 1, revision)).toBe(true);
+  });
+
+  it('keeps revisions current for unrelated kinds and posts', () => {
+    const mutations = createEngagementMutationCoordinator();
+    const likeRevision = mutations.captureRevision('like', 1);
+    const secondPostRevision = mutations.captureRevision('like', 2);
+
+    mutations.begin('repost', 1);
+    mutations.begin('like', 3);
+
+    expect(mutations.isRevisionCurrent('like', 1, likeRevision)).toBe(true);
+    expect(mutations.isRevisionCurrent('like', 2, secondPostRevision)).toBe(true);
+  });
+
+  it('invalidates revisions across a reset even when the version repeats', () => {
+    const mutations = createEngagementMutationCoordinator();
+    mutations.resetKind('like');
+    mutations.resetKind('like');
+    const oldRevision = mutations.captureRevision('like', 1);
+
+    mutations.resetKind('like');
+
+    expect(oldRevision).toEqual({ generation: 2, version: 0 });
+    expect(mutations.captureRevision('like', 1)).toEqual({ generation: 3, version: 0 });
+    expect(mutations.isRevisionCurrent('like', 1, oldRevision)).toBe(false);
+  });
 });

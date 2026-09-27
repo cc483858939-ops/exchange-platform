@@ -11,6 +11,11 @@ export type EngagementMutationToken = {
   generation: number;
 };
 
+export type EngagementMutationRevision = {
+  generation: number;
+  version: number;
+};
+
 export const createEngagementMutationCoordinator = () => {
   const pending = {
     like: reactive(new Set<number>()),
@@ -29,6 +34,18 @@ export const createEngagementMutationCoordinator = () => {
   };
 
   const getVersion = (kind: EngagementMutationKind, postId: number) => versions[kind].get(postId) ?? 0;
+
+  const captureRevision = (kind: EngagementMutationKind, postId: number): EngagementMutationRevision => ({
+    generation: generations[kind],
+    version: getVersion(kind, postId),
+  });
+
+  const isRevisionCurrent = (
+    kind: EngagementMutationKind,
+    postId: number,
+    revision: EngagementMutationRevision,
+  ) => generations[kind] === revision.generation
+    && getVersion(kind, postId) === revision.version;
 
   const begin = (kind: EngagementMutationKind, postId: number): EngagementMutationToken => {
     const version = getVersion(kind, postId) + 1;
@@ -85,5 +102,7 @@ export const createEngagementMutationCoordinator = () => {
     resetKind,
     resetAll,
     getVersion,
+    captureRevision,
+    isRevisionCurrent,
   };
 };

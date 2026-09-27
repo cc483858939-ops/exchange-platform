@@ -629,6 +629,61 @@ describe('profile session store', () => {
     expect(session.timelineItems[0].post.likeCount).toBe(8);
   });
 
+  it('applies a successful Profile Like mutation to every cached copy of the Post', async () => {
+    const store = useProfileSessionStore();
+    const preferred = readyProfilePost({ id: 14, likeCount: 2 });
+    const cachedCopy = readyProfilePost({ id: 14, likeCount: 2 });
+    store.ensureSession(7)!.timelineItems = [profileTimelineItem(preferred)];
+    store.ensureSession(8)!.timelineItems = [profileTimelineItem(cachedCopy)];
+    mocks.likePost.mockResolvedValue({ likes: 3, liked: true });
+
+    await expect(store.toggleLike(14, 7)).resolves.toBe('succeeded');
+
+    expect(preferred).toMatchObject({ likeCount: 3, liked: true });
+    expect(cachedCopy).toMatchObject({ likeCount: 3, liked: true });
+  });
+
+  it('ignores a pending Profile Like after the viewer changes', async () => {
+    const pending = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(pending.promise);
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+
+    const mutation = store.toggleLike(4, 7);
+    store.setViewer(8);
+    pending.resolve({ likes: 3, liked: true });
+
+    await expect(mutation).resolves.toBe('ignored');
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+    expect(store.sessions.size).toBe(0);
+    expect(feedPost).toMatchObject({ likeCount: 3, liked: true });
+  });
+
+  it('does not let an older Profile Like hydration overwrite a newer mutation', async () => {
+    mocks.getUserTimeline.mockResolvedValueOnce({ items: [timelineItem(4)], next_cursor: null });
+    const hydration = deferred<{
+      items: { post_id: number; likes: number; liked: boolean }[];
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getPostLikeStates.mockReturnValueOnce(hydration.promise);
+    mocks.likePost.mockResolvedValue({ likes: 1, liked: true });
+    const store = useProfileSessionStore();
+    const session = store.ensureSession(7)!;
+
+    await store.loadTimeline(7);
+    const feedPost = session.timelineItems[0].post;
+    feedPost.likeStatus = 'ready';
+    await expect(store.toggleLike(4, 7)).resolves.toBe('succeeded');
+
+    hydration.resolve({
+      items: [{ post_id: 4, likes: 90, liked: false }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(feedPost).toMatchObject({ likeCount: 1, liked: true, likeStatus: 'ready' });
+  });
+
   it('returns succeeded after syncing a Profile Like response and clearing pending', async () => {
     const store = useProfileSessionStore();
     const { feedPost } = addReadyProfilePost(store);
@@ -823,6 +878,55 @@ describe('profile session store', () => {
     expect(post.reposted).toBe(false);
     expect(post.repostCount).toBe(8);
     expect(store.repostPendingPostIds.has(4)).toBe(false);
+  });
+
+  it('invalidates pending Profile Repost and Bookmark mutations on external state updates', async () => {
+    const repostResult = deferred<{ reposts: number; reposted: boolean }>();
+    const bookmarkResult = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.repostPost.mockReturnValueOnce(repostResult.promise);
+    mocks.bookmarkPost.mockReturnValueOnce(bookmarkResult.promise);
+    const store = useProfileSessionStore();
+    const repostedPost = readyProfilePost({ id: 41 });
+    const bookmarkPost = readyProfilePost({ id: 42 });
+    const session = store.ensureSession(7)!;
+    session.timelineItems = [
+      profileTimelineItem(repostedPost),
+      profileTimelineItem(bookmarkPost),
+    ];
+
+    const repostMutation = store.toggleRepost(41, 7);
+    const bookmarkMutation = store.toggleBookmark(42, 7);
+    expect(store.repostPendingPostIds.has(41)).toBe(true);
+    expect(store.bookmarkPendingPostIds.has(42)).toBe(true);
+    store.applyExternalRepostStateLocal({
+      postId: 41, reposts: 12, reposted: true, status: 'ready',
+    });
+    store.applyExternalBookmarkStateLocal({
+      postId: 42, bookmarked: false, status: 'ready',
+    });
+    repostResult.resolve({ reposts: 9, reposted: true });
+    bookmarkResult.resolve({ post_id: 42, bookmarked: true });
+
+    await expect(repostMutation).resolves.toBe('ignored');
+    await expect(bookmarkMutation).resolves.toBe(false);
+    expect(store.repostPendingPostIds.has(41)).toBe(false);
+    expect(store.bookmarkPendingPostIds.has(42)).toBe(false);
+    expect(repostedPost).toMatchObject({ repostCount: 12, reposted: true });
+    expect(bookmarkPost.bookmarked).toBe(false);
+  });
+
+  it('rolls back a failed Profile Bookmark mutation and clears pending', async () => {
+    const store = useProfileSessionStore();
+    const { feedPost } = addReadyProfilePost(store);
+    mocks.bookmarkPost.mockRejectedValueOnce(new Error('bookmark failed'));
+
+    const mutation = store.toggleBookmark(4, 7);
+    expect(feedPost.bookmarked).toBe(true);
+    expect(store.bookmarkPendingPostIds.has(4)).toBe(true);
+
+    await expect(mutation).resolves.toBe(false);
+    expect(feedPost.bookmarked).toBe(false);
+    expect(store.bookmarkPendingPostIds.has(4)).toBe(false);
   });
 
   it('returns ignored for a second Profile Repost while the first mutation is pending', async () => {

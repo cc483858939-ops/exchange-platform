@@ -190,6 +190,144 @@ describe('bookmarksSession store', () => {
     expect(store.items).toHaveLength(0);
   });
 
+  it('optimistically toggles Like and Repost and rolls each one back on failure', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [],
+    });
+    mocks.getPostRepostStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, reposts: 0, reposted: false }], unavailable_post_ids: [],
+    });
+    const store = createStore();
+    await store.loadInitial();
+    await settle();
+    mocks.likePost.mockRejectedValueOnce(new Error('like failed'));
+    mocks.repostPost.mockRejectedValueOnce(new Error('repost failed'));
+
+    const likeRequest = store.toggleLike(1);
+    const repostRequest = store.toggleRepost(1);
+    expect(store.items[0]).toMatchObject({
+      likeCount: 4, liked: true, repostCount: 1, reposted: true,
+    });
+    expect(store.likePendingPostIDs.has(1)).toBe(true);
+    expect(store.repostPendingPostIDs.has(1)).toBe(true);
+
+    await expect(Promise.all([likeRequest, repostRequest])).resolves.toEqual([false, false]);
+    expect(store.items[0]).toMatchObject({
+      likeCount: 3, liked: false, repostCount: 0, reposted: false,
+    });
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+    expect(store.repostPendingPostIDs.has(1)).toBe(false);
+  });
+
+  it('ignores pending Like and Repost results after external state updates', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [],
+    });
+    mocks.getPostRepostStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, reposts: 0, reposted: false }], unavailable_post_ids: [],
+    });
+    const store = createStore();
+    await store.loadInitial();
+    await settle();
+    const likeResult = deferred<{ likes: number; liked: boolean }>();
+    const repostResult = deferred<{ reposts: number; reposted: boolean }>();
+    mocks.likePost.mockReturnValueOnce(likeResult.promise);
+    mocks.repostPost.mockReturnValueOnce(repostResult.promise);
+
+    const likeMutation = store.toggleLike(1);
+    const repostMutation = store.toggleRepost(1);
+    store.applyExternalLikeStateLocal({ postId: 1, likes: 8, liked: true, status: 'ready' });
+    store.applyExternalRepostStateLocal({ postId: 1, reposts: 7, reposted: true, status: 'ready' });
+    likeResult.resolve({ likes: 4, liked: true });
+    repostResult.resolve({ reposts: 2, reposted: true });
+
+    await expect(Promise.all([likeMutation, repostMutation])).resolves.toEqual([false, false]);
+    expect(store.items[0]).toMatchObject({ likeCount: 8, liked: true, repostCount: 7, reposted: true });
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+    expect(store.repostPendingPostIDs.has(1)).toBe(false);
+  });
+
+  it('keeps newer local Like state when an older hydration response arrives', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const hydration = deferred<{
+      items: { post_id: number; likes: number; liked: boolean }[];
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getPostLikeStates.mockReturnValueOnce(hydration.promise);
+    mocks.likePost.mockResolvedValueOnce({ likes: 1, liked: true });
+    const store = createStore();
+
+    await store.loadInitial();
+    store.items[0].likeStatus = 'ready';
+    const mutation = store.toggleLike(1);
+    await expect(mutation).resolves.toBe(true);
+    hydration.resolve({
+      items: [{ post_id: 1, likes: 99, liked: false }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(store.items[0]).toMatchObject({ likeCount: 1, liked: true, likeStatus: 'ready' });
+  });
+
+  it('removes a pending bookmark when external state says it is no longer saved', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const store = createStore();
+    await store.loadInitial();
+    const unbookmarkResult = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.unbookmarkPost.mockReturnValueOnce(unbookmarkResult.promise);
+
+    const mutation = store.toggleBookmark(1);
+    expect(store.items).toHaveLength(0);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(true);
+    expect(store.applyExternalBookmarkStateLocal({
+      postId: 1, bookmarked: false, status: 'ready',
+    })).toBe(true);
+    unbookmarkResult.resolve({ post_id: 1, bookmarked: false });
+
+    await expect(mutation).resolves.toBe(false);
+    expect(store.items).toHaveLength(0);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(false);
+    expect(store.mutationErrors.has(1)).toBe(false);
+  });
+
+  it('marks an absent externally bookmarked Post stale without inserting it', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: 'cursor-1' });
+    const store = createStore();
+    await store.loadInitial();
+    const pagingVersion = store.pagingVersion;
+
+    expect(store.applyExternalBookmarkStateLocal({
+      postId: 2, bookmarked: true, status: 'ready',
+    })).toBe(false);
+
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.stale).toBe(true);
+    expect(store.pagingVersion).toBeGreaterThan(pagingVersion);
+  });
+
+  it('invalidates a pending mutation when the Bookmarks viewer changes', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [],
+    });
+    const store = createStore();
+    await store.loadInitial();
+    await settle();
+    const likeResult = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(likeResult.promise);
+
+    const mutation = store.toggleLike(1);
+    store.setViewer(8);
+    likeResult.resolve({ likes: 4, liked: true });
+
+    await expect(mutation).resolves.toBe(false);
+    expect(store.items).toEqual([]);
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+  });
+
   it('begins the shared bookmark fence before optimistic removal settles', async () => {
     mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
     mocks.getPostBookmarkStates.mockResolvedValueOnce({

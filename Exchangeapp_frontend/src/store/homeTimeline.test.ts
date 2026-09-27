@@ -426,6 +426,36 @@ describe('home timeline session store', () => {
     await page3Request;
   });
 
+  it('does not let older Like hydration overwrite a newer mutation', async () => {
+    const hydration = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(31)],
+      next_cursor: null,
+    });
+    mocks.getPostLikeStates.mockReturnValueOnce(hydration.promise);
+    mocks.likePost.mockResolvedValueOnce({ likes: 1, liked: true });
+    const store = useHomeTimelineStore();
+
+    await store.loadFollowing();
+    const post = store.following.items[0];
+    expect(post.likeStatus).toBe('unknown');
+
+    // Make the row actionable while the earlier hydration request is still pending.
+    post.likeStatus = 'ready';
+    await expect(store.toggleLike(post.id)).resolves.toBe('succeeded');
+
+    hydration.resolve({
+      items: [{ post_id: post.id, likes: 99, liked: false }],
+      unavailable_post_ids: [],
+    });
+    await settle();
+
+    expect(post).toMatchObject({ likeCount: 1, liked: true, likeStatus: 'ready' });
+  });
+
   it('drops a late request when the authenticated viewer changes', async () => {
     let resolveRecommendations!: (response: ReturnType<typeof recommendationPage>) => void;
     const pending = new Promise<ReturnType<typeof recommendationPage>>(resolve => {
@@ -778,6 +808,23 @@ describe('home timeline session store', () => {
     expect(mocks.likePost).not.toHaveBeenCalled();
   });
 
+  it('ignores a duplicate Like while the current request is pending', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(4, 7);
+    store.following.items = [post];
+    const pending = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(pending.promise);
+
+    const first = store.toggleLike(4);
+    await expect(store.toggleLike(4)).resolves.toBe('ignored');
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
+    expect(store.likePendingPostIds.has(4)).toBe(true);
+
+    pending.resolve({ likes: 1, liked: true });
+    await expect(first).resolves.toBe('succeeded');
+    expect(store.likePendingPostIds.has(4)).toBe(false);
+  });
+
   it('batch-hydrates Repost state without changing For You membership', async () => {
     mocks.getPostRecommendations.mockResolvedValue(recommendationPage([recommendation(1), recommendation(2)]));
     mocks.getPostRepostStates.mockResolvedValue({
@@ -935,6 +982,87 @@ describe('home timeline session store', () => {
     resolveLike({ likes: 3, liked: true });
     expect(await localMutation).toBe('ignored');
     expect(store.following.items[0].likeCount).toBe(8);
+  });
+
+  it('does not let a stale Like settle clear a newer request for the same Post', async () => {
+    const first = deferred<{ likes: number; liked: boolean }>();
+    const second = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(44, 7);
+    store.following.items = [post];
+
+    const firstMutation = store.toggleLike(44);
+    store.applyExternalLikeStateLocal({
+      postId: 44,
+      likes: 6,
+      liked: false,
+      status: 'ready',
+    });
+    const secondMutation = store.toggleLike(44);
+    expect(store.likePendingPostIds.has(44)).toBe(true);
+
+    first.resolve({ likes: 90, liked: true });
+    await expect(firstMutation).resolves.toBe('ignored');
+    expect(store.likePendingPostIds.has(44)).toBe(true);
+    expect(post).toMatchObject({ likeCount: 7, liked: true });
+
+    second.resolve({ likes: 7, liked: true });
+    await expect(secondMutation).resolves.toBe('succeeded');
+    expect(store.likePendingPostIds.has(44)).toBe(false);
+    expect(post).toMatchObject({ likeCount: 7, liked: true });
+  });
+
+  it('ignores an in-flight Like after the authenticated viewer changes', async () => {
+    const pending = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(pending.promise);
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(45, 7);
+    store.following.items = [post];
+
+    const mutation = store.toggleLike(45);
+    store.setViewer(8);
+    pending.resolve({ likes: 1, liked: true });
+
+    await expect(mutation).resolves.toBe('ignored');
+    expect(store.likePendingPostIds.has(45)).toBe(false);
+    expect(post).toMatchObject({ likeCount: 1, liked: true });
+  });
+
+  it('ignores an in-flight Bookmark after an external state update wins', async () => {
+    const pending = deferred<{ bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(pending.promise);
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(46, 7);
+    store.following.items = [post];
+
+    const mutation = store.toggleBookmark(46);
+    expect(post.bookmarked).toBe(true);
+    store.applyExternalBookmarkStateLocal({
+      postId: 46,
+      bookmarked: false,
+      status: 'ready',
+    });
+    pending.resolve({ bookmarked: true });
+
+    await expect(mutation).resolves.toBe('ignored');
+    expect(store.bookmarkPendingPostIds.has(46)).toBe(false);
+    expect(post.bookmarked).toBe(false);
+  });
+
+  it('rolls back a failed Home Bookmark mutation and settles pending state', async () => {
+    const store = useHomeTimelineStore();
+    const post = feedPostFixture(47, 7);
+    store.following.items = [post];
+    mocks.bookmarkPost.mockRejectedValueOnce(new Error('bookmark failed'));
+
+    const mutation = store.toggleBookmark(47);
+    expect(post.bookmarked).toBe(true);
+    expect(store.bookmarkPendingPostIds.has(47)).toBe(true);
+
+    await expect(mutation).resolves.toBe('failed');
+    expect(post.bookmarked).toBe(false);
+    expect(store.bookmarkPendingPostIds.has(47)).toBe(false);
   });
 
   it('updates comment counts across recently published, Following, and For You copies', () => {

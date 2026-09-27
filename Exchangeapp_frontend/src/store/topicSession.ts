@@ -121,34 +121,41 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     const { kind, slug, request, capturedViewerID, generation, posts, fetch, apply, markUnavailable } = options;
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
-    const versions = new Map(postIDs.map(postID => [postID, engagementMutations.getVersion(kind, postID)]));
+    const revisions = new Map(postIDs.map(postID => [
+      postID,
+      engagementMutations.captureRevision(kind, postID),
+    ]));
     const current = () => canApplyHydration(slug, request, capturedViewerID, generation);
     try {
       const response = await fetch(postIDs);
       if (!current()) return;
       const updated = new Set<number>();
       response.items.forEach((item) => {
-        if (versions.get(item.post_id) !== engagementMutations.getVersion(kind, item.post_id)) return;
+        const revision = revisions.get(item.post_id);
+        if (!revision || !engagementMutations.isRevisionCurrent(kind, item.post_id, revision)) return;
         const post = findPost(item.post_id);
         if (!post) return;
         apply(post, item);
         updated.add(item.post_id);
       });
       response.unavailable_post_ids.forEach((postID) => {
-        if (versions.get(postID) !== engagementMutations.getVersion(kind, postID)) return;
+        const revision = revisions.get(postID);
+        if (!revision || !engagementMutations.isRevisionCurrent(kind, postID, revision)) return;
         const post = findPost(postID);
         if (post) markUnavailable(post);
         updated.add(postID);
       });
       postIDs.forEach((postID) => {
-        if (updated.has(postID) || versions.get(postID) !== engagementMutations.getVersion(kind, postID)) return;
+        const revision = revisions.get(postID);
+        if (updated.has(postID) || !revision || !engagementMutations.isRevisionCurrent(kind, postID, revision)) return;
         const post = findPost(postID);
         if (post) markUnavailable(post);
       });
     } catch {
       if (!current()) return;
       postIDs.forEach((postID) => {
-        if (versions.get(postID) !== engagementMutations.getVersion(kind, postID)) return;
+        const revision = revisions.get(postID);
+        if (!revision || !engagementMutations.isRevisionCurrent(kind, postID, revision)) return;
         const post = findPost(postID);
         if (post) markUnavailable(post);
       });

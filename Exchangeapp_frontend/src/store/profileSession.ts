@@ -15,17 +15,9 @@ import {
   unfollowUser,
   type UserFollowState,
 } from '../services/userService';
-import { getPostLikeStates, likePost, unlikePost } from '../services/likeService';
-import {
-  bookmarkPost,
-  getPostBookmarkStates,
-  unbookmarkPost,
-} from '../services/bookmarkService';
-import {
-  getPostRepostStates,
-  repostPost,
-  undoRepostPost,
-} from '../services/repostService';
+import { getPostLikeStates } from '../services/likeService';
+import { getPostBookmarkStates } from '../services/bookmarkService';
+import { getPostRepostStates } from '../services/repostService';
 import type { Post } from '../types/Post';
 import type {
   FeedBookmarkStateUpdate,
@@ -55,6 +47,19 @@ import {
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
 import { syncProfileFollowState } from './sessionSync';
+import {
+  createEngagementMutationCoordinator,
+  type EngagementMutationRevision,
+  type EngagementMutationResult,
+} from './engagementMutationCoordinator';
+import {
+  createOptimisticBookmarkUpdate,
+  createOptimisticLikeUpdate,
+  createOptimisticRepostUpdate,
+  executeBookmarkToggle,
+  executeLikeToggle,
+  executeRepostToggle,
+} from './engagementOperations';
 
 export type ProfileSessionEntry = {
   user: PublicUser | null;
@@ -104,7 +109,7 @@ export type ProfileSessionCapture = {
   profileRequestVersion: number;
 };
 
-export type ProfileEngagementMutationResult = 'succeeded' | 'failed' | 'ignored';
+export type ProfileEngagementMutationResult = EngagementMutationResult;
 
 const maxProfileSessions = 8;
 const pageSize = 20;
@@ -170,19 +175,14 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const viewerGeneration = ref(0);
   const profileReselectVersion = ref(0);
   const sessions = reactive(new Map<number, ProfileSessionEntry>());
-  const likePendingPostIds = reactive(new Set<number>());
-  const repostPendingPostIds = reactive(new Set<number>());
-  const bookmarkPendingPostIds = reactive(new Set<number>());
+  const engagementMutations = createEngagementMutationCoordinator();
+  const likePendingPostIds = engagementMutations.likePendingPostIDs;
+  const repostPendingPostIds = engagementMutations.repostPendingPostIDs;
+  const bookmarkPendingPostIds = engagementMutations.bookmarkPendingPostIDs;
   const pendingDeletePostIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
   const deleteTargetProfileIDs = new Map<number, number>();
   const deleteMutationVersions = new Map<number, number>();
-  const likeMutationVersions = new Map<number, number>();
-  const repostMutationVersions = new Map<number, number>();
-  const bookmarkMutationVersions = new Map<number, number>();
-  let likeGeneration = 0;
-  let repostGeneration = 0;
-  let bookmarkGeneration = 0;
   let accessClock = 0;
 
   const nextAccessTime = () => {
@@ -257,33 +257,13 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return session;
   };
 
-  const clearLikeWork = () => {
-    likeGeneration += 1;
-    likePendingPostIds.clear();
-    likeMutationVersions.clear();
-  };
-
-  const clearRepostWork = () => {
-    repostGeneration += 1;
-    repostPendingPostIds.clear();
-    repostMutationVersions.clear();
-  };
-
-  const clearBookmarkWork = () => {
-    bookmarkGeneration += 1;
-    bookmarkPendingPostIds.clear();
-    bookmarkMutationVersions.clear();
-  };
-
   const setViewer = (rawViewerID: unknown) => {
     const nextViewerID = normalizeID(rawViewerID);
     if (nextViewerID === viewerID.value) return false;
     viewerID.value = nextViewerID;
     viewerGeneration.value += 1;
     sessions.clear();
-    clearLikeWork();
-    clearRepostWork();
-    clearBookmarkWork();
+    engagementMutations.resetAll();
     pendingDeletePostIds.clear();
     deleteErrors.clear();
     deleteTargetProfileIDs.clear();
@@ -349,21 +329,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   };
 
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
-    likeMutationVersions.set(
-      update.postId,
-      (likeMutationVersions.get(update.postId) ?? 0) + 1,
-    );
-    likePendingPostIds.delete(update.postId);
+    engagementMutations.invalidate('like', update.postId);
     return applyLikeStateUpdateLocal(update);
-  };
-
-  const getRepostMutationVersion = (postId: number) =>
-    repostMutationVersions.get(postId) ?? 0;
-
-  const bumpRepostMutationVersion = (postId: number) => {
-    const next = getRepostMutationVersion(postId) + 1;
-    repostMutationVersions.set(postId, next);
-    return next;
   };
 
   const applyRepostStateUpdateLocal = (
@@ -372,7 +339,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   ) => {
     if (
       expectedVersion !== undefined
-      && getRepostMutationVersion(update.postId) !== expectedVersion
+      && engagementMutations.getVersion('repost', update.postId) !== expectedVersion
     ) {
       return false;
     }
@@ -384,18 +351,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   };
 
   const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
-    bumpRepostMutationVersion(update.postId);
-    repostPendingPostIds.delete(update.postId);
+    engagementMutations.invalidate('repost', update.postId);
     return applyRepostStateUpdateLocal(update);
-  };
-
-  const getBookmarkMutationVersion = (postId: number) =>
-    bookmarkMutationVersions.get(postId) ?? 0;
-
-  const bumpBookmarkMutationVersion = (postId: number) => {
-    const next = getBookmarkMutationVersion(postId) + 1;
-    bookmarkMutationVersions.set(postId, next);
-    return next;
   };
 
   const applyBookmarkStateUpdateLocal = (
@@ -404,7 +361,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   ) => {
     if (
       expectedVersion !== undefined
-      && getBookmarkMutationVersion(update.postId) !== expectedVersion
+      && engagementMutations.getVersion('bookmark', update.postId) !== expectedVersion
     ) return false;
     let applied = false;
     forEachProfilePost(update.postId, (post) => {
@@ -414,8 +371,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   };
 
   const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
-    bumpBookmarkMutationVersion(update.postId);
-    bookmarkPendingPostIds.delete(update.postId);
+    engagementMutations.invalidate('bookmark', update.postId);
     return applyBookmarkStateUpdateLocal(update);
   };
 
@@ -512,12 +468,15 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     return applied;
   };
 
-  const markUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+  const markUnavailableLocal = (
+    postIds: number[],
+    revisions: Map<number, EngagementMutationRevision>,
+  ) => {
     postIds.forEach((postId) => {
-      const capturedVersion = versions.get(postId);
+      const revision = revisions.get(postId);
       if (
-        capturedVersion === undefined
-        || (likeMutationVersions.get(postId) ?? 0) !== capturedVersion
+        !revision
+        || !engagementMutations.isRevisionCurrent('like', postId, revision)
       ) return;
       forEachProfilePost(postId, (post) => {
         if (post.likeStatus === 'unknown') setFeedPostLikeUnavailable(post);
@@ -532,21 +491,19 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   ) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
-    const versions = new Map(uniqueIDs.map((id) => [id, likeMutationVersions.get(id) ?? 0]));
-    const capturedLikeGeneration = likeGeneration;
+    const revisions = new Map(uniqueIDs.map((id) => [
+      id,
+      engagementMutations.captureRevision('like', id),
+    ]));
     try {
       const response = await getPostLikeStates(uniqueIDs);
-      if (
-        !isCurrent()
-        || capturedViewerGeneration !== viewerGeneration.value
-        || capturedLikeGeneration !== likeGeneration
-      ) return;
+      if (!isCurrent() || capturedViewerGeneration !== viewerGeneration.value) return;
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = versions.get(item.post_id);
+        const revision = revisions.get(item.post_id);
         if (
-          capturedVersion === undefined
-          || (likeMutationVersions.get(item.post_id) ?? 0) !== capturedVersion
+          !revision
+          || !engagementMutations.isRevisionCurrent('like', item.post_id, revision)
           || !findPost(item.post_id)
         ) return;
         readyIDs.add(item.post_id);
@@ -558,11 +515,11 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         });
       });
       response.unavailable_post_ids.forEach((postId) => {
-        const capturedVersion = versions.get(postId);
+        const revision = revisions.get(postId);
         if (
           readyIDs.has(postId)
-          || capturedVersion === undefined
-          || (likeMutationVersions.get(postId) ?? 0) !== capturedVersion
+          || !revision
+          || !engagementMutations.isRevisionCurrent('like', postId, revision)
           || !findPost(postId)
         ) return;
         applyLikeStateUpdateEverywhere({
@@ -574,17 +531,20 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       });
     } catch {
       if (isCurrent() && capturedViewerGeneration === viewerGeneration.value) {
-        markUnavailableLocal(uniqueIDs, versions);
+        markUnavailableLocal(uniqueIDs, revisions);
       }
     }
   };
 
-  const markRepostUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+  const markRepostUnavailableLocal = (
+    postIds: number[],
+    revisions: Map<number, EngagementMutationRevision>,
+  ) => {
     postIds.forEach((postId) => {
-      const capturedVersion = versions.get(postId);
+      const revision = revisions.get(postId);
       if (
-        capturedVersion === undefined
-        || getRepostMutationVersion(postId) !== capturedVersion
+        !revision
+        || !engagementMutations.isRevisionCurrent('repost', postId, revision)
       ) return;
       forEachProfilePost(postId, (post) => {
         if (post.repostStatus === 'unknown') setFeedPostRepostUnavailable(post);
@@ -598,17 +558,19 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   ) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
-    const versions = new Map(uniqueIDs.map((id) => [id, getRepostMutationVersion(id)]));
-    const capturedRepostGeneration = repostGeneration;
+    const revisions = new Map(uniqueIDs.map((id) => [
+      id,
+      engagementMutations.captureRevision('repost', id),
+    ]));
     try {
       const response = await getPostRepostStates(uniqueIDs);
-      if (!isCurrent() || capturedRepostGeneration !== repostGeneration) return;
+      if (!isCurrent()) return;
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = versions.get(item.post_id);
+        const revision = revisions.get(item.post_id);
         if (
-          capturedVersion === undefined
-          || getRepostMutationVersion(item.post_id) !== capturedVersion
+          !revision
+          || !engagementMutations.isRevisionCurrent('repost', item.post_id, revision)
           || !findPost(item.post_id)
         ) return;
         readyIDs.add(item.post_id);
@@ -617,14 +579,14 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
           reposts: item.reposts,
           reposted: item.reposted,
           status: 'ready',
-        }, capturedVersion);
+        }, revision.version);
       });
       response.unavailable_post_ids.forEach((postId) => {
-        const capturedVersion = versions.get(postId);
+        const revision = revisions.get(postId);
         if (
           readyIDs.has(postId)
-          || capturedVersion === undefined
-          || getRepostMutationVersion(postId) !== capturedVersion
+          || !revision
+          || !engagementMutations.isRevisionCurrent('repost', postId, revision)
           || !findPost(postId)
         ) return;
         applyRepostStateUpdateEverywhere({
@@ -632,21 +594,24 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
           reposts: 0,
           reposted: false,
           status: 'unavailable',
-        }, capturedVersion);
+        }, revision.version);
       });
     } catch {
-      if (isCurrent() && capturedRepostGeneration === repostGeneration) {
-        markRepostUnavailableLocal(uniqueIDs, versions);
+      if (isCurrent()) {
+        markRepostUnavailableLocal(uniqueIDs, revisions);
       }
     }
   };
 
-  const markBookmarkUnavailableLocal = (postIds: number[], versions: Map<number, number>) => {
+  const markBookmarkUnavailableLocal = (
+    postIds: number[],
+    revisions: Map<number, EngagementMutationRevision>,
+  ) => {
     postIds.forEach((postId) => {
-      const capturedVersion = versions.get(postId);
+      const revision = revisions.get(postId);
       if (
-        capturedVersion === undefined
-        || getBookmarkMutationVersion(postId) !== capturedVersion
+        !revision
+        || !engagementMutations.isRevisionCurrent('bookmark', postId, revision)
       ) return;
       forEachProfilePost(postId, (post) => {
         if (post.bookmarkStatus === 'unknown') setFeedPostBookmarkUnavailable(post);
@@ -660,17 +625,19 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   ) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
-    const versions = new Map(uniqueIDs.map((id) => [id, getBookmarkMutationVersion(id)]));
-    const capturedBookmarkGeneration = bookmarkGeneration;
+    const revisions = new Map(uniqueIDs.map((id) => [
+      id,
+      engagementMutations.captureRevision('bookmark', id),
+    ]));
     try {
       const response = await getPostBookmarkStates(uniqueIDs);
-      if (!isCurrent() || capturedBookmarkGeneration !== bookmarkGeneration) return;
+      if (!isCurrent()) return;
       const readyIDs = new Set<number>();
       response.items.forEach((item) => {
-        const capturedVersion = versions.get(item.post_id);
+        const revision = revisions.get(item.post_id);
         if (
-          capturedVersion === undefined
-          || getBookmarkMutationVersion(item.post_id) !== capturedVersion
+          !revision
+          || !engagementMutations.isRevisionCurrent('bookmark', item.post_id, revision)
           || !findPost(item.post_id)
         ) return;
         readyIDs.add(item.post_id);
@@ -678,25 +645,25 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
           postId: item.post_id,
           bookmarked: item.bookmarked,
           status: 'ready',
-        }, capturedVersion);
+        }, revision.version);
       });
       response.unavailable_post_ids.forEach((postId) => {
-        const capturedVersion = versions.get(postId);
+        const revision = revisions.get(postId);
         if (
           readyIDs.has(postId)
-          || capturedVersion === undefined
-          || getBookmarkMutationVersion(postId) !== capturedVersion
+          || !revision
+          || !engagementMutations.isRevisionCurrent('bookmark', postId, revision)
           || !findPost(postId)
         ) return;
         applyBookmarkStateUpdateEverywhere({
           postId,
           bookmarked: false,
           status: 'unavailable',
-        }, capturedVersion);
+        }, revision.version);
       });
     } catch {
-      if (isCurrent() && capturedBookmarkGeneration === bookmarkGeneration) {
-        markBookmarkUnavailableLocal(uniqueIDs, versions);
+      if (isCurrent()) {
+        markBookmarkUnavailableLocal(uniqueIDs, revisions);
       }
     }
   };
@@ -808,7 +775,6 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
             capturedViewerGeneration,
           ),
         );
-        const capturedBookmarkGeneration = bookmarkGeneration;
         void hydrateBookmarkStates(
           newItems.map((item) => item.post.id),
           () => currentTimelineSession(
@@ -817,7 +783,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
             capturedTimelineGeneration,
             capturedViewerID,
             capturedViewerGeneration,
-          ) && bookmarkGeneration === capturedBookmarkGeneration,
+          ),
         );
       }
     } catch (error) {
@@ -891,7 +857,6 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
             capturedViewerGeneration,
           ),
         );
-        const capturedBookmarkGeneration = bookmarkGeneration;
         void hydrateBookmarkStates(
           newItems.map((item) => item.post.id),
           () => currentTimelineSession(
@@ -900,7 +865,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
             capturedTimelineGeneration,
             capturedViewerID,
             capturedViewerGeneration,
-          ) && bookmarkGeneration === capturedBookmarkGeneration,
+          ),
         );
       }
     } catch (error) {
@@ -1040,43 +1005,27 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     ) return 'ignored';
     const previousLiked = post.liked;
     const previousLikes = post.likeCount;
-    const mutationVersion = (likeMutationVersions.get(postId) ?? 0) + 1;
-    likeMutationVersions.set(postId, mutationVersion);
-    const capturedLikeGeneration = likeGeneration;
     const capturedViewerGeneration = viewerGeneration.value;
-    likePendingPostIds.add(postId);
-    applyLikeStateUpdateEverywhere({
-      postId,
-      likes: previousLiked ? Math.max(0, previousLikes - 1) : previousLikes + 1,
-      liked: !previousLiked,
-      status: 'ready',
-    });
+    const token = engagementMutations.begin('like', postId);
+    applyLikeStateUpdateEverywhere(createOptimisticLikeUpdate(post));
     const isCurrent = () =>
-      likePendingPostIds.has(postId)
-      && (likeMutationVersions.get(postId) ?? 0) === mutationVersion
-      && likeGeneration === capturedLikeGeneration
+      engagementMutations.isCurrent(token)
       && viewerID.value === capturedViewerID
       && viewerGeneration.value === capturedViewerGeneration
       && authStore.isAuthenticated;
     try {
-      const result = previousLiked
-        ? await unlikePost(postId)
-        : await likePost(postId);
+      const result = await executeLikeToggle(postId, previousLiked);
       if (!isCurrent()) return 'ignored';
-      const settledVersion = mutationVersion + 1;
-      likeMutationVersions.set(postId, settledVersion);
       applyLikeStateUpdateEverywhere({
         postId,
         likes: result.likes,
         liked: result.liked,
         status: 'ready',
       });
-      likePendingPostIds.delete(postId);
+      engagementMutations.settle(token);
       return 'succeeded';
     } catch (error) {
       if (!isCurrent()) return 'ignored';
-      const settledVersion = mutationVersion + 1;
-      likeMutationVersions.set(postId, settledVersion);
       applyLikeStateUpdateEverywhere({
         postId,
         likes: previousLikes,
@@ -1091,7 +1040,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
           status: 'unavailable',
         });
       }
-      likePendingPostIds.delete(postId);
+      engagementMutations.settle(token);
       return 'failed';
     }
   };
@@ -1112,52 +1061,39 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
     const previousReposted = post.reposted;
     const previousReposts = post.repostCount;
-    const mutationVersion = bumpRepostMutationVersion(postId);
-    const capturedGeneration = repostGeneration;
     const capturedViewerGeneration = viewerGeneration.value;
-    repostPendingPostIds.add(postId);
-    applyRepostStateUpdateEverywhere({
-      postId,
-      reposts: previousReposted ? Math.max(0, previousReposts - 1) : previousReposts + 1,
-      reposted: !previousReposted,
-      status: 'ready',
-    }, mutationVersion);
+    const token = engagementMutations.begin('repost', postId);
+    applyRepostStateUpdateEverywhere(createOptimisticRepostUpdate(post), token.version);
 
     const isCurrent = () => (
       authStore.isAuthenticated
       && viewerID.value === capturedViewerID
       && viewerGeneration.value === capturedViewerGeneration
-      && repostGeneration === capturedGeneration
-      && (repostMutationVersions.get(postId) ?? 0) === mutationVersion
-      && repostPendingPostIds.has(postId)
+      && engagementMutations.isCurrent(token)
     );
 
     try {
-      const response = previousReposted
-        ? await undoRepostPost(postId)
-        : await repostPost(postId);
+      const response = await executeRepostToggle(postId, previousReposted);
       if (!isCurrent()) return 'ignored';
-      repostMutationVersions.set(postId, mutationVersion + 1);
       applyRepostStateUpdateEverywhere({
         postId,
         reposts: response.reposts,
         reposted: response.reposted,
         status: 'ready',
-      }, mutationVersion + 1);
-      repostPendingPostIds.delete(postId);
+      }, token.version);
+      engagementMutations.settle(token);
       markOwnProfileTimelineStale();
       if (previousReposted) removeOwnRepostActivityLocal(postId, capturedViewerID);
       return 'succeeded';
     } catch {
       if (!isCurrent()) return 'ignored';
-      repostMutationVersions.set(postId, mutationVersion + 1);
       applyRepostStateUpdateEverywhere({
         postId,
         reposts: previousReposts,
         reposted: previousReposted,
         status: 'ready',
-      }, mutationVersion + 1);
-      repostPendingPostIds.delete(postId);
+      }, token.version);
+      engagementMutations.settle(token);
       return 'failed';
     }
   };
@@ -1175,47 +1111,35 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
 
     const previousBookmarked = post.bookmarked;
     beginBookmarkStateMutation(postId);
-    const mutationVersion = bumpBookmarkMutationVersion(postId);
-    const capturedBookmarkGeneration = bookmarkGeneration;
     const capturedViewerGeneration = viewerGeneration.value;
-    bookmarkPendingPostIds.add(postId);
-    applyBookmarkStateUpdateEverywhere({
-      postId,
-      bookmarked: !previousBookmarked,
-      status: 'ready',
-    }, mutationVersion);
+    const token = engagementMutations.begin('bookmark', postId);
+    applyBookmarkStateUpdateEverywhere(createOptimisticBookmarkUpdate(post), token.version);
 
     const isCurrent = () => (
       authStore.isAuthenticated
       && viewerID.value === capturedViewerID
       && viewerGeneration.value === capturedViewerGeneration
-      && bookmarkGeneration === capturedBookmarkGeneration
-      && getBookmarkMutationVersion(postId) === mutationVersion
-      && bookmarkPendingPostIds.has(postId)
+      && engagementMutations.isCurrent(token)
     );
 
     try {
-      const response = previousBookmarked
-        ? await unbookmarkPost(postId)
-        : await bookmarkPost(postId);
+      const response = await executeBookmarkToggle(postId, previousBookmarked);
       if (!isCurrent()) return false;
-      const settledVersion = bumpBookmarkMutationVersion(postId);
       applyBookmarkStateUpdateEverywhere({
         postId,
         bookmarked: response.bookmarked,
         status: 'ready',
-      }, settledVersion);
-      bookmarkPendingPostIds.delete(postId);
+      }, token.version);
+      engagementMutations.settle(token);
       return true;
     } catch {
       if (!isCurrent()) return false;
-      const settledVersion = bumpBookmarkMutationVersion(postId);
       applyBookmarkStateUpdateEverywhere({
         postId,
         bookmarked: previousBookmarked,
         status: 'ready',
-      }, settledVersion);
-      bookmarkPendingPostIds.delete(postId);
+      }, token.version);
+      engagementMutations.settle(token);
       return false;
     }
   };
@@ -1232,12 +1156,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         session.timelineLoadMoreError = '';
       }
     });
-    likePendingPostIds.delete(postId);
-    likeMutationVersions.delete(postId);
-    repostPendingPostIds.delete(postId);
-    bumpRepostMutationVersion(postId);
-    bookmarkPendingPostIds.delete(postId);
-    bumpBookmarkMutationVersion(postId);
+    engagementMutations.invalidatePost(postId);
     pendingDeletePostIds.delete(postId);
     deleteErrors.delete(postId);
     deleteTargetProfileIDs.delete(postId);
