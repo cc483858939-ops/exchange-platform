@@ -101,6 +101,27 @@ function Assert-MigrationRender {
     }
 }
 
+function Assert-PostMediaGCRender {
+    param([Parameter(Mandatory = $true)][object]$CronJob)
+    if ($CronJob.kind -ne "CronJob") {
+        throw "Post media GC render did not produce a CronJob"
+    }
+    if ($CronJob.spec.schedule -ne "*/10 * * * *" -or $CronJob.spec.concurrencyPolicy -ne "Forbid") {
+        throw "Post media GC CronJob must keep its bounded ten-minute non-overlapping schedule"
+    }
+    $containers = @($CronJob.spec.jobTemplate.spec.template.spec.containers | Where-Object { $_.name -eq "post-media-gc" })
+    if ($containers.Count -ne 1) {
+        throw "Post media GC CronJob must contain exactly one post-media-gc container"
+    }
+    if ($containers[0].image -ne $Image -or $containers[0].command -notcontains "/app/go-exchange-post-media-gc") {
+        throw "Post media GC CronJob must use the requested digest and dedicated command"
+    }
+    $releaseEnv = @($containers[0].env | Where-Object { $_.name -eq "RELEASE_REVISION" })
+    if ($releaseEnv.Count -ne 1 -or $releaseEnv[0].value -ne $ReleaseRevision) {
+        throw "Post media GC render is missing the requested RELEASE_REVISION"
+    }
+}
+
 function Get-JobTerminalState {
     param([AllowNull()][object]$Job)
     if ($null -eq $Job -or $null -eq $Job.status) {
@@ -168,6 +189,12 @@ function Invoke-Deployment {
         $null = Render-Manifest -ManifestPath (Join-Path $ManifestDir "worker-deployment.yaml") -ContainerName "app" -OutputPath $workerPath
         Invoke-Kubectl -Arguments @("apply", "-f", $workerPath) | Out-Null
         Invoke-Kubectl -Arguments @("rollout", "status", "deployment/go-exchange-worker", "--timeout=${RolloutTimeoutSeconds}s") | Out-Null
+
+        $postMediaGCPath = [System.IO.Path]::GetTempFileName()
+        $temporaryPaths += $postMediaGCPath
+        $postMediaGC = Render-Manifest -ManifestPath (Join-Path $ManifestDir "post-media-gc-cronjob.yaml") -ContainerName "post-media-gc" -OutputPath $postMediaGCPath
+        Assert-PostMediaGCRender $postMediaGC
+        Invoke-Kubectl -Arguments @("apply", "-f", $postMediaGCPath) | Out-Null
     }
     finally {
         foreach ($temporaryPath in $temporaryPaths) {

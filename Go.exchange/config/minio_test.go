@@ -59,3 +59,37 @@ func TestNewStorageClientReturnsBucketCheckError(t *testing.T) {
 		t.Fatalf("client=%v err=%v", client, err)
 	}
 }
+
+func TestNewStorageClientForExistingBucketDoesNotProbeOrCreateBucket(t *testing.T) {
+	originalExists := storageBucketExists
+	originalMake := storageMakeBucket
+	t.Cleanup(func() {
+		storageBucketExists = originalExists
+		storageMakeBucket = originalMake
+	})
+	called := false
+	storageBucketExists = func(context.Context, *minio.Client, string) (bool, error) {
+		called = true
+		return false, nil
+	}
+	storageMakeBucket = func(context.Context, *minio.Client, string) error {
+		called = true
+		return nil
+	}
+
+	client, err := NewStorageClientForExistingBucketWithOptions(ExistingBucketStorageOptions{
+		Endpoint: "127.0.0.1:9000", AccessKey: "dedicated-gc-access", SecretKey: "dedicated-gc-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewStorageClientForExistingBucketWithOptions: %v", err)
+	}
+	if client == nil || called {
+		t.Fatalf("client=%v bucket privilege probes called=%t", client != nil, called)
+	}
+}
+
+func TestNewStorageClientForExistingBucketRequiresDedicatedCredentials(t *testing.T) {
+	if client, err := NewStorageClientForExistingBucketWithOptions(ExistingBucketStorageOptions{}); client != nil || err == nil {
+		t.Fatalf("client=%v err=%v, want missing dedicated credentials error", client, err)
+	}
+}

@@ -211,6 +211,179 @@ func TestPersistPostGraphConsumesUploadedMediaInTransactionIntegration(t *testin
 	}
 }
 
+func TestExpiredUploadedMediaRemainsBindableUntilGCClaimsItIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
+	mediaID := uuid.NewString()
+	pendingUpload, mediaURL := newTestPostMediaUpload(t, fixture.Author.ID, mediaID, postmediaupload.StatusUploaded)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	uploadedAt := now.Add(-25 * time.Hour)
+	pendingUpload.UploadedAt = &uploadedAt
+	pendingUpload.CleanupAfter = now.Add(-time.Hour)
+	if err := db.Create(&pendingUpload).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Unscoped().Where("media_id = ?", mediaID).Delete(&models.PostMediaUpload{}) })
+
+	previousDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = previousDB })
+	var post models.Post
+	media := []validatedPostMedia{{MediaID: mediaID, MediaType: "image", PublicURL: mediaURL}}
+	if err := persistPostGraph(context.Background(), &post, fixture.Author.ID, "grace expired but unclaimed", createPostRequest{Content: "grace expired but unclaimed"}, media, now); err != nil {
+		t.Fatalf("expired but unclaimed upload was rejected: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("post_id = ?", post.ID).Delete(&models.PostMedia{})
+		db.Unscoped().Delete(&models.Post{}, post.ID)
+	})
+	var boundCount, pendingCount int64
+	if err := db.Model(&models.PostMedia{}).Where("post_id = ?", post.ID).Count(&boundCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMediaUpload{}).Where("media_id = ?", mediaID).Count(&pendingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if boundCount != 1 || pendingCount != 0 {
+		t.Fatalf("expired unclaimed upload state bound=%d pending=%d", boundCount, pendingCount)
+	}
+}
+
+func TestPostMediaGCClaimWinsAgainstCreateIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
+	mediaID := uuid.NewString()
+	pendingUpload, mediaURL := newTestPostMediaUpload(t, fixture.Author.ID, mediaID, postmediaupload.StatusUploaded)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	uploadedAt := now.Add(-25 * time.Hour)
+	pendingUpload.UploadedAt = &uploadedAt
+	pendingUpload.CleanupAfter = now.Add(-time.Hour)
+	if err := db.Create(&pendingUpload).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Unscoped().Where("media_id = ?", mediaID).Delete(&models.PostMediaUpload{}) })
+	claims, err := postmediaupload.ClaimCleanupBatch(context.Background(), db, now, 15*time.Minute, 10)
+	if err != nil || len(claims) != 1 || claims[0].MediaID != mediaID {
+		t.Fatalf("GC claim=%+v err=%v", claims, err)
+	}
+
+	previousDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = previousDB })
+	var post models.Post
+	media := []validatedPostMedia{{MediaID: mediaID, MediaType: "image", PublicURL: mediaURL}}
+	err = persistPostGraph(context.Background(), &post, fixture.Author.ID, "gc already claimed media", createPostRequest{Content: "gc already claimed media"}, media, now)
+	if err != errInvalidPostMedia {
+		t.Fatalf("create error=%v want invalid media after GC claim", err)
+	}
+	var postCount, mediaCount int64
+	if err := db.Unscoped().Model(&models.Post{}).Where("id = ?", post.ID).Count(&postCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMedia{}).Where("post_id = ?", post.ID).Count(&mediaCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	var stored models.PostMediaUpload
+	if err := db.Where("media_id = ?", mediaID).Take(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if postCount != 0 || mediaCount != 0 || stored.Status != postmediaupload.StatusCleanupPending || stored.CleanupClaimToken == nil || *stored.CleanupClaimToken != claims[0].ClaimToken {
+		t.Fatalf("failed create did not roll back against claimed lease: posts=%d media=%d lease=%+v", postCount, mediaCount, stored)
+	}
+}
+
+func TestPostMediaCreateLockWinsAgainstGCSkipLockedIntegration(t *testing.T) {
+	db := openReplyIntegrationDatabase(t)
+	fixture := newReplyIntegrationFixture(t, db)
+	mediaID := uuid.NewString()
+	pendingUpload, mediaURL := newTestPostMediaUpload(t, fixture.Author.ID, mediaID, postmediaupload.StatusUploaded)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	uploadedAt := now.Add(-25 * time.Hour)
+	pendingUpload.UploadedAt = &uploadedAt
+	pendingUpload.CleanupAfter = now.Add(-time.Hour)
+	if err := db.Create(&pendingUpload).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Unscoped().Where("media_id = ?", mediaID).Delete(&models.PostMediaUpload{}) })
+
+	previousDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = previousDB })
+	originalLock := lockPendingPostMediaUploads
+	locked := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCreate := func() { releaseOnce.Do(func() { close(release) }) }
+	lockPendingPostMediaUploads = func(tx *gorm.DB, ids []string) ([]models.PostMediaUpload, error) {
+		uploads, err := originalLock(tx, ids)
+		if err == nil {
+			locked <- struct{}{}
+			<-release
+		}
+		return uploads, err
+	}
+	t.Cleanup(func() { lockPendingPostMediaUploads = originalLock })
+	t.Cleanup(releaseCreate)
+
+	type createResult struct {
+		post models.Post
+		err  error
+	}
+	result := make(chan createResult, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		var post models.Post
+		media := []validatedPostMedia{{MediaID: mediaID, MediaType: "image", PublicURL: mediaURL}}
+		err := persistPostGraph(context.Background(), &post, fixture.Author.ID, "create locked before gc", createPostRequest{Content: "create locked before gc"}, media, now)
+		result <- createResult{post: post, err: err}
+	}()
+	t.Cleanup(func() {
+		releaseCreate()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("create goroutine did not stop during test cleanup")
+		}
+	})
+	select {
+	case <-locked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not acquire the uploaded-media row lock")
+	}
+	claims, err := postmediaupload.ClaimCleanupBatch(context.Background(), db, now, 15*time.Minute, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("GC did not skip row locked by create: %+v", claims)
+	}
+	releaseCreate()
+	var created createResult
+	select {
+	case created = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not finish after releasing the row lock")
+	}
+	if created.err != nil {
+		t.Fatalf("create failed while winning the row lock: %v", created.err)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Where("post_id = ?", created.post.ID).Delete(&models.PostMedia{})
+		db.Unscoped().Delete(&models.Post{}, created.post.ID)
+	})
+	var boundCount, pendingCount int64
+	if err := db.Model(&models.PostMedia{}).Where("post_id = ?", created.post.ID).Count(&boundCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMediaUpload{}).Where("media_id = ?", mediaID).Count(&pendingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if boundCount != 1 || pendingCount != 0 {
+		t.Fatalf("create lock winner state bound=%d pending=%d", boundCount, pendingCount)
+	}
+}
+
 func TestPersistPostGraphRejectsMissingWrongOwnerUploadingAndStaleMediaIntegration(t *testing.T) {
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)

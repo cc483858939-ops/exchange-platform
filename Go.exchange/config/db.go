@@ -59,6 +59,43 @@ func OpenWorkerDatabase(cfg *Config) (*gorm.DB, error) {
 	return db, nil
 }
 
+func OpenMaintenanceDatabase(cfg *Config) (*gorm.DB, error) {
+	if cfg == nil {
+		return nil, errors.New("maintenance database configuration is nil")
+	}
+	return OpenMaintenanceDatabaseWithDSN(cfg, databaseDSN(cfg))
+}
+
+func OpenMaintenanceDatabaseWithDSN(cfg *Config, dsn string) (*gorm.DB, error) {
+	if cfg == nil {
+		return nil, errors.New("maintenance database configuration is nil")
+	}
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("maintenance database DSN is not configured")
+	}
+	pool := DatabasePoolOptions{
+		MaxOpenConns: cfg.Database.MaxOpenConns,
+		MaxIdleConns: cfg.Database.MaxIdleconns,
+	}
+	if override, set, err := databasePoolSizeOverride("MAINTENANCE_DB_MAX_OPEN_CONNS"); err != nil {
+		return nil, fmt.Errorf("configure maintenance database pool: %w", err)
+	} else if set {
+		if override > pool.MaxOpenConns {
+			return nil, fmt.Errorf("MAINTENANCE_DB_MAX_OPEN_CONNS (%d) exceeds total database pool budget (%d)", override, pool.MaxOpenConns)
+		}
+		pool.MaxOpenConns = override
+		if pool.MaxIdleConns > override {
+			pool.MaxIdleConns = override
+		}
+	}
+	db, err := openMaintenanceDatabase(dsn, pool)
+	if err != nil {
+		return nil, fmt.Errorf("open maintenance database: %w", err)
+	}
+	logDatabaseProfile("maintenance", db, pool)
+	return db, nil
+}
+
 func InitWorkerDatabaseConfig() {
 	cfg, err := Load()
 	if err != nil {
@@ -76,27 +113,11 @@ func InitMaintenanceDatabaseConfig() {
 	if err != nil {
 		log.Fatalf("failed to load application configuration: %v", err)
 	}
-	pool := DatabasePoolOptions{
-		MaxOpenConns: cfg.Database.MaxOpenConns,
-		MaxIdleConns: cfg.Database.MaxIdleconns,
-	}
-	if override, set, err := databasePoolSizeOverride("MAINTENANCE_DB_MAX_OPEN_CONNS"); err != nil {
-		log.Fatalf("failed to configure maintenance database pool: %v", err)
-	} else if set {
-		if override > pool.MaxOpenConns {
-			log.Fatalf("MAINTENANCE_DB_MAX_OPEN_CONNS (%d) exceeds total database pool budget (%d)", override, pool.MaxOpenConns)
-		}
-		pool.MaxOpenConns = override
-		if pool.MaxIdleConns > override {
-			pool.MaxIdleConns = override
-		}
-	}
-	db, err := openMaintenanceDatabase(databaseDSN(cfg), pool)
+	db, err := OpenMaintenanceDatabase(cfg)
 	if err != nil {
 		log.Fatalf("failed to initialize maintenance database: %v", err)
 	}
 	global.MaintenanceDb = db
-	logDatabaseProfile("maintenance", db, pool)
 }
 
 func CloseDatabasePools() {

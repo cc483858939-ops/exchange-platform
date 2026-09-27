@@ -1,0 +1,7 @@
+-- Provision the dedicated login role and password outside this file.
+-- Run as the database/table owner; do not grant this role membership in an
+-- application or migration role.
+GRANT CONNECT ON DATABASE goexchange TO post_media_gc;
+GRANT USAGE ON SCHEMA public TO post_media_gc;
+REVOKE ALL PRIVILEGES ON TABLE public.post_media_uploads FROM post_media_gc;
+GRANT SELECT, UPDATE, DELETE ON TABLE public.post_media_uploads TO post_media_gc;

@@ -22,6 +22,11 @@ type PostMediaUpload struct {
 	CreatedAt    time.Time  `json:"-" gorm:"not null"`
 	UploadedAt   *time.Time `json:"-"`
 	CleanupAfter time.Time  `json:"-" gorm:"not null;index:idx_post_media_uploads_status_cleanup_after,priority:2"`
+
+	CleanupClaimToken *string    `json:"-" gorm:"type:uuid"`
+	CleanupClaimedAt  *time.Time `json:"-"`
+	CleanupAttempts   int64      `json:"-" gorm:"not null;default:0"`
+	LastCleanupError  *string    `json:"-" gorm:"type:text"`
 }
 
 func (PostMediaUpload) TableName() string { return "post_media_uploads" }

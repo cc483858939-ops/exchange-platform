@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: go-exchange-post-media-gc
+  labels:
+    app: go-exchange
+    component: post-media-gc
+  annotations:
+    go.exchange/release-revision: "injected-by-deploy-script"
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 540
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: go-exchange
+        component: post-media-gc
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 540
+      template:
+        metadata:
+          labels:
+            app: go-exchange
+            component: post-media-gc
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: post-media-gc
+              image: your-registry/go-exchange:replace-me
+              imagePullPolicy: IfNotPresent
+              command: ["/app/go-exchange-post-media-gc"]
+              env:
+                - name: RELEASE_REVISION
+                  value: "injected-by-deploy-script"
+                - name: POST_MEDIA_GC_DATABASE_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: go-exchange-post-media-gc-secrets
+                      key: DATABASE_DSN
+                - name: POST_MEDIA_GC_MINIO_ENDPOINT
+                  value: "minio:9000"
+                - name: POST_MEDIA_GC_MINIO_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: go-exchange-post-media-gc-secrets
+                      key: MINIO_ACCESS_KEY
+                - name: POST_MEDIA_GC_MINIO_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: go-exchange-post-media-gc-secrets
+                      key: MINIO_SECRET_KEY
+                - name: POST_MEDIA_GC_MINIO_BUCKET
+                  value: "go-exchange"
+                - name: POST_MEDIA_GC_MINIO_USE_SSL
+                  value: "false"
+                - name: POST_MEDIA_GC_BATCH_SIZE
+                  value: "100"
+                - name: POST_MEDIA_GC_MAX_ROWS_PER_RUN
+                  value: "1000"
+                - name: POST_MEDIA_GC_CLAIM_TIMEOUT
+                  value: "15m"
+                - name: POST_MEDIA_GC_RETRY_BASE
+                  value: "5m"
+                - name: POST_MEDIA_GC_RETRY_MAX
+                  value: "6h"
+                - name: POST_MEDIA_GC_OBJECT_TIMEOUT
+                  value: "30s"
+                - name: POST_MEDIA_GC_RUN_TIMEOUT
+                  value: "8m"

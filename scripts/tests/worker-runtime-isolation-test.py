@@ -22,6 +22,21 @@ FORBIDDEN_WORKER_CONSTRUCTORS = (
     "JWT_VERIFY_KEYS_DIR",
     "JWT_ACTIVE_KID",
 )
+POST_MEDIA_GC_ENVIRONMENT = {
+    "POST_MEDIA_GC_DATABASE_DSN",
+    "POST_MEDIA_GC_MINIO_ENDPOINT",
+    "POST_MEDIA_GC_MINIO_ACCESS_KEY",
+    "POST_MEDIA_GC_MINIO_SECRET_KEY",
+    "POST_MEDIA_GC_MINIO_BUCKET",
+    "POST_MEDIA_GC_MINIO_USE_SSL",
+    "POST_MEDIA_GC_BATCH_SIZE",
+    "POST_MEDIA_GC_MAX_ROWS_PER_RUN",
+    "POST_MEDIA_GC_CLAIM_TIMEOUT",
+    "POST_MEDIA_GC_RETRY_BASE",
+    "POST_MEDIA_GC_RETRY_MAX",
+    "POST_MEDIA_GC_OBJECT_TIMEOUT",
+    "POST_MEDIA_GC_RUN_TIMEOUT",
+}
 
 
 def compose_config(*arguments: str) -> dict:
@@ -74,6 +89,72 @@ def assert_worker_isolated(compose: dict, label: str) -> dict:
     return worker
 
 
+def assert_post_media_gc_isolated(compose: dict) -> dict:
+    service = compose.get("services", {}).get("post-media-gc")
+    if not isinstance(service, dict):
+        raise SystemExit("production Compose: post-media-gc service is missing")
+    if service.get("profiles") != ["maintenance"]:
+        raise SystemExit("production Compose: post-media-gc must be maintenance-profile only")
+    if service.get("entrypoint") != ["/app/go-exchange-post-media-gc"]:
+        raise SystemExit("production Compose: post-media-gc must run its dedicated binary")
+
+    environment = service.get("environment") or {}
+    unexpected_environment = sorted(set(environment) - POST_MEDIA_GC_ENVIRONMENT)
+    if unexpected_environment:
+        raise SystemExit(
+            "production Compose: post-media-gc received unrelated environment keys: "
+            + ", ".join(unexpected_environment)
+        )
+    if set(environment) != POST_MEDIA_GC_ENVIRONMENT:
+        missing_environment = sorted(POST_MEDIA_GC_ENVIRONMENT - set(environment))
+        raise SystemExit(
+            "production Compose: post-media-gc is missing dedicated configuration keys: "
+            + ", ".join(missing_environment)
+        )
+
+    dependencies = service.get("depends_on") or {}
+    dependency_names = set(dependencies) if isinstance(dependencies, dict) else set(dependencies)
+    if dependency_names != {"db", "migrate", "minio"}:
+        raise SystemExit(
+            "production Compose: post-media-gc may depend only on db, migrate, and minio"
+        )
+    return service
+
+
+def assert_kubernetes_post_media_gc_isolated() -> None:
+    cronjob = (ROOT / "Go.exchange/k8s/post-media-gc-cronjob.yaml").read_text(
+        encoding="utf-8"
+    )
+    required_contract = (
+        "kind: CronJob",
+        'schedule: "*/10 * * * *"',
+        "concurrencyPolicy: Forbid",
+        "activeDeadlineSeconds: 540",
+        "command: [\"/app/go-exchange-post-media-gc\"]",
+        "POST_MEDIA_GC_DATABASE_DSN",
+        "POST_MEDIA_GC_MINIO_ACCESS_KEY",
+        "POST_MEDIA_GC_MINIO_SECRET_KEY",
+        "name: go-exchange-post-media-gc-secrets",
+        "restartPolicy: Never",
+    )
+    for required in required_contract:
+        if required not in cronjob:
+            raise SystemExit(f"Kubernetes Post media GC CronJob is missing {required}")
+    if "envFrom:" in cronjob:
+        raise SystemExit("Kubernetes Post media GC CronJob must use explicit environment keys")
+    for forbidden in ("REDIS", "KAFKA", "JWT", "TWITTER", "go-exchange-runtime-secrets"):
+        if forbidden in cronjob:
+            raise SystemExit(
+                f"Kubernetes Post media GC CronJob must not receive {forbidden} configuration"
+            )
+
+    gc_sources = sorted((ROOT / "Go.exchange/postmediagc").glob("*.go"))
+    if not gc_sources:
+        raise SystemExit("Post media GC implementation sources are missing")
+    if any("ListObjects" in source.read_text(encoding="utf-8") for source in gc_sources):
+        raise SystemExit("Post media GC must delete row-owned keys without scanning MinIO")
+
+
 def main() -> None:
     dev = compose_config("-f", "docker-compose.yml")
     dev_worker = assert_worker_isolated(dev, "development Compose")
@@ -87,6 +168,8 @@ def main() -> None:
         )
 
     prod = compose_config(
+        "--profile",
+        "maintenance",
         "--env-file",
         "deploy/.env.example",
         "-f",
@@ -97,6 +180,7 @@ def main() -> None:
         raise SystemExit(
             "production Compose worker entrypoint must be /app/go-exchange-worker"
         )
+    assert_post_media_gc_isolated(prod)
 
     worker_source = (ROOT / "Go.exchange/cmd/worker/main.go").read_text(
         encoding="utf-8"
@@ -122,7 +206,12 @@ def main() -> None:
     if "volumeMounts:" in kubernetes_worker and "jwt" in kubernetes_worker.lower():
         raise SystemExit("Kubernetes worker must not mount JWT secrets")
 
-    print("Worker runtime isolation assertions passed for Compose and Kubernetes.")
+    assert_kubernetes_post_media_gc_isolated()
+
+    print(
+        "Worker isolation and dedicated Post media GC runtime assertions passed "
+        "for Compose and Kubernetes."
+    )
 
 
 if __name__ == "__main__":

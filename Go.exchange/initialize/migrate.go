@@ -328,14 +328,21 @@ func applyPostMediaUploadConstraints(tx *gorm.DB) error {
 		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_owner_positive",
 		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_owner_positive CHECK (owner_id > 0)",
 		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_status",
-		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_status CHECK (status IN ('uploading', 'uploaded'))",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_status CHECK (status IN ('uploading', 'uploaded', 'cleanup_pending'))",
 		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_object_keys_nonblank",
 		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_object_keys_nonblank CHECK (char_length(btrim(original_object_key)) > 0 AND char_length(btrim(medium_object_key)) > 0 AND char_length(btrim(large_object_key)) > 0 AND char_length(btrim(manifest_object_key)) > 0)",
 		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_urls_nonblank",
 		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_urls_nonblank CHECK (char_length(btrim(medium_url)) > 0 AND char_length(btrim(large_url)) > 0)",
 		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_uploaded_shape",
-		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_uploaded_shape CHECK ((status = 'uploading' AND uploaded_at IS NULL) OR (status = 'uploaded' AND uploaded_at IS NOT NULL AND width > 0 AND height > 0 AND cleanup_after >= uploaded_at))",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_uploaded_shape CHECK ((status = 'uploading' AND uploaded_at IS NULL) OR (status = 'uploaded' AND uploaded_at IS NOT NULL AND width > 0 AND height > 0 AND cleanup_after >= uploaded_at) OR (status = 'cleanup_pending' AND (uploaded_at IS NULL OR (uploaded_at IS NOT NULL AND width > 0 AND height > 0 AND cleanup_after >= uploaded_at))))",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_cleanup_attempts_nonnegative",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_cleanup_attempts_nonnegative CHECK (cleanup_attempts >= 0)",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_cleanup_claim_shape",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_cleanup_claim_shape CHECK ((status IN ('uploading', 'uploaded') AND cleanup_claim_token IS NULL AND cleanup_claimed_at IS NULL) OR (status = 'cleanup_pending' AND ((cleanup_claim_token IS NULL AND cleanup_claimed_at IS NULL) OR (cleanup_claim_token IS NOT NULL AND cleanup_claimed_at IS NOT NULL))))",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_cleanup_error_size",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_cleanup_error_size CHECK (last_cleanup_error IS NULL OR octet_length(last_cleanup_error) <= 1024)",
 		"CREATE INDEX IF NOT EXISTS idx_post_media_uploads_status_cleanup_after ON post_media_uploads (status, cleanup_after)",
+		"CREATE INDEX IF NOT EXISTS idx_post_media_uploads_gc_eligible ON post_media_uploads (cleanup_after, media_id) WHERE status IN ('uploading', 'uploaded', 'cleanup_pending')",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {

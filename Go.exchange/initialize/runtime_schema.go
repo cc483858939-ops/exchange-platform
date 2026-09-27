@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 11 adds the durable pending Post media upload registry.
-const RequiredSchemaVersion int64 = 11
+// Schema 12 adds claimable and retryable Post media orphan cleanup.
+const RequiredSchemaVersion int64 = 12
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 11
-	PublishedSchemaCompatibilityFloor int64 = 11
+	PublishedSchemaCurrentVersion     int64 = 12
+	PublishedSchemaCompatibilityFloor int64 = 12
 )
 
 const runtimeSchemaStateID uint = 1
@@ -153,10 +153,14 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"chk_post_media_uploads_object_keys_nonblank",
 			"chk_post_media_uploads_urls_nonblank",
 			"chk_post_media_uploads_uploaded_shape",
+			"chk_post_media_uploads_cleanup_attempts_nonnegative",
+			"chk_post_media_uploads_cleanup_claim_shape",
+			"chk_post_media_uploads_cleanup_error_size",
 		},
 		Indexes: []string{
 			"post_media_uploads_pkey",
 			"idx_post_media_uploads_status_cleanup_after",
+			"idx_post_media_uploads_gc_eligible",
 		},
 	},
 	{

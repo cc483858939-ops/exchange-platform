@@ -311,11 +311,11 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != 11 || PublishedSchemaCompatibilityFloor != 11 || RequiredSchemaVersion != 11 {
+	if PublishedSchemaCurrentVersion != 12 || PublishedSchemaCompatibilityFloor != 12 || RequiredSchemaVersion != 12 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
 	}
-	if !runtimeSchemaVersionsCompatible(11, 11, 11) || runtimeSchemaVersionsCompatible(11, 11, 10) {
-		t.Fatal("schema 11 must accept schema 11 and reject schema-10 binaries")
+	if !runtimeSchemaVersionsCompatible(12, 12, 12) || runtimeSchemaVersionsCompatible(12, 12, 11) {
+		t.Fatal("schema 12 must accept schema 12 and reject schema-11 binaries")
 	}
 }
 

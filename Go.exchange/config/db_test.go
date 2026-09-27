@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+func TestOpenMaintenanceDatabaseRequiresConfig(t *testing.T) {
+	if db, err := OpenMaintenanceDatabase(nil); db != nil || err == nil {
+		t.Fatalf("OpenMaintenanceDatabase(nil)=(%v, %v), want error", db, err)
+	}
+}
+
 func TestRequestAndDatabaseTimeoutDefaults(t *testing.T) {
 	for _, key := range []string{
 		"API_REQUEST_TIMEOUT",

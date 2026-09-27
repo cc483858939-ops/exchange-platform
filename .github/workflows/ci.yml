@@ -401,6 +401,7 @@ jobs:
           TWITTER_AUTH_TOKEN: ci-placeholder
         run: |
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml config --quiet
+          docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile maintenance config --quiet
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile rss --profile devdata config --quiet
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile observability config --quiet
           python3 scripts/tests/worker-runtime-isolation-test.py

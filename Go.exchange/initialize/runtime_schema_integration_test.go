@@ -103,8 +103,8 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.Where("id = ?", runtimeSchemaStateID).Take(&publishedState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if publishedState.CurrentVersion != 11 || publishedState.CompatibilityFloor != 11 {
-		t.Fatalf("published schema contract=%d/%d want=11/11", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
+	if publishedState.CurrentVersion != 12 || publishedState.CompatibilityFloor != 12 {
+		t.Fatalf("published schema contract=%d/%d want=12/12", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
 	}
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
@@ -175,6 +175,20 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 			t.Fatalf("drop Post media upload cleanup index: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_index_missing")
+	})
+
+	withIntegrationSavepoint(t, tx, "missing_post_media_gc_eligible_index", func() {
+		if err := tx.Exec("DROP INDEX " + qualifiedIntegrationTable(primarySchema, "idx_post_media_uploads_gc_eligible")).Error; err != nil {
+			t.Fatalf("drop Post media GC eligibility index: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_index_missing")
+	})
+
+	withIntegrationSavepoint(t, tx, "missing_post_media_cleanup_claim_constraint", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "post_media_uploads") + " DROP CONSTRAINT chk_post_media_uploads_cleanup_claim_shape").Error; err != nil {
+			t.Fatalf("drop Post media cleanup claim constraint: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
 	})
 
 	withIntegrationSavepoint(t, tx, "legacy_content_table", func() {

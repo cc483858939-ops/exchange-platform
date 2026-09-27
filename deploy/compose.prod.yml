@@ -206,6 +206,33 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  post-media-gc:
+    profiles: ["maintenance"]
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange-post-media-gc"]
+    environment:
+      POST_MEDIA_GC_DATABASE_DSN: "${POST_MEDIA_GC_DATABASE_DSN:?POST_MEDIA_GC_DATABASE_DSN is required}"
+      POST_MEDIA_GC_MINIO_ENDPOINT: "${POST_MEDIA_GC_MINIO_ENDPOINT:?POST_MEDIA_GC_MINIO_ENDPOINT is required}"
+      POST_MEDIA_GC_MINIO_ACCESS_KEY: "${POST_MEDIA_GC_MINIO_ACCESS_KEY:?POST_MEDIA_GC_MINIO_ACCESS_KEY is required}"
+      POST_MEDIA_GC_MINIO_SECRET_KEY: "${POST_MEDIA_GC_MINIO_SECRET_KEY:?POST_MEDIA_GC_MINIO_SECRET_KEY is required}"
+      POST_MEDIA_GC_MINIO_BUCKET: "${POST_MEDIA_GC_MINIO_BUCKET:?POST_MEDIA_GC_MINIO_BUCKET is required}"
+      POST_MEDIA_GC_MINIO_USE_SSL: "${POST_MEDIA_GC_MINIO_USE_SSL:-false}"
+      POST_MEDIA_GC_BATCH_SIZE: "${POST_MEDIA_GC_BATCH_SIZE:-100}"
+      POST_MEDIA_GC_MAX_ROWS_PER_RUN: "${POST_MEDIA_GC_MAX_ROWS_PER_RUN:-1000}"
+      POST_MEDIA_GC_CLAIM_TIMEOUT: "${POST_MEDIA_GC_CLAIM_TIMEOUT:-15m}"
+      POST_MEDIA_GC_RETRY_BASE: "${POST_MEDIA_GC_RETRY_BASE:-5m}"
+      POST_MEDIA_GC_RETRY_MAX: "${POST_MEDIA_GC_RETRY_MAX:-6h}"
+      POST_MEDIA_GC_OBJECT_TIMEOUT: "${POST_MEDIA_GC_OBJECT_TIMEOUT:-30s}"
+      POST_MEDIA_GC_RUN_TIMEOUT: "${POST_MEDIA_GC_RUN_TIMEOUT:-8m}"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    restart: "no"
+
   kafka-init:
     <<: [*backend-image, *service-defaults]
     entrypoint: ["/app/go-exchange-kafka-init"]

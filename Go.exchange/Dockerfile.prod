@@ -17,7 +17,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /o
     && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-kafka-init ./cmd/kafka-init \
     && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-cdc-init ./cmd/cdc-init \
     && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-outbox-cutover ./cmd/outbox-cutover \
-    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-devdata ./cmd/devdata
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-devdata ./cmd/devdata \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-post-media-gc ./cmd/post-media-gc
 
 FROM debian:bookworm-slim
 
@@ -34,6 +35,7 @@ COPY --from=builder /out/go-exchange-kafka-init /app/go-exchange-kafka-init
 COPY --from=builder /out/go-exchange-cdc-init /app/go-exchange-cdc-init
 COPY --from=builder /out/go-exchange-outbox-cutover /app/go-exchange-outbox-cutover
 COPY --from=builder /out/go-exchange-devdata /app/go-exchange-devdata
+COPY --from=builder /out/go-exchange-post-media-gc /app/go-exchange-post-media-gc
 COPY config /app/config
 
 EXPOSE 3000

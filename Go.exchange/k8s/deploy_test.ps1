@@ -38,4 +38,32 @@ Assert-Condition ((Get-JobTerminalState $complete) -eq "complete") "Complete=Tru
 Assert-Condition ((Get-JobTerminalState $failed) -eq "failed") "Failed=True was not terminal failure"
 Assert-Condition ((Get-JobTerminalState $null) -eq "pending") "missing Job status was not pending"
 
+$gcContainer = [pscustomobject]@{
+    name = "post-media-gc"
+    image = "registry.example.com/go-exchange@sha256:$digest"
+    command = @("/app/go-exchange-post-media-gc")
+    env = @([pscustomobject]@{ name = "RELEASE_REVISION"; value = "09eecd4b7f86" })
+}
+$Image = $gcContainer.image
+$ReleaseRevision = "09eecd4b7f86"
+$gcCronJob = [pscustomobject]@{
+    kind = "CronJob"
+    spec = [pscustomobject]@{
+        schedule = "*/10 * * * *"
+        concurrencyPolicy = "Forbid"
+        jobTemplate = [pscustomobject]@{
+            spec = [pscustomobject]@{
+                template = [pscustomobject]@{
+                    spec = [pscustomobject]@{ containers = @($gcContainer) }
+                }
+            }
+        }
+    }
+}
+Assert-PostMediaGCRender $gcCronJob
+$gcCronJob.spec.concurrencyPolicy = "Allow"
+$invalidGCRejected = $false
+try { Assert-PostMediaGCRender $gcCronJob } catch { $invalidGCRejected = $true }
+Assert-Condition $invalidGCRejected "overlapping Post media GC schedule was accepted"
+
 Write-Output "deploy.ps1 library tests: PASS"
