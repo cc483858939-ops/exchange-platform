@@ -301,7 +301,7 @@ func TestUploadPostMediaKeepsRegistryWhenBestEffortCleanupFails(t *testing.T) {
 	}
 }
 
-func TestUploadPostMediaDoesNotWriteObjectsWithoutRegistryAndCleansAfterFinalizeFailure(t *testing.T) {
+func TestUploadPostMediaPreservesRegistryAndPayloadOnFinalizationFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	lifecycle := stubPostMediaUploadLifecycle(t)
 	originalLoader := loadActiveProfileViewer
@@ -313,8 +313,21 @@ func TestUploadPostMediaDoesNotWriteObjectsWithoutRegistryAndCleansAfterFinalize
 	})
 	loadActiveProfileViewer = func(context.Context, uint) (models.User, error) { return models.User{Model: gorm.Model{ID: 42}}, nil }
 	var writes, removals int
-	putStoredObject = func(context.Context, string, io.Reader, int64, string) error { writes++; return nil }
-	removeStoredObject = func(context.Context, string) error { removals++; return nil }
+	objects := make(map[string][]byte)
+	putStoredObject = func(_ context.Context, objectKey string, reader io.Reader, _ int64, _ string) error {
+		body, err := io.ReadAll(reader)
+		if err != nil {
+			return err
+		}
+		writes++
+		objects[objectKey] = body
+		return nil
+	}
+	removeStoredObject = func(_ context.Context, objectKey string) error {
+		removals++
+		delete(objects, objectKey)
+		return nil
+	}
 	body, contentType := multipartImageRequestBody(t, "post.png", profilePNGFixture(t))
 	newRequest := func() *gin.Context {
 		recorder := httptest.NewRecorder()
@@ -328,8 +341,8 @@ func TestUploadPostMediaDoesNotWriteObjectsWithoutRegistryAndCleansAfterFinalize
 	createPendingPostMediaUpload = func(context.Context, models.PostMediaUpload) error { return errors.New("registry unavailable") }
 	ctx := newRequest()
 	UploadPostMedia(ctx)
-	if ctx.Writer.Status() != http.StatusInternalServerError || writes != 0 {
-		t.Fatalf("registry failure status=%d writes=%d", ctx.Writer.Status(), writes)
+	if ctx.Writer.Status() != http.StatusInternalServerError || writes != 0 || removals != 0 || len(objects) != 0 || lifecycle.deleteCalls != 0 {
+		t.Fatalf("registry failure status=%d writes=%d removals=%d objects=%d lifecycle=%+v", ctx.Writer.Status(), writes, removals, len(objects), lifecycle)
 	}
 
 	lifecycle.reset()
@@ -343,35 +356,35 @@ func TestUploadPostMediaDoesNotWriteObjectsWithoutRegistryAndCleansAfterFinalize
 	}
 	ctx = newRequest()
 	UploadPostMedia(ctx)
-	if ctx.Writer.Status() != http.StatusInternalServerError || writes != 4 || removals != 4 || len(lifecycle.rows) != 0 || lifecycle.deleteCalls != 1 {
-		t.Fatalf("finalize failure status=%d writes=%d removals=%d lifecycle=%+v", ctx.Writer.Status(), writes, removals, lifecycle)
+	if ctx.Writer.Status() != http.StatusInternalServerError || writes != 4 || removals != 0 || len(objects) != 4 || len(lifecycle.rows) != 1 || lifecycle.deleteCalls != 0 {
+		t.Fatalf("finalize failure status=%d writes=%d removals=%d objects=%d lifecycle=%+v", ctx.Writer.Status(), writes, removals, len(objects), lifecycle)
+	}
+	for _, upload := range lifecycle.rows {
+		if upload.Status != postmediaupload.StatusUploading {
+			t.Fatalf("definite finalize failure changed the uploading lease: %+v", upload)
+		}
 	}
 
 	lifecycle.reset()
-	writes, removals = 0, 0
+	writes, removals, objects = 0, 0, make(map[string][]byte)
 	markPendingPostMediaUploadUploaded = func(ctx context.Context, mediaID string, ownerID uint, uploadedAt, cleanupAfter time.Time) error {
 		if err := originalFinalize(ctx, mediaID, ownerID, uploadedAt, cleanupAfter); err != nil {
 			return err
 		}
 		return errors.New("ambiguous finalize acknowledgement")
 	}
-	ctx = newRequest()
-	UploadPostMedia(ctx)
-	if ctx.Writer.Status() != http.StatusInternalServerError || writes != 4 || removals != 4 || len(lifecycle.rows) != 0 || lifecycle.deleteCalls != 1 {
-		t.Fatalf("ambiguous finalize cleanup status=%d writes=%d removals=%d lifecycle=%+v", ctx.Writer.Status(), writes, removals, lifecycle)
+	deletePendingPostMediaUpload = func(context.Context, string, uint) error {
+		lifecycle.deleteCalls++
+		return errors.New("database remains unavailable")
 	}
-
-	lifecycle.reset()
-	writes, removals = 0, 0
-	removeStoredObject = func(context.Context, string) error { removals++; return errors.New("remove failed") }
 	ctx = newRequest()
 	UploadPostMedia(ctx)
-	if ctx.Writer.Status() != http.StatusInternalServerError || writes != 4 || removals != 4 || len(lifecycle.rows) != 1 || lifecycle.deleteCalls != 0 {
-		t.Fatalf("ambiguous finalize with cleanup failure status=%d writes=%d removals=%d lifecycle=%+v", ctx.Writer.Status(), writes, removals, lifecycle)
+	if ctx.Writer.Status() != http.StatusInternalServerError || writes != 4 || removals != 0 || len(objects) != 4 || len(lifecycle.rows) != 1 || lifecycle.deleteCalls != 0 {
+		t.Fatalf("ambiguous finalize status=%d writes=%d removals=%d objects=%d lifecycle=%+v", ctx.Writer.Status(), writes, removals, len(objects), lifecycle)
 	}
 	for _, upload := range lifecycle.rows {
 		if upload.Status != postmediaupload.StatusUploaded || upload.UploadedAt == nil || !upload.CleanupAfter.After(*upload.UploadedAt) {
-			t.Fatalf("cleanup failure lost committed upload tracking: %+v", upload)
+			t.Fatalf("ambiguous finalize lost committed upload tracking: %+v", upload)
 		}
 	}
 }
@@ -424,7 +437,7 @@ func stubPostMediaUploadLifecycle(t *testing.T) *postMediaUploadLifecycleSpy {
 	deletePendingPostMediaUpload = func(_ context.Context, mediaID string, ownerID uint) error {
 		spy.deleteCalls++
 		upload, exists := spy.rows[mediaID]
-		if !exists || upload.OwnerID != ownerID || (upload.Status != postmediaupload.StatusUploading && upload.Status != postmediaupload.StatusUploaded) {
+		if !exists || upload.OwnerID != ownerID || upload.Status != postmediaupload.StatusUploading {
 			return postmediaupload.ErrUploadUnavailable
 		}
 		delete(spy.rows, mediaID)

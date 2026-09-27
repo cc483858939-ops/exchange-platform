@@ -228,7 +228,11 @@ func UploadPostMedia(ctx *gin.Context) {
 		requestContext, mediaID, viewerID, uploadedAt,
 		uploadedAt.Add(postmediaupload.DefaultGracePeriod),
 	); err != nil {
-		cleanupAfterFailure(err)
+		log.Printf(
+			"[PostMediaUpload] upload payload retained after lifecycle finalization failure media_id=%s error_category=%s",
+			mediaID,
+			postMediaUploadFinalizationErrorCategory(err),
+		)
 		if handleRequestDBError(ctx, err) {
 			return
 		}
@@ -239,6 +243,19 @@ func UploadPostMedia(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, postMediaUploadResponse{
 		MediaURL: postmedia.PublicURL(paths.MediumObjectKey),
 	})
+}
+
+func postMediaUploadFinalizationErrorCategory(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "request_cancelled"
+	case errors.Is(err, context.DeadlineExceeded), isPostgresTimeoutError(err):
+		return "database_timeout"
+	case errors.Is(err, postmediaupload.ErrUploadUnavailable):
+		return "lease_unavailable"
+	default:
+		return "database_error"
+	}
 }
 
 func cleanupPostMediaObjects(ctx context.Context, paths postmedia.UserV1ObjectPaths) error {

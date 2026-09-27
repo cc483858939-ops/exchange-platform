@@ -63,9 +63,9 @@ func MarkUploaded(ctx context.Context, db *gorm.DB, mediaID string, ownerID uint
 	return nil
 }
 
-// DeleteAfterObjectCleanup removes an unconsumed lease only after the caller
-// has confirmed that all expected storage objects were removed. It accepts
-// both states because a failed UPDATE can have an ambiguous commit outcome.
+// DeleteAfterObjectCleanup removes an uploading lease only after the caller
+// has confirmed that all expected storage objects were removed. Uploaded
+// leases must retain their complete payload after finalization errors.
 func DeleteAfterObjectCleanup(ctx context.Context, db *gorm.DB, mediaID string, ownerID uint) error {
 	if db == nil {
 		return errors.New("database is not initialized")
@@ -73,7 +73,7 @@ func DeleteAfterObjectCleanup(ctx context.Context, db *gorm.DB, mediaID string, 
 	if ctx == nil {
 		return errors.New("upload context is nil")
 	}
-	result := db.WithContext(ctx).Where("media_id = ? AND owner_id = ? AND status IN ?", mediaID, ownerID, []string{StatusUploading, StatusUploaded}).
+	result := db.WithContext(ctx).Where("media_id = ? AND owner_id = ? AND status = ?", mediaID, ownerID, StatusUploading).
 		Delete(&models.PostMediaUpload{})
 	if result.Error != nil {
 		return result.Error
