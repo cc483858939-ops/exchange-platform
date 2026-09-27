@@ -210,56 +210,32 @@ func TestPostgresTimeoutMillisRoundsUpAndPreservesZero(t *testing.T) {
 	}
 }
 
-func TestRuntimeAllDatabasePoolBudgetIsSplitWithoutDoubling(t *testing.T) {
-	t.Setenv("API_DB_MAX_OPEN_CONNS", "")
-	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "")
-	pools, err := allocateDatabasePools(RuntimeRoleAll, 114, 11)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pools.API.MaxOpenConns != 80 || pools.Worker.MaxOpenConns != 34 {
-		t.Fatalf("pool allocation=%+v, want API=80 worker=34", pools)
-	}
-	if pools.API.MaxOpenConns+pools.Worker.MaxOpenConns > 114 {
-		t.Fatalf("combined max open exceeds budget: %+v", pools)
-	}
-	if pools.API.MaxIdleConns+pools.Worker.MaxIdleConns > 11 {
-		t.Fatalf("combined max idle exceeds budget: %+v", pools)
-	}
-}
-
-func TestSingleRuntimeRoleKeepsConfiguredPoolBudget(t *testing.T) {
-	t.Setenv("API_DB_MAX_OPEN_CONNS", "")
-	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "")
-	api, err := allocateDatabasePools(RuntimeRoleAPI, 114, 11)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if api.API.MaxOpenConns != 114 || api.API.MaxIdleConns != 11 || api.Worker.MaxOpenConns != 0 {
-		t.Fatalf("API-only pool allocation=%+v", api)
-	}
-	worker, err := allocateDatabasePools(RuntimeRoleWorker, 114, 11)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if worker.Worker.MaxOpenConns != 114 || worker.Worker.MaxIdleConns != 11 || worker.API.MaxOpenConns != 0 {
-		t.Fatalf("worker-only pool allocation=%+v", worker)
-	}
-}
-
-func TestRuntimeAllDatabasePoolOverridesRespectBudget(t *testing.T) {
+func TestRuntimeDatabasePoolOptionsUseIndependentOverrides(t *testing.T) {
+	cfg := &Config{}
+	cfg.Database.MaxOpenConns = 114
+	cfg.Database.MaxIdleconns = 11
 	t.Setenv("API_DB_MAX_OPEN_CONNS", "80")
 	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "30")
-	pools, err := allocateDatabasePools(RuntimeRoleAll, 114, 11)
+
+	api, err := runtimeDatabasePoolOptions(cfg, "API_DB_MAX_OPEN_CONNS")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pools.API.MaxOpenConns != 80 || pools.Worker.MaxOpenConns != 30 {
-		t.Fatalf("pool overrides=%+v, want API=80 worker=30", pools)
+	worker, err := runtimeDatabasePoolOptions(cfg, "WORKER_DB_MAX_OPEN_CONNS")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "40")
-	if _, err := allocateDatabasePools(RuntimeRoleAll, 114, 11); err == nil {
-		t.Fatal("pool overrides above total budget should be rejected")
+	if api.MaxOpenConns != 80 || api.MaxIdleConns != 11 {
+		t.Fatalf("API database pool=%+v, want max open 80 and max idle 11", api)
+	}
+	if worker.MaxOpenConns != 30 || worker.MaxIdleConns != 11 {
+		t.Fatalf("Worker database pool=%+v, want max open 30 and max idle 11", worker)
+	}
+	if _, err := runtimeDatabasePoolOptions(cfg, "MISSING_DB_MAX_OPEN_CONNS"); err != nil {
+		t.Fatalf("missing override should use configured pool: %v", err)
+	}
+	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "115")
+	if _, err := runtimeDatabasePoolOptions(cfg, "WORKER_DB_MAX_OPEN_CONNS"); err == nil {
+		t.Fatal("pool override above configured process pool should be rejected")
 	}
 }

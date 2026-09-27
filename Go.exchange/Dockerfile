@@ -6,7 +6,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/go-exchange ./main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/go-exchange-api ./cmd/api \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/go-exchange-worker ./cmd/worker
 
 FROM debian:bookworm-slim
 
@@ -16,9 +17,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=builder /out/go-exchange /app/go-exchange
+COPY --from=builder /out/go-exchange-api /app/go-exchange-api
+COPY --from=builder /out/go-exchange-worker /app/go-exchange-worker
 COPY config /app/config
 
 EXPOSE 3000
-
-ENTRYPOINT ["/app/go-exchange"]

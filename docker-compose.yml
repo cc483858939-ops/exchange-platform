@@ -129,7 +129,7 @@ services:
     restart: "no"
   api:
     <<: *go-service
-    command: ["go", "run", "main.go"]
+    command: ["go", "run", "./cmd/api"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -143,7 +143,6 @@ services:
         condition: service_started
     environment:
       <<: *go-environment
-      APP_RUNTIME_ROLE: api
       TRANSLATION_ENABLED: ${TRANSLATION_ENABLED:-false}
       TRANSLATION_BASE_URL: ${TRANSLATION_BASE_URL:-}
       TRANSLATION_API_KEY: ${TRANSLATION_API_KEY:-}
@@ -165,7 +164,7 @@ services:
 
   worker:
     <<: *go-service
-    command: ["go", "run", "main.go"]
+    command: ["go", "run", "./cmd/worker"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -175,11 +174,8 @@ services:
         condition: service_completed_successfully
       cdc-init:
         condition: service_completed_successfully
-      minio:
-        condition: service_started
     environment:
       <<: *go-environment
-      APP_RUNTIME_ROLE: worker
       LIKE_BEHAVIOR_BATCH_SIZE: ${LIKE_BEHAVIOR_BATCH_SIZE:-500}
       LIKE_BEHAVIOR_CLAIM_LEASE: ${LIKE_BEHAVIOR_CLAIM_LEASE:-30s}
       LIKE_BEHAVIOR_FLUSH_INTERVAL: ${LIKE_BEHAVIOR_FLUSH_INTERVAL:-1s}

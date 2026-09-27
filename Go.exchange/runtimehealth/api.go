@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	apiReadinessRole          = "api"
 	defaultEvaluationInterval = 2 * time.Second
 	readinessSnapshotMaxAge   = 5 * time.Second
 	perCheckTimeout           = time.Second
@@ -73,7 +74,7 @@ type APIReadiness struct {
 
 func NewAPIReadiness(options APIOptions) *APIReadiness {
 	if strings.TrimSpace(options.Role) == "" {
-		options.Role = config.RuntimeRoleAPI
+		options.Role = apiReadinessRole
 	}
 	if options.RequiredSchemaVersion <= 0 {
 		options.RequiredSchemaVersion = initialize.RequiredSchemaVersion
@@ -189,7 +190,7 @@ func (readiness *APIReadiness) MarkShuttingDown() {
 
 func (readiness *APIReadiness) Snapshot() APISnapshot {
 	if readiness == nil {
-		return APISnapshot{Status: "not_ready", Role: config.RuntimeRoleAPI, ReasonCodes: []string{"readiness_snapshot_stale"}}
+		return APISnapshot{Status: "not_ready", Role: apiReadinessRole, ReasonCodes: []string{"readiness_snapshot_stale"}}
 	}
 	snapshot := readiness.snapshot.Load().(APISnapshot).clone()
 	now := readiness.options.Now()
@@ -202,7 +203,7 @@ func (readiness *APIReadiness) Snapshot() APISnapshot {
 
 func (readiness *APIReadiness) EvaluateNow(ctx context.Context) APISnapshot {
 	if readiness == nil {
-		return APISnapshot{Status: "not_ready", Role: config.RuntimeRoleAPI, ReasonCodes: []string{"readiness_snapshot_stale"}}
+		return APISnapshot{Status: "not_ready", Role: apiReadinessRole, ReasonCodes: []string{"readiness_snapshot_stale"}}
 	}
 	readiness.stateMu.Lock()
 	shuttingDown := readiness.shuttingDown

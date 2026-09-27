@@ -19,14 +19,12 @@ spec:
         - name: app
           image: your-registry/go-exchange:replace-me
           imagePullPolicy: IfNotPresent
+          command: ["/app/go-exchange-worker"]
           envFrom:
             - configMapRef:
                 name: go-exchange-config
             - secretRef:
                 name: go-exchange-runtime-secrets
-          env:
-            - name: APP_RUNTIME_ROLE
-              value: worker
           ports:
             - name: worker-health
               containerPort: 8081

@@ -33,62 +33,52 @@ type DatabasePoolOptions struct {
 	MaxIdleConns int
 }
 
-type DatabasePoolAllocation struct {
-	API    DatabasePoolOptions
-	Worker DatabasePoolOptions
+func OpenAPIDatabase(cfg *Config) (*gorm.DB, error) {
+	pool, err := runtimeDatabasePoolOptions(cfg, "API_DB_MAX_OPEN_CONNS")
+	if err != nil {
+		return nil, err
+	}
+	db, err := openAPIDatabase(databaseDSN(cfg), pool)
+	if err != nil {
+		return nil, fmt.Errorf("open API database: %w", err)
+	}
+	logDatabaseProfile("api", db, pool)
+	return db, nil
 }
 
-func initDB() error {
-	if AppConfig == nil {
-		return errors.New("application configuration is not initialized")
-	}
-	role := RuntimeRole()
-	pools, err := runtimeDatabasePoolAllocation(role)
+func OpenWorkerDatabase(cfg *Config) (*gorm.DB, error) {
+	pool, err := runtimeDatabasePoolOptions(cfg, "WORKER_DB_MAX_OPEN_CONNS")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	apiDB, workerDB, err := openRuntimeDatabaseHandles(DatabaseDSN(), role, pools)
+	db, err := openWorkerDatabase(databaseDSN(cfg), pool)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("open worker database: %w", err)
 	}
-
-	global.APIDb = apiDB
-	global.Db = apiDB
-	global.WorkerDb = workerDB
-	if apiDB != nil {
-		logDatabaseProfile("api", apiDB, pools.API)
-	}
-	if workerDB != nil {
-		logDatabaseProfile("worker", workerDB, pools.Worker)
-	}
-	return nil
+	logDatabaseProfile("worker", db, pool)
+	return db, nil
 }
 
 func InitWorkerDatabaseConfig() {
-	LoadConfig()
-	if AppConfig == nil {
-		log.Fatal("application configuration is not initialized")
-	}
-	pools, err := runtimeDatabasePoolAllocation(RuntimeRoleWorker)
+	cfg, err := Load()
 	if err != nil {
-		log.Fatalf("failed to configure worker database pool: %v", err)
+		log.Fatalf("failed to load application configuration: %v", err)
 	}
-	db, err := openWorkerDatabase(DatabaseDSN(), pools.Worker)
+	db, err := OpenWorkerDatabase(cfg)
 	if err != nil {
 		log.Fatalf("failed to initialize worker database: %v", err)
 	}
 	global.WorkerDb = db
-	logDatabaseProfile("worker", db, pools.Worker)
 }
 
 func InitMaintenanceDatabaseConfig() {
-	LoadConfig()
-	if AppConfig == nil {
-		log.Fatal("application configuration is not initialized")
+	cfg, err := Load()
+	if err != nil {
+		log.Fatalf("failed to load application configuration: %v", err)
 	}
 	pool := DatabasePoolOptions{
-		MaxOpenConns: AppConfig.Database.MaxOpenConns,
-		MaxIdleConns: AppConfig.Database.MaxIdleconns,
+		MaxOpenConns: cfg.Database.MaxOpenConns,
+		MaxIdleConns: cfg.Database.MaxIdleconns,
 	}
 	if override, set, err := databasePoolSizeOverride("MAINTENANCE_DB_MAX_OPEN_CONNS"); err != nil {
 		log.Fatalf("failed to configure maintenance database pool: %v", err)
@@ -101,7 +91,7 @@ func InitMaintenanceDatabaseConfig() {
 			pool.MaxIdleConns = override
 		}
 	}
-	db, err := openMaintenanceDatabase(DatabaseDSN(), pool)
+	db, err := openMaintenanceDatabase(databaseDSN(cfg), pool)
 	if err != nil {
 		log.Fatalf("failed to initialize maintenance database: %v", err)
 	}
@@ -112,13 +102,7 @@ func InitMaintenanceDatabaseConfig() {
 func CloseDatabasePools() {
 	handles := []*gorm.DB{global.APIDb, global.WorkerDb, global.MaintenanceDb}
 	for _, db := range handles {
-		if db == nil {
-			continue
-		}
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
+		_ = CloseDatabase(db)
 	}
 	global.Db = nil
 	global.APIDb = nil
@@ -126,24 +110,15 @@ func CloseDatabasePools() {
 	global.MaintenanceDb = nil
 }
 
-func openRuntimeDatabaseHandles(dsn, role string, pools DatabasePoolAllocation) (*gorm.DB, *gorm.DB, error) {
-	var apiDB, workerDB *gorm.DB
-	if role == RuntimeRoleAPI || role == RuntimeRoleAll {
-		db, err := openAPIDatabase(dsn, pools.API)
-		if err != nil {
-			return nil, nil, fmt.Errorf("open API database: %w", err)
-		}
-		apiDB = db
+func CloseDatabase(db *gorm.DB) error {
+	if db == nil {
+		return nil
 	}
-	if role == RuntimeRoleWorker || role == RuntimeRoleAll {
-		db, err := openWorkerDatabase(dsn, pools.Worker)
-		if err != nil {
-			closeDatabaseHandle(apiDB)
-			return nil, nil, fmt.Errorf("open worker database: %w", err)
-		}
-		workerDB = db
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
 	}
-	return apiDB, workerDB, nil
+	return sqlDB.Close()
 }
 
 func openDatabase(dsn string, options DatabaseOptions) (*gorm.DB, error) {
@@ -260,79 +235,36 @@ func postgresTimeoutMillis(timeout time.Duration) (string, error) {
 	return strconv.FormatInt(int64(millis), 10), nil
 }
 
-func runtimeDatabasePoolAllocation(role string) (DatabasePoolAllocation, error) {
-	if AppConfig == nil {
-		return DatabasePoolAllocation{}, errors.New("application configuration is not initialized")
+func runtimeDatabasePoolOptions(cfg *Config, overrideKey string) (DatabasePoolOptions, error) {
+	if cfg == nil {
+		return DatabasePoolOptions{}, errors.New("application configuration is not initialized")
 	}
-	return allocateDatabasePools(
-		role,
-		AppConfig.Database.MaxOpenConns,
-		AppConfig.Database.MaxIdleconns,
-	)
-}
-
-func allocateDatabasePools(role string, totalOpen, totalIdle int) (DatabasePoolAllocation, error) {
+	totalOpen := cfg.Database.MaxOpenConns
+	totalIdle := cfg.Database.MaxIdleconns
 	if totalOpen <= 0 {
-		return DatabasePoolAllocation{}, errors.New("database max open connection budget must be positive")
+		return DatabasePoolOptions{}, errors.New("database max open connections must be positive")
 	}
 	if totalIdle < 0 {
-		return DatabasePoolAllocation{}, errors.New("database max idle connection budget must not be negative")
+		return DatabasePoolOptions{}, errors.New("database max idle connections must not be negative")
 	}
 	if totalIdle > totalOpen {
 		totalIdle = totalOpen
 	}
-
-	switch role {
-	case RuntimeRoleAPI:
-		apiOpen, err := requestedPoolSize("API_DB_MAX_OPEN_CONNS", totalOpen, totalOpen)
-		if err != nil {
-			return DatabasePoolAllocation{}, err
-		}
-		return DatabasePoolAllocation{API: DatabasePoolOptions{MaxOpenConns: apiOpen, MaxIdleConns: min(totalIdle, apiOpen)}}, nil
-	case RuntimeRoleWorker:
-		workerOpen, err := requestedPoolSize("WORKER_DB_MAX_OPEN_CONNS", totalOpen, totalOpen)
-		if err != nil {
-			return DatabasePoolAllocation{}, err
-		}
-		return DatabasePoolAllocation{Worker: DatabasePoolOptions{MaxOpenConns: workerOpen, MaxIdleConns: min(totalIdle, workerOpen)}}, nil
-	case RuntimeRoleAll:
-		apiOverride, apiSet, err := databasePoolSizeOverride("API_DB_MAX_OPEN_CONNS")
-		if err != nil {
-			return DatabasePoolAllocation{}, err
-		}
-		workerOverride, workerSet, err := databasePoolSizeOverride("WORKER_DB_MAX_OPEN_CONNS")
-		if err != nil {
-			return DatabasePoolAllocation{}, err
-		}
-		apiOpen, workerOpen := 0, 0
-		switch {
-		case apiSet && workerSet:
-			apiOpen, workerOpen = apiOverride, workerOverride
-		case apiSet:
-			apiOpen, workerOpen = apiOverride, totalOpen-apiOverride
-		case workerSet:
-			workerOpen, apiOpen = workerOverride, totalOpen-workerOverride
-		default:
-			apiOpen = (totalOpen*70 + 99) / 100
-			workerOpen = totalOpen - apiOpen
-		}
-		if apiOpen <= 0 || workerOpen <= 0 {
-			return DatabasePoolAllocation{}, errors.New("runtime=all requires positive API and worker database pool sizes")
-		}
-		if apiOpen+workerOpen > totalOpen {
-			return DatabasePoolAllocation{}, fmt.Errorf("API and worker max open connections (%d) exceed total database pool budget (%d)", apiOpen+workerOpen, totalOpen)
-		}
-		idleBudget := min(totalIdle, apiOpen+workerOpen)
-		apiIdle := (idleBudget*apiOpen + (apiOpen+workerOpen)/2) / (apiOpen + workerOpen)
-		apiIdle = min(apiIdle, apiOpen)
-		workerIdle := min(idleBudget-apiIdle, workerOpen)
-		return DatabasePoolAllocation{
-			API:    DatabasePoolOptions{MaxOpenConns: apiOpen, MaxIdleConns: apiIdle},
-			Worker: DatabasePoolOptions{MaxOpenConns: workerOpen, MaxIdleConns: workerIdle},
-		}, nil
-	default:
-		return DatabasePoolAllocation{}, fmt.Errorf("unsupported database runtime role %q", role)
+	maxOpen, err := requestedPoolSize(overrideKey, totalOpen, totalOpen)
+	if err != nil {
+		return DatabasePoolOptions{}, err
 	}
+	return DatabasePoolOptions{MaxOpenConns: maxOpen, MaxIdleConns: min(totalIdle, maxOpen)}, nil
+}
+
+func databaseDSN(cfg *Config) string {
+	if dsn := strings.TrimSpace(os.Getenv("DATABASE_DSN")); dsn != "" {
+		return dsn
+	}
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Database.Dsn
 }
 
 func requestedPoolSize(key string, fallback, totalBudget int) (int, error) {
@@ -359,16 +291,6 @@ func databasePoolSizeOverride(key string) (int, bool, error) {
 		return 0, false, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return value, true, nil
-}
-
-func closeDatabaseHandle(db *gorm.DB) {
-	if db == nil {
-		return
-	}
-	sqlDB, err := db.DB()
-	if err == nil {
-		_ = sqlDB.Close()
-	}
 }
 
 func logDatabaseProfile(role string, db *gorm.DB, pool DatabasePoolOptions) {

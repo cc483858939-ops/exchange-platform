@@ -16,7 +16,7 @@ EX 将内容发布、社交互动、行为采集和个性化推荐串联成完�
 | 异步一致性 | Redis Lua 原子操作、版本化点赞快照、事务 Outbox、Debezium CDC、Consumer Inbox 去重 |
 | 内容与社交 | 统一 Post 模型、短帖与长文、回复与引用、转发、关注、通知、游标分页 |
 | 全栈交互 | Feed 与详情页数据衔接、跨页面互动同步、账号身份隔离、阅读行为采集 |
-| 工程基础 | API / Worker 分角色运行、独立迁移、健康检查、Prometheus / Grafana、分层 CI |
+| 工程基础 | API 与 Worker 独立进程、独立迁移、健康检查、Prometheus / Grafana、分层 CI |
 
 ## 产品功能
 
@@ -128,7 +128,7 @@ flowchart TD
     W --> MET
 ```
 
-同一 Go 应用通过 `APP_RUNTIME_ROLE` 拆分为 `api` 与 `worker`；未设置或设为 `all` 时组合运行。数据库迁移由独立任务执行，API 和 Worker 启动时不执行 `AutoMigrate`。
+API（cmd/api）与 Worker（cmd/worker）是独立可执行进程；本地组合开发通过 Compose 同时启动两个服务。数据库迁移由独立任务执行，API 和 Worker 启动时不执行 AutoMigrate。
 
 `/healthz` 用于存活检查，`/readyz` 检查数据库、schema 兼容性和 Redis 等就绪条件。API 将 Kafka 异常报告为降级；Worker 另外记录流水线状态、消费提交、失败与积压。指标入口为 `/metrics`。
 

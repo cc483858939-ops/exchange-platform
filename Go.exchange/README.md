@@ -15,15 +15,14 @@ Go.exchange is a Go + Gin backend for unified Post publishing, Post reactions, r
 
 Kafka and Kafka UI are present in the local compose file for experiments or future event-driven work, but the current backend request and worker paths mainly use Redis rather than Kafka.
 
-## Runtime Roles
+## Runtime Binaries
 
-The same Go application can run different roles through `APP_RUNTIME_ROLE`:
+The API and background workers run as separate executables and processes:
 
-- `api`: HTTP API only
-- `worker`: background workers only
-- unset or `all`: API and workers in one process
+- API: `cmd/api` (HTTP API, API database, Redis, MinIO, JWT, and Kafka publisher)
+- Worker: `cmd/worker` (worker database, Redis, worker tasks, and worker health server)
 
-Normal local development should use the split `api` and `worker` compose services.
+Local development runs both through the separate `api` and `worker` Compose services.
 
 ## Database Migration
 
@@ -111,7 +110,7 @@ cd D:\code\mf\Go.exchange
 go run ./cmd/gen-jwt-keys --kid local-dev-v1 --out .secrets/jwt
 ```
 
-The Docker development image exposes the generated host files at the paths used by `Dockerfile.dev`. Worker mode does not load JWT configuration.
+The Docker development image exposes the generated host files at the paths used by `Dockerfile.dev`. The Worker executable does not load JWT configuration.
 
 `Go.exchange/.env.example` is a reference template only; root Compose does not load it automatically. When running Compose from `D:\code\mf`, Docker Compose can take overrides from the shell environment, the repository-root `.env`, or an explicit `--env-file`. The `DATABASE_DSN` default in `docker-compose.yml` is used when no override is supplied.
 
@@ -178,21 +177,22 @@ Following and profile-timeline endpoints return {"items":[],"next_cursor":null};
 
 ```text
 Go.exchange/
+|-- cmd/api/           # API runtime executable
+|-- cmd/worker/        # Worker runtime executable
 |-- cmd/migrate/       # one-shot database migration command
-|-- config/            # config loading and runtime dependency initialization
+|-- config/            # side-effect-free config loading and dependency constructors
 |-- consts/            # Redis keys and Lua scripts
 |-- controllers/       # HTTP handlers
 |-- core/              # HTTP server startup and graceful shutdown
 |-- global/            # shared DB, Redis, and MinIO clients
-|-- initialize/        # app initialization and migration runner
+|-- initialize/        # schema validation and migration runner
 |-- metrics/           # Prometheus metrics middleware and handler
 |-- middlewares/       # JWT auth middleware
 |-- models/            # GORM models
 |-- observability/     # Prometheus and Grafana provisioning
 |-- router/            # route registration
-|-- tasks/             # background workers
+|-- tasks/             # Worker background tasks
 |-- utils/             # JWT and utility helpers
-`-- main.go            # API/worker runtime entrypoint
 ```
 
 ## Design Notes

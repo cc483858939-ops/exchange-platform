@@ -12,7 +12,10 @@ import (
 )
 
 func main() {
-	config.LoadConfig()
+	if _, err := config.Load(); err != nil {
+		log.Printf("failed to load application configuration: %v", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

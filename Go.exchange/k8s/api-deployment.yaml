@@ -19,6 +19,7 @@ spec:
         - name: app
           image: your-registry/go-exchange:replace-me
           imagePullPolicy: IfNotPresent
+          command: ["/app/go-exchange-api"]
           envFrom:
             - configMapRef:
                 name: go-exchange-config
@@ -26,9 +27,6 @@ spec:
                 name: go-exchange-runtime-secrets
             - secretRef:
                 name: go-exchange-api-auth-secrets
-          env:
-            - name: APP_RUNTIME_ROLE
-              value: api
           ports:
             - name: http
               containerPort: 3000

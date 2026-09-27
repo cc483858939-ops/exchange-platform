@@ -1,12 +1,45 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"Go.exchange/global"
+
 	"github.com/spf13/viper"
 )
+
+func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(configPath, []byte("app:\n  port: ':3000'\ndatabase:\n  maxopenconns: 4\n  maxidleconns: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	previousConfig := AppConfig
+	previousDB, previousAPIDB, previousWorkerDB := global.Db, global.APIDb, global.WorkerDb
+	previousRedis, previousStorage := global.RedisDB, global.MinioClient
+	global.Db, global.APIDb, global.WorkerDb = nil, nil, nil
+	global.RedisDB, global.MinioClient = nil, nil
+	t.Cleanup(func() {
+		AppConfig = previousConfig
+		global.Db, global.APIDb, global.WorkerDb = previousDB, previousAPIDB, previousWorkerDB
+		global.RedisDB, global.MinioClient = previousRedis, previousStorage
+	})
+
+	cfg, err := loadConfigFrom(configPath)
+	if err != nil {
+		t.Fatalf("load configuration: %v", err)
+	}
+	if cfg.Database.MaxOpenConns != 4 || AppConfig != cfg {
+		t.Fatalf("loaded config was not returned and published: cfg=%+v AppConfig=%p", cfg.Database, AppConfig)
+	}
+	if global.Db != nil || global.APIDb != nil || global.WorkerDb != nil || global.RedisDB != nil || global.MinioClient != nil {
+		t.Fatal("loading config initialized an external resource")
+	}
+}
 
 func TestRecommendationSettingPresenceDetectsExplicitZeroAndFalse(t *testing.T) {
 	v := viper.New()
@@ -128,45 +161,41 @@ func TestTranslationConfigDefaultsAndEnvironmentOverrides(t *testing.T) {
 	}
 }
 
-func TestValidateRuntimeEventingConfigByRole(t *testing.T) {
-	original := AppConfig
-	t.Cleanup(func() { AppConfig = original })
-
-	AppConfig = &Config{Kafka: KafkaConfig{
+func TestValidateEventingConfigByRuntime(t *testing.T) {
+	cfg := &Config{Kafka: KafkaConfig{
 		ActivityEventsTopic:  "activity",
 		ConsumerDLQTopic:     "consumer-dlq",
 		NotificationGroupID:  "notifications",
 		NotificationDLQTopic: "notification-dlq",
 	}}
-	for _, role := range []string{RuntimeRoleAPI, RuntimeRoleWorker, RuntimeRoleAll} {
-		if err := ValidateRuntimeEventingConfig(role); err != nil {
-			t.Fatalf("role=%s error=%v", role, err)
-		}
+	if err := ValidateAPIEventingConfig(cfg); err != nil {
+		t.Fatalf("valid API config error=%v", err)
+	}
+	if err := ValidateWorkerEventingConfig(cfg); err != nil {
+		t.Fatalf("valid Worker config error=%v", err)
 	}
 
-	AppConfig.Kafka.ActivityEventsTopic = ""
-	if err := ValidateRuntimeEventingConfig(RuntimeRoleAPI); err == nil {
+	cfg.Kafka.ActivityEventsTopic = ""
+	if err := ValidateAPIEventingConfig(cfg); err == nil {
 		t.Fatal("API without activity topic must fail")
 	}
-	AppConfig.Kafka.ActivityEventsTopic = "activity"
-	AppConfig.Kafka.ConsumerDLQTopic = ""
-	if err := ValidateRuntimeEventingConfig(RuntimeRoleAPI); err != nil {
+	cfg.Kafka.ActivityEventsTopic = "activity"
+	cfg.Kafka.ConsumerDLQTopic = ""
+	if err := ValidateAPIEventingConfig(cfg); err != nil {
 		t.Fatalf("API should not require consumer DLQ topic: %v", err)
 	}
-	for _, role := range []string{RuntimeRoleWorker, RuntimeRoleAll} {
-		if err := ValidateRuntimeEventingConfig(role); err == nil {
-			t.Fatalf("role=%s without consumer DLQ topic must fail", role)
-		}
+	if err := ValidateWorkerEventingConfig(cfg); err == nil {
+		t.Fatal("Worker without consumer DLQ topic must fail")
 	}
-	AppConfig.Kafka.ConsumerDLQTopic = "consumer-dlq"
-	AppConfig.Kafka.NotificationGroupID = ""
-	if err := ValidateRuntimeEventingConfig(RuntimeRoleWorker); err == nil {
+	cfg.Kafka.ConsumerDLQTopic = "consumer-dlq"
+	cfg.Kafka.NotificationGroupID = ""
+	if err := ValidateWorkerEventingConfig(cfg); err == nil {
 		t.Fatal("worker without notification group must fail")
 	}
-	AppConfig.Kafka.NotificationGroupID = "notifications"
-	AppConfig.Kafka.NotificationDLQTopic = ""
-	if err := ValidateRuntimeEventingConfig(RuntimeRoleAll); err == nil {
-		t.Fatal("all role without notification DLQ must fail")
+	cfg.Kafka.NotificationGroupID = "notifications"
+	cfg.Kafka.NotificationDLQTopic = ""
+	if err := ValidateWorkerEventingConfig(cfg); err == nil {
+		t.Fatal("Worker without notification DLQ must fail")
 	}
 }
 

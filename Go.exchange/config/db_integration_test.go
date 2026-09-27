@@ -7,8 +7,6 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	"Go.exchange/global"
 )
 
 func TestPostgresRuntimeTimeoutsAndCancellation(t *testing.T) {
@@ -176,19 +174,19 @@ func TestPostgresDatabaseTimeoutProfilesAreIsolated(t *testing.T) {
 	}
 	workerDB, err := openWorkerDatabase(dsn, pool)
 	if err != nil {
-		closeDatabaseHandle(apiDB)
+		_ = CloseDatabase(apiDB)
 		t.Fatalf("open worker database: %v", err)
 	}
 	maintenanceDB, err := openMaintenanceDatabase(dsn, pool)
 	if err != nil {
-		closeDatabaseHandle(apiDB)
-		closeDatabaseHandle(workerDB)
+		_ = CloseDatabase(apiDB)
+		_ = CloseDatabase(workerDB)
 		t.Fatalf("open maintenance database: %v", err)
 	}
 	t.Cleanup(func() {
-		closeDatabaseHandle(apiDB)
-		closeDatabaseHandle(workerDB)
-		closeDatabaseHandle(maintenanceDB)
+		_ = CloseDatabase(apiDB)
+		_ = CloseDatabase(workerDB)
+		_ = CloseDatabase(maintenanceDB)
 	})
 
 	apiSQL, err := apiDB.DB()
@@ -304,69 +302,46 @@ func TestPostgresDatabaseTimeoutProfilesAreIsolated(t *testing.T) {
 	}
 }
 
-func TestPostgresRuntimeAllInitializesIndependentAPIsAndWorkerPools(t *testing.T) {
+func TestPostgresExplicitAPIDatabasesUseIndependentPoolAndTimeoutProfiles(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
-		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL runtime=all pool isolation test")
+		t.Skip("set POSTGRES_TEST_DSN to run separate API and Worker database pool test")
 	}
-	t.Setenv("APP_RUNTIME_ROLE", RuntimeRoleAll)
 	t.Setenv("DATABASE_DSN", dsn)
 	t.Setenv("API_DB_STATEMENT_TIMEOUT", "250ms")
 	t.Setenv("API_DB_LOCK_TIMEOUT", "100ms")
 	t.Setenv("WORKER_DB_STATEMENT_TIMEOUT", "500ms")
 	t.Setenv("WORKER_DB_LOCK_TIMEOUT", "500ms")
-	t.Setenv("API_DB_MAX_OPEN_CONNS", "")
-	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "")
-
-	previousConfig := AppConfig
-	previousDB, previousAPIDB, previousWorkerDB := global.Db, global.APIDb, global.WorkerDb
-	AppConfig = &Config{}
-	AppConfig.Database.Dsn = dsn
-	AppConfig.Database.MaxOpenConns = 4
-	AppConfig.Database.MaxIdleconns = 2
-	var openedAPI, openedWorker interface{ DB() (*sql.DB, error) }
-	t.Cleanup(func() {
-		if openedAPI != nil {
-			if db, err := openedAPI.DB(); err == nil {
-				_ = db.Close()
-			}
-		}
-		if openedWorker != nil {
-			if db, err := openedWorker.DB(); err == nil {
-				_ = db.Close()
-			}
-		}
-		global.Db, global.APIDb, global.WorkerDb = previousDB, previousAPIDB, previousWorkerDB
-		AppConfig = previousConfig
-	})
-
-	if err := initDB(); err != nil {
-		t.Fatalf("initialize runtime=all databases: %v", err)
+	t.Setenv("API_DB_MAX_OPEN_CONNS", "4")
+	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "4")
+	cfg := &Config{}
+	cfg.Database.Dsn = dsn
+	cfg.Database.MaxOpenConns = 4
+	cfg.Database.MaxIdleconns = 2
+	apiDB, err := OpenAPIDatabase(cfg)
+	if err != nil {
+		t.Fatalf("open API database: %v", err)
 	}
-	openedAPI, openedWorker = global.APIDb, global.WorkerDb
-	if global.APIDb == nil || global.WorkerDb == nil || global.APIDb == global.WorkerDb {
-		t.Fatal("runtime=all must create distinct API and Worker handles")
+	t.Cleanup(func() { _ = CloseDatabase(apiDB) })
+	workerDB, err := OpenWorkerDatabase(cfg)
+	if err != nil {
+		t.Fatalf("open Worker database: %v", err)
 	}
-	if global.Db != global.APIDb {
-		t.Fatal("global.Db must remain an alias for the API database")
-	}
+	t.Cleanup(func() { _ = CloseDatabase(workerDB) })
 
-	apiSQL, err := global.APIDb.DB()
+	apiSQL, err := apiDB.DB()
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerSQL, err := global.WorkerDb.DB()
+	workerSQL, err := workerDB.DB()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := apiSQL.Stats().MaxOpenConnections; got != 3 {
-		t.Errorf("API max open connections=%d, want 3", got)
+	if got := apiSQL.Stats().MaxOpenConnections; got != 4 {
+		t.Errorf("API max open connections=%d, want 4", got)
 	}
-	if got := workerSQL.Stats().MaxOpenConnections; got != 1 {
-		t.Errorf("worker max open connections=%d, want 1", got)
-	}
-	if apiSQL.Stats().MaxOpenConnections+workerSQL.Stats().MaxOpenConnections > AppConfig.Database.MaxOpenConns {
-		t.Fatal("runtime=all pool caps exceed configured total connection budget")
+	if got := workerSQL.Stats().MaxOpenConnections; got != 4 {
+		t.Errorf("Worker max open connections=%d, want 4 independently", got)
 	}
 	var apiStatement, workerStatement string
 	if err := apiSQL.QueryRowContext(context.Background(), "SHOW statement_timeout").Scan(&apiStatement); err != nil {
@@ -376,7 +351,7 @@ func TestPostgresRuntimeAllInitializesIndependentAPIsAndWorkerPools(t *testing.T
 		t.Fatal(err)
 	}
 	if apiStatement != "250ms" || workerStatement != "500ms" {
-		t.Fatalf("runtime=all statement profiles API=%q worker=%q", apiStatement, workerStatement)
+		t.Fatalf("separate statement profiles API=%q Worker=%q", apiStatement, workerStatement)
 	}
 }
 

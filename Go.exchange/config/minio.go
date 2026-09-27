@@ -3,10 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
-
-	"Go.exchange/global"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -21,8 +18,7 @@ var storageMakeBucket = func(ctx context.Context, client *minio.Client, bucket s
 }
 
 // NewStorageClient creates a MinIO client and makes sure the configured bucket
-// exists. It returns errors to callers that can degrade gracefully, such as
-// operator tooling; production startup continues to use initStorage below.
+// exists. The API composition root owns failure handling.
 func NewStorageClient() (*minio.Client, error) {
 	client, err := minio.New(StorageEndpoint(), &minio.Options{
 		Creds:  credentials.NewStaticV4(StorageAccessKey(), StorageSecretKey(), ""),
@@ -46,14 +42,6 @@ func NewStorageClient() (*minio.Client, error) {
 		}
 	}
 	return client, nil
-}
-
-func initStorage() {
-	client, err := NewStorageClient()
-	if err != nil {
-		log.Fatalf("Failed to initialize MinIO storage, got error:%v", err)
-	}
-	global.MinioClient = client
 }
 
 func isBucketAlreadyExistsError(err error) bool {

@@ -27,7 +27,7 @@ services:
 
   api:
     <<: *go-service
-    command: ["go", "run", "main.go"]
+    command: ["go", "run", "./cmd/api"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -36,7 +36,6 @@ services:
       kafka:
         condition: service_started
     environment:
-      APP_RUNTIME_ROLE: api
       RECOMMENDATION_TELEMETRY_ENABLED: ${RECOMMENDATION_TELEMETRY_ENABLED:-false}
       RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT: ${RECOMMENDATION_TELEMETRY_ROLLOUT_PERCENT:-0}
       RECOMMENDATION_TELEMETRY_SIGNING_KEY: ${RECOMMENDATION_TELEMETRY_SIGNING_KEY:-}
@@ -48,7 +47,7 @@ services:
 
   worker:
     <<: *go-service
-    command: ["go", "run", "main.go"]
+    command: ["go", "run", "./cmd/worker"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -57,7 +56,6 @@ services:
       kafka:
         condition: service_started
     environment:
-      APP_RUNTIME_ROLE: worker
       LIKE_BEHAVIOR_BATCH_SIZE: ${LIKE_BEHAVIOR_BATCH_SIZE:-500}
       LIKE_BEHAVIOR_CLAIM_LEASE: ${LIKE_BEHAVIOR_CLAIM_LEASE:-30s}
       LIKE_BEHAVIOR_FLUSH_INTERVAL: ${LIKE_BEHAVIOR_FLUSH_INTERVAL:-1s}

@@ -1,17 +1,11 @@
 package config
 
 import (
-	"Go.exchange/global"
-	"log"
-
 	"github.com/go-redis/redis/v7"
 )
 
-func InitRedis() { initRedis() }
-
-// NewRedisClient connects and verifies Redis without terminating the process.
-// CLI tooling uses this best-effort path; production startup continues to use
-// initRedis below and retains its existing fatal-on-failure behavior.
+// NewRedisClient connects and verifies Redis. Runtime composition roots own
+// failure handling and closing the returned client.
 func NewRedisClient() (*redis.Client, error) {
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:         RedisAddr(),
@@ -26,12 +20,4 @@ func NewRedisClient() (*redis.Client, error) {
 		return nil, err
 	}
 	return redisClient, nil
-}
-
-func initRedis() {
-	redisClient, err := NewRedisClient()
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis, got error:%v", err)
-	}
-	global.RedisDB = redisClient
 }

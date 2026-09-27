@@ -41,7 +41,7 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	}
 	port := config.AppPort()
 	readiness := runtimehealth.NewAPIReadiness(runtimehealth.APIOptions{
-		Role:                  config.RuntimeRoleAPI,
+		Role:                  "api",
 		RequiredSchemaVersion: initialize.RequiredSchemaVersion,
 		EmbeddingEnabled:      config.AppConfig != nil && config.AppConfig.Embedding.Enabled,
 	})

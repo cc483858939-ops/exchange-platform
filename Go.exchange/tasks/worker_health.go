@@ -28,6 +28,9 @@ var recommendationMetricsConsumers atomic.Int32
 var likeSnapshotConsumers atomic.Int32
 var likeEventRelayRunning atomic.Bool
 var likeBehaviorRelayWorkers atomic.Int32
+
+const workerReadinessRole = "worker"
+
 var likeSnapshotRelayRunning atomic.Bool
 
 const (
@@ -82,7 +85,7 @@ var workerLastTransitionKey string
 
 func init() {
 	workerSnapshot.Store(runtimehealth.WorkerReadinessSnapshot{
-		Status: "not_ready", Role: config.RuntimeRoleWorker,
+		Status: "not_ready", Role: workerReadinessRole,
 		Checks:      map[string]string{"database": "not_checked", "schema": "not_checked", "redis": "not_checked", "kafka": "not_checked"},
 		Pipelines:   map[string]runtimehealth.WorkerPipelineSnapshot{},
 		ReasonCodes: []string{"readiness_snapshot_stale"},
@@ -153,7 +156,7 @@ func startWorkerReadinessProbe(ctx context.Context, wg interface {
 			case <-ctx.Done():
 				workerReady.Store(false)
 				storeWorkerSnapshot(runtimehealth.WorkerReadinessSnapshot{
-					Status: "not_ready", Role: config.RuntimeRoleWorker,
+					Status: "not_ready", Role: workerReadinessRole,
 					Checks:    map[string]string{"database": "not_checked", "schema": "not_checked", "redis": "not_checked", "kafka": "not_checked"},
 					Pipelines: pipelineSnapshots(), ReasonCodes: []string{"shutting_down"}, EvaluatedAt: time.Now().UTC(),
 				})
@@ -178,7 +181,7 @@ func WorkerReadinessSnapshot() runtimehealth.WorkerReadinessSnapshot {
 func MarkWorkerShuttingDown() {
 	workerShuttingDown.Store(true)
 	storeWorkerSnapshot(runtimehealth.WorkerReadinessSnapshot{
-		Status: "not_ready", Role: config.RuntimeRoleWorker,
+		Status: "not_ready", Role: workerReadinessRole,
 		Checks:    map[string]string{"database": "not_checked", "schema": "not_checked", "redis": "not_checked", "kafka": "not_checked"},
 		Pipelines: pipelineSnapshots(), ReasonCodes: []string{"shutting_down"}, EvaluatedAt: time.Now().UTC(),
 	})
@@ -464,7 +467,7 @@ func evaluateWorkerReadiness(ctx context.Context) {
 		status = "not_ready"
 	}
 	snapshot := runtimehealth.WorkerReadinessSnapshot{
-		Status: status, Role: config.RuntimeRoleWorker, Checks: statuses,
+		Status: status, Role: workerReadinessRole, Checks: statuses,
 		Pipelines: pipelineSnapshots(), ReasonCodes: uniqueReasons(reasons), EvaluatedAt: now,
 	}
 	if workerShuttingDown.Load() {
@@ -599,12 +602,12 @@ func pipelineSnapshots() map[string]runtimehealth.WorkerPipelineSnapshot {
 func storeWorkerSnapshot(snapshot runtimehealth.WorkerReadinessSnapshot) {
 	previous := workerSnapshot.Load().(runtimehealth.WorkerReadinessSnapshot)
 	workerSnapshot.Store(cloneWorkerSnapshot(snapshot))
-	metrics.SetRuntimeReadinessLastEvaluation(config.RuntimeRoleWorker, snapshot.EvaluatedAt)
+	metrics.SetRuntimeReadinessLastEvaluation(workerReadinessRole, snapshot.EvaluatedAt)
 	for check, status := range snapshot.Checks {
-		metrics.SetRuntimeReadiness(config.RuntimeRoleWorker, check, status == "ok")
+		metrics.SetRuntimeReadiness(workerReadinessRole, check, status == "ok")
 	}
 	if snapshot.Status == "ready" {
-		metrics.SetRuntimeReadinessLastSuccess(config.RuntimeRoleWorker, snapshot.EvaluatedAt)
+		metrics.SetRuntimeReadinessLastSuccess(workerReadinessRole, snapshot.EvaluatedAt)
 	}
 	transitionKey := snapshot.Status + ":" + strings.Join(snapshot.ReasonCodes, ",")
 	workerReadinessTransitionMu.Lock()
@@ -612,8 +615,8 @@ func storeWorkerSnapshot(snapshot runtimehealth.WorkerReadinessSnapshot) {
 	workerLastTransitionKey = transitionKey
 	workerReadinessTransitionMu.Unlock()
 	if previousKey != "" && previousKey != transitionKey {
-		metrics.RecordRuntimeReadinessTransition(config.RuntimeRoleWorker, previous.Status, snapshot.Status, strings.Join(snapshot.ReasonCodes, ","))
-		log.Printf("[Readiness:%s] %s -> %s", config.RuntimeRoleWorker, previous.Status, snapshot.Status)
+		metrics.RecordRuntimeReadinessTransition(workerReadinessRole, previous.Status, snapshot.Status, strings.Join(snapshot.ReasonCodes, ","))
+		log.Printf("[Readiness:%s] %s -> %s", workerReadinessRole, previous.Status, snapshot.Status)
 	}
 }
 

@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
 	"strings"
 
@@ -341,32 +341,26 @@ func BuildEmbeddingVersion() string {
 	return DefaultBuildEmbeddingVersion
 }
 
-func InitConfig() {
-	LoadConfig()
-	InitDB()
-	initRedis()
-	initStorage()
+func Load() (*Config, error) {
+	return loadConfigFrom("./config/config.yml")
 }
 
-func InitDatabaseConfig() {
-	LoadConfig()
-	InitDB()
-}
-
-func LoadConfig() {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yml")
-	viper.AddConfigPath("./config")
-	if err := viper.ReadInConfig(); err != nil {
-		log.Fatalf("Error reading config file: %v", err)
+func loadConfigFrom(path string) (*Config, error) {
+	reader := viper.New()
+	reader.SetConfigType("yml")
+	reader.SetConfigFile(path)
+	if err := reader.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("read application config: %w", err)
 	}
-	AppConfig = &Config{}
-	if err := viper.Unmarshal(AppConfig); err != nil {
-		log.Fatalf("Unable to decode into struct: %v", err)
+	cfg := &Config{}
+	if err := reader.Unmarshal(cfg); err != nil {
+		return nil, fmt.Errorf("decode application config: %w", err)
 	}
-	AppConfig.RecommendationPresence = recommendationSettingPresence(viper.GetViper())
-	applySensitiveEnvironmentOverrides(AppConfig)
-	AppConfig.Translation = AppConfig.Translation.Normalized()
+	cfg.RecommendationPresence = recommendationSettingPresence(reader)
+	applySensitiveEnvironmentOverrides(cfg)
+	cfg.Translation = cfg.Translation.Normalized()
+	AppConfig = cfg
+	return cfg, nil
 }
 
 func applySensitiveEnvironmentOverrides(cfg *Config) {
@@ -496,10 +490,4 @@ func parsePositiveInt(raw string) int {
 		value = value*10 + int(r-'0')
 	}
 	return value
-}
-
-func InitDB() {
-	if err := initDB(); err != nil {
-		log.Fatalf("failed to initialize database: %v", err)
-	}
 }

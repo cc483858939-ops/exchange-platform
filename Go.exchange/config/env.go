@@ -11,52 +11,30 @@ import (
 	"time"
 )
 
-const (
-	RuntimeRoleAll    = "all"
-	RuntimeRoleAPI    = "api"
-	RuntimeRoleWorker = "worker"
-)
-
-func RuntimeRole() string {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("APP_RUNTIME_ROLE")))
-	switch role {
-	case "", RuntimeRoleAll:
-		return RuntimeRoleAll
-	case RuntimeRoleAPI:
-		return RuntimeRoleAPI
-	case RuntimeRoleWorker:
-		return RuntimeRoleWorker
-	default:
-		return RuntimeRoleAll
-	}
-}
-
-// ValidateRuntimeEventingConfig fails before a process can accept authoritative
-// mutations while its required durable activity path is unavailable.
-func ValidateRuntimeEventingConfig(role string) error {
-	if AppConfig == nil {
+// ValidateAPIEventingConfig fails before the API accepts mutations when its
+// durable activity path is unavailable.
+func ValidateAPIEventingConfig(cfg *Config) error {
+	if cfg == nil {
 		return errors.New("application configuration is not initialized")
 	}
-	role = strings.ToLower(strings.TrimSpace(role))
-	if role == "" {
-		role = RuntimeRoleAll
-	}
-	if role != RuntimeRoleAPI && role != RuntimeRoleWorker && role != RuntimeRoleAll {
-		role = RuntimeRoleAll
-	}
-	if strings.TrimSpace(AppConfig.Kafka.ActivityEventsTopic) == "" {
+	if strings.TrimSpace(cfg.Kafka.ActivityEventsTopic) == "" {
 		return errors.New("Kafka activity events topic is not configured")
 	}
-	if role == RuntimeRoleWorker || role == RuntimeRoleAll {
-		if strings.TrimSpace(AppConfig.Kafka.ConsumerDLQTopic) == "" {
-			return errors.New("Kafka consumer DLQ topic is not configured")
-		}
-		if strings.TrimSpace(AppConfig.Kafka.NotificationGroupID) == "" {
-			return errors.New("Kafka notification consumer group is not configured")
-		}
-		if strings.TrimSpace(AppConfig.Kafka.NotificationDLQTopic) == "" {
-			return errors.New("Kafka notification DLQ topic is not configured")
-		}
+	return nil
+}
+
+func ValidateWorkerEventingConfig(cfg *Config) error {
+	if err := ValidateAPIEventingConfig(cfg); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.Kafka.ConsumerDLQTopic) == "" {
+		return errors.New("Kafka consumer DLQ topic is not configured")
+	}
+	if strings.TrimSpace(cfg.Kafka.NotificationGroupID) == "" {
+		return errors.New("Kafka notification consumer group is not configured")
+	}
+	if strings.TrimSpace(cfg.Kafka.NotificationDLQTopic) == "" {
+		return errors.New("Kafka notification DLQ topic is not configured")
 	}
 	return nil
 }

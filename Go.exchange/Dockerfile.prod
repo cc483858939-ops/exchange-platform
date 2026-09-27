@@ -11,7 +11,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange ./main.go \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-api ./cmd/api \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-worker ./cmd/worker \
     && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-migrate ./cmd/migrate \
     && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-kafka-init ./cmd/kafka-init \
     && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/go-exchange-cdc-init ./cmd/cdc-init \
@@ -26,7 +27,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=builder /out/go-exchange /app/go-exchange
+COPY --from=builder /out/go-exchange-api /app/go-exchange-api
+COPY --from=builder /out/go-exchange-worker /app/go-exchange-worker
 COPY --from=builder /out/go-exchange-migrate /app/go-exchange-migrate
 COPY --from=builder /out/go-exchange-kafka-init /app/go-exchange-kafka-init
 COPY --from=builder /out/go-exchange-cdc-init /app/go-exchange-cdc-init
@@ -35,5 +37,3 @@ COPY --from=builder /out/go-exchange-devdata /app/go-exchange-devdata
 COPY config /app/config
 
 EXPOSE 3000
-
-ENTRYPOINT ["/app/go-exchange"]
