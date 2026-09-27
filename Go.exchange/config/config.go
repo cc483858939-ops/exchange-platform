@@ -138,10 +138,14 @@ type RecommendationExplorationConfig struct {
 }
 
 type RecommendationTraceConfig struct {
-	ResultRetentionDays  int `mapstructure:"result_retention_days"`
-	RequestRetentionDays int `mapstructure:"request_retention_days"`
-	CleanupIntervalHours int `mapstructure:"cleanup_interval_hours"`
-	CleanupBatchSize     int `mapstructure:"cleanup_batch_size"`
+	ResultRetentionDays    int `mapstructure:"result_retention_days"`
+	RequestRetentionDays   int `mapstructure:"request_retention_days"`
+	CleanupIntervalHours   int `mapstructure:"cleanup_interval_hours"`
+	CleanupBatchSize       int `mapstructure:"cleanup_batch_size"`
+	PersistTimeoutMS       int `mapstructure:"persist_timeout_ms"`
+	QueueCapacity          int `mapstructure:"queue_capacity"`
+	WorkerCount            int `mapstructure:"worker_count"`
+	ShutdownDrainTimeoutMS int `mapstructure:"shutdown_drain_timeout_ms"`
 }
 
 type RecommendationCandidateCaps struct {

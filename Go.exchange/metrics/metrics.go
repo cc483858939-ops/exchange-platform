@@ -46,6 +46,10 @@ var (
 	recommendationResultsBySelection             = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_selection_total", Help: "Returned recommendation results by selection mode and exploration reason."}, []string{"mode", "reason"})
 	recommendationServedHistoryFailures          = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_served_history_load_failures_total", Help: "Recommendation served-history load failures."})
 	recommendationTracePersistFailures           = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_persist_failures_total", Help: "Recommendation serving trace persistence failures."})
+	recommendationTraceEnqueue                   = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_enqueue_total", Help: "Recommendation serving trace enqueue outcomes."}, []string{"outcome"})
+	recommendationTraceQueueDepth                = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_recommendation_trace_queue_depth", Help: "Current number of recommendation serving traces waiting in the dispatcher queue."})
+	recommendationTracePersist                   = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_persist_total", Help: "Asynchronous recommendation serving trace persistence outcomes."}, []string{"outcome"})
+	recommendationTracePersistDuration           = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_trace_persist_duration_seconds", Help: "Asynchronous recommendation serving trace persistence duration in seconds.", Buckets: prometheus.DefBuckets})
 	recommendationTraceCleanupFailures           = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_failures_total", Help: "Recommendation serving trace cleanup failures."})
 	recommendationTraceCleanupRows               = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_rows_total", Help: "Recommendation serving trace rows cleaned up."})
 	recommendationProfileLoad                    = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_profile_load_total", Help: "Materialized recommendation profile load outcomes."}, []string{"status"})
@@ -78,7 +82,7 @@ func init() {
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
-		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
+		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceEnqueue, recommendationTraceQueueDepth, recommendationTracePersist, recommendationTracePersistDuration, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
 		translationRequests, translationRequestDuration, translationCacheOperations, translationProviderRequests, translationProviderDuration,
 		rateLimitDecisions, rateLimitErrors,
@@ -99,6 +103,12 @@ func init() {
 	}
 	for _, result := range []string{"success", "error", "lock_skipped"} {
 		recommendationProfileMaterialization.WithLabelValues(result)
+	}
+	for _, outcome := range []string{"queued", "dropped_full", "dropped_stopping"} {
+		recommendationTraceEnqueue.WithLabelValues(outcome)
+	}
+	for _, outcome := range []string{"success", "error", "timeout"} {
+		recommendationTracePersist.WithLabelValues(outcome)
 	}
 }
 
@@ -229,7 +239,31 @@ func AddRecommendationResultsBySelection(mode, reason string, count int) {
 }
 func RecordRecommendationServedHistoryLoadFailure() { recommendationServedHistoryFailures.Inc() }
 func RecordRecommendationTracePersistFailure()      { recommendationTracePersistFailures.Inc() }
-func RecordRecommendationTraceCleanupFailure()      { recommendationTraceCleanupFailures.Inc() }
+func RecordRecommendationTraceEnqueue(outcome string) {
+	switch outcome {
+	case "queued", "dropped_full", "dropped_stopping":
+		recommendationTraceEnqueue.WithLabelValues(outcome).Inc()
+	}
+}
+func SetRecommendationTraceQueueDepth(depth int) {
+	if depth < 0 {
+		depth = 0
+	}
+	recommendationTraceQueueDepth.Set(float64(depth))
+}
+func RecordRecommendationTracePersist(outcome string, duration time.Duration) {
+	switch outcome {
+	case "success", "error", "timeout":
+		recommendationTracePersist.WithLabelValues(outcome).Inc()
+	default:
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	recommendationTracePersistDuration.Observe(duration.Seconds())
+}
+func RecordRecommendationTraceCleanupFailure() { recommendationTraceCleanupFailures.Inc() }
 func AddRecommendationTraceCleanupRows(count int) {
 	if count > 0 {
 		recommendationTraceCleanupRows.Add(float64(count))

@@ -16,7 +16,6 @@ import (
 const (
 	defaultRecommendationLimit = 20
 	maxRecommendationLimit     = 50
-	defaultTracePersistTimeout = 5 * time.Second
 )
 
 var (
@@ -39,9 +38,6 @@ func NewService(dependencies ServiceDependencies, cfg ServiceConfig) (Verificati
 	}
 	if dependencies.Metrics == nil {
 		dependencies.Metrics = NoopMetrics{}
-	}
-	if cfg.TracePersistTimeout <= 0 {
-		cfg.TracePersistTimeout = defaultTracePersistTimeout
 	}
 	cfg.Tracking.SigningKey = append([]byte(nil), cfg.Tracking.SigningKey...)
 	return &RecommendationService{dependencies: dependencies, config: cfg, metrics: dependencies.Metrics}, nil
@@ -104,13 +100,22 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 		service.metrics.AddTrackingResults("tracked", len(result.Tracking))
 		service.metrics.AddTrackingResults("untracked", len(result.Selected)-len(result.Tracking))
 	}
-	service.recordHistory(ctx, request, result.Selected)
+	generationDuration := time.Since(started)
+	service.metrics.ObserveGenerationDuration(result.StrategyID, generationDuration)
+	var traceJob *TracePersistJob
 	if request.Viewer.Kind == ViewerAuthenticated {
-		service.persistTrace(ctx, request, result, started)
+		traceRequest := buildRecommendationRequest(request, result, generationDuration, service.config.Recommendation)
+		traceJob = &TracePersistJob{
+			Request: traceRequest,
+			Results: buildResultTraces(traceRequest, result.Selected, request.Now, service.config.Recommendation),
+		}
+	}
+	service.recordHistory(ctx, request, result.Selected)
+	if traceJob != nil && ctx.Err() == nil && service.dependencies.TraceEnqueuer != nil {
+		service.dependencies.TraceEnqueuer.TryEnqueue(*traceJob)
 	}
 	service.metrics.ObserveCandidateCount(len(result.FreshCandidateSummary.Candidates))
 	service.metrics.ObserveResultCount(len(result.Selected))
-	service.metrics.ObserveGenerationDuration(result.StrategyID, time.Since(started))
 	service.recordResultMetrics(result.Selected)
 	requestOutcome := "success"
 	if len(result.Selected) == 0 {
@@ -437,22 +442,6 @@ func (service *RecommendationService) recordHistory(ctx context.Context, request
 		if err != nil {
 			log.Printf("[Recommendation] guest served-history persist failed: %v", err)
 		}
-	}
-}
-
-func (service *RecommendationService) persistTrace(ctx context.Context, request ServeRequest, result ServeResult, started time.Time) {
-	requestRecord := buildRecommendationRequest(request, result, started, service.config.Recommendation)
-	traces := buildResultTraces(requestRecord, result.Selected, request.Now, service.config.Recommendation)
-	if service.dependencies.Traces == nil {
-		service.metrics.RecordTracePersistFailure()
-		log.Printf("[RecommendationTelemetry] persist serving trace %s: recommendation trace repository is nil", request.RequestID)
-		return
-	}
-	traceCtx, cancel := context.WithTimeout(ctx, service.config.TracePersistTimeout)
-	defer cancel()
-	if err := service.dependencies.Traces.PersistServing(traceCtx, requestRecord, traces); err != nil {
-		service.metrics.RecordTracePersistFailure()
-		log.Printf("[RecommendationTelemetry] persist serving trace %s: %v", request.RequestID, err)
 	}
 }
 

@@ -24,9 +24,19 @@ import (
 	"Go.exchange/translation"
 )
 
-var httpReadinessByServer sync.Map
+const (
+	apiShutdownTimeout       = 10 * time.Second
+	defaultTraceDrainTimeout = 5 * time.Second
+)
 
-func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher) (*http.Server, error) {
+type APIRuntime struct {
+	Server            *http.Server
+	readiness         *runtimehealth.APIReadiness
+	traceDispatcher   recommendation.TraceDispatcher
+	traceDrainTimeout time.Duration
+}
+
+func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher) (_ *APIRuntime, returnErr error) {
 	limiter, err := auth.NewRedisAttemptLimiter(global.RedisDB)
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth rate limiter: %w", err)
@@ -75,9 +85,30 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	}
 	recommendationConfig := recommendation.NormalizeConfig(config.AppConfig.Recommendation, config.AppConfig.RecommendationPresence)
 	servingTimeout := time.Duration(recommendationConfig.ServingTimeoutMS) * time.Millisecond
+	traceRepository, err := recommendation.NewGormTraceRepository(apiDB)
+	if err != nil {
+		return nil, fmt.Errorf("initialize recommendation trace repository: %w", err)
+	}
+	traceDispatcher, err := recommendation.NewAsyncTraceDispatcher(traceRepository, recommendation.NewPrometheusMetrics(), recommendationConfig.Trace)
+	if err != nil {
+		return nil, fmt.Errorf("initialize recommendation trace dispatcher: %w", err)
+	}
+	defer func() {
+		if returnErr == nil {
+			return
+		}
+		cleanupTimeout := time.Duration(recommendationConfig.Trace.ShutdownDrainTimeoutMS) * time.Millisecond
+		if cleanupTimeout <= 0 {
+			cleanupTimeout = defaultTraceDrainTimeout
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+		if err := traceDispatcher.Shutdown(cleanupCtx); err != nil {
+			log.Printf("stop recommendation trace dispatcher after startup failure: %v", err)
+		}
+	}()
 	serviceConfig := recommendation.ServiceConfig{
-		Recommendation:      recommendationConfig,
-		TracePersistTimeout: 5 * time.Second,
+		Recommendation: recommendationConfig,
 		Tracking: recommendation.TrackingConfig{
 			Enabled:        config.RecommendationTelemetryEnabled(),
 			RolloutPercent: config.RecommendationTelemetryRolloutPercent(),
@@ -86,6 +117,7 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 		},
 	}
 	recommendationDependencies.Metrics = recommendation.NewPrometheusMetrics()
+	recommendationDependencies.TraceEnqueuer = traceDispatcher
 	recommendationService, err := recommendation.NewService(recommendationDependencies, serviceConfig)
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation service: %w", err)
@@ -105,14 +137,15 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	}
 	readiness.Start(context.Background())
 	server := newAPIServer(port, handler)
-	httpReadinessByServer.Store(server, readiness)
-	server.RegisterOnShutdown(readiness.Stop)
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Listen: %s\n", err)
 		}
 	}()
-	return server, nil
+	return &APIRuntime{
+		Server: server, readiness: readiness, traceDispatcher: traceDispatcher,
+		traceDrainTimeout: time.Duration(recommendationConfig.Trace.ShutdownDrainTimeoutMS) * time.Millisecond,
+	}, nil
 }
 
 func newAPIServer(addr string, handler http.Handler) *http.Server {
@@ -127,22 +160,56 @@ func newAPIServer(addr string, handler http.Handler) *http.Server {
 	}
 }
 
-func WaitForShutdown(ctx context.Context, cancel context.CancelFunc, server *http.Server, waitGroup *sync.WaitGroup) {
+func WaitForShutdown(ctx context.Context, cancel context.CancelFunc, runtime *APIRuntime, waitGroup *sync.WaitGroup) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	if value, ok := httpReadinessByServer.Load(server); ok {
-		readiness := value.(*runtimehealth.APIReadiness)
-		readiness.MarkShuttingDown()
-		readiness.Stop()
-		httpReadinessByServer.Delete(server)
+	defer signal.Stop(quit)
+	if ctx == nil {
+		<-quit
+	} else {
+		select {
+		case <-quit:
+		case <-ctx.Done():
+		}
 	}
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownAPIRuntime(cancel, runtime, waitGroup)
+}
+
+func shutdownAPIRuntime(cancel context.CancelFunc, runtime *APIRuntime, waitGroup *sync.WaitGroup) {
+	if runtime == nil {
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	if runtime.readiness != nil {
+		runtime.readiness.MarkShuttingDown()
+		runtime.readiness.Stop()
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), apiShutdownTimeout)
 	defer shutdownCancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server forced to shut down: %v", err)
+	if runtime.Server != nil {
+		if err := runtime.Server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP server forced to shut down: %v", err)
+		}
 	}
-	cancel()
+	traceDrainTimeout := runtime.traceDrainTimeout
+	if traceDrainTimeout <= 0 {
+		traceDrainTimeout = defaultTraceDrainTimeout
+	}
+	if runtime.traceDispatcher != nil {
+		traceCtx, traceCancel := context.WithTimeout(context.Background(), traceDrainTimeout)
+		if err := runtime.traceDispatcher.Shutdown(traceCtx); err != nil {
+			log.Printf("recommendation trace dispatcher shutdown timed out: %v", err)
+		}
+		traceCancel()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if waitGroup == nil {
+		return
+	}
 	done := make(chan struct{})
 	go func() {
 		waitGroup.Wait()
@@ -151,7 +218,7 @@ func WaitForShutdown(ctx context.Context, cancel context.CancelFunc, server *htt
 	select {
 	case <-done:
 		log.Println("background tasks stopped")
-	case <-shutdownCtx.Done():
+	case <-time.After(apiShutdownTimeout):
 		log.Println("background task shutdown timed out")
 	}
 }

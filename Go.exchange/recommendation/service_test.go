@@ -170,20 +170,24 @@ func (store *serviceTestHistoryStore) RecordGuestServed(_ context.Context, _ str
 	return store.recordErr
 }
 
-type serviceTestTraceRepository struct {
-	calls   *[]string
-	request models.RecommendationRequest
-	results []models.RecommendationResultTrace
-	err     error
+type serviceTestTraceEnqueuer struct {
+	calls        *[]string
+	job          TracePersistJob
+	result       TraceEnqueueResult
+	enqueueCalls int
 }
 
-func (repository *serviceTestTraceRepository) PersistServing(_ context.Context, request models.RecommendationRequest, results []models.RecommendationResultTrace) error {
-	if repository.calls != nil {
-		*repository.calls = append(*repository.calls, "trace")
+func (enqueuer *serviceTestTraceEnqueuer) TryEnqueue(job TracePersistJob) TraceEnqueueResult {
+	enqueuer.enqueueCalls++
+	if enqueuer.calls != nil {
+		*enqueuer.calls = append(*enqueuer.calls, "trace_enqueue")
 	}
-	repository.request = request
-	repository.results = append([]models.RecommendationResultTrace(nil), results...)
-	return repository.err
+	enqueuer.job = job
+	enqueuer.job.Results = append([]models.RecommendationResultTrace(nil), job.Results...)
+	if enqueuer.result == "" {
+		return TraceEnqueueQueued
+	}
+	return enqueuer.result
 }
 
 func serviceTestConfig() config.RecommendationConfig {
@@ -246,10 +250,11 @@ func TestRecommendationServiceAuthenticatedOwnsServingSequenceAndSideEffects(t *
 		PositiveVector: []float32{1, 0}, ProfileVersion: MaterializedProfileVersion,
 	}}}
 	history := &serviceTestHistoryStore{calls: &calls}
-	traces := &serviceTestTraceRepository{calls: &calls}
+	traces := &serviceTestTraceEnqueuer{calls: &calls}
 	deps := ServiceDependencies{
-		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles, History: history, Traces: traces},
+		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles, History: history},
 		ServingVersions:  serviceTestVersionProvider{version: "post_embedding_v1", calls: &calls},
+		TraceEnqueuer:    traces,
 	}
 	service := newServiceTestService(t, deps, ServiceConfig{Recommendation: serviceTestConfig()})
 	requestID := uuid.NewString()
@@ -259,7 +264,7 @@ func TestRecommendationServiceAuthenticatedOwnsServingSequenceAndSideEffects(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := []string{"version", "history_load_user", "profile", "semantic", "following", "recent", "trending", "hydrate", "author_context", "history_record_user", "trace"}
+	wantCalls := []string{"version", "history_load_user", "profile", "semantic", "following", "recent", "trending", "hydrate", "author_context", "history_record_user", "trace_enqueue"}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("serving calls=%v want=%v", calls, wantCalls)
 	}
@@ -269,8 +274,8 @@ func TestRecommendationServiceAuthenticatedOwnsServingSequenceAndSideEffects(t *
 	if !reflect.DeepEqual(history.lastUserIDs, []uint{1, 2}) {
 		t.Fatalf("recorded history=%v want [1 2]", history.lastUserIDs)
 	}
-	if traces.request.RequestID != requestID || traces.request.CandidateCount != 2 || len(traces.results) != 2 {
-		t.Fatalf("persisted request=%#v traces=%#v", traces.request, traces.results)
+	if traces.job.Request.RequestID != requestID || traces.job.Request.CandidateCount != 2 || len(traces.job.Results) != 2 {
+		t.Fatalf("enqueued request=%#v traces=%#v", traces.job.Request, traces.job.Results)
 	}
 }
 
@@ -392,15 +397,15 @@ func TestRecommendationServiceFallbackReintroducesSoftButNotHardServedUserPosts(
 func TestRecommendationServicePreservesFailuresAndFailOpenPolicies(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	request := ServeRequest{Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 9}, Limit: 1, RequestID: uuid.NewString(), Now: now}
-	newDeps := func(candidateErr, profileErr, historyErr, traceErr error) ServiceDependencies {
+	newDeps := func(candidateErr, profileErr, historyErr error) ServiceDependencies {
 		return ServiceDependencies{
 			DataDependencies: DataDependencies{
 				Candidates: &serviceTestCandidateRepository{recent: []Candidate{testCandidate(1, CandidateSourceRecent)}, loadErr: candidateErr},
 				Profiles:   &serviceTestProfileRepository{loaded: ProfileLoadResult{Profile: Profile{ProfileStatus: ProfileStatusMiss}}, loadErr: profileErr},
 				History:    &serviceTestHistoryStore{loadErr: historyErr, recordErr: errors.New("write unavailable")},
-				Traces:     &serviceTestTraceRepository{err: traceErr},
 			},
 			ServingVersions: serviceTestVersionProvider{version: "post_embedding_v1"},
+			TraceEnqueuer:   &serviceTestTraceEnqueuer{result: TraceEnqueueDroppedFull},
 		}
 	}
 	for _, tc := range []struct {
@@ -413,7 +418,7 @@ func TestRecommendationServicePreservesFailuresAndFailOpenPolicies(t *testing.T)
 		{name: "profile failure", profileErr: context.Canceled, wantErr: context.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			service := newServiceTestService(t, newDeps(tc.candidateErr, tc.profileErr, errors.New("history unavailable"), nil), ServiceConfig{Recommendation: serviceTestConfig()})
+			service := newServiceTestService(t, newDeps(tc.candidateErr, tc.profileErr, errors.New("history unavailable")), ServiceConfig{Recommendation: serviceTestConfig()})
 			_, err := service.Serve(context.Background(), request)
 			if err == nil || err.Error() != tc.wantErr.Error() {
 				t.Fatalf("error=%v want=%v", err, tc.wantErr)
@@ -424,7 +429,7 @@ func TestRecommendationServicePreservesFailuresAndFailOpenPolicies(t *testing.T)
 		})
 	}
 
-	service := newServiceTestService(t, newDeps(nil, nil, errors.New("history unavailable"), errors.New("trace unavailable")), ServiceConfig{Recommendation: serviceTestConfig()})
+	service := newServiceTestService(t, newDeps(nil, nil, errors.New("history unavailable")), ServiceConfig{Recommendation: serviceTestConfig()})
 	result, err := service.Serve(context.Background(), request)
 	if err != nil {
 		t.Fatalf("history and trace failures should be best-effort: %v", err)
@@ -433,7 +438,7 @@ func TestRecommendationServicePreservesFailuresAndFailOpenPolicies(t *testing.T)
 		t.Fatalf("fail-open result=%#v", result)
 	}
 
-	service = newServiceTestService(t, newDeps(nil, nil, context.DeadlineExceeded, nil), ServiceConfig{Recommendation: serviceTestConfig()})
+	service = newServiceTestService(t, newDeps(nil, nil, context.DeadlineExceeded), ServiceConfig{Recommendation: serviceTestConfig()})
 	if _, err := service.Serve(context.Background(), request); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("history deadline was swallowed: %v", err)
 	}

@@ -23,10 +23,6 @@ func NewGormServiceDependencies(db *gorm.DB, redisClient *redis.Client) (Service
 	if err != nil {
 		return ServiceDependencies{}, err
 	}
-	traces, err := NewGormTraceRepository(db)
-	if err != nil {
-		return ServiceDependencies{}, err
-	}
 	var history HistoryStore
 	if redisClient != nil {
 		history, err = NewRedisHistoryStore(redisClient)
@@ -39,7 +35,7 @@ func NewGormServiceDependencies(db *gorm.DB, redisClient *redis.Client) (Service
 		return ServiceDependencies{}, err
 	}
 	return ServiceDependencies{
-		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles, History: history, Traces: traces},
+		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles, History: history},
 		ServingVersions:  versionProvider,
 	}, nil
 }

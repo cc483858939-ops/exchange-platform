@@ -84,9 +84,8 @@ type ServingVersionProvider interface {
 }
 
 type ServiceConfig struct {
-	Recommendation      config.RecommendationConfig
-	TracePersistTimeout time.Duration
-	Tracking            TrackingConfig
+	Recommendation config.RecommendationConfig
+	Tracking       TrackingConfig
 }
 
 type Metrics interface {
@@ -101,22 +100,28 @@ type Metrics interface {
 	AddTrackingResults(status string, count int)
 	RecordHistoryLoadFailure(viewer ViewerKind)
 	RecordTracePersistFailure()
+	RecordTraceEnqueue(result TraceEnqueueResult)
+	SetTraceQueueDepth(depth int)
+	RecordTracePersist(outcome TracePersistOutcome, duration time.Duration)
 	RecordProfileLoad(status string)
 	ObserveProfileAge(age time.Duration)
 }
 
 type NoopMetrics struct{}
 
-func (NoopMetrics) RecordRequest(string, string)                    {}
-func (NoopMetrics) ObserveCandidateCount(int)                       {}
-func (NoopMetrics) ObserveResultCount(int)                          {}
-func (NoopMetrics) ObserveGenerationDuration(string, time.Duration) {}
-func (NoopMetrics) AddRecallCandidates(string, int)                 {}
-func (NoopMetrics) AddResultsBySource(string, int)                  {}
-func (NoopMetrics) AddResultsByClass(string, int)                   {}
-func (NoopMetrics) AddResultsBySelection(string, string, int)       {}
-func (NoopMetrics) AddTrackingResults(string, int)                  {}
-func (NoopMetrics) RecordHistoryLoadFailure(ViewerKind)             {}
-func (NoopMetrics) RecordTracePersistFailure()                      {}
-func (NoopMetrics) RecordProfileLoad(string)                        {}
-func (NoopMetrics) ObserveProfileAge(time.Duration)                 {}
+func (NoopMetrics) RecordRequest(string, string)                          {}
+func (NoopMetrics) ObserveCandidateCount(int)                             {}
+func (NoopMetrics) ObserveResultCount(int)                                {}
+func (NoopMetrics) ObserveGenerationDuration(string, time.Duration)       {}
+func (NoopMetrics) AddRecallCandidates(string, int)                       {}
+func (NoopMetrics) AddResultsBySource(string, int)                        {}
+func (NoopMetrics) AddResultsByClass(string, int)                         {}
+func (NoopMetrics) AddResultsBySelection(string, string, int)             {}
+func (NoopMetrics) AddTrackingResults(string, int)                        {}
+func (NoopMetrics) RecordHistoryLoadFailure(ViewerKind)                   {}
+func (NoopMetrics) RecordTracePersistFailure()                            {}
+func (NoopMetrics) RecordTraceEnqueue(TraceEnqueueResult)                 {}
+func (NoopMetrics) SetTraceQueueDepth(int)                                {}
+func (NoopMetrics) RecordTracePersist(TracePersistOutcome, time.Duration) {}
+func (NoopMetrics) RecordProfileLoad(string)                              {}
+func (NoopMetrics) ObserveProfileAge(time.Duration)                       {}

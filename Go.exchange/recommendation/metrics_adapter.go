@@ -45,6 +45,15 @@ func (PrometheusMetrics) RecordHistoryLoadFailure(viewer ViewerKind) {
 func (PrometheusMetrics) RecordTracePersistFailure() {
 	metrics.RecordRecommendationTracePersistFailure()
 }
+func (PrometheusMetrics) RecordTraceEnqueue(result TraceEnqueueResult) {
+	metrics.RecordRecommendationTraceEnqueue(string(result))
+}
+func (PrometheusMetrics) SetTraceQueueDepth(depth int) {
+	metrics.SetRecommendationTraceQueueDepth(depth)
+}
+func (PrometheusMetrics) RecordTracePersist(outcome TracePersistOutcome, duration time.Duration) {
+	metrics.RecordRecommendationTracePersist(string(outcome), duration)
+}
 func (PrometheusMetrics) RecordProfileLoad(status string) {
 	metrics.RecordRecommendationProfileLoad(status)
 }

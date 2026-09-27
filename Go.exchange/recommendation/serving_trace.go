@@ -7,7 +7,7 @@ import (
 	"Go.exchange/models"
 )
 
-func buildRecommendationRequest(request ServeRequest, result ServeResult, started time.Time, cfg config.RecommendationConfig) models.RecommendationRequest {
+func buildRecommendationRequest(request ServeRequest, result ServeResult, generationDuration time.Duration, cfg config.RecommendationConfig) models.RecommendationRequest {
 	selected := result.Selected
 	candidates := result.FreshCandidateSummary
 	profile := result.Profile
@@ -34,7 +34,7 @@ func buildRecommendationRequest(request ServeRequest, result ServeResult, starte
 		ExplorationResultCount:  exploration.Results,
 		SoftServedFallbackCount: countSelected(selected, func(item SelectedCandidate) bool { return item.Candidate.WasSoftServed }),
 		PersonalizationMode:     result.PersonalizationMode, FallbackReason: result.FallbackReason,
-		GenerationLatencyMS: time.Since(started).Milliseconds(), CreatedAt: request.Now,
+		GenerationLatencyMS: generationDuration.Milliseconds(), CreatedAt: request.Now,
 	}
 }
 

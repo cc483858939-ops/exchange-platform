@@ -113,6 +113,10 @@ recommendation:
     request_retention_days: 90
     cleanup_interval_hours: 6
     cleanup_batch_size: 5000
+    persist_timeout_ms: 5000
+    queue_capacity: 256
+    worker_count: 1
+    shutdown_drain_timeout_ms: 5000
   candidates:
     personalized:
       semantic: 200

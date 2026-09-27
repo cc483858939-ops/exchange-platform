@@ -29,7 +29,11 @@ func DefaultConfig() config.RecommendationConfig {
 			Enabled: true, AuthorWindowSize: 8, MaxSameAuthorInWindow: 2,
 			SemanticDuplicateThreshold: 0.92, SemanticDuplicatePenalty: 1,
 		},
-		Trace: config.RecommendationTraceConfig{ResultRetentionDays: 30, RequestRetentionDays: 90, CleanupIntervalHours: 6, CleanupBatchSize: 5000},
+		Trace: config.RecommendationTraceConfig{
+			ResultRetentionDays: 30, RequestRetentionDays: 90, CleanupIntervalHours: 6, CleanupBatchSize: 5000,
+			PersistTimeoutMS: defaultTracePersistTimeoutMS, QueueCapacity: defaultTraceQueueCapacity,
+			WorkerCount: defaultTraceWorkerCount, ShutdownDrainTimeoutMS: defaultTraceShutdownDrainTimeoutMS,
+		},
 		Candidates: config.RecommendationCandidatesConfig{
 			Personalized: config.RecommendationCandidateCaps{Semantic: 200, Following: 150, Recent: 150, Trending: 150, Merged: 500},
 			ColdStart:    config.RecommendationCandidateCaps{Following: 200, Recent: 200, Trending: 200, Merged: 500},
@@ -192,6 +196,18 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	if set.Trace.CleanupBatchSize > 0 {
 		cfg.Trace.CleanupBatchSize = set.Trace.CleanupBatchSize
 	}
+	if set.Trace.PersistTimeoutMS > 0 {
+		cfg.Trace.PersistTimeoutMS = set.Trace.PersistTimeoutMS
+	}
+	if set.Trace.QueueCapacity > 0 {
+		cfg.Trace.QueueCapacity = set.Trace.QueueCapacity
+	}
+	if set.Trace.WorkerCount > 0 {
+		cfg.Trace.WorkerCount = set.Trace.WorkerCount
+	}
+	if set.Trace.ShutdownDrainTimeoutMS > 0 {
+		cfg.Trace.ShutdownDrainTimeoutMS = set.Trace.ShutdownDrainTimeoutMS
+	}
 	applyCandidateCaps(&cfg.Candidates.Personalized, set.Candidates.Personalized)
 	applyCandidateCaps(&cfg.Candidates.ColdStart, set.Candidates.ColdStart)
 	cfg.ProfileMaterialization = set.ProfileMaterialization.Normalized()
@@ -276,6 +292,18 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	}
 	if cfg.Trace.CleanupBatchSize <= 0 {
 		cfg.Trace.CleanupBatchSize = 5000
+	}
+	if cfg.Trace.PersistTimeoutMS <= 0 {
+		cfg.Trace.PersistTimeoutMS = defaultTracePersistTimeoutMS
+	}
+	if cfg.Trace.QueueCapacity <= 0 {
+		cfg.Trace.QueueCapacity = defaultTraceQueueCapacity
+	}
+	if cfg.Trace.WorkerCount <= 0 {
+		cfg.Trace.WorkerCount = defaultTraceWorkerCount
+	}
+	if cfg.Trace.ShutdownDrainTimeoutMS <= 0 {
+		cfg.Trace.ShutdownDrainTimeoutMS = defaultTraceShutdownDrainTimeoutMS
 	}
 	if cfg.SemanticRecall.RecentWindowDays <= 0 {
 		cfg.SemanticRecall.RecentWindowDays = 7

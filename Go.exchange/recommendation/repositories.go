@@ -164,12 +164,12 @@ type DataDependencies struct {
 	Candidates CandidateRepository
 	Profiles   ProfileRepository
 	History    HistoryStore
-	Traces     TraceRepository
 }
 
 type ServiceDependencies struct {
 	DataDependencies
 	ServingVersions ServingVersionProvider
+	TraceEnqueuer   TraceEnqueuer
 	Metrics         Metrics
 }
 

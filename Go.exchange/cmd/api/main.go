@@ -90,10 +90,10 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var waitGroup sync.WaitGroup
-	server, err := core.StartHttpServer(tokens, publisher)
+	apiRuntime, err := core.StartHttpServer(tokens, publisher)
 	if err != nil {
 		return err
 	}
-	core.WaitForShutdown(ctx, cancel, server, &waitGroup)
+	core.WaitForShutdown(ctx, cancel, apiRuntime, &waitGroup)
 	return nil
 }

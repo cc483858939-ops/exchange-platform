@@ -51,15 +51,31 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	requestID := uuid.NewString()
+	t.Cleanup(func() {
+		db.Unscoped().Where("request_id = ?", requestID).Delete(&models.RecommendationRequest{})
+		db.Unscoped().Where("request_id = ?", requestID).Delete(&models.RecommendationResultTrace{})
+		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostEmbedding{})
+		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
+	})
+	dispatcher, err := NewAsyncTraceDispatcher(traces, NoopMetrics{}, cfg.Trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Trace.ShutdownDrainTimeoutMS)*time.Millisecond)
+		defer cancel()
+		_ = dispatcher.Shutdown(cleanupCtx)
+	})
 	service, err := NewService(ServiceDependencies{
-		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles, Traces: traces},
+		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles},
 		ServingVersions:  serviceTestVersionProvider{version: version},
-	}, ServiceConfig{Recommendation: cfg, TracePersistTimeout: 5 * time.Second})
+		TraceEnqueuer:    dispatcher,
+	}, ServiceConfig{Recommendation: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	requestID := uuid.NewString()
 	result, err := service.Serve(context.Background(), ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: viewer.ID}, Limit: 20, RequestID: requestID, Now: now,
 	})
@@ -72,6 +88,12 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 	if result.StrategyID != RecommendationPersonalizedStrategyID || result.FreshCandidateSummary.RecentCount == 0 || len(result.Selected) == 0 {
 		t.Fatalf("authenticated service result=%#v", result)
 	}
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), time.Duration(cfg.Trace.ShutdownDrainTimeoutMS)*time.Millisecond)
+	if err := dispatcher.Shutdown(drainCtx); err != nil {
+		cancelDrain()
+		t.Fatalf("drain serving trace dispatcher: %v", err)
+	}
+	cancelDrain()
 
 	var persisted int64
 	if err := db.Model(&models.RecommendationRequest{}).Where("request_id = ?", requestID).Count(&persisted).Error; err != nil {
@@ -80,10 +102,4 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 	if persisted != 1 {
 		t.Fatalf("serving trace persisted %d request rows, want 1", persisted)
 	}
-	t.Cleanup(func() {
-		db.Unscoped().Where("request_id = ?", requestID).Delete(&models.RecommendationRequest{})
-		db.Unscoped().Where("request_id = ?", requestID).Delete(&models.RecommendationResultTrace{})
-		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostEmbedding{})
-		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
-	})
 }

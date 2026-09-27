@@ -119,6 +119,42 @@ func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
 	}
 }
 
+func TestHandlerExposesBoundedRecommendationTraceMetrics(t *testing.T) {
+	RecordRecommendationTraceEnqueue("queued")
+	RecordRecommendationTraceEnqueue("dropped_full")
+	RecordRecommendationTraceEnqueue("dropped_stopping")
+	RecordRecommendationTraceEnqueue("request-123")
+	SetRecommendationTraceQueueDepth(4)
+	SetRecommendationTraceQueueDepth(-1)
+	RecordRecommendationTracePersist("success", 20*time.Millisecond)
+	RecordRecommendationTracePersist("error", time.Second)
+	RecordRecommendationTracePersist("timeout", 2*time.Second)
+	RecordRecommendationTracePersist("database error text", time.Second)
+	RecordRecommendationTracePersistFailure()
+
+	r := httptest.NewRecorder()
+	Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := r.Body.String()
+	for _, metric := range []string{
+		`go_exchange_recommendation_trace_enqueue_total{outcome="queued"} `,
+		`go_exchange_recommendation_trace_enqueue_total{outcome="dropped_full"} `,
+		`go_exchange_recommendation_trace_enqueue_total{outcome="dropped_stopping"} `,
+		"go_exchange_recommendation_trace_queue_depth 0",
+		`go_exchange_recommendation_trace_persist_total{outcome="success"} `,
+		`go_exchange_recommendation_trace_persist_total{outcome="error"} `,
+		`go_exchange_recommendation_trace_persist_total{outcome="timeout"} `,
+		"go_exchange_recommendation_trace_persist_duration_seconds_count 3",
+		"go_exchange_recommendation_trace_persist_failures_total ",
+	} {
+		if !strings.Contains(body, metric) {
+			t.Fatalf("metric %q missing from exposition: %s", metric, body)
+		}
+	}
+	if strings.Contains(body, "request-123") || strings.Contains(body, "database error text") {
+		t.Fatalf("unbounded trace label escaped into metrics: %s", body)
+	}
+}
+
 func prometheusMetricValue(t *testing.T, prefix string) float64 {
 	t.Helper()
 	r := httptest.NewRecorder()

@@ -45,6 +45,32 @@ func TestRecommendationServingTimeoutDoesNotChangeRecommendationHashes(t *testin
 	}
 }
 
+func TestRecommendationTraceDispatcherSettingsDefaultAndNormalize(t *testing.T) {
+	defaults := NormalizeConfig(config.RecommendationConfig{}, nil).Trace
+	if defaults.PersistTimeoutMS != 5000 || defaults.QueueCapacity != 256 || defaults.WorkerCount != 1 || defaults.ShutdownDrainTimeoutMS != 5000 {
+		t.Fatalf("trace dispatcher defaults=%#v", defaults)
+	}
+	configured := config.RecommendationConfig{Trace: config.RecommendationTraceConfig{
+		PersistTimeoutMS: 1200, QueueCapacity: 32, WorkerCount: 3, ShutdownDrainTimeoutMS: 2400,
+	}}
+	got := NormalizeConfig(configured, nil).Trace
+	if got.PersistTimeoutMS != 1200 || got.QueueCapacity != 32 || got.WorkerCount != 3 || got.ShutdownDrainTimeoutMS != 2400 {
+		t.Fatalf("normalized trace dispatcher settings=%#v", got)
+	}
+}
+
+func TestRecommendationTraceDispatcherSettingsDoNotChangeRankerHash(t *testing.T) {
+	base := DefaultConfig()
+	changed := base
+	changed.Trace.PersistTimeoutMS = 1200
+	changed.Trace.QueueCapacity = 32
+	changed.Trace.WorkerCount = 3
+	changed.Trace.ShutdownDrainTimeoutMS = 2400
+	if got, want := RankerConfigHash(changed, "post_embedding_v1"), RankerConfigHash(base, "post_embedding_v1"); got != want {
+		t.Fatalf("trace dispatcher settings changed ranker hash: got=%q want=%q", got, want)
+	}
+}
+
 func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.T) {
 	configured := config.Config{}
 
