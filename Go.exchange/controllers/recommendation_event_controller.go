@@ -12,6 +12,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v7"
@@ -213,14 +214,14 @@ func validateRecommendationTelemetryEvent(userID uint, input recommendationEvent
 		return validatedRecommendationEvent{}, "unsupported_event_type"
 	}
 
-	claims, err := verifyRecommendationTrackingToken(strings.TrimSpace(input.TrackingToken), key)
+	claims, err := recommendation.VerifyTrackingToken(strings.TrimSpace(input.TrackingToken), key)
 	if err != nil {
 		return validatedRecommendationEvent{}, "invalid_tracking_token"
 	}
 	if claims.UserID != userID {
 		return validatedRecommendationEvent{}, "user_mismatch"
 	}
-	if claims.Scene != recommendationScene {
+	if claims.Scene != recommendation.RecommendationScene {
 		return validatedRecommendationEvent{}, "unsupported_scene"
 	}
 

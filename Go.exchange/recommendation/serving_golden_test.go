@@ -29,7 +29,7 @@ func TestBalancedPositionsAreDeterministicAndBounded(t *testing.T) {
 
 func TestRecommendationRankerPenalizesNegativeSimilarityWithConfidence(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := normalizedRecommendationConfig()
+	cfg := DefaultConfig()
 	profile := userInterestProfile{NegativeVector: []float32{1, 0}, NegativeConfidence: 1, AuthorAffinity: map[uint]float64{}, FollowingAuthorIDs: map[uint]struct{}{}}
 	candidates := []hydratedRecommendationCandidate{
 		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 1}, Embedding: []float32{0, 1}},
@@ -43,7 +43,7 @@ func TestRecommendationRankerPenalizesNegativeSimilarityWithConfidence(t *testin
 
 func TestRecommendationSelectionUsesFreshThenSoftWithoutDuplicate(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := normalizedRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.OutOfNetworkMinRatio = 0
 	cfg.Diversity.Enabled = false
 	fresh := []hydratedRecommendationCandidate{{

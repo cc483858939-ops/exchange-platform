@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/config"
 	"Go.exchange/recommendation"
 )
 
@@ -34,7 +33,7 @@ func TestParseRecommendationAcceptLanguageRejectsUnsupportedAndInvalidRanges(t *
 		"zh;q=1.1, ja;q=-0.1, en;q=NaN",
 		"zh;q=0, ja;q=0, en;q=0",
 	} {
-		if got := parseRecommendationAcceptLanguage(raw); got != (recommendationLanguagePrior{}) {
+		if got := parseRecommendationAcceptLanguage(raw); got != (recommendation.LanguagePrior{}) {
 			t.Fatalf("raw=%q prior=%#v want zero", raw, got)
 		}
 	}
@@ -47,29 +46,11 @@ func TestParseRecommendationAcceptLanguageRejectsUnsupportedAndInvalidRanges(t *
 }
 
 func TestParseRecommendationAcceptLanguageIsBounded(t *testing.T) {
-	if got := parseRecommendationAcceptLanguage(strings.Repeat("fr-FR,", 200) + "zh"); got != (recommendationLanguagePrior{}) {
+	if got := parseRecommendationAcceptLanguage(strings.Repeat("fr-FR,", 200) + "zh"); got != (recommendation.LanguagePrior{}) {
 		t.Fatalf("overlong header unexpectedly found a language: %#v", got)
 	}
-	if got := parseRecommendationAcceptLanguage(strings.Repeat("fr-FR,", recommendationAcceptLanguageMaxRanges) + ",zh"); got != (recommendationLanguagePrior{}) {
+	if got := parseRecommendationAcceptLanguage(strings.Repeat("fr-FR,", recommendationAcceptLanguageMaxRanges) + ",zh"); got != (recommendation.LanguagePrior{}) {
 		t.Fatalf("language after range cap unexpectedly found: %#v", got)
-	}
-}
-
-func TestNormalizedRecommendationLanguageAffinityConfigHonorsExplicitZeroAndFalse(t *testing.T) {
-	original := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = original })
-	config.AppConfig = &config.Config{
-		Recommendation: config.RecommendationConfig{LanguageAffinity: config.RecommendationLanguageAffinityConfig{Weight: 0, EvidenceSaturationScale: 0, MaxBehaviorShare: 0}},
-		RecommendationPresence: map[string]bool{
-			"language_affinity.enabled":                   true,
-			"language_affinity.weight":                    true,
-			"language_affinity.evidence_saturation_scale": true,
-			"language_affinity.max_behavior_share":        true,
-		},
-	}
-	got := normalizedRecommendationConfig().LanguageAffinity
-	if got.Enabled || got.Weight != 0 || got.MaxBehaviorShare != 0 || got.EvidenceSaturationScale != 5 {
-		t.Fatalf("normalized explicit settings=%#v", got)
 	}
 }
 
@@ -77,10 +58,7 @@ func TestRecommendationHandlerParsesBrowserLanguageWithoutLeakingIt(t *testing.T
 	service := &fakeRecommendationService{result: recommendation.ServeResult{
 		RequestID: "language-request", Now: time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC),
 	}}
-	handler, err := NewRecommendationHandler(service, nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newRecommendationHandlerForTest(t, service, &fakeRecommendationResponseMapper{}, 0)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
 	ctx.Set("user_id", uint(7))
 	ctx.Request.Header.Set("Accept-Language", "ja-JP, en-US;q=0.2, zh;q=0")

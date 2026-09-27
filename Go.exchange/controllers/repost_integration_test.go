@@ -11,6 +11,7 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -325,7 +326,11 @@ func TestPublicPostRepostCountsHydrateTimelineRecommendationsAndRepliesIntegrati
 	if err := preloadPostAuthor(publicPostScope(db.Model(&models.Post{}), time.Now().UTC())).First(&rootWithAuthor, root.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	recommendations, err := selectedRecommendationResponsesFromDB(db, []selectedRecommendation{{Post: rootWithAuthor}}, time.Now().UTC())
+	responseMapper, err := NewGormRecommendationResponseMapper(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recommendations, err := responseMapper.Map(context.Background(), []recommendation.SelectedCandidate{{Post: rootWithAuthor}}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

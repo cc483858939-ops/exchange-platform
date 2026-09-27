@@ -16,7 +16,7 @@ func assertDomainLanguageFloat(t *testing.T, got, want float64) {
 }
 
 func TestRecommendationLanguageContextBlendsAndCapsBehaviorEvidence(t *testing.T) {
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	browser := LanguageContext{Browser: LanguagePrior{ZH: 1}, BrowserPrimary: "zh"}
 	behavior := LanguagePrior{JA: 1}
 	context := BuildLanguageContext(browser, behavior, 5, testRankingConfig(cfg).Language)
@@ -57,7 +57,7 @@ func TestRecommendationLanguageContextSanitizesMaterializedProfileValues(t *test
 
 func TestRecommendationRankerAppliesOnlyBoundedPositiveLanguageComponent(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	languageContext := LanguageContext{Combined: LanguagePrior{ZH: .8, EN: .2}}
 	ranked := RankCandidates(ProfileFeatures{}, []RankedCandidate{
 		{Post: models.Post{Language: "en"}},
@@ -85,7 +85,7 @@ func TestRecommendationRankerAppliesOnlyBoundedPositiveLanguageComponent(t *test
 
 func TestRecommendationLanguageBonusDoesNotBeatStrongSemanticSignal(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	ranked := RankCandidates(ProfileFeatures{PositiveVector: []float32{1, 0}}, []RankedCandidate{
 		{Post: models.Post{Language: "en"}, Embedding: []float32{1, 0}},
 		{Post: models.Post{Language: "zh"}, Embedding: []float32{0, 1}},

@@ -11,7 +11,6 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/models"
-	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -33,19 +32,10 @@ func TestLoadPostReferencePropagatesDatabaseInitializationError(t *testing.T) {
 	}
 }
 
-func TestSelectedRecommendationResponsesPropagatesReferenceHydrationError(t *testing.T) {
-	quoteID := uint(99)
-	_, err := selectedRecommendationResponsesFromDB(nil, []recommendation.SelectedCandidate{{
-		Post: models.Post{
-			Model:       gorm.Model{ID: 1},
-			AuthorID:    7,
-			Author:      models.User{Model: gorm.Model{ID: 7}},
-			Language:    "und",
-			QuotePostID: &quoteID,
-		},
-	}}, time.Now().UTC())
+func TestGormRecommendationResponseMapperRequiresDB(t *testing.T) {
+	_, err := NewGormRecommendationResponseMapper(nil)
 	if err == nil {
-		t.Fatal("expected recommendation response hydration error")
+		t.Fatal("expected mapper constructor to reject nil database")
 	}
 }
 

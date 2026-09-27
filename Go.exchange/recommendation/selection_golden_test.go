@@ -12,7 +12,7 @@ import (
 
 func TestRecommendationSelectionUsesStrictFallbackBeforeAuthorRelaxation(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.Enabled = true
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
@@ -31,7 +31,7 @@ func TestRecommendationSelectionUsesStrictFallbackBeforeAuthorRelaxation(t *test
 
 func TestRecommendationSelectionUsesStrictOutOfNetworkFallbackBeforeAuthorRelaxation(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
 	cfg.OutOfNetworkMinRatio = 0.5
@@ -49,7 +49,7 @@ func TestRecommendationSelectionUsesStrictOutOfNetworkFallbackBeforeAuthorRelaxa
 
 func TestRecommendationSelectionRelaxesAuthorAfterStrictPoolsExhausted(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.Enabled = true
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 1
@@ -91,7 +91,7 @@ func TestExplorationPositionsVaryAcrossFixedRequestIDs(t *testing.T) {
 
 func TestRecommendationStrictExplorationRespectsAuthorWindow(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.Enabled = true
 	cfg.Diversity.AuthorWindowSize = 8
 	cfg.Diversity.MaxSameAuthorInWindow = 2
@@ -111,7 +111,7 @@ func TestRecommendationStrictExplorationRespectsAuthorWindow(t *testing.T) {
 
 func TestRecommendationStrictExplorationDoesNotRelaxAuthorWindow(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.Ratio = .5
 	cfg.Exploration.MaxSlots = 2
 	cfg.OutOfNetworkMinRatio = 0
@@ -151,7 +151,7 @@ func TestRecommendationStrictExplorationDoesNotRelaxAuthorWindow(t *testing.T) {
 
 func TestRecommendationExplorationPrefersOutOfNetworkAtOutPreferredPosition(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.Enabled = false
 	inNetwork := makeExplorationTestCandidate(now, 1, 100, 1, true, false)
 	inNetwork.IsInNetwork = true
@@ -165,7 +165,7 @@ func TestRecommendationExplorationPrefersOutOfNetworkAtOutPreferredPosition(t *t
 
 func TestRecommendationExplorationFallsBackToAnyStrictCandidate(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.Enabled = false
 	inNetwork := makeExplorationTestCandidate(now, 1, 1, .5, true, false)
 	inNetwork.IsInNetwork = true
@@ -177,7 +177,7 @@ func TestRecommendationExplorationFallsBackToAnyStrictCandidate(t *testing.T) {
 
 func TestRecommendationExplorationFallsBackToNormalWithoutUnderfill(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.Ratio = .34
 	cfg.Exploration.MaxSlots = 1
 	cfg.OutOfNetworkMinRatio = 1

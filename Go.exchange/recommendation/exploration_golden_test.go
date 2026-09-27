@@ -27,7 +27,7 @@ func TestRecommendationExplorationTargetUsesRatioCapAndDisablement(t *testing.T)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := defaultRecommendationConfig()
+			cfg := DefaultConfig()
 			cfg.Exploration.Ratio = tc.ratio
 			cfg.Exploration.MaxSlots = tc.slots
 			if got := recommendationExplorationTarget(tc.limit, cfg); got != tc.want {
@@ -71,7 +71,7 @@ func TestExplorationPositionsAreDeterministicInteriorBiasedAndBounded(t *testing
 
 func TestRecommendationExplorationReasonsUseRecentAndNovelAgeCutoffs(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.RecentWindowDays = 7
 	cfg.Exploration.NovelPostMaxAgeDays = 30
 	makeCandidate := func(id uint, ageDays float64, recent, novel bool) hydratedRecommendationCandidate {
@@ -105,7 +105,7 @@ func TestRecommendationExplorationReasonsUseRecentAndNovelAgeCutoffs(t *testing.
 
 func TestRecommendationExplorationSemanticUsesMaterializedVectorsAndSafeInputs(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.NegativeSemanticWeight = 1.5
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}, NegativeVector: []float32{1, 0}, NegativeConfidence: 1}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
@@ -130,7 +130,7 @@ func TestRecommendationExplorationSemanticUsesMaterializedVectorsAndSafeInputs(t
 }
 
 func TestRecommendationSemanticDuplicatePredicateIsIndependentOfPenalty(t *testing.T) {
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.SemanticDuplicatePenalty = 0
 	selected := []selectedRecommendation{{Embedding: []float32{1, 0}}}
 	candidate := hydratedRecommendationCandidate{Embedding: []float32{1, 0}}
@@ -152,7 +152,7 @@ func TestRecommendationSemanticDuplicatePredicateIsIndependentOfPenalty(t *testi
 
 func TestRecommendationSelectionRecordsNaturalAndDisplacedExploration(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.Ratio = .34
 	cfg.Exploration.MaxSlots = 1
 	cfg.OutOfNetworkMinRatio = 0
@@ -211,7 +211,7 @@ func makeExplorationTestCandidate(now time.Time, id uint, baseScore, exploration
 
 func TestRecommendationSoftSelectionAppendsRealCandidatesWithoutExploration(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.OutOfNetworkMinRatio = 0
 	cfg.Diversity.Enabled = false
 	initial := []selectedRecommendation{
@@ -246,7 +246,7 @@ func TestRecommendationSoftSelectionAppendsRealCandidatesWithoutExploration(t *t
 
 func TestRecommendationExplorationRecentRequiresRecentRecallProvenance(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	candidate := makeExplorationTestCandidate(now, 1, 1, .5, false, false)
 	candidate.Candidate.FromSemantic = true
 	candidate.Candidate.FromFollowing = true
@@ -258,7 +258,7 @@ func TestRecommendationExplorationRecentRequiresRecentRecallProvenance(t *testin
 
 func TestRecommendationExplorationYoungNonRecentSourcesAreNotEligible(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	for _, source := range []struct {
 		name string
 		set  func(*embeddingCandidate)
@@ -279,7 +279,7 @@ func TestRecommendationExplorationYoungNonRecentSourcesAreNotEligible(t *testing
 
 func TestRecommendationExplorationNovelAuthorIsIndependentFromRecentRecall(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	candidate := makeExplorationTestCandidate(now, 1, 1, .5, false, true)
 	if got := recommendationExplorationReason(candidate, now, cfg); got != recommendationExplorationReasonNovelAuthor {
 		t.Fatalf("novel-author reason=%q want=%q", got, recommendationExplorationReasonNovelAuthor)
@@ -296,7 +296,7 @@ func TestRecommendationExplorationNovelAuthorIsIndependentFromRecentRecall(t *te
 
 func TestRecommendationStrictExplorationRejectsSemanticDuplicatesWhenPenaltyIsZero(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Diversity.Enabled = true
 	cfg.Diversity.SemanticDuplicateThreshold = .8
 	cfg.Diversity.SemanticDuplicatePenalty = 0
@@ -317,7 +317,7 @@ func TestRecommendationStrictExplorationRejectsSemanticDuplicatesWhenPenaltyIsZe
 
 func TestRecommendationDuplicateOnlyExplorationFallsBackToRankedWithoutUnderfill(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.Ratio = .5
 	cfg.Exploration.MaxSlots = 1
 	cfg.OutOfNetworkMinRatio = 0
@@ -344,7 +344,7 @@ func TestRecommendationDuplicateOnlyExplorationFallsBackToRankedWithoutUnderfill
 
 func TestRecommendationExplorationShortageDoesNotUnderfill(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.Ratio = .2
 	cfg.Exploration.MaxSlots = 2
 	cfg.OutOfNetworkMinRatio = 0
@@ -378,7 +378,7 @@ func TestRecommendationExplorationShortageDoesNotUnderfill(t *testing.T) {
 
 func TestRecommendationExplorationDoesNotCarryForwardNaturalOpportunity(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.Ratio = .5
 	cfg.Exploration.MaxSlots = 2
 	cfg.OutOfNetworkMinRatio = 0
@@ -430,7 +430,7 @@ func TestRecommendationExplorationDoesNotCarryForwardNaturalOpportunity(t *testi
 
 func TestRecommendationExplorationCountsOpportunitySeparatelyFromDisplacement(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.Exploration.Ratio = .1
 	cfg.Exploration.MaxSlots = 2
 	cfg.OutOfNetworkMinRatio = 0

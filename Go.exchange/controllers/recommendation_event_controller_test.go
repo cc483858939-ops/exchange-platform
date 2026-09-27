@@ -12,6 +12,7 @@ import (
 
 	"Go.exchange/eventing"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -33,13 +34,13 @@ func allowRecommendationTelemetryTestRateLimit(uint, int) (bool, error) { return
 
 func signTestRecommendationToken(t *testing.T, userID, postID uint, now time.Time, estimated int64, policy string) string {
 	t.Helper()
-	token, err := signRecommendationTrackingClaims(recommendationTrackingClaims{
+	token, err := recommendation.SignTrackingClaims(recommendation.TrackingClaims{
 		UserID: userID, RequestID: uuid.NewString(), PostID: postID, Position: 1,
-		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
-		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		Scene: recommendation.RecommendationScene, RankerVersion: recommendation.RankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendation.RecommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
 		EstimatedReadTimeMS: estimated, ReadPolicyVersion: policy,
-		SelectionMode: string(recommendationResultSelectionRanked),
+		SelectionMode: string(recommendation.SelectionModeRanked),
 	}, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
@@ -169,15 +170,15 @@ func TestValidateRecommendationTelemetryEventRejectsUserMismatch(t *testing.T) {
 func TestValidateRecommendationTelemetryEventCopiesSignedExplorationProvenance(t *testing.T) {
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	key := []byte("0123456789abcdef0123456789abcdef")
-	claims := recommendationTrackingClaims{
+	claims := recommendation.TrackingClaims{
 		UserID: 7, RequestID: uuid.NewString(), PostID: 11, Position: 1,
-		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
-		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		Scene: recommendation.RecommendationScene, RankerVersion: recommendation.RankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendation.RecommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
 		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
-		ExplorationOpportunity: true, SelectionMode: string(recommendationResultSelectionExploration), ExplorationReason: recommendationExplorationReasonRecent,
+		ExplorationOpportunity: true, SelectionMode: string(recommendation.SelectionModeExploration), ExplorationReason: recommendation.ExplorationReasonRecent,
 	}
-	token, err := signRecommendationTrackingClaims(claims, key)
+	token, err := recommendation.SignTrackingClaims(claims, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestValidateRecommendationTelemetryEventCopiesSignedExplorationProvenance(t
 	if reason != "" {
 		t.Fatalf("reason=%q", reason)
 	}
-	if !event.Payload.ExplorationOpportunity || event.Payload.SelectionMode != string(recommendationResultSelectionExploration) || event.Payload.ExplorationReason != recommendationExplorationReasonRecent {
+	if !event.Payload.ExplorationOpportunity || event.Payload.SelectionMode != string(recommendation.SelectionModeExploration) || event.Payload.ExplorationReason != recommendation.ExplorationReasonRecent {
 		t.Fatalf("payload provenance=%#v", event.Payload)
 	}
 }
@@ -195,15 +196,15 @@ func TestValidateRecommendationTelemetryEventCopiesSignedExplorationProvenance(t
 func TestValidateRecommendationTelemetryEventCopiesSignedRankedOpportunity(t *testing.T) {
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	key := []byte("0123456789abcdef0123456789abcdef")
-	claims := recommendationTrackingClaims{
+	claims := recommendation.TrackingClaims{
 		UserID: 7, RequestID: uuid.NewString(), PostID: 11, Position: 1,
-		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
-		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		Scene: recommendation.RecommendationScene, RankerVersion: recommendation.RankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendation.RecommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
 		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
-		ExplorationOpportunity: true, SelectionMode: string(recommendationResultSelectionRanked), ExplorationReason: "",
+		ExplorationOpportunity: true, SelectionMode: string(recommendation.SelectionModeRanked), ExplorationReason: "",
 	}
-	token, err := signRecommendationTrackingClaims(claims, key)
+	token, err := recommendation.SignTrackingClaims(claims, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestValidateRecommendationTelemetryEventCopiesSignedRankedOpportunity(t *te
 	if reason != "" {
 		t.Fatalf("reason=%q", reason)
 	}
-	if !event.Payload.ExplorationOpportunity || event.Payload.SelectionMode != string(recommendationResultSelectionRanked) || event.Payload.ExplorationReason != "" {
+	if !event.Payload.ExplorationOpportunity || event.Payload.SelectionMode != string(recommendation.SelectionModeRanked) || event.Payload.ExplorationReason != "" {
 		t.Fatalf("ranked opportunity payload=%#v", event.Payload)
 	}
 }
@@ -230,22 +231,22 @@ func TestRecommendationEventsHandlerUsesSignedProvenanceAgainstClientFields(t *t
 		recommendationTelemetryNow = originalNow
 	})
 	recommendationTelemetryNow = func() time.Time { return now }
-	claims := recommendationTrackingClaims{
+	claims := recommendation.TrackingClaims{
 		UserID: 7, RequestID: uuid.NewString(), PostID: 11, Position: 1,
-		Scene: recommendationScene, RankerVersion: recommendationRankerVersion,
-		RankerConfigHash: "0123456789ab", StrategyID: recommendationPersonalizedStrategyID,
+		Scene: recommendation.RecommendationScene, RankerVersion: recommendation.RankerVersion,
+		RankerConfigHash: "0123456789ab", StrategyID: recommendation.RecommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
 		EstimatedReadTimeMS: 3000, ReadPolicyVersion: recommendationReadPolicyVersion,
-		ExplorationOpportunity: true, SelectionMode: string(recommendationResultSelectionExploration), ExplorationReason: recommendationExplorationReasonRecent,
+		ExplorationOpportunity: true, SelectionMode: string(recommendation.SelectionModeExploration), ExplorationReason: recommendation.ExplorationReasonRecent,
 	}
-	token, err := signRecommendationTrackingClaims(claims, []byte(key))
+	token, err := recommendation.SignTrackingClaims(claims, []byte(key))
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, err := json.Marshal(map[string]interface{}{"events": []map[string]interface{}{{
 		"event_id": uuid.NewString(), "event_type": models.RecommendationEventTypeImpression,
 		"tracking_token": token, "occurred_at": now.Format(time.RFC3339Nano),
-		"exploration_opportunity": false, "selection_mode": string(recommendationResultSelectionRanked), "exploration_reason": "",
+		"exploration_opportunity": false, "selection_mode": string(recommendation.SelectionModeRanked), "exploration_reason": "",
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +265,7 @@ func TestRecommendationEventsHandlerUsesSignedProvenanceAgainstClientFields(t *t
 	if err := json.Unmarshal(publisher.events[0].Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if !payload.ExplorationOpportunity || payload.SelectionMode != string(recommendationResultSelectionExploration) || payload.ExplorationReason != recommendationExplorationReasonRecent {
+	if !payload.ExplorationOpportunity || payload.SelectionMode != string(recommendation.SelectionModeExploration) || payload.ExplorationReason != recommendation.ExplorationReasonRecent {
 		t.Fatalf("publisher payload used client provenance instead of signed claims: %#v", payload)
 	}
 }

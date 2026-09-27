@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"time"
 
 	"Go.exchange/auth"
@@ -17,19 +18,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, nil, nil, nil, false, translationServices...)
-}
-
-func SetupRouterWithRateLimiter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, nil, nil, true, translationServices...)
-}
-
-func SetupRouterWithRecommendationHandler(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, true, translationServices...)
-}
-
-func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, enableApplicationRateLimit bool, translationServices ...translation.Service) (*gin.Engine, error) {
+func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, translationServices ...translation.Service) (*gin.Engine, error) {
+	if recommendationHandler == nil {
+		return nil, errors.New("recommendation handler is required")
+	}
 	trustedProxies, err := config.TrustedProxyCIDRs()
 	if err != nil {
 		return nil, err
@@ -61,12 +53,9 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	router.GET("/healthz", controllers.Healthz)
 	router.GET("/readyz", controllers.ReadyzWithProvider(readiness))
 	router.GET("/metrics", gin.WrapH(metrics.Handler()))
-	publicRecommendationHandler := gin.HandlerFunc(controllers.GetPublicPostRecommendations)
-	userRecommendationHandler := gin.HandlerFunc(controllers.GetPostRecommendations)
-	if recommendationHandler != nil {
-		publicRecommendationHandler = recommendationHandler.GetPublicPostRecommendations
-		userRecommendationHandler = recommendationHandler.GetPostRecommendations
-	}
+	publicRecommendationHandler := recommendationHandler.GetPublicPostRecommendations
+	userRecommendationHandler := recommendationHandler.GetPostRecommendations
+	enableApplicationRateLimit := applicationLimiter != nil
 
 	authRoutes := router.Group("/api/auth")
 	{

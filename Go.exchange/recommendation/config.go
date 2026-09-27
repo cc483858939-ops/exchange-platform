@@ -1,26 +1,13 @@
-package controllers
+package recommendation
 
 import (
-	"context"
-	"errors"
 	"math"
-	"time"
+	"strings"
 
 	"Go.exchange/config"
-	"Go.exchange/models"
-	"Go.exchange/recommendation"
 )
 
-const defaultRecommendationServingTimeout = 5 * time.Second
-
-func recommendationServingTimeout(cfg config.RecommendationConfig) time.Duration {
-	if cfg.ServingTimeoutMS > 0 {
-		return time.Duration(cfg.ServingTimeoutMS) * time.Millisecond
-	}
-	return defaultRecommendationServingTimeout
-}
-
-func defaultRecommendationConfig() config.RecommendationConfig {
+func DefaultConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
 		ServingTimeoutMS: 5000,
 		BehaviorWeights: config.RecommendationBehaviorWeights{
@@ -58,34 +45,31 @@ func defaultRecommendationConfig() config.RecommendationConfig {
 	}
 }
 
-func normalizedRecommendationConfig() config.RecommendationConfig {
-	cfg := defaultRecommendationConfig()
-	if config.AppConfig == nil {
-		return cfg
-	}
-	set := config.AppConfig.Recommendation
+func NormalizeConfig(configured config.RecommendationConfig, presence map[string]bool) config.RecommendationConfig {
+	cfg := DefaultConfig()
+	set := configured
 	if set.ServingTimeoutMS > 0 {
 		cfg.ServingTimeoutMS = set.ServingTimeoutMS
 	}
-	if recommendationSettingProvided("behavior_weights.view", set.BehaviorWeights.View != 0) {
+	if settingProvided(presence, "behavior_weights.view", set.BehaviorWeights.View != 0) {
 		cfg.BehaviorWeights.View = set.BehaviorWeights.View
 	}
-	if recommendationSettingProvided("behavior_weights.like", set.BehaviorWeights.Like != 0) {
+	if settingProvided(presence, "behavior_weights.like", set.BehaviorWeights.Like != 0) {
 		cfg.BehaviorWeights.Like = set.BehaviorWeights.Like
 	}
-	if recommendationSettingProvided("behavior_weights.click", set.BehaviorWeights.Click != 0) {
+	if settingProvided(presence, "behavior_weights.click", set.BehaviorWeights.Click != 0) {
 		cfg.BehaviorWeights.Click = set.BehaviorWeights.Click
 	}
-	if recommendationSettingProvided("behavior_weights.qualified_read", set.BehaviorWeights.QualifiedRead != 0) {
+	if settingProvided(presence, "behavior_weights.qualified_read", set.BehaviorWeights.QualifiedRead != 0) {
 		cfg.BehaviorWeights.QualifiedRead = set.BehaviorWeights.QualifiedRead
 	}
-	if set.BehaviorWeights.Reply >= 0 && recommendationSettingProvided("behavior_weights.reply", set.BehaviorWeights.Reply > 0) {
+	if set.BehaviorWeights.Reply >= 0 && settingProvided(presence, "behavior_weights.reply", set.BehaviorWeights.Reply > 0) {
 		cfg.BehaviorWeights.Reply = set.BehaviorWeights.Reply
 	}
-	if recommendationSettingProvided("behavior_weights.quick_bounce", set.BehaviorWeights.QuickBounce != 0) {
+	if settingProvided(presence, "behavior_weights.quick_bounce", set.BehaviorWeights.QuickBounce != 0) {
 		cfg.BehaviorWeights.QuickBounce = set.BehaviorWeights.QuickBounce
 	}
-	if recommendationSettingProvided("behavior_weights.not_interested", set.BehaviorWeights.NotInterested != 0) {
+	if settingProvided(presence, "behavior_weights.not_interested", set.BehaviorWeights.NotInterested != 0) {
 		cfg.BehaviorWeights.NotInterested = set.BehaviorWeights.NotInterested
 	}
 	if set.SignalHalfLifeDays > 0 {
@@ -97,31 +81,31 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Fusion.RankConstant > 0 {
 		cfg.Fusion.RankConstant = set.Fusion.RankConstant
 	}
-	if set.PositiveSignalCoexistBonus >= 0 && recommendationSettingProvided("positive_signal_coexist_bonus", set.PositiveSignalCoexistBonus != 0) {
+	if set.PositiveSignalCoexistBonus >= 0 && settingProvided(presence, "positive_signal_coexist_bonus", set.PositiveSignalCoexistBonus != 0) {
 		cfg.PositiveSignalCoexistBonus = set.PositiveSignalCoexistBonus
 	}
 	if set.PositivePostWeightCap > 0 {
 		cfg.PositivePostWeightCap = set.PositivePostWeightCap
 	}
-	if set.SemanticWeight >= 0 && recommendationSettingProvided("semantic_weight", set.SemanticWeight != 0) {
+	if set.SemanticWeight >= 0 && settingProvided(presence, "semantic_weight", set.SemanticWeight != 0) {
 		cfg.SemanticWeight = set.SemanticWeight
 	}
-	if set.NegativeSemanticWeight >= 0 && recommendationSettingProvided("negative_semantic_weight", set.NegativeSemanticWeight != 0) {
+	if set.NegativeSemanticWeight >= 0 && settingProvided(presence, "negative_semantic_weight", set.NegativeSemanticWeight != 0) {
 		cfg.NegativeSemanticWeight = set.NegativeSemanticWeight
 	}
 	if set.NegativeConfidenceSaturationScale > 0 {
 		cfg.NegativeConfidenceSaturationScale = set.NegativeConfidenceSaturationScale
 	}
-	if recommendationSettingProvided("trending_weight", set.TrendingWeight != 0) {
+	if settingProvided(presence, "trending_weight", set.TrendingWeight != 0) {
 		cfg.TrendingWeight = set.TrendingWeight
 	}
-	if recommendationSettingProvided("trending.reply_factor", set.Trending.ReplyFactor != 0) {
+	if settingProvided(presence, "trending.reply_factor", set.Trending.ReplyFactor != 0) {
 		cfg.Trending.ReplyFactor = set.Trending.ReplyFactor
 	}
 	if set.SemanticRecall.RecentWindowDays > 0 {
 		cfg.SemanticRecall.RecentWindowDays = set.SemanticRecall.RecentWindowDays
 	}
-	if recommendationSettingProvided("semantic_recall.recent_ratio", set.SemanticRecall.RecentRatio != 0) {
+	if settingProvided(presence, "semantic_recall.recent_ratio", set.SemanticRecall.RecentRatio != 0) {
 		cfg.SemanticRecall.RecentRatio = set.SemanticRecall.RecentRatio
 	}
 	if set.Trending.MaxAgeDays > 0 {
@@ -130,7 +114,7 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Trending.HalfLifeHours > 0 {
 		cfg.Trending.HalfLifeHours = set.Trending.HalfLifeHours
 	}
-	if recommendationSettingProvided("exploration.ratio", set.Exploration.Ratio != 0) {
+	if settingProvided(presence, "exploration.ratio", set.Exploration.Ratio != 0) {
 		cfg.Exploration.Ratio = set.Exploration.Ratio
 	}
 	if set.Exploration.MaxSlots > 0 {
@@ -142,16 +126,16 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Exploration.NovelPostMaxAgeDays > 0 {
 		cfg.Exploration.NovelPostMaxAgeDays = set.Exploration.NovelPostMaxAgeDays
 	}
-	if set.AuthorAffinityWeight >= 0 && recommendationSettingProvided("author_affinity_weight", set.AuthorAffinityWeight != 0) {
+	if set.AuthorAffinityWeight >= 0 && settingProvided(presence, "author_affinity_weight", set.AuthorAffinityWeight != 0) {
 		cfg.AuthorAffinityWeight = set.AuthorAffinityWeight
 	}
 	if set.AuthorAffinitySaturationScale > 0 {
 		cfg.AuthorAffinitySaturationScale = set.AuthorAffinitySaturationScale
 	}
-	if set.FollowingBonus >= 0 && recommendationSettingProvided("following_bonus", set.FollowingBonus != 0) {
+	if set.FollowingBonus >= 0 && settingProvided(presence, "following_bonus", set.FollowingBonus != 0) {
 		cfg.FollowingBonus = set.FollowingBonus
 	}
-	if set.OutOfNetworkMinRatio >= 0 && set.OutOfNetworkMinRatio <= 1 && recommendationSettingProvided("out_of_network_min_ratio", set.OutOfNetworkMinRatio != 0) {
+	if set.OutOfNetworkMinRatio >= 0 && set.OutOfNetworkMinRatio <= 1 && settingProvided(presence, "out_of_network_min_ratio", set.OutOfNetworkMinRatio != 0) {
 		cfg.OutOfNetworkMinRatio = set.OutOfNetworkMinRatio
 	}
 	if set.ServedHardExclusionMinutes > 0 {
@@ -169,7 +153,7 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.GuestServedHistoryTTLHours > 0 {
 		cfg.GuestServedHistoryTTLHours = set.GuestServedHistoryTTLHours
 	}
-	if recommendationSettingProvided("diversity.enabled", set.Diversity.Enabled) {
+	if settingProvided(presence, "diversity.enabled", set.Diversity.Enabled) {
 		cfg.Diversity.Enabled = set.Diversity.Enabled
 	}
 	if set.Diversity.AuthorWindowSize > 0 {
@@ -178,22 +162,22 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	if set.Diversity.MaxSameAuthorInWindow > 0 {
 		cfg.Diversity.MaxSameAuthorInWindow = set.Diversity.MaxSameAuthorInWindow
 	}
-	if set.Diversity.SemanticDuplicateThreshold >= -1 && set.Diversity.SemanticDuplicateThreshold <= 1 && recommendationSettingProvided("diversity.semantic_duplicate_threshold", set.Diversity.SemanticDuplicateThreshold != 0) {
+	if set.Diversity.SemanticDuplicateThreshold >= -1 && set.Diversity.SemanticDuplicateThreshold <= 1 && settingProvided(presence, "diversity.semantic_duplicate_threshold", set.Diversity.SemanticDuplicateThreshold != 0) {
 		cfg.Diversity.SemanticDuplicateThreshold = set.Diversity.SemanticDuplicateThreshold
 	}
-	if set.Diversity.SemanticDuplicatePenalty >= 0 && recommendationSettingProvided("diversity.semantic_duplicate_penalty", set.Diversity.SemanticDuplicatePenalty != 0) {
+	if set.Diversity.SemanticDuplicatePenalty >= 0 && settingProvided(presence, "diversity.semantic_duplicate_penalty", set.Diversity.SemanticDuplicatePenalty != 0) {
 		cfg.Diversity.SemanticDuplicatePenalty = set.Diversity.SemanticDuplicatePenalty
 	}
-	if recommendationSettingProvided("language_affinity.enabled", set.LanguageAffinity.Enabled) {
+	if settingProvided(presence, "language_affinity.enabled", set.LanguageAffinity.Enabled) {
 		cfg.LanguageAffinity.Enabled = set.LanguageAffinity.Enabled
 	}
-	if recommendationSettingProvided("language_affinity.weight", set.LanguageAffinity.Weight != 0) {
+	if settingProvided(presence, "language_affinity.weight", set.LanguageAffinity.Weight != 0) {
 		cfg.LanguageAffinity.Weight = set.LanguageAffinity.Weight
 	}
-	if recommendationSettingProvided("language_affinity.evidence_saturation_scale", set.LanguageAffinity.EvidenceSaturationScale != 0) {
+	if settingProvided(presence, "language_affinity.evidence_saturation_scale", set.LanguageAffinity.EvidenceSaturationScale != 0) {
 		cfg.LanguageAffinity.EvidenceSaturationScale = set.LanguageAffinity.EvidenceSaturationScale
 	}
-	if recommendationSettingProvided("language_affinity.max_behavior_share", set.LanguageAffinity.MaxBehaviorShare != 0) {
+	if settingProvided(presence, "language_affinity.max_behavior_share", set.LanguageAffinity.MaxBehaviorShare != 0) {
 		cfg.LanguageAffinity.MaxBehaviorShare = set.LanguageAffinity.MaxBehaviorShare
 	}
 	if set.Trace.ResultRetentionDays > 0 {
@@ -326,17 +310,10 @@ func normalizedRecommendationConfig() config.RecommendationConfig {
 	return cfg
 }
 
-// RecommendationConfigSnapshot exposes the normalized startup configuration
-// to the API composition root. Serving requests receive the resulting copy;
-// the recommendation Service never reads config.AppConfig.
-func RecommendationConfigSnapshot() config.RecommendationConfig {
-	return normalizedRecommendationConfig()
+func settingProvided(presence map[string]bool, path string, legacyProvided bool) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	return legacyProvided || presence[path]
 }
-
-func recommendationSettingProvided(path string, legacyProvided bool) bool {
-	return legacyProvided || (config.AppConfig != nil && config.AppConfig.HasRecommendationSetting(path))
-}
-
 func applyCandidateCaps(target *config.RecommendationCandidateCaps, set config.RecommendationCandidateCaps) {
 	if set.Semantic > 0 {
 		target.Semantic = set.Semantic
@@ -353,51 +330,4 @@ func applyCandidateCaps(target *config.RecommendationCandidateCaps, set config.R
 	if set.Merged > 0 {
 		target.Merged = set.Merged
 	}
-}
-
-type userInterestProfile = recommendation.Profile
-
-func buildEmbeddingInterestProfile(ctx context.Context, behaviors []postBehaviorSignal, feedback []recommendationFeedbackSignal, reactions map[uint]recommendationReactionState, now time.Time, cfg config.RecommendationConfig, servingVersion string, loadEmbeddings func(context.Context, []uint, string) (map[uint][]float32, error)) (userInterestProfile, error) {
-	profile := userInterestProfile{
-		InteractedPostIDs: make(map[uint]struct{}), PositiveContributions: make(map[uint]float64), PositiveAffinityContributions: make(map[uint]float64),
-	}
-	behaviorRows := make([]models.PostBehavior, 0, len(behaviors))
-	for _, item := range behaviors {
-		behaviorRows = append(behaviorRows, item.Behavior)
-	}
-	feedbackRows := make([]recommendation.FeedbackEvent, 0, len(feedback))
-	for _, item := range feedback {
-		feedbackRows = append(feedbackRows, recommendation.FeedbackEvent{
-			EventID: item.Event.EventID, PostID: item.Event.PostID, EventType: item.Event.EventType,
-			OccurredAt: item.Event.OccurredAt, ReceivedAt: item.Event.ReceivedAt, ReadOutcome: item.Event.ReadOutcome,
-		})
-	}
-	reactionRows := make(map[uint]recommendation.ReactionState, len(reactions))
-	for postID, reaction := range reactions {
-		reactionRows[postID] = recommendation.ReactionState{Liked: reaction.Liked, StateChangedAt: reaction.StateChangedAt}
-	}
-	canonical := recommendation.CanonicalizeOutcomes(behaviorRows, feedbackRows, reactionRows)
-	if loadEmbeddings == nil {
-		return profile, errors.New("recommendation embedding loader is nil")
-	}
-	built, err := recommendation.BuildInterestProfile(canonical, now, cfg, servingVersion, func(ids []uint, version string) (map[uint][]float32, error) {
-		return loadEmbeddings(ctx, ids, version)
-	})
-	if err != nil {
-		return profile, err
-	}
-	for _, postID := range built.InteractedPostIDs {
-		profile.InteractedPostIDs[postID] = struct{}{}
-	}
-	profile.PositiveVector = built.PositiveVector
-	profile.NegativeVector = built.NegativeVector
-	profile.PositiveSignalCount = built.PositiveSignalCount
-	profile.NegativeSignalCount = built.NegativeSignalCount
-	profile.PersonalizedSignalCount = built.PersonalizedSignalCount
-	profile.PositiveContributions = built.PositiveContributions
-	profile.PositiveAffinityContributions = built.PositiveAffinityContributions
-	if len(profile.NegativeVector) > 0 && cfg.NegativeConfidenceSaturationScale > 0 {
-		profile.NegativeConfidence = math.Tanh(built.NegativeEvidence / cfg.NegativeConfidenceSaturationScale)
-	}
-	return profile, nil
 }

@@ -45,7 +45,7 @@ func TestRecommendationRepositoriesHonorCanceledContextIntegration(t *testing.T)
 	}
 	canceledRequestID := uuid.NewString()
 	canceledRequest := models.RecommendationRequest{
-		RequestID: canceledRequestID, Scene: recommendationScene, StrategyID: RecommendationColdStartStrategyID,
+		RequestID: canceledRequestID, Scene: RecommendationScene, StrategyID: RecommendationColdStartStrategyID,
 		RankerVersion: RankerVersion, RankerConfigHash: "canceled-context-test", RequestedLimit: 1,
 		PersonalizationMode: "cold_start", CreatedAt: now,
 	}

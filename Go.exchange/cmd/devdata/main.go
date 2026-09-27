@@ -17,6 +17,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/devdata"
 	"Go.exchange/global"
+	"Go.exchange/recommendation"
 
 	"github.com/go-redis/redis/v7"
 	"gorm.io/gorm"
@@ -252,7 +253,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		verification, err := devdata.VerifyCoreWithOptions(ctx, db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
+		recommendationConfig := recommendation.NormalizeConfig(config.AppConfig.Recommendation, config.AppConfig.RecommendationPresence)
+		verification, err := devdata.VerifyCoreWithOptions(ctx, db, registry, time.Now().UTC(), devdata.VerificationOptions{
+			Mode: devdata.VerificationModeCuratedV1Live, Recommendation: &recommendationConfig,
+		})
 		if err != nil {
 			return err
 		}
@@ -680,7 +684,10 @@ func syncAndVerifyWithDB(ctx context.Context, stdout io.Writer, registry devdata
 		return err
 	}
 	fmt.Fprintf(stdout, "Sync: kept=%d reactivated=%d inserted=%d retired_soft=%d retired_hard=%d\n", result.Kept, result.Reactivated, result.Inserted, result.RetiredSoft, result.RetiredHard)
-	verification, err := devdata.VerifyCoreWithOptions(ctx, db, registry, time.Now().UTC(), devdata.VerificationOptions{Mode: devdata.VerificationModeCuratedV1Live})
+	recommendationConfig := recommendation.NormalizeConfig(config.AppConfig.Recommendation, config.AppConfig.RecommendationPresence)
+	verification, err := devdata.VerifyCoreWithOptions(ctx, db, registry, time.Now().UTC(), devdata.VerificationOptions{
+		Mode: devdata.VerificationModeCuratedV1Live, Recommendation: &recommendationConfig,
+	})
 	if err != nil {
 		return err
 	}

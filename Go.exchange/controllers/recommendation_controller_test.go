@@ -28,6 +28,28 @@ func (fake *fakeRecommendationService) Serve(ctx context.Context, request recomm
 	return fake.result, fake.err
 }
 
+type fakeRecommendationResponseMapper struct {
+	contexts      []context.Context
+	selectedCalls [][]recommendation.SelectedCandidate
+	result        []RecommendedPostResponse
+	err           error
+}
+
+func (fake *fakeRecommendationResponseMapper) Map(ctx context.Context, selected []recommendation.SelectedCandidate, _ time.Time) ([]RecommendedPostResponse, error) {
+	fake.contexts = append(fake.contexts, ctx)
+	fake.selectedCalls = append(fake.selectedCalls, append([]recommendation.SelectedCandidate(nil), selected...))
+	return fake.result, fake.err
+}
+
+func newRecommendationHandlerForTest(t *testing.T, service recommendation.Service, mapper RecommendationResponseMapper, timeout time.Duration) *RecommendationHandler {
+	t.Helper()
+	handler, err := NewRecommendationHandler(service, mapper, timeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
 func newRecommendationHTTPContext(method, path string) (*gin.Context, *httptest.ResponseRecorder) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -40,10 +62,8 @@ func TestRecommendationHandlerUsesInjectedServiceAndMapsRequest(t *testing.T) {
 	service := &fakeRecommendationService{result: recommendation.ServeResult{
 		RequestID: "serving-request", Now: time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC), Depleted: true,
 	}}
-	handler, err := NewRecommendationHandler(service, nil, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mapper := &fakeRecommendationResponseMapper{}
+	handler := newRecommendationHandlerForTest(t, service, mapper, time.Second)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts?limit=77")
 	ctx.Set("user_id", uint(42))
 	ctx.Request.Header.Set("Accept-Language", "ja-JP, en-US;q=0.2")
@@ -67,6 +87,12 @@ func TestRecommendationHandlerUsesInjectedServiceAndMapsRequest(t *testing.T) {
 	if _, ok := service.contexts[0].Deadline(); !ok {
 		t.Fatal("handler did not propagate its configured serving deadline")
 	}
+	if len(mapper.contexts) != 1 || len(mapper.selectedCalls) != 1 {
+		t.Fatalf("mapper calls=%d, want one", len(mapper.contexts))
+	}
+	if _, ok := mapper.contexts[0].Deadline(); !ok {
+		t.Fatal("handler did not propagate serving deadline to response mapper")
+	}
 	if !strings.Contains(recorder.Body.String(), `"request_id":"serving-request"`) || !strings.Contains(recorder.Body.String(), `"depleted":true`) {
 		t.Fatalf("response=%s", recorder.Body.String())
 	}
@@ -76,10 +102,8 @@ func TestPublicRecommendationHandlerNormalizesGuestSessionHeader(t *testing.T) {
 	service := &fakeRecommendationService{result: recommendation.ServeResult{
 		RequestID: "guest-request", Now: time.Now().UTC(), Depleted: false,
 	}}
-	handler, err := NewRecommendationHandler(service, nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mapper := &fakeRecommendationResponseMapper{}
+	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/public/recommendations/posts?limit=not-a-number")
 	ctx.Request.Header.Set(guestRecommendationSessionHeader, "  4CA3706B-197E-4F63-8F51-F99176F8B61C ")
 	handler.GetPublicPostRecommendations(ctx)
@@ -97,10 +121,8 @@ func TestPublicRecommendationHandlerNormalizesGuestSessionHeader(t *testing.T) {
 
 func TestPublicRecommendationHandlerKeepsInvalidGuestSessionEmpty(t *testing.T) {
 	service := &fakeRecommendationService{result: recommendation.ServeResult{RequestID: "guest-request", Now: time.Now().UTC()}}
-	handler, err := NewRecommendationHandler(service, nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mapper := &fakeRecommendationResponseMapper{}
+	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/public/recommendations/posts")
 	ctx.Request.Header.Set(guestRecommendationSessionHeader, "not-a-uuid")
 	handler.GetPublicPostRecommendations(ctx)
@@ -110,15 +132,17 @@ func TestPublicRecommendationHandlerKeepsInvalidGuestSessionEmpty(t *testing.T) 
 }
 
 func TestRecommendationHandlerMapsDeadlineAndRequestCancellation(t *testing.T) {
-	handler, err := NewRecommendationHandler(&fakeRecommendationService{err: context.DeadlineExceeded}, nil, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mapper := &fakeRecommendationResponseMapper{}
+	service := &fakeRecommendationService{err: context.DeadlineExceeded}
+	handler := newRecommendationHandlerForTest(t, service, mapper, time.Second)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
 	ctx.Set("user_id", uint(42))
 	handler.GetPostRecommendations(ctx)
 	if recorder.Code != http.StatusGatewayTimeout {
 		t.Fatalf("deadline status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(mapper.contexts) != 0 {
+		t.Fatalf("mapper calls=%d, want none after service failure", len(mapper.contexts))
 	}
 
 	cancelled, cancel := context.WithCancel(context.Background())
@@ -133,23 +157,23 @@ func TestRecommendationHandlerMapsDeadlineAndRequestCancellation(t *testing.T) {
 }
 
 func TestRecommendationHandlerRequiresAuthenticatedViewer(t *testing.T) {
-	handler, err := NewRecommendationHandler(&fakeRecommendationService{}, nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := &fakeRecommendationService{}
+	mapper := &fakeRecommendationResponseMapper{}
+	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
 	handler.GetPostRecommendations(ctx)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	if len(service.requests) != 0 || len(mapper.contexts) != 0 {
+		t.Fatalf("unauthenticated request called dependencies: service=%d mapper=%d", len(service.requests), len(mapper.contexts))
+	}
 }
 
 func TestRecommendationHandlerMapsServiceFailureToHTTP500(t *testing.T) {
 	service := &fakeRecommendationService{err: errors.New("service unavailable")}
-	handler, err := NewRecommendationHandler(service, nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mapper := &fakeRecommendationResponseMapper{}
+	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
 	ctx.Set("user_id", uint(42))
 	handler.GetPostRecommendations(ctx)
@@ -159,10 +183,13 @@ func TestRecommendationHandlerMapsServiceFailureToHTTP500(t *testing.T) {
 	if len(service.requests) != 1 {
 		t.Fatalf("service calls=%d, want one", len(service.requests))
 	}
+	if len(mapper.contexts) != 0 {
+		t.Fatalf("mapper calls=%d, want none after service failure", len(mapper.contexts))
+	}
 }
 
 func TestRecommendationHandlerMapsTrackingFactsIntoResponseJSON(t *testing.T) {
-	recommendations := []recommendedPostResponse{{Post: postResponse{ID: 17}, Score: .75}}
+	recommendations := []RecommendedPostResponse{{Post: postResponse{ID: 17}, Score: .75}}
 	facts := []recommendation.TrackingFact{{
 		PostID: 17, RequestID: "request-17", Position: 1, Scene: "recommendation_page",
 		RankerVersion: "rules_v6", RankerConfigHash: "hash-17", StrategyID: "strategy-17",
@@ -181,12 +208,26 @@ func TestRecommendationHandlerMapsTrackingFactsIntoResponseJSON(t *testing.T) {
 }
 
 func TestRecommendationHandlerRequiresService(t *testing.T) {
-	if _, err := NewRecommendationHandler(nil, nil, 0); err == nil {
+	mapper := &fakeRecommendationResponseMapper{}
+	if _, err := NewRecommendationHandler(nil, mapper, 0); err == nil {
 		t.Fatal("expected constructor to reject nil service")
 	}
+	if _, err := NewRecommendationHandler(&fakeRecommendationService{}, nil, 0); err == nil {
+		t.Fatal("expected constructor to reject nil response mapper")
+	}
+}
+
+func TestRecommendationHandlerMapsResponseMapperFailureToHTTP500(t *testing.T) {
+	service := &fakeRecommendationService{result: recommendation.ServeResult{RequestID: "request", Now: time.Now().UTC()}}
+	mapper := &fakeRecommendationResponseMapper{err: errors.New("hydrate failed")}
+	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
-	GetPostRecommendations(ctx)
-	if recorder.Code != http.StatusServiceUnavailable {
+	ctx.Set("user_id", uint(42))
+	handler.GetPostRecommendations(ctx)
+	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "hydrate failed") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(mapper.contexts) != 1 {
+		t.Fatalf("mapper calls=%d, want one", len(mapper.contexts))
 	}
 }

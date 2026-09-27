@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	recommendationScene                            = "recommendation_page"
+	RecommendationScene                            = "recommendation_page"
 	RecommendationPersonalizedStrategyID           = "for_you_materialized_profile_v6"
 	RecommendationColdStartStrategyID              = "for_you_materialized_profile_v6"
 	RecommendationTrackingTokenVersion             = "v3"
@@ -119,7 +119,7 @@ func buildTrackingFacts(userID uint, requestID, configHash, strategyID string, s
 		}
 		claims := TrackingClaims{
 			UserID: userID, RequestID: requestID, PostID: item.Post.ID,
-			Position: index + 1, Scene: recommendationScene,
+			Position: index + 1, Scene: RecommendationScene,
 			RankerVersion: RankerVersion, RankerConfigHash: configHash,
 			StrategyID: strategyID, IssuedAtUnix: issuedAt.Unix(), ExpiresAtUnix: expiresAt.Unix(),
 			EstimatedReadTimeMS: EstimatePostReadTime(item.Post.Content).Milliseconds(), ReadPolicyVersion: RecommendationReadPolicyVersion,
@@ -131,7 +131,7 @@ func buildTrackingFacts(userID uint, requestID, configHash, strategyID string, s
 			return nil, err
 		}
 		facts = append(facts, TrackingFact{
-			PostID: item.Post.ID, RequestID: requestID, Position: index + 1, Scene: recommendationScene,
+			PostID: item.Post.ID, RequestID: requestID, Position: index + 1, Scene: RecommendationScene,
 			RankerVersion: RankerVersion, RankerConfigHash: configHash, StrategyID: strategyID,
 			Token: token, ExpiresAt: expiresAt,
 		})

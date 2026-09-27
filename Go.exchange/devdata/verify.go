@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"Go.exchange/controllers"
+	"Go.exchange/config"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
@@ -25,7 +25,8 @@ const (
 )
 
 type VerificationOptions struct {
-	Mode string
+	Mode           string
+	Recommendation *config.RecommendationConfig
 }
 
 type AccountVerification struct {
@@ -177,7 +178,11 @@ func VerifyCoreWithOptions(ctx context.Context, db *gorm.DB, registry SourceRegi
 		}
 	}
 
-	serving, err := verifyActualRecommendationServing(ctx, db, now)
+	recommendationConfig := recommendation.DefaultConfig()
+	if options.Recommendation != nil {
+		recommendationConfig = *options.Recommendation
+	}
+	serving, err := verifyActualRecommendationServing(ctx, db, recommendationConfig, now)
 	if err != nil {
 		return CoreVerification{}, err
 	}
@@ -204,7 +209,7 @@ func VerifyCoreWithOptions(ctx context.Context, db *gorm.DB, registry SourceRegi
 	return result, nil
 }
 
-func verifyActualRecommendationServing(ctx context.Context, db *gorm.DB, now time.Time) (recommendation.VerificationResult, error) {
+func verifyActualRecommendationServing(ctx context.Context, db *gorm.DB, recommendationConfig config.RecommendationConfig, now time.Time) (recommendation.VerificationResult, error) {
 	if db == nil {
 		return recommendation.VerificationResult{}, errors.New("database is not initialized")
 	}
@@ -222,7 +227,7 @@ func verifyActualRecommendationServing(ctx context.Context, db *gorm.DB, now tim
 	}
 	dependencies.Metrics = recommendation.NoopMetrics{}
 	service, err := recommendation.NewService(dependencies, recommendation.ServiceConfig{
-		Recommendation: controllers.RecommendationConfigSnapshot(),
+		Recommendation: recommendationConfig,
 	})
 	if err != nil {
 		return recommendation.VerificationResult{}, fmt.Errorf("initialize recommendation verification service: %w", err)

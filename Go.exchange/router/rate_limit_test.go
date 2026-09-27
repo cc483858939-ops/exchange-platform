@@ -43,7 +43,7 @@ func (l *rateLimitRouteLimiter) Allow(_ context.Context, input ratelimit.Input) 
 func TestSetupRouterWiresInitialRateLimitActions(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	limiter := &rateLimitRouteLimiter{}
-	engine, err := SetupRouterWithRateLimiter(nil, rateLimitRouteVerifier{}, nil, nil, limiter)
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, limiter, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestSetupRouterWiresInitialRateLimitActions(t *testing.T) {
 
 func TestSetupRouterExplicitlyDisablesApplicationRateLimit(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
-	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil)
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,28 +100,17 @@ func TestSetupRouterExplicitlyDisablesApplicationRateLimit(t *testing.T) {
 	}
 }
 
-func TestSetupRouterWithRateLimiterNilDependencyFailsClosed(t *testing.T) {
+func TestSetupRouterRequiresRecommendationHandler(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
-	engine, err := SetupRouterWithRateLimiter(nil, rateLimitRouteVerifier{}, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPut, "/api/users/7/follow", nil)
-	request.Header.Set("Authorization", "Bearer test-token")
-	response := httptest.NewRecorder()
-	engine.ServeHTTP(response, request)
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d body=%s, want 503", response.Code, response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), `"code":"RATE_LIMIT_UNAVAILABLE"`) {
-		t.Fatalf("body=%s", response.Body.String())
+	if _, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("SetupRouter unexpectedly accepted a missing recommendation handler")
 	}
 }
 
 func TestSetupRouterExposesRateLimitHeadersThroughCORS(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.test")
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

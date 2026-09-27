@@ -8,32 +8,21 @@ import (
 	"strings"
 	"time"
 
-	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
-const (
-	recommendationFeedbackPostLimit         = recommendation.ProfileReplyLimit
-	recommendationRecentViewPostLimit       = recommendation.ProfileRecentViewLimit
-	recommendationCandidateRetrievalVersion = recommendation.CandidateRetrievalVersion
-	guestRecommendationSessionHeader        = "X-Guest-Recommendation-Session"
-)
+const guestRecommendationSessionHeader = "X-Guest-Recommendation-Session"
 
-type postBehaviorSignal struct {
-	Behavior models.PostBehavior
-}
-
-type recommendedPostResponse struct {
+type RecommendedPostResponse struct {
 	Post     postResponse                    `json:"post"`
 	Score    float64                         `json:"score"`
 	Tracking *recommendationTrackingResponse `json:"tracking,omitempty"`
 }
 
 type postRecommendationPageResponse struct {
-	Items     []recommendedPostResponse `json:"items"`
+	Items     []RecommendedPostResponse `json:"items"`
 	RequestID string                    `json:"request_id"`
 	Depleted  bool                      `json:"depleted"`
 }
@@ -50,18 +39,20 @@ type recommendationTrackingResponse struct {
 }
 
 // RecommendationHandler is the HTTP adapter for the recommendation Service.
-// The database is used only by the response mapper to hydrate API DTOs.
 type RecommendationHandler struct {
 	service        recommendation.Service
-	db             *gorm.DB
+	responseMapper RecommendationResponseMapper
 	servingTimeout time.Duration
 }
 
-func NewRecommendationHandler(service recommendation.Service, db *gorm.DB, servingTimeout time.Duration) (*RecommendationHandler, error) {
+func NewRecommendationHandler(service recommendation.Service, responseMapper RecommendationResponseMapper, servingTimeout time.Duration) (*RecommendationHandler, error) {
 	if service == nil {
 		return nil, errors.New("recommendation service is required")
 	}
-	return &RecommendationHandler{service: service, db: db, servingTimeout: servingTimeout}, nil
+	if responseMapper == nil {
+		return nil, errors.New("recommendation response mapper is required")
+	}
+	return &RecommendationHandler{service: service, responseMapper: responseMapper, servingTimeout: servingTimeout}, nil
 }
 
 func (handler *RecommendationHandler) GetPostRecommendations(ctx *gin.Context) {
@@ -79,7 +70,7 @@ func (handler *RecommendationHandler) GetPublicPostRecommendations(ctx *gin.Cont
 }
 
 func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendation.Viewer) {
-	if handler == nil || handler.service == nil {
+	if handler == nil || handler.service == nil || handler.responseMapper == nil {
 		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation service is unavailable"})
 		return
 	}
@@ -109,11 +100,7 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
 	}
-	var responseDB *gorm.DB
-	if handler.db != nil {
-		responseDB = handler.db.WithContext(servingCtx)
-	}
-	recommendations, err := selectedRecommendationResponsesFromDB(responseDB, result.Selected, result.Now)
+	recommendations, err := handler.responseMapper.Map(servingCtx, result.Selected, result.Now)
 	if err != nil {
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
@@ -124,7 +111,7 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 	})
 }
 
-func attachRecommendationTrackingFacts(recommendations []recommendedPostResponse, facts []recommendation.TrackingFact) {
+func attachRecommendationTrackingFacts(recommendations []RecommendedPostResponse, facts []recommendation.TrackingFact) {
 	trackingByPost := make(map[uint]recommendation.TrackingFact, len(facts))
 	for _, fact := range facts {
 		trackingByPost[fact.PostID] = fact
@@ -138,16 +125,6 @@ func attachRecommendationTrackingFacts(recommendations []recommendedPostResponse
 			}
 		}
 	}
-}
-
-// These unbound handlers remain for routers assembled without API services in
-// tests or utility processes. Production wiring always uses the injected handler.
-func GetPostRecommendations(ctx *gin.Context) {
-	ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation service is unavailable"})
-}
-
-func GetPublicPostRecommendations(ctx *gin.Context) {
-	ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation service is unavailable"})
 }
 
 func recommendationErrorResponse(ctx *gin.Context, err error, _ string) {

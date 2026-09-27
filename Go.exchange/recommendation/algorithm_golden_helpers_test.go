@@ -36,27 +36,6 @@ const (
 	recommendationRecallSourceTrending  = CandidateSourceTrending
 )
 
-func defaultRecommendationConfig() config.RecommendationConfig {
-	return config.RecommendationConfig{
-		Fusion:      config.RecommendationFusionConfig{RankConstant: 60},
-		Trending:    config.RecommendationTrendingConfig{MaxAgeDays: 3, HalfLifeHours: 12, ReplyFactor: 1.5},
-		Exploration: config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30},
-		LanguageAffinity: config.RecommendationLanguageAffinityConfig{
-			Enabled: true, Weight: 0.35, EvidenceSaturationScale: 5, MaxBehaviorShare: 0.95,
-		},
-		SemanticWeight: 4, NegativeSemanticWeight: 1.5, TrendingWeight: 0.5,
-		AuthorAffinityWeight: 1, FollowingBonus: 0.5, OutOfNetworkMinRatio: 0.30,
-		Diversity: config.RecommendationDiversityConfig{
-			Enabled: true, AuthorWindowSize: 8, MaxSameAuthorInWindow: 2,
-			SemanticDuplicateThreshold: 0.92, SemanticDuplicatePenalty: 1,
-		},
-	}
-}
-
-func normalizedRecommendationConfig() config.RecommendationConfig {
-	return defaultRecommendationConfig()
-}
-
 func testRankingConfig(cfg config.RecommendationConfig) RankingConfig {
 	return RankingConfig{
 		SemanticWeight: cfg.SemanticWeight, NegativeSemanticWeight: cfg.NegativeSemanticWeight,

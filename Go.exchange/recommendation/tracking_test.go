@@ -17,7 +17,7 @@ import (
 func testRecommendationTrackingClaims(now time.Time) TrackingClaims {
 	return TrackingClaims{
 		UserID: 7, RequestID: "550e8400-e29b-41d4-a716-446655440000", PostID: 11,
-		Position: 2, Scene: recommendationScene, RankerVersion: RankerVersion,
+		Position: 2, Scene: RecommendationScene, RankerVersion: RankerVersion,
 		RankerConfigHash: "0123456789ab", StrategyID: RecommendationPersonalizedStrategyID,
 		IssuedAtUnix: now.Add(-time.Minute).Unix(), ExpiresAtUnix: now.Add(time.Hour).Unix(),
 		EstimatedReadTimeMS: 3000, ReadPolicyVersion: RecommendationReadPolicyVersion,

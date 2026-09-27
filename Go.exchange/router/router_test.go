@@ -41,14 +41,14 @@ func TestSetupRouterIgnoresForwardedHeadersFromUntrustedSource(t *testing.T) {
 
 func TestSetupRouterRejectsInvalidTrustedProxyConfiguration(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "0.0.0.0/0")
-	if _, err := SetupRouter(nil, nil, nil, nil); err == nil {
+	if _, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil); err == nil {
 		t.Fatal("SetupRouter unexpectedly accepted a trust-all proxy configuration")
 	}
 }
 
 func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 
 func TestSetupRouterKeepsPublicRecommendationsOpenAndRepresentativeAPIsProtected(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestSetupRouterKeepsPublicRecommendationsOpenAndRepresentativeAPIsProtected
 
 func TestSetupRouterKeepsPublicPostAndProfileReadsOpen(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestSetupRouterKeepsPublicPostAndProfileReadsOpen(t *testing.T) {
 
 func TestSetupRouterRegistersProfileTimelineRoute(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestSetupRouterRegistersProfileTimelineRoute(t *testing.T) {
 func TestSetupRouterAllowsIdempotencyKeyForPostCreation(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.test")
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestSetupRouterAllowsIdempotencyKeyForPostCreation(t *testing.T) {
 func TestSetupRouterAllowsGuestRecommendationSessionHeader(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.test")
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestSetupRouterAllowsGuestRecommendationSessionHeader(t *testing.T) {
 func newClientIPTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	engine, err := SetupRouter(nil, nil, nil, nil)
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

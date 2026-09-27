@@ -73,11 +73,8 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation dependencies: %w", err)
 	}
-	recommendationConfig := controllers.RecommendationConfigSnapshot()
-	servingTimeout := 5 * time.Second
-	if recommendationConfig.ServingTimeoutMS > 0 {
-		servingTimeout = time.Duration(recommendationConfig.ServingTimeoutMS) * time.Millisecond
-	}
+	recommendationConfig := recommendation.NormalizeConfig(config.AppConfig.Recommendation, config.AppConfig.RecommendationPresence)
+	servingTimeout := time.Duration(recommendationConfig.ServingTimeoutMS) * time.Millisecond
 	serviceConfig := recommendation.ServiceConfig{
 		Recommendation:      recommendationConfig,
 		TracePersistTimeout: 5 * time.Second,
@@ -93,12 +90,16 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation service: %w", err)
 	}
-	recommendationHandler, err := controllers.NewRecommendationHandler(recommendationService, apiDB, servingTimeout)
+	responseMapper, err := controllers.NewGormRecommendationResponseMapper(apiDB)
+	if err != nil {
+		return nil, fmt.Errorf("initialize recommendation response mapper: %w", err)
+	}
+	recommendationHandler, err := controllers.NewRecommendationHandler(recommendationService, responseMapper, servingTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation handler: %w", err)
 	}
 	telemetryRateLimiter := controllers.NewRecommendationTelemetryRedisRateLimiter(global.RedisDB)
-	handler, err := router.SetupRouterWithRecommendationHandler(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, translationService)
+	handler, err := router.SetupRouter(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, translationService)
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}

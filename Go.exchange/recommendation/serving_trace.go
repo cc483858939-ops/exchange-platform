@@ -13,7 +13,7 @@ func buildRecommendationRequest(request ServeRequest, result ServeResult, starte
 	profile := result.Profile
 	exploration := ExplorationCountsForSelection(selected, ExplorationTarget(request.Limit, selectionConfig(cfg).Exploration))
 	return models.RecommendationRequest{
-		RequestID: request.RequestID, UserID: request.Viewer.UserID, Scene: recommendationScene, StrategyID: result.StrategyID,
+		RequestID: request.RequestID, UserID: request.Viewer.UserID, Scene: RecommendationScene, StrategyID: result.StrategyID,
 		RankerVersion: RankerVersion, RankerConfigHash: result.RankerConfigHash,
 		ProfileVersion: profile.ProfileVersion, ProfileConfigHash: profile.ProfileConfigHash,
 		ProfileStatus: profile.ProfileStatus, ProfileAgeMS: profile.ProfileAgeMS,

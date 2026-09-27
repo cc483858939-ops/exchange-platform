@@ -1,4 +1,4 @@
-package controllers
+package recommendation
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/recommendation"
 )
 
 func TestRecommendationServingTimeoutNormalizesConfiguredAndInvalidValues(t *testing.T) {
@@ -17,19 +16,17 @@ func TestRecommendationServingTimeoutNormalizesConfiguredAndInvalidValues(t *tes
 		want       time.Duration
 	}{
 		{name: "configured", configured: 2500, wantMS: 2500, want: 2500 * time.Millisecond},
-		{name: "zero defaults", configured: 0, wantMS: 5000, want: defaultRecommendationServingTimeout},
-		{name: "negative defaults", configured: -1, wantMS: 5000, want: defaultRecommendationServingTimeout},
+		{name: "zero defaults", configured: 0, wantMS: 5000, want: (5000 * time.Millisecond)},
+		{name: "negative defaults", configured: -1, wantMS: 5000, want: (5000 * time.Millisecond)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			original := config.AppConfig
-			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{ServingTimeoutMS: test.configured}}
-			t.Cleanup(func() { config.AppConfig = original })
+			configured := config.Config{Recommendation: config.RecommendationConfig{ServingTimeoutMS: test.configured}}
 
-			cfg := normalizedRecommendationConfig()
+			cfg := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)
 			if cfg.ServingTimeoutMS != test.wantMS {
 				t.Fatalf("serving timeout ms=%d want %d", cfg.ServingTimeoutMS, test.wantMS)
 			}
-			if got := recommendationServingTimeout(cfg); got != test.want {
+			if got := (time.Duration(cfg.ServingTimeoutMS) * time.Millisecond); got != test.want {
 				t.Fatalf("serving timeout=%s want %s", got, test.want)
 			}
 		})
@@ -37,23 +34,21 @@ func TestRecommendationServingTimeoutNormalizesConfiguredAndInvalidValues(t *tes
 }
 
 func TestRecommendationServingTimeoutDoesNotChangeRecommendationHashes(t *testing.T) {
-	base := defaultRecommendationConfig()
+	base := DefaultConfig()
 	mutated := base
 	mutated.ServingTimeoutMS = 2500
-	if got, want := recommendation.ProfileConfigHash(mutated, "post_embedding_v1"), recommendation.ProfileConfigHash(base, "post_embedding_v1"); got != want {
+	if got, want := ProfileConfigHash(mutated, "post_embedding_v1"), ProfileConfigHash(base, "post_embedding_v1"); got != want {
 		t.Fatalf("profile hash changed with serving timeout: got=%q want=%q", got, want)
 	}
-	if got, want := recommendationRankerConfigHash(mutated, "post_embedding_v1"), recommendationRankerConfigHash(base, "post_embedding_v1"); got != want {
+	if got, want := RankerConfigHash(mutated, "post_embedding_v1"), RankerConfigHash(base, "post_embedding_v1"); got != want {
 		t.Fatalf("ranker hash changed with serving timeout: got=%q want=%q", got, want)
 	}
 }
 
 func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{}
-	t.Cleanup(func() { config.AppConfig = original })
+	configured := config.Config{}
 
-	cfg := normalizedRecommendationConfig()
+	cfg := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)
 	if cfg.BehaviorWeights.View != 0.25 || cfg.BehaviorWeights.Like != 4 ||
 		cfg.BehaviorWeights.Click != 1 || cfg.BehaviorWeights.QualifiedRead != 2.5 ||
 		cfg.BehaviorWeights.Reply != 5 || cfg.BehaviorWeights.QuickBounce != -2 ||
@@ -69,31 +64,25 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 }
 
 func TestNormalizedRecommendationConfigUsesDefaultFusionRankConstant(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{}
-	t.Cleanup(func() { config.AppConfig = original })
+	configured := config.Config{}
 
-	if got := normalizedRecommendationConfig().Fusion.RankConstant; got != 60 {
+	if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).Fusion.RankConstant; got != 60 {
 		t.Fatalf("fusion rank constant=%d, want 60", got)
 	}
 }
 
 func TestNormalizedRecommendationConfigUsesDefaultGuestServedHistoryLimit(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{}
-	t.Cleanup(func() { config.AppConfig = original })
+	configured := config.Config{}
 
-	if got := normalizedRecommendationConfig().GuestServedHistoryLimit; got != 2000 {
+	if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).GuestServedHistoryLimit; got != 2000 {
 		t.Fatalf("guest served history limit=%d, want 2000", got)
 	}
 }
 
 func TestNormalizedRecommendationConfigOverridesGuestServedHistoryLimit(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryLimit: 3000}}
-	t.Cleanup(func() { config.AppConfig = original })
+	configured := config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryLimit: 3000}}
 
-	if got := normalizedRecommendationConfig().GuestServedHistoryLimit; got != 3000 {
+	if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).GuestServedHistoryLimit; got != 3000 {
 		t.Fatalf("guest served history limit=%d, want 3000", got)
 	}
 }
@@ -101,11 +90,9 @@ func TestNormalizedRecommendationConfigOverridesGuestServedHistoryLimit(t *testi
 func TestNormalizedRecommendationConfigRejectsNonPositiveGuestServedHistoryLimit(t *testing.T) {
 	for _, limit := range []int{0, -1} {
 		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
-			original := config.AppConfig
-			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryLimit: limit}}
-			t.Cleanup(func() { config.AppConfig = original })
+			configured := config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryLimit: limit}}
 
-			if got := normalizedRecommendationConfig().GuestServedHistoryLimit; got != 2000 {
+			if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).GuestServedHistoryLimit; got != 2000 {
 				t.Fatalf("guest served history limit=%d, want 2000", got)
 			}
 		})
@@ -113,21 +100,17 @@ func TestNormalizedRecommendationConfigRejectsNonPositiveGuestServedHistoryLimit
 }
 
 func TestNormalizedRecommendationConfigUsesDefaultGuestServedHistoryTTLHours(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{}
-	t.Cleanup(func() { config.AppConfig = original })
+	configured := config.Config{}
 
-	if got := normalizedRecommendationConfig().GuestServedHistoryTTLHours; got != 24 {
+	if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).GuestServedHistoryTTLHours; got != 24 {
 		t.Fatalf("guest served history ttl hours=%d, want 24", got)
 	}
 }
 
 func TestNormalizedRecommendationConfigOverridesGuestServedHistoryTTLHours(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryTTLHours: 48}}
-	t.Cleanup(func() { config.AppConfig = original })
+	configured := config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryTTLHours: 48}}
 
-	if got := normalizedRecommendationConfig().GuestServedHistoryTTLHours; got != 48 {
+	if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).GuestServedHistoryTTLHours; got != 48 {
 		t.Fatalf("guest served history ttl hours=%d, want 48", got)
 	}
 }
@@ -135,11 +118,9 @@ func TestNormalizedRecommendationConfigOverridesGuestServedHistoryTTLHours(t *te
 func TestNormalizedRecommendationConfigRejectsNonPositiveGuestServedHistoryTTLHours(t *testing.T) {
 	for _, ttlHours := range []int{0, -1} {
 		t.Run(fmt.Sprintf("ttl_hours_%d", ttlHours), func(t *testing.T) {
-			original := config.AppConfig
-			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryTTLHours: ttlHours}}
-			t.Cleanup(func() { config.AppConfig = original })
+			configured := config.Config{Recommendation: config.RecommendationConfig{GuestServedHistoryTTLHours: ttlHours}}
 
-			if got := normalizedRecommendationConfig().GuestServedHistoryTTLHours; got != 24 {
+			if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).GuestServedHistoryTTLHours; got != 24 {
 				t.Fatalf("guest served history ttl hours=%d, want 24", got)
 			}
 		})
@@ -147,13 +128,11 @@ func TestNormalizedRecommendationConfigRejectsNonPositiveGuestServedHistoryTTLHo
 }
 
 func TestNormalizedRecommendationConfigOverridesFusionRankConstant(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
+	configured := config.Config{Recommendation: config.RecommendationConfig{
 		Fusion: config.RecommendationFusionConfig{RankConstant: 30},
 	}}
-	t.Cleanup(func() { config.AppConfig = original })
 
-	if got := normalizedRecommendationConfig().Fusion.RankConstant; got != 30 {
+	if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).Fusion.RankConstant; got != 30 {
 		t.Fatalf("fusion rank constant=%d, want 30", got)
 	}
 }
@@ -161,13 +140,11 @@ func TestNormalizedRecommendationConfigOverridesFusionRankConstant(t *testing.T)
 func TestNormalizedRecommendationConfigRejectsNonPositiveFusionRankConstant(t *testing.T) {
 	for _, rankConstant := range []int{0, -1} {
 		t.Run(fmt.Sprintf("rank_constant_%d", rankConstant), func(t *testing.T) {
-			original := config.AppConfig
-			config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
+			configured := config.Config{Recommendation: config.RecommendationConfig{
 				Fusion: config.RecommendationFusionConfig{RankConstant: rankConstant},
 			}}
-			t.Cleanup(func() { config.AppConfig = original })
 
-			if got := normalizedRecommendationConfig().Fusion.RankConstant; got != 60 {
+			if got := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence).Fusion.RankConstant; got != 60 {
 				t.Fatalf("fusion rank constant=%d, want 60", got)
 			}
 		})
@@ -175,15 +152,13 @@ func TestNormalizedRecommendationConfigRejectsNonPositiveFusionRankConstant(t *t
 }
 
 func TestNormalizedRecommendationConfigProgrammaticOverridesRemainSupported(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
+	configured := config.Config{Recommendation: config.RecommendationConfig{
 		FollowingBonus:       0.25,
 		OutOfNetworkMinRatio: 0.40,
 		Exploration:          config.RecommendationExplorationConfig{Ratio: 0.20, MaxSlots: 5, RecentWindowDays: 4, NovelPostMaxAgeDays: 12},
 	}}
-	t.Cleanup(func() { config.AppConfig = original })
 
-	cfg := normalizedRecommendationConfig()
+	cfg := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)
 	if cfg.FollowingBonus != 0.25 || cfg.OutOfNetworkMinRatio != 0.40 || cfg.Exploration.Ratio != 0.20 || cfg.Exploration.MaxSlots != 5 || cfg.Exploration.RecentWindowDays != 4 || cfg.Exploration.NovelPostMaxAgeDays != 12 {
 		t.Fatalf("normalized config=%#v", cfg)
 	}
@@ -214,17 +189,15 @@ func TestNormalizedRecommendationConfigExplicitZeroOverrides(t *testing.T) {
 		{name: "diversity.semantic_duplicate_penalty", path: "diversity.semantic_duplicate_penalty", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicatePenalty = 0 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicatePenalty }},
 	}
 
-	original := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = original })
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			set := config.RecommendationConfig{}
 			tc.set(&set)
-			config.AppConfig = &config.Config{
+			configured := config.Config{
 				Recommendation:         set,
 				RecommendationPresence: map[string]bool{tc.path: true},
 			}
-			if got := tc.get(normalizedRecommendationConfig()); got != 0 {
+			if got := tc.get(NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)); got != 0 {
 				t.Fatalf("normalized %s=%v, want 0", tc.path, got)
 			}
 		})
@@ -248,17 +221,15 @@ func TestNormalizedRecommendationConfigTrendingAndSemanticRecallValidation(t *te
 		{name: "trending weight negative", path: "trending_weight", set: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.TrendingWeight }, want: 0.5},
 	}
 
-	original := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = original })
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			set := config.RecommendationConfig{}
 			tc.set(&set)
-			config.AppConfig = &config.Config{
+			configured := config.Config{
 				Recommendation:         set,
 				RecommendationPresence: map[string]bool{tc.path: true},
 			}
-			if got := tc.get(normalizedRecommendationConfig()); got != tc.want {
+			if got := tc.get(NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)); got != tc.want {
 				t.Fatalf("normalized %s=%v, want %v", tc.path, got, tc.want)
 			}
 		})
@@ -266,29 +237,42 @@ func TestNormalizedRecommendationConfigTrendingAndSemanticRecallValidation(t *te
 }
 
 func TestNormalizedRecommendationConfigExplicitZeroRatios(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{RecommendationPresence: map[string]bool{
+	configured := config.Config{RecommendationPresence: map[string]bool{
 		"out_of_network_min_ratio": true,
 		"exploration.ratio":        true,
 	}}
-	t.Cleanup(func() { config.AppConfig = original })
 
-	cfg := normalizedRecommendationConfig()
+	cfg := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)
 	if cfg.OutOfNetworkMinRatio != 0 || cfg.Exploration.Ratio != 0 {
 		t.Fatalf("normalized ratios=%#v, want both zero", cfg)
 	}
 }
 
 func TestNormalizedRecommendationConfigExplicitFalseDisablesDiversity(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{
+	configured := config.Config{
 		Recommendation:         config.RecommendationConfig{Diversity: config.RecommendationDiversityConfig{Enabled: false}},
 		RecommendationPresence: map[string]bool{"diversity.enabled": true},
 	}
-	t.Cleanup(func() { config.AppConfig = original })
 
-	if cfg := normalizedRecommendationConfig(); cfg.Diversity.Enabled {
+	if cfg := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence); cfg.Diversity.Enabled {
 		t.Fatal("explicit diversity.enabled=false must disable diversity")
+	}
+}
+
+func TestNormalizeConfigHonorsExplicitLanguageAffinityZeroAndFalse(t *testing.T) {
+	cfg := NormalizeConfig(
+		config.RecommendationConfig{LanguageAffinity: config.RecommendationLanguageAffinityConfig{
+			Weight: 0, EvidenceSaturationScale: 0, MaxBehaviorShare: 0,
+		}},
+		map[string]bool{
+			"language_affinity.enabled":                   true,
+			"language_affinity.weight":                    true,
+			"language_affinity.evidence_saturation_scale": true,
+			"language_affinity.max_behavior_share":        true,
+		},
+	).LanguageAffinity
+	if cfg.Enabled || cfg.Weight != 0 || cfg.MaxBehaviorShare != 0 || cfg.EvidenceSaturationScale != 5 {
+		t.Fatalf("normalized explicit settings=%#v", cfg)
 	}
 }
 
@@ -312,17 +296,15 @@ func TestNormalizedRecommendationConfigInvalidValuesRemainInvalid(t *testing.T) 
 		{name: "semantic penalty negative", path: "diversity.semantic_duplicate_penalty", set: func(cfg *config.RecommendationConfig) { cfg.Diversity.SemanticDuplicatePenalty = -1 }, get: func(cfg config.RecommendationConfig) float64 { return cfg.Diversity.SemanticDuplicatePenalty }, want: 1},
 	}
 
-	original := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = original })
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			set := config.RecommendationConfig{}
 			tc.set(&set)
-			config.AppConfig = &config.Config{
+			configured := config.Config{
 				Recommendation:         set,
 				RecommendationPresence: map[string]bool{tc.path: true},
 			}
-			if got := tc.get(normalizedRecommendationConfig()); got != tc.want {
+			if got := tc.get(NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)); got != tc.want {
 				t.Fatalf("normalized %s=%v, want %v", tc.path, got, tc.want)
 			}
 		})
@@ -330,8 +312,7 @@ func TestNormalizedRecommendationConfigInvalidValuesRemainInvalid(t *testing.T) 
 }
 
 func TestNormalizedRecommendationConfigExplicitZeroDoesNotRelaxPositiveOnlyFields(t *testing.T) {
-	original := config.AppConfig
-	config.AppConfig = &config.Config{Recommendation: config.RecommendationConfig{
+	configured := config.Config{Recommendation: config.RecommendationConfig{
 		SignalHalfLifeDays:                0,
 		PositivePostWeightCap:             0,
 		NegativeConfidenceSaturationScale: 0,
@@ -339,9 +320,8 @@ func TestNormalizedRecommendationConfigExplicitZeroDoesNotRelaxPositiveOnlyField
 		Diversity:                         config.RecommendationDiversityConfig{AuthorWindowSize: 0},
 		Trace:                             config.RecommendationTraceConfig{CleanupBatchSize: 0},
 	}}
-	t.Cleanup(func() { config.AppConfig = original })
 
-	cfg := normalizedRecommendationConfig()
+	cfg := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)
 	if cfg.SignalHalfLifeDays != 14 || cfg.PositivePostWeightCap != 7 ||
 		cfg.NegativeConfidenceSaturationScale != 12 || cfg.ServedHistoryLimit != 1000 ||
 		cfg.Diversity.AuthorWindowSize != 8 || cfg.Trace.CleanupBatchSize != 5000 {

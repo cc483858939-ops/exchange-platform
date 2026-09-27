@@ -12,7 +12,7 @@ import (
 
 func TestRecommendationRankerUsesSemanticAndTrendingBreakdown(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	article := models.Post{
 		Model:     gorm.Model{ID: 1, CreatedAt: now.Add(-48 * time.Hour)},
 		AuthorID:  10,
@@ -43,7 +43,7 @@ func TestRecommendationRankerUsesSemanticAndTrendingBreakdown(t *testing.T) {
 
 func TestRecommendationRankerPublicationAgeDoesNotChangeBaseScore(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
 		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-time.Hour)}, AuthorID: 10}},
@@ -56,7 +56,7 @@ func TestRecommendationRankerPublicationAgeDoesNotChangeBaseScore(t *testing.T) 
 
 func TestRecommendationRankerOldRelevantPostBeatsWeakNewArticle(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
 		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .9}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-365 * 24 * time.Hour)}, AuthorID: 10}},
@@ -69,7 +69,7 @@ func TestRecommendationRankerOldRelevantPostBeatsWeakNewArticle(t *testing.T) {
 
 func TestRecommendationTrendingRawUsesHalfLife(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	base := models.Post{Model: gorm.Model{CreatedAt: now}, LikeCount: 10, ReplyCount: 2}
 	halfLife := base
 	halfLife.Model.CreatedAt = now.Add(-time.Duration(cfg.Trending.HalfLifeHours * float64(time.Hour)))
@@ -81,7 +81,7 @@ func TestRecommendationTrendingRawUsesHalfLife(t *testing.T) {
 
 func TestRecommendationTrendingRawAppliesAgeAndEngagementBoundaries(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	if got := recommendationTrendingRaw(models.Post{Model: gorm.Model{CreatedAt: now}, LikeCount: 0, ReplyCount: 0}, now, cfg); got != 0 {
 		t.Fatalf("zero engagement raw=%v, want 0", got)
 	}
@@ -97,7 +97,7 @@ func TestRecommendationTrendingRawAppliesAgeAndEngagementBoundaries(t *testing.T
 
 func TestRecommendationRankerAppliesTrendingIndependentOfRecallSource(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	ranked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{{
 		Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5},
 		Post:      models.Post{Model: gorm.Model{CreatedAt: now.Add(-time.Hour)}, LikeCount: 10},
@@ -109,7 +109,7 @@ func TestRecommendationRankerAppliesTrendingIndependentOfRecallSource(t *testing
 
 func TestRecommendationRankerUsesDeterministicTieBreak(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	ranked := rankRecommendationCandidates(userInterestProfile{}, []hydratedRecommendationCandidate{
 		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now}, AuthorID: 10}},
 		{Candidate: embeddingCandidate{PostID: 3, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 3, CreatedAt: now}, AuthorID: 10}},
@@ -121,7 +121,7 @@ func TestRecommendationRankerUsesDeterministicTieBreak(t *testing.T) {
 
 func TestRecommendationExplorationSemanticHonorsNegativePreference(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.NegativeSemanticWeight = 2
 	profile := userInterestProfile{
 		PositiveVector:     []float32{1, 0, 0},
@@ -143,7 +143,7 @@ func TestRecommendationExplorationSemanticHonorsNegativePreference(t *testing.T)
 
 func TestRecommendationExplorationSemanticInvalidEmbeddingsRemainFiniteAndBounded(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}, NegativeVector: []float32{0, 1}, NegativeConfidence: 1}
 	for index, embedding := range [][]float32{
 		nil,
@@ -165,7 +165,7 @@ func TestRecommendationExplorationSemanticInvalidEmbeddingsRemainFiniteAndBounde
 
 func TestRecommendationRankerComputesSemanticOutsideSemanticRecall(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{{
 		Candidate: embeddingCandidate{PostID: 1, FromFollowing: true},
@@ -183,7 +183,7 @@ func TestRecommendationRankerFallsBackToRecallSemanticWhenHydratedEmbeddingMissi
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{{
 		Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .8},
 		Post:      models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10},
-	}}, now, defaultRecommendationConfig())
+	}}, now, DefaultConfig())
 	if len(ranked) != 1 || math.Abs(ranked[0].Breakdown.PositiveSemantic-.8) > 1e-9 {
 		t.Fatalf("ranked=%#v, want recall semantic fallback .8", ranked)
 	}
@@ -191,7 +191,7 @@ func TestRecommendationRankerFallsBackToRecallSemanticWhenHydratedEmbeddingMissi
 
 func TestRecommendationRankerKeepsNilEmbeddingWithNonSemanticScores(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	cfg.LanguageAffinity.Enabled = true
 	cfg.LanguageAffinity.Weight = 0.25
 	profile := userInterestProfile{
@@ -248,7 +248,7 @@ func TestRecommendationRankerKeepsNilEmbeddingWithNonSemanticScores(t *testing.T
 
 func TestRecommendationRankerKeepsEmbeddedAndNilEmbeddingCandidates(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	cfg := defaultRecommendationConfig()
+	cfg := DefaultConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
 		{
@@ -304,7 +304,7 @@ func TestRecommendationRankerIgnoresFusionScore(t *testing.T) {
 			Embedding: []float32{1, 0},
 		},
 	}
-	ranked := rankRecommendationCandidates(profile, candidates, now, defaultRecommendationConfig())
+	ranked := rankRecommendationCandidates(profile, candidates, now, DefaultConfig())
 	if len(ranked) != 2 || math.Abs(ranked[0].Breakdown.BaseScore-ranked[1].Breakdown.BaseScore) > 1e-9 {
 		t.Fatalf("ranked=%#v, FusionScore must not affect BaseScore", ranked)
 	}
