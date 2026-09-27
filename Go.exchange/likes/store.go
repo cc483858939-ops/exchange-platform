@@ -17,6 +17,13 @@ type Store struct{ client *redis.Client }
 
 func NewStore(client *redis.Client) *Store { return &Store{client: client} }
 
+type expiryLeaseCandidate struct {
+	postID          uint
+	expectedVersion int64
+}
+
+type expiryLeaseRenewalFunc func(context.Context, uint, int64, time.Duration, time.Duration) (bool, error)
+
 func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (MutationResult, error) {
 	if s == nil || s.client == nil {
 		return MutationResult{}, errors.New("redis is not initialized")
@@ -46,9 +53,26 @@ func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (Mu
 }
 
 func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
+	return s.get(ctx, userID, postID, 0, 0, nil)
+}
+
+// GetForServing reads and validates Like state for a client-facing request.
+// When ttl and renewalThreshold form a valid lease policy, it observes the
+// Ready key's PTTL in the read pipeline and best-effort renews an existing
+// lease inside the renewal window. Passing zero durations keeps the read pure.
+func (s *Store) GetForServing(ctx context.Context, userID, postID uint, ttl, renewalThreshold time.Duration) (State, error) {
+	var renew expiryLeaseRenewalFunc
+	if validExpiryLeaseDurations(ttl, renewalThreshold) {
+		renew = s.RenewExpiryLease
+	}
+	return s.get(ctx, userID, postID, ttl, renewalThreshold, renew)
+}
+
+func (s *Store) get(ctx context.Context, userID, postID uint, ttl, renewalThreshold time.Duration, renew expiryLeaseRenewalFunc) (State, error) {
 	if s == nil || s.client == nil {
 		return State{}, errors.New("redis is not initialized")
 	}
+	renewalEnabled := validExpiryLeaseDurations(ttl, renewalThreshold)
 	pipe := s.client.WithContext(ctx).Pipeline()
 	ready := pipe.Get(ReadyKey(postID))
 	count := pipe.Get(CountKey(postID))
@@ -58,9 +82,13 @@ func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
 	if userID > 0 {
 		member = pipe.SIsMember(UsersKey(postID), strconv.FormatUint(uint64(userID), 10))
 	}
-	_, err := pipe.ExecContext(ctx)
-	if err != nil && err != redis.Nil {
-		return State{}, err
+	var pttl *redis.DurationCmd
+	if renewalEnabled {
+		pttl = pipe.PTTL(ReadyKey(postID))
+	}
+	_, execErr := pipe.ExecContext(ctx)
+	if execErr != nil && execErr != redis.Nil && pttl == nil {
+		return State{}, execErr
 	}
 	if err := requireReadyCommand(ready); err != nil {
 		return State{}, err
@@ -91,6 +119,12 @@ func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
 	if member != nil {
 		state.Liked = member.Val()
 	}
+	if execErr != nil && execErr != redis.Nil && (pttl == nil || pttl.Err() == nil) {
+		return State{}, execErr
+	}
+	if renew != nil && pttl != nil && pttl.Err() == nil && pttl.Val() > 0 && pttl.Val() <= renewalThreshold {
+		_, _ = renew(ctx, postID, versionValue, ttl, renewalThreshold)
+	}
 	return state, nil
 }
 
@@ -101,9 +135,21 @@ func (s *Store) LoadSummary(ctx context.Context, postID uint) (State, error) {
 }
 
 func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[uint]State, []uint, error) {
+	return s.getMany(ctx, userID, postIDs, 0, 0)
+}
+
+// GetManyForServing keeps the batched read pipeline and renews eligible
+// expiring states in one optional follow-up pipeline. Invalid or zero lease
+// durations disable PTTL observation and renewal while preserving read semantics.
+func (s *Store) GetManyForServing(ctx context.Context, userID uint, postIDs []uint, ttl, renewalThreshold time.Duration) (map[uint]State, []uint, error) {
+	return s.getMany(ctx, userID, postIDs, ttl, renewalThreshold)
+}
+
+func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint, ttl, renewalThreshold time.Duration) (map[uint]State, []uint, error) {
 	if s == nil || s.client == nil {
 		return nil, nil, errors.New("redis is not initialized")
 	}
+	renewalEnabled := validExpiryLeaseDurations(ttl, renewalThreshold)
 	states := make(map[uint]State, len(postIDs))
 	unavailable := make([]uint, 0)
 	if len(postIDs) == 0 {
@@ -117,25 +163,35 @@ func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 		version     *redis.StringCmd
 		cardinality *redis.IntCmd
 		member      *redis.BoolCmd
+		pttl        *redis.DurationCmd
 	}
 	pipe := s.client.WithContext(ctx).Pipeline()
 	batch := make([]commands, 0, len(postIDs))
 	user := strconv.FormatUint(uint64(userID), 10)
 	for _, postID := range postIDs {
-		batch = append(batch, commands{
+		command := commands{
 			postID:      postID,
 			ready:       pipe.Get(ReadyKey(postID)),
 			count:       pipe.Get(CountKey(postID)),
 			version:     pipe.Get(VersionKey(postID)),
 			cardinality: pipe.SCard(UsersKey(postID)),
 			member:      pipe.SIsMember(UsersKey(postID), user),
-		})
+		}
+		if renewalEnabled {
+			command.pttl = pipe.PTTL(ReadyKey(postID))
+		}
+		batch = append(batch, command)
 	}
-	_, err := pipe.ExecContext(ctx)
-	if err != nil && err != redis.Nil {
-		return nil, nil, err
+	_, execErr := pipe.ExecContext(ctx)
+	if execErr != nil && execErr != redis.Nil && !renewalEnabled {
+		return nil, nil, execErr
 	}
 
+	var renewCandidates []expiryLeaseCandidate
+	var renewCandidateIDs map[uint]struct{}
+	if renewalEnabled {
+		renewCandidateIDs = make(map[uint]struct{})
+	}
 	for _, command := range batch {
 		for _, commandErr := range []error{command.ready.Err(), command.count.Err(), command.version.Err(), command.cardinality.Err(), command.member.Err()} {
 			if commandErr != nil && commandErr != redis.Nil {
@@ -155,6 +211,25 @@ func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 			Version: version,
 			Liked:   command.member.Val(),
 		}
+		if command.pttl != nil && command.pttl.Err() == nil && command.pttl.Val() > 0 && command.pttl.Val() <= renewalThreshold {
+			if _, seen := renewCandidateIDs[command.postID]; !seen {
+				renewCandidateIDs[command.postID] = struct{}{}
+				renewCandidates = append(renewCandidates, expiryLeaseCandidate{postID: command.postID, expectedVersion: version})
+			}
+		}
+	}
+	hasPTTLError := false
+	for _, command := range batch {
+		if command.pttl != nil && command.pttl.Err() != nil {
+			hasPTTLError = true
+			break
+		}
+	}
+	if execErr != nil && execErr != redis.Nil && !hasPTTLError {
+		return nil, nil, execErr
+	}
+	if renewalEnabled && len(renewCandidates) > 0 {
+		s.renewExpiryLeases(ctx, renewCandidates, ttl, renewalThreshold)
 	}
 	return states, unavailable, nil
 }
@@ -243,6 +318,71 @@ func (s *Store) ArmExpiry(ctx context.Context, postID uint, expectedVersion int6
 		postID, expectedVersion, seconds,
 	).Int64()
 	return value == 1, mapScriptError(err)
+}
+
+// RenewExpiryLease extends an existing recovery-backed expiry lease. It never
+// creates a marker or changes mutation-driven expiry candidate chronology.
+func (s *Store) RenewExpiryLease(ctx context.Context, postID uint, expectedVersion int64, ttl, renewalThreshold time.Duration) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, errors.New("redis is not initialized")
+	}
+	if postID == 0 || expectedVersion < 0 || !validExpiryLeaseDurations(ttl, renewalThreshold) {
+		return false, errors.New("invalid like state expiry renewal arguments")
+	}
+	ttlMillis, thresholdMillis := expiryLeaseMilliseconds(ttl, renewalThreshold)
+	if ttlMillis <= 0 || thresholdMillis <= 0 || thresholdMillis >= ttlMillis {
+		return false, errors.New("invalid like state expiry renewal durations")
+	}
+	value, err := s.client.WithContext(ctx).Eval(
+		renewExpiryLeaseScript,
+		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, RecoverableVersionsKey},
+		postID, strconv.FormatInt(expectedVersion, 10), ttlMillis, thresholdMillis,
+	).Int64()
+	return value == 1, mapScriptError(err)
+}
+
+func (s *Store) renewExpiryLeases(ctx context.Context, candidates []expiryLeaseCandidate, ttl, renewalThreshold time.Duration) {
+	if s == nil || s.client == nil || len(candidates) == 0 || !validExpiryLeaseDurations(ttl, renewalThreshold) {
+		return
+	}
+	ttlMillis, thresholdMillis := expiryLeaseMilliseconds(ttl, renewalThreshold)
+	if ttlMillis <= 0 || thresholdMillis <= 0 || thresholdMillis >= ttlMillis {
+		return
+	}
+	pipe := s.client.WithContext(ctx).Pipeline()
+	seen := make(map[uint]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, exists := seen[candidate.postID]; exists {
+			continue
+		}
+		seen[candidate.postID] = struct{}{}
+		pipe.Eval(
+			renewExpiryLeaseScript,
+			[]string{ReadyKey(candidate.postID), CountKey(candidate.postID), UsersKey(candidate.postID), VersionKey(candidate.postID), RegistryKey, RecoverableVersionsKey},
+			candidate.postID, strconv.FormatInt(candidate.expectedVersion, 10), ttlMillis, thresholdMillis,
+		)
+	}
+	_, _ = pipe.ExecContext(ctx)
+}
+
+func validExpiryLeaseDurations(ttl, renewalThreshold time.Duration) bool {
+	return ttl > 0 && renewalThreshold > 0 && renewalThreshold < ttl &&
+		durationMillisecondsCeil(renewalThreshold) < durationMillisecondsCeil(ttl)
+}
+
+func expiryLeaseMilliseconds(ttl, renewalThreshold time.Duration) (int64, int64) {
+	return durationMillisecondsCeil(ttl), durationMillisecondsCeil(renewalThreshold)
+}
+
+func durationMillisecondsCeil(duration time.Duration) int64 {
+	millis := int64(duration / time.Millisecond)
+	if duration%time.Millisecond != 0 {
+		millis++
+	}
+	if millis < 1 {
+		return 1
+	}
+	return millis
 }
 
 // PurgePost removes all Redis-owned Like state for a deleted Post. Relational

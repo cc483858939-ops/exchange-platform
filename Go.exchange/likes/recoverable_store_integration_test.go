@@ -257,6 +257,241 @@ func TestStoreIdempotentMutationPreservesArmedExpiryIntegration(t *testing.T) {
 	}
 }
 
+func TestStoreReadAwareExpiryLeaseIntegration(t *testing.T) {
+	client, store, basePostID := openRecoverableStoreIntegration(t)
+	ctx := context.Background()
+	const fullTTL = 24 * time.Hour
+	const renewalThreshold = 12 * time.Hour
+	postIDs := make([]uint, 11)
+	for index := range postIDs {
+		postIDs[index] = basePostID + uint(index)
+		if index > 0 {
+			cleanupRecoverableStorePost(client, postIDs[index])
+		}
+	}
+	t.Cleanup(func() {
+		for _, postID := range postIDs {
+			cleanupRecoverableStorePost(client, postID)
+			cleanupRecoverableStoreBehaviorPair(client, 11, postID)
+			cleanupRecoverableStoreBehaviorPair(client, 12, postID)
+		}
+	})
+
+	initialize := func(postID uint, count int64, userIDs []uint) {
+		t.Helper()
+		if created, err := store.Initialize(ctx, postID, count, 10, userIDs); err != nil || !created {
+			t.Fatalf("Initialize post=%d created=%t err=%v", postID, created, err)
+		}
+	}
+	armWithPTTL := func(postID uint, pttl time.Duration) {
+		t.Helper()
+		if armed, err := store.ArmExpiry(ctx, postID, 10, fullTTL); err != nil || !armed {
+			t.Fatalf("ArmExpiry post=%d armed=%t err=%v", postID, armed, err)
+		}
+		for _, key := range []string{ReadyKey(postID), CountKey(postID), VersionKey(postID), UsersKey(postID)} {
+			if err := client.PExpire(key, pttl).Err(); err != nil {
+				t.Fatalf("PEXPIRE key=%q: %v", key, err)
+			}
+		}
+	}
+	readPTTL := func(postID uint) time.Duration {
+		t.Helper()
+		pttl, err := client.PTTL(ReadyKey(postID)).Result()
+		if err != nil {
+			t.Fatalf("PTTL post=%d: %v", postID, err)
+		}
+		return pttl
+	}
+
+	// Persistent reads must stay pure and leave mutation chronology alone.
+	persistentID := postIDs[0]
+	initialize(persistentID, 1, []uint{11})
+	candidateBefore, err := client.ZScore(ExpiryCandidatesKey, strconv.FormatUint(uint64(persistentID), 10)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetForServing(ctx, 11, persistentID, fullTTL, renewalThreshold)
+	if err != nil || state.Count != 1 || !state.Liked {
+		t.Fatalf("persistent serving state=%+v err=%v", state, err)
+	}
+	if pttl := readPTTL(persistentID); pttl != -1 {
+		t.Fatalf("persistent Ready PTTL=%s want -1", pttl)
+	}
+	candidateAfter, err := client.ZScore(ExpiryCandidatesKey, strconv.FormatUint(uint64(persistentID), 10)).Result()
+	if err != nil || candidateAfter != candidateBefore {
+		t.Fatalf("candidate before=%f after=%f err=%v", candidateBefore, candidateAfter, err)
+	}
+
+	// Healthy leases are left alone, while low leases return to the full TTL.
+	healthyID := postIDs[1]
+	initialize(healthyID, 1, []uint{11})
+	armWithPTTL(healthyID, 20*time.Hour)
+	healthyBefore := readPTTL(healthyID)
+	if _, err := store.GetForServing(ctx, 11, healthyID, fullTTL, renewalThreshold); err != nil {
+		t.Fatal(err)
+	}
+	healthyAfter := readPTTL(healthyID)
+	if healthyAfter <= 19*time.Hour || healthyAfter > healthyBefore {
+		t.Fatalf("healthy Ready PTTL before=%s after=%s", healthyBefore, healthyAfter)
+	}
+
+	lowID := postIDs[2]
+	initialize(lowID, 1, []uint{11})
+	armWithPTTL(lowID, 5*time.Hour)
+	if _, err := store.GetForServing(ctx, 11, lowID, fullTTL, renewalThreshold); err != nil {
+		t.Fatal(err)
+	}
+	if pttl := readPTTL(lowID); pttl <= 23*time.Hour {
+		t.Fatalf("renewed Ready PTTL=%s want near 24h", pttl)
+	}
+	for _, key := range []string{CountKey(lowID), VersionKey(lowID), UsersKey(lowID)} {
+		pttl, err := client.PTTL(key).Result()
+		if err != nil || pttl <= 23*time.Hour {
+			t.Fatalf("renewed key=%q PTTL=%s err=%v", key, pttl, err)
+		}
+	}
+	if marker, err := client.HGet(RecoverableVersionsKey, strconv.FormatUint(uint64(lowID), 10)).Result(); err != nil || marker != "10" {
+		t.Fatalf("renewal marker=%q err=%v want unchanged version 10", marker, err)
+	}
+	if _, err := client.ZScore(ExpiryCandidatesKey, strconv.FormatUint(uint64(lowID), 10)).Result(); err != redis.Nil {
+		t.Fatalf("renewal touched expiry candidates: %v", err)
+	}
+
+	// Internal reads do not renew; only a serving read crosses that boundary.
+	internalID := postIDs[3]
+	initialize(internalID, 1, []uint{11})
+	armWithPTTL(internalID, 5*time.Hour)
+	internalBefore := readPTTL(internalID)
+	if _, err := store.Get(ctx, 11, internalID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadSummary(ctx, internalID); err != nil {
+		t.Fatal(err)
+	}
+	internalAfter := readPTTL(internalID)
+	if internalAfter > internalBefore || internalAfter <= 4*time.Hour {
+		t.Fatalf("internal read changed PTTL before=%s after=%s", internalBefore, internalAfter)
+	}
+	if _, err := store.GetForServing(ctx, 11, internalID, fullTTL, renewalThreshold); err != nil {
+		t.Fatal(err)
+	}
+	if pttl := readPTTL(internalID); pttl <= 23*time.Hour {
+		t.Fatalf("serving read after internal reads PTTL=%s want renewal", pttl)
+	}
+
+	// GetMany keeps one batch read and renews only low-TTL candidates, including
+	// at most once when the input contains duplicate Post IDs.
+	batchPersistentID, batchHealthyID, batchLowID := postIDs[4], postIDs[5], postIDs[6]
+	initialize(batchPersistentID, 1, []uint{11})
+	initialize(batchHealthyID, 1, []uint{11})
+	initialize(batchLowID, 1, []uint{11})
+	armWithPTTL(batchHealthyID, 20*time.Hour)
+	armWithPTTL(batchLowID, 5*time.Hour)
+	states, unavailable, err := store.GetManyForServing(ctx, 11, []uint{batchPersistentID, batchHealthyID, batchLowID, batchLowID}, fullTTL, renewalThreshold)
+	if err != nil || len(unavailable) != 0 || len(states) != 3 {
+		t.Fatalf("GetManyForServing states=%v unavailable=%v err=%v", states, unavailable, err)
+	}
+	if readPTTL(batchPersistentID) != -1 {
+		t.Fatalf("batch persistent state gained a TTL: %s", readPTTL(batchPersistentID))
+	}
+	if pttl := readPTTL(batchHealthyID); pttl <= 19*time.Hour || pttl > 20*time.Hour {
+		t.Fatalf("batch healthy state PTTL=%s", pttl)
+	}
+	if pttl := readPTTL(batchLowID); pttl <= 23*time.Hour {
+		t.Fatalf("batch low state PTTL=%s want renewal", pttl)
+	}
+
+	// An absent Users Set is valid for an empty state and remains absent after renewal.
+	emptyID := postIDs[7]
+	initialize(emptyID, 0, nil)
+	armWithPTTL(emptyID, 5*time.Hour)
+	state, err = store.GetForServing(ctx, 11, emptyID, fullTTL, renewalThreshold)
+	if err != nil || state.Count != 0 {
+		t.Fatalf("empty state=%+v err=%v", state, err)
+	}
+	if pttl := readPTTL(emptyID); pttl <= 23*time.Hour {
+		t.Fatalf("empty state Ready PTTL=%s want renewal", pttl)
+	}
+	if exists, err := client.Exists(UsersKey(emptyID)).Result(); err != nil || exists != 0 {
+		t.Fatalf("empty Users key exists=%d err=%v", exists, err)
+	}
+
+	// A mutation after the observed version wins over a stale renewal attempt.
+	raceID := postIDs[8]
+	initialize(raceID, 1, []uint{11})
+	armWithPTTL(raceID, 5*time.Hour)
+	mutation, err := store.Mutate(ctx, 12, raceID, true)
+	if err != nil || !mutation.Changed || mutation.Version != 11 {
+		t.Fatalf("mutation=%+v err=%v", mutation, err)
+	}
+	if renewed, err := store.RenewExpiryLease(ctx, raceID, 10, fullTTL, renewalThreshold); err != nil || renewed {
+		t.Fatalf("stale renewal renewed=%t err=%v", renewed, err)
+	}
+	for _, key := range []string{ReadyKey(raceID), CountKey(raceID), VersionKey(raceID), UsersKey(raceID)} {
+		if pttl, err := client.PTTL(key).Result(); err != nil || pttl != -1 {
+			t.Fatalf("mutation did not persist key=%q PTTL=%s err=%v", key, pttl, err)
+		}
+	}
+
+	// Missing or mismatched recovery markers can never renew a lease.
+	for index, markerValue := range []string{"missing", "9"} {
+		markerID := postIDs[9+index]
+		initialize(markerID, 1, []uint{11})
+		armWithPTTL(markerID, 5*time.Hour)
+		field := strconv.FormatUint(uint64(markerID), 10)
+		if markerValue == "missing" {
+			client.HDel(RecoverableVersionsKey, field)
+		} else {
+			client.HSet(RecoverableVersionsKey, field, markerValue)
+		}
+		if _, err := store.GetForServing(ctx, 11, markerID, fullTTL, renewalThreshold); err != nil {
+			t.Fatal(err)
+		}
+		if pttl := readPTTL(markerID); pttl <= 0 || pttl > 5*time.Hour {
+			t.Fatalf("marker=%q unexpectedly renewed PTTL=%s", markerValue, pttl)
+		}
+		if markerValue == "missing" {
+			if exists, err := client.HExists(RecoverableVersionsKey, field).Result(); err != nil || exists {
+				t.Fatalf("renewal recreated missing marker exists=%t err=%v", exists, err)
+			}
+		}
+	}
+
+	// A successful state read is returned even when its optional renewal fails.
+	failOpenID := postIDs[10]
+	initialize(failOpenID, 1, []uint{11})
+	armWithPTTL(failOpenID, 5*time.Hour)
+	renewAttempted := false
+	state, err = store.get(ctx, 11, failOpenID, fullTTL, renewalThreshold, func(context.Context, uint, int64, time.Duration, time.Duration) (bool, error) {
+		renewAttempted = true
+		return false, errors.New("simulated optional renewal failure")
+	})
+	if err != nil || state.Count != 1 || !state.Liked || !renewAttempted {
+		t.Fatalf("failed renewal state=%+v attempted=%t err=%v", state, renewAttempted, err)
+	}
+	if pttl := readPTTL(failOpenID); pttl <= 0 || pttl > 5*time.Hour {
+		t.Fatalf("failed renewal unexpectedly changed PTTL=%s", pttl)
+	}
+
+	// A cold lease with no serving reads still expires naturally.
+	coldID := postIDs[10] + 1
+	cleanupRecoverableStorePost(client, coldID)
+	t.Cleanup(func() { cleanupRecoverableStorePost(client, coldID) })
+	initialize(coldID, 0, nil)
+	if armed, err := store.ArmExpiry(ctx, coldID, 10, fullTTL); err != nil || !armed {
+		t.Fatalf("cold ArmExpiry armed=%t err=%v", armed, err)
+	}
+	for _, key := range []string{ReadyKey(coldID), CountKey(coldID), VersionKey(coldID)} {
+		if err := client.PExpire(key, 150*time.Millisecond).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	if exists, err := client.Exists(ReadyKey(coldID)).Result(); err != nil || exists != 0 {
+		t.Fatalf("cold Ready exists=%d err=%v", exists, err)
+	}
+}
+
 func TestStoreLuaTypePreflightPreventsPurgePartialMutationIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()

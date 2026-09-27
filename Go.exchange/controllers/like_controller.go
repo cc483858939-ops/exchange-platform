@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/likes"
 
@@ -206,12 +208,14 @@ func setPostLikedStateWithRedis(ctx context.Context, userID uint, postID uint, l
 }
 
 func loadPostLikeStateFromRedis(ctx context.Context, userID uint, postID uint) (postLikeStateResult, error) {
-	state, err := likes.NewStore(global.RedisDB).Get(ctx, userID, postID)
+	ttl, renewalThreshold := likeStateServingReadLease()
+	state, err := likes.NewStore(global.RedisDB).GetForServing(ctx, userID, postID, ttl, renewalThreshold)
 	return postLikeStateResult{Likes: state.Count, Liked: state.Liked}, err
 }
 
 func loadPostLikeStatesFromRedis(ctx context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
-	states, unavailable, err := likes.NewStore(global.RedisDB).GetMany(ctx, userID, postIDs)
+	ttl, renewalThreshold := likeStateServingReadLease()
+	states, unavailable, err := likes.NewStore(global.RedisDB).GetManyForServing(ctx, userID, postIDs, ttl, renewalThreshold)
 	if err != nil {
 		return postLikeStatesLoadResult{}, err
 	}
@@ -224,6 +228,14 @@ func loadPostLikeStatesFromRedis(ctx context.Context, userID uint, postIDs []uin
 	}
 	return result, nil
 }
+
+func likeStateServingReadLease() (time.Duration, time.Duration) {
+	if !config.LikeStateExpiryEnabled() {
+		return 0, 0
+	}
+	return config.LikeStateTTL(), config.LikeStateReadRenewalThreshold()
+}
+
 func getPostLikeCount(postID uint) (int64, error) {
 	result, err := loadPostLikeStateFromRedis(context.Background(), 0, postID)
 	return result.Likes, err

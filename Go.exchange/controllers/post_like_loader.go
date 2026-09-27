@@ -345,14 +345,14 @@ func loadPostLikeStatesWithRecovery(ctx context.Context, userID uint, postIDs []
 		}
 	}
 	if len(recoveredIDs) > 0 {
-		readyStates, stillUnavailable, getErr := store.GetMany(ctx, userID, recoveredIDs)
+		readyResult, getErr := loadPostLikeStatesFromRedis(ctx, userID, recoveredIDs)
 		if getErr != nil {
 			return postLikeStatesLoadResult{}, getErr
 		}
-		for postID, state := range readyStates {
-			result.States[postID] = postLikeStateResult{Likes: state.Count, Liked: state.Liked}
+		for postID, state := range readyResult.States {
+			result.States[postID] = state
 		}
-		for _, postID := range stillUnavailable {
+		for _, postID := range readyResult.Unavailable {
 			unavailable[postID] = struct{}{}
 		}
 	}

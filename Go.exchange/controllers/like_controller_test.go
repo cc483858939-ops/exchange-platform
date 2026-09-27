@@ -9,11 +9,26 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"Go.exchange/likes"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestLikeStateServingReadLeaseUsesExpiryFeatureFlag(t *testing.T) {
+	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "false")
+	t.Setenv("LIKE_STATE_TTL", "24h")
+	t.Setenv("LIKE_STATE_READ_RENEWAL_THRESHOLD", "6h")
+	if ttl, threshold := likeStateServingReadLease(); ttl != 0 || threshold != 0 {
+		t.Fatalf("disabled serving lease ttl=%s threshold=%s", ttl, threshold)
+	}
+
+	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "true")
+	if ttl, threshold := likeStateServingReadLease(); ttl != 24*time.Hour || threshold != 6*time.Hour {
+		t.Fatalf("enabled serving lease ttl=%s threshold=%s", ttl, threshold)
+	}
+}
 
 func TestLikePostReturnsMutationResult(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -234,6 +234,20 @@ func LikeStateTTL() time.Duration {
 	return envDuration("LIKE_STATE_TTL", 24*time.Hour)
 }
 
+// LikeStateReadRenewalThreshold defaults to half the configured expiry TTL.
+func LikeStateReadRenewalThreshold() time.Duration {
+	ttl := LikeStateTTL()
+	fallback := ttl / 2
+	if fallback <= 0 {
+		return 0
+	}
+	threshold := envDuration("LIKE_STATE_READ_RENEWAL_THRESHOLD", fallback)
+	if threshold >= ttl {
+		return fallback
+	}
+	return threshold
+}
+
 func LikeStateMaintenanceInterval() time.Duration {
 	return envDuration("LIKE_STATE_MAINTENANCE_INTERVAL", time.Minute)
 }

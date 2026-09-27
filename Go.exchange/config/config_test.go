@@ -244,6 +244,7 @@ func TestLikeStateEnvironmentDefaultsAndOverrides(t *testing.T) {
 		"LIKE_STATE_EXPIRY_ENABLED",
 		"LIKE_STATE_IDLE_BEFORE_EXPIRY",
 		"LIKE_STATE_TTL",
+		"LIKE_STATE_READ_RENEWAL_THRESHOLD",
 		"LIKE_STATE_MAINTENANCE_INTERVAL",
 		"LIKE_STATE_MAINTENANCE_BATCH_SIZE",
 	} {
@@ -258,6 +259,9 @@ func TestLikeStateEnvironmentDefaultsAndOverrides(t *testing.T) {
 	if got := LikeStateTTL(); got != 24*time.Hour {
 		t.Fatalf("TTL=%s", got)
 	}
+	if got := LikeStateReadRenewalThreshold(); got != 12*time.Hour {
+		t.Fatalf("read renewal threshold=%s want 12h", got)
+	}
 	if got := LikeStateMaintenanceInterval(); got != time.Minute {
 		t.Fatalf("maintenance interval=%s", got)
 	}
@@ -268,10 +272,22 @@ func TestLikeStateEnvironmentDefaultsAndOverrides(t *testing.T) {
 	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "true")
 	t.Setenv("LIKE_STATE_IDLE_BEFORE_EXPIRY", "2h")
 	t.Setenv("LIKE_STATE_TTL", "90m")
+	t.Setenv("LIKE_STATE_READ_RENEWAL_THRESHOLD", "")
+	if got := LikeStateReadRenewalThreshold(); got != 45*time.Minute {
+		t.Fatalf("custom TTL renewal default=%s want 45m", got)
+	}
+	t.Setenv("LIKE_STATE_READ_RENEWAL_THRESHOLD", "30m")
 	t.Setenv("LIKE_STATE_MAINTENANCE_INTERVAL", "15s")
 	t.Setenv("LIKE_STATE_MAINTENANCE_BATCH_SIZE", "25")
-	if !LikeStateExpiryEnabled() || LikeStateIdleBeforeExpiry() != 2*time.Hour || LikeStateTTL() != 90*time.Minute || LikeStateMaintenanceInterval() != 15*time.Second || LikeStateMaintenanceBatchSize() != 25 {
-		t.Fatalf("unexpected like state config enabled=%t idle=%s ttl=%s interval=%s batch=%d", LikeStateExpiryEnabled(), LikeStateIdleBeforeExpiry(), LikeStateTTL(), LikeStateMaintenanceInterval(), LikeStateMaintenanceBatchSize())
+	if !LikeStateExpiryEnabled() || LikeStateIdleBeforeExpiry() != 2*time.Hour || LikeStateTTL() != 90*time.Minute || LikeStateReadRenewalThreshold() != 30*time.Minute || LikeStateMaintenanceInterval() != 15*time.Second || LikeStateMaintenanceBatchSize() != 25 {
+		t.Fatalf("unexpected like state config enabled=%t idle=%s ttl=%s renewal=%s interval=%s batch=%d", LikeStateExpiryEnabled(), LikeStateIdleBeforeExpiry(), LikeStateTTL(), LikeStateReadRenewalThreshold(), LikeStateMaintenanceInterval(), LikeStateMaintenanceBatchSize())
+	}
+
+	for _, invalid := range []string{"90m", "0s", "not-a-duration"} {
+		t.Setenv("LIKE_STATE_READ_RENEWAL_THRESHOLD", invalid)
+		if got := LikeStateReadRenewalThreshold(); got != 45*time.Minute {
+			t.Fatalf("invalid renewal threshold %q=%s want TTL/2", invalid, got)
+		}
 	}
 
 	t.Setenv("LIKE_STATE_MAINTENANCE_BATCH_SIZE", "0")

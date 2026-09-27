@@ -194,6 +194,58 @@ redis.call('ZREM', KEYS[6], ARGV[1])
 return 1
 `)
 
+const renewExpiryLeaseScript = `
+local function type_matches(key, expected)
+  local actual = redis.call('TYPE', key).ok
+  return actual == 'none' or actual == expected
+end
+
+local function nonnegative_integer(raw)
+  if not raw or not string.match(raw, '^%d+$') then return nil end
+  local value = tonumber(raw)
+  if not value or value < 0 then return nil end
+  return value
+end
+
+if not type_matches(KEYS[1], 'string') or
+   not type_matches(KEYS[2], 'string') or
+   not type_matches(KEYS[3], 'set') or
+   not type_matches(KEYS[4], 'string') or
+   not type_matches(KEYS[5], 'set') or
+   not type_matches(KEYS[6], 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
+
+if redis.call('GET', KEYS[1]) ~= '1' or
+   redis.call('SISMEMBER', KEYS[5], ARGV[1]) ~= 1 or
+   redis.call('HGET', KEYS[6], ARGV[1]) ~= ARGV[2] then
+  return 0
+end
+
+local count_raw = redis.call('GET', KEYS[2])
+local version_raw = redis.call('GET', KEYS[4])
+local count = nonnegative_integer(count_raw)
+local version = nonnegative_integer(version_raw)
+if not count or not version or version_raw ~= ARGV[2] or
+   redis.call('SCARD', KEYS[3]) ~= count then
+  return 0
+end
+
+local pttl = redis.call('PTTL', KEYS[1])
+local ttl = tonumber(ARGV[3])
+local threshold = tonumber(ARGV[4])
+if not ttl or ttl <= 0 or not threshold or threshold <= 0 or threshold >= ttl or
+   pttl <= 0 or pttl > threshold then
+  return 0
+end
+
+redis.call('PEXPIRE', KEYS[1], ttl)
+redis.call('PEXPIRE', KEYS[2], ttl)
+redis.call('PEXPIRE', KEYS[4], ttl)
+if redis.call('EXISTS', KEYS[3]) == 1 then redis.call('PEXPIRE', KEYS[3], ttl) end
+return 1
+`
+
 var purgePostScript = redis.NewScript(`
 local function type_matches(key, expected)
   local actual = redis.call('TYPE', key).ok
