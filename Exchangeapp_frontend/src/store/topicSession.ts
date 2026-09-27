@@ -24,10 +24,14 @@ import {
   syncTopicRepostState,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
+import {
+  createEngagementMutationCoordinator,
+  type EngagementMutationKind,
+  type EngagementMutationResult,
+  type EngagementMutationToken,
+} from './engagementMutationCoordinator';
 
 const pageSize = 20;
-type MutationResult = 'succeeded' | 'failed' | 'ignored';
-type MutationKind = 'like' | 'repost' | 'bookmark';
 
 const normalizeID = (value: unknown): number | null => (
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
@@ -54,31 +58,16 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
   const viewerGeneration = ref(0);
   const requestVersion = ref(0);
   const pagingVersion = ref(0);
-  const likePendingPostIDs = reactive(new Set<number>());
-  const repostPendingPostIDs = reactive(new Set<number>());
-  const bookmarkPendingPostIDs = reactive(new Set<number>());
+  const engagementMutations = createEngagementMutationCoordinator();
+  const {
+    likePendingPostIDs,
+    repostPendingPostIDs,
+    bookmarkPendingPostIDs,
+  } = engagementMutations;
   const mutationErrors = reactive(new Map<number, string>());
 
   const loadedPostIDs = new Set<number>();
   const deletedPostIDs = new Set<number>();
-  const mutationVersions: Record<MutationKind, Map<number, number>> = {
-    like: new Map(),
-    repost: new Map(),
-    bookmark: new Map(),
-  };
-
-  const pendingFor = (kind: MutationKind) => (
-    kind === 'like' ? likePendingPostIDs
-      : kind === 'repost' ? repostPendingPostIDs
-        : bookmarkPendingPostIDs
-  );
-
-  const versionFor = (kind: MutationKind, postID: number) => mutationVersions[kind].get(postID) ?? 0;
-  const bumpVersion = (kind: MutationKind, postID: number) => {
-    const version = versionFor(kind, postID) + 1;
-    mutationVersions[kind].set(postID, version);
-    return version;
-  };
 
   const findPost = (postID: number) => items.value.find(post => post.id === postID);
   const isCurrentRequest = (version: number, slug: string) => (
@@ -119,7 +108,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     && authStore.isAuthenticated;
 
   const hydrateOneState = async <T extends { post_id: number }>(options: {
-    kind: MutationKind;
+    kind: EngagementMutationKind;
     slug: string;
     request: number;
     capturedViewerID: number;
@@ -132,34 +121,34 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     const { kind, slug, request, capturedViewerID, generation, posts, fetch, apply, markUnavailable } = options;
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
-    const versions = new Map(postIDs.map(postID => [postID, versionFor(kind, postID)]));
+    const versions = new Map(postIDs.map(postID => [postID, engagementMutations.getVersion(kind, postID)]));
     const current = () => canApplyHydration(slug, request, capturedViewerID, generation);
     try {
       const response = await fetch(postIDs);
       if (!current()) return;
       const updated = new Set<number>();
       response.items.forEach((item) => {
-        if (versions.get(item.post_id) !== versionFor(kind, item.post_id)) return;
+        if (versions.get(item.post_id) !== engagementMutations.getVersion(kind, item.post_id)) return;
         const post = findPost(item.post_id);
         if (!post) return;
         apply(post, item);
         updated.add(item.post_id);
       });
       response.unavailable_post_ids.forEach((postID) => {
-        if (versions.get(postID) !== versionFor(kind, postID)) return;
+        if (versions.get(postID) !== engagementMutations.getVersion(kind, postID)) return;
         const post = findPost(postID);
         if (post) markUnavailable(post);
         updated.add(postID);
       });
       postIDs.forEach((postID) => {
-        if (updated.has(postID) || versions.get(postID) !== versionFor(kind, postID)) return;
+        if (updated.has(postID) || versions.get(postID) !== engagementMutations.getVersion(kind, postID)) return;
         const post = findPost(postID);
         if (post) markUnavailable(post);
       });
     } catch {
       if (!current()) return;
       postIDs.forEach((postID) => {
-        if (versions.get(postID) !== versionFor(kind, postID)) return;
+        if (versions.get(postID) !== engagementMutations.getVersion(kind, postID)) return;
         const post = findPost(postID);
         if (post) markUnavailable(post);
       });
@@ -218,11 +207,8 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     loadMoreError.value = '';
     loadedPostIDs.clear();
     deletedPostIDs.clear();
-    likePendingPostIDs.clear();
-    repostPendingPostIDs.clear();
-    bookmarkPendingPostIDs.clear();
+    engagementMutations.resetAll();
     mutationErrors.clear();
-    Object.values(mutationVersions).forEach(versions => versions.clear());
   };
 
   const loadInitial = async (force = false) => {
@@ -302,11 +288,8 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     if (nextViewerID === viewerID.value) return;
     viewerID.value = nextViewerID;
     viewerGeneration.value += 1;
-    likePendingPostIDs.clear();
-    repostPendingPostIDs.clear();
-    bookmarkPendingPostIDs.clear();
+    engagementMutations.resetAll();
     mutationErrors.clear();
-    Object.values(mutationVersions).forEach(versions => versions.clear());
     if (nextViewerID === null) {
       initializeGuestInteractionStates(items.value);
     } else if (activeSlug.value) {
@@ -321,24 +304,21 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
   );
 
   const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
-    bumpVersion('like', update.postId);
-    likePendingPostIDs.delete(update.postId);
+    engagementMutations.invalidate('like', update.postId);
     mutationErrors.delete(update.postId);
     const post = findPost(update.postId);
     return post ? applyFeedLikeStateUpdate(post, update) : false;
   };
 
   const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
-    bumpVersion('repost', update.postId);
-    repostPendingPostIDs.delete(update.postId);
+    engagementMutations.invalidate('repost', update.postId);
     mutationErrors.delete(update.postId);
     const post = findPost(update.postId);
     return post ? applyFeedRepostStateUpdate(post, update) : false;
   };
 
   const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
-    bumpVersion('bookmark', update.postId);
-    bookmarkPendingPostIDs.delete(update.postId);
+    engagementMutations.invalidate('bookmark', update.postId);
     mutationErrors.delete(update.postId);
     const post = findPost(update.postId);
     return post ? applyFeedBookmarkStateUpdate(post, update) : false;
@@ -357,13 +337,8 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     const existed = Boolean(findPost(postID));
     deletedPostIDs.add(postID);
     items.value = items.value.filter(post => post.id !== postID);
-    likePendingPostIDs.delete(postID);
-    repostPendingPostIDs.delete(postID);
-    bookmarkPendingPostIDs.delete(postID);
     mutationErrors.delete(postID);
-    bumpVersion('like', postID);
-    bumpVersion('repost', postID);
-    bumpVersion('bookmark', postID);
+    engagementMutations.invalidatePost(postID);
     return existed;
   };
 
@@ -396,33 +371,36 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     replaceAuthorIdentityLocal,
   });
 
-  const isCurrentMutation = (kind: MutationKind, postID: number, version: number, slug: string, request: number, viewer: number, generation: number) => (
-    isCurrentRequest(request, slug)
+  const isCurrentMutation = (
+    token: EngagementMutationToken,
+    slug: string,
+    request: number,
+    viewer: number,
+    viewerGenerationSnapshot: number,
+  ) => (
+    engagementMutations.isCurrent(token)
+    && isCurrentRequest(request, slug)
     && viewerID.value === viewer
-    && viewerGeneration.value === generation
+    && viewerGeneration.value === viewerGenerationSnapshot
     && authStore.isAuthenticated
-    && versionFor(kind, postID) === version
-    && pendingFor(kind).has(postID)
   );
 
-  const toggleLike = async (postID: number): Promise<MutationResult> => {
+  const toggleLike = async (postID: number): Promise<EngagementMutationResult> => {
     const post = findPost(postID);
     if (!post || viewerID.value === null || post.likeStatus !== 'ready' || likePendingPostIDs.has(postID)) return 'ignored';
     const previous = { liked: post.liked, count: post.likeCount };
     const expectedLiked = !previous.liked;
     const expectedCount = expectedLiked ? previous.count + 1 : Math.max(0, previous.count - 1);
-    const version = bumpVersion('like', postID);
     const slug = activeSlug.value;
     const request = requestVersion.value;
     const viewer = viewerID.value;
-    const generation = viewerGeneration.value;
-    likePendingPostIDs.add(postID);
+    const viewerGenerationSnapshot = viewerGeneration.value;
+    const token = engagementMutations.begin('like', postID);
     mutationErrors.delete(postID);
     applyFeedLikeStateUpdate(post, { postId: postID, likes: expectedCount, liked: expectedLiked, status: 'ready' });
     try {
       const result = previous.liked ? await unlikePost(postID) : await likePost(postID);
-      if (!slug || !isCurrentMutation('like', postID, version, slug, request, viewer, generation)) return 'ignored';
-      bumpVersion('like', postID);
+      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
       const update: FeedLikeStateUpdate = {
         postId: postID,
         likes: normalizeCount(result.likes, expectedCount),
@@ -430,37 +408,34 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
         status: 'ready',
       };
       applyFeedLikeStateUpdate(post, update);
-      likePendingPostIDs.delete(postID);
+      engagementMutations.settle(token);
       syncTopicLikeState(update);
       return 'succeeded';
     } catch {
-      if (!slug || !isCurrentMutation('like', postID, version, slug, request, viewer, generation)) return 'ignored';
-      bumpVersion('like', postID);
+      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
       applyFeedLikeStateUpdate(post, { postId: postID, likes: previous.count, liked: previous.liked, status: 'ready' });
-      likePendingPostIDs.delete(postID);
+      engagementMutations.settle(token);
       mutationErrors.set(postID, 'Could not update like.');
       return 'failed';
     }
   };
 
-  const toggleRepost = async (postID: number): Promise<MutationResult> => {
+  const toggleRepost = async (postID: number): Promise<EngagementMutationResult> => {
     const post = findPost(postID);
     if (!post || viewerID.value === null || post.repostStatus !== 'ready' || repostPendingPostIDs.has(postID)) return 'ignored';
     const previous = { reposted: post.reposted, count: post.repostCount };
     const expectedReposted = !previous.reposted;
     const expectedCount = expectedReposted ? previous.count + 1 : Math.max(0, previous.count - 1);
-    const version = bumpVersion('repost', postID);
     const slug = activeSlug.value;
     const request = requestVersion.value;
     const viewer = viewerID.value;
-    const generation = viewerGeneration.value;
-    repostPendingPostIDs.add(postID);
+    const viewerGenerationSnapshot = viewerGeneration.value;
+    const token = engagementMutations.begin('repost', postID);
     mutationErrors.delete(postID);
     applyFeedRepostStateUpdate(post, { postId: postID, reposts: expectedCount, reposted: expectedReposted, status: 'ready' });
     try {
       const result = previous.reposted ? await undoRepostPost(postID) : await repostPost(postID);
-      if (!slug || !isCurrentMutation('repost', postID, version, slug, request, viewer, generation)) return 'ignored';
-      bumpVersion('repost', postID);
+      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
       const update: FeedRepostStateUpdate = {
         postId: postID,
         reposts: normalizeCount(result.reposts, expectedCount),
@@ -468,50 +443,46 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
         status: 'ready',
       };
       applyFeedRepostStateUpdate(post, update);
-      repostPendingPostIDs.delete(postID);
+      engagementMutations.settle(token);
       syncTopicRepostState(update);
       return 'succeeded';
     } catch {
-      if (!slug || !isCurrentMutation('repost', postID, version, slug, request, viewer, generation)) return 'ignored';
-      bumpVersion('repost', postID);
+      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
       applyFeedRepostStateUpdate(post, { postId: postID, reposts: previous.count, reposted: previous.reposted, status: 'ready' });
-      repostPendingPostIDs.delete(postID);
+      engagementMutations.settle(token);
       mutationErrors.set(postID, 'Could not update repost.');
       return 'failed';
     }
   };
 
-  const toggleBookmark = async (postID: number): Promise<MutationResult> => {
+  const toggleBookmark = async (postID: number): Promise<EngagementMutationResult> => {
     const post = findPost(postID);
     if (!post || viewerID.value === null || post.bookmarkStatus !== 'ready' || bookmarkPendingPostIDs.has(postID)) return 'ignored';
     const previous = post.bookmarked;
     const expectedBookmarked = !previous;
-    const version = bumpVersion('bookmark', postID);
     const slug = activeSlug.value;
     const request = requestVersion.value;
     const viewer = viewerID.value;
-    const generation = viewerGeneration.value;
-    bookmarkPendingPostIDs.add(postID);
+    const viewerGenerationSnapshot = viewerGeneration.value;
+    const token = engagementMutations.begin('bookmark', postID);
     mutationErrors.delete(postID);
     applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: expectedBookmarked, status: 'ready' });
     try {
       const result = previous ? await unbookmarkPost(postID) : await bookmarkPost(postID);
-      if (!slug || !isCurrentMutation('bookmark', postID, version, slug, request, viewer, generation)) return 'ignored';
-      bumpVersion('bookmark', postID);
+      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
       const update: FeedBookmarkStateUpdate = {
         postId: postID,
         bookmarked: typeof result.bookmarked === 'boolean' ? result.bookmarked : expectedBookmarked,
         status: 'ready',
       };
       applyFeedBookmarkStateUpdate(post, update);
-      bookmarkPendingPostIDs.delete(postID);
+      engagementMutations.settle(token);
       syncTopicBookmarkState(update);
       return 'succeeded';
     } catch {
-      if (!slug || !isCurrentMutation('bookmark', postID, version, slug, request, viewer, generation)) return 'ignored';
-      bumpVersion('bookmark', postID);
+      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
       applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: previous, status: 'ready' });
-      bookmarkPendingPostIDs.delete(postID);
+      engagementMutations.settle(token);
       mutationErrors.set(postID, 'Could not update bookmark.');
       return 'failed';
     }

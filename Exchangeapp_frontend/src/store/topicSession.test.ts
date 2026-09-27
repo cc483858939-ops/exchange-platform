@@ -106,7 +106,7 @@ const deferred = <T>() => {
 
 describe('topicSession store', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mocks.getTopicPosts.mockImplementation(async (slug: string) => ({
       topic: topic(slug), items: [], next_cursor: null,
     }));
@@ -295,6 +295,9 @@ describe('topicSession store', () => {
 
   it('invalidates pending local mutations when external state arrives', async () => {
     mocks.getTopicPosts.mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({ items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [] });
+    mocks.getPostRepostStates.mockResolvedValueOnce({ items: [{ post_id: 1, reposts: 4, reposted: false }], unavailable_post_ids: [] });
+    mocks.getPostBookmarkStates.mockResolvedValueOnce({ items: [{ post_id: 1, bookmarked: false }], unavailable_post_ids: [] });
     const store = createStore(true);
     await store.setTopic('japan');
     await settle();
@@ -302,12 +305,110 @@ describe('topicSession store', () => {
     mocks.likePost.mockReturnValueOnce(likeResult.promise);
 
     const mutation = store.toggleLike(1);
+    expect(store.likePendingPostIDs.has(1)).toBe(true);
+    expect(mocks.likePost).toHaveBeenCalledOnce();
     store.applyExternalLikeStateLocal({ postId: 1, likes: 9, liked: true, status: 'ready' });
     likeResult.resolve({ likes: 4, liked: true });
 
     await expect(mutation).resolves.toBe('ignored');
     expect(store.items[0]).toMatchObject({ likeCount: 9, liked: true });
     expect(store.likePendingPostIDs.has(1)).toBe(false);
+  });
+
+  it('ignores a pending Topic mutation after changing slugs', async () => {
+    mocks.getTopicPosts
+      .mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: null })
+      .mockResolvedValueOnce({ topic: topic('ai'), items: [post(2)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({ items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [] });
+    mocks.getPostRepostStates.mockResolvedValueOnce({ items: [{ post_id: 1, reposts: 4, reposted: false }], unavailable_post_ids: [] });
+    mocks.getPostBookmarkStates.mockResolvedValueOnce({ items: [{ post_id: 1, bookmarked: false }], unavailable_post_ids: [] });
+    const store = createStore(true);
+    await store.setTopic('japan');
+    await settle();
+    const likeResult = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(likeResult.promise);
+
+    const mutation = store.toggleLike(1);
+    expect(store.likePendingPostIDs.has(1)).toBe(true);
+    await store.setTopic('ai');
+    likeResult.resolve({ likes: 99, liked: true });
+
+    await expect(mutation).resolves.toBe('ignored');
+    expect(store.activeSlug).toBe('ai');
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    expect(store.items[0]).toMatchObject({ likeCount: 3, liked: false });
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+  });
+
+  it('ignores an old viewer mutation after a different viewer becomes active', async () => {
+    mocks.getTopicPosts.mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({ items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [] });
+    mocks.getPostRepostStates.mockResolvedValueOnce({ items: [{ post_id: 1, reposts: 4, reposted: false }], unavailable_post_ids: [] });
+    mocks.getPostBookmarkStates.mockResolvedValueOnce({ items: [{ post_id: 1, bookmarked: false }], unavailable_post_ids: [] });
+    const store = createStore(true);
+    await store.setTopic('japan');
+    await settle();
+    const likeResult = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(likeResult.promise);
+
+    const mutation = store.toggleLike(1);
+    mocks.getPostLikeStates.mockResolvedValueOnce({ items: [{ post_id: 1, likes: 8, liked: false }], unavailable_post_ids: [] });
+    mocks.getPostRepostStates.mockResolvedValueOnce({ items: [{ post_id: 1, reposts: 4, reposted: false }], unavailable_post_ids: [] });
+    mocks.getPostBookmarkStates.mockResolvedValueOnce({ items: [{ post_id: 1, bookmarked: false }], unavailable_post_ids: [] });
+    mocks.authStore!.currentIdentity = { id: 8 };
+    store.setViewer(8);
+    await settle();
+    expect(store.viewerID).toBe(8);
+    likeResult.resolve({ likes: 99, liked: true });
+
+    await expect(mutation).resolves.toBe('ignored');
+    expect(store.viewerID).toBe(8);
+    expect(store.items[0]).toMatchObject({ likeCount: 8, liked: false });
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+  });
+
+  it('invalidates all engagement mutations when removing a post and blocks a cursor duplicate', async () => {
+    mocks.getTopicPosts
+      .mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ topic: topic('japan'), items: [post(1), post(2)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({ items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [] });
+    mocks.getPostRepostStates.mockResolvedValueOnce({ items: [{ post_id: 1, reposts: 4, reposted: false }], unavailable_post_ids: [] });
+    mocks.getPostBookmarkStates.mockResolvedValueOnce({ items: [{ post_id: 1, bookmarked: false }], unavailable_post_ids: [] });
+    const store = createStore(true);
+    await store.setTopic('japan');
+    await settle();
+    const likeResult = deferred<{ likes: number; liked: boolean }>();
+    const repostResult = deferred<{ reposts: number; reposted: boolean }>();
+    const bookmarkResult = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(likeResult.promise);
+    mocks.repostPost.mockReturnValueOnce(repostResult.promise);
+    mocks.bookmarkPost.mockReturnValueOnce(bookmarkResult.promise);
+
+    const likeMutation = store.toggleLike(1);
+    const repostMutation = store.toggleRepost(1);
+    const bookmarkMutation = store.toggleBookmark(1);
+    expect(store.likePendingPostIDs.has(1)).toBe(true);
+    expect(store.repostPendingPostIDs.has(1)).toBe(true);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(true);
+
+    expect(store.removePostLocal(1)).toBe(true);
+    expect(store.items).toEqual([]);
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+    expect(store.repostPendingPostIDs.has(1)).toBe(false);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(false);
+
+    likeResult.resolve({ likes: 5, liked: true });
+    repostResult.resolve({ reposts: 6, reposted: true });
+    bookmarkResult.resolve({ post_id: 1, bookmarked: true });
+    await expect(Promise.all([likeMutation, repostMutation, bookmarkMutation])).resolves.toEqual([
+      'ignored', 'ignored', 'ignored',
+    ]);
+    await store.loadMore();
+
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    expect(mocks.syncTopicLikeState).not.toHaveBeenCalled();
+    expect(mocks.syncTopicRepostState).not.toHaveBeenCalled();
+    expect(mocks.syncTopicBookmarkState).not.toHaveBeenCalled();
   });
 
   it('removes posts, blocks later cursor duplicates, and updates author identities', async () => {
@@ -353,6 +454,7 @@ describe('topicSession store', () => {
     await settle();
 
     await expect(store.toggleLike(1)).resolves.toBe('succeeded');
+    expect(store.items[0].likeCount).toBe(4);
     staleLikes.resolve({ items: [{ post_id: 1, likes: 1, liked: false }], unavailable_post_ids: [] });
     await settle();
     expect(store.items[0].liked).toBe(true);
