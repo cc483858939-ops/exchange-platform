@@ -190,6 +190,34 @@ func TestPostEmbeddingRuntimeSchemaCanaryRequiresVersionedIdentityAndIndex(t *te
 	t.Fatal("post_embeddings schema canary is missing")
 }
 
+func TestPostMediaUploadRuntimeSchemaCanaryRequiresLifecycleContract(t *testing.T) {
+	for _, canary := range postSchemaObjectCanaries {
+		if canary.Table != "post_media_uploads" {
+			continue
+		}
+		constraints := make(map[string]struct{}, len(canary.Constraints))
+		for _, constraint := range canary.Constraints {
+			constraints[constraint] = struct{}{}
+		}
+		for _, required := range []string{"fk_post_media_uploads_owner", "chk_post_media_uploads_status"} {
+			if _, exists := constraints[required]; !exists {
+				t.Fatalf("post_media_uploads schema canary is missing constraint %q: %v", required, canary.Constraints)
+			}
+		}
+		indexes := make(map[string]struct{}, len(canary.Indexes))
+		for _, index := range canary.Indexes {
+			indexes[index] = struct{}{}
+		}
+		for _, required := range []string{"post_media_uploads_pkey", "idx_post_media_uploads_status_cleanup_after"} {
+			if _, exists := indexes[required]; !exists {
+				t.Fatalf("post_media_uploads schema canary is missing index %q: %v", required, canary.Indexes)
+			}
+		}
+		return
+	}
+	t.Fatal("post_media_uploads schema canary is missing")
+}
+
 func TestEmbeddingServingStateRuntimeSchemaCanaryRequiresSingletonConstraints(t *testing.T) {
 	for _, canary := range postSchemaObjectCanaries {
 		if canary.Table != "embedding_serving_state" {
@@ -228,7 +256,7 @@ func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	apiTables := canaryTableSet(api)
 	workerTables := canaryTableSet(worker)
 	for _, required := range []string{
-		"users", "post_media", "post_embeddings", "embedding_serving_state", "post_behaviors", "user_post_reco_states",
+		"users", "post_media", "post_media_uploads", "post_embeddings", "embedding_serving_state", "post_behaviors", "user_post_reco_states",
 		"user_reco_profiles", "user_author_affinities", "user_reco_profile_dirty", "exchange_rates", "runtime_schema_state",
 	} {
 		if !apiTables[required] {
@@ -283,11 +311,11 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != 10 || PublishedSchemaCompatibilityFloor != 10 || RequiredSchemaVersion != 10 {
+	if PublishedSchemaCurrentVersion != 11 || PublishedSchemaCompatibilityFloor != 11 || RequiredSchemaVersion != 11 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
 	}
-	if !runtimeSchemaVersionsCompatible(10, 10, 10) || runtimeSchemaVersionsCompatible(10, 10, 9) {
-		t.Fatal("schema 10 must accept schema 10 and reject schema-9 binaries")
+	if !runtimeSchemaVersionsCompatible(11, 11, 11) || runtimeSchemaVersionsCompatible(11, 11, 10) {
+		t.Fatal("schema 11 must accept schema 11 and reject schema-10 binaries")
 	}
 }
 
@@ -319,6 +347,7 @@ func TestRuntimeSchemaVersionsCompatibleUsesRequiredVersionInterval(t *testing.T
 		{name: "schema 9 rejects required version 8", current: 9, floor: 9, required: 8, want: false},
 		{name: "schema 9 rejects required version 4", current: 9, floor: 9, required: 4, want: false},
 		{name: "schema 9 rejects required version 10", current: 9, floor: 9, required: 10, want: false},
+		{name: "schema 10 rejects required version 11", current: 10, floor: 10, required: 11, want: false},
 		{name: "floor exceeds current", current: 4, floor: 5, required: 5, want: false},
 		{name: "current is zero", current: 0, floor: 0, required: 0, want: false},
 		{name: "floor is zero", current: 5, floor: 0, required: 5, want: false},

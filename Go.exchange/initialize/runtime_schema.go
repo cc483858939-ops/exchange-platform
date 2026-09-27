@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 10 adds database-backed recommendation embedding serving state.
-const RequiredSchemaVersion int64 = 10
+// Schema 11 adds the durable pending Post media upload registry.
+const RequiredSchemaVersion int64 = 11
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 10
-	PublishedSchemaCompatibilityFloor int64 = 10
+	PublishedSchemaCurrentVersion     int64 = 11
+	PublishedSchemaCompatibilityFloor int64 = 11
 )
 
 const runtimeSchemaStateID uint = 1
@@ -145,6 +145,21 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		},
 	},
 	{
+		Table: "post_media_uploads",
+		Constraints: []string{
+			"fk_post_media_uploads_owner",
+			"chk_post_media_uploads_owner_positive",
+			"chk_post_media_uploads_status",
+			"chk_post_media_uploads_object_keys_nonblank",
+			"chk_post_media_uploads_urls_nonblank",
+			"chk_post_media_uploads_uploaded_shape",
+		},
+		Indexes: []string{
+			"post_media_uploads_pkey",
+			"idx_post_media_uploads_status_cleanup_after",
+		},
+	},
+	{
 		Table: "post_reposts",
 		Constraints: []string{
 			"fk_post_reposts_user",
@@ -205,6 +220,7 @@ var apiSchemaModels = []interface{}{
 	&models.UserFollow{},
 	&models.Post{},
 	&models.PostMedia{},
+	&models.PostMediaUpload{},
 	&models.PostRepost{},
 	&models.PostBookmark{},
 	&models.PostReaction{},

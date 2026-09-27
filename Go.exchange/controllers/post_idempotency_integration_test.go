@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"Go.exchange/models"
+	"Go.exchange/postmediaupload"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -156,18 +156,11 @@ func TestCreatePostIdempotencyMediaReplayDoesNotDuplicateRowsIntegration(t *test
 	ensureClientPublishSchemaForIntegration(t, db)
 	fixture := newPostEmbeddingOutboxFixture(t, db)
 
-	originalStat := statStoredObject
-	originalRead := readStoredObject
-	t.Cleanup(func() {
-		statStoredObject = originalStat
-		readStoredObject = originalRead
-	})
-	statStoredObject = func(context.Context, string) error { return nil }
 	mediaID := uuid.NewString()
-	readStoredObject = func(_ context.Context, _ string, _ int64) ([]byte, error) {
-		return testPostMediaManifestJSONFor(fixture.users[0].ID, mediaID), nil
+	pendingUpload, mediaURL := newTestPostMediaUpload(t, fixture.users[0].ID, mediaID, postmediaupload.StatusUploaded)
+	if err := db.Create(&pendingUpload).Error; err != nil {
+		t.Fatal(err)
 	}
-	mediaURL := "/api/files/post-media/users/v1/" + strconv.FormatUint(uint64(fixture.users[0].ID), 10) + "/" + mediaID + "/medium.jpg"
 	body := `{"content":"caption","media":[{"type":"image","url":"` + mediaURL + `"}]}`
 	key := uuid.New()
 	ctx, recorder := newClientPublishIntegrationContext(body, fixture.users[0].ID, key)
@@ -179,6 +172,10 @@ func TestCreatePostIdempotencyMediaReplayDoesNotDuplicateRowsIntegration(t *test
 	trackIntegrationPost(fixture, first.ID)
 	if len(first.Media) != 1 {
 		t.Fatalf("first media=%#v", first.Media)
+	}
+	var pendingCount int64
+	if err := db.Model(&models.PostMediaUpload{}).Where("media_id = ?", mediaID).Count(&pendingCount).Error; err != nil || pendingCount != 0 {
+		t.Fatalf("consumed pending media count=%d err=%v", pendingCount, err)
 	}
 
 	ctx, recorder = newClientPublishIntegrationContext(body, fixture.users[0].ID, key)
@@ -366,6 +363,118 @@ func TestCreatePostIdempotencyConcurrentSameKeyCreatesOnePostIntegration(t *test
 	}
 	if outboxCount != 1 {
 		t.Fatalf("concurrent outbox rows=%d want=1", outboxCount)
+	}
+}
+
+func TestCreatePostIdempotencyConcurrentSameKeyConsumesMediaOnceIntegration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openPostEmbeddingOutboxIntegrationDatabase(t)
+	ensureClientPublishSchemaForIntegration(t, db)
+	fixture := newPostEmbeddingOutboxFixture(t, db)
+	mediaID := uuid.NewString()
+	pendingUpload, mediaURL := newTestPostMediaUpload(t, fixture.users[0].ID, mediaID, postmediaupload.StatusUploaded)
+	if err := db.Create(&pendingUpload).Error; err != nil {
+		t.Fatal(err)
+	}
+	key := uuid.New()
+	body := `{"content":"concurrent media publish","media":[{"type":"image","url":"` + mediaURL + `"}]}`
+	results := make(chan idempotencyIntegrationResult, 2)
+	var waitGroup sync.WaitGroup
+	for range 2 {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			results <- runClientPublishIntegrationRequest(body, fixture.users[0].ID, key)
+		}()
+	}
+	waitGroup.Wait()
+	close(results)
+
+	collected := make([]idempotencyIntegrationResult, 0, 2)
+	for result := range results {
+		collected = append(collected, result)
+		trackIntegrationPost(fixture, result.postID)
+	}
+	statuses := []int{collected[0].status, collected[1].status}
+	sort.Ints(statuses)
+	if statuses[0] != http.StatusOK || statuses[1] != http.StatusCreated || collected[0].postID == 0 || collected[0].postID != collected[1].postID {
+		t.Fatalf("concurrent media publish results=%#v", collected)
+	}
+	var postCount, mediaCount, pendingCount int64
+	if err := db.Unscoped().Model(&models.Post{}).Where("author_id = ? AND client_publish_id = ?", fixture.users[0].ID, key).Count(&postCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMedia{}).Where("post_id = ?", collected[0].postID).Count(&mediaCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMediaUpload{}).Where("media_id = ?", mediaID).Count(&pendingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if postCount != 1 || mediaCount != 1 || pendingCount != 0 {
+		t.Fatalf("concurrent media state posts=%d PostMedia=%d pending=%d", postCount, mediaCount, pendingCount)
+	}
+}
+
+func TestCreatePostConcurrentDifferentKeysCompeteForSameMediaIntegration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openPostEmbeddingOutboxIntegrationDatabase(t)
+	ensureClientPublishSchemaForIntegration(t, db)
+	fixture := newPostEmbeddingOutboxFixture(t, db)
+	mediaID := uuid.NewString()
+	pendingUpload, mediaURL := newTestPostMediaUpload(t, fixture.users[0].ID, mediaID, postmediaupload.StatusUploaded)
+	if err := db.Create(&pendingUpload).Error; err != nil {
+		t.Fatal(err)
+	}
+	content := "competing media publish " + uuid.NewString()
+	body := `{"content":"` + content + `","media":[{"type":"image","url":"` + mediaURL + `"}]}`
+	keys := []uuid.UUID{uuid.New(), uuid.New()}
+	results := make(chan idempotencyIntegrationResult, len(keys))
+	start := make(chan struct{})
+	var waitGroup sync.WaitGroup
+	for _, key := range keys {
+		waitGroup.Add(1)
+		go func(key uuid.UUID) {
+			defer waitGroup.Done()
+			<-start
+			results <- runClientPublishIntegrationRequest(body, fixture.users[0].ID, key)
+		}(key)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(results)
+
+	created, rejected := 0, 0
+	var createdPostID uint
+	for result := range results {
+		trackIntegrationPost(fixture, result.postID)
+		switch result.status {
+		case http.StatusCreated:
+			created++
+			createdPostID = result.postID
+		case http.StatusBadRequest:
+			rejected++
+		default:
+			t.Fatalf("competing media publish status=%d body=%s", result.status, result.body)
+		}
+	}
+	if created != 1 || rejected != 1 || createdPostID == 0 {
+		t.Fatalf("competing media publish created=%d rejected=%d winner=%d", created, rejected, createdPostID)
+	}
+	var postCount, winnerMediaCount, totalMediaCount, pendingCount int64
+	if err := db.Unscoped().Model(&models.Post{}).Where("author_id = ? AND content = ?", fixture.users[0].ID, content).Count(&postCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMedia{}).Where("post_id = ?", createdPostID).Count(&winnerMediaCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMedia{}).Where("url = ?", mediaURL).Count(&totalMediaCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMediaUpload{}).Where("media_id = ?", mediaID).Count(&pendingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if postCount != 1 || winnerMediaCount != 1 || totalMediaCount != 1 || pendingCount != 0 {
+		t.Fatalf("competing media state posts=%d winnerPostMedia=%d totalPostMedia=%d pending=%d", postCount, winnerMediaCount, totalMediaCount, pendingCount)
 	}
 }
 

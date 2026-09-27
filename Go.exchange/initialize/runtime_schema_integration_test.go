@@ -103,14 +103,17 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.Where("id = ?", runtimeSchemaStateID).Take(&publishedState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if publishedState.CurrentVersion != 10 || publishedState.CompatibilityFloor != 10 {
-		t.Fatalf("published schema contract=%d/%d want=10/10", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
+	if publishedState.CurrentVersion != 11 || publishedState.CompatibilityFloor != 11 {
+		t.Fatalf("published schema contract=%d/%d want=11/11", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
 	}
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
 	}
 	if err := applyPostMediaConstraints(tx); err != nil {
 		t.Fatalf("apply PostMedia constraints: %v", err)
+	}
+	if err := applyPostMediaUploadConstraints(tx); err != nil {
+		t.Fatalf("apply PostMedia upload constraints: %v", err)
 	}
 	if err := applyPostEmbeddingConstraints(tx); err != nil {
 		t.Fatalf("apply PostEmbedding constraints: %v", err)
@@ -163,6 +166,13 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	withIntegrationSavepoint(t, tx, "missing_post_index", func() {
 		if err := tx.Exec("DROP INDEX " + qualifiedIntegrationTable(primarySchema, "idx_posts_author_created")).Error; err != nil {
 			t.Fatalf("drop Post author index: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_index_missing")
+	})
+
+	withIntegrationSavepoint(t, tx, "missing_post_media_upload_cleanup_index", func() {
+		if err := tx.Exec("DROP INDEX " + qualifiedIntegrationTable(primarySchema, "idx_post_media_uploads_status_cleanup_after")).Error; err != nil {
+			t.Fatalf("drop Post media upload cleanup index: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_index_missing")
 	})

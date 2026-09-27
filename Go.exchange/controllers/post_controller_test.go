@@ -28,7 +28,11 @@ func stubCreatePostAuthor(t *testing.T) {
 func stubPostCreatePersistence(t *testing.T, persisted *models.Post, id uint) {
 	original := persistPostGraphFn
 	t.Cleanup(func() { persistPostGraphFn = original })
-	persistPostGraphFn = func(_ context.Context, post *models.Post, userID uint, content string, req createPostRequest, _ []validatedPostMedia, now time.Time) error {
+	persistPostGraphFn = func(_ context.Context, post *models.Post, userID uint, content string, req createPostRequest, media []validatedPostMedia, now time.Time) error {
+		for index := range media {
+			media[index].LargeURL = strings.Replace(media[index].PublicURL, "/medium.", "/large.", 1)
+			media[index].Width, media[index].Height = 1200, 800
+		}
 		*post = models.Post{Model: gorm.Model{ID: id, CreatedAt: now, UpdatedAt: now}, AuthorID: userID, Content: content, Language: "und", Visibility: "public"}
 		if persisted != nil {
 			*persisted = *post
@@ -68,20 +72,6 @@ func TestCreatePostBuildsPublishedRecord(t *testing.T) {
 func TestCreatePostValidatesAndReturnsOrderedMedia(t *testing.T) {
 	stubCreatePostAuthor(t)
 	stubPostCreatePersistence(t, nil, 44)
-	originalStat := statStoredObject
-	originalRead := readStoredObject
-	t.Cleanup(func() {
-		statStoredObject = originalStat
-		readStoredObject = originalRead
-	})
-	statStoredObject = func(context.Context, string) error { return nil }
-	readStoredObject = func(_ context.Context, objectKey string, _ int64) ([]byte, error) {
-		parts := strings.Split(objectKey, "/")
-		if len(parts) != 6 {
-			return nil, errors.New("unexpected manifest key")
-		}
-		return testPostMediaManifestJSONFor(7, parts[4]), nil
-	}
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -103,13 +93,10 @@ func TestCreatePostValidatesAndReturnsOrderedMedia(t *testing.T) {
 
 func TestCreatePostRejectsMoreThanFourMediaBeforePersistence(t *testing.T) {
 	stubCreatePostAuthor(t)
-	originalStat := statStoredObject
 	originalPersist := persistPostGraphFn
 	t.Cleanup(func() {
-		statStoredObject = originalStat
 		persistPostGraphFn = originalPersist
 	})
-	statStoredObject = func(context.Context, string) error { return nil }
 	persistCalled := false
 	persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
 		persistCalled = true

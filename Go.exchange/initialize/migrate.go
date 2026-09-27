@@ -54,6 +54,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.UserFollow{},
 			&models.Post{},
 			&models.PostMedia{},
+			&models.PostMediaUpload{},
 			&models.PostRepost{},
 			&models.PostBookmark{},
 			&models.PostEmbedding{},
@@ -91,6 +92,9 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			return err
 		}
 		if err := applyPostMediaConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyPostMediaUploadConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyPostEmbeddingConstraints(tx); err != nil {
@@ -312,6 +316,30 @@ func applyPostMediaConstraints(tx *gorm.DB) error {
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("apply post media constraints: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyPostMediaUploadConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS fk_post_media_uploads_owner",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT fk_post_media_uploads_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_owner_positive",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_owner_positive CHECK (owner_id > 0)",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_status",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_status CHECK (status IN ('uploading', 'uploaded'))",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_object_keys_nonblank",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_object_keys_nonblank CHECK (char_length(btrim(original_object_key)) > 0 AND char_length(btrim(medium_object_key)) > 0 AND char_length(btrim(large_object_key)) > 0 AND char_length(btrim(manifest_object_key)) > 0)",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_urls_nonblank",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_urls_nonblank CHECK (char_length(btrim(medium_url)) > 0 AND char_length(btrim(large_url)) > 0)",
+		"ALTER TABLE post_media_uploads DROP CONSTRAINT IF EXISTS chk_post_media_uploads_uploaded_shape",
+		"ALTER TABLE post_media_uploads ADD CONSTRAINT chk_post_media_uploads_uploaded_shape CHECK ((status = 'uploading' AND uploaded_at IS NULL) OR (status = 'uploaded' AND uploaded_at IS NOT NULL AND width > 0 AND height > 0 AND cleanup_after >= uploaded_at))",
+		"CREATE INDEX IF NOT EXISTS idx_post_media_uploads_status_cleanup_after ON post_media_uploads (status, cleanup_after)",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply Post media upload constraints: %w", err)
 		}
 	}
 	return nil

@@ -15,6 +15,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/postmediaupload"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -46,6 +47,7 @@ func openPostEmbeddingOutboxIntegrationDatabase(t *testing.T) *gorm.DB {
 		&models.User{},
 		&models.Post{},
 		&models.PostMedia{},
+		&models.PostMediaUpload{},
 		&models.PostBehavior{},
 		&models.UserRecoProfileDirty{},
 		&models.OutboxEvent{},
@@ -110,6 +112,7 @@ func (fixture *postEmbeddingOutboxFixture) cleanup() {
 		for _, user := range fixture.users {
 			userIDs = append(userIDs, user.ID)
 		}
+		fixture.db.Unscoped().Where("owner_id IN ?", userIDs).Delete(&models.PostMediaUpload{})
 		fixture.db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserRecoProfileDirty{})
 		fixture.db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
 	}
@@ -196,16 +199,22 @@ func TestPostEmbeddingOutboxInsertFailureRollsBackPostIntegration(t *testing.T) 
 	db := openPostEmbeddingOutboxIntegrationDatabase(t)
 	fixture := newPostEmbeddingOutboxFixture(t, db)
 	installRejectingOutboxInsertTrigger(t, db)
+	mediaID := uuid.NewString()
+	pendingUpload, mediaURL := newTestPostMediaUpload(t, fixture.users[0].ID, mediaID, postmediaupload.StatusUploaded)
+	if err := db.Create(&pendingUpload).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	var post models.Post
-	err := persistPostGraph(context.Background(), &post, fixture.users[0].ID, "embedding rollback", createPostRequest{Content: "embedding rollback"}, nil, time.Now().UTC())
+	media := []validatedPostMedia{{MediaID: mediaID, MediaType: "image", PublicURL: mediaURL}}
+	err := persistPostGraph(context.Background(), &post, fixture.users[0].ID, "embedding rollback", createPostRequest{Content: "embedding rollback"}, media, time.Now().UTC())
 	if err == nil {
 		t.Fatal("persist unexpectedly succeeded with failing outbox insert")
 	}
 	if post.ID == 0 {
 		t.Fatal("post ID was not assigned before outbox failure")
 	}
-	var postCount int64
+	var postCount, mediaCount, pendingCount int64
 	if err := db.Unscoped().Model(&models.Post{}).
 		Where("id = ? AND author_id = ? AND content = ?", post.ID, fixture.users[0].ID, "embedding rollback").
 		Count(&postCount).Error; err != nil {
@@ -213,6 +222,15 @@ func TestPostEmbeddingOutboxInsertFailureRollsBackPostIntegration(t *testing.T) 
 	}
 	if postCount != 0 {
 		t.Fatalf("rolled-back post rows=%d want=0", postCount)
+	}
+	if err := db.Model(&models.PostMedia{}).Where("post_id = ?", post.ID).Count(&mediaCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.PostMediaUpload{}).Where("media_id = ?", mediaID).Count(&pendingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if mediaCount != 0 || pendingCount != 1 {
+		t.Fatalf("outbox rollback left PostMedia=%d pending=%d, want 0/1", mediaCount, pendingCount)
 	}
 	var outboxCount int64
 	if err := db.Model(&models.OutboxEvent{}).

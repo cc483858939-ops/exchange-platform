@@ -15,6 +15,7 @@ import (
 	"Go.exchange/likes"
 	"Go.exchange/models"
 	"Go.exchange/postlanguage"
+	"Go.exchange/postmediaupload"
 	"Go.exchange/ratelimit"
 	"Go.exchange/recommendation"
 
@@ -62,6 +63,8 @@ func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
 }
 
 var persistPostGraphFn = persistPostGraph
+var lockPendingPostMediaUploads = postmediaupload.LockForConsumption
+var deleteConsumedPostMediaUploads = postmediaupload.DeleteConsumed
 
 func NewCreatePostHandler(limiters ...ratelimit.Limiter) gin.HandlerFunc {
 	var limiter ratelimit.Limiter
@@ -177,10 +180,6 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 	media, err := validatePostMediaRequests(ctx.Request.Context(), userID, req.Media)
 	if err != nil {
 		switch {
-		case errors.Is(err, errPostMediaObjectUnavailable):
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "media file is unavailable"})
-		case errors.Is(err, errPostMediaStorageUnavailable):
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
 		default:
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid media"})
 		}
@@ -205,6 +204,10 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "reply or quote target unavailable"})
+			return
+		}
+		if errors.Is(err, errInvalidPostMedia) {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid media"})
 			return
 		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -267,12 +270,43 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 		if err := tx.Create(post).Error; err != nil {
 			return err
 		}
-		for position, item := range media {
-			if err := tx.Create(&models.PostMedia{
-				PostID: post.ID, MediaType: item.MediaType, URL: item.PublicURL, LargeURL: item.LargeURL,
-				Width: item.Width, Height: item.Height,
-				Position: position, CreatedAt: now,
-			}).Error; err != nil {
+		if len(media) > 0 {
+			mediaIDs := make([]string, len(media))
+			for index, item := range media {
+				mediaIDs[index] = item.MediaID
+			}
+			pendingUploads, err := lockPendingPostMediaUploads(tx, mediaIDs)
+			if err != nil {
+				return err
+			}
+			if len(pendingUploads) != len(media) {
+				return errInvalidPostMedia
+			}
+			pendingByID := make(map[string]models.PostMediaUpload, len(pendingUploads))
+			for _, upload := range pendingUploads {
+				pendingByID[upload.MediaID] = upload
+			}
+			for position := range media {
+				item := &media[position]
+				upload, exists := pendingByID[item.MediaID]
+				if !exists || upload.OwnerID != userID || upload.Status != postmediaupload.StatusUploaded || upload.MediumURL != item.PublicURL {
+					return errInvalidPostMedia
+				}
+				item.LargeURL = upload.LargeURL
+				item.Width = upload.Width
+				item.Height = upload.Height
+				if err := tx.Create(&models.PostMedia{
+					PostID: post.ID, MediaType: item.MediaType, URL: item.PublicURL, LargeURL: item.LargeURL,
+					Width: item.Width, Height: item.Height,
+					Position: position, CreatedAt: now,
+				}).Error; err != nil {
+					return err
+				}
+			}
+			if err := deleteConsumedPostMediaUploads(tx, mediaIDs, userID); err != nil {
+				if errors.Is(err, postmediaupload.ErrUploadUnavailable) {
+					return errInvalidPostMedia
+				}
 				return err
 			}
 		}

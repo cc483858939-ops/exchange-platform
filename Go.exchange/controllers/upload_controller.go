@@ -7,14 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"Go.exchange/avatarimage"
 	"Go.exchange/config"
 	"Go.exchange/global"
+	"Go.exchange/models"
 	"Go.exchange/postmedia"
 	"Go.exchange/postmediaimage"
+	"Go.exchange/postmediaupload"
 	"Go.exchange/profileavatar"
 	"Go.exchange/profilecover"
 	"Go.exchange/profilecoverimage"
@@ -25,10 +29,11 @@ import (
 )
 
 const (
-	postMediaObjectPrefix     = postmedia.UserV1ObjectPrefix
-	maxPostMediaImageSize     = postmediaimage.MaxSourceBytes
-	profileAvatarObjectPrefix = "profile-avatars/"
-	maxProfileAvatarImageSize = 2 << 20
+	postMediaObjectPrefix         = postmedia.UserV1ObjectPrefix
+	maxPostMediaImageSize         = postmediaimage.MaxSourceBytes
+	postMediaUploadCleanupTimeout = 5 * time.Second
+	profileAvatarObjectPrefix     = "profile-avatars/"
+	maxProfileAvatarImageSize     = 2 << 20
 )
 
 type postMediaUploadResponse struct {
@@ -57,47 +62,26 @@ var getStoredObject = func(ctx context.Context, objectKey string) (*minio.Object
 	return global.MinioClient.GetObject(ctx, config.StorageBucket(), objectKey, minio.GetObjectOptions{})
 }
 
-// readStoredObject is the bounded internal object-reader seam used to load a
-// user upload manifest. Stat happens before the bounded read so a malformed or
-// unexpectedly large object cannot turn into an unbounded allocation.
-var readStoredObject = func(ctx context.Context, objectKey string, maxBytes int64) ([]byte, error) {
-	if maxBytes <= 0 {
-		return nil, errInvalidPostMedia
+var removeStoredObject = func(ctx context.Context, objectKey string) error {
+	if global.MinioClient == nil {
+		return errors.New("storage is not initialized")
 	}
-	object, err := getStoredObject(ctx, objectKey)
-	if err != nil {
-		return nil, classifyStoredObjectError(err)
+	if err := global.MinioClient.RemoveObject(ctx, config.StorageBucket(), objectKey, minio.RemoveObjectOptions{}); err != nil && !isMissingStoredObjectError(err) {
+		return err
 	}
-	defer object.Close()
-	info, err := object.Stat()
-	if err != nil {
-		return nil, classifyStoredObjectError(err)
-	}
-	if info.Size < 0 || info.Size > maxBytes {
-		return nil, errInvalidPostMedia
-	}
-	body, err := io.ReadAll(io.LimitReader(object, maxBytes+1))
-	if err != nil {
-		return nil, classifyStoredObjectError(err)
-	}
-	if int64(len(body)) > maxBytes {
-		return nil, errInvalidPostMedia
-	}
-	return body, nil
+	return nil
 }
 
-var statStoredObject = func(ctx context.Context, objectKey string) error {
-	if global.MinioClient == nil {
-		return errPostMediaStorageUnavailable
-	}
-	_, err := global.MinioClient.StatObject(ctx, config.StorageBucket(), objectKey, minio.StatObjectOptions{})
-	if err == nil {
-		return nil
-	}
-	if isMissingStoredObjectError(err) {
-		return errPostMediaObjectUnavailable
-	}
-	return fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
+var createPendingPostMediaUpload = func(ctx context.Context, upload models.PostMediaUpload) error {
+	return postmediaupload.CreateUploading(ctx, global.Db, upload)
+}
+
+var markPendingPostMediaUploadUploaded = func(ctx context.Context, mediaID string, ownerID uint, uploadedAt, cleanupAfter time.Time) error {
+	return postmediaupload.MarkUploaded(ctx, global.Db, mediaID, ownerID, uploadedAt, cleanupAfter)
+}
+
+var deletePendingPostMediaUpload = func(ctx context.Context, mediaID string, ownerID uint) error {
+	return postmediaupload.DeleteAfterObjectCleanup(ctx, global.Db, mediaID, ownerID)
 }
 
 var statProfileAvatarObject = func(ctx context.Context, objectKey string) (storedObjectInfo, bool, error) {
@@ -129,9 +113,8 @@ var statProfileCoverObject = func(ctx context.Context, objectKey string) (stored
 }
 
 func UploadPostMedia(ctx *gin.Context) {
-	// Uploaded objects are intentionally retained when a later create-post
-	// request fails; orphan cleanup is outside this phase and a later retry may
-	// still reference the returned URL.
+	// Every user upload is registered before object storage side effects begin.
+	// A successful upload remains reusable until create-post consumes its lease.
 	viewerID, ok := requireActiveProfileViewerID(ctx)
 	if !ok {
 		return
@@ -175,19 +158,6 @@ func UploadPostMedia(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build media object key"})
 		return
 	}
-	requestContext := ctx.Request.Context()
-	if err := putStoredObject(requestContext, paths.OriginalObjectKey, bytes.NewReader(body), int64(len(body)), processed.OriginalContentType); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
-		return
-	}
-	if err := putStoredObject(requestContext, paths.MediumObjectKey, bytes.NewReader(processed.Medium.Body), int64(len(processed.Medium.Body)), processed.Medium.ContentType); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
-		return
-	}
-	if err := putStoredObject(requestContext, paths.LargeObjectKey, bytes.NewReader(processed.Large.Body), int64(len(processed.Large.Body)), processed.Large.ContentType); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
-		return
-	}
 	manifestBody, err := json.Marshal(postmedia.Manifest{
 		Version:           1,
 		OwnerID:           viewerID,
@@ -203,17 +173,83 @@ func UploadPostMedia(ctx *gin.Context) {
 		},
 	})
 	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build media manifest"})
+		return
+	}
+	now := time.Now().UTC()
+	if err := createPendingPostMediaUpload(ctx.Request.Context(), models.PostMediaUpload{
+		MediaID: mediaID, OwnerID: viewerID, Status: postmediaupload.StatusUploading,
+		OriginalObjectKey: paths.OriginalObjectKey, MediumObjectKey: paths.MediumObjectKey,
+		LargeObjectKey: paths.LargeObjectKey, ManifestObjectKey: paths.ManifestObjectKey,
+		MediumURL: postmedia.PublicURL(paths.MediumObjectKey), LargeURL: postmedia.PublicURL(paths.LargeObjectKey),
+		Width: processed.Medium.Width, Height: processed.Medium.Height,
+		CreatedAt: now, CleanupAfter: now.Add(postmediaupload.DefaultUploadTimeout),
+	}); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media upload registry is unavailable"})
+		return
+	}
+	cleanupAfterFailure := func(cause error) {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), postMediaUploadCleanupTimeout)
+		defer cancel()
+		if cleanupErr := cleanupPostMediaObjects(cleanupCtx, paths); cleanupErr != nil {
+			log.Printf("[PostMediaUpload] best-effort object cleanup failed after %v: %v", cause, cleanupErr)
+			return
+		}
+		if err := deletePendingPostMediaUpload(cleanupCtx, mediaID, viewerID); err != nil {
+			log.Printf("[PostMediaUpload] failed to remove cleaned upload registry row %s: %v", mediaID, err)
+		}
+	}
+	requestContext := ctx.Request.Context()
+	if err := putStoredObject(requestContext, paths.OriginalObjectKey, bytes.NewReader(body), int64(len(body)), processed.OriginalContentType); err != nil {
+		cleanupAfterFailure(err)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		return
+	}
+	if err := putStoredObject(requestContext, paths.MediumObjectKey, bytes.NewReader(processed.Medium.Body), int64(len(processed.Medium.Body)), processed.Medium.ContentType); err != nil {
+		cleanupAfterFailure(err)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		return
+	}
+	if err := putStoredObject(requestContext, paths.LargeObjectKey, bytes.NewReader(processed.Large.Body), int64(len(processed.Large.Body)), processed.Large.ContentType); err != nil {
+		cleanupAfterFailure(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
 		return
 	}
 	if err := putStoredObject(requestContext, paths.ManifestObjectKey, bytes.NewReader(manifestBody), int64(len(manifestBody)), "application/json"); err != nil {
+		cleanupAfterFailure(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		return
+	}
+	uploadedAt := time.Now().UTC()
+	if err := markPendingPostMediaUploadUploaded(
+		requestContext, mediaID, viewerID, uploadedAt,
+		uploadedAt.Add(postmediaupload.DefaultGracePeriod),
+	); err != nil {
+		cleanupAfterFailure(err)
+		if handleRequestDBError(ctx, err) {
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media upload registry is unavailable"})
 		return
 	}
 
 	ctx.JSON(http.StatusOK, postMediaUploadResponse{
 		MediaURL: postmedia.PublicURL(paths.MediumObjectKey),
 	})
+}
+
+func cleanupPostMediaObjects(ctx context.Context, paths postmedia.UserV1ObjectPaths) error {
+	keys := []string{paths.OriginalObjectKey, paths.MediumObjectKey, paths.LargeObjectKey, paths.ManifestObjectKey}
+	var cleanupErrors []error
+	for _, objectKey := range keys {
+		if err := removeStoredObject(ctx, objectKey); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove %s: %w", objectKey, err))
+		}
+	}
+	return errors.Join(cleanupErrors...)
 }
 
 func UploadProfileAvatar(ctx *gin.Context) {
@@ -381,13 +417,6 @@ func isAllowedObjectKey(objectKey string) bool {
 		return false
 	}
 	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) || profilecover.IsDevDataPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
-}
-
-func classifyStoredObjectError(err error) error {
-	if isMissingStoredObjectError(err) {
-		return errPostMediaObjectUnavailable
-	}
-	return fmt.Errorf("%w: %v", errPostMediaStorageUnavailable, err)
 }
 
 func isMissingStoredObjectError(err error) bool {

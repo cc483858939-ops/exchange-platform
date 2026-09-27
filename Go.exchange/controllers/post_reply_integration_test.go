@@ -39,7 +39,7 @@ func openReplyIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostBehavior{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostMediaUpload{}, &models.PostBehavior{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.Db, config.AppConfig
