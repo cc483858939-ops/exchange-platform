@@ -20,6 +20,9 @@ import (
 )
 
 func TestLoadPostReferencesByIDsEmptyWithoutDatabase(t *testing.T) {
+	if references, err := loadPostReferencesByIDsFromDB(nil, nil, time.Now().UTC()); err != nil || references == nil || len(references) != 0 {
+		t.Fatalf("empty references=%#v err=%v want a non-nil empty map without a database", references, err)
+	}
 	references, err := loadPostReferencesByIDsFromDB(nil, []uint{0, 0}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -37,9 +40,17 @@ func TestLoadPostReferencesByIDsEmptyWithoutDatabase(t *testing.T) {
 	}
 }
 
-func TestLoadPostReferencesByIDsPropagatesDatabaseInitializationError(t *testing.T) {
-	if _, err := loadPostReferencesByIDsFromDB(nil, []uint{42}, time.Now().UTC()); err == nil {
-		t.Fatal("expected database initialization error")
+func TestLoadPostReferencesByIDsPropagatesClosedDatabaseErrorIntegration(t *testing.T) {
+	db := openProfileTimelineIntegrationDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadPostReferencesByIDsFromDB(db, []uint{42}, time.Now().UTC()); err == nil {
+		t.Fatal("expected closed database error")
 	}
 }
 

@@ -16,14 +16,14 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestLoadPostReferencePropagatesDatabaseInitializationError(t *testing.T) {
+func TestLoadPostReferencesByIDsPropagatesDatabaseInitializationError(t *testing.T) {
 	postID := uint(42)
-	reference, err := loadPostReferenceFromDB(nil, &postID, time.Now().UTC())
+	references, err := loadPostReferencesByIDsFromDB(nil, []uint{postID}, time.Now().UTC())
 	if err == nil {
 		t.Fatal("expected database initialization error")
 	}
-	if reference != nil {
-		t.Fatalf("reference=%#v want nil on infrastructure error", reference)
+	if references != nil {
+		t.Fatalf("references=%#v want nil on infrastructure error", references)
 	}
 
 	response := postResponse{QuotePostID: &postID}
@@ -107,7 +107,7 @@ func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) 
 	}
 }
 
-func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
+func TestLoadPostReferencesByIDsUsesExactWireUnionIntegration(t *testing.T) {
 	db := openReplyIntegrationDatabase(t)
 	fixture := newReplyIntegrationFixture(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -160,16 +160,6 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 		db.Unscoped().Where("id = ?", inactiveAuthor.ID).Delete(&models.User{})
 	})
 
-	activeID := fixture.Article.ID
-	activeReference, err := loadPostReferenceFromDB(db, &activeID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if activeReference == nil || activeReference.Deleted || activeReference.Author == nil || activeReference.Content == "" {
-		t.Fatalf("active post reference=%#v", activeReference)
-	}
-	assertActivePostReferenceWire(t, activeReference)
-
 	normalActive := models.Post{
 		Model:    gorm.Model{CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)},
 		AuthorID: fixture.Author.ID, Content: "normal active reference", Visibility: "public",
@@ -178,51 +168,47 @@ func TestLoadPostReferenceUsesExactWireUnionIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids = append(ids, normalActive.ID)
-	normalActiveReference, err := loadPostReferenceFromDB(db, &normalActive.ID, now)
+	missingID := unavailablePost.ID + 1000000
+	activeID := fixture.Article.ID
+	referenceIDs := append([]uint{activeID}, ids...)
+	referenceIDs = append(referenceIDs, missingID)
+	references, err := loadPostReferencesByIDsFromDB(db, referenceIDs, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if normalActiveReference == nil || normalActiveReference.Deleted {
+
+	activeReference := references[activeID]
+	if activeReference.Deleted || activeReference.Author == nil || activeReference.Content == "" {
+		t.Fatalf("active post reference=%#v", activeReference)
+	}
+	assertActivePostReferenceWire(t, &activeReference)
+
+	normalActiveReference := references[normalActive.ID]
+	if normalActiveReference.Deleted {
 		t.Fatalf("normal active reference=%#v", normalActiveReference)
 	}
-	assertActivePostReferenceWire(t, normalActiveReference)
+	assertActivePostReferenceWire(t, &normalActiveReference)
 
-	deleted, err := loadPostReferenceFromDB(db, &deletedPost.ID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertPostReferenceTombstone(t, deleted)
+	deleted := references[deletedPost.ID]
+	assertPostReferenceTombstone(t, &deleted)
 
-	unavailable, err := loadPostReferenceFromDB(db, &unavailablePost.ID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if unavailable == nil || unavailable.Deleted || unavailable.Content != unavailablePost.Content {
+	unavailable := references[unavailablePost.ID]
+	if unavailable.Deleted || unavailable.Content != unavailablePost.Content {
 		t.Fatalf("active post reference=%#v", unavailable)
 	}
-	assertActivePostReferenceWire(t, unavailable)
+	assertActivePostReferenceWire(t, &unavailable)
 
-	future, err := loadPostReferenceFromDB(db, &futurePost.ID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if future == nil || future.Deleted || future.Content != futurePost.Content {
+	future := references[futurePost.ID]
+	if future.Deleted || future.Content != futurePost.Content {
 		t.Fatalf("future normal reference=%#v", future)
 	}
-	assertActivePostReferenceWire(t, future)
+	assertActivePostReferenceWire(t, &future)
 
-	inactive, err := loadPostReferenceFromDB(db, &inactiveAuthorPost.ID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertPostReferenceTombstone(t, inactive)
+	inactive := references[inactiveAuthorPost.ID]
+	assertPostReferenceTombstone(t, &inactive)
 
-	missingID := unavailablePost.ID + 1000000
-	missing, err := loadPostReferenceFromDB(db, &missingID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertPostReferenceTombstone(t, missing)
+	missing := references[missingID]
+	assertPostReferenceTombstone(t, &missing)
 }
 
 func assertActivePostReferenceWire(t *testing.T, reference *postReferenceResponse) {

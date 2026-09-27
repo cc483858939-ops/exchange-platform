@@ -231,14 +231,3 @@ func loadPostReferencesByIDsFromDB(db *gorm.DB, ids []uint, now time.Time) (map[
 	}
 	return references, nil
 }
-
-func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferenceResponse, error) {
-	if id == nil || *id == 0 {
-		return nil, nil
-	}
-	references, err := loadPostReferencesByIDsFromDB(db, []uint{*id}, now)
-	if err != nil {
-		return nil, err
-	}
-	return copyPostReference(references, id), nil
-}
