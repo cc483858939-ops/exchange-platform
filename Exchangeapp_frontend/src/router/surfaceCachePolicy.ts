@@ -62,6 +62,12 @@ export const getHistoryReturnCacheKey = (
   return `history:${viewerID}`;
 };
 
+export const getTopicReturnCacheKey = (
+  route: RouteLocationNormalizedLoaded,
+): string | null => (
+  route.name === 'Topic' ? 'topic:return' : null
+);
+
 export const shouldPreserveExternalProfileCache = (
   route: RouteLocationNormalizedLoaded,
   viewerID: number | null,
@@ -81,6 +87,13 @@ export const shouldPreserveHistoryReturnCache = (
   route: RouteLocationNormalizedLoaded,
 ): boolean => (
   route.name === 'History'
+  || route.name === 'PostDetail'
+);
+
+export const shouldPreserveTopicReturnCache = (
+  route: RouteLocationNormalizedLoaded,
+): boolean => (
+  route.name === 'Topic'
   || route.name === 'PostDetail'
 );
 

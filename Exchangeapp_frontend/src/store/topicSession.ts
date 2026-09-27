@@ -7,6 +7,7 @@ import { getPostLikeStates, likePost, unlikePost } from '../services/likeService
 import { getPostRepostStates, repostPost, undoRepostPost } from '../services/repostService';
 import type { Post } from '../types/Post';
 import type { FeedBookmarkStateUpdate, FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
+import type { PublicAuthor } from '../types/User';
 import {
   applyFeedBookmarkStateUpdate,
   applyFeedLikeStateUpdate,
@@ -17,10 +18,12 @@ import {
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import {
-  syncExternalPostBookmarkState,
-  syncExternalPostLikeState,
-  syncExternalPostRepostState,
+  registerTopicSessionSync,
+  syncTopicBookmarkState,
+  syncTopicLikeState,
+  syncTopicRepostState,
 } from './sessionSync';
+import type { PostReplyCountUpdate } from './sessionSync';
 
 const pageSize = 20;
 type MutationResult = 'succeeded' | 'failed' | 'ignored';
@@ -44,6 +47,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
   const initialLoading = ref(false);
   const initialError = ref('');
   const nextCursor = ref<string | null>(null);
+  const scrollTop = ref(0);
   const loadingMore = ref(false);
   const loadMoreError = ref('');
   const viewerID = ref<number | null>(null);
@@ -56,6 +60,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
   const mutationErrors = reactive(new Map<number, string>());
 
   const loadedPostIDs = new Set<number>();
+  const deletedPostIDs = new Set<number>();
   const mutationVersions: Record<MutationKind, Map<number, number>> = {
     like: new Map(),
     repost: new Map(),
@@ -94,7 +99,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
   const appendPosts = (posts: Post[]) => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
-      if (loadedPostIDs.has(post.id)) return;
+      if (loadedPostIDs.has(post.id) || deletedPostIDs.has(post.id)) return;
       loadedPostIDs.add(post.id);
       additions.push(postToFeedPost(post));
     });
@@ -208,9 +213,11 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     initialLoading.value = false;
     initialError.value = '';
     nextCursor.value = null;
+    scrollTop.value = 0;
     loadingMore.value = false;
     loadMoreError.value = '';
     loadedPostIDs.clear();
+    deletedPostIDs.clear();
     likePendingPostIDs.clear();
     repostPendingPostIDs.clear();
     bookmarkPendingPostIDs.clear();
@@ -313,6 +320,82 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     { immediate: true },
   );
 
+  const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
+    bumpVersion('like', update.postId);
+    likePendingPostIDs.delete(update.postId);
+    mutationErrors.delete(update.postId);
+    const post = findPost(update.postId);
+    return post ? applyFeedLikeStateUpdate(post, update) : false;
+  };
+
+  const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
+    bumpVersion('repost', update.postId);
+    repostPendingPostIDs.delete(update.postId);
+    mutationErrors.delete(update.postId);
+    const post = findPost(update.postId);
+    return post ? applyFeedRepostStateUpdate(post, update) : false;
+  };
+
+  const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
+    bumpVersion('bookmark', update.postId);
+    bookmarkPendingPostIDs.delete(update.postId);
+    mutationErrors.delete(update.postId);
+    const post = findPost(update.postId);
+    return post ? applyFeedBookmarkStateUpdate(post, update) : false;
+  };
+
+  const applyReplyCountUpdateLocal = (update: PostReplyCountUpdate) => {
+    const replyCount = Number(update.replyCount);
+    if (!Number.isSafeInteger(replyCount) || replyCount < 0) return false;
+    const post = findPost(update.postId);
+    if (!post) return false;
+    post.replyCount = replyCount;
+    return true;
+  };
+
+  const removePostLocal = (postID: number) => {
+    const existed = Boolean(findPost(postID));
+    deletedPostIDs.add(postID);
+    items.value = items.value.filter(post => post.id !== postID);
+    likePendingPostIDs.delete(postID);
+    repostPendingPostIDs.delete(postID);
+    bookmarkPendingPostIDs.delete(postID);
+    mutationErrors.delete(postID);
+    bumpVersion('like', postID);
+    bumpVersion('repost', postID);
+    bumpVersion('bookmark', postID);
+    return existed;
+  };
+
+  const replaceAuthorIdentityLocal = (author: PublicAuthor) => {
+    let applied = false;
+    items.value = items.value.map((post) => {
+      const canonicalMatches = post.author.id === author.id;
+      const actorMatches = post.repostContext?.actor.id === author.id;
+      if (!canonicalMatches && !actorMatches) return post;
+      applied = true;
+      return {
+        ...post,
+        author: canonicalMatches ? author : post.author,
+        repostContext: actorMatches ? { actor: author } : post.repostContext,
+      };
+    });
+    return applied;
+  };
+
+  const saveScrollTop = (value: number) => {
+    scrollTop.value = Number.isFinite(value) && value >= 0 ? value : 0;
+  };
+
+  registerTopicSessionSync({
+    applyExternalLikeStateLocal,
+    applyExternalRepostStateLocal,
+    applyExternalBookmarkStateLocal,
+    applyReplyCountUpdateLocal,
+    removePostLocal,
+    replaceAuthorIdentityLocal,
+  });
+
   const isCurrentMutation = (kind: MutationKind, postID: number, version: number, slug: string, request: number, viewer: number, generation: number) => (
     isCurrentRequest(request, slug)
     && viewerID.value === viewer
@@ -348,7 +431,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
       };
       applyFeedLikeStateUpdate(post, update);
       likePendingPostIDs.delete(postID);
-      syncExternalPostLikeState(update);
+      syncTopicLikeState(update);
       return 'succeeded';
     } catch {
       if (!slug || !isCurrentMutation('like', postID, version, slug, request, viewer, generation)) return 'ignored';
@@ -386,7 +469,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
       };
       applyFeedRepostStateUpdate(post, update);
       repostPendingPostIDs.delete(postID);
-      syncExternalPostRepostState(update);
+      syncTopicRepostState(update);
       return 'succeeded';
     } catch {
       if (!slug || !isCurrentMutation('repost', postID, version, slug, request, viewer, generation)) return 'ignored';
@@ -422,7 +505,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
       };
       applyFeedBookmarkStateUpdate(post, update);
       bookmarkPendingPostIDs.delete(postID);
-      syncExternalPostBookmarkState(update);
+      syncTopicBookmarkState(update);
       return 'succeeded';
     } catch {
       if (!slug || !isCurrentMutation('bookmark', postID, version, slug, request, viewer, generation)) return 'ignored';
@@ -442,6 +525,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     initialLoading,
     initialError,
     nextCursor,
+    scrollTop,
     loadingMore,
     loadMoreError,
     viewerID,
@@ -459,5 +543,12 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     toggleLike,
     toggleRepost,
     toggleBookmark,
+    applyExternalLikeStateLocal,
+    applyExternalRepostStateLocal,
+    applyExternalBookmarkStateLocal,
+    applyReplyCountUpdateLocal,
+    removePostLocal,
+    replaceAuthorIdentityLocal,
+    saveScrollTop,
   };
 });

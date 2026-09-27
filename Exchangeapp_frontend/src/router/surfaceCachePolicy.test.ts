@@ -4,10 +4,12 @@ import {
   getExternalProfileCacheKey,
   getHistoryReturnCacheKey,
   getRootSurfaceCacheKey,
+  getTopicReturnCacheKey,
   getViewerCacheNamespace,
   isViewOwnedScrollRoute,
   shouldPreserveExternalProfileCache,
   shouldPreserveHistoryReturnCache,
+  shouldPreserveTopicReturnCache,
 } from './surfaceCachePolicy';
 
 const location = (
@@ -57,7 +59,14 @@ describe('surface cache policy', () => {
     expect(getRootSurfaceCacheKey(location('PostDetail', { id: '42' }), 7)).toBeNull();
     expect(getExternalProfileCacheKey(location('PostDetail', { id: '42' }), 7)).toBeNull();
     expect(getHistoryReturnCacheKey(location('PostDetail', { id: '42' }), 7)).toBeNull();
+    expect(getTopicReturnCacheKey(location('PostDetail', { id: '42' }))).toBeNull();
+    expect(getRootSurfaceCacheKey(location('Topic', { slug: 'japan' }), 7)).toBeNull();
     expect(getRootSurfaceCacheKey(location('History'), 7)).toBeNull();
+  });
+
+  it('uses one fixed Topic return slot regardless of the slug', () => {
+    expect(getTopicReturnCacheKey(location('Topic', { slug: 'japan' }))).toBe('topic:return');
+    expect(getTopicReturnCacheKey(location('Topic', { slug: 'ai' }))).toBe('topic:return');
   });
 
   it('keys authenticated History return caches by viewer and excludes anonymous users', () => {
@@ -94,6 +103,14 @@ describe('surface cache policy', () => {
     expect(shouldPreserveHistoryReturnCache(location('PostCreate'))).toBe(false);
   });
 
+  it('preserves Topic return cache only through Topic and PostDetail', () => {
+    expect(shouldPreserveTopicReturnCache(location('Topic', { slug: 'japan' }))).toBe(true);
+    expect(shouldPreserveTopicReturnCache(location('PostDetail', { id: '42' }))).toBe(true);
+    for (const name of ['Home', 'UserSearch', 'History', 'UserProfile', 'Notifications', 'CurrencyExchange']) {
+      expect(shouldPreserveTopicReturnCache(location(name))).toBe(false);
+    }
+  });
+
   it('uses stable viewer namespaces', () => {
     expect(getViewerCacheNamespace(7)).toBe('viewer:7');
     expect(getViewerCacheNamespace(null)).toBe('anonymous');
@@ -106,6 +123,7 @@ describe('surface cache policy', () => {
     'Notifications',
     'UserProfile',
     'History',
+    'Topic',
   ])('lets %s own scroll restoration', (name) => {
     expect(isViewOwnedScrollRoute(location(name))).toBe(true);
   });

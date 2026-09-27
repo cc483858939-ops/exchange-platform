@@ -57,6 +57,11 @@ const HistoryProbe = defineComponent({
   `,
 });
 
+const TopicProbe = defineComponent({
+  name: 'TopicView',
+  template: '<main data-topic-marker>Topic</main>',
+});
+
 const UserProfileProbe = defineComponent({
   name: 'UserProfileView',
   template: `
@@ -90,6 +95,7 @@ const createTestRouter = () => createRouter({
     { path: '/users/:id/followers', name: 'UserFollowers', component: TransientProbe, meta: { layout: 'app' } },
     { path: '/search', name: 'UserSearch', component: SearchProbe, meta: { layout: 'app' } },
     { path: '/history', name: 'History', component: HistoryProbe, meta: { layout: 'app' } },
+    { path: '/topics/:slug', name: 'Topic', component: TopicProbe, meta: { layout: 'app' } },
   ],
 });
 
@@ -254,6 +260,49 @@ describe('App root and external surface caches', () => {
     expect(wrapper.find('[data-history-marker]').element).toBe(originalHistory);
     expect(wrapper.find('[data-history-post]').element).toBe(originalPost);
     expect(wrapper.find('[data-history-image]').element).toBe(originalImage);
+    wrapper.unmount();
+  });
+
+  it('preserves the same Topic DOM through PostDetail and back', async () => {
+    const { router, wrapper } = await mountApp('/topics/japan');
+    const originalTopic = wrapper.find('[data-topic-marker]').element;
+
+    await router.push('/posts/42');
+    await settle();
+    expect(wrapper.find('[data-detail-marker]').exists()).toBe(true);
+
+    await router.push('/topics/japan');
+    await settle();
+
+    expect(wrapper.find('[data-topic-marker]').element).toBe(originalTopic);
+    wrapper.unmount();
+  });
+
+  it('releases the Topic return cache when navigating to Home', async () => {
+    const { router, wrapper } = await mountApp('/topics/japan');
+    const originalTopic = wrapper.find('[data-topic-marker]').element;
+
+    await router.push('/');
+    await settle();
+    await router.push('/topics/japan');
+    await settle();
+
+    expect(wrapper.find('[data-topic-marker]').element).not.toBe(originalTopic);
+    wrapper.unmount();
+  });
+
+  it('isolates the Topic return cache by viewer namespace', async () => {
+    const { router, wrapper } = await mountApp('/topics/japan');
+    const viewerSevenTopic = wrapper.find('[data-topic-marker]').element;
+
+    await router.push('/posts/42');
+    await settle();
+    mocks.authStore.currentIdentity = { id: 8, username: 'viewer-8' };
+    await settle();
+    await router.push('/topics/japan');
+    await settle();
+
+    expect(wrapper.find('[data-topic-marker]').element).not.toBe(viewerSevenTopic);
     wrapper.unmount();
   });
 

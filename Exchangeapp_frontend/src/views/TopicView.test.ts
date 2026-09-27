@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { reactive } from 'vue';
+import { defineComponent, h, KeepAlive, reactive, ref } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -9,13 +9,21 @@ const mocks = vi.hoisted(() => ({
   topicSession: null as any,
   route: null as any,
   router: null as any,
+  beforeRouteLeave: null as null | (() => void),
+  beforeRouteUpdate: null as null | ((to: any) => unknown),
 }));
 
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../store/topicSession', () => ({ useTopicSessionStore: () => mocks.topicSession }));
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('vue-router')>();
-  return { ...actual, useRoute: () => mocks.route, useRouter: () => mocks.router };
+  return {
+    ...actual,
+    useRoute: () => mocks.route,
+    useRouter: () => mocks.router,
+    onBeforeRouteLeave: (guard: () => void) => { mocks.beforeRouteLeave = guard; },
+    onBeforeRouteUpdate: (guard: (to: any) => unknown) => { mocks.beforeRouteUpdate = guard; },
+  };
 });
 
 import TopicView from './TopicView.vue';
@@ -47,6 +55,7 @@ const createSession = (overrides: Record<string, unknown> = {}) => reactive({
   initialLoading: false,
   initialError: '',
   nextCursor: null as string | null,
+  scrollTop: 0,
   loadingMore: false,
   loadMoreError: '',
   viewerID: null as number | null,
@@ -55,6 +64,9 @@ const createSession = (overrides: Record<string, unknown> = {}) => reactive({
   bookmarkPendingPostIDs: new Set<number>(),
   mutationErrors: new Map<number, string>(),
   setTopic: vi.fn().mockResolvedValue(undefined),
+  saveScrollTop: vi.fn((value: number) => {
+    if (mocks.topicSession) mocks.topicSession.scrollTop = value;
+  }),
   reset: vi.fn(),
   retryInitial: vi.fn(),
   retryLoadMore: vi.fn(),
@@ -78,12 +90,42 @@ const mountTopic = () => mount(TopicView, {
   },
 });
 
+const TopicDetailProbe = defineComponent({ template: '<main data-topic-detail />' });
+
+const mountCachedTopic = () => {
+  const topicVisible = ref(true);
+  const wrapper = mount(defineComponent({
+    setup: () => () => h(KeepAlive, null, {
+      default: () => topicVisible.value
+        ? h(TopicView, { key: 'topic' })
+        : h(TopicDetailProbe, { key: 'detail' }),
+    }),
+  }), {
+    global: {
+      stubs: {
+        AppIcon: true,
+        MobileAccountMenu: true,
+        PostCard: {
+          props: ['post', 'trackView', 'requiresAuthForActions', 'viewSessionKey', 'likePending', 'repostPending', 'bookmarkPending'],
+          template: '<article data-topic-card>{{ post.content }}</article>',
+        },
+      },
+    },
+  });
+  return {
+    wrapper,
+    showTopic: (visible: boolean) => { topicVisible.value = visible; },
+  };
+};
+
 describe('TopicView', () => {
   beforeEach(() => {
     mocks.authStore = reactive({ isAuthenticated: false, currentIdentity: null });
     mocks.route = reactive({ name: 'Topic', params: { slug: 'japan' }, fullPath: '/topics/japan' });
     mocks.router = { back: vi.fn(), push: vi.fn() };
     mocks.topicSession = createSession();
+    mocks.beforeRouteLeave = null;
+    mocks.beforeRouteUpdate = null;
   });
 
   afterEach(() => vi.unstubAllGlobals());
@@ -135,14 +177,80 @@ describe('TopicView', () => {
     expect(mocks.topicSession.loadMore).toHaveBeenCalledOnce();
   });
 
-  it('loads a reused route with the new slug and scrolls its feed to the top', async () => {
+  it('loads a reused Topic route with the new slug and scrolls its feed to the top', async () => {
     const wrapper = mountTopic();
     const viewport = wrapper.get('.topic-view__scroll').element as HTMLElement;
     viewport.scrollTop = 80;
-    mocks.route.params.slug = 'ai';
-    await flushPromises();
+    await mocks.beforeRouteUpdate?.({ name: 'Topic', params: { slug: ' AI ' } });
 
     expect(mocks.topicSession.setTopic).toHaveBeenLastCalledWith('ai');
     expect(viewport.scrollTop).toBe(0);
+    expect(mocks.topicSession.saveScrollTop).toHaveBeenLastCalledWith(0);
+  });
+
+  it('saves and restores the internal scroll position across activation without reloading', async () => {
+    const { wrapper, showTopic } = mountCachedTopic();
+    await flushPromises();
+    const viewport = wrapper.get('.topic-view__scroll').element as HTMLElement;
+    viewport.scrollTop = 1200;
+
+    mocks.beforeRouteLeave?.();
+    expect(mocks.topicSession.saveScrollTop).toHaveBeenCalledWith(1200);
+    mocks.route.name = 'PostDetail';
+    showTopic(false);
+    await flushPromises();
+    expect(wrapper.find('[data-topic-detail]').exists()).toBe(true);
+
+    mocks.route.name = 'Topic';
+    mocks.route.params.slug = 'japan';
+    mocks.topicSession.scrollTop = 1200;
+    showTopic(true);
+    await flushPromises();
+
+    expect(wrapper.get('.topic-view__scroll').element).toBe(viewport);
+    expect(viewport.scrollTop).toBe(1200);
+    expect(mocks.topicSession.setTopic).toHaveBeenCalledTimes(1);
+  });
+
+  it('disconnects the pagination observer while hidden and ignores its callback', async () => {
+    const observers: Array<{
+      callback: IntersectionObserverCallback;
+      disconnect: ReturnType<typeof vi.fn>;
+      observe: ReturnType<typeof vi.fn>;
+    }> = [];
+    class FakeIntersectionObserver {
+      callback: IntersectionObserverCallback;
+      disconnect = vi.fn();
+      observe = vi.fn();
+
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+    }
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+    mocks.topicSession = createSession({ nextCursor: 'cursor-1' });
+    const { wrapper, showTopic } = mountCachedTopic();
+    await flushPromises();
+    const originalObserver = observers.at(-1);
+    expect(originalObserver).toBeTruthy();
+
+    mocks.route.name = 'PostDetail';
+    showTopic(false);
+    await flushPromises();
+
+    expect(originalObserver?.disconnect).toHaveBeenCalled();
+    originalObserver?.callback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      originalObserver as unknown as IntersectionObserver,
+    );
+    expect(mocks.topicSession.loadMore).not.toHaveBeenCalled();
+
+    mocks.route.name = 'Topic';
+    showTopic(true);
+    await flushPromises();
+    expect(observers.length).toBeGreaterThan(1);
+    expect(observers.at(-1)?.observe).toHaveBeenCalled();
+    wrapper.unmount();
   });
 });

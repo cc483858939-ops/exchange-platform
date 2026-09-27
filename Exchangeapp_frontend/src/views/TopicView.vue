@@ -72,8 +72,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  watch,
+} from 'vue';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import PostCard from '../components/feed/PostCard.vue';
@@ -88,6 +97,7 @@ const authStore = useAuthStore();
 const topicSession = useTopicSessionStore();
 const scrollViewportRef = ref<HTMLElement | null>(null);
 const sentinelRef = ref<HTMLElement | null>(null);
+const topicViewActive = ref(true);
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 const firstMutationError = computed(() => Array.from(topicSession.mutationErrors.values())[0] ?? '');
 const topicTitle = computed(() => `#${topicSession.topic?.label ?? topicSession.activeSlug ?? 'Topic'}`);
@@ -96,10 +106,10 @@ const viewSessionKey = computed(() => {
   return `topic:${viewerID ?? 'anonymous'}:${topicSession.activeSlug ?? ''}`;
 });
 
-const normalizedSlug = computed(() => {
-  const raw = Array.isArray(route.params.slug) ? route.params.slug[0] : route.params.slug;
+const normalizeTopicSlug = (value: unknown): string => {
+  const raw = Array.isArray(value) ? value[0] : value;
   return typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-});
+};
 
 const goBack = () => {
   const historyState = window.history.state as { back?: string | null } | null;
@@ -116,10 +126,17 @@ const disconnectObserver = () => {
   observer = null;
 };
 
+const saveCurrentScroll = () => {
+  const viewport = scrollViewportRef.value;
+  if (viewport) topicSession.saveScrollTop(viewport.scrollTop);
+};
+
 const updateObserver = () => {
   disconnectObserver();
   if (
-    !intersectionObserverAvailable
+    !topicViewActive.value
+    || route.name !== 'Topic'
+    || !intersectionObserverAvailable
     || !topicSession.nextCursor
     || topicSession.loadingMore
     || topicSession.loadMoreError
@@ -127,26 +144,81 @@ const updateObserver = () => {
     || !scrollViewportRef.value
   ) return;
   observer = new IntersectionObserver((entries) => {
-    if (entries.some(entry => entry.isIntersecting)) void topicSession.loadMore();
+    if (
+      topicViewActive.value
+      && route.name === 'Topic'
+      && entries.some(entry => entry.isIntersecting)
+    ) {
+      void topicSession.loadMore();
+    }
   }, { root: scrollViewportRef.value, rootMargin: '320px 0px' });
   observer.observe(sentinelRef.value);
 };
 
-watch(normalizedSlug, (slug) => {
-  void topicSession.setTopic(slug);
-  void nextTick(() => {
+const enterTopic = async (slug: string) => {
+  const changed = slug !== topicSession.activeSlug;
+  await topicSession.setTopic(slug);
+  if (changed) {
+    await nextTick();
     if (scrollViewportRef.value) scrollViewportRef.value.scrollTop = 0;
-    updateObserver();
-  });
-}, { immediate: true });
+    topicSession.saveScrollTop(0);
+  }
+  await nextTick();
+  updateObserver();
+};
+
+onBeforeRouteLeave(() => {
+  saveCurrentScroll();
+});
+
+onBeforeRouteUpdate(async (to) => {
+  if (to.name === 'Topic') {
+    await enterTopic(normalizeTopicSlug(to.params.slug));
+  }
+});
+
+onMounted(() => {
+  topicViewActive.value = true;
+  void enterTopic(normalizeTopicSlug(route.params.slug));
+});
+
+let firstActivation = true;
+onActivated(async () => {
+  topicViewActive.value = true;
+  if (firstActivation) {
+    firstActivation = false;
+    return;
+  }
+  if (route.name !== 'Topic') return;
+
+  const slug = normalizeTopicSlug(route.params.slug);
+  if (slug !== topicSession.activeSlug) {
+    await enterTopic(slug);
+    return;
+  }
+
+  await nextTick();
+  if (scrollViewportRef.value) {
+    scrollViewportRef.value.scrollTop = topicSession.scrollTop;
+  }
+  updateObserver();
+});
+
+onDeactivated(() => {
+  if (!topicViewActive.value) return;
+  saveCurrentScroll();
+  topicViewActive.value = false;
+  disconnectObserver();
+});
 
 watch(
   () => [topicSession.nextCursor, topicSession.loadingMore, topicSession.loadMoreError, topicSession.items.length],
-  () => { void nextTick(updateObserver); },
+  () => {
+    if (topicViewActive.value) void nextTick(updateObserver);
+  },
   { flush: 'post' },
 );
 
-onMounted(updateObserver);
 onBeforeUnmount(() => {
   disconnectObserver();
   topicSession.reset();

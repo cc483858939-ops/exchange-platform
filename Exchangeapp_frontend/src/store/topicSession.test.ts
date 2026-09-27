@@ -18,9 +18,13 @@ const mocks = vi.hoisted(() => ({
   undoRepostPost: vi.fn(),
   bookmarkPost: vi.fn(),
   unbookmarkPost: vi.fn(),
+  registerTopicSessionSync: vi.fn(),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
   syncExternalPostBookmarkState: vi.fn(),
+  syncTopicLikeState: vi.fn(),
+  syncTopicRepostState: vi.fn(),
+  syncTopicBookmarkState: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -41,9 +45,13 @@ vi.mock('../services/bookmarkService', () => ({
   unbookmarkPost: mocks.unbookmarkPost,
 }));
 vi.mock('./sessionSync', () => ({
+  registerTopicSessionSync: mocks.registerTopicSessionSync,
   syncExternalPostLikeState: mocks.syncExternalPostLikeState,
   syncExternalPostRepostState: mocks.syncExternalPostRepostState,
   syncExternalPostBookmarkState: mocks.syncExternalPostBookmarkState,
+  syncTopicLikeState: mocks.syncTopicLikeState,
+  syncTopicRepostState: mocks.syncTopicRepostState,
+  syncTopicBookmarkState: mocks.syncTopicBookmarkState,
 }));
 
 import { useTopicSessionStore } from './topicSession';
@@ -168,6 +176,25 @@ describe('topicSession store', () => {
     expect(mocks.getTopicPosts).toHaveBeenNthCalledWith(2, 'ai', { limit: 20, cursor: 'cursor-1' });
   });
 
+  it('keeps loaded pages and the next cursor when re-entering the same Topic', async () => {
+    mocks.getTopicPosts
+      .mockResolvedValueOnce({ topic: topic('ai'), items: [post(1)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ topic: topic('ai'), items: [post(2)], next_cursor: 'cursor-2' })
+      .mockResolvedValueOnce({ topic: topic('ai'), items: [post(3)], next_cursor: null });
+    const store = createStore();
+
+    await store.setTopic('ai');
+    await store.loadMore();
+    store.saveScrollTop(1200);
+    await store.setTopic(' AI ');
+    await store.loadMore();
+
+    expect(mocks.getTopicPosts).toHaveBeenCalledTimes(3);
+    expect(mocks.getTopicPosts).toHaveBeenNthCalledWith(3, 'ai', { limit: 20, cursor: 'cursor-2' });
+    expect(store.items.map(item => item.id)).toEqual([1, 2, 3]);
+    expect(store.scrollTop).toBe(1200);
+  });
+
   it('ignores a stale response after the active slug changes', async () => {
     const japan = deferred<{ topic: ReturnType<typeof topic>; items: Post[]; next_cursor: null }>();
     const ai = deferred<{ topic: ReturnType<typeof topic>; items: Post[]; next_cursor: null }>();
@@ -225,15 +252,94 @@ describe('topicSession store', () => {
     likeResult.resolve({ likes: 11, liked: true });
     await expect(mutation).resolves.toBe('succeeded');
     expect(store.items[0].likeCount).toBe(11);
-    expect(mocks.syncExternalPostLikeState).toHaveBeenCalledWith({ postId: 1, likes: 11, liked: true, status: 'ready' });
+    expect(mocks.syncTopicLikeState).toHaveBeenCalledWith({ postId: 1, likes: 11, liked: true, status: 'ready' });
 
     await expect(store.toggleRepost(1)).resolves.toBe('succeeded');
     expect(store.items[0].repostCount).toBe(5);
-    expect(mocks.syncExternalPostRepostState).toHaveBeenCalledWith({ postId: 1, reposts: 5, reposted: true, status: 'ready' });
+    expect(mocks.syncTopicRepostState).toHaveBeenCalledWith({ postId: 1, reposts: 5, reposted: true, status: 'ready' });
     await expect(store.toggleBookmark(1)).resolves.toBe('succeeded');
     expect(store.items[0].bookmarked).toBe(true);
-    expect(mocks.syncExternalPostBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
+    expect(mocks.syncTopicBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
     expect(store.likePendingPostIDs.size + store.repostPendingPostIDs.size + store.bookmarkPendingPostIDs.size).toBe(0);
+  });
+
+  it('registers the Topic adapter and applies external post state locally', async () => {
+    mocks.getTopicPosts.mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: null });
+    const store = createStore();
+    await store.setTopic('japan');
+
+    expect(mocks.registerTopicSessionSync).toHaveBeenCalledOnce();
+    expect(mocks.registerTopicSessionSync).toHaveBeenCalledWith(expect.objectContaining({
+      applyExternalLikeStateLocal: expect.any(Function),
+      applyExternalRepostStateLocal: expect.any(Function),
+      applyExternalBookmarkStateLocal: expect.any(Function),
+      applyReplyCountUpdateLocal: expect.any(Function),
+      removePostLocal: expect.any(Function),
+      replaceAuthorIdentityLocal: expect.any(Function),
+    }));
+
+    expect(store.applyExternalLikeStateLocal({ postId: 1, likes: 4, liked: true, status: 'ready' })).toBe(true);
+    expect(store.applyExternalRepostStateLocal({ postId: 1, reposts: 5, reposted: true, status: 'ready' })).toBe(true);
+    expect(store.applyExternalBookmarkStateLocal({ postId: 1, bookmarked: true, status: 'ready' })).toBe(true);
+    expect(store.applyReplyCountUpdateLocal({ postId: 1, replyCount: 7 })).toBe(true);
+    expect(store.items[0]).toMatchObject({
+      likeCount: 4,
+      liked: true,
+      repostCount: 5,
+      reposted: true,
+      bookmarked: true,
+      replyCount: 7,
+    });
+    expect(store.applyReplyCountUpdateLocal({ postId: 1, replyCount: -1 })).toBe(false);
+  });
+
+  it('invalidates pending local mutations when external state arrives', async () => {
+    mocks.getTopicPosts.mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: null });
+    const store = createStore(true);
+    await store.setTopic('japan');
+    await settle();
+    const likeResult = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(likeResult.promise);
+
+    const mutation = store.toggleLike(1);
+    store.applyExternalLikeStateLocal({ postId: 1, likes: 9, liked: true, status: 'ready' });
+    likeResult.resolve({ likes: 4, liked: true });
+
+    await expect(mutation).resolves.toBe('ignored');
+    expect(store.items[0]).toMatchObject({ likeCount: 9, liked: true });
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+  });
+
+  it('removes posts, blocks later cursor duplicates, and updates author identities', async () => {
+    mocks.getTopicPosts
+      .mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ topic: topic('japan'), items: [post(99), post(2)], next_cursor: null });
+    const store = createStore();
+    await store.setTopic('japan');
+    store.items[0].repostContext = { actor: post(1).author };
+
+    expect(store.replaceAuthorIdentityLocal({ id: 9, username: 'new-author', display_name: 'New Author', avatar_url: '' })).toBe(true);
+    expect(store.items[0].author.username).toBe('new-author');
+    expect(store.items[0].repostContext?.actor.username).toBe('new-author');
+    expect(store.removePostLocal(99)).toBe(false);
+    await store.loadMore();
+    expect(store.items.map(item => item.id)).toEqual([1, 2]);
+
+    expect(store.removePostLocal(1)).toBe(true);
+    expect(store.items.map(item => item.id)).toEqual([2]);
+  });
+
+  it('normalizes saved scroll and resets it when Topic page state is cleared', async () => {
+    const store = createStore();
+    store.saveScrollTop(1200);
+    expect(store.scrollTop).toBe(1200);
+    store.saveScrollTop(Number.NaN);
+    expect(store.scrollTop).toBe(0);
+    store.saveScrollTop(42);
+
+    await store.setTopic('japan');
+    await store.setTopic('ai');
+    expect(store.scrollTop).toBe(0);
   });
 
   it('does not let old hydration overwrite a newer mutation', async () => {
