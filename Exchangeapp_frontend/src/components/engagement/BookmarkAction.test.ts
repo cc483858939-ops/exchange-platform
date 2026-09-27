@@ -98,12 +98,12 @@ describe('BookmarkAction', () => {
     });
   });
 
-  it('keeps bookmark motion through 539ms and settles at 540ms', async () => {
+  it('keeps bookmark motion through 569ms and settles at 570ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountBookmarkAction();
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(539);
+    vi.advanceTimersByTime(569);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('bookmarking');
 
@@ -112,12 +112,12 @@ describe('BookmarkAction', () => {
     expect(wrapper.get('button').attributes('data-motion')).toBe('idle');
   });
 
-  it('keeps unbookmark motion through 299ms and settles at 300ms', async () => {
+  it('keeps unbookmark motion through 329ms and settles at 330ms', async () => {
     vi.useFakeTimers();
     const wrapper = mountBookmarkAction({ bookmarked: true });
 
     await wrapper.get('button').trigger('click');
-    vi.advanceTimersByTime(299);
+    vi.advanceTimersByTime(329);
     await wrapper.vm.$nextTick();
     expect(wrapper.get('button').attributes('data-motion')).toBe('unbookmarking');
 

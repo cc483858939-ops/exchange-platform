@@ -34,8 +34,10 @@ import BookmarkMorphIcon from './BookmarkMorphIcon.vue';
 type BookmarkActionVariant = 'compact' | 'detail';
 type BookmarkMotion = 'idle' | 'bookmarking' | 'unbookmarking';
 
-const bookmarkMotionDurationMs = 540;
-const unbookmarkMotionDurationMs = 300;
+// Keep the parent motion state slightly longer than the child GSAP
+// timeline so post-flush startup does not truncate the final settle.
+const bookmarkMotionDurationMs = 570;
+const unbookmarkMotionDurationMs = 330;
 
 const props = withDefaults(defineProps<{
   bookmarked: boolean;
