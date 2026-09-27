@@ -63,14 +63,13 @@ func (mapper *GormRecommendationResponseMapper) Map(ctx context.Context, selecte
 	if err := hydratePostResponseRepostCountsFromDB(db, posts); err != nil {
 		return nil, err
 	}
+	if err := hydratePostResponsesReferencesFromDB(db, posts, now); err != nil {
+		return nil, err
+	}
 	result := make([]RecommendedPostResponse, 0, len(prepared))
 	for index, item := range prepared {
-		post := posts[index]
-		if err := hydratePostResponseReferencesFromDB(db, &post, now); err != nil {
-			return nil, err
-		}
 		result = append(result, RecommendedPostResponse{
-			Post: post, Score: item.score,
+			Post: posts[index], Score: item.score,
 		})
 	}
 	return result, nil

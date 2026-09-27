@@ -332,10 +332,8 @@ func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
 		return nil, err
 	}
 	referenceNow := time.Now().UTC()
-	for index := range responses {
-		if err := hydratePostResponseReferencesFromDB(referenceDB, &responses[index], referenceNow); err != nil {
-			return nil, err
-		}
+	if err := hydratePostResponsesReferencesFromDB(referenceDB, responses, referenceNow); err != nil {
+		return nil, err
 	}
 	return responses, nil
 }

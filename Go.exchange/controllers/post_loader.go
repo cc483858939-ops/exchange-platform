@@ -117,65 +117,128 @@ func hydratePostResponseReferencesFromDB(db *gorm.DB, response *postResponse, no
 	if response == nil {
 		return nil
 	}
-	if response.ReplyToPostID != nil {
-		reference, err := loadPostReferenceFromDB(db, response.ReplyToPostID, now)
-		if err != nil {
-			return err
-		}
-		response.ReplyToPost = reference
-	} else {
-		response.ReplyToPost = nil
+	responses := []postResponse{*response}
+	if err := hydratePostResponsesReferencesFromDB(db, responses, now); err != nil {
+		return err
 	}
-	if response.QuotePostID != nil {
-		reference, err := loadPostReferenceFromDB(db, response.QuotePostID, now)
-		if err != nil {
-			return err
+	*response = responses[0]
+	return nil
+}
+
+func hydratePostResponsesReferencesFromDB(db *gorm.DB, responses []postResponse, now time.Time) error {
+	if len(responses) == 0 {
+		return nil
+	}
+	ids := make([]uint, 0, len(responses)*2)
+	for index := range responses {
+		if responses[index].ReplyToPostID != nil {
+			ids = append(ids, *responses[index].ReplyToPostID)
 		}
-		response.QuotePost = reference
-	} else {
-		response.QuotePost = nil
+		if responses[index].QuotePostID != nil {
+			ids = append(ids, *responses[index].QuotePostID)
+		}
+	}
+	references, err := loadPostReferencesByIDsFromDB(db, ids, now)
+	if err != nil {
+		return err
+	}
+	for index := range responses {
+		responses[index].ReplyToPost = copyPostReference(references, responses[index].ReplyToPostID)
+		responses[index].QuotePost = copyPostReference(references, responses[index].QuotePostID)
 	}
 	return nil
+}
+
+func copyPostReference(references map[uint]postReferenceResponse, id *uint) *postReferenceResponse {
+	if id == nil || *id == 0 {
+		return nil
+	}
+	reference, ok := references[*id]
+	if !ok {
+		return nil
+	}
+	copy := reference
+	if reference.Author != nil {
+		author := *reference.Author
+		copy.Author = &author
+	}
+	if reference.PublishedAt != nil {
+		publishedAt := *reference.PublishedAt
+		copy.PublishedAt = &publishedAt
+	}
+	if reference.Media != nil {
+		copy.Media = append(make([]postMediaResponse, 0, len(reference.Media)), reference.Media...)
+	}
+	return &copy
+}
+
+func loadPostReferencesByIDsFromDB(db *gorm.DB, ids []uint, now time.Time) (map[uint]postReferenceResponse, error) {
+	uniqueIDs := make([]uint, 0, len(ids))
+	references := make(map[uint]postReferenceResponse, len(ids))
+	seen := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+		references[id] = postReferenceResponse{ID: id, Deleted: true}
+	}
+	if len(uniqueIDs) == 0 {
+		return references, nil
+	}
+	if db == nil {
+		return nil, errors.New("database is not initialized")
+	}
+
+	var posts []models.Post
+	query := preloadPostAuthor(db.Model(&models.Post{})).
+		Select(publicPostSelectColumns).
+		Where("posts.id IN ?", uniqueIDs)
+	if err := publicPostScope(query, now).Find(&posts).Error; err != nil {
+		return nil, err
+	}
+	activeIDs := make([]uint, 0, len(posts))
+	for _, post := range posts {
+		author, err := publicAuthorFromPost(post)
+		if err != nil {
+			return nil, err
+		}
+		publishedAt := post.CreatedAt.UTC()
+		references[post.ID] = postReferenceResponse{
+			ID: post.ID, Deleted: false, Author: &author, Content: post.Content,
+			PublishedAt: &publishedAt,
+		}
+		activeIDs = append(activeIDs, post.ID)
+	}
+	if len(activeIDs) == 0 {
+		return references, nil
+	}
+	mediaByPostID, err := loadPostMediaByPostIDs(db, activeIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, postID := range activeIDs {
+		reference := references[postID]
+		reference.Media = mediaByPostID[postID]
+		if reference.Media == nil {
+			reference.Media = make([]postMediaResponse, 0)
+		}
+		references[postID] = reference
+	}
+	return references, nil
 }
 
 func loadPostReferenceFromDB(db *gorm.DB, id *uint, now time.Time) (*postReferenceResponse, error) {
 	if id == nil || *id == 0 {
 		return nil, nil
 	}
-	if db == nil {
-		return nil, errors.New("database is not initialized")
-	}
-
-	var structuralPost models.Post
-	if err := db.Unscoped().Model(&models.Post{}).Where("posts.id = ?", *id).First(&structuralPost).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &postReferenceResponse{ID: *id, Deleted: true}, nil
-		}
-		return nil, err
-	}
-	if structuralPost.DeletedAt.Valid {
-		return &postReferenceResponse{ID: *id, Deleted: true}, nil
-	}
-
-	var post models.Post
-	err := publicPostScope(preloadPostAuthor(db.Model(&models.Post{})).Where("posts.id = ?", *id), now).First(&post).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &postReferenceResponse{ID: *id, Deleted: true}, nil
-		}
-		return nil, err
-	}
-	publishedAt := post.CreatedAt.UTC()
-	author, err := publicAuthorFromPost(post)
+	references, err := loadPostReferencesByIDsFromDB(db, []uint{*id}, now)
 	if err != nil {
 		return nil, err
 	}
-	mediaByPostID, err := loadPostMediaByPostIDs(db, []uint{post.ID})
-	if err != nil {
-		return nil, err
-	}
-	return &postReferenceResponse{
-		ID: post.ID, Deleted: false, Author: &author, Content: post.Content,
-		PublishedAt: &publishedAt, Media: mediaByPostID[post.ID],
-	}, nil
+	return copyPostReference(references, id), nil
 }

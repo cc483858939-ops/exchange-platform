@@ -85,17 +85,13 @@ func GetPostReplies(ctx *gin.Context) {
 	if hasMore {
 		posts = posts[:limit]
 	}
-	items := make([]replyResponse, 0, len(posts))
-	for _, reply := range posts {
-		response, err := newReplyResponse(db, reply)
-		if err != nil {
-			if handleRequestDBError(ctx, err) {
-				return
-			}
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	items, err := newPostResponses(posts)
+	if err != nil {
+		if handleRequestDBError(ctx, err) {
 			return
 		}
-		items = append(items, response)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 	if err := hydratePostResponsesMediaFromDB(db, items); err != nil {
 		if handleRequestDBError(ctx, err) {
@@ -105,6 +101,14 @@ func GetPostReplies(ctx *gin.Context) {
 		return
 	}
 	if err := hydratePostResponseRepostCountsFromDB(db, items); err != nil {
+		if handleRequestDBError(ctx, err) {
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	referenceNow := time.Now().UTC()
+	if err := hydratePostResponsesReferencesFromDB(db, items, referenceNow); err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
