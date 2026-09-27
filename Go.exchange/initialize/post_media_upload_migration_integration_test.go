@@ -161,3 +161,129 @@ WHERE conrelid = 'post_media_uploads'::regclass
 		}
 	}
 }
+
+func TestDeleteAfterObjectCleanupStateFenceIntegration(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunMigrationsWithDB(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	owner := models.User{Username: "post-media-cleanup-guard-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&owner).Error; err != nil {
+		t.Fatal(err)
+	}
+	var mediaIDs []string
+	t.Cleanup(func() {
+		if len(mediaIDs) > 0 {
+			if err := db.Unscoped().Where("media_id IN ?", mediaIDs).Delete(&models.PostMediaUpload{}).Error; err != nil {
+				t.Errorf("clean up Post media upload fixtures: %v", err)
+			}
+		}
+		if err := db.Unscoped().Delete(&models.User{}, owner.ID).Error; err != nil {
+			t.Errorf("clean up Post media upload test owner: %v", err)
+		}
+	})
+
+	newUploadingLease := func() models.PostMediaUpload {
+		mediaID := uuid.NewString()
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		return models.PostMediaUpload{
+			MediaID:           mediaID,
+			OwnerID:           owner.ID,
+			Status:            postmediaupload.StatusUploading,
+			OriginalObjectKey: "post-media/users/v1/1/" + mediaID + "/original.jpg",
+			MediumObjectKey:   "post-media/users/v1/1/" + mediaID + "/medium.jpg",
+			LargeObjectKey:    "post-media/users/v1/1/" + mediaID + "/large.jpg",
+			ManifestObjectKey: "post-media/users/v1/1/" + mediaID + "/manifest.json",
+			MediumURL:         "/api/files/post-media/users/v1/1/" + mediaID + "/medium.jpg",
+			LargeURL:          "/api/files/post-media/users/v1/1/" + mediaID + "/large.jpg",
+			Width:             1200,
+			Height:            800,
+			CreatedAt:         now,
+			CleanupAfter:      now.Add(postmediaupload.DefaultUploadTimeout),
+		}
+	}
+	createLease := func(upload models.PostMediaUpload) {
+		t.Helper()
+		mediaIDs = append(mediaIDs, upload.MediaID)
+		if err := postmediaupload.CreateUploading(context.Background(), db, upload); err != nil {
+			t.Fatalf("create uploading lease %q: %v", upload.MediaID, err)
+		}
+	}
+
+	t.Run("uploaded lease is protected with metadata intact", func(t *testing.T) {
+		upload := newUploadingLease()
+		createLease(upload)
+		uploadedAt := upload.CreatedAt.Add(time.Minute)
+		cleanupAfter := uploadedAt.Add(postmediaupload.DefaultGracePeriod)
+		if err := postmediaupload.MarkUploaded(context.Background(), db, upload.MediaID, owner.ID, uploadedAt, cleanupAfter); err != nil {
+			t.Fatalf("mark lease uploaded: %v", err)
+		}
+
+		var before models.PostMediaUpload
+		if err := db.Where("media_id = ?", upload.MediaID).Take(&before).Error; err != nil {
+			t.Fatalf("load uploaded lease before cleanup attempt: %v", err)
+		}
+		if before.MediaID != upload.MediaID || before.OwnerID != owner.ID || before.Status != postmediaupload.StatusUploaded || before.UploadedAt == nil || !before.UploadedAt.Equal(uploadedAt) || !before.CleanupAfter.Equal(cleanupAfter) {
+			t.Fatalf("uploaded lease precondition failed: %+v", before)
+		}
+
+		if err := postmediaupload.DeleteAfterObjectCleanup(context.Background(), db, upload.MediaID, owner.ID); !errors.Is(err, postmediaupload.ErrUploadUnavailable) {
+			t.Fatalf("cleanup deletion error=%v, want ErrUploadUnavailable", err)
+		}
+
+		var after models.PostMediaUpload
+		if err := db.Where("media_id = ?", upload.MediaID).Take(&after).Error; err != nil {
+			t.Fatalf("uploaded lease disappeared after cleanup attempt: %v", err)
+		}
+		if after.MediaID != before.MediaID || after.OwnerID != before.OwnerID || after.Status != postmediaupload.StatusUploaded || after.UploadedAt == nil || !after.UploadedAt.Equal(*before.UploadedAt) || !after.CleanupAfter.Equal(before.CleanupAfter) {
+			t.Fatalf("uploaded lease metadata changed after rejected cleanup: before=%+v after=%+v", before, after)
+		}
+	})
+
+	t.Run("uploading lease is deletable", func(t *testing.T) {
+		upload := newUploadingLease()
+		createLease(upload)
+
+		if err := postmediaupload.DeleteAfterObjectCleanup(context.Background(), db, upload.MediaID, owner.ID); err != nil {
+			t.Fatalf("delete uploading lease: %v", err)
+		}
+		var stored models.PostMediaUpload
+		if err := db.Where("media_id = ?", upload.MediaID).Take(&stored).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+			t.Fatalf("uploading lease lookup error=%v, want row to be absent", err)
+		}
+	})
+
+	t.Run("wrong owner cannot delete uploading lease", func(t *testing.T) {
+		upload := newUploadingLease()
+		createLease(upload)
+
+		wrongOwnerID := owner.ID + 1
+		if wrongOwnerID == owner.ID {
+			t.Fatal("could not construct distinct wrong owner ID")
+		}
+		if err := postmediaupload.DeleteAfterObjectCleanup(context.Background(), db, upload.MediaID, wrongOwnerID); !errors.Is(err, postmediaupload.ErrUploadUnavailable) {
+			t.Fatalf("wrong-owner cleanup error=%v, want ErrUploadUnavailable", err)
+		}
+		var stored models.PostMediaUpload
+		if err := db.Where("media_id = ?", upload.MediaID).Take(&stored).Error; err != nil {
+			t.Fatalf("wrong-owner cleanup removed lease: %v", err)
+		}
+		if stored.MediaID != upload.MediaID || stored.OwnerID != owner.ID || stored.Status != postmediaupload.StatusUploading {
+			t.Fatalf("wrong-owner cleanup changed lease: %+v", stored)
+		}
+	})
+
+	t.Run("missing lease is unavailable", func(t *testing.T) {
+		if err := postmediaupload.DeleteAfterObjectCleanup(context.Background(), db, uuid.NewString(), owner.ID); !errors.Is(err, postmediaupload.ErrUploadUnavailable) {
+			t.Fatalf("missing-lease cleanup error=%v, want ErrUploadUnavailable", err)
+		}
+	})
+}
