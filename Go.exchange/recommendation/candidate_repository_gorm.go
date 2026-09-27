@@ -260,8 +260,8 @@ func publicCandidateQuery(db *gorm.DB, input PublicCandidateQuery) *gorm.DB {
 	return query
 }
 
-func trendingOrder(now time.Time, replyFactor, halfLifeHours float64) clause.Expr {
-	return clause.Expr{SQL: `
+func trendingOrder(now time.Time, replyFactor, halfLifeHours float64) clause.OrderBy {
+	return clause.OrderBy{Expression: clause.Expr{SQL: `
 (
     LN(1 + GREATEST(posts.like_count, 0))
     + ? * LN(1 + GREATEST(posts.reply_count, 0))
@@ -274,7 +274,7 @@ EXP(
 )
 DESC,
 posts.created_at DESC,
-posts.id DESC`, Vars: []interface{}{replyFactor, now.UTC(), halfLifeHours}}
+posts.id DESC`, Vars: []interface{}{replyFactor, now.UTC(), halfLifeHours}}}
 }
 
 func queryCandidateIDs(query *gorm.DB, limit int, following, recent bool) ([]Candidate, error) {
