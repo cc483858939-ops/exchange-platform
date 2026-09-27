@@ -262,7 +262,7 @@ func TestStoreReadAwareExpiryLeaseIntegration(t *testing.T) {
 	ctx := context.Background()
 	const fullTTL = 24 * time.Hour
 	const renewalThreshold = 12 * time.Hour
-	postIDs := make([]uint, 11)
+	postIDs := make([]uint, 13)
 	for index := range postIDs {
 		postIDs[index] = basePostID + uint(index)
 		if index > 0 {
@@ -458,7 +458,7 @@ func TestStoreReadAwareExpiryLeaseIntegration(t *testing.T) {
 	}
 
 	// A successful state read is returned even when its optional renewal fails.
-	failOpenID := postIDs[10]
+	failOpenID := postIDs[11]
 	initialize(failOpenID, 1, []uint{11})
 	armWithPTTL(failOpenID, 5*time.Hour)
 	renewAttempted := false
@@ -474,9 +474,7 @@ func TestStoreReadAwareExpiryLeaseIntegration(t *testing.T) {
 	}
 
 	// A cold lease with no serving reads still expires naturally.
-	coldID := postIDs[10] + 1
-	cleanupRecoverableStorePost(client, coldID)
-	t.Cleanup(func() { cleanupRecoverableStorePost(client, coldID) })
+	coldID := postIDs[12]
 	initialize(coldID, 0, nil)
 	if armed, err := store.ArmExpiry(ctx, coldID, 10, fullTTL); err != nil || !armed {
 		t.Fatalf("cold ArmExpiry armed=%t err=%v", armed, err)

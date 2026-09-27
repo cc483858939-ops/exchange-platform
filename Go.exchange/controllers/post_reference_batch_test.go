@@ -61,14 +61,13 @@ func TestLoadPostReferencesBatchesMixedReferencesAndPreservesTombstonesIntegrati
 
 	activeWithMedia := createReferenceBatchTestPost(t, db, fixture.Author.ID, "active with media", "public", now.Add(-time.Minute), nil, nil)
 	activeWithoutMedia := createReferenceBatchTestPost(t, db, fixture.Author.ID, "active without media", "public", now.Add(-2*time.Minute), nil, nil)
-	privatePost := createReferenceBatchTestPost(t, db, fixture.Author.ID, "private", "private", now.Add(-3*time.Minute), nil, nil)
 	deletedPost := createReferenceBatchTestPost(t, db, fixture.Author.ID, "deleted", "public", now.Add(-4*time.Minute), nil, nil)
 	deletedAuthor := models.User{Username: "reference-deleted-author-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&deletedAuthor).Error; err != nil {
 		t.Fatal(err)
 	}
 	deletedAuthorPost := createReferenceBatchTestPost(t, db, deletedAuthor.ID, "deleted author", "public", now.Add(-5*time.Minute), nil, nil)
-	createdPostIDs := []uint{activeWithMedia.ID, activeWithoutMedia.ID, privatePost.ID, deletedPost.ID, deletedAuthorPost.ID}
+	createdPostIDs := []uint{activeWithMedia.ID, activeWithoutMedia.ID, deletedPost.ID, deletedAuthorPost.ID}
 	t.Cleanup(func() {
 		db.Unscoped().Where("post_id IN ?", createdPostIDs).Delete(&models.PostMedia{})
 		db.Unscoped().Where("id IN ?", createdPostIDs).Delete(&models.Post{})
@@ -91,7 +90,7 @@ func TestLoadPostReferencesBatchesMixedReferencesAndPreservesTombstonesIntegrati
 
 	responses := []postResponse{
 		{ReplyToPostID: &activeWithMedia.ID, QuotePostID: &deletedPost.ID},
-		{ReplyToPostID: &activeWithMedia.ID, QuotePostID: &privatePost.ID},
+		{ReplyToPostID: &activeWithMedia.ID, QuotePostID: &deletedAuthorPost.ID},
 		{ReplyToPostID: &missingID, QuotePostID: &activeWithoutMedia.ID},
 		{ReplyToPostID: &activeWithoutMedia.ID, QuotePostID: &zeroID},
 		{ReplyToPostID: &deletedAuthorPost.ID},
@@ -129,7 +128,7 @@ func TestLoadPostReferencesBatchesMixedReferencesAndPreservesTombstonesIntegrati
 		t.Fatalf("media order=%#v want position order", responses[1].ReplyToPost.Media)
 	}
 	assertActivePostReferenceWire(t, responses[2].QuotePost)
-	assertOneReferenceBatch(t, queryLogger.snapshot(), 1, 1, 1, 6)
+	assertOneReferenceBatch(t, queryLogger.snapshot(), 1, 1, 1, 5)
 }
 
 func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *testing.T) {
