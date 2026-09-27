@@ -82,7 +82,7 @@ import {
   ref,
   watch,
 } from 'vue';
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import PostCard from '../components/feed/PostCard.vue';
@@ -158,29 +158,45 @@ const updateObserver = () => {
 const enterTopic = async (slug: string) => {
   const changed = slug !== topicSession.activeSlug;
   await topicSession.setTopic(slug);
+  if (route.name !== 'Topic' || slug !== topicSession.activeSlug) return;
+
   if (changed) {
     await nextTick();
+    if (route.name !== 'Topic' || slug !== topicSession.activeSlug) return;
     if (scrollViewportRef.value) scrollViewportRef.value.scrollTop = 0;
     topicSession.saveScrollTop(0);
   }
+
   await nextTick();
-  updateObserver();
+  if (
+    topicViewActive.value
+    && route.name === 'Topic'
+    && slug === topicSession.activeSlug
+  ) {
+    updateObserver();
+  }
 };
 
 onBeforeRouteLeave(() => {
   saveCurrentScroll();
 });
 
-onBeforeRouteUpdate(async (to) => {
-  if (to.name === 'Topic') {
-    await enterTopic(normalizeTopicSlug(to.params.slug));
-  }
-});
-
 onMounted(() => {
   topicViewActive.value = true;
   void enterTopic(normalizeTopicSlug(route.params.slug));
 });
+
+watch(
+  [() => route.name, () => route.params.slug],
+  ([routeName, rawSlug]) => {
+    if (!topicViewActive.value || routeName !== 'Topic') return;
+
+    const slug = normalizeTopicSlug(rawSlug);
+    if (slug === topicSession.activeSlug) return;
+
+    void enterTopic(slug);
+  },
+);
 
 let firstActivation = true;
 onActivated(async () => {

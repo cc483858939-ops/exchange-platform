@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   router: null as any,
   beforeRouteLeave: null as null | (() => void),
-  beforeRouteUpdate: null as null | ((to: any) => unknown),
 }));
 
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -22,7 +21,6 @@ vi.mock('vue-router', async (importOriginal) => {
     useRoute: () => mocks.route,
     useRouter: () => mocks.router,
     onBeforeRouteLeave: (guard: () => void) => { mocks.beforeRouteLeave = guard; },
-    onBeforeRouteUpdate: (guard: (to: any) => unknown) => { mocks.beforeRouteUpdate = guard; },
   };
 });
 
@@ -125,7 +123,6 @@ describe('TopicView', () => {
     mocks.router = { back: vi.fn(), push: vi.fn() };
     mocks.topicSession = createSession();
     mocks.beforeRouteLeave = null;
-    mocks.beforeRouteUpdate = null;
   });
 
   afterEach(() => vi.unstubAllGlobals());
@@ -177,15 +174,56 @@ describe('TopicView', () => {
     expect(mocks.topicSession.loadMore).toHaveBeenCalledOnce();
   });
 
-  it('loads a reused Topic route with the new slug and scrolls its feed to the top', async () => {
+  it('loads the new Topic after the committed route changes and scrolls to the top', async () => {
+    mocks.topicSession.setTopic = vi.fn((slug: string) => {
+      mocks.topicSession.activeSlug = slug;
+      return Promise.resolve();
+    });
     const wrapper = mountTopic();
     const viewport = wrapper.get('.topic-view__scroll').element as HTMLElement;
     viewport.scrollTop = 80;
-    await mocks.beforeRouteUpdate?.({ name: 'Topic', params: { slug: ' AI ' } });
+
+    mocks.route.params.slug = ' AI ';
+    await flushPromises();
 
     expect(mocks.topicSession.setTopic).toHaveBeenLastCalledWith('ai');
     expect(viewport.scrollTop).toBe(0);
     expect(mocks.topicSession.saveScrollTop).toHaveBeenLastCalledWith(0);
+  });
+
+  it('ignores stale Topic completions after a newer slug becomes active', async () => {
+    let resolveAI!: () => void;
+    let resolveTechnology!: () => void;
+    const aiRequest = new Promise<void>((resolve) => { resolveAI = resolve; });
+    const technologyRequest = new Promise<void>((resolve) => { resolveTechnology = resolve; });
+    const wrapper = mountTopic();
+    const viewport = wrapper.get('.topic-view__scroll').element as HTMLElement;
+
+    mocks.topicSession.setTopic = vi.fn((slug: string) => {
+      mocks.topicSession.activeSlug = slug;
+      if (slug === 'ai') return aiRequest;
+      if (slug === 'technology') return technologyRequest;
+      return Promise.resolve();
+    });
+    await flushPromises();
+
+    mocks.route.params.slug = 'ai';
+    await flushPromises();
+    mocks.route.params.slug = 'technology';
+    await flushPromises();
+
+    resolveTechnology();
+    await flushPromises();
+    expect(mocks.topicSession.activeSlug).toBe('technology');
+    expect(viewport.scrollTop).toBe(0);
+
+    viewport.scrollTop = 47;
+    resolveAI();
+    await flushPromises();
+
+    expect(viewport.scrollTop).toBe(47);
+    expect(mocks.topicSession.saveScrollTop).toHaveBeenLastCalledWith(0);
+    wrapper.unmount();
   });
 
   it('saves and restores the internal scroll position across activation without reloading', async () => {
