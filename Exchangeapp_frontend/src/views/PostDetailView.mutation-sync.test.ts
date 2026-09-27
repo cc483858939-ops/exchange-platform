@@ -448,27 +448,27 @@ describe('PostDetailView mutation synchronization', () => {
     const mounted = mountDetail();
     await flushPromises();
 
-    const bookmark = mounted.get('.post-detail__bookmark');
-    await bookmark.trigger('click');
-    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    const getBookmark = () => mounted.get('.post-detail__bookmark');
+    await getBookmark().trigger('click');
+    expect(getBookmark().attributes('aria-pressed')).toBe('true');
     mocks.route.params.id = '43';
     await flushPromises();
     await flushPromises();
-    expect(bookmark.attributes('aria-pressed')).toBe('false');
+    expect(getBookmark().attributes('aria-pressed')).toBe('false');
 
-    await bookmark.trigger('click');
-    expect(bookmark.attributes('aria-pressed')).toBe('true');
-    expect(bookmark.attributes('aria-busy')).toBe('true');
+    await getBookmark().trigger('click');
+    expect(getBookmark().attributes('aria-pressed')).toBe('true');
+    expect(getBookmark().attributes('aria-busy')).toBe('true');
     mutationA.resolve({ post_id: 42, bookmarked: false });
     await flushPromises();
-    expect(bookmark.attributes('aria-pressed')).toBe('true');
-    expect(bookmark.attributes('aria-busy')).toBe('true');
+    expect(getBookmark().attributes('aria-pressed')).toBe('true');
+    expect(getBookmark().attributes('aria-busy')).toBe('true');
     expect(mocks.externalBookmark).not.toHaveBeenCalled();
 
     mutationB.resolve({ post_id: 43, bookmarked: true });
     await flushPromises();
-    expect(bookmark.attributes('aria-pressed')).toBe('true');
-    expect(bookmark.attributes('aria-busy')).toBeUndefined();
+    expect(getBookmark().attributes('aria-pressed')).toBe('true');
+    expect(getBookmark().attributes('aria-busy')).toBeUndefined();
     expect(mocks.externalBookmark).toHaveBeenCalledTimes(1);
     mounted.unmount();
   });
