@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"testing"
 	"time"
 
 	"Go.exchange/config"
@@ -50,12 +51,27 @@ func testDefaultRecommendationConfig() config.RecommendationConfig {
 		Enabled: true, AuthorWindowSize: 8, MaxSameAuthorInWindow: 2,
 		SemanticDuplicateThreshold: 0.92, SemanticDuplicatePenalty: 1,
 	}
-	cfg.Trace = config.RecommendationTraceConfig{ResultRetentionDays: 30, RequestRetentionDays: 90, CleanupIntervalHours: 6, CleanupBatchSize: 5000}
+	cfg.Trace = config.RecommendationTraceConfig{
+		PersistTimeoutMS: defaultTracePersistTimeoutMS, QueueCapacity: defaultTraceQueueCapacity,
+		WorkerCount: defaultTraceWorkerCount, ShutdownDrainTimeoutMS: defaultTraceShutdownDrainTimeoutMS,
+		ResultRetentionDays: 30, RequestRetentionDays: 90, CleanupIntervalHours: 6, CleanupBatchSize: 5000,
+	}
 	cfg.Candidates = config.RecommendationCandidatesConfig{
 		Personalized: config.RecommendationCandidateCaps{Semantic: 200, Following: 150, Recent: 150, Trending: 150, Merged: 500},
 		ColdStart:    config.RecommendationCandidateCaps{Following: 200, Recent: 200, Trending: 200, Merged: 500},
 	}
 	return cfg
+}
+
+func TestDefaultRecommendationConfigIncludesTraceDispatcherDefaults(t *testing.T) {
+	trace := testDefaultRecommendationConfig().Trace
+	if trace.PersistTimeoutMS != defaultTracePersistTimeoutMS ||
+		trace.QueueCapacity != defaultTraceQueueCapacity ||
+		trace.WorkerCount != defaultTraceWorkerCount ||
+		trace.ShutdownDrainTimeoutMS != defaultTraceShutdownDrainTimeoutMS ||
+		trace.ShutdownDrainTimeoutMS <= 0 {
+		t.Fatalf("integration test trace config=%+v, want dispatcher defaults with a positive shutdown timeout", trace)
+	}
 }
 
 func candidateQueryForTest(servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, limit int) CandidateQuery {

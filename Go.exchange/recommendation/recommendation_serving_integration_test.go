@@ -15,6 +15,10 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 	author := newRecommendationProfileControllerIntegrationUser(t, db, "authenticated-serving-author")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	cfg := testDefaultRecommendationConfig()
+	shutdownTimeout := time.Duration(cfg.Trace.ShutdownDrainTimeoutMS) * time.Millisecond
+	if shutdownTimeout <= 0 {
+		t.Fatalf("trace dispatcher shutdown timeout must be positive, got %dms", cfg.Trace.ShutdownDrainTimeoutMS)
+	}
 	version := recommendationProfileControllerIntegrationEmbeddingVersion
 
 	profile := models.UserRecoProfile{
@@ -63,7 +67,7 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Trace.ShutdownDrainTimeoutMS)*time.Millisecond)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = dispatcher.Shutdown(cleanupCtx)
 	})
@@ -88,7 +92,7 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 	if result.StrategyID != RecommendationPersonalizedStrategyID || result.FreshCandidateSummary.RecentCount == 0 || len(result.Selected) == 0 {
 		t.Fatalf("authenticated service result=%#v", result)
 	}
-	drainCtx, cancelDrain := context.WithTimeout(context.Background(), time.Duration(cfg.Trace.ShutdownDrainTimeoutMS)*time.Millisecond)
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), shutdownTimeout)
 	if err := dispatcher.Shutdown(drainCtx); err != nil {
 		cancelDrain()
 		t.Fatalf("drain serving trace dispatcher: %v", err)
