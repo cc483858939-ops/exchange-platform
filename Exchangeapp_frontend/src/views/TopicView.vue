@@ -157,15 +157,29 @@ const updateObserver = () => {
 
 const enterTopic = async (slug: string) => {
   const changed = slug !== topicSession.activeSlug;
-  await topicSession.setTopic(slug);
-  if (route.name !== 'Topic' || slug !== topicSession.activeSlug) return;
+  const topicRequest = topicSession.setTopic(slug);
 
   if (changed) {
     await nextTick();
-    if (route.name !== 'Topic' || slug !== topicSession.activeSlug) return;
+    if (
+      !topicViewActive.value
+      || route.name !== 'Topic'
+      || slug !== topicSession.activeSlug
+    ) {
+      await topicRequest;
+      return;
+    }
+
     if (scrollViewportRef.value) scrollViewportRef.value.scrollTop = 0;
     topicSession.saveScrollTop(0);
   }
+
+  await topicRequest;
+  if (
+    !topicViewActive.value
+    || route.name !== 'Topic'
+    || slug !== topicSession.activeSlug
+  ) return;
 
   await nextTick();
   if (

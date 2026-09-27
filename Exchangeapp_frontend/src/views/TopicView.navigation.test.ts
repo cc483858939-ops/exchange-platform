@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { defineComponent, h, reactive } from 'vue';
+import { defineComponent, h, nextTick, reactive } from 'vue';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -67,6 +67,7 @@ describe('TopicView navigation', () => {
       if (slug !== 'ai') return Promise.resolve();
 
       aiLoadPending = true;
+      mocks.topicSession.scrollTop = 0;
       mocks.topicSession.topic = null;
       mocks.topicSession.items = [];
       mocks.topicSession.loaded = false;
@@ -97,6 +98,8 @@ describe('TopicView navigation', () => {
       },
     });
     await flushPromises();
+    const viewport = wrapper.get('.topic-view__scroll').element as HTMLElement;
+    viewport.scrollTop = 1200;
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const navigation = router.push('/topics/ai');
@@ -111,6 +114,7 @@ describe('TopicView navigation', () => {
 
     if (!committedBeforeLoadFinished) aiRequest.resolve();
     await navigation;
+    await nextTick();
     await flushPromises();
 
     expect(committedBeforeLoadFinished).toBe(true);
@@ -118,6 +122,9 @@ describe('TopicView navigation', () => {
     expect(mocks.topicSession.setTopic).toHaveBeenLastCalledWith('ai');
     expect(aiLoadPending).toBe(true);
     expect(mocks.topicSession.initialLoading).toBe(true);
+    expect(mocks.topicSession.scrollTop).toBe(0);
+    expect(viewport.scrollTop).toBe(0);
+    expect(mocks.topicSession.saveScrollTop).toHaveBeenCalledWith(0);
     expect(wrapper.text()).toContain('Loading topic posts...');
 
     aiRequest.resolve();

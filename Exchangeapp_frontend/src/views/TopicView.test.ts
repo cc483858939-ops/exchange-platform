@@ -191,6 +191,27 @@ describe('TopicView', () => {
     expect(mocks.topicSession.saveScrollTop).toHaveBeenLastCalledWith(0);
   });
 
+  it('does not reset scroll when the committed route normalizes to the active slug', async () => {
+    mocks.topicSession.setTopic = vi.fn((slug: string) => {
+      mocks.topicSession.activeSlug = slug;
+      return Promise.resolve();
+    });
+    const wrapper = mountTopic();
+    await flushPromises();
+    const viewport = wrapper.get('.topic-view__scroll').element as HTMLElement;
+    viewport.scrollTop = 900;
+    mocks.topicSession.scrollTop = 900;
+
+    mocks.route.params.slug = ' JAPAN ';
+    await flushPromises();
+
+    expect(mocks.topicSession.setTopic).toHaveBeenCalledTimes(1);
+    expect(viewport.scrollTop).toBe(900);
+    expect(mocks.topicSession.scrollTop).toBe(900);
+    expect(mocks.topicSession.saveScrollTop).not.toHaveBeenCalledWith(0);
+    wrapper.unmount();
+  });
+
   it('ignores stale Topic completions after a newer slug becomes active', async () => {
     let resolveAI!: () => void;
     let resolveTechnology!: () => void;
