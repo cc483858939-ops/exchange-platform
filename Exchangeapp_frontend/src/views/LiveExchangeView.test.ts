@@ -8,6 +8,14 @@ import { ElMessage } from 'element-plus';
 import LiveExchangeView from './LiveExchangeView.vue';
 import { useExchangeSessionStore } from '../store/exchangeSession';
 
+vi.mock('element-plus/es/components/alert/style/css', () => ({}));
+vi.mock('element-plus/es/components/button/style/css', () => ({}));
+vi.mock('element-plus/es/components/form/style/css', () => ({}));
+vi.mock('element-plus/es/components/input/style/css', () => ({}));
+vi.mock('element-plus/es/components/message/style/css', () => ({}));
+vi.mock('element-plus/es/components/select/style/css', () => ({}));
+vi.mock('element-plus/es/components/skeleton/style/css', () => ({}));
+
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
 }));

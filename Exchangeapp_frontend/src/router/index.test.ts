@@ -4,6 +4,12 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('element-plus/es/components/message/style/css', () => ({}));
+vi.mock('element-plus/es/components/alert/style/css', () => ({}));
+vi.mock('element-plus/es/components/button/style/css', () => ({}));
+vi.mock('element-plus/es/components/form/style/css', () => ({}));
+vi.mock('element-plus/es/components/input/style/css', () => ({}));
+vi.mock('element-plus/es/components/select/style/css', () => ({}));
+vi.mock('element-plus/es/components/skeleton/style/css', () => ({}));
 import router, { resolveAuthenticatedGuestOnlyDestination } from './index';
 import { routeScrollBehavior } from './scrollBehavior';
 
