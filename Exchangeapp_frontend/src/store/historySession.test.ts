@@ -89,6 +89,11 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
+const flushMicrotasks = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
 const setAuth = (id: number | null) => {
   mocks.authStore = reactive({
     isAuthenticated: id !== null,
@@ -242,6 +247,119 @@ describe('historySession store', () => {
     expect(store.viewerID).toBe(8);
     expect(store.items).toEqual([]);
     expect(store.loaded).toBe(false);
+  });
+
+  it('drops engagement hydration after a viewer reset', async () => {
+    const store = createStore(7);
+    const hydration = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getLikedHistory.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockReturnValueOnce(hydration.promise);
+
+    await store.loadInitial();
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    store.setViewer(8);
+    hydration.resolve({
+      items: [{ post_id: 1, likes: 99, liked: true }],
+      unavailable_post_ids: [],
+    });
+    await flushMicrotasks();
+
+    expect(store.viewerID).toBe(8);
+    expect(store.items).toEqual([]);
+  });
+
+  it('does not let an older Like hydration overwrite an external Like update', async () => {
+    const store = createStore();
+    const hydration = deferred<{
+      items: Array<{ post_id: number; likes: number; liked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    mocks.getLikedHistory.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockReturnValueOnce(hydration.promise);
+
+    await store.loadInitial();
+    store.applyExternalLikeStateLocal({
+      postId: 1,
+      likes: 12,
+      liked: true,
+      status: 'ready',
+    });
+    hydration.resolve({
+      items: [{ post_id: 1, likes: 99, liked: true }],
+      unavailable_post_ids: [],
+    });
+    await flushMicrotasks();
+
+    expect(store.items[0]).toMatchObject({ likeCount: 12, liked: true, likeStatus: 'ready' });
+  });
+
+  it('does not let older Repost hydration overwrite a newer mutation', async () => {
+    const store = createStore();
+    const hydration = deferred<{
+      items: Array<{ post_id: number; reposts: number; reposted: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const mutation = deferred<{ reposts: number; reposted: boolean }>();
+    mocks.getLikedHistory.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostRepostStates.mockReturnValueOnce(hydration.promise);
+    mocks.repostPost.mockReturnValueOnce(mutation.promise);
+
+    await store.loadInitial();
+    const item = store.items[0];
+    item.repostStatus = 'ready';
+    item.repostCount = 2;
+    const request = store.toggleRepost(1);
+    expect(item).toMatchObject({ repostCount: 3, reposted: true });
+    expect(store.repostPendingPostIDs.has(1)).toBe(true);
+
+    hydration.resolve({
+      items: [{ post_id: 1, reposts: 90, reposted: false }],
+      unavailable_post_ids: [],
+    });
+    await flushMicrotasks();
+    expect(item).toMatchObject({ repostCount: 3, reposted: true });
+    expect(store.repostPendingPostIDs.has(1)).toBe(true);
+
+    mutation.resolve({ reposts: 4, reposted: true });
+    await expect(request).resolves.toBe(true);
+    expect(item).toMatchObject({ repostCount: 4, reposted: true });
+    expect(store.repostPendingPostIDs.has(1)).toBe(false);
+  });
+
+  it('does not let older Bookmark hydration overwrite a newer mutation', async () => {
+    const store = createStore();
+    const hydration = deferred<{
+      items: Array<{ post_id: number; bookmarked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const mutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.getLikedHistory.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostBookmarkStates.mockReturnValueOnce(hydration.promise);
+    mocks.bookmarkPost.mockReturnValueOnce(mutation.promise);
+
+    await store.loadInitial();
+    const item = store.items[0];
+    item.bookmarkStatus = 'ready';
+    item.bookmarked = false;
+    const request = store.toggleBookmark(1);
+    expect(item.bookmarked).toBe(true);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(true);
+
+    hydration.resolve({
+      items: [{ post_id: 1, bookmarked: false }],
+      unavailable_post_ids: [],
+    });
+    await flushMicrotasks();
+    expect(item.bookmarked).toBe(true);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(true);
+
+    mutation.resolve({ post_id: 1, bookmarked: true });
+    await expect(request).resolves.toBe(true);
+    expect(item.bookmarked).toBe(true);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(false);
   });
 
   it('keeps unrelated pending hydration alive when an uncached Post is deleted', async () => {
@@ -406,6 +524,54 @@ describe('historySession store', () => {
     expect(store.items[0].likeCount).toBe(12);
     expect(store.items[0].liked).toBe(true);
     expect(store.pendingUnlikePostIDs.has(1)).toBe(false);
+  });
+
+  it('ignores duplicate Unlike and keeps the newer request pending after stale A resolves', async () => {
+    const store = createStore();
+    await loadReady(store, [1]);
+    const first = deferred<{ likes: number; liked: boolean }>();
+    const second = deferred<{ likes: number; liked: boolean }>();
+    mocks.unlikePost.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const requestA = store.toggleUnlike(1);
+    expect(store.items).toEqual([]);
+    expect(store.pendingUnlikePostIDs.has(1)).toBe(true);
+    await store.toggleUnlike(1);
+    expect(mocks.unlikePost).toHaveBeenCalledTimes(1);
+
+    store.applyExternalLikeStateLocal({
+      postId: 1,
+      likes: 12,
+      liked: true,
+      status: 'ready',
+    });
+    const requestB = store.toggleUnlike(1);
+    expect(store.items).toEqual([]);
+    expect(store.pendingUnlikePostIDs.has(1)).toBe(true);
+    expect(mocks.unlikePost).toHaveBeenCalledTimes(2);
+
+    first.resolve({ likes: 0, liked: false });
+    await requestA;
+    expect(store.pendingUnlikePostIDs.has(1)).toBe(true);
+    expect(store.items).toEqual([]);
+
+    second.resolve({ likes: 11, liked: false });
+    await requestB;
+    expect(store.pendingUnlikePostIDs.has(1)).toBe(false);
+    expect(store.items).toEqual([]);
+  });
+
+  it('restores Unlike failure at its original index and preserves the 503 state', async () => {
+    const store = createStore();
+    await loadReady(store, [1, 2, 3]);
+    mocks.unlikePost.mockRejectedValueOnce({ response: { status: 503 } });
+
+    await store.toggleUnlike(2);
+
+    expect(store.items.map(item => item.id)).toEqual([1, 2, 3]);
+    expect(store.items[1]).toMatchObject({ liked: true, likeStatus: 'unavailable' });
+    expect(store.pendingUnlikePostIDs.has(2)).toBe(false);
+    expect(store.mutationErrors.get(2)).toBe('Likes are temporarily unavailable.');
   });
 
   it('does not remove membership for unavailable state and revalidates stale cache with a fresh cursor', async () => {

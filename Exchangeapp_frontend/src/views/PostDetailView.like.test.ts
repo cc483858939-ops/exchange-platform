@@ -206,7 +206,7 @@ describe('PostDetailView LikeAction wiring', () => {
     expect(likeAction.attributes('data-liked')).toBe('true');
     expect(likeAction.attributes('data-count')).toBe('4');
     expect(likeAction.attributes('data-pending')).toBe('true');
-    expect(mocks.likePost).toHaveBeenCalledWith('42');
+    expect(mocks.likePost).toHaveBeenCalledWith(42);
 
     request.resolve({ liked: true, likes: 4 });
     await flushPromises();

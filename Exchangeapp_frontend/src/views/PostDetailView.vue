@@ -553,9 +553,9 @@ import ReplyComposer from '../components/replies/ReplyComposer.vue';
 import ReplyList from '../components/replies/ReplyList.vue';
 import { createPostReply, deletePostReply, getPostReplies } from '../services/replyService';
 import { deletePost, getPostById } from '../services/postService';
-import { getPostLikeState, likePost, unlikePost } from '../services/likeService';
-import { bookmarkPost, getPostBookmarkStates, unbookmarkPost } from '../services/bookmarkService';
-import { getPostRepostState, repostPost, undoRepostPost } from '../services/repostService';
+import { getPostLikeState } from '../services/likeService';
+import { getPostBookmarkStates } from '../services/bookmarkService';
+import { getPostRepostState } from '../services/repostService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { createPostViewEventID, getPostViewTelemetry } from '../services/postViewTelemetry';
@@ -565,6 +565,15 @@ import { useAuthStore } from '../store/auth';
 import { usePostDetailHandoffStore } from '../store/postDetailHandoff';
 import { useFeedStore } from '../store/feed';
 import { useReplyDraftStore } from '../store/replyDraft';
+import { createEngagementMutationCoordinator } from '../store/engagementMutationCoordinator';
+import {
+  createOptimisticBookmarkUpdate,
+  createOptimisticLikeUpdate,
+  createOptimisticRepostUpdate,
+  executeBookmarkToggle,
+  executeLikeToggle,
+  executeRepostToggle,
+} from '../store/engagementOperations';
 import {
   syncExternalPostLikeState,
   syncExternalPostRepostState,
@@ -599,6 +608,14 @@ const currentIdentity = computed(() => (
 const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
 
 const postId = computed(() => String(route.params.id ?? '').trim());
+const currentDetailPostID = computed<number | null>(() => {
+  const value = postId.value;
+  if (!/^\d+$/.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+});
+const detailEngagementMutations = createEngagementMutationCoordinator();
+const replyBookmarkMutations = createEngagementMutationCoordinator();
 const post = ref<Post | null>(null);
 const postLoading = ref(false);
 const postError = ref('');
@@ -618,17 +635,26 @@ let translationRequestVersion = 0;
 const liked = ref(false);
 const likeCount = ref(0);
 const likeStateLoading = ref(false);
-const likeSubmitting = ref(false);
+const likeSubmitting = computed(() => {
+  const postID = currentDetailPostID.value;
+  return postID !== null && detailEngagementMutations.likePendingPostIDs.has(postID);
+});
 const likeError = ref('');
 const reposted = ref(false);
 const repostCount = ref(0);
 const repostStateLoading = ref(false);
-const repostSubmitting = ref(false);
+const repostSubmitting = computed(() => {
+  const postID = currentDetailPostID.value;
+  return postID !== null && detailEngagementMutations.repostPendingPostIDs.has(postID);
+});
 const repostError = ref('');
 const repostStateUnavailable = ref(false);
 const bookmarked = ref(false);
 const bookmarkStateLoading = ref(false);
-const bookmarkSubmitting = ref(false);
+const bookmarkSubmitting = computed(() => {
+  const postID = currentDetailPostID.value;
+  return postID !== null && detailEngagementMutations.bookmarkPendingPostIDs.has(postID);
+});
 const bookmarkError = ref('');
 const bookmarkStateUnavailable = ref(false);
 
@@ -648,10 +674,8 @@ const mediaContextComposerRef = ref<InstanceType<typeof ReplyComposer> | null>(n
 const replyCount = ref(0);
 const viewCount = ref(0);
 const replyBookmarkStates = reactive<Record<number, { bookmarked: boolean; status: FeedBookmarkStatus }>>({});
-const replyBookmarkPendingIDs = reactive(new Set<number>());
+const replyBookmarkPendingIDs = replyBookmarkMutations.bookmarkPendingPostIDs;
 const replyBookmarkError = ref('');
-let replyBookmarkHydrationGeneration = 0;
-const replyBookmarkMutationVersions = new Map<number, number>();
 
 type MediaViewerState = {
   media: Post['media'];
@@ -663,11 +687,8 @@ const mediaViewer = ref<MediaViewerState | null>(null);
 let detailRequestVersion = 0;
 let deleteRequestVersion = 0;
 let likeRequestVersion = 0;
-let likeMutationVersion = 0;
 let repostRequestVersion = 0;
-let repostMutationVersion = 0;
 let bookmarkRequestVersion = 0;
-let bookmarkMutationVersion = 0;
 let repliesRequestVersion = 0;
 let replyDeleteRequestVersion = 0;
 let replyIntentTask: Promise<void> | null = null;
@@ -1124,38 +1145,35 @@ const startRead = (id: string, detailVersion: number) => {
 
 const resetLikeState = () => {
   likeRequestVersion += 1;
-  likeMutationVersion += 1;
+  detailEngagementMutations.resetKind('like');
   liked.value = false;
   likeCount.value = 0;
   likeStateLoading.value = false;
-  likeSubmitting.value = false;
   likeError.value = '';
 };
 
 const resetRepostState = () => {
   repostRequestVersion += 1;
-  repostMutationVersion += 1;
+  detailEngagementMutations.resetKind('repost');
   reposted.value = false;
   repostCount.value = 0;
   repostStateLoading.value = false;
-  repostSubmitting.value = false;
   repostError.value = '';
   repostStateUnavailable.value = false;
 };
 
 const resetBookmarkState = () => {
   bookmarkRequestVersion += 1;
-  bookmarkMutationVersion += 1;
+  detailEngagementMutations.resetKind('bookmark');
   bookmarked.value = false;
   bookmarkStateLoading.value = false;
-  bookmarkSubmitting.value = false;
   bookmarkError.value = '';
   bookmarkStateUnavailable.value = false;
 };
 
 const resetRepliesState = () => {
   repliesRequestVersion += 1;
-  replyBookmarkHydrationGeneration += 1;
+  replyBookmarkMutations.resetKind('bookmark');
   replyDeleteRequestVersion += 1;
   replies.value = [];
   nextCursor.value = null;
@@ -1170,8 +1188,6 @@ const resetRepliesState = () => {
   deleteReplyCandidateId.value = null;
   replyDeleteError.value = '';
   replyCount.value = 0;
-  replyBookmarkPendingIDs.clear();
-  replyBookmarkMutationVersions.clear();
   Object.keys(replyBookmarkStates).forEach((replyID) => {
     delete replyBookmarkStates[Number(replyID)];
   });
@@ -1310,29 +1326,39 @@ const loadLikeState = async (id: string, detailVersion: number) => {
     return;
   }
 
+  const postID = Number(id);
+  if (
+    !Number.isSafeInteger(postID)
+    || postID <= 0
+    || currentDetailPostID.value !== postID
+    || post.value?.id !== postID
+  ) return;
+
   const requestVersion = ++likeRequestVersion;
-  const mutationVersionAtStart = likeMutationVersion;
+  const revision = detailEngagementMutations.captureRevision('like', postID);
+  const isCurrentRequest = () => (
+    detailVersion === detailRequestVersion
+    && requestVersion === likeRequestVersion
+    && currentDetailPostID.value === postID
+    && post.value?.id === postID
+  );
+  const isCurrentHydration = () => isCurrentRequest()
+    && detailEngagementMutations.isRevisionCurrent('like', postID, revision);
   likeStateLoading.value = true;
   likeError.value = '';
 
   try {
     const response = await getPostLikeState(id);
-    if (
-      detailVersion !== detailRequestVersion ||
-      requestVersion !== likeRequestVersion ||
-      mutationVersionAtStart !== likeMutationVersion
-    ) {
-      return;
-    }
+    if (!isCurrentHydration()) return;
 
     liked.value = response.liked;
     likeCount.value = clampCount(response.likes);
   } catch {
-    if (detailVersion === detailRequestVersion && requestVersion === likeRequestVersion) {
+    if (isCurrentHydration()) {
       likeError.value = 'Like status is unavailable. You can still try again.';
     }
   } finally {
-    if (detailVersion === detailRequestVersion && requestVersion === likeRequestVersion) {
+    if (isCurrentRequest()) {
       likeStateLoading.value = false;
     }
   }
@@ -1343,40 +1369,42 @@ const loadRepostState = async (id: string, detailVersion: number) => {
     return;
   }
 
+  const postID = Number(id);
+  if (
+    !Number.isSafeInteger(postID)
+    || postID <= 0
+    || currentDetailPostID.value !== postID
+    || post.value?.id !== postID
+  ) return;
+
   const requestVersion = ++repostRequestVersion;
-  const mutationVersionAtStart = repostMutationVersion;
+  const revision = detailEngagementMutations.captureRevision('repost', postID);
+  const isCurrentRequest = () => (
+    detailVersion === detailRequestVersion
+    && requestVersion === repostRequestVersion
+    && currentDetailPostID.value === postID
+    && post.value?.id === postID
+  );
+  const isCurrentHydration = () => isCurrentRequest()
+    && detailEngagementMutations.isRevisionCurrent('repost', postID, revision);
   repostStateLoading.value = true;
   repostError.value = '';
   repostStateUnavailable.value = false;
 
   try {
     const response = await getPostRepostState(id);
-    if (
-      detailVersion !== detailRequestVersion
-      || requestVersion !== repostRequestVersion
-      || mutationVersionAtStart !== repostMutationVersion
-    ) {
-      return;
-    }
+    if (!isCurrentHydration()) return;
 
     reposted.value = response.reposted;
     repostCount.value = clampCount(response.reposts);
     repostStateUnavailable.value = false;
   } catch {
-    if (
-      detailVersion === detailRequestVersion
-      && requestVersion === repostRequestVersion
-      && mutationVersionAtStart === repostMutationVersion
-    ) {
+    if (isCurrentHydration()) {
       repostError.value = 'Repost status is unavailable. You can still try again.';
       repostStateUnavailable.value = true;
     }
   } finally {
-    if (
-      detailVersion === detailRequestVersion
-      && requestVersion === repostRequestVersion
-      && mutationVersionAtStart === repostMutationVersion
-    ) {
+    if (isCurrentRequest()) {
       repostStateLoading.value = false;
     }
   }
@@ -1384,19 +1412,31 @@ const loadRepostState = async (id: string, detailVersion: number) => {
 
 const loadBookmarkState = async (id: string, detailVersion: number) => {
   if (!authStore.isAuthenticated) return;
+  const postID = Number(id);
+  if (
+    !Number.isSafeInteger(postID)
+    || postID <= 0
+    || currentDetailPostID.value !== postID
+    || post.value?.id !== postID
+  ) return;
+
   const requestVersion = ++bookmarkRequestVersion;
-  const mutationVersionAtStart = bookmarkMutationVersion;
+  const revision = detailEngagementMutations.captureRevision('bookmark', postID);
+  const isCurrentRequest = () => (
+    detailVersion === detailRequestVersion
+    && requestVersion === bookmarkRequestVersion
+    && currentDetailPostID.value === postID
+    && post.value?.id === postID
+  );
+  const isCurrentHydration = () => isCurrentRequest()
+    && detailEngagementMutations.isRevisionCurrent('bookmark', postID, revision);
   bookmarkStateLoading.value = true;
   bookmarkError.value = '';
   bookmarkStateUnavailable.value = false;
   try {
-    const response = await getPostBookmarkStates([Number(id)]);
-    if (
-      detailVersion !== detailRequestVersion
-      || requestVersion !== bookmarkRequestVersion
-      || mutationVersionAtStart !== bookmarkMutationVersion
-    ) return;
-    const item = response.items.find(candidate => candidate.post_id === Number(id));
+    const response = await getPostBookmarkStates([postID]);
+    if (!isCurrentHydration()) return;
+    const item = response.items.find(candidate => candidate.post_id === postID);
     if (item) {
       bookmarked.value = item.bookmarked;
       return;
@@ -1404,25 +1444,20 @@ const loadBookmarkState = async (id: string, detailVersion: number) => {
     bookmarkStateUnavailable.value = true;
     bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
   } catch {
-    if (
-      detailVersion === detailRequestVersion
-      && requestVersion === bookmarkRequestVersion
-      && mutationVersionAtStart === bookmarkMutationVersion
-    ) {
+    if (isCurrentHydration()) {
       bookmarkStateUnavailable.value = true;
       bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
     }
   } finally {
-    if (detailVersion === detailRequestVersion && requestVersion === bookmarkRequestVersion) {
+    if (isCurrentRequest()) {
       bookmarkStateLoading.value = false;
     }
   }
 };
 
 const toggleLike = async () => {
-  if (!post.value) {
-    return;
-  }
+  const id = currentDetailPostID.value;
+  if (!post.value || id === null || post.value.id !== id) return;
   if (!authStore.isAuthenticated) {
     navigateToLogin();
     return;
@@ -1432,47 +1467,49 @@ const toggleLike = async () => {
   }
 
   const detailVersion = detailRequestVersion;
-  const id = postId.value;
-  const mutationVersion = ++likeMutationVersion;
   const previousLiked = liked.value;
   const previousCount = likeCount.value;
-
-  likeSubmitting.value = true;
+  const token = detailEngagementMutations.begin('like', id);
   likeError.value = '';
-  liked.value = !previousLiked;
-  likeCount.value = Math.max(0, previousCount + (liked.value ? 1 : -1));
+  const optimisticUpdate = createOptimisticLikeUpdate({
+    id,
+    liked: previousLiked,
+    likeCount: previousCount,
+  });
+  liked.value = optimisticUpdate.liked;
+  likeCount.value = optimisticUpdate.likes;
+  const isCurrent = () => (
+    detailEngagementMutations.isCurrent(token)
+    && detailVersion === detailRequestVersion
+    && currentDetailPostID.value === token.postId
+    && post.value?.id === token.postId
+  );
 
   try {
-    const response = previousLiked ? await unlikePost(id) : await likePost(id);
-    if (detailVersion !== detailRequestVersion || mutationVersion !== likeMutationVersion) {
-      return;
-    }
+    const response = await executeLikeToggle(id, previousLiked);
+    if (!isCurrent()) return;
 
     liked.value = response.liked;
     likeCount.value = clampCount(response.likes);
     syncExternalPostLikeState({
-      postId: Number(id),
+      postId: id,
       likes: likeCount.value,
       liked: response.liked,
       status: 'ready',
     });
+    detailEngagementMutations.settle(token);
   } catch {
-    if (detailVersion === detailRequestVersion && mutationVersion === likeMutationVersion) {
-      liked.value = previousLiked;
-      likeCount.value = Math.max(0, previousCount);
-      likeError.value = 'Like failed. Please try again.';
-    }
-  } finally {
-    if (detailVersion === detailRequestVersion && mutationVersion === likeMutationVersion) {
-      likeSubmitting.value = false;
-    }
+    if (!isCurrent()) return;
+    liked.value = previousLiked;
+    likeCount.value = Math.max(0, previousCount);
+    likeError.value = 'Like failed. Please try again.';
+    detailEngagementMutations.settle(token);
   }
 };
 
 const toggleRepost = async () => {
-  if (!post.value) {
-    return;
-  }
+  const id = currentDetailPostID.value;
+  if (!post.value || id === null || post.value.id !== id) return;
   if (!authStore.isAuthenticated) {
     navigateToLogin();
     return;
@@ -1486,48 +1523,52 @@ const toggleRepost = async () => {
   }
 
   const detailVersion = detailRequestVersion;
-  const id = postId.value;
-  const mutationVersion = ++repostMutationVersion;
   const previousReposted = reposted.value;
   const previousCount = repostCount.value;
-
-  repostSubmitting.value = true;
+  const token = detailEngagementMutations.begin('repost', id);
   repostError.value = '';
   repostStateUnavailable.value = false;
-  reposted.value = !previousReposted;
-  repostCount.value = Math.max(0, previousCount + (reposted.value ? 1 : -1));
+  const optimisticUpdate = createOptimisticRepostUpdate({
+    id,
+    reposted: previousReposted,
+    repostCount: previousCount,
+  });
+  reposted.value = optimisticUpdate.reposted;
+  repostCount.value = optimisticUpdate.reposts;
+  const isCurrent = () => (
+    detailEngagementMutations.isCurrent(token)
+    && detailVersion === detailRequestVersion
+    && currentDetailPostID.value === token.postId
+    && post.value?.id === token.postId
+  );
 
   try {
-    const response = previousReposted ? await undoRepostPost(id) : await repostPost(id);
-    if (detailVersion !== detailRequestVersion || mutationVersion !== repostMutationVersion) {
-      return;
-    }
+    const response = await executeRepostToggle(id, previousReposted);
+    if (!isCurrent()) return;
 
     reposted.value = response.reposted;
     repostCount.value = clampCount(response.reposts);
     syncExternalPostRepostState({
-      postId: Number(id),
+      postId: id,
       reposts: repostCount.value,
       reposted: response.reposted,
       status: 'ready',
     });
+    detailEngagementMutations.settle(token);
     markOwnProfileTimelineStale();
   } catch {
-    if (detailVersion === detailRequestVersion && mutationVersion === repostMutationVersion) {
-      reposted.value = previousReposted;
-      repostCount.value = Math.max(0, previousCount);
-      repostError.value = 'Could not update repost. Please try again.';
-      repostStateUnavailable.value = false;
-    }
-  } finally {
-    if (detailVersion === detailRequestVersion && mutationVersion === repostMutationVersion) {
-      repostSubmitting.value = false;
-    }
+    if (!isCurrent()) return;
+    reposted.value = previousReposted;
+    repostCount.value = Math.max(0, previousCount);
+    repostError.value = 'Could not update repost. Please try again.';
+    repostStateUnavailable.value = false;
+    detailEngagementMutations.settle(token);
   }
 };
 
 const toggleBookmark = async () => {
-  if (!post.value) return;
+  const id = currentDetailPostID.value;
+  if (!post.value || id === null || post.value.id !== id) return;
   if (!authStore.isAuthenticated) {
     navigateToLogin();
     return;
@@ -1539,52 +1580,54 @@ const toggleBookmark = async () => {
   ) return;
 
   const detailVersion = detailRequestVersion;
-  const id = postId.value;
-  const normalizedPostID = Number(id);
-  beginBookmarkStateMutation(normalizedPostID);
-  const mutationVersion = ++bookmarkMutationVersion;
+  beginBookmarkStateMutation(id);
   const previousBookmarked = bookmarked.value;
-  bookmarkSubmitting.value = true;
+  const token = detailEngagementMutations.begin('bookmark', id);
   bookmarkError.value = '';
-  bookmarked.value = !previousBookmarked;
+  const optimisticUpdate = createOptimisticBookmarkUpdate({ id, bookmarked: previousBookmarked });
+  bookmarked.value = optimisticUpdate.bookmarked;
+  const isCurrent = () => (
+    detailEngagementMutations.isCurrent(token)
+    && detailVersion === detailRequestVersion
+    && currentDetailPostID.value === token.postId
+    && post.value?.id === token.postId
+  );
 
   try {
-    const response = previousBookmarked
-      ? await unbookmarkPost(id)
-      : await bookmarkPost(id);
-    if (detailVersion !== detailRequestVersion || mutationVersion !== bookmarkMutationVersion) return;
+    const response = await executeBookmarkToggle(id, previousBookmarked);
+    if (!isCurrent()) return;
     bookmarked.value = response.bookmarked;
     bookmarkStateUnavailable.value = false;
     syncExternalPostBookmarkState({
-      postId: normalizedPostID,
+      postId: id,
       bookmarked: response.bookmarked,
       status: 'ready',
     });
+    detailEngagementMutations.settle(token);
   } catch {
-    if (detailVersion === detailRequestVersion && mutationVersion === bookmarkMutationVersion) {
-      bookmarked.value = previousBookmarked;
-      bookmarkError.value = 'Could not update bookmark. Please try again.';
-    }
-  } finally {
-    if (detailVersion === detailRequestVersion && mutationVersion === bookmarkMutationVersion) {
-      bookmarkSubmitting.value = false;
-    }
+    if (!isCurrent()) return;
+    bookmarked.value = previousBookmarked;
+    bookmarkError.value = 'Could not update bookmark. Please try again.';
+    detailEngagementMutations.settle(token);
   }
 };
 
 const hydrateReplyBookmarkStates = async (replyItems: Post[], detailVersion: number) => {
   if (!authStore.isAuthenticated || replyItems.length === 0) return;
   const postIDs = Array.from(new Set(replyItems.map(reply => reply.id)));
-  const hydrationGeneration = replyBookmarkHydrationGeneration;
-  const mutationVersions = new Map(
-    postIDs.map(postID => [postID, replyBookmarkMutationVersions.get(postID) ?? 0]),
-  );
-  const canApply = (replyID: number) => (
-    detailVersion === detailRequestVersion
-    && hydrationGeneration === replyBookmarkHydrationGeneration
-    && replies.value.some(reply => reply.id === replyID)
-    && mutationVersions.get(replyID) === (replyBookmarkMutationVersions.get(replyID) ?? 0)
-  );
+  const revisions = new Map(postIDs.map(postID => [
+    postID,
+    replyBookmarkMutations.captureRevision('bookmark', postID),
+  ]));
+  const canApply = (replyID: number) => {
+    const revision = revisions.get(replyID);
+    return Boolean(
+      revision
+      && detailVersion === detailRequestVersion
+      && replies.value.some(reply => reply.id === replyID)
+      && replyBookmarkMutations.isRevisionCurrent('bookmark', replyID, revision)
+    );
+  };
   try {
     const response = await getPostBookmarkStates(postIDs);
     const readyIDs = new Set<number>();
@@ -1627,24 +1670,23 @@ const toggleReplyBookmark = async (replyID: number) => {
   const previousBookmarked = state.bookmarked;
   beginBookmarkStateMutation(replyID);
   replyBookmarkError.value = '';
-  const mutationVersion = (replyBookmarkMutationVersions.get(replyID) ?? 0) + 1;
-  replyBookmarkMutationVersions.set(replyID, mutationVersion);
   const capturedDetailVersion = detailRequestVersion;
-  replyBookmarkPendingIDs.add(replyID);
-  state.bookmarked = !previousBookmarked;
+  const token = replyBookmarkMutations.begin('bookmark', replyID);
+  const optimisticUpdate = createOptimisticBookmarkUpdate({
+    id: replyID,
+    bookmarked: previousBookmarked,
+  });
+  state.bookmarked = optimisticUpdate.bookmarked;
   const isCurrent = () => (
     capturedDetailVersion === detailRequestVersion
-    && replyBookmarkMutationVersions.get(replyID) === mutationVersion
-    && replyBookmarkPendingIDs.has(replyID)
+    && replies.value.some(candidate => candidate.id === replyID)
+    && replyBookmarkMutations.isCurrent(token)
   );
   try {
-    const response = previousBookmarked
-      ? await unbookmarkPost(replyID)
-      : await bookmarkPost(replyID);
+    const response = await executeBookmarkToggle(replyID, previousBookmarked);
     if (!isCurrent()) return;
-    replyBookmarkMutationVersions.set(replyID, mutationVersion + 1);
     state.bookmarked = response.bookmarked;
-    replyBookmarkPendingIDs.delete(replyID);
+    replyBookmarkMutations.settle(token);
     syncExternalPostBookmarkState({
       postId: replyID,
       bookmarked: response.bookmarked,
@@ -1652,9 +1694,8 @@ const toggleReplyBookmark = async (replyID: number) => {
     });
   } catch {
     if (!isCurrent()) return;
-    replyBookmarkMutationVersions.set(replyID, mutationVersion + 1);
     state.bookmarked = previousBookmarked;
-    replyBookmarkPendingIDs.delete(replyID);
+    replyBookmarkMutations.settle(token);
     replyBookmarkError.value = 'Could not update bookmark. Please try again.';
   }
 };
@@ -1662,8 +1703,7 @@ const toggleReplyBookmark = async (replyID: number) => {
 const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
   let applied = false;
   if (post.value?.id === update.postId) {
-    bookmarkMutationVersion += 1;
-    bookmarkSubmitting.value = false;
+    detailEngagementMutations.invalidate('bookmark', update.postId);
     if (update.status === 'ready') {
       bookmarked.value = update.bookmarked;
       bookmarkStateUnavailable.value = false;
@@ -1678,9 +1718,7 @@ const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
   const reply = replies.value.find(candidate => candidate.id === update.postId);
   const replyState = replyBookmarkStates[update.postId];
   if (replyState || reply) {
-    const nextVersion = (replyBookmarkMutationVersions.get(update.postId) ?? 0) + 1;
-    replyBookmarkMutationVersions.set(update.postId, nextVersion);
-    replyBookmarkPendingIDs.delete(update.postId);
+    replyBookmarkMutations.invalidate('bookmark', update.postId);
     if (update.status === 'ready') {
       replyBookmarkStates[update.postId] = {
         bookmarked: update.bookmarked,
@@ -1929,8 +1967,7 @@ const confirmDeleteReply = async () => {
 
     replies.value = replies.value.filter(reply => reply.id !== replyID);
     delete replyBookmarkStates[replyID];
-    replyBookmarkPendingIDs.delete(replyID);
-    replyBookmarkMutationVersions.delete(replyID);
+    replyBookmarkMutations.invalidate('bookmark', replyID);
     syncExternalPostRemoval(replyID);
     replyCount.value = Math.max(0, replyCount.value - 1);
     syncExternalReplyCount({

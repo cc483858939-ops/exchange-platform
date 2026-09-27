@@ -658,7 +658,7 @@ describe('PostDetailView post-first surface', () => {
     await flushPromises();
 
     expect(mocks.likePost).toHaveBeenCalledTimes(1);
-    expect(mocks.likePost).toHaveBeenCalledWith('42');
+    expect(mocks.likePost).toHaveBeenCalledWith(42);
     expect(wrapper.get('.post-media-context .test-like-action').attributes('data-liked'))
       .toBe('true');
     expect(wrapper.get('.post-media-context .test-like-action').text()).toBe('12');
@@ -706,7 +706,7 @@ describe('PostDetailView post-first surface', () => {
     await nextTick();
 
     expect(mocks.repostPost).toHaveBeenCalledTimes(1);
-    expect(mocks.repostPost).toHaveBeenCalledWith('42');
+    expect(mocks.repostPost).toHaveBeenCalledWith(42);
     expect(wrapper.get('.post-media-context .test-repost-action').attributes('data-reposted'))
       .toBe('true');
     expect(wrapper.get('.post-media-context .test-repost-action').text()).toBe('1');

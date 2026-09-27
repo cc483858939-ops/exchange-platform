@@ -289,6 +289,190 @@ describe('PostDetailView mutation synchronization', () => {
     mounted.unmount();
   });
 
+  it('lets external Bookmark truth invalidate a pending main Post mutation', async () => {
+    const mutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(mutation.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const bookmark = mounted.get('.post-detail__bookmark');
+    await bookmark.trigger('click');
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-busy')).toBe('true');
+
+    mocks.detailSync?.applyExternalBookmarkStateLocal({
+      postId: 42,
+      bookmarked: false,
+      status: 'ready',
+    });
+    await mounted.vm.$nextTick();
+    expect(bookmark.attributes('aria-pressed')).toBe('false');
+    expect(bookmark.attributes('aria-busy')).toBeUndefined();
+
+    mutation.resolve({ post_id: 42, bookmarked: true });
+    await flushPromises();
+    expect(bookmark.attributes('aria-pressed')).toBe('false');
+    expect(bookmark.attributes('aria-busy')).toBeUndefined();
+    expect(mocks.externalBookmark).not.toHaveBeenCalled();
+    mounted.unmount();
+  });
+
+  it('keeps main Like hydration from overwriting a newer mutation revision', async () => {
+    const hydration = deferred<{ liked: boolean; likes: number }>();
+    const mutation = deferred<{ liked: boolean; likes: number }>();
+    mocks.getPostLikeState.mockReturnValueOnce(hydration.promise);
+    mocks.likePost.mockReturnValueOnce(mutation.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const setupState = (mounted.vm as any).$.setupState;
+    expect(setupState.likeStateLoading).toBe(true);
+    setupState.likeStateLoading = false;
+    const like = mounted.get('.test-like');
+    await like.trigger('click');
+    expect(like.text()).toBe('4');
+
+    hydration.resolve({ liked: false, likes: 99 });
+    await flushPromises();
+    expect(like.text()).toBe('4');
+
+    mutation.resolve({ liked: true, likes: 4 });
+    await flushPromises();
+    expect(like.text()).toBe('4');
+    expect(mocks.externalLike).toHaveBeenCalledWith({
+      postId: 42,
+      likes: 4,
+      liked: true,
+      status: 'ready',
+    });
+    mounted.unmount();
+  });
+
+  it('keeps a main Bookmark request current when reply state is reset', async () => {
+    const mainMutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    const replyMutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(mainMutation.promise).mockReturnValueOnce(replyMutation.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const mainBookmark = mounted.get('.post-detail__bookmark');
+    const replyBookmark = mounted.get('[data-id="9"]');
+    await mainBookmark.trigger('click');
+    await replyBookmark.trigger('click');
+    const setupState = (mounted.vm as any).$.setupState;
+    expect(mainBookmark.attributes('aria-busy')).toBe('true');
+    expect(setupState.replyBookmarkPendingIDs.has(9)).toBe(true);
+
+    setupState.resetRepliesState();
+    await mounted.vm.$nextTick();
+    expect(setupState.bookmarkSubmitting).toBe(true);
+    expect(setupState.detailEngagementMutations.bookmarkPendingPostIDs.has(42)).toBe(true);
+    expect(setupState.replyBookmarkPendingIDs.has(9)).toBe(false);
+
+    replyMutation.resolve({ post_id: 9, bookmarked: true });
+    await flushPromises();
+    expect(setupState.bookmarkSubmitting).toBe(true);
+    expect(setupState.detailEngagementMutations.bookmarkPendingPostIDs.has(42)).toBe(true);
+
+    mainMutation.resolve({ post_id: 42, bookmarked: true });
+    await flushPromises();
+    expect(mainBookmark.attributes('aria-pressed')).toBe('true');
+    expect(mainBookmark.attributes('aria-busy')).toBeUndefined();
+    mounted.unmount();
+  });
+
+  it('ignores an external Bookmark overwrite of a pending reply mutation', async () => {
+    const mutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.bookmarkPost.mockReturnValueOnce(mutation.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const replyBookmark = mounted.get('[data-id="9"]');
+    await replyBookmark.trigger('click');
+    expect(replyBookmark.attributes('data-bookmarked')).toBe('true');
+    mocks.detailSync?.applyExternalBookmarkStateLocal({
+      postId: 9,
+      bookmarked: false,
+      status: 'ready',
+    });
+    await mounted.vm.$nextTick();
+    expect(replyBookmark.attributes('data-bookmarked')).toBe('false');
+    expect((mounted.vm as any).$.setupState.replyBookmarkPendingIDs.has(9)).toBe(false);
+
+    mutation.resolve({ post_id: 9, bookmarked: true });
+    await flushPromises();
+    expect(replyBookmark.attributes('data-bookmarked')).toBe('false');
+    expect(mocks.externalBookmark).not.toHaveBeenCalled();
+    mounted.unmount();
+  });
+
+  it('does not let a stale Post A Like response clear or overwrite Post B', async () => {
+    const mutationA = deferred<{ liked: boolean; likes: number }>();
+    const mutationB = deferred<{ liked: boolean; likes: number }>();
+    const postB = { ...post, id: 43, conversation_id: 43 };
+    mocks.getPostById.mockResolvedValueOnce(post).mockResolvedValueOnce(postB);
+    mocks.likePost.mockReturnValueOnce(mutationA.promise).mockReturnValueOnce(mutationB.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    await mounted.get('.test-like').trigger('click');
+    expect(mounted.get('.test-like').text()).toBe('4');
+    mocks.route.params.id = '43';
+    await flushPromises();
+    await flushPromises();
+    expect(mounted.get('.test-like').text()).toBe('3');
+
+    await mounted.get('.test-like').trigger('click');
+    expect(mounted.get('.test-like').text()).toBe('4');
+    expect((mounted.vm as any).$.setupState.likeSubmitting).toBe(true);
+    mutationA.resolve({ liked: true, likes: 90 });
+    await flushPromises();
+    expect(mounted.get('.test-like').text()).toBe('4');
+    expect((mounted.vm as any).$.setupState.likeSubmitting).toBe(true);
+    expect(mocks.externalLike).not.toHaveBeenCalled();
+
+    mutationB.resolve({ liked: true, likes: 5 });
+    await flushPromises();
+    expect(mounted.get('.test-like').text()).toBe('5');
+    expect((mounted.vm as any).$.setupState.likeSubmitting).toBe(false);
+    expect(mocks.externalLike).toHaveBeenCalledTimes(1);
+    mounted.unmount();
+  });
+
+  it('does not let a stale Post A Bookmark response overwrite Post B', async () => {
+    const mutationA = deferred<{ post_id: number; bookmarked: boolean }>();
+    const mutationB = deferred<{ post_id: number; bookmarked: boolean }>();
+    const postB = { ...post, id: 43, conversation_id: 43 };
+    mocks.getPostById.mockResolvedValueOnce(post).mockResolvedValueOnce(postB);
+    mocks.bookmarkPost.mockReturnValueOnce(mutationA.promise).mockReturnValueOnce(mutationB.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const bookmark = mounted.get('.post-detail__bookmark');
+    await bookmark.trigger('click');
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    mocks.route.params.id = '43';
+    await flushPromises();
+    await flushPromises();
+    expect(bookmark.attributes('aria-pressed')).toBe('false');
+
+    await bookmark.trigger('click');
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-busy')).toBe('true');
+    mutationA.resolve({ post_id: 42, bookmarked: false });
+    await flushPromises();
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-busy')).toBe('true');
+    expect(mocks.externalBookmark).not.toHaveBeenCalled();
+
+    mutationB.resolve({ post_id: 43, bookmarked: true });
+    await flushPromises();
+    expect(bookmark.attributes('aria-pressed')).toBe('true');
+    expect(bookmark.attributes('aria-busy')).toBeUndefined();
+    expect(mocks.externalBookmark).toHaveBeenCalledTimes(1);
+    mounted.unmount();
+  });
+
   it('optimistically toggles Detail Repost, settles from server state, and syncs cached surfaces', async () => {
     mocks.getPostRepostState.mockResolvedValueOnce({ reposts: 8, reposted: false });
     mocks.repostPost.mockResolvedValueOnce({ reposts: 9, reposted: true });
@@ -301,7 +485,7 @@ describe('PostDetailView mutation synchronization', () => {
     expect(repost.text()).toContain('9');
     await flushPromises();
 
-    expect(mocks.repostPost).toHaveBeenCalledWith('42');
+    expect(mocks.repostPost).toHaveBeenCalledWith(42);
     expect(mocks.externalRepost).toHaveBeenCalledWith({
       postId: 42,
       reposts: 9,
@@ -409,6 +593,90 @@ describe('PostDetailView mutation synchronization', () => {
     await flushPromises();
     expect(mounted.get('[data-id="9"]').attributes('data-state')).toBe('ready');
     expect(mounted.get('[data-id="9"]').attributes('data-bookmarked')).toBe('true');
+    mounted.unmount();
+  });
+
+  it('does not let old reply hydration change a same-ID reply after collection reset', async () => {
+    const oldHydration = deferred<{
+      items: Array<{ post_id: number; bookmarked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const postB = { ...post, id: 43, conversation_id: 43 };
+    const replyB = { ...reply(9), conversation_id: 43, reply_to_post_id: 43 };
+    let replyHydrationCount = 0;
+    mocks.getPostById.mockResolvedValueOnce(post).mockResolvedValueOnce(postB);
+    mocks.getPostReplies
+      .mockResolvedValueOnce({ items: [reply(9)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [replyB], next_cursor: null });
+    mocks.getPostBookmarkStates.mockImplementation((postIDs: number[]) => {
+      if (postIDs.includes(9)) {
+        replyHydrationCount += 1;
+        if (replyHydrationCount === 1) return oldHydration.promise;
+        return Promise.resolve({
+          items: [{ post_id: 9, bookmarked: true }],
+          unavailable_post_ids: [],
+        });
+      }
+      return Promise.resolve({
+        items: postIDs.map(postID => ({ post_id: postID, bookmarked: false })),
+        unavailable_post_ids: [],
+      });
+    });
+
+    const mounted = mountDetail();
+    await flushPromises();
+    expect(mounted.get('[data-id="9"]').attributes('data-bookmarked')).toBe('false');
+
+    mocks.route.params.id = '43';
+    await flushPromises();
+    await flushPromises();
+    expect(mounted.get('[data-id="9"]').attributes('data-bookmarked')).toBe('true');
+
+    oldHydration.resolve({
+      items: [{ post_id: 9, bookmarked: false }],
+      unavailable_post_ids: [],
+    });
+    await flushPromises();
+    expect(mounted.get('[data-id="9"]').attributes('data-bookmarked')).toBe('true');
+    mounted.unmount();
+  });
+
+  it('does not let an older reply hydration overwrite a local reply mutation', async () => {
+    const hydration = deferred<{
+      items: Array<{ post_id: number; bookmarked: boolean }>;
+      unavailable_post_ids: number[];
+    }>();
+    const mutation = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.getPostBookmarkStates.mockImplementation((postIDs: number[]) => (
+      postIDs.includes(42)
+        ? Promise.resolve({ items: [{ post_id: 42, bookmarked: false }], unavailable_post_ids: [] })
+        : hydration.promise
+    ));
+    mocks.bookmarkPost.mockReturnValueOnce(mutation.promise);
+
+    const mounted = mountDetail();
+    await flushPromises();
+    const setupState = (mounted.vm as any).$.setupState;
+    setupState.replyBookmarkStates[9] = { bookmarked: false, status: 'ready' };
+    const replyBookmark = mounted.get('[data-id="9"]');
+    await replyBookmark.trigger('click');
+    expect(replyBookmark.attributes('data-bookmarked')).toBe('true');
+
+    hydration.resolve({
+      items: [{ post_id: 9, bookmarked: false }],
+      unavailable_post_ids: [],
+    });
+    await flushPromises();
+    expect(replyBookmark.attributes('data-bookmarked')).toBe('true');
+
+    mutation.resolve({ post_id: 9, bookmarked: true });
+    await flushPromises();
+    expect(replyBookmark.attributes('data-bookmarked')).toBe('true');
+    expect(mocks.externalBookmark).toHaveBeenCalledWith({
+      postId: 9,
+      bookmarked: true,
+      status: 'ready',
+    });
     mounted.unmount();
   });
 

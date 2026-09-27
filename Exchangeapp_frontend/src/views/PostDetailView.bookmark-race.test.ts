@@ -224,7 +224,7 @@ describe('PostDetailView bookmark hydration race', () => {
     const bookmark = wrapper.get('.post-detail__bookmark');
     await bookmark.trigger('click');
 
-    expect(mocks.bookmarkPost).toHaveBeenCalledWith('42');
+    expect(mocks.bookmarkPost).toHaveBeenCalledWith(42);
     expect(bookmark.attributes('aria-pressed')).toBe('true');
     expect(bookmark.attributes('aria-busy')).toBe('true');
 
