@@ -1,4 +1,4 @@
-package controllers
+package recommendation
 
 import (
 	"math"
@@ -86,7 +86,7 @@ func TestMaterializedNegativeConfidence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := materializedNegativeConfidence(
+			got := MaterializedNegativeConfidence(
 				test.evidence,
 				test.computedAt,
 				now,
@@ -122,7 +122,7 @@ func TestMaterializedNegativeConfidenceRejectsInvalidNumbers(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := materializedNegativeConfidence(test.evidence, now, now, test.halfLifeDays, test.saturationScale, true)
+			got := MaterializedNegativeConfidence(test.evidence, now, now, test.halfLifeDays, test.saturationScale, true)
 			if got != 0 || math.IsNaN(got) || math.IsInf(got, 0) {
 				t.Fatalf("confidence=%g want finite zero", got)
 			}

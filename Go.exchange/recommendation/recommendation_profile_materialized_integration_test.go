@@ -1,4 +1,4 @@
-package controllers
+package recommendation
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
-	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -119,8 +118,8 @@ func controllerIntegrationVector(values []float32) *pgvector.Vector {
 
 func compatibleControllerIntegrationProfile(userID uint, cfg config.RecommendationConfig, nextRebuildAt, computedAt time.Time) models.UserRecoProfile {
 	return models.UserRecoProfile{
-		UserID: userID, ProfileVersion: recommendation.MaterializedProfileVersion,
-		ProfileConfigHash: recommendation.ProfileConfigHash(cfg, recommendationProfileControllerIntegrationEmbeddingVersion),
+		UserID: userID, ProfileVersion: MaterializedProfileVersion,
+		ProfileConfigHash: ProfileConfigHash(cfg, recommendationProfileControllerIntegrationEmbeddingVersion),
 		EmbeddingVersion:  recommendationProfileControllerIntegrationEmbeddingVersion, Dimensions: 2,
 		PositiveVector:   controllerIntegrationVector([]float32{1, 0}),
 		NegativeVector:   controllerIntegrationVector([]float32{0, 1}),
@@ -133,7 +132,7 @@ func compatibleControllerIntegrationProfile(userID uint, cfg config.Recommendati
 func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 	db := openRecommendationProfileControllerIntegrationDB(t)
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	cfg := normalizedRecommendationConfig()
+	cfg := testDefaultRecommendationConfig()
 
 	t.Run("hit", func(t *testing.T) {
 		user := newRecommendationProfileControllerIntegrationUser(t, db, "loader-hit")
@@ -141,11 +140,11 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 		if err := db.Create(&profile).Error; err != nil {
 			t.Fatal(err)
 		}
-		loaded, err := loadMaterializedUserInterestProfile(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
+		loaded, err := loadMaterializedProfileForIntegration(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if loaded.ProfileStatus != recommendationProfileStatusHit || !loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 2 || len(loaded.NegativeVector) != 2 {
+		if loaded.ProfileStatus != ProfileStatusHit || !loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 2 || len(loaded.NegativeVector) != 2 {
 			t.Fatalf("loaded hit profile=%+v", loaded)
 		}
 	})
@@ -156,11 +155,11 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 		if err := db.Create(&profile).Error; err != nil {
 			t.Fatal(err)
 		}
-		loaded, err := loadMaterializedUserInterestProfile(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
+		loaded, err := loadMaterializedProfileForIntegration(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if loaded.ProfileStatus != recommendationProfileStatusStale || !loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 2 || len(loaded.NegativeVector) != 2 {
+		if loaded.ProfileStatus != ProfileStatusStale || !loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 2 || len(loaded.NegativeVector) != 2 {
 			t.Fatalf("loaded stale profile=%+v", loaded)
 		}
 		var dirty models.UserRecoProfileDirty
@@ -171,11 +170,11 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 
 	t.Run("miss", func(t *testing.T) {
 		user := newRecommendationProfileControllerIntegrationUser(t, db, "loader-miss")
-		loaded, err := loadMaterializedUserInterestProfile(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
+		loaded, err := loadMaterializedProfileForIntegration(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if loaded.ProfileStatus != recommendationProfileStatusMiss || loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 0 || len(loaded.NegativeVector) != 0 {
+		if loaded.ProfileStatus != ProfileStatusMiss || loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 0 || len(loaded.NegativeVector) != 0 {
 			t.Fatalf("loaded miss profile=%+v", loaded)
 		}
 		var dirty models.UserRecoProfileDirty
@@ -200,11 +199,11 @@ func TestMaterializedProfileLoaderStateMachineIntegration(t *testing.T) {
 			if err := db.Create(&profile).Error; err != nil {
 				t.Fatal(err)
 			}
-			loaded, err := loadMaterializedUserInterestProfile(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
+			loaded, err := loadMaterializedProfileForIntegration(db, user.ID, recommendationProfileControllerIntegrationEmbeddingVersion, now, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if loaded.ProfileStatus != recommendationProfileStatusIncompatible || loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 0 || len(loaded.NegativeVector) != 0 {
+			if loaded.ProfileStatus != ProfileStatusIncompatible || loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 0 || len(loaded.NegativeVector) != 0 {
 				t.Fatalf("loaded incompatible profile=%+v", loaded)
 			}
 			var dirty models.UserRecoProfileDirty
@@ -219,10 +218,10 @@ func TestMaterializedProfileLoaderUsesRequestSnapshotAfterRuntimeRollbackIntegra
 	db := openRecommendationProfileControllerIntegrationDB(t)
 	user := newRecommendationProfileControllerIntegrationUser(t, db, "snapshot-rollback")
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	cfg := normalizedRecommendationConfig()
+	cfg := testDefaultRecommendationConfig()
 	profile := compatibleControllerIntegrationProfile(user.ID, cfg, now.Add(time.Hour), now)
 	profile.EmbeddingVersion = "post_embedding_v1"
-	profile.ProfileConfigHash = recommendation.ProfileConfigHash(cfg, "post_embedding_v1")
+	profile.ProfileConfigHash = ProfileConfigHash(cfg, "post_embedding_v1")
 	if err := db.Create(&profile).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -233,11 +232,11 @@ func TestMaterializedProfileLoaderUsesRequestSnapshotAfterRuntimeRollbackIntegra
 		t.Fatal(err)
 	}
 
-	loaded, err := loadMaterializedUserInterestProfile(db, user.ID, "post_embedding_v2", now, cfg)
+	loaded, err := loadMaterializedProfileForIntegration(db, user.ID, "post_embedding_v2", now, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.ProfileStatus != recommendationProfileStatusIncompatible || loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 0 {
+	if loaded.ProfileStatus != ProfileStatusIncompatible || loaded.MaterializedInteractionsReady || len(loaded.PositiveVector) != 0 {
 		t.Fatalf("v1 profile was accepted for captured v2 snapshot after DB rollback: %+v", loaded)
 	}
 }
@@ -253,7 +252,7 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 	addRecommendationProfileControllerServingEmbedding(t, db, eligible)
 	if err := db.Create(&models.UserPostRecoState{
 		UserID: viewer.ID, PostID: interacted.ID, Interacted: true,
-		CanonicalVersion: recommendation.CanonicalOutcomeVersion, RebuiltAt: now,
+		CanonicalVersion: CanonicalOutcomeVersion, RebuiltAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -265,11 +264,11 @@ func TestMaterializedInteractionExclusionIntegration(t *testing.T) {
 		t.Fatal("materialized interaction fixture was not persisted")
 	}
 
-	profile := userInterestProfile{MaterializedInteractionsReady: true}
+	profile := Profile{MaterializedInteractionsReady: true}
 	candidates, err := loadRecommendationSourceCandidates(
 		db,
 		recommendationProfileControllerIntegrationEmbeddingVersion,
-		viewer.ID, profile, map[uint]servedPost{}, now, normalizedRecommendationConfig(), false,
+		viewer.ID, profile, map[uint]ServedItem{}, now, testDefaultRecommendationConfig(), false,
 		"posts.created_at DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
@@ -304,8 +303,8 @@ func TestImmediateNotInterestedProtectionBeforeMaterializerRefreshIntegration(t 
 	candidates, err := loadRecommendationSourceCandidates(
 		db,
 		recommendationProfileControllerIntegrationEmbeddingVersion,
-		viewer.ID, userInterestProfile{MaterializedInteractionsReady: true}, map[uint]servedPost{}, now,
-		normalizedRecommendationConfig(), false, "posts.created_at DESC, posts.id DESC", 10, "recent",
+		viewer.ID, Profile{MaterializedInteractionsReady: true}, map[uint]ServedItem{}, now,
+		testDefaultRecommendationConfig(), false, "posts.created_at DESC, posts.id DESC", 10, "recent",
 	)
 	if err != nil {
 		t.Fatal(err)

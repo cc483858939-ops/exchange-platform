@@ -190,10 +190,11 @@ type LanguageContext struct {
 }
 
 const (
-	LanguageZH             = "zh"
-	LanguageJA             = "ja"
-	LanguageEN             = "en"
-	LanguageUnd            = "und"
-	RankerVersion          = "rules_v6"
-	SelectionPolicyVersion = "network_balance_exploration_v2"
+	LanguageZH                = "zh"
+	LanguageJA                = "ja"
+	LanguageEN                = "en"
+	LanguageUnd               = "und"
+	RankerVersion             = "rules_v6"
+	SelectionPolicyVersion    = "network_balance_exploration_v2"
+	CandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v5"
 )

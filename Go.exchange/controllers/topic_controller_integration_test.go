@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -18,10 +19,13 @@ func TestTopicFeedMembershipOrderingAndCursorIntegration(t *testing.T) {
 	if os.Getenv("POSTGRES_TEST_DSN") == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
 	}
-	db := openRecommendationCandidateIntegrationDB(t)
+	db := openProfileTimelineIntegrationDB(t)
 	if err := db.AutoMigrate(&models.DevDataMirrorAccount{}, &models.DevDataMirrorPost{}); err != nil {
 		t.Fatal(err)
 	}
+	originalDB := global.Db
+	global.Db = db
+	t.Cleanup(func() { global.Db = originalDB })
 
 	originalLoader := loadTopicConfiguration
 	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) {

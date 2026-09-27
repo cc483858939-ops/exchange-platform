@@ -325,7 +325,7 @@ func TestPublicPostRepostCountsHydrateTimelineRecommendationsAndRepliesIntegrati
 	if err := preloadPostAuthor(publicPostScope(db.Model(&models.Post{}), time.Now().UTC())).First(&rootWithAuthor, root.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	recommendations, err := selectedRecommendationResponses(context.Background(), []selectedRecommendation{{Post: rootWithAuthor}})
+	recommendations, err := selectedRecommendationResponsesFromDB(db, []selectedRecommendation{{Post: rootWithAuthor}}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

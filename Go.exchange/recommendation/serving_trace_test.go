@@ -1,6 +1,7 @@
-package controllers
+package recommendation
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -11,25 +12,25 @@ import (
 
 func TestBuildRecommendationResultTracesPreservesThreeProvenanceStates(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	selected := []selectedRecommendation{
+	selected := []SelectedCandidate{
 		{
 			Post:          models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10},
-			SelectionMode: recommendationResultSelectionRanked,
+			SelectionMode: SelectionModeRanked,
 		},
 		{
 			Post:                   models.Post{Model: gorm.Model{ID: 2}, AuthorID: 20},
 			ExplorationOpportunity: true,
-			SelectionMode:          recommendationResultSelectionRanked,
+			SelectionMode:          SelectionModeRanked,
 		},
 		{
 			Post:                   models.Post{Model: gorm.Model{ID: 3}, AuthorID: 30},
 			ExplorationOpportunity: true,
-			SelectionMode:          recommendationResultSelectionExploration,
-			ExplorationReason:      recommendationExplorationReasonRecent,
+			SelectionMode:          SelectionModeExploration,
+			ExplorationReason:      ExplorationReasonRecent,
 			ExplorationSemantic:    .5,
 		},
 	}
-	traces := buildRecommendationResultTraces(models.RecommendationRequest{RequestID: "request-id"}, selected, now, defaultRecommendationConfig())
+	traces := buildResultTraces(models.RecommendationRequest{RequestID: "request-id"}, selected, now, testDefaultRecommendationConfig())
 	if len(traces) != 3 {
 		t.Fatalf("trace count=%d want=3", len(traces))
 	}
@@ -39,9 +40,9 @@ func TestBuildRecommendationResultTracesPreservesThreeProvenanceStates(t *testin
 		reason      string
 		semantic    float64
 	}{
-		{false, string(recommendationResultSelectionRanked), "", 0},
-		{true, string(recommendationResultSelectionRanked), "", 0},
-		{true, string(recommendationResultSelectionExploration), recommendationExplorationReasonRecent, .5},
+		{false, string(SelectionModeRanked), "", 0},
+		{true, string(SelectionModeRanked), "", 0},
+		{true, string(SelectionModeExploration), ExplorationReasonRecent, .5},
 	}
 	for index, trace := range traces {
 		if trace.PostID != uint(index+1) || trace.Position != index+1 {
@@ -53,18 +54,40 @@ func TestBuildRecommendationResultTracesPreservesThreeProvenanceStates(t *testin
 	}
 }
 
+func TestBuildResultTracesSanitizesPostLanguageAndAffinity(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	traces := buildResultTraces(models.RecommendationRequest{RequestID: "request-id"}, []SelectedCandidate{{
+		Post:      models.Post{Language: "ja"},
+		Breakdown: ScoreBreakdown{LanguageAffinity: .6, LanguageComponent: .21},
+	}}, now, testDefaultRecommendationConfig())
+	if len(traces) != 1 || traces[0].PostLanguage != "ja" {
+		t.Fatalf("traces=%#v", traces)
+	}
+	if math.Abs(traces[0].LanguageAffinity-.6) > 1e-9 || math.Abs(traces[0].LanguageComponent-.21) > 1e-9 {
+		t.Fatalf("language trace=%#v", traces[0])
+	}
+
+	traces = buildResultTraces(models.RecommendationRequest{RequestID: "request-id"}, []SelectedCandidate{{
+		Post:      models.Post{Language: "unsupported"},
+		Breakdown: ScoreBreakdown{LanguageAffinity: math.NaN(), LanguageComponent: -1},
+	}}, now, testDefaultRecommendationConfig())
+	if traces[0].PostLanguage != LanguageUnd || traces[0].LanguageAffinity != 0 || traces[0].LanguageComponent != 0 {
+		t.Fatalf("invalid language trace=%#v", traces[0])
+	}
+}
+
 func TestBuildRecommendationResultTracesPreservesFusionMetadata(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	selected := []selectedRecommendation{{
-		Candidate: embeddingCandidate{
+	selected := []SelectedCandidate{{
+		Candidate: Candidate{
 			PostID: 1, FusionScore: .031, SourceCount: 2,
 			SemanticRank: 3, RecentRank: 8,
 		},
 		Post:          models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10},
-		SelectionMode: recommendationResultSelectionRanked,
+		SelectionMode: SelectionModeRanked,
 	}}
 
-	traces := buildRecommendationResultTraces(models.RecommendationRequest{RequestID: "request-id"}, selected, now, defaultRecommendationConfig())
+	traces := buildResultTraces(models.RecommendationRequest{RequestID: "request-id"}, selected, now, testDefaultRecommendationConfig())
 	if len(traces) != 1 {
 		t.Fatalf("trace count=%d want=1", len(traces))
 	}

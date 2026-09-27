@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"Go.exchange/config"
-	"Go.exchange/models"
 	"Go.exchange/recommendation"
 )
 
@@ -56,27 +55,6 @@ func TestParseRecommendationAcceptLanguageIsBounded(t *testing.T) {
 	}
 }
 
-func TestRecommendationResultTraceStoresPostLanguageBreakdown(t *testing.T) {
-	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	traces := buildRecommendationResultTraces(models.RecommendationRequest{RequestID: "request-id"}, []selectedRecommendation{{
-		Post:      models.Post{Language: "ja"},
-		Breakdown: recommendationScoreBreakdown{LanguageAffinity: .6, LanguageComponent: .21},
-	}}, now, defaultRecommendationConfig())
-	if len(traces) != 1 || traces[0].PostLanguage != "ja" {
-		t.Fatalf("traces=%#v", traces)
-	}
-	assertRecommendationLanguageFloat(t, traces[0].LanguageAffinity, .6)
-	assertRecommendationLanguageFloat(t, traces[0].LanguageComponent, .21)
-
-	traces = buildRecommendationResultTraces(models.RecommendationRequest{RequestID: "request-id"}, []selectedRecommendation{{
-		Post:      models.Post{Language: "unsupported"},
-		Breakdown: recommendationScoreBreakdown{LanguageAffinity: math.NaN(), LanguageComponent: -1},
-	}}, now, defaultRecommendationConfig())
-	if traces[0].PostLanguage != recommendationLanguageUnd || traces[0].LanguageAffinity != 0 || traces[0].LanguageComponent != 0 {
-		t.Fatalf("invalid language trace=%#v", traces[0])
-	}
-}
-
 func TestNormalizedRecommendationLanguageAffinityConfigHonorsExplicitZeroAndFalse(t *testing.T) {
 	original := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = original })
@@ -96,7 +74,7 @@ func TestNormalizedRecommendationLanguageAffinityConfigHonorsExplicitZeroAndFals
 }
 
 func TestRecommendationHandlerParsesBrowserLanguageWithoutLeakingIt(t *testing.T) {
-	service := &recommendationServiceStub{result: recommendation.ServeResult{
+	service := &fakeRecommendationService{result: recommendation.ServeResult{
 		RequestID: "language-request", Now: time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC),
 	}}
 	handler, err := NewRecommendationHandler(service, nil, 0)
@@ -111,7 +89,7 @@ func TestRecommendationHandlerParsesBrowserLanguageWithoutLeakingIt(t *testing.T
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	received := service.request.BrowserLanguage
+	received := service.requests[0].BrowserLanguage
 	if received.BrowserPrimary != "ja" {
 		t.Fatalf("received browser context=%#v", received)
 	}

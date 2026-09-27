@@ -175,7 +175,7 @@ func RankerConfigHash(cfg config.RecommendationConfig, servingVersion string) st
 		cfg.Candidates.ColdStart.Following, cfg.Candidates.ColdStart.Recent, cfg.Candidates.ColdStart.Trending, cfg.Candidates.ColdStart.Merged,
 		cfg.Fusion.RankConstant, cfg.LanguageAffinity.Enabled, cfg.LanguageAffinity.Weight,
 		cfg.LanguageAffinity.EvidenceSaturationScale, cfg.LanguageAffinity.MaxBehaviorShare,
-		"social_semantic_materialized_profile_rrf_v5", MaterializedProfileVersion, ProfileConfigHash(cfg, servingVersion),
+		CandidateRetrievalVersion, MaterializedProfileVersion, ProfileConfigHash(cfg, servingVersion),
 		CanonicalOutcomeVersion, RecommendationPassiveRecencyPolicy, RecommendationReadPolicyVersion, SelectionPolicyVersion, servingVersion)
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])[:12]

@@ -1,4 +1,4 @@
-package controllers
+package recommendation
 
 import (
 	"os"
@@ -63,7 +63,7 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 			t.Fatal(err)
 		}
 	}
-	if err := db.Create(&models.PostBehavior{UserID: viewer.ID, PostID: interacted.ID, Action: PostBehaviorActionView, LastSeenAt: now}).Error; err != nil {
+	if err := db.Create(&models.PostBehavior{UserID: viewer.ID, PostID: interacted.ID, Action: "view", LastSeenAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -75,9 +75,9 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 		db.Unscoped().Where("id IN ?", []uint{viewer.ID, author.ID}).Delete(&models.User{})
 	})
 
-	cfg := defaultRecommendationConfig()
-	profile := userInterestProfile{PositiveVector: []float32{1, 0}, InteractedPostIDs: map[uint]struct{}{interacted.ID: {}}}
-	candidates, err := loadRecommendationSemanticCandidates(db, "post_embedding_v1", viewer.ID, profile, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
+	cfg := testDefaultRecommendationConfig()
+	profile := Profile{PositiveVector: []float32{1, 0}, InteractedPostIDs: map[uint]struct{}{interacted.ID: {}}}
+	candidates, err := loadRecommendationSemanticCandidates(db, "post_embedding_v1", viewer.ID, profile, map[uint]ServedItem{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,10 +164,10 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 		db.Unscoped().Where("id IN ?", []uint{viewer.ID, author.ID}).Delete(&models.User{})
 	})
 
-	cfg := defaultRecommendationConfig()
-	candidates, err := loadRecommendationSemanticCandidates(db, "v2", viewer.ID, userInterestProfile{
+	cfg := testDefaultRecommendationConfig()
+	candidates, err := loadRecommendationSemanticCandidates(db, "v2", viewer.ID, Profile{
 		PositiveVector: []float32{1, 0},
-	}, map[uint]servedPost{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
+	}, map[uint]ServedItem{}, now, cfg, false, cfg.Candidates.Personalized.Semantic)
 	if err != nil {
 		t.Fatal(err)
 	}

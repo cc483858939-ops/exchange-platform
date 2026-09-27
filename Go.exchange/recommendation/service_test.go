@@ -128,39 +128,45 @@ func (*serviceTestProfileRepository) LoadPostAffinityInputs(context.Context, []u
 }
 
 type serviceTestHistoryStore struct {
-	calls        *[]string
-	user         ServedHistory
-	guest        ServedHistory
-	loadErr      error
-	recordErr    error
-	lastUserIDs  []uint
-	lastGuestIDs []uint
+	calls           *[]string
+	user            ServedHistory
+	guest           ServedHistory
+	loadErr         error
+	recordErr       error
+	lastUserIDs     []uint
+	lastGuestIDs    []uint
+	lastUserWindow  HistoryWindow
+	lastGuestWindow HistoryWindow
 }
 
-func (store *serviceTestHistoryStore) LoadUserHistory(context.Context, uint, HistoryWindow) (ServedHistory, error) {
+func (store *serviceTestHistoryStore) LoadUserHistory(_ context.Context, _ uint, window HistoryWindow) (ServedHistory, error) {
 	if store.calls != nil {
 		*store.calls = append(*store.calls, "history_load_user")
 	}
+	store.lastUserWindow = window
 	return store.user, store.loadErr
 }
-func (store *serviceTestHistoryStore) RecordUserServed(_ context.Context, _ uint, postIDs []uint, _ HistoryWindow) error {
+func (store *serviceTestHistoryStore) RecordUserServed(_ context.Context, _ uint, postIDs []uint, window HistoryWindow) error {
 	if store.calls != nil {
 		*store.calls = append(*store.calls, "history_record_user")
 	}
 	store.lastUserIDs = append([]uint(nil), postIDs...)
+	store.lastUserWindow = window
 	return store.recordErr
 }
-func (store *serviceTestHistoryStore) LoadGuestHistory(context.Context, string, HistoryWindow) (ServedHistory, error) {
+func (store *serviceTestHistoryStore) LoadGuestHistory(_ context.Context, _ string, window HistoryWindow) (ServedHistory, error) {
 	if store.calls != nil {
 		*store.calls = append(*store.calls, "history_load_guest")
 	}
+	store.lastGuestWindow = window
 	return store.guest, store.loadErr
 }
-func (store *serviceTestHistoryStore) RecordGuestServed(_ context.Context, _ string, postIDs []uint, _ HistoryWindow) error {
+func (store *serviceTestHistoryStore) RecordGuestServed(_ context.Context, _ string, postIDs []uint, window HistoryWindow) error {
 	if store.calls != nil {
 		*store.calls = append(*store.calls, "history_record_guest")
 	}
 	store.lastGuestIDs = append([]uint(nil), postIDs...)
+	store.lastGuestWindow = window
 	return store.recordErr
 }
 

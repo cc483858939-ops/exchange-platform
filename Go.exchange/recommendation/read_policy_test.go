@@ -1,4 +1,4 @@
-package controllers
+package recommendation
 
 import (
 	"strings"
@@ -14,16 +14,16 @@ func TestClassifyRecommendationReadV1(t *testing.T) {
 		estimated  int64
 		want       string
 	}{
-		{name: "tiny short post bounce", foreground: 1000, progress: 0, estimated: 3000, want: recommendationReadOutcomeQuickBounce},
-		{name: "short post dwell qualifies", foreground: 3000, progress: 0, estimated: 3000, want: recommendationReadOutcomeQualified},
-		{name: "fast scroll alone does not qualify", foreground: 2000, progress: 100, estimated: 60 * 1000, want: recommendationReadOutcomeNeutral},
-		{name: "engaged partial reading qualifies", foreground: 20 * 1000, progress: 50, estimated: 60 * 1000, want: recommendationReadOutcomeQualified},
-		{name: "strong dwell qualifies", foreground: 45 * 1000, progress: 0, estimated: 60 * 1000, want: recommendationReadOutcomeQualified},
-		{name: "intermediate is neutral", foreground: 10 * 1000, progress: 20, estimated: 60 * 1000, want: recommendationReadOutcomeNeutral},
+		{name: "tiny short post bounce", foreground: 1000, progress: 0, estimated: 3000, want: "quick_bounce"},
+		{name: "short post dwell qualifies", foreground: 3000, progress: 0, estimated: 3000, want: "qualified"},
+		{name: "fast scroll alone does not qualify", foreground: 2000, progress: 100, estimated: 60 * 1000, want: "neutral"},
+		{name: "engaged partial reading qualifies", foreground: 20 * 1000, progress: 50, estimated: 60 * 1000, want: "qualified"},
+		{name: "strong dwell qualifies", foreground: 45 * 1000, progress: 0, estimated: 60 * 1000, want: "qualified"},
+		{name: "intermediate is neutral", foreground: 10 * 1000, progress: 20, estimated: 60 * 1000, want: "neutral"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := classifyRecommendationRead(tc.foreground, tc.progress, tc.estimated, recommendationReadPolicyVersion)
+			got, err := ClassifyRecommendationRead(tc.foreground, tc.progress, tc.estimated, RecommendationReadPolicyVersion)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -42,16 +42,16 @@ func TestClassifyRecommendationReadRejectsInvalidMeasurements(t *testing.T) {
 		estimated  int64
 		policy     string
 	}{
-		{name: "negative foreground", foreground: -1, progress: 0, estimated: 3000, policy: recommendationReadPolicyVersion},
-		{name: "foreground above max", foreground: recommendationReadMaxForegroundMS + 1, progress: 0, estimated: 3000, policy: recommendationReadPolicyVersion},
-		{name: "negative progress", foreground: 1000, progress: -1, estimated: 3000, policy: recommendationReadPolicyVersion},
-		{name: "progress above max", foreground: 1000, progress: 101, estimated: 3000, policy: recommendationReadPolicyVersion},
-		{name: "missing estimate", foreground: 1000, progress: 0, estimated: 0, policy: recommendationReadPolicyVersion},
+		{name: "negative foreground", foreground: -1, progress: 0, estimated: 3000, policy: RecommendationReadPolicyVersion},
+		{name: "foreground above max", foreground: 6*60*60*1000 + 1, progress: 0, estimated: 3000, policy: RecommendationReadPolicyVersion},
+		{name: "negative progress", foreground: 1000, progress: -1, estimated: 3000, policy: RecommendationReadPolicyVersion},
+		{name: "progress above max", foreground: 1000, progress: 101, estimated: 3000, policy: RecommendationReadPolicyVersion},
+		{name: "missing estimate", foreground: 1000, progress: 0, estimated: 0, policy: RecommendationReadPolicyVersion},
 		{name: "unknown policy", foreground: 1000, progress: 0, estimated: 3000, policy: "read_v2"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := classifyRecommendationRead(tc.foreground, tc.progress, tc.estimated, tc.policy); err == nil {
+			if _, err := ClassifyRecommendationRead(tc.foreground, tc.progress, tc.estimated, tc.policy); err == nil {
 				t.Fatal("expected invalid measurement error")
 			}
 		})
@@ -81,7 +81,7 @@ func TestEstimatePostReadTime(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := estimatePostReadTime(tc.content); got != tc.want {
+			if got := EstimatePostReadTime(tc.content); got != tc.want {
 				t.Fatalf("estimate=%s want=%s", got, tc.want)
 			}
 		})

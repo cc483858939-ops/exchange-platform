@@ -18,7 +18,7 @@ import (
 const (
 	recommendationFeedbackPostLimit         = recommendation.ProfileReplyLimit
 	recommendationRecentViewPostLimit       = recommendation.ProfileRecentViewLimit
-	recommendationCandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v5"
+	recommendationCandidateRetrievalVersion = recommendation.CandidateRetrievalVersion
 	guestRecommendationSessionHeader        = "X-Guest-Recommendation-Session"
 )
 
@@ -118,13 +118,19 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
 	}
-	trackingByPost := make(map[uint]recommendation.TrackingFact, len(result.Tracking))
-	for _, fact := range result.Tracking {
+	attachRecommendationTrackingFacts(recommendations, result.Tracking)
+	ctx.JSON(http.StatusOK, postRecommendationPageResponse{
+		Items: recommendations, RequestID: result.RequestID, Depleted: result.Depleted,
+	})
+}
+
+func attachRecommendationTrackingFacts(recommendations []recommendedPostResponse, facts []recommendation.TrackingFact) {
+	trackingByPost := make(map[uint]recommendation.TrackingFact, len(facts))
+	for _, fact := range facts {
 		trackingByPost[fact.PostID] = fact
 	}
 	for index := range recommendations {
-		postID := recommendations[index].Post.ID
-		if fact, exists := trackingByPost[postID]; exists {
+		if fact, exists := trackingByPost[recommendations[index].Post.ID]; exists {
 			recommendations[index].Tracking = &recommendationTrackingResponse{
 				RequestID: fact.RequestID, Position: fact.Position, Scene: fact.Scene,
 				RankerVersion: fact.RankerVersion, RankerConfigHash: fact.RankerConfigHash,
@@ -132,9 +138,6 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 			}
 		}
 	}
-	ctx.JSON(http.StatusOK, postRecommendationPageResponse{
-		Items: recommendations, RequestID: result.RequestID, Depleted: result.Depleted,
-	})
 }
 
 // These unbound handlers remain for routers assembled without API services in
