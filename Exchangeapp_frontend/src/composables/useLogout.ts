@@ -6,7 +6,7 @@ export function useLogout() {
   const authStore = useAuthStore();
 
   const handleLogout = () => {
-    authStore.logout();
+    void authStore.logout();
     void router.push({ name: 'Home' });
   };
 

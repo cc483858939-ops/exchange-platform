@@ -7,6 +7,12 @@ export type AuthIdentity = {
 
 type TokenClaims = {
   sub?: unknown;
+  sid?: unknown;
+};
+
+export type AuthTokenMetadata = {
+  userId: number;
+  sessionId: string;
 };
 
 const decodeBase64Url = (value: string): string => {
@@ -28,6 +34,34 @@ const readUserID = (value: unknown): number | null => {
   return null;
 };
 
+const readTokenClaims = (token: string | null | undefined): TokenClaims | null => {
+  try {
+    const rawToken = token?.trim().replace(/^Bearer\s+/i, '');
+    if (!rawToken) {
+      return null;
+    }
+    const segments = rawToken.split('.');
+    if (segments.length !== 3 || !segments[1]) {
+      return null;
+    }
+    return JSON.parse(decodeBase64Url(segments[1])) as TokenClaims;
+  } catch {
+    return null;
+  }
+};
+
+export const decodeAuthTokenMetadata = (
+  token: string | null | undefined,
+): AuthTokenMetadata | null => {
+  const claims = readTokenClaims(token);
+  const userId = readUserID(claims?.sub);
+  const sessionId = typeof claims?.sid === 'string' ? claims.sid.trim() : '';
+  if (!userId || !sessionId) {
+    return null;
+  }
+  return { userId, sessionId };
+};
+
 export const normalizeAuthIdentity = (value: unknown): AuthIdentity | null => {
   if (typeof value !== 'object' || value === null) {
     return null;
@@ -45,19 +79,7 @@ export const normalizeAuthIdentity = (value: unknown): AuthIdentity | null => {
 };
 
 export const decodeAuthIdentity = (token: string | null | undefined): AuthIdentity | null => {
-  try {
-    const rawToken = token?.trim().replace(/^Bearer\s+/i, '');
-    if (!rawToken) {
-      return null;
-    }
-    const segments = rawToken.split('.');
-    if (segments.length !== 3 || !segments[1]) {
-      return null;
-    }
-    const claims = JSON.parse(decodeBase64Url(segments[1])) as TokenClaims;
-    const id = readUserID(claims.sub);
-    return id ? { id, username: '', display_name: '', avatar_url: '' } : null;
-  } catch {
-    return null;
-  }
+  const claims = readTokenClaims(token);
+  const id = readUserID(claims?.sub);
+  return id ? { id, username: '', display_name: '', avatar_url: '' } : null;
 };

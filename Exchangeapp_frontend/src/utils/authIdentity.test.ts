@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { decodeAuthIdentity, normalizeAuthIdentity } from './authIdentity';
+import { decodeAuthIdentity, decodeAuthTokenMetadata, normalizeAuthIdentity } from './authIdentity';
 
 const tokenWithSubject = (sub: unknown) => {
   const payload = btoa(JSON.stringify({ sub }))
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+  return `header.${payload}.signature`;
+};
+
+const tokenWithMetadata = (sub: unknown, sid: unknown) => {
+  const payload = btoa(JSON.stringify({ sub, sid }))
     .replace(/=/g, '')
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
@@ -55,5 +63,28 @@ describe('decodeAuthIdentity', () => {
       display_name: '',
       avatar_url: '',
     });
+  });
+});
+
+describe('decodeAuthTokenMetadata', () => {
+  it('decodes a positive subject and stable session id', () => {
+    expect(decodeAuthTokenMetadata(tokenWithMetadata('7', 'sid-1'))).toEqual({
+      userId: 7,
+      sessionId: 'sid-1',
+    });
+  });
+
+  it.each([
+    ['missing sid', tokenWithMetadata('7', undefined)],
+    ['blank sid', tokenWithMetadata('7', '  ')],
+    ['invalid subject', tokenWithMetadata('0', 'sid-1')],
+    ['unsafe subject', tokenWithMetadata('9007199254740992', 'sid-1')],
+    ['malformed token', 'not-a-jwt'],
+  ])('rejects %s', (_name, token) => {
+    expect(decodeAuthTokenMetadata(token)).toBeNull();
+  });
+
+  it('keeps the legacy identity decoder compatible with tokens without sid', () => {
+    expect(decodeAuthIdentity(tokenWithSubject('7'))).toMatchObject({ id: 7 });
   });
 });

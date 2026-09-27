@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     sessionVersion: 0,
     refreshAccessToken: vi.fn(async () => 'Bearer refreshed'),
     clearAuth: vi.fn(),
+    reconcilePersistedAuthState: vi.fn(),
   };
 
   const instance = Object.assign(
@@ -94,9 +95,13 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
-const makeRequest = (sessionVersion?: number, url = '/posts'): TestRequestConfig => ({
+const makeRequest = (
+  sessionVersion?: number,
+  url = '/posts',
+  authorization = 'Bearer original',
+): TestRequestConfig => ({
   url,
-  headers: { Authorization: 'Bearer original' },
+  headers: { Authorization: authorization },
   ...(sessionVersion === undefined ? {} : { _authSessionVersion: sessionVersion }),
 } as TestRequestConfig);
 
@@ -124,6 +129,7 @@ describe('Axios authentication session handling', () => {
     mocks.authStore.sessionVersion = 0;
     mocks.authStore.refreshAccessToken.mockReset().mockResolvedValue('Bearer refreshed');
     mocks.authStore.clearAuth.mockReset();
+    mocks.authStore.reconcilePersistedAuthState.mockReset();
 
     await import('./axios');
   });
@@ -174,8 +180,8 @@ describe('Axios authentication session handling', () => {
     mocks.authStore.token = 'Bearer A';
     mocks.authStore.refreshAccessToken.mockReturnValue(refresh.promise);
 
-    const firstRequest = makeRequest(8);
-    const secondRequest = makeRequest(8);
+    const firstRequest = makeRequest(8, '/posts', 'Bearer A');
+    const secondRequest = makeRequest(8, '/posts', 'Bearer A');
     const firstRetry = responseErrorInterceptor()(makeUnauthorizedError(firstRequest));
     const secondRetry = responseErrorInterceptor()(makeUnauthorizedError(secondRequest));
 
@@ -193,6 +199,42 @@ describe('Axios authentication session handling', () => {
     expect(secondRequest.headers.Authorization).toBe('Bearer A refreshed');
   });
 
+  it('reconciles storage and retries with an already peer-refreshed token', async () => {
+    mocks.authStore.sessionVersion = 8;
+    mocks.authStore.refreshToken = 'R1';
+    mocks.authStore.token = 'Bearer A1';
+    const request = makeRequest(8);
+    request.headers.Authorization = 'Bearer A0';
+
+    await responseErrorInterceptor()(makeUnauthorizedError(request));
+
+    expect(mocks.authStore.reconcilePersistedAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.authStore.refreshAccessToken).not.toHaveBeenCalled();
+    expect(mocks.instance).toHaveBeenCalledTimes(1);
+    expect(request._retry).toBe(true);
+    expect(request.headers.Authorization).toBe('Bearer A1');
+  });
+
+  it('rejects a 401 after reconciliation changes the request session', async () => {
+    mocks.authStore.sessionVersion = 4;
+    mocks.authStore.refreshToken = 'B refresh';
+    mocks.authStore.token = 'Bearer B';
+    mocks.authStore.reconcilePersistedAuthState.mockImplementation(() => {
+      mocks.authStore.sessionVersion = 5;
+      mocks.authStore.refreshToken = 'C refresh';
+      mocks.authStore.token = 'Bearer C';
+    });
+    const request = makeRequest(4);
+    const error = makeUnauthorizedError(request);
+
+    await expect(responseErrorInterceptor()(error)).rejects.toBe(error);
+
+    expect(mocks.authStore.reconcilePersistedAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.authStore.refreshAccessToken).not.toHaveBeenCalled();
+    expect(mocks.instance).not.toHaveBeenCalled();
+    expect(request.headers.Authorization).toBe('Bearer original');
+  });
+
   it('does not reuse a pending refresh from an older generation', async () => {
     const accountARefresh = deferred<string>();
     const accountBRefresh = deferred<string>();
@@ -203,13 +245,13 @@ describe('Axios authentication session handling', () => {
       .mockReturnValueOnce(accountARefresh.promise)
       .mockReturnValueOnce(accountBRefresh.promise);
 
-    const accountARequest = makeRequest(2);
+    const accountARequest = makeRequest(2, '/posts', 'Bearer A');
     const accountAResult = responseErrorInterceptor()(makeUnauthorizedError(accountARequest));
 
     mocks.authStore.sessionVersion = 4;
     mocks.authStore.refreshToken = 'B refresh';
     mocks.authStore.token = 'Bearer B';
-    const accountBRequest = makeRequest(4);
+    const accountBRequest = makeRequest(4, '/posts', 'Bearer B');
     const accountBResult = responseErrorInterceptor()(makeUnauthorizedError(accountBRequest));
 
     expect(mocks.authStore.refreshAccessToken).toHaveBeenCalledTimes(2);
@@ -233,16 +275,16 @@ describe('Axios authentication session handling', () => {
       .mockReturnValueOnce(accountARefresh.promise)
       .mockReturnValueOnce(accountBRefresh.promise);
 
-    const accountAResult = responseErrorInterceptor()(makeUnauthorizedError(makeRequest(2)));
+    const accountAResult = responseErrorInterceptor()(makeUnauthorizedError(makeRequest(2, '/posts', 'Bearer A')));
     mocks.authStore.sessionVersion = 4;
     mocks.authStore.refreshToken = 'B refresh';
     mocks.authStore.token = 'Bearer B';
-    const firstBResult = responseErrorInterceptor()(makeUnauthorizedError(makeRequest(4)));
+    const firstBResult = responseErrorInterceptor()(makeUnauthorizedError(makeRequest(4, '/posts', 'Bearer B')));
 
     accountARefresh.resolve('Bearer stale A');
     await expect(accountAResult).rejects.toMatchObject({ name: 'AuthSessionChangedError' });
 
-    const secondBRequest = makeRequest(4);
+    const secondBRequest = makeRequest(4, '/posts', 'Bearer B');
     const secondBResult = responseErrorInterceptor()(makeUnauthorizedError(secondBRequest));
     expect(mocks.authStore.refreshAccessToken).toHaveBeenCalledTimes(2);
 
@@ -259,7 +301,7 @@ describe('Axios authentication session handling', () => {
     mocks.authStore.refreshToken = 'A refresh';
     mocks.authStore.token = 'Bearer A';
     mocks.authStore.refreshAccessToken.mockReturnValue(refresh.promise);
-    const request = makeRequest(9);
+    const request = makeRequest(9, '/posts', 'Bearer A');
     const pendingRetry = responseErrorInterceptor()(makeUnauthorizedError(request));
 
     mocks.authStore.sessionVersion = 10;
@@ -269,7 +311,7 @@ describe('Axios authentication session handling', () => {
 
     await expect(pendingRetry).rejects.toMatchObject({ name: 'AuthSessionChangedError' });
     expect(mocks.instance).not.toHaveBeenCalled();
-    expect(request.headers.Authorization).toBe('Bearer original');
+    expect(request.headers.Authorization).toBe('Bearer A');
   });
 
   it('does not relabel a retry or replace its header if the session changes before dispatch', async () => {
@@ -285,7 +327,7 @@ describe('Axios authentication session handling', () => {
       const preparedConfig = await handler(config as TestRequestConfig);
       return { config: preparedConfig, status: 200 };
     });
-    const request = makeRequest(9);
+    const request = makeRequest(9, '/posts', 'Bearer A');
     const pendingRetry = responseErrorInterceptor()(makeUnauthorizedError(request));
 
     refresh.resolve('Bearer A refreshed');

@@ -8,7 +8,11 @@ import router, { resolveAuthenticatedGuestOnlyDestination } from './index';
 import { routeScrollBehavior } from './scrollBehavior';
 
 const setAuthenticatedState = (id = 42) => {
-  localStorage.setItem('token', 'access-token');
+  const payload = btoa(JSON.stringify({ sub: String(id), sid: `sid-${id}` }))
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+  localStorage.setItem('token', `header.${payload}.signature`);
   localStorage.setItem('refresh_token', 'refresh-token');
   localStorage.setItem('auth_user', JSON.stringify({
     id,

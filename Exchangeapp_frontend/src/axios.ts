@@ -30,6 +30,14 @@ const isAuthEndpoint = (url?: string) => {
   return authEndpointPaths.some((path) => url.includes(path));
 };
 
+const readAuthorizationHeader = (config: RetryableRequestConfig): string | null => {
+  const headers = config.headers;
+  const value = typeof headers.get === 'function'
+    ? headers.get('Authorization')
+    : headers.Authorization;
+  return typeof value === 'string' ? value.trim() : null;
+};
+
 instance.interceptors.request.use(config => {
   const authStore = useAuthStore();
   const authConfig = config as RetryableRequestConfig;
@@ -61,6 +69,8 @@ instance.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    authStore.reconcilePersistedAuthState();
+
     const requestVersion = originalRequest._authSessionVersion;
     if (requestVersion === undefined || requestVersion !== authStore.sessionVersion) {
       return Promise.reject(error);
@@ -71,6 +81,13 @@ instance.interceptors.response.use(
     }
 
     originalRequest._retry = true;
+
+    const currentAuthorization = authStore.token?.trim() ?? '';
+    const requestAuthorization = readAuthorizationHeader(originalRequest) ?? '';
+    if (currentAuthorization && currentAuthorization !== requestAuthorization) {
+      originalRequest.headers.Authorization = currentAuthorization;
+      return instance(originalRequest);
+    }
 
     try {
       if (!refreshState || refreshState.sessionVersion !== requestVersion) {
