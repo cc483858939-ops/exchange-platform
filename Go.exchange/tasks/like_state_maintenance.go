@@ -15,23 +15,9 @@ import (
 )
 
 type likeStateMaintenanceBaseline struct {
-	Count               int64
-	Version             int64
-	ReactionRowCount    int64
-	LikedReactionCount  int64
-	MaxReactionVersion  int64
-	InvalidVersionCount int64
+	Count   int64
+	Version int64
 }
-
-type likeStateMaintenanceReactionAggregate struct {
-	PostID              uint  `gorm:"column:post_id"`
-	ReactionRowCount    int64 `gorm:"column:reaction_row_count"`
-	LikedReactionCount  int64 `gorm:"column:liked_reaction_count"`
-	MaxReactionVersion  int64 `gorm:"column:max_reaction_version"`
-	InvalidVersionCount int64 `gorm:"column:invalid_version_count"`
-}
-
-const likeStateMaintenanceMemberScanBatch int64 = 1024
 
 func startLikeStateMaintenance(ctx context.Context, wg interface {
 	Add(int)
@@ -126,6 +112,9 @@ func reconcileLikeStateRegistry(ctx context.Context, store *likes.Store, db *gor
 }
 
 func verifyIdleLikeStates(ctx context.Context, store *likes.Store, db *gorm.DB, now time.Time) error {
+	if !config.LikeStateExpiryEnabled() {
+		return nil
+	}
 	cutoff := now.Add(-config.LikeStateIdleBeforeExpiry())
 	postIDs, err := store.LoadExpiryCandidates(ctx, cutoff, config.LikeStateMaintenanceBatchSize())
 	if err != nil {
@@ -173,17 +162,6 @@ func verifyIdleLikeStates(ctx context.Context, store *likes.Store, db *gorm.DB, 
 			}
 			continue
 		}
-		membershipEqual, err := verifyLikeMembership(ctx, db, store, postID)
-		if err != nil {
-			return err
-		}
-		if !membershipEqual {
-			log.Printf("[LikeStateMaintenance] like_state_expiry_mismatch post=%d reason=membership_not_equal", postID)
-			if touchErr := store.TouchExpiryCandidate(ctx, postID, now); touchErr != nil {
-				return touchErr
-			}
-			continue
-		}
 		quiescent, err := store.SnapshotQueueQuiescent(ctx, postID)
 		if err != nil {
 			return err
@@ -196,13 +174,6 @@ func verifyIdleLikeStates(ctx context.Context, store *likes.Store, db *gorm.DB, 
 			continue
 		}
 
-		if !config.LikeStateExpiryEnabled() {
-			log.Printf("[LikeStateMaintenance] like_state_expiry_would_arm post=%d version=%d", postID, baseline.Version)
-			if touchErr := store.TouchExpiryCandidate(ctx, postID, now); touchErr != nil {
-				return touchErr
-			}
-			continue
-		}
 		armed, err := store.ArmExpiry(ctx, postID, baseline.Version, config.LikeStateTTL())
 		if err != nil {
 			return err
@@ -246,7 +217,7 @@ func loadLikeStateMaintenanceBaselines(db *gorm.DB, postIDs []uint) (map[uint]li
 	ids := uniqueMaintenancePostIDs(postIDs)
 	var posts []models.Post
 	if err := db.Unscoped().Model(&models.Post{}).
-		Select("posts.id,posts.like_count,posts.like_sync_version,posts.deleted_at").
+		Select("posts.id,posts.like_count,posts.like_sync_version").
 		Where("posts.id IN ? AND posts.deleted_at IS NULL", ids).
 		Find(&posts).Error; err != nil {
 		return nil, err
@@ -254,91 +225,17 @@ func loadLikeStateMaintenanceBaselines(db *gorm.DB, postIDs []uint) (map[uint]li
 	if len(posts) == 0 {
 		return result, nil
 	}
-	activeIDs := make([]uint, 0, len(posts))
 	for _, post := range posts {
-		activeIDs = append(activeIDs, post.ID)
 		result[post.ID] = likeStateMaintenanceBaseline{Count: post.LikeCount, Version: post.LikeSyncVersion}
-	}
-	var aggregates []likeStateMaintenanceReactionAggregate
-	if err := db.Model(&models.PostReaction{}).
-		Select("post_id, COUNT(*) AS reaction_row_count, COUNT(*) FILTER (WHERE liked = TRUE) AS liked_reaction_count, COALESCE(MAX(reaction_version), 0) AS max_reaction_version, COUNT(*) FILTER (WHERE reaction_version <= 0) AS invalid_version_count").
-		Where("post_id IN ? AND reaction = ?", activeIDs, models.PostReactionLike).
-		Group("post_id").
-		Scan(&aggregates).Error; err != nil {
-		return nil, err
-	}
-	for _, aggregate := range aggregates {
-		baseline, ok := result[aggregate.PostID]
-		if !ok {
-			continue
-		}
-		baseline.ReactionRowCount = aggregate.ReactionRowCount
-		baseline.LikedReactionCount = aggregate.LikedReactionCount
-		baseline.MaxReactionVersion = aggregate.MaxReactionVersion
-		baseline.InvalidVersionCount = aggregate.InvalidVersionCount
-		result[aggregate.PostID] = baseline
 	}
 	return result, nil
 }
 
 func validateLikeStateMaintenanceBaseline(baseline likeStateMaintenanceBaseline) error {
-	if baseline.Count < 0 || baseline.Version < 0 || baseline.ReactionRowCount < 0 ||
-		baseline.LikedReactionCount < 0 || baseline.MaxReactionVersion < 0 || baseline.InvalidVersionCount < 0 ||
-		baseline.LikedReactionCount > baseline.ReactionRowCount {
-		return likes.ErrLikeProjectionNotReady
-	}
-	if baseline.ReactionRowCount == 0 {
-		if baseline.Count != 0 || baseline.Version != 0 || baseline.LikedReactionCount != 0 || baseline.MaxReactionVersion != 0 || baseline.InvalidVersionCount != 0 {
-			return likes.ErrLikeProjectionNotReady
-		}
-		return nil
-	}
-	if baseline.Version <= 0 || baseline.InvalidVersionCount != 0 || baseline.MaxReactionVersion != baseline.Version || baseline.LikedReactionCount != baseline.Count {
+	if baseline.Count < 0 || baseline.Version < 0 {
 		return likes.ErrLikeProjectionNotReady
 	}
 	return nil
-}
-
-func verifyLikeMembership(ctx context.Context, db *gorm.DB, store *likes.Store, postID uint) (bool, error) {
-	if db == nil {
-		return false, errors.New("database is not initialized")
-	}
-	if store == nil {
-		return false, errors.New("like state store is not initialized")
-	}
-	if postID == 0 {
-		return false, errors.New("invalid Like membership verification arguments")
-	}
-	// Count equality is checked before this walk. Do not derive it from SSCAN
-	// results because a cursor iteration may return duplicate members.
-	var cursor uint64
-	for {
-		userIDs, nextCursor, err := store.ScanUsers(ctx, postID, cursor, likeStateMaintenanceMemberScanBatch)
-		if err != nil {
-			return false, err
-		}
-		if len(userIDs) > 0 {
-			var durableUserIDs []uint
-			if err := db.Model(&models.PostReaction{}).
-				Where("post_id = ? AND reaction = ? AND liked = ? AND user_id IN ?", postID, models.PostReactionLike, true, userIDs).
-				Pluck("user_id", &durableUserIDs).Error; err != nil {
-				return false, err
-			}
-			durableSet := make(map[uint]struct{}, len(durableUserIDs))
-			for _, userID := range durableUserIDs {
-				durableSet[userID] = struct{}{}
-			}
-			for _, userID := range userIDs {
-				if _, ok := durableSet[userID]; !ok {
-					return false, nil
-				}
-			}
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			return true, nil
-		}
-	}
 }
 
 func uniqueMaintenancePostIDs(postIDs []uint) []uint {
