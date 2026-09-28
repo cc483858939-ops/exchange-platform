@@ -571,6 +571,105 @@ func TestRecommendationTraceCleanupLockSkippedMetricsPreserveFailureAndBacklog(t
 	}
 }
 
+func TestRecommendationTraceCleanupMetricsRespectObservationOwnership(t *testing.T) {
+	tests := []struct {
+		name                string
+		result              recommendationTraceCleanupRunResult
+		runErr              error
+		initialBacklog      float64
+		wantBacklog         float64
+		wantFailureDelta    float64
+		wantOutcome         string
+		wantResultRowDelta  float64
+		wantRequestRowDelta float64
+	}{
+		{
+			name:             "pre-run error preserves empty backlog observation",
+			runErr:           errors.New("advisory lock query failed"),
+			initialBacklog:   0,
+			wantBacklog:      0,
+			wantFailureDelta: 1,
+			wantOutcome:      "error",
+		},
+		{
+			name:             "pre-run error preserves backlog observation",
+			runErr:           errors.New("pinned connection unavailable"),
+			initialBacklog:   1,
+			wantBacklog:      1,
+			wantFailureDelta: 1,
+			wantOutcome:      "error",
+		},
+		{
+			name: "error after cleanup cycle records partial work",
+			result: recommendationTraceCleanupRunResult{
+				ResultRows: 4, RequestRows: 2, Cycles: 1,
+			},
+			runErr:              errors.New("request delete failed"),
+			initialBacklog:      0,
+			wantBacklog:         1,
+			wantFailureDelta:    1,
+			wantOutcome:         "error",
+			wantResultRowDelta:  4,
+			wantRequestRowDelta: 2,
+		},
+		{
+			name: "caught-up cycle clears backlog even with zero deleted rows",
+			result: recommendationTraceCleanupRunResult{
+				Cycles: 1, CaughtUp: true,
+			},
+			initialBacklog: 1,
+			wantBacklog:    0,
+			wantOutcome:    "caught_up",
+		},
+		{
+			name: "budget-reached cycle marks backlog likely",
+			result: recommendationTraceCleanupRunResult{
+				Cycles: 1, BudgetReached: true,
+			},
+			initialBacklog: 0,
+			wantBacklog:    1,
+			wantOutcome:    "budget_reached",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metrics.SetRecommendationTraceCleanupBacklogLikely(test.initialBacklog == 1)
+			t.Cleanup(func() { metrics.SetRecommendationTraceCleanupBacklogLikely(false) })
+			backlogBefore := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_backlog_likely")
+			failuresBefore := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_failures_total")
+			resultRowsBefore := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="result"}`)
+			requestRowsBefore := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="request"}`)
+			outcomeBefore := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_runs_total{outcome="`+test.wantOutcome+`"}`)
+			durationCountBefore := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_duration_seconds_count")
+			if backlogBefore != test.initialBacklog {
+				t.Fatalf("test setup backlog=%v, want %v", backlogBefore, test.initialBacklog)
+			}
+
+			recordRecommendationTraceCleanupMetrics(test.result, test.runErr, time.Millisecond)
+
+			if got := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_backlog_likely"); got != test.wantBacklog {
+				t.Fatalf("backlog gauge=%v, want %v", got, test.wantBacklog)
+			}
+			if got := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_failures_total"); got != failuresBefore+test.wantFailureDelta {
+				t.Fatalf("failure counter=%v, want %v", got, failuresBefore+test.wantFailureDelta)
+			}
+			if got := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="result"}`); got != resultRowsBefore+test.wantResultRowDelta {
+				t.Fatalf("result row counter=%v, want %v", got, resultRowsBefore+test.wantResultRowDelta)
+			}
+			if got := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="request"}`); got != requestRowsBefore+test.wantRequestRowDelta {
+				t.Fatalf("request row counter=%v, want %v", got, requestRowsBefore+test.wantRequestRowDelta)
+			}
+			if got := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_runs_total{outcome="`+test.wantOutcome+`"}`); got != outcomeBefore+1 {
+				t.Fatalf("%s run counter=%v, want %v", test.wantOutcome, got, outcomeBefore+1)
+			}
+			if got := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_duration_seconds_count"); got != durationCountBefore+1 {
+				t.Fatalf("duration sample count=%v, want %v", got, durationCountBefore+1)
+			}
+		})
+	}
+}
+
 func recommendationTraceCleanupMetricValue(t *testing.T, prefix string) float64 {
 	t.Helper()
 	recorder := httptest.NewRecorder()

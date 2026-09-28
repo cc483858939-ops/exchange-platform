@@ -116,7 +116,9 @@ func recordRecommendationTraceCleanupMetrics(result recommendationTraceCleanupRu
 	}
 	metrics.AddRecommendationTraceCleanupRows("result", result.ResultRows)
 	metrics.AddRecommendationTraceCleanupRows("request", result.RequestRows)
-	metrics.SetRecommendationTraceCleanupBacklogLikely(!result.CaughtUp)
+	if result.Cycles > 0 {
+		metrics.SetRecommendationTraceCleanupBacklogLikely(!result.CaughtUp)
+	}
 
 	outcome := "caught_up"
 	if runErr != nil {
