@@ -221,6 +221,9 @@ func createCleanupFixture(t *testing.T, db *gorm.DB, ownerID uint, status string
 		if err := postmediaupload.MarkUploaded(context.Background(), db, mediaID, ownerID, uploadedAt, cleanupAfter); err != nil {
 			t.Fatalf("mark upload fixture uploaded: %v", err)
 		}
+		upload.Status = postmediaupload.StatusUploaded
+		upload.UploadedAt = &uploadedAt
+		upload.CleanupAfter = cleanupAfter
 	}
 	if status == postmediaupload.StatusCleanupPending {
 		updates := map[string]interface{}{"status": postmediaupload.StatusCleanupPending, "cleanup_attempts": int64(1)}
@@ -237,6 +240,13 @@ func createCleanupFixture(t *testing.T, db *gorm.DB, ownerID uint, status string
 		}
 		upload.Status = postmediaupload.StatusCleanupPending
 		upload.CleanupAttempts = 1
+	}
+	var stored models.PostMediaUpload
+	if err := db.Where("media_id = ?", mediaID).Take(&stored).Error; err != nil {
+		t.Fatalf("load committed cleanup fixture %q: %v", mediaID, err)
+	}
+	if stored.Status != upload.Status || !sameOptionalTime(stored.UploadedAt, upload.UploadedAt) || !stored.CleanupAfter.Equal(upload.CleanupAfter) || !sameOptionalString(stored.CleanupClaimToken, upload.CleanupClaimToken) || !sameOptionalTime(stored.CleanupClaimedAt, upload.CleanupClaimedAt) || stored.CleanupAttempts != upload.CleanupAttempts {
+		t.Fatalf("cleanup fixture does not match committed row: fixture=%+v stored=%+v", upload, stored)
 	}
 	return upload
 }
@@ -266,4 +276,11 @@ func sameOptionalString(left, right *string) bool {
 		return left == nil && right == nil
 	}
 	return *left == *right
+}
+
+func sameOptionalTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
 }

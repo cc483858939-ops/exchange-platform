@@ -185,7 +185,7 @@ WHERE conrelid = 'post_media_uploads'::regclass
 	if err := db.Create(&invalidStatus).Error; err == nil {
 		t.Fatal("status CHECK accepted an unsupported lifecycle state")
 	} else {
-		requirePostgresCheckViolation(t, "unsupported Post media upload state", err, "chk_post_media_uploads_status")
+		requirePostgresCheckViolation(t, "unsupported Post media upload state", err)
 	}
 	invalidOwner := upload
 	invalidOwner.MediaID = uuid.NewString()
