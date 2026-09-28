@@ -34,6 +34,10 @@ import {
   type EngagementMutationRevision,
 } from './engagementMutationCoordinator';
 import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
+import {
   createOptimisticBookmarkUpdate,
   createOptimisticRepostUpdate,
   executeBookmarkToggle,
@@ -672,51 +676,58 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       return;
     }
 
-    const capturedGeneration = viewerGeneration.value;
-    const token = engagementMutations.begin('like', postID);
-    removedSnapshots.set(postID, { post: { ...post }, originalIndex: index });
-    items.value = items.value.filter(candidate => candidate.id !== postID);
-    mutationErrors.value.delete(postID);
-    const isCurrentMutation = () => (
-      isCurrentViewer(capturedViewerID, capturedGeneration)
-      && engagementMutations.isCurrent(token)
-    );
+    const lease = tryBeginEngagementMutationLease(capturedViewerID, 'like', postID);
+    if (!lease) return;
 
     try {
-      const result = await executeLikeToggle(postID, true);
-      if (!isCurrentMutation()) {
-        return;
-      }
-      const likes = normalizeCount(result.likes) ?? removedSnapshots.get(postID)?.post.likeCount ?? 0;
-      engagementMutations.settle(token);
-      syncExternalPostLikeState({
-        postId: postID,
-        likes,
-        liked: result.liked,
-        status: 'ready',
-      });
-    } catch (error) {
-      if (!isCurrentMutation()) {
-        return;
-      }
-      const snapshot = removedSnapshots.get(postID);
-      if (snapshot) {
-        const restored = {
-          ...snapshot.post,
-          likeStatus: getErrorStatus(error) === 503 ? 'unavailable' as const : 'ready' as const,
-        };
-        const nextItems = [...items.value];
-        nextItems.splice(Math.min(snapshot.originalIndex, nextItems.length), 0, restored);
-        items.value = nextItems;
-        removedSnapshots.delete(postID);
-      }
-      engagementMutations.settle(token);
-      mutationErrors.value.set(
-        postID,
-        getErrorStatus(error) === 503
-          ? 'Likes are temporarily unavailable.'
-          : 'Could not remove this like.',
+      const capturedGeneration = viewerGeneration.value;
+      const token = engagementMutations.begin('like', postID);
+      removedSnapshots.set(postID, { post: { ...post }, originalIndex: index });
+      items.value = items.value.filter(candidate => candidate.id !== postID);
+      mutationErrors.value.delete(postID);
+      const isCurrentMutation = () => (
+        isCurrentViewer(capturedViewerID, capturedGeneration)
+        && engagementMutations.isCurrent(token)
       );
+
+      try {
+        const result = await executeLikeToggle(postID, true);
+        if (!isCurrentMutation()) {
+          return;
+        }
+        const likes = normalizeCount(result.likes) ?? removedSnapshots.get(postID)?.post.likeCount ?? 0;
+        engagementMutations.settle(token);
+        syncExternalPostLikeState({
+          postId: postID,
+          likes,
+          liked: result.liked,
+          status: 'ready',
+        });
+      } catch (error) {
+        if (!isCurrentMutation()) {
+          return;
+        }
+        const snapshot = removedSnapshots.get(postID);
+        if (snapshot) {
+          const restored = {
+            ...snapshot.post,
+            likeStatus: getErrorStatus(error) === 503 ? 'unavailable' as const : 'ready' as const,
+          };
+          const nextItems = [...items.value];
+          nextItems.splice(Math.min(snapshot.originalIndex, nextItems.length), 0, restored);
+          items.value = nextItems;
+          removedSnapshots.delete(postID);
+        }
+        engagementMutations.settle(token);
+        mutationErrors.value.set(
+          postID,
+          getErrorStatus(error) === 503
+            ? 'Likes are temporarily unavailable.'
+            : 'Could not remove this like.',
+        );
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
@@ -731,39 +742,46 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       || repostPendingPostIDs.has(postID)
     ) return false;
 
-    const previousReposted = post.reposted;
-    const previousReposts = post.repostCount;
-    const capturedViewerGeneration = viewerGeneration.value;
-    const token = engagementMutations.begin('repost', postID);
-    applyFeedRepostStateUpdate(post, createOptimisticRepostUpdate(post));
-
-    const isCurrentMutation = () => (
-      isCurrentViewer(capturedViewerID, capturedViewerGeneration)
-      && engagementMutations.isCurrent(token)
-    );
+    const lease = tryBeginEngagementMutationLease(capturedViewerID, 'repost', postID);
+    if (!lease) return false;
 
     try {
-      const response = await executeRepostToggle(postID, previousReposted);
-      if (!isCurrentMutation()) return false;
-      syncExternalPostRepostState({
-        postId: postID,
-        reposts: response.reposts,
-        reposted: response.reposted,
-        status: 'ready',
-      });
-      engagementMutations.settle(token);
-      markOwnProfileTimelineStale();
-      return true;
-    } catch {
-      if (!isCurrentMutation()) return false;
-      applyFeedRepostStateUpdate(post, {
-        postId: postID,
-        reposts: previousReposts,
-        reposted: previousReposted,
-        status: 'ready',
-      });
-      engagementMutations.settle(token);
-      return false;
+      const previousReposted = post.reposted;
+      const previousReposts = post.repostCount;
+      const capturedViewerGeneration = viewerGeneration.value;
+      const token = engagementMutations.begin('repost', postID);
+      applyFeedRepostStateUpdate(post, createOptimisticRepostUpdate(post));
+
+      const isCurrentMutation = () => (
+        isCurrentViewer(capturedViewerID, capturedViewerGeneration)
+        && engagementMutations.isCurrent(token)
+      );
+
+      try {
+        const response = await executeRepostToggle(postID, previousReposted);
+        if (!isCurrentMutation()) return false;
+        syncExternalPostRepostState({
+          postId: postID,
+          reposts: response.reposts,
+          reposted: response.reposted,
+          status: 'ready',
+        });
+        engagementMutations.settle(token);
+        markOwnProfileTimelineStale();
+        return true;
+      } catch {
+        if (!isCurrentMutation()) return false;
+        applyFeedRepostStateUpdate(post, {
+          postId: postID,
+          reposts: previousReposts,
+          reposted: previousReposted,
+          status: 'ready',
+        });
+        engagementMutations.settle(token);
+        return false;
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
@@ -778,44 +796,51 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       || bookmarkPendingPostIDs.has(postID)
     ) return false;
 
-    const previousBookmarked = post.bookmarked;
-    beginBookmarkStateMutation(postID);
-    const capturedViewerGeneration = viewerGeneration.value;
-    const token = engagementMutations.begin('bookmark', postID);
-    mutationErrors.value.delete(postID);
-    applyFeedBookmarkStateUpdate(post, createOptimisticBookmarkUpdate(post));
-
-    const isCurrentMutation = () => (
-      isCurrentViewer(capturedViewerID, capturedViewerGeneration)
-      && engagementMutations.isCurrent(token)
-    );
+    const lease = tryBeginEngagementMutationLease(capturedViewerID, 'bookmark', postID);
+    if (!lease) return false;
 
     try {
-      const response = await executeBookmarkToggle(postID, previousBookmarked);
-      if (!isCurrentMutation()) return false;
-      applyFeedBookmarkStateUpdate(post, {
-        postId: postID,
-        bookmarked: response.bookmarked,
-        status: 'ready',
-      });
-      engagementMutations.settle(token);
+      const previousBookmarked = post.bookmarked;
+      beginBookmarkStateMutation(postID);
+      const capturedViewerGeneration = viewerGeneration.value;
+      const token = engagementMutations.begin('bookmark', postID);
       mutationErrors.value.delete(postID);
-      syncHistoryBookmarkState({
-        postId: postID,
-        bookmarked: response.bookmarked,
-        status: 'ready',
-      });
-      return true;
-    } catch {
-      if (!isCurrentMutation()) return false;
-      applyFeedBookmarkStateUpdate(post, {
-        postId: postID,
-        bookmarked: previousBookmarked,
-        status: 'ready',
-      });
-      engagementMutations.settle(token);
-      mutationErrors.value.set(postID, 'Could not update bookmark.');
-      return false;
+      applyFeedBookmarkStateUpdate(post, createOptimisticBookmarkUpdate(post));
+
+      const isCurrentMutation = () => (
+        isCurrentViewer(capturedViewerID, capturedViewerGeneration)
+        && engagementMutations.isCurrent(token)
+      );
+
+      try {
+        const response = await executeBookmarkToggle(postID, previousBookmarked);
+        if (!isCurrentMutation()) return false;
+        applyFeedBookmarkStateUpdate(post, {
+          postId: postID,
+          bookmarked: response.bookmarked,
+          status: 'ready',
+        });
+        engagementMutations.settle(token);
+        mutationErrors.value.delete(postID);
+        syncHistoryBookmarkState({
+          postId: postID,
+          bookmarked: response.bookmarked,
+          status: 'ready',
+        });
+        return true;
+      } catch {
+        if (!isCurrentMutation()) return false;
+        applyFeedBookmarkStateUpdate(post, {
+          postId: postID,
+          bookmarked: previousBookmarked,
+          status: 'ready',
+        });
+        engagementMutations.settle(token);
+        mutationErrors.value.set(postID, 'Could not update bookmark.');
+        return false;
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 

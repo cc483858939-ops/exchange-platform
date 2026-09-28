@@ -36,6 +36,11 @@ const mocks = vi.hoisted(() => ({
   getPostBookmarkStates: vi.fn(),
   bookmarkPost: vi.fn(),
   unbookmarkPost: vi.fn(),
+  getUser: vi.fn(),
+  getUserTimeline: vi.fn(),
+  getUserFollowState: vi.fn(),
+  followUser: vi.fn(),
+  unfollowUser: vi.fn(),
   deletePost: vi.fn(),
 }));
 
@@ -79,9 +84,23 @@ vi.mock('../services/bookmarkService', () => ({
   unbookmarkPost: mocks.unbookmarkPost,
 }));
 
+vi.mock('../services/userService', () => ({
+  getUser: mocks.getUser,
+  getUserTimeline: mocks.getUserTimeline,
+  getUserFollowState: mocks.getUserFollowState,
+  followUser: mocks.followUser,
+  unfollowUser: mocks.unfollowUser,
+}));
+
 import {
   useHomeTimelineStore,
 } from './homeTimeline';
+import { useProfileSessionStore } from './profileSession';
+import {
+  isEngagementMutationLeased,
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
 import { GUEST_RECOMMENDATION_SESSION_STORAGE_KEY } from '../utils/guestRecommendationSession';
 
 const guestSessionID = '4ca3706b-197e-4f63-8f51-f99176f8b61c';
@@ -207,6 +226,11 @@ describe('home timeline session store', () => {
     mocks.getPostBookmarkStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.bookmarkPost.mockReset();
     mocks.unbookmarkPost.mockReset();
+    mocks.getUser.mockReset();
+    mocks.getUserTimeline.mockReset();
+    mocks.getUserFollowState.mockReset();
+    mocks.followUser.mockReset();
+    mocks.unfollowUser.mockReset();
     mocks.deletePost.mockReset().mockResolvedValue(undefined);
     mocks.getPostEngagementStates.mockReset().mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
   });
@@ -757,6 +781,46 @@ describe('home timeline session store', () => {
     expect(store.likePendingPostIds.has(4)).toBe(false);
   });
 
+  it('blocks a Profile Unlike while Home Like is pending, then permits it after Home settles', async () => {
+    const homeStore = useHomeTimelineStore();
+    const profileStore = useProfileSessionStore();
+    const homePost = feedPostFixture(42, 8);
+    const profilePost = feedPostFixture(42, 8);
+    homeStore.following.items = [homePost];
+    const profileSession = profileStore.ensureSession(7)!;
+    profileSession.timelineItems = [{
+      activityType: 'post',
+      activityAt: profilePost.createdAt,
+      sourceId: 42,
+      actor: profilePost.author,
+      post: profilePost,
+    }];
+
+    const pendingLike = deferred<{ likes: number; liked: boolean }>();
+    mocks.likePost.mockReturnValueOnce(pendingLike.promise);
+    const homeMutation = homeStore.toggleLike(42);
+
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
+    expect(homePost).toMatchObject({ liked: true, likeCount: 1 });
+    expect(profilePost).toMatchObject({ liked: true, likeCount: 1 });
+    expect(isEngagementMutationLeased(7, 'like', 42)).toBe(true);
+
+    await expect(profileStore.toggleLike(42, 7)).resolves.toBe('ignored');
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
+    expect(mocks.unlikePost).not.toHaveBeenCalled();
+    expect(profilePost).toMatchObject({ liked: true, likeCount: 1 });
+
+    pendingLike.resolve({ likes: 1, liked: true });
+    await expect(homeMutation).resolves.toBe('succeeded');
+    expect(isEngagementMutationLeased(7, 'like', 42)).toBe(false);
+
+    mocks.unlikePost.mockResolvedValueOnce({ likes: 0, liked: false });
+    await expect(profileStore.toggleLike(42, 7)).resolves.toBe('succeeded');
+    expect(mocks.unlikePost).toHaveBeenCalledTimes(1);
+    expect(homePost).toMatchObject({ liked: false, likeCount: 0 });
+    expect(profilePost).toMatchObject({ liked: false, likeCount: 0 });
+  });
+
   it('rolls back a failed Like mutation and reports failed', async () => {
     const store = useHomeTimelineStore();
     const post = feedPostFixture(4, 7);
@@ -991,7 +1055,7 @@ describe('home timeline session store', () => {
     expect(store.following.items[0].likeCount).toBe(8);
   });
 
-  it('does not let a stale Like settle clear a newer request for the same Post', async () => {
+  it('blocks a newer Home Like until a stale in-flight request releases its lease', async () => {
     const first = deferred<{ likes: number; liked: boolean }>();
     const second = deferred<{ likes: number; liked: boolean }>();
     mocks.likePost.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
@@ -1007,15 +1071,21 @@ describe('home timeline session store', () => {
       status: 'ready',
     });
     const secondMutation = store.toggleLike(44);
-    expect(store.likePendingPostIds.has(44)).toBe(true);
+    await expect(secondMutation).resolves.toBe('ignored');
+    expect(store.likePendingPostIds.has(44)).toBe(false);
+    expect(post).toMatchObject({ likeCount: 6, liked: false });
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
 
     first.resolve({ likes: 90, liked: true });
     await expect(firstMutation).resolves.toBe('ignored');
+    expect(store.likePendingPostIds.has(44)).toBe(false);
+    expect(post).toMatchObject({ likeCount: 6, liked: false });
+
+    const nextMutation = store.toggleLike(44);
     expect(store.likePendingPostIds.has(44)).toBe(true);
     expect(post).toMatchObject({ likeCount: 7, liked: true });
-
     second.resolve({ likes: 7, liked: true });
-    await expect(secondMutation).resolves.toBe('succeeded');
+    await expect(nextMutation).resolves.toBe('succeeded');
     expect(store.likePendingPostIds.has(44)).toBe(false);
     expect(post).toMatchObject({ likeCount: 7, liked: true });
   });

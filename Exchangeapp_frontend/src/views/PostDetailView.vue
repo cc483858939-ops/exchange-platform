@@ -566,6 +566,10 @@ import { useFeedStore } from '../store/feed';
 import { useReplyDraftStore } from '../store/replyDraft';
 import { createEngagementMutationCoordinator } from '../store/engagementMutationCoordinator';
 import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from '../store/engagementMutationLease';
+import {
   createOptimisticBookmarkUpdate,
   createOptimisticLikeUpdate,
   createOptimisticRepostUpdate,
@@ -1420,44 +1424,53 @@ const toggleLike = async () => {
     return;
   }
 
-  const detailVersion = detailRequestVersion;
-  const previousLiked = liked.value;
-  const previousCount = likeCount.value;
-  const token = detailEngagementMutations.begin('like', id);
-  likeError.value = '';
-  const optimisticUpdate = createOptimisticLikeUpdate({
-    id,
-    liked: previousLiked,
-    likeCount: previousCount,
-  });
-  liked.value = optimisticUpdate.liked;
-  likeCount.value = optimisticUpdate.likes;
-  const isCurrent = () => (
-    detailEngagementMutations.isCurrent(token)
-    && detailVersion === detailRequestVersion
-    && currentDetailPostID.value === token.postId
-    && post.value?.id === token.postId
-  );
+  const viewerID = currentViewerID.value;
+  if (viewerID === null) return;
+  const lease = tryBeginEngagementMutationLease(viewerID, 'like', id);
+  if (!lease) return;
 
   try {
-    const response = await executeLikeToggle(id, previousLiked);
-    if (!isCurrent()) return;
-
-    liked.value = response.liked;
-    likeCount.value = clampCount(response.likes);
-    syncExternalPostLikeState({
-      postId: id,
-      likes: likeCount.value,
-      liked: response.liked,
-      status: 'ready',
+    const detailVersion = detailRequestVersion;
+    const previousLiked = liked.value;
+    const previousCount = likeCount.value;
+    const token = detailEngagementMutations.begin('like', id);
+    likeError.value = '';
+    const optimisticUpdate = createOptimisticLikeUpdate({
+      id,
+      liked: previousLiked,
+      likeCount: previousCount,
     });
-    detailEngagementMutations.settle(token);
-  } catch {
-    if (!isCurrent()) return;
-    liked.value = previousLiked;
-    likeCount.value = Math.max(0, previousCount);
-    likeError.value = 'Like failed. Please try again.';
-    detailEngagementMutations.settle(token);
+    liked.value = optimisticUpdate.liked;
+    likeCount.value = optimisticUpdate.likes;
+    const isCurrent = () => (
+      detailEngagementMutations.isCurrent(token)
+      && detailVersion === detailRequestVersion
+      && currentDetailPostID.value === token.postId
+      && post.value?.id === token.postId
+    );
+
+    try {
+      const response = await executeLikeToggle(id, previousLiked);
+      if (!isCurrent()) return;
+
+      liked.value = response.liked;
+      likeCount.value = clampCount(response.likes);
+      syncExternalPostLikeState({
+        postId: id,
+        likes: likeCount.value,
+        liked: response.liked,
+        status: 'ready',
+      });
+      detailEngagementMutations.settle(token);
+    } catch {
+      if (!isCurrent()) return;
+      liked.value = previousLiked;
+      likeCount.value = Math.max(0, previousCount);
+      likeError.value = 'Like failed. Please try again.';
+      detailEngagementMutations.settle(token);
+    }
+  } finally {
+    releaseEngagementMutationLease(lease);
   }
 };
 
@@ -1476,47 +1489,56 @@ const toggleRepost = async () => {
     return;
   }
 
-  const detailVersion = detailRequestVersion;
-  const previousReposted = reposted.value;
-  const previousCount = repostCount.value;
-  const token = detailEngagementMutations.begin('repost', id);
-  repostError.value = '';
-  repostStateUnavailable.value = false;
-  const optimisticUpdate = createOptimisticRepostUpdate({
-    id,
-    reposted: previousReposted,
-    repostCount: previousCount,
-  });
-  reposted.value = optimisticUpdate.reposted;
-  repostCount.value = optimisticUpdate.reposts;
-  const isCurrent = () => (
-    detailEngagementMutations.isCurrent(token)
-    && detailVersion === detailRequestVersion
-    && currentDetailPostID.value === token.postId
-    && post.value?.id === token.postId
-  );
+  const viewerID = currentViewerID.value;
+  if (viewerID === null) return;
+  const lease = tryBeginEngagementMutationLease(viewerID, 'repost', id);
+  if (!lease) return;
 
   try {
-    const response = await executeRepostToggle(id, previousReposted);
-    if (!isCurrent()) return;
-
-    reposted.value = response.reposted;
-    repostCount.value = clampCount(response.reposts);
-    syncExternalPostRepostState({
-      postId: id,
-      reposts: repostCount.value,
-      reposted: response.reposted,
-      status: 'ready',
-    });
-    detailEngagementMutations.settle(token);
-    markOwnProfileTimelineStale();
-  } catch {
-    if (!isCurrent()) return;
-    reposted.value = previousReposted;
-    repostCount.value = Math.max(0, previousCount);
-    repostError.value = 'Could not update repost. Please try again.';
+    const detailVersion = detailRequestVersion;
+    const previousReposted = reposted.value;
+    const previousCount = repostCount.value;
+    const token = detailEngagementMutations.begin('repost', id);
+    repostError.value = '';
     repostStateUnavailable.value = false;
-    detailEngagementMutations.settle(token);
+    const optimisticUpdate = createOptimisticRepostUpdate({
+      id,
+      reposted: previousReposted,
+      repostCount: previousCount,
+    });
+    reposted.value = optimisticUpdate.reposted;
+    repostCount.value = optimisticUpdate.reposts;
+    const isCurrent = () => (
+      detailEngagementMutations.isCurrent(token)
+      && detailVersion === detailRequestVersion
+      && currentDetailPostID.value === token.postId
+      && post.value?.id === token.postId
+    );
+
+    try {
+      const response = await executeRepostToggle(id, previousReposted);
+      if (!isCurrent()) return;
+
+      reposted.value = response.reposted;
+      repostCount.value = clampCount(response.reposts);
+      syncExternalPostRepostState({
+        postId: id,
+        reposts: repostCount.value,
+        reposted: response.reposted,
+        status: 'ready',
+      });
+      detailEngagementMutations.settle(token);
+      markOwnProfileTimelineStale();
+    } catch {
+      if (!isCurrent()) return;
+      reposted.value = previousReposted;
+      repostCount.value = Math.max(0, previousCount);
+      repostError.value = 'Could not update repost. Please try again.';
+      repostStateUnavailable.value = false;
+      detailEngagementMutations.settle(token);
+    }
+  } finally {
+    releaseEngagementMutationLease(lease);
   }
 };
 
@@ -1533,36 +1555,45 @@ const toggleBookmark = async () => {
     || bookmarkStateUnavailable.value
   ) return;
 
-  const detailVersion = detailRequestVersion;
-  beginBookmarkStateMutation(id);
-  const previousBookmarked = bookmarked.value;
-  const token = detailEngagementMutations.begin('bookmark', id);
-  bookmarkError.value = '';
-  const optimisticUpdate = createOptimisticBookmarkUpdate({ id, bookmarked: previousBookmarked });
-  bookmarked.value = optimisticUpdate.bookmarked;
-  const isCurrent = () => (
-    detailEngagementMutations.isCurrent(token)
-    && detailVersion === detailRequestVersion
-    && currentDetailPostID.value === token.postId
-    && post.value?.id === token.postId
-  );
+  const viewerID = currentViewerID.value;
+  if (viewerID === null) return;
+  const lease = tryBeginEngagementMutationLease(viewerID, 'bookmark', id);
+  if (!lease) return;
 
   try {
-    const response = await executeBookmarkToggle(id, previousBookmarked);
-    if (!isCurrent()) return;
-    bookmarked.value = response.bookmarked;
-    bookmarkStateUnavailable.value = false;
-    syncExternalPostBookmarkState({
-      postId: id,
-      bookmarked: response.bookmarked,
-      status: 'ready',
-    });
-    detailEngagementMutations.settle(token);
-  } catch {
-    if (!isCurrent()) return;
-    bookmarked.value = previousBookmarked;
-    bookmarkError.value = 'Could not update bookmark. Please try again.';
-    detailEngagementMutations.settle(token);
+    const detailVersion = detailRequestVersion;
+    beginBookmarkStateMutation(id);
+    const previousBookmarked = bookmarked.value;
+    const token = detailEngagementMutations.begin('bookmark', id);
+    bookmarkError.value = '';
+    const optimisticUpdate = createOptimisticBookmarkUpdate({ id, bookmarked: previousBookmarked });
+    bookmarked.value = optimisticUpdate.bookmarked;
+    const isCurrent = () => (
+      detailEngagementMutations.isCurrent(token)
+      && detailVersion === detailRequestVersion
+      && currentDetailPostID.value === token.postId
+      && post.value?.id === token.postId
+    );
+
+    try {
+      const response = await executeBookmarkToggle(id, previousBookmarked);
+      if (!isCurrent()) return;
+      bookmarked.value = response.bookmarked;
+      bookmarkStateUnavailable.value = false;
+      syncExternalPostBookmarkState({
+        postId: id,
+        bookmarked: response.bookmarked,
+        status: 'ready',
+      });
+      detailEngagementMutations.settle(token);
+    } catch {
+      if (!isCurrent()) return;
+      bookmarked.value = previousBookmarked;
+      bookmarkError.value = 'Could not update bookmark. Please try again.';
+      detailEngagementMutations.settle(token);
+    }
+  } finally {
+    releaseEngagementMutationLease(lease);
   }
 };
 
@@ -1621,36 +1652,45 @@ const toggleReplyBookmark = async (replyID: number) => {
   if (!state || state.status !== 'ready') return;
   const reply = replies.value.find(candidate => candidate.id === replyID);
   if (!reply) return;
-  const previousBookmarked = state.bookmarked;
-  beginBookmarkStateMutation(replyID);
-  replyBookmarkError.value = '';
-  const capturedDetailVersion = detailRequestVersion;
-  const token = replyBookmarkMutations.begin('bookmark', replyID);
-  const optimisticUpdate = createOptimisticBookmarkUpdate({
-    id: replyID,
-    bookmarked: previousBookmarked,
-  });
-  state.bookmarked = optimisticUpdate.bookmarked;
-  const isCurrent = () => (
-    capturedDetailVersion === detailRequestVersion
-    && replies.value.some(candidate => candidate.id === replyID)
-    && replyBookmarkMutations.isCurrent(token)
-  );
+  const viewerID = currentViewerID.value;
+  if (viewerID === null) return;
+  const lease = tryBeginEngagementMutationLease(viewerID, 'bookmark', replyID);
+  if (!lease) return;
+
   try {
-    const response = await executeBookmarkToggle(replyID, previousBookmarked);
-    if (!isCurrent()) return;
-    state.bookmarked = response.bookmarked;
-    replyBookmarkMutations.settle(token);
-    syncExternalPostBookmarkState({
-      postId: replyID,
-      bookmarked: response.bookmarked,
-      status: 'ready',
+    const previousBookmarked = state.bookmarked;
+    beginBookmarkStateMutation(replyID);
+    replyBookmarkError.value = '';
+    const capturedDetailVersion = detailRequestVersion;
+    const token = replyBookmarkMutations.begin('bookmark', replyID);
+    const optimisticUpdate = createOptimisticBookmarkUpdate({
+      id: replyID,
+      bookmarked: previousBookmarked,
     });
-  } catch {
-    if (!isCurrent()) return;
-    state.bookmarked = previousBookmarked;
-    replyBookmarkMutations.settle(token);
-    replyBookmarkError.value = 'Could not update bookmark. Please try again.';
+    state.bookmarked = optimisticUpdate.bookmarked;
+    const isCurrent = () => (
+      capturedDetailVersion === detailRequestVersion
+      && replies.value.some(candidate => candidate.id === replyID)
+      && replyBookmarkMutations.isCurrent(token)
+    );
+    try {
+      const response = await executeBookmarkToggle(replyID, previousBookmarked);
+      if (!isCurrent()) return;
+      state.bookmarked = response.bookmarked;
+      replyBookmarkMutations.settle(token);
+      syncExternalPostBookmarkState({
+        postId: replyID,
+        bookmarked: response.bookmarked,
+        status: 'ready',
+      });
+    } catch {
+      if (!isCurrent()) return;
+      state.bookmarked = previousBookmarked;
+      replyBookmarkMutations.settle(token);
+      replyBookmarkError.value = 'Could not update bookmark. Please try again.';
+    }
+  } finally {
+    releaseEngagementMutationLease(lease);
   }
 };
 

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   syncTopicLikeState: vi.fn(),
   syncTopicRepostState: vi.fn(),
   syncTopicBookmarkState: vi.fn(),
+  beginBookmarkStateMutation: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -57,9 +58,14 @@ vi.mock('./sessionSync', () => ({
   syncTopicLikeState: mocks.syncTopicLikeState,
   syncTopicRepostState: mocks.syncTopicRepostState,
   syncTopicBookmarkState: mocks.syncTopicBookmarkState,
+  beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
 }));
 
 import { useTopicSessionStore } from './topicSession';
+import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
 
 const topic = (slug: string) => ({ slug, label: slug.toUpperCase(), description: `${slug} description` });
 
@@ -267,6 +273,27 @@ describe('topicSession store', () => {
     expect(store.items[0].bookmarked).toBe(true);
     expect(mocks.syncTopicBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
     expect(store.likePendingPostIDs.size + store.repostPendingPostIDs.size + store.bookmarkPendingPostIDs.size).toBe(0);
+  });
+
+  it('leaves Topic state and mutation errors untouched when another surface owns the Like lease', async () => {
+    mocks.getTopicPosts.mockResolvedValueOnce({ topic: topic('japan'), items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({ items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [] });
+    const store = createStore(true);
+    await store.setTopic('japan');
+    await settle();
+    store.mutationErrors.set(1, 'existing error');
+    const lease = tryBeginEngagementMutationLease(7, 'like', 1)!;
+
+    try {
+      await expect(store.toggleLike(1)).resolves.toBe('ignored');
+      expect(store.items[0]).toMatchObject({ liked: false, likeCount: 3 });
+      expect(store.likePendingPostIDs.has(1)).toBe(false);
+      expect(store.mutationErrors.get(1)).toBe('existing error');
+      expect(mocks.likePost).not.toHaveBeenCalled();
+      expect(mocks.unlikePost).not.toHaveBeenCalled();
+    } finally {
+      releaseEngagementMutationLease(lease);
+    }
   });
 
   it('registers the Topic adapter and applies external post state locally', async () => {

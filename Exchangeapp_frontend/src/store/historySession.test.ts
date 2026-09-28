@@ -5,6 +5,10 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import type { Post } from '../types/Post';
 import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
+import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
 import { useHistorySessionStore } from './historySession';
 
 const mocks = vi.hoisted(() => ({
@@ -146,6 +150,23 @@ describe('historySession store', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('leaves History unchanged and skips Unlike while another surface owns the Like lease', async () => {
+    const store = createStore();
+    await loadReady(store, [1]);
+    const lease = tryBeginEngagementMutationLease(7, 'like', 1)!;
+
+    try {
+      await store.toggleUnlike(1);
+
+      expect(store.items.map(item => item.id)).toEqual([1]);
+      expect(store.items[0].liked).toBe(true);
+      expect(store.mutationErrors.has(1)).toBe(false);
+      expect(mocks.unlikePost).not.toHaveBeenCalled();
+    } finally {
+      releaseEngagementMutationLease(lease);
+    }
   });
 
   it('stores internal scrollTop and normalizes invalid values', () => {
@@ -532,7 +553,7 @@ describe('historySession store', () => {
     expect(store.pendingUnlikePostIDs.has(1)).toBe(false);
   });
 
-  it('ignores duplicate Unlike and keeps the newer request pending after stale A resolves', async () => {
+  it('blocks a newer Unlike until a stale in-flight request releases its lease', async () => {
     const store = createStore();
     await loadReady(store, [1]);
     const first = deferred<{ likes: number; liked: boolean }>();
@@ -551,16 +572,22 @@ describe('historySession store', () => {
       liked: true,
       status: 'ready',
     });
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.items[0]).toMatchObject({ likeCount: 12, liked: true });
+    await store.toggleUnlike(1);
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.pendingUnlikePostIDs.has(1)).toBe(false);
+    expect(mocks.unlikePost).toHaveBeenCalledTimes(1);
+
+    first.resolve({ likes: 0, liked: false });
+    await requestA;
+    expect(store.pendingUnlikePostIDs.has(1)).toBe(false);
+    expect(store.items.map(item => item.id)).toEqual([1]);
+
     const requestB = store.toggleUnlike(1);
     expect(store.items).toEqual([]);
     expect(store.pendingUnlikePostIDs.has(1)).toBe(true);
     expect(mocks.unlikePost).toHaveBeenCalledTimes(2);
-
-    first.resolve({ likes: 0, liked: false });
-    await requestA;
-    expect(store.pendingUnlikePostIDs.has(1)).toBe(true);
-    expect(store.items).toEqual([]);
-
     second.resolve({ likes: 11, liked: false });
     await requestB;
     expect(store.pendingUnlikePostIDs.has(1)).toBe(false);
@@ -623,7 +650,8 @@ describe('historySession store', () => {
   it('updates replies and author identity in both visible and removed snapshots', async () => {
     const store = createStore();
     await loadReady(store, [1]);
-    await store.toggleUnlike(1);
+    const request = store.toggleUnlike(1);
+    await request;
     expect(store.items).toEqual([]);
 
     expect(store.applyReplyCountUpdateLocal({ postId: 1, replyCount: 9 })).toBe(true);

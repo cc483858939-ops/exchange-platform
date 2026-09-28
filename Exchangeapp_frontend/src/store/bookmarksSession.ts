@@ -34,6 +34,10 @@ import {
   type EngagementMutationRevision,
 } from './engagementMutationCoordinator';
 import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
+import {
   createOptimisticBookmarkUpdate,
   createOptimisticLikeUpdate,
   createOptimisticRepostUpdate,
@@ -473,96 +477,138 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
 
   const toggleLike = async (postID: number) => {
     const post = findPost(postID);
-    if (!post || post.likeStatus !== 'ready' || likePendingPostIDs.has(postID)) return false;
-    const previousLiked = post.liked;
-    const previousLikes = post.likeCount;
     const capturedViewerID = viewerID.value;
-    const capturedViewerGeneration = viewerGeneration.value;
-    const token = engagementMutations.begin('like', postID);
-    applyFeedLikeStateUpdate(post, createOptimisticLikeUpdate(post));
-    const current = () => isCurrentViewer(capturedViewerID!, capturedViewerGeneration)
-      && engagementMutations.isCurrent(token);
+    if (
+      !post
+      || capturedViewerID === null
+      || !authStore.isAuthenticated
+      || post.likeStatus !== 'ready'
+      || likePendingPostIDs.has(postID)
+    ) return false;
+
+    const lease = tryBeginEngagementMutationLease(capturedViewerID, 'like', postID);
+    if (!lease) return false;
+
     try {
-      const result = await executeLikeToggle(postID, previousLiked);
-      if (!current()) return false;
-      applyFeedLikeStateUpdate(post, { postId: postID, likes: result.likes, liked: result.liked, status: 'ready' });
-      engagementMutations.settle(token);
-      syncExternalPostLikeState({ postId: postID, likes: result.likes, liked: result.liked, status: 'ready' });
-      return true;
-    } catch {
-      if (!current()) return false;
-      applyFeedLikeStateUpdate(post, { postId: postID, likes: previousLikes, liked: previousLiked, status: 'ready' });
-      engagementMutations.settle(token);
-      return false;
+      const previousLiked = post.liked;
+      const previousLikes = post.likeCount;
+      const capturedViewerGeneration = viewerGeneration.value;
+      const token = engagementMutations.begin('like', postID);
+      applyFeedLikeStateUpdate(post, createOptimisticLikeUpdate(post));
+      const current = () => isCurrentViewer(capturedViewerID, capturedViewerGeneration)
+        && engagementMutations.isCurrent(token);
+      try {
+        const result = await executeLikeToggle(postID, previousLiked);
+        if (!current()) return false;
+        applyFeedLikeStateUpdate(post, { postId: postID, likes: result.likes, liked: result.liked, status: 'ready' });
+        engagementMutations.settle(token);
+        syncExternalPostLikeState({ postId: postID, likes: result.likes, liked: result.liked, status: 'ready' });
+        return true;
+      } catch {
+        if (!current()) return false;
+        applyFeedLikeStateUpdate(post, { postId: postID, likes: previousLikes, liked: previousLiked, status: 'ready' });
+        engagementMutations.settle(token);
+        return false;
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
   const toggleRepost = async (postID: number) => {
     const post = findPost(postID);
-    if (!post || post.repostStatus !== 'ready' || repostPendingPostIDs.has(postID)) return false;
-    const previousReposted = post.reposted;
-    const previousReposts = post.repostCount;
     const capturedViewerID = viewerID.value;
-    const capturedViewerGeneration = viewerGeneration.value;
-    const token = engagementMutations.begin('repost', postID);
-    applyFeedRepostStateUpdate(post, createOptimisticRepostUpdate(post));
-    const current = () => isCurrentViewer(capturedViewerID!, capturedViewerGeneration)
-      && engagementMutations.isCurrent(token);
+    if (
+      !post
+      || capturedViewerID === null
+      || !authStore.isAuthenticated
+      || post.repostStatus !== 'ready'
+      || repostPendingPostIDs.has(postID)
+    ) return false;
+
+    const lease = tryBeginEngagementMutationLease(capturedViewerID, 'repost', postID);
+    if (!lease) return false;
+
     try {
-      const result = await executeRepostToggle(postID, previousReposted);
-      if (!current()) return false;
-      applyFeedRepostStateUpdate(post, { postId: postID, reposts: result.reposts, reposted: result.reposted, status: 'ready' });
-      engagementMutations.settle(token);
-      syncExternalPostRepostState({ postId: postID, reposts: result.reposts, reposted: result.reposted, status: 'ready' });
-      return true;
-    } catch {
-      if (!current()) return false;
-      applyFeedRepostStateUpdate(post, { postId: postID, reposts: previousReposts, reposted: previousReposted, status: 'ready' });
-      engagementMutations.settle(token);
-      return false;
+      const previousReposted = post.reposted;
+      const previousReposts = post.repostCount;
+      const capturedViewerGeneration = viewerGeneration.value;
+      const token = engagementMutations.begin('repost', postID);
+      applyFeedRepostStateUpdate(post, createOptimisticRepostUpdate(post));
+      const current = () => isCurrentViewer(capturedViewerID, capturedViewerGeneration)
+        && engagementMutations.isCurrent(token);
+      try {
+        const result = await executeRepostToggle(postID, previousReposted);
+        if (!current()) return false;
+        applyFeedRepostStateUpdate(post, { postId: postID, reposts: result.reposts, reposted: result.reposted, status: 'ready' });
+        engagementMutations.settle(token);
+        syncExternalPostRepostState({ postId: postID, reposts: result.reposts, reposted: result.reposted, status: 'ready' });
+        return true;
+      } catch {
+        if (!current()) return false;
+        applyFeedRepostStateUpdate(post, { postId: postID, reposts: previousReposts, reposted: previousReposted, status: 'ready' });
+        engagementMutations.settle(token);
+        return false;
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
   const toggleBookmark = async (postID: number) => {
     const post = findPost(postID);
-    if (!post || post.bookmarkStatus !== 'ready' || bookmarkPendingPostIDs.has(postID)) return false;
-    const previousBookmarked = post.bookmarked;
-    beginBookmarkStateMutation(postID);
     const capturedViewerID = viewerID.value;
-    const capturedViewerGeneration = viewerGeneration.value;
-    const token = engagementMutations.begin('bookmark', postID);
-    const optimisticUpdate = createOptimisticBookmarkUpdate(post);
-    const originalIndex = items.value.findIndex(candidate => candidate.id === postID);
-    if (previousBookmarked && originalIndex >= 0) {
-      removedBookmarkSnapshots.set(postID, { post: { ...post }, originalIndex });
-      items.value = items.value.filter(candidate => candidate.id !== postID);
-    } else {
-      applyFeedBookmarkStateUpdate(post, optimisticUpdate);
-    }
-    const current = () => isCurrentViewer(capturedViewerID!, capturedViewerGeneration)
-      && engagementMutations.isCurrent(token);
+    if (
+      !post
+      || capturedViewerID === null
+      || !authStore.isAuthenticated
+      || post.bookmarkStatus !== 'ready'
+      || bookmarkPendingPostIDs.has(postID)
+    ) return false;
+
+    const lease = tryBeginEngagementMutationLease(capturedViewerID, 'bookmark', postID);
+    if (!lease) return false;
+
     try {
-      const result = await executeBookmarkToggle(postID, previousBookmarked);
-      if (!current()) return false;
-      engagementMutations.settle(token);
-      removedBookmarkSnapshots.delete(postID);
-      syncExternalPostBookmarkState({ postId: postID, bookmarked: result.bookmarked, status: 'ready' });
-      return true;
-    } catch {
-      if (!current()) return false;
-      engagementMutations.settle(token);
-      const snapshot = removedBookmarkSnapshots.get(postID);
-      if (snapshot && !findPost(postID)) {
-        const next = [...items.value];
-        next.splice(Math.min(snapshot.originalIndex, next.length), 0, snapshot.post);
-        items.value = next;
-        loadedPostIDs.add(postID);
-      } else if (findPost(postID)) {
-        applyFeedBookmarkStateUpdate(findPost(postID)!, { postId: postID, bookmarked: previousBookmarked, status: 'ready' });
+      const previousBookmarked = post.bookmarked;
+      beginBookmarkStateMutation(postID);
+      const capturedViewerGeneration = viewerGeneration.value;
+      const token = engagementMutations.begin('bookmark', postID);
+      const optimisticUpdate = createOptimisticBookmarkUpdate(post);
+      const originalIndex = items.value.findIndex(candidate => candidate.id === postID);
+      if (previousBookmarked && originalIndex >= 0) {
+        removedBookmarkSnapshots.set(postID, { post: { ...post }, originalIndex });
+        items.value = items.value.filter(candidate => candidate.id !== postID);
+      } else {
+        applyFeedBookmarkStateUpdate(post, optimisticUpdate);
       }
-      removedBookmarkSnapshots.delete(postID);
-      mutationErrors.set(postID, 'Could not update bookmark.');
-      return false;
+      const current = () => isCurrentViewer(capturedViewerID, capturedViewerGeneration)
+        && engagementMutations.isCurrent(token);
+      try {
+        const result = await executeBookmarkToggle(postID, previousBookmarked);
+        if (!current()) return false;
+        engagementMutations.settle(token);
+        removedBookmarkSnapshots.delete(postID);
+        syncExternalPostBookmarkState({ postId: postID, bookmarked: result.bookmarked, status: 'ready' });
+        return true;
+      } catch {
+        if (!current()) return false;
+        engagementMutations.settle(token);
+        const snapshot = removedBookmarkSnapshots.get(postID);
+        if (snapshot && !findPost(postID)) {
+          const next = [...items.value];
+          next.splice(Math.min(snapshot.originalIndex, next.length), 0, snapshot.post);
+          items.value = next;
+          loadedPostIDs.add(postID);
+        } else if (findPost(postID)) {
+          applyFeedBookmarkStateUpdate(findPost(postID)!, { postId: postID, bookmarked: previousBookmarked, status: 'ready' });
+        }
+        removedBookmarkSnapshots.delete(postID);
+        mutationErrors.set(postID, 'Could not update bookmark.');
+        return false;
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 

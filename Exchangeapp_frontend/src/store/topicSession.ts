@@ -23,6 +23,7 @@ import {
   syncTopicBookmarkState,
   syncTopicLikeState,
   syncTopicRepostState,
+  beginBookmarkStateMutation,
 } from './sessionSync';
 import type { PostReplyCountUpdate } from './sessionSync';
 import {
@@ -30,6 +31,10 @@ import {
   type EngagementMutationResult,
   type EngagementMutationToken,
 } from './engagementMutationCoordinator';
+import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
 
 const pageSize = 20;
 
@@ -366,104 +371,147 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
 
   const toggleLike = async (postID: number): Promise<EngagementMutationResult> => {
     const post = findPost(postID);
-    if (!post || viewerID.value === null || post.likeStatus !== 'ready' || likePendingPostIDs.has(postID)) return 'ignored';
-    const previous = { liked: post.liked, count: post.likeCount };
-    const expectedLiked = !previous.liked;
-    const expectedCount = expectedLiked ? previous.count + 1 : Math.max(0, previous.count - 1);
-    const slug = activeSlug.value;
-    const request = requestVersion.value;
     const viewer = viewerID.value;
-    const viewerGenerationSnapshot = viewerGeneration.value;
-    const token = engagementMutations.begin('like', postID);
-    mutationErrors.delete(postID);
-    applyFeedLikeStateUpdate(post, { postId: postID, likes: expectedCount, liked: expectedLiked, status: 'ready' });
+    if (
+      !post
+      || viewer === null
+      || !authStore.isAuthenticated
+      || post.likeStatus !== 'ready'
+      || likePendingPostIDs.has(postID)
+    ) return 'ignored';
+
+    const lease = tryBeginEngagementMutationLease(viewer, 'like', postID);
+    if (!lease) return 'ignored';
+
     try {
-      const result = previous.liked ? await unlikePost(postID) : await likePost(postID);
-      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
-      const update: FeedLikeStateUpdate = {
-        postId: postID,
-        likes: normalizeCount(result.likes, expectedCount),
-        liked: typeof result.liked === 'boolean' ? result.liked : expectedLiked,
-        status: 'ready',
-      };
-      applyFeedLikeStateUpdate(post, update);
-      engagementMutations.settle(token);
-      syncTopicLikeState(update);
-      return 'succeeded';
-    } catch {
-      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
-      applyFeedLikeStateUpdate(post, { postId: postID, likes: previous.count, liked: previous.liked, status: 'ready' });
-      engagementMutations.settle(token);
-      mutationErrors.set(postID, 'Could not update like.');
-      return 'failed';
+      const previous = { liked: post.liked, count: post.likeCount };
+      const expectedLiked = !previous.liked;
+      const expectedCount = expectedLiked ? previous.count + 1 : Math.max(0, previous.count - 1);
+      const slug = activeSlug.value;
+      const request = requestVersion.value;
+      const viewerGenerationSnapshot = viewerGeneration.value;
+      const token = engagementMutations.begin('like', postID);
+      mutationErrors.delete(postID);
+      applyFeedLikeStateUpdate(post, { postId: postID, likes: expectedCount, liked: expectedLiked, status: 'ready' });
+      try {
+        const result = previous.liked ? await unlikePost(postID) : await likePost(postID);
+        if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
+        const update: FeedLikeStateUpdate = {
+          postId: postID,
+          likes: normalizeCount(result.likes, expectedCount),
+          liked: typeof result.liked === 'boolean' ? result.liked : expectedLiked,
+          status: 'ready',
+        };
+        applyFeedLikeStateUpdate(post, update);
+        engagementMutations.settle(token);
+        syncTopicLikeState(update);
+        return 'succeeded';
+      } catch {
+        if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
+        applyFeedLikeStateUpdate(post, { postId: postID, likes: previous.count, liked: previous.liked, status: 'ready' });
+        engagementMutations.settle(token);
+        mutationErrors.set(postID, 'Could not update like.');
+        return 'failed';
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
   const toggleRepost = async (postID: number): Promise<EngagementMutationResult> => {
     const post = findPost(postID);
-    if (!post || viewerID.value === null || post.repostStatus !== 'ready' || repostPendingPostIDs.has(postID)) return 'ignored';
-    const previous = { reposted: post.reposted, count: post.repostCount };
-    const expectedReposted = !previous.reposted;
-    const expectedCount = expectedReposted ? previous.count + 1 : Math.max(0, previous.count - 1);
-    const slug = activeSlug.value;
-    const request = requestVersion.value;
     const viewer = viewerID.value;
-    const viewerGenerationSnapshot = viewerGeneration.value;
-    const token = engagementMutations.begin('repost', postID);
-    mutationErrors.delete(postID);
-    applyFeedRepostStateUpdate(post, { postId: postID, reposts: expectedCount, reposted: expectedReposted, status: 'ready' });
+    if (
+      !post
+      || viewer === null
+      || !authStore.isAuthenticated
+      || post.repostStatus !== 'ready'
+      || repostPendingPostIDs.has(postID)
+    ) return 'ignored';
+
+    const lease = tryBeginEngagementMutationLease(viewer, 'repost', postID);
+    if (!lease) return 'ignored';
+
     try {
-      const result = previous.reposted ? await undoRepostPost(postID) : await repostPost(postID);
-      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
-      const update: FeedRepostStateUpdate = {
-        postId: postID,
-        reposts: normalizeCount(result.reposts, expectedCount),
-        reposted: typeof result.reposted === 'boolean' ? result.reposted : expectedReposted,
-        status: 'ready',
-      };
-      applyFeedRepostStateUpdate(post, update);
-      engagementMutations.settle(token);
-      syncTopicRepostState(update);
-      return 'succeeded';
-    } catch {
-      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
-      applyFeedRepostStateUpdate(post, { postId: postID, reposts: previous.count, reposted: previous.reposted, status: 'ready' });
-      engagementMutations.settle(token);
-      mutationErrors.set(postID, 'Could not update repost.');
-      return 'failed';
+      const previous = { reposted: post.reposted, count: post.repostCount };
+      const expectedReposted = !previous.reposted;
+      const expectedCount = expectedReposted ? previous.count + 1 : Math.max(0, previous.count - 1);
+      const slug = activeSlug.value;
+      const request = requestVersion.value;
+      const viewerGenerationSnapshot = viewerGeneration.value;
+      const token = engagementMutations.begin('repost', postID);
+      mutationErrors.delete(postID);
+      applyFeedRepostStateUpdate(post, { postId: postID, reposts: expectedCount, reposted: expectedReposted, status: 'ready' });
+      try {
+        const result = previous.reposted ? await undoRepostPost(postID) : await repostPost(postID);
+        if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
+        const update: FeedRepostStateUpdate = {
+          postId: postID,
+          reposts: normalizeCount(result.reposts, expectedCount),
+          reposted: typeof result.reposted === 'boolean' ? result.reposted : expectedReposted,
+          status: 'ready',
+        };
+        applyFeedRepostStateUpdate(post, update);
+        engagementMutations.settle(token);
+        syncTopicRepostState(update);
+        return 'succeeded';
+      } catch {
+        if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
+        applyFeedRepostStateUpdate(post, { postId: postID, reposts: previous.count, reposted: previous.reposted, status: 'ready' });
+        engagementMutations.settle(token);
+        mutationErrors.set(postID, 'Could not update repost.');
+        return 'failed';
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
   const toggleBookmark = async (postID: number): Promise<EngagementMutationResult> => {
     const post = findPost(postID);
-    if (!post || viewerID.value === null || post.bookmarkStatus !== 'ready' || bookmarkPendingPostIDs.has(postID)) return 'ignored';
-    const previous = post.bookmarked;
-    const expectedBookmarked = !previous;
-    const slug = activeSlug.value;
-    const request = requestVersion.value;
     const viewer = viewerID.value;
-    const viewerGenerationSnapshot = viewerGeneration.value;
-    const token = engagementMutations.begin('bookmark', postID);
-    mutationErrors.delete(postID);
-    applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: expectedBookmarked, status: 'ready' });
+    if (
+      !post
+      || viewer === null
+      || !authStore.isAuthenticated
+      || post.bookmarkStatus !== 'ready'
+      || bookmarkPendingPostIDs.has(postID)
+    ) return 'ignored';
+
+    const lease = tryBeginEngagementMutationLease(viewer, 'bookmark', postID);
+    if (!lease) return 'ignored';
+
     try {
-      const result = previous ? await unbookmarkPost(postID) : await bookmarkPost(postID);
-      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
-      const update: FeedBookmarkStateUpdate = {
-        postId: postID,
-        bookmarked: typeof result.bookmarked === 'boolean' ? result.bookmarked : expectedBookmarked,
-        status: 'ready',
-      };
-      applyFeedBookmarkStateUpdate(post, update);
-      engagementMutations.settle(token);
-      syncTopicBookmarkState(update);
-      return 'succeeded';
-    } catch {
-      if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
-      applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: previous, status: 'ready' });
-      engagementMutations.settle(token);
-      mutationErrors.set(postID, 'Could not update bookmark.');
-      return 'failed';
+      const previous = post.bookmarked;
+      const expectedBookmarked = !previous;
+      const slug = activeSlug.value;
+      const request = requestVersion.value;
+      const viewerGenerationSnapshot = viewerGeneration.value;
+      beginBookmarkStateMutation(postID);
+      const token = engagementMutations.begin('bookmark', postID);
+      mutationErrors.delete(postID);
+      applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: expectedBookmarked, status: 'ready' });
+      try {
+        const result = previous ? await unbookmarkPost(postID) : await bookmarkPost(postID);
+        if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
+        const update: FeedBookmarkStateUpdate = {
+          postId: postID,
+          bookmarked: typeof result.bookmarked === 'boolean' ? result.bookmarked : expectedBookmarked,
+          status: 'ready',
+        };
+        applyFeedBookmarkStateUpdate(post, update);
+        engagementMutations.settle(token);
+        syncTopicBookmarkState(update);
+        return 'succeeded';
+      } catch {
+        if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';
+        applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: previous, status: 'ready' });
+        engagementMutations.settle(token);
+        mutationErrors.set(postID, 'Could not update bookmark.');
+        return 'failed';
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 

@@ -7,6 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Post } from '../types/Post';
 import type { PostEngagementStatesResponse } from '../services/engagementService';
 import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
+import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as { isAuthenticated: boolean; currentIdentity: { id: number } | null } | null,
@@ -113,6 +117,30 @@ describe('bookmarksSession store', () => {
     mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
     mocks.bookmarkPost.mockResolvedValue({ post_id: 1, bookmarked: true });
     mocks.unbookmarkPost.mockResolvedValue({ post_id: 1, bookmarked: false });
+  });
+
+  it('leaves Bookmarks state and errors untouched while another surface owns the Like lease', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, likes: 3, liked: false }],
+      unavailable_post_ids: [],
+    });
+    const store = createStore();
+    await store.loadInitial();
+    await settle();
+    store.mutationErrors.set(1, 'existing error');
+    const lease = tryBeginEngagementMutationLease(7, 'like', 1)!;
+
+    try {
+      await expect(store.toggleLike(1)).resolves.toBe(false);
+      expect(store.items[0]).toMatchObject({ liked: false, likeCount: 3 });
+      expect(store.likePendingPostIDs.has(1)).toBe(false);
+      expect(store.mutationErrors.get(1)).toBe('existing error');
+      expect(mocks.likePost).not.toHaveBeenCalled();
+      expect(mocks.unlikePost).not.toHaveBeenCalled();
+    } finally {
+      releaseEngagementMutationLease(lease);
+    }
   });
 
   it('loads canonical bookmarks with positive bookmark state and paginates independently', async () => {

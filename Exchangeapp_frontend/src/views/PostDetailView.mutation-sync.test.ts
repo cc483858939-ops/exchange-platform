@@ -7,6 +7,10 @@ import { reactive } from 'vue';
 import PostDetailView from './PostDetailView.vue';
 import type { Post } from '../types/Post';
 import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
+import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from '../store/engagementMutationLease';
 
 const mocks = vi.hoisted(() => ({
   getPostById: vi.fn(),
@@ -275,6 +279,42 @@ describe('PostDetailView mutation synchronization', () => {
 
     expect(mocks.externalLike).not.toHaveBeenCalled();
     failed.unmount();
+  });
+
+  it('does not mutate the main Post or call Like service while another surface owns the lease', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const likeLease = tryBeginEngagementMutationLease(7, 'like', 42)!;
+
+    try {
+      await mounted.get('.test-like').trigger('click');
+      expect(mounted.get('.test-like').text()).toBe('3');
+      expect(mocks.likePost).not.toHaveBeenCalled();
+      expect(mocks.unlikePost).not.toHaveBeenCalled();
+      expect((mounted.vm as any).$.setupState.likeSubmitting).toBe(false);
+    } finally {
+      releaseEngagementMutationLease(likeLease);
+      mounted.unmount();
+    }
+  });
+
+  it('does not mutate a reply Bookmark or call its service while another surface owns the lease', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const replyBookmark = mounted.get('[data-id="9"]');
+    const bookmarkLease = tryBeginEngagementMutationLease(7, 'bookmark', 9)!;
+
+    try {
+      await replyBookmark.trigger('click');
+      expect(replyBookmark.attributes('data-bookmarked')).toBe('false');
+      expect((mounted.vm as any).$.setupState.replyBookmarkPendingIDs.has(9)).toBe(false);
+      expect(mocks.beginBookmarkStateMutation).not.toHaveBeenCalledWith(9);
+      expect(mocks.bookmarkPost).not.toHaveBeenCalled();
+      expect(mocks.unbookmarkPost).not.toHaveBeenCalled();
+    } finally {
+      releaseEngagementMutationLease(bookmarkLease);
+      mounted.unmount();
+    }
   });
 
   it('begins the shared fence before a main Post bookmark request settles', async () => {

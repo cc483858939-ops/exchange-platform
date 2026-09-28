@@ -49,6 +49,10 @@ import {
   type EngagementMutationRevision,
 } from './engagementMutationCoordinator';
 import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
+import {
   createOptimisticBookmarkUpdate,
   createOptimisticLikeUpdate,
   createOptimisticRepostUpdate,
@@ -953,138 +957,170 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const toggleLike = async (postId: number): Promise<HomeEngagementMutationResult> => {
     const post = findPost(postId);
-    if (!post || post.likeStatus !== 'ready' || likePendingPostIds.has(postId)) {
+    const capturedViewerID = viewerID.value;
+    if (
+      !post
+      || post.likeStatus !== 'ready'
+      || likePendingPostIds.has(postId)
+      || !isAuthenticatedForViewer(capturedViewerID)
+    ) {
       return 'ignored';
     }
 
-    const previousLiked = post.liked;
-    const previousLikes = post.likeCount;
-    const capturedAuthGeneration = authGeneration;
-    const capturedViewerID = viewerID.value;
-    const token = engagementMutations.begin('like', postId);
-    applyLikeStateUpdate(createOptimisticLikeUpdate(post), token.version);
-
-    const isCurrent = () =>
-      isAuthenticatedForViewer(capturedViewerID)
-      && authGeneration === capturedAuthGeneration
-      && engagementMutations.isCurrent(token);
+    const lease = tryBeginEngagementMutationLease(capturedViewerID!, 'like', postId);
+    if (!lease) return 'ignored';
 
     try {
-      const result = await executeLikeToggle(postId, previousLiked);
-      if (!isCurrent()) return 'ignored';
-      applyLikeStateUpdate({
-        postId,
-        likes: result.likes,
-        liked: result.liked,
-        status: 'ready',
-      }, token.version);
-      engagementMutations.settle(token);
-      return 'succeeded';
-    } catch (error) {
-      if (!isCurrent()) return 'ignored';
-      applyLikeStateUpdate({
-        postId,
-        likes: previousLikes,
-        liked: previousLiked,
-        status: 'ready',
-      }, token.version);
-      if (getErrorStatus(error) === 503) {
+      const previousLiked = post.liked;
+      const previousLikes = post.likeCount;
+      const capturedAuthGeneration = authGeneration;
+      const token = engagementMutations.begin('like', postId);
+      applyLikeStateUpdate(createOptimisticLikeUpdate(post), token.version);
+
+      const isCurrent = () =>
+        isAuthenticatedForViewer(capturedViewerID)
+        && authGeneration === capturedAuthGeneration
+        && engagementMutations.isCurrent(token);
+
+      try {
+        const result = await executeLikeToggle(postId, previousLiked);
+        if (!isCurrent()) return 'ignored';
+        applyLikeStateUpdate({
+          postId,
+          likes: result.likes,
+          liked: result.liked,
+          status: 'ready',
+        }, token.version);
+        engagementMutations.settle(token);
+        return 'succeeded';
+      } catch (error) {
+        if (!isCurrent()) return 'ignored';
         applyLikeStateUpdate({
           postId,
           likes: previousLikes,
           liked: previousLiked,
-          status: 'unavailable',
+          status: 'ready',
         }, token.version);
+        if (getErrorStatus(error) === 503) {
+          applyLikeStateUpdate({
+            postId,
+            likes: previousLikes,
+            liked: previousLiked,
+            status: 'unavailable',
+          }, token.version);
+        }
+        engagementMutations.settle(token);
+        return 'failed';
       }
-      engagementMutations.settle(token);
-      return 'failed';
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
   const toggleRepost = async (postId: number): Promise<HomeEngagementMutationResult> => {
     const post = findPost(postId);
-    if (!post || post.repostStatus !== 'ready' || repostPendingPostIds.has(postId)) {
+    const capturedViewerID = viewerID.value;
+    if (
+      !post
+      || post.repostStatus !== 'ready'
+      || repostPendingPostIds.has(postId)
+      || !isAuthenticatedForViewer(capturedViewerID)
+    ) {
       return 'ignored';
     }
 
-    const previousReposted = post.reposted;
-    const previousReposts = post.repostCount;
-    const capturedAuthGeneration = authGeneration;
-    const capturedViewerID = viewerID.value;
-    const token = engagementMutations.begin('repost', postId);
-    applyRepostStateUpdate(createOptimisticRepostUpdate(post), token.version);
-
-    const isCurrent = () =>
-      isAuthenticatedForViewer(capturedViewerID)
-      && authGeneration === capturedAuthGeneration
-      && engagementMutations.isCurrent(token);
+    const lease = tryBeginEngagementMutationLease(capturedViewerID!, 'repost', postId);
+    if (!lease) return 'ignored';
 
     try {
-      const result = await executeRepostToggle(postId, previousReposted);
-      if (!isCurrent()) return 'ignored';
-      applyRepostStateUpdate({
-        postId,
-        reposts: result.reposts,
-        reposted: result.reposted,
-        status: 'ready',
-      }, token.version);
-      engagementMutations.settle(token);
-      markOwnProfileTimelineStale();
-      return 'succeeded';
-    } catch {
-      if (!isCurrent()) return 'ignored';
-      applyRepostStateUpdate({
-        postId,
-        reposts: previousReposts,
-        reposted: previousReposted,
-        status: 'ready',
-      }, token.version);
-      engagementMutations.settle(token);
-      return 'failed';
+      const previousReposted = post.reposted;
+      const previousReposts = post.repostCount;
+      const capturedAuthGeneration = authGeneration;
+      const token = engagementMutations.begin('repost', postId);
+      applyRepostStateUpdate(createOptimisticRepostUpdate(post), token.version);
+
+      const isCurrent = () =>
+        isAuthenticatedForViewer(capturedViewerID)
+        && authGeneration === capturedAuthGeneration
+        && engagementMutations.isCurrent(token);
+
+      try {
+        const result = await executeRepostToggle(postId, previousReposted);
+        if (!isCurrent()) return 'ignored';
+        applyRepostStateUpdate({
+          postId,
+          reposts: result.reposts,
+          reposted: result.reposted,
+          status: 'ready',
+        }, token.version);
+        engagementMutations.settle(token);
+        markOwnProfileTimelineStale();
+        return 'succeeded';
+      } catch {
+        if (!isCurrent()) return 'ignored';
+        applyRepostStateUpdate({
+          postId,
+          reposts: previousReposts,
+          reposted: previousReposted,
+          status: 'ready',
+        }, token.version);
+        engagementMutations.settle(token);
+        return 'failed';
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
   const toggleBookmark = async (postId: number): Promise<HomeEngagementMutationResult> => {
     const post = findPost(postId);
+    const capturedViewerID = viewerID.value;
     if (
       !post
       || post.bookmarkStatus !== 'ready'
       || bookmarkPendingPostIds.has(postId)
+      || !isAuthenticatedForViewer(capturedViewerID)
     ) {
       return 'ignored';
     }
 
-    const previousBookmarked = post.bookmarked;
-    beginBookmarkStateMutation(postId);
-    const capturedAuthGeneration = authGeneration;
-    const capturedViewerID = viewerID.value;
-    const token = engagementMutations.begin('bookmark', postId);
-    applyBookmarkStateUpdateLocal(createOptimisticBookmarkUpdate(post), token.version);
-
-    const isCurrent = () =>
-      isAuthenticatedForViewer(capturedViewerID)
-      && authGeneration === capturedAuthGeneration
-      && engagementMutations.isCurrent(token);
+    const lease = tryBeginEngagementMutationLease(capturedViewerID!, 'bookmark', postId);
+    if (!lease) return 'ignored';
 
     try {
-      const result = await executeBookmarkToggle(postId, previousBookmarked);
-      if (!isCurrent()) return 'ignored';
-      applyBookmarkStateUpdate({
-        postId,
-        bookmarked: result.bookmarked,
-        status: 'ready',
-      }, token.version);
-      engagementMutations.settle(token);
-      return 'succeeded';
-    } catch {
-      if (!isCurrent()) return 'ignored';
-      applyBookmarkStateUpdateLocal({
-        postId,
-        bookmarked: previousBookmarked,
-        status: 'ready',
-      }, token.version);
-      engagementMutations.settle(token);
-      return 'failed';
+      const previousBookmarked = post.bookmarked;
+      beginBookmarkStateMutation(postId);
+      const capturedAuthGeneration = authGeneration;
+      const token = engagementMutations.begin('bookmark', postId);
+      applyBookmarkStateUpdateLocal(createOptimisticBookmarkUpdate(post), token.version);
+
+      const isCurrent = () =>
+        isAuthenticatedForViewer(capturedViewerID)
+        && authGeneration === capturedAuthGeneration
+        && engagementMutations.isCurrent(token);
+
+      try {
+        const result = await executeBookmarkToggle(postId, previousBookmarked);
+        if (!isCurrent()) return 'ignored';
+        applyBookmarkStateUpdate({
+          postId,
+          bookmarked: result.bookmarked,
+          status: 'ready',
+        }, token.version);
+        engagementMutations.settle(token);
+        return 'succeeded';
+      } catch {
+        if (!isCurrent()) return 'ignored';
+        applyBookmarkStateUpdateLocal({
+          postId,
+          bookmarked: previousBookmarked,
+          status: 'ready',
+        }, token.version);
+        engagementMutations.settle(token);
+        return 'failed';
+      }
+    } finally {
+      releaseEngagementMutationLease(lease);
     }
   };
 
