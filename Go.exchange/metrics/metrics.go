@@ -116,7 +116,7 @@ func init() {
 	for _, table := range []string{"result", "request"} {
 		recommendationTraceCleanupRows.WithLabelValues(table)
 	}
-	for _, outcome := range []string{"caught_up", "budget_reached", "error"} {
+	for _, outcome := range []string{"caught_up", "budget_reached", "error", "lock_skipped"} {
 		recommendationTraceCleanupRuns.WithLabelValues(outcome)
 	}
 	recommendationTraceCleanupBacklogLikely.Set(0)
@@ -284,7 +284,7 @@ func AddRecommendationTraceCleanupRows(table string, count int64) {
 }
 func RecordRecommendationTraceCleanupRun(outcome string, duration time.Duration) {
 	switch outcome {
-	case "caught_up", "budget_reached", "error":
+	case "caught_up", "budget_reached", "error", "lock_skipped":
 		recommendationTraceCleanupRuns.WithLabelValues(outcome).Inc()
 	default:
 		return

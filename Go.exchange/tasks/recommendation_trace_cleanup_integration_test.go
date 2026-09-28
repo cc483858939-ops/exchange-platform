@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -238,6 +239,218 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	}
 	if requestCount != 0 {
 		t.Fatalf("request C count=%d, want 0", requestCount)
+	}
+}
+
+func TestRecommendationTraceCleanupAdvisoryLockIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL advisory-lock integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(4)
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.Post{},
+		&models.RecommendationRequest{},
+		&models.RecommendationResultTrace{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS fk_recommendation_result_traces_request").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("ALTER TABLE recommendation_result_traces ADD CONSTRAINT fk_recommendation_result_traces_request FOREIGN KEY (request_id) REFERENCES recommendation_requests(request_id) ON UPDATE CASCADE ON DELETE CASCADE").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	user := models.User{Username: "recommendation-trace-cleanup-lock-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	post := models.Post{AuthorID: user.ID, Content: "trace cleanup lock fixture", Visibility: "public"}
+	if err := db.Create(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	request := models.RecommendationRequest{
+		RequestID:        uuid.NewString(),
+		UserID:           user.ID,
+		Scene:            "for_you",
+		StrategyID:       "trace-cleanup-lock",
+		RankerVersion:    "test",
+		RankerConfigHash: "test",
+		RequestedLimit:   1,
+		CreatedAt:        now.AddDate(0, 0, -120),
+	}
+	if err := db.Create(&request).Error; err != nil {
+		t.Fatal(err)
+	}
+	trace := models.RecommendationResultTrace{
+		RequestID: request.RequestID,
+		Position:  1,
+		PostID:    post.ID,
+		AuthorID:  user.ID,
+		CreatedAt: now.AddDate(0, 0, -120),
+		ExpiresAt: now.AddDate(0, 0, -120),
+	}
+	if err := db.Create(&trace).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupDB := db.WithContext(context.Background())
+		cleanupDB.Unscoped().Where("request_id = ?", request.RequestID).Delete(&models.RecommendationResultTrace{})
+		cleanupDB.Unscoped().Where("request_id = ?", request.RequestID).Delete(&models.RecommendationRequest{})
+		cleanupDB.Unscoped().Where("id = ?", post.ID).Delete(&models.Post{})
+		cleanupDB.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+	})
+
+	cfg := testRecommendationTraceCleanupConfig()
+	cfg.ResultRetentionDays = 30
+	cfg.RequestRetentionDays = 90
+	cleanupOnConnection := func(ctx context.Context, connDB *gorm.DB) (recommendationTraceCleanupRunResult, error) {
+		return runRecommendationTraceCleanup(
+			ctx,
+			cfg,
+			time.Now,
+			func(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+				return deleteExpiredRecommendationResultTraceBatch(ctx, connDB, cutoff, limit)
+			},
+			func(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+				return deleteOldRecommendationRequestBatch(ctx, connDB, cutoff, limit)
+			},
+		)
+	}
+	withPinnedPID := func(pid *int) recommendationTraceCleanupPinnedConnection {
+		return func(ctx context.Context, callback func(*gorm.DB) error) error {
+			return db.WithContext(ctx).Connection(func(connDB *gorm.DB) error {
+				if err := connDB.Raw("SELECT pg_backend_pid()").Scan(pid).Error; err != nil {
+					return err
+				}
+				return callback(connDB)
+			})
+		}
+	}
+	withLock := func(ctx context.Context, pin recommendationTraceCleanupPinnedConnection, run func(*gorm.DB) (recommendationTraceCleanupRunResult, error)) (recommendationTraceCleanupRunResult, error) {
+		return withRecommendationTraceCleanupLockUsing(
+			ctx,
+			pin,
+			run,
+			tryRecommendationTraceCleanupAdvisoryLock,
+			unlockRecommendationTraceCleanupAdvisoryLock,
+		)
+	}
+
+	type asyncRun struct {
+		result recommendationTraceCleanupRunResult
+		err    error
+	}
+	aCtx, cancelA := context.WithTimeout(context.Background(), 20*time.Second)
+	releaseA := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseA) }) }
+	aEntered := make(chan struct{})
+	aDone := make(chan asyncRun, 1)
+	aPID := 0
+	aFinished := false
+	go func() {
+		result, runErr := withLock(aCtx, withPinnedPID(&aPID), func(connDB *gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			close(aEntered)
+			select {
+			case <-releaseA:
+			case <-aCtx.Done():
+				return recommendationTraceCleanupRunResult{}, aCtx.Err()
+			}
+			return cleanupOnConnection(aCtx, connDB)
+		})
+		aDone <- asyncRun{result: result, err: runErr}
+	}()
+	defer func() {
+		release()
+		cancelA()
+		if !aFinished {
+			select {
+			case <-aDone:
+			case <-time.After(5 * time.Second):
+				t.Error("timed out waiting for first cleanup runner to stop")
+			}
+		}
+	}()
+	select {
+	case <-aEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first cleanup runner did not acquire the advisory lock")
+	}
+
+	bPID := 0
+	bRunnerCalls := 0
+	bRun := func(connDB *gorm.DB) (recommendationTraceCleanupRunResult, error) {
+		bRunnerCalls++
+		return cleanupOnConnection(context.Background(), connDB)
+	}
+	bResult, err := withLock(context.Background(), withPinnedPID(&bPID), bRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bResult.LockSkipped || bResult.CaughtUp || bResult.Cycles != 0 || bResult.ResultRows != 0 || bResult.RequestRows != 0 {
+		t.Fatalf("contending runner result=%+v", bResult)
+	}
+	if bRunnerCalls != 0 {
+		t.Fatalf("contending runner executed cleanup %d times", bRunnerCalls)
+	}
+	if aPID == 0 || bPID == 0 || aPID == bPID {
+		t.Fatalf("expected two distinct pinned PostgreSQL connections, first pid=%d second pid=%d", aPID, bPID)
+	}
+	var traceCount, requestCount int64
+	if err := db.Model(&models.RecommendationResultTrace{}).Where("request_id = ?", request.RequestID).Count(&traceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.RecommendationRequest{}).Where("request_id = ?", request.RequestID).Count(&requestCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if traceCount != 1 || requestCount != 1 {
+		t.Fatalf("losing runner mutated eligible rows: trace count=%d request count=%d", traceCount, requestCount)
+	}
+
+	release()
+	select {
+	case aRun := <-aDone:
+		aFinished = true
+		if aRun.err != nil {
+			t.Fatal(aRun.err)
+		}
+		if !aRun.result.CaughtUp || aRun.result.ResultRows != 1 || aRun.result.RequestRows != 1 {
+			t.Fatalf("first runner result=%+v", aRun.result)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("first cleanup runner did not finish after release")
+	}
+
+	bResult, err = withLock(context.Background(), withPinnedPID(&bPID), bRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bResult.LockSkipped || !bResult.CaughtUp || bRunnerCalls != 1 {
+		t.Fatalf("second runner result=%+v, runner calls=%d", bResult, bRunnerCalls)
+	}
+	if err := db.Model(&models.RecommendationResultTrace{}).Where("request_id = ?", request.RequestID).Count(&traceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.RecommendationRequest{}).Where("request_id = ?", request.RequestID).Count(&requestCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if traceCount != 0 || requestCount != 0 {
+		t.Fatalf("first runner left eligible rows: trace count=%d request count=%d", traceCount, requestCount)
 	}
 }
 

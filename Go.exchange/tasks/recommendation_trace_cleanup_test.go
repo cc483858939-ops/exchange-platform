@@ -3,11 +3,16 @@ package tasks
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/metrics"
+	"gorm.io/gorm"
 )
 
 func TestRecommendationTraceCleanupConfig(t *testing.T) {
@@ -318,6 +323,7 @@ func TestRecommendationTraceCleanupNextDelay(t *testing.T) {
 	}{
 		{name: "caught up uses normal cadence", result: recommendationTraceCleanupRunResult{CaughtUp: true}, want: 10 * time.Minute},
 		{name: "backlog uses catch-up cadence", result: recommendationTraceCleanupRunResult{BudgetReached: true}, want: time.Minute},
+		{name: "lock skip uses normal cadence", result: recommendationTraceCleanupRunResult{LockSkipped: true}, want: 10 * time.Minute},
 		{name: "errors use normal cadence", result: recommendationTraceCleanupRunResult{BudgetReached: true}, err: errors.New("database unavailable"), want: 10 * time.Minute},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -326,6 +332,262 @@ func TestRecommendationTraceCleanupNextDelay(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecommendationTraceCleanupLockSkippedDoesNotRunCleanup(t *testing.T) {
+	pinnedDB := &gorm.DB{}
+	runCalls, unlockCalls := 0, 0
+	result, err := withRecommendationTraceCleanupLockUsing(
+		context.Background(),
+		func(_ context.Context, callback func(*gorm.DB) error) error { return callback(pinnedDB) },
+		func(*gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			runCalls++
+			return recommendationTraceCleanupRunResult{}, nil
+		},
+		func(_ context.Context, db *gorm.DB) (bool, error) {
+			if db != pinnedDB {
+				t.Fatal("lock acquisition did not use the pinned connection")
+			}
+			return false, nil
+		},
+		func(context.Context, *gorm.DB) (bool, error) {
+			unlockCalls++
+			return true, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.LockSkipped || result.CaughtUp || result.BudgetReached || result.Cycles != 0 || result.ResultRows != 0 || result.RequestRows != 0 {
+		t.Fatalf("lock-skipped result=%+v", result)
+	}
+	if runCalls != 0 || unlockCalls != 0 {
+		t.Fatalf("run calls=%d unlock calls=%d, want both zero", runCalls, unlockCalls)
+	}
+}
+
+func TestRecommendationTraceCleanupLockAcquiredRunsAndUnlocksOnPinnedConnection(t *testing.T) {
+	pinnedDB := &gorm.DB{}
+	var operations []string
+	wantResult := recommendationTraceCleanupRunResult{ResultRows: 3, RequestRows: 2, Cycles: 1, CaughtUp: true}
+	result, err := withRecommendationTraceCleanupLockUsing(
+		context.Background(),
+		func(_ context.Context, callback func(*gorm.DB) error) error { return callback(pinnedDB) },
+		func(db *gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			if db != pinnedDB {
+				t.Fatal("cleanup runner did not use the pinned connection")
+			}
+			operations = append(operations, "run")
+			return wantResult, nil
+		},
+		func(_ context.Context, db *gorm.DB) (bool, error) {
+			if db != pinnedDB {
+				t.Fatal("lock acquisition did not use the pinned connection")
+			}
+			operations = append(operations, "acquire")
+			return true, nil
+		},
+		func(_ context.Context, db *gorm.DB) (bool, error) {
+			if db != pinnedDB {
+				t.Fatal("unlock did not use the pinned connection")
+			}
+			operations = append(operations, "unlock")
+			return true, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != wantResult {
+		t.Fatalf("result=%+v, want %+v", result, wantResult)
+	}
+	if !reflect.DeepEqual(operations, []string{"acquire", "run", "unlock"}) {
+		t.Fatalf("operations=%v", operations)
+	}
+}
+
+func TestRecommendationTraceCleanupUnlocksAfterRunnerError(t *testing.T) {
+	pinnedDB := &gorm.DB{}
+	runErr := errors.New("cleanup delete failed")
+	unlockCalls := 0
+	_, err := withRecommendationTraceCleanupLockUsing(
+		context.Background(),
+		func(_ context.Context, callback func(*gorm.DB) error) error { return callback(pinnedDB) },
+		func(*gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			return recommendationTraceCleanupRunResult{}, runErr
+		},
+		func(context.Context, *gorm.DB) (bool, error) { return true, nil },
+		func(_ context.Context, db *gorm.DB) (bool, error) {
+			if db != pinnedDB {
+				t.Fatal("unlock did not use the pinned connection")
+			}
+			unlockCalls++
+			return true, nil
+		},
+	)
+	if !errors.Is(err, runErr) {
+		t.Fatalf("error=%v, want cleanup error", err)
+	}
+	if unlockCalls != 1 {
+		t.Fatalf("unlock calls=%d, want 1", unlockCalls)
+	}
+}
+
+func TestRecommendationTraceCleanupJoinsRunnerAndUnlockErrors(t *testing.T) {
+	pinnedDB := &gorm.DB{}
+	runErr := errors.New("cleanup delete failed")
+	unlockErr := errors.New("unlock query failed")
+	_, err := withRecommendationTraceCleanupLockUsing(
+		context.Background(),
+		func(_ context.Context, callback func(*gorm.DB) error) error { return callback(pinnedDB) },
+		func(*gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			return recommendationTraceCleanupRunResult{}, runErr
+		},
+		func(context.Context, *gorm.DB) (bool, error) { return true, nil },
+		func(_ context.Context, db *gorm.DB) (bool, error) {
+			if db != pinnedDB {
+				t.Fatal("unlock did not use the pinned connection")
+			}
+			return false, unlockErr
+		},
+	)
+	if !errors.Is(err, runErr) || !errors.Is(err, unlockErr) {
+		t.Fatalf("error=%v, want both cleanup and unlock errors", err)
+	}
+}
+
+func TestRecommendationTraceCleanupCancellationStillUsesBoundedUnlockContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pinnedDB := &gorm.DB{}
+	var unlockDeadline time.Time
+	unlockCalls := 0
+	_, err := withRecommendationTraceCleanupLockUsing(
+		ctx,
+		func(_ context.Context, callback func(*gorm.DB) error) error { return callback(pinnedDB) },
+		func(*gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			cancel()
+			return recommendationTraceCleanupRunResult{}, context.Canceled
+		},
+		func(context.Context, *gorm.DB) (bool, error) { return true, nil },
+		func(unlockCtx context.Context, db *gorm.DB) (bool, error) {
+			if db != pinnedDB {
+				t.Fatal("unlock did not use the pinned connection")
+			}
+			if err := unlockCtx.Err(); err != nil {
+				t.Fatalf("unlock context is canceled: %v", err)
+			}
+			var ok bool
+			unlockDeadline, ok = unlockCtx.Deadline()
+			if !ok {
+				t.Fatal("unlock context has no deadline")
+			}
+			unlockCalls++
+			return true, nil
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v, want context canceled", err)
+	}
+	if unlockCalls != 1 {
+		t.Fatalf("unlock calls=%d, want 1", unlockCalls)
+	}
+	remaining := time.Until(unlockDeadline)
+	if remaining <= 0 || remaining > recommendationTraceCleanupUnlockTimeout {
+		t.Fatalf("unlock deadline remaining=%s, want within %s", remaining, recommendationTraceCleanupUnlockTimeout)
+	}
+}
+
+func TestRecommendationTraceCleanupLockAcquisitionErrorDoesNotRunOrUnlock(t *testing.T) {
+	pinnedDB := &gorm.DB{}
+	acquireErr := errors.New("advisory lock query failed")
+	runCalls, unlockCalls := 0, 0
+	_, err := withRecommendationTraceCleanupLockUsing(
+		context.Background(),
+		func(_ context.Context, callback func(*gorm.DB) error) error { return callback(pinnedDB) },
+		func(*gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			runCalls++
+			return recommendationTraceCleanupRunResult{}, nil
+		},
+		func(context.Context, *gorm.DB) (bool, error) { return false, acquireErr },
+		func(context.Context, *gorm.DB) (bool, error) {
+			unlockCalls++
+			return true, nil
+		},
+	)
+	if !errors.Is(err, acquireErr) {
+		t.Fatalf("error=%v, want acquisition error", err)
+	}
+	if runCalls != 0 || unlockCalls != 0 {
+		t.Fatalf("run calls=%d unlock calls=%d, want both zero", runCalls, unlockCalls)
+	}
+}
+
+func TestRecommendationTraceCleanupUnlockFalseIsAnError(t *testing.T) {
+	pinnedDB := &gorm.DB{}
+	_, err := withRecommendationTraceCleanupLockUsing(
+		context.Background(),
+		func(_ context.Context, callback func(*gorm.DB) error) error { return callback(pinnedDB) },
+		func(*gorm.DB) (recommendationTraceCleanupRunResult, error) {
+			return recommendationTraceCleanupRunResult{CaughtUp: true}, nil
+		},
+		func(context.Context, *gorm.DB) (bool, error) { return true, nil },
+		func(context.Context, *gorm.DB) (bool, error) { return false, nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "did not hold the lock") {
+		t.Fatalf("error=%v, want unlock false error", err)
+	}
+}
+
+func TestRecommendationTraceCleanupLockSkippedMetricsPreserveFailureAndBacklog(t *testing.T) {
+	metrics.SetRecommendationTraceCleanupBacklogLikely(true)
+	t.Cleanup(func() { metrics.SetRecommendationTraceCleanupBacklogLikely(false) })
+	backlogBefore := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_backlog_likely")
+	failuresBefore := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_failures_total")
+	resultRowsBefore := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="result"}`)
+	requestRowsBefore := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="request"}`)
+	lockSkippedRunsBefore := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_runs_total{outcome="lock_skipped"}`)
+	durationCountBefore := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_duration_seconds_count")
+
+	recordRecommendationTraceCleanupMetrics(recommendationTraceCleanupRunResult{LockSkipped: true}, nil, time.Millisecond)
+
+	if got := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_backlog_likely"); got != backlogBefore {
+		t.Fatalf("backlog gauge=%v, want unchanged value %v", got, backlogBefore)
+	}
+	if got := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_failures_total"); got != failuresBefore {
+		t.Fatalf("failure counter=%v, want unchanged value %v", got, failuresBefore)
+	}
+	if got := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="result"}`); got != resultRowsBefore {
+		t.Fatalf("result row counter=%v, want unchanged value %v", got, resultRowsBefore)
+	}
+	if got := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_rows_total{table="request"}`); got != requestRowsBefore {
+		t.Fatalf("request row counter=%v, want unchanged value %v", got, requestRowsBefore)
+	}
+	if got := recommendationTraceCleanupMetricValue(t, `go_exchange_recommendation_trace_cleanup_runs_total{outcome="lock_skipped"}`); got != lockSkippedRunsBefore+1 {
+		t.Fatalf("lock-skipped run counter=%v, want %v", got, lockSkippedRunsBefore+1)
+	}
+	if got := recommendationTraceCleanupMetricValue(t, "go_exchange_recommendation_trace_cleanup_duration_seconds_count"); got != durationCountBefore+1 {
+		t.Fatalf("duration sample count=%v, want %v", got, durationCountBefore+1)
+	}
+}
+
+func recommendationTraceCleanupMetricValue(t *testing.T, prefix string) float64 {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
+	for _, line := range strings.Split(recorder.Body.String(), "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		fields := strings.Fields(line)
+		value, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			t.Fatalf("parse metric %q line %q: %v", prefix, line, err)
+		}
+		return value
+	}
+	t.Fatalf("metric %q not found", prefix)
+	return 0
 }
 
 func testRecommendationTraceCleanupConfig() config.RecommendationTraceConfig {

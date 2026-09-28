@@ -162,6 +162,7 @@ func TestHandlerExposesRecommendationTraceCleanupMetrics(t *testing.T) {
 	RecordRecommendationTraceCleanupRun("caught_up", time.Second)
 	RecordRecommendationTraceCleanupRun("budget_reached", 2*time.Second)
 	RecordRecommendationTraceCleanupRun("error", 3*time.Second)
+	RecordRecommendationTraceCleanupRun("lock_skipped", 0)
 	RecordRecommendationTraceCleanupRun("database error text", time.Second)
 	SetRecommendationTraceCleanupBacklogLikely(true)
 
@@ -174,7 +175,8 @@ func TestHandlerExposesRecommendationTraceCleanupMetrics(t *testing.T) {
 		`go_exchange_recommendation_trace_cleanup_runs_total{outcome="caught_up"} 1`,
 		`go_exchange_recommendation_trace_cleanup_runs_total{outcome="budget_reached"} 1`,
 		`go_exchange_recommendation_trace_cleanup_runs_total{outcome="error"} 1`,
-		"go_exchange_recommendation_trace_cleanup_duration_seconds_count 3",
+		`go_exchange_recommendation_trace_cleanup_runs_total{outcome="lock_skipped"} 1`,
+		"go_exchange_recommendation_trace_cleanup_duration_seconds_count 4",
 		"go_exchange_recommendation_trace_cleanup_backlog_likely 1",
 	} {
 		if !strings.Contains(body, metric) {
