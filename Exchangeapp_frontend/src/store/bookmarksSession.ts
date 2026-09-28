@@ -301,7 +301,8 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
         const post = findPost(postID);
         if (!post) return;
         const bookmark = states.get(postID)?.bookmark;
-        if (bookmark?.status !== 'ready' || !bookmark.bookmarked) {
+        if (bookmark?.status !== 'ready') return;
+        if (!bookmark.bookmarked) {
           items.value = items.value.filter(candidate => candidate.id !== postID);
           loadedPostIDs.delete(postID);
           return;

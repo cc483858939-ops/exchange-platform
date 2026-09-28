@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Post } from '../types/Post';
+import type { PostEngagementStatesResponse } from '../services/engagementService';
 import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 
 const mocks = vi.hoisted(() => ({
@@ -135,6 +136,139 @@ describe('bookmarksSession store', () => {
     await settle();
     expect(store.items.map(item => item.id)).toEqual([1, 2]);
     expect(mocks.getBookmarks).toHaveBeenNthCalledWith(2, { limit: 20, cursor: 'cursor-1' });
+  });
+
+  it('keeps bookmark membership when bookmark hydration is unavailable and applies ready Like and Repost states', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostEngagementStates.mockResolvedValueOnce({
+      items: [{
+        post_id: 1,
+        like: { status: 'ready', likes: 3, liked: false },
+        repost: { status: 'ready', reposts: 1, reposted: false },
+        bookmark: { status: 'unavailable' },
+      }],
+    });
+    const store = createStore();
+
+    await store.loadInitial();
+    await settle();
+
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.items[0]).toMatchObject({
+      bookmarked: true,
+      bookmarkStatus: 'ready',
+      likeCount: 3,
+      liked: false,
+      likeStatus: 'ready',
+      repostCount: 1,
+      reposted: false,
+      repostStatus: 'ready',
+    });
+  });
+
+  it('removes a bookmark only for ready false and clears its loaded ID', async () => {
+    mocks.getBookmarks
+      .mockResolvedValueOnce({ items: [post(1)], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostEngagementStates
+      .mockResolvedValueOnce({
+        items: [{
+          post_id: 1,
+          like: { status: 'ready', likes: 3, liked: false },
+          repost: { status: 'ready', reposts: 1, reposted: false },
+          bookmark: { status: 'ready', bookmarked: false },
+        }],
+      })
+      .mockResolvedValueOnce({
+        items: [{
+          post_id: 1,
+          like: { status: 'ready', likes: 3, liked: false },
+          repost: { status: 'ready', reposts: 1, reposted: false },
+          bookmark: { status: 'ready', bookmarked: true },
+        }],
+      });
+    const store = createStore();
+
+    await store.loadInitial();
+    await settle();
+    expect(store.items).toEqual([]);
+
+    await store.loadMore();
+    await settle();
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.items[0]).toMatchObject({ bookmarked: true, bookmarkStatus: 'ready' });
+  });
+
+  it('keeps bookmark membership when the engagement response omits the Post', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostEngagementStates.mockResolvedValueOnce({ items: [] });
+    const store = createStore();
+
+    await store.loadInitial();
+    await settle();
+
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.items[0]).toMatchObject({ bookmarked: true, bookmarkStatus: 'ready' });
+  });
+
+  it('keeps bookmark membership when the whole engagement request fails', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostEngagementStates.mockRejectedValueOnce(new Error('temporary unavailable'));
+    const store = createStore();
+
+    await store.loadInitial();
+    await settle();
+
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.items[0]).toMatchObject({ bookmarked: true, bookmarkStatus: 'ready' });
+  });
+
+  it('keeps bookmark membership when Like and Repost hydration are unavailable', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostEngagementStates.mockResolvedValueOnce({
+      items: [{
+        post_id: 1,
+        like: { status: 'unavailable' },
+        repost: { status: 'unavailable' },
+        bookmark: { status: 'ready', bookmarked: true },
+      }],
+    });
+    const store = createStore();
+
+    await store.loadInitial();
+    await settle();
+
+    expect(store.items.map(item => item.id)).toEqual([1]);
+    expect(store.items[0]).toMatchObject({
+      bookmarked: true,
+      bookmarkStatus: 'ready',
+      likeStatus: 'unavailable',
+      repostStatus: 'unavailable',
+    });
+  });
+
+  it('does not restore an unbookmarked item when older engagement hydration arrives', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const hydration = deferred<PostEngagementStatesResponse>();
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+    const store = createStore();
+
+    await store.loadInitial();
+    const unbookmark = store.toggleBookmark(1);
+    expect(store.items).toEqual([]);
+    await expect(unbookmark).resolves.toBe(true);
+
+    hydration.resolve({
+      items: [{
+        post_id: 1,
+        like: { status: 'ready', likes: 3, liked: false },
+        repost: { status: 'ready', reposts: 1, reposted: false },
+        bookmark: { status: 'ready', bookmarked: true },
+      }],
+    });
+    await settle();
+
+    expect(store.items).toEqual([]);
   });
 
   it('removes a bookmark optimistically and restores it after a failed mutation', async () => {

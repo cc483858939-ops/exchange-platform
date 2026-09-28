@@ -201,6 +201,7 @@ describe('HistoryView', () => {
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostEngagementStates.mockClear();
+    mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
     mocks.unlikePost.mockResolvedValue({ likes: 0, liked: false });
     setWindowScrollY(0);
   });
@@ -429,7 +430,7 @@ describe('HistoryView', () => {
     setAuth(7);
     mocks.getLikedHistory.mockResolvedValue({ items: [post(42)], next_cursor: null });
     mocks.getPostLikeStates.mockResolvedValue({
-      items: [{ post_id: 42, likes: 3, liked: false }],
+      items: [{ post_id: 42, likes: 3, liked: true }],
       unavailable_post_ids: [],
     });
     const wrapper = mountHistory();
@@ -440,7 +441,7 @@ describe('HistoryView', () => {
     const card = wrapper.find('.history-post');
     expect(card.attributes('data-id')).toBe('42');
     expect(card.attributes('data-status')).toBe('ready');
-    expect(card.attributes('data-liked')).toBe('false');
+    expect(card.attributes('data-liked')).toBe('true');
     expect(card.attributes('data-track-view')).toBe('false');
     expect(mocks.getPostLikeStates).toHaveBeenCalledWith([42]);
   });
