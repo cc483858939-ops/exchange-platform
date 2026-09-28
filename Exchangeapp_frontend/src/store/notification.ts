@@ -163,7 +163,7 @@ export const useNotificationStore = defineStore('notification', () => {
         if (isCurrentViewer(capture)) {
           const previous = unreadCount.value;
           setUnreadCount(count);
-          if (loaded.value && count > previous) {
+          if (loaded.value && unreadCount.value !== previous) {
             markListStale();
           }
         }

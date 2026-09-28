@@ -142,6 +142,34 @@ describe('notification store', () => {
     expect(mocks.getNotifications).toHaveBeenCalledTimes(1);
   });
 
+  it('marks a loaded list stale when the unread count decreases', async () => {
+    mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: null });
+    mocks.getUnreadNotificationCount.mockResolvedValueOnce(3);
+    const store = useNotificationStore();
+    store.setViewer(7);
+    await store.loadInitial();
+    store.setUnreadCount(4);
+
+    await store.refreshUnreadCount();
+
+    expect(store.unreadCount).toBe(3);
+    expect(store.listStale).toBe(true);
+  });
+
+  it('keeps a loaded list fresh when the unread count is unchanged', async () => {
+    mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1)], next_cursor: null });
+    mocks.getUnreadNotificationCount.mockResolvedValueOnce(4);
+    const store = useNotificationStore();
+    store.setViewer(7);
+    await store.loadInitial();
+    store.setUnreadCount(4);
+
+    await store.refreshUnreadCount();
+
+    expect(store.unreadCount).toBe(4);
+    expect(store.listStale).toBe(false);
+  });
+
   it('revalidates the first page while preserving cached tail IDs', async () => {
     mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1), notification(2)], next_cursor: 'cursor-old' });
     mocks.getUnreadNotificationCount.mockResolvedValueOnce(3);

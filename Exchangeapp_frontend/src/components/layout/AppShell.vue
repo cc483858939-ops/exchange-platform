@@ -26,34 +26,90 @@ import LeftSidebar from './LeftSidebar.vue';
 import MobileBottomNav from './MobileBottomNav.vue';
 import RightRail from './RightRail.vue';
 
+const NOTIFICATION_POLL_INTERVAL_MS = 60_000;
+
 const authStore = useAuthStore();
 const route = useRoute();
 const notificationStore = useNotificationStore();
 const searchSession = useSearchSessionStore();
+let notificationPollTimer: number | null = null;
+let disposed = false;
 
 const currentViewerID = () => (
   authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null
 );
 
-const refreshUnreadAndMaybeRevalidate = () => {
+const canPollNotifications = () => (
+  !disposed
+  && authStore.isAuthenticated
+  && notificationStore.captureViewer() !== null
+  && document.visibilityState === 'visible'
+);
+
+const clearNotificationPollTimer = () => {
+  if (notificationPollTimer === null) {
+    return;
+  }
+  window.clearTimeout(notificationPollTimer);
+  notificationPollTimer = null;
+};
+
+const refreshUnreadAndMaybeRevalidate = async () => {
   const capture = notificationStore.captureViewer();
   if (!capture) {
     return;
   }
-  void notificationStore.refreshUnreadCount(capture)
-    .then(() => {
-      if (route.name === 'Notifications' && notificationStore.listStale) {
-        void notificationStore.revalidateNotifications();
-      }
-    })
-    .catch(() => undefined);
+  try {
+    await notificationStore.refreshUnreadCount(capture);
+    if (route.name === 'Notifications' && notificationStore.listStale) {
+      await notificationStore.revalidateNotifications();
+    }
+  } catch {
+    // Background freshness failures keep the cached badge and list unchanged.
+  }
+};
+
+const scheduleNotificationPoll = () => {
+  clearNotificationPollTimer();
+  if (!canPollNotifications()) {
+    return;
+  }
+
+  notificationPollTimer = window.setTimeout(() => {
+    notificationPollTimer = null;
+    void runScheduledNotificationRefresh();
+  }, NOTIFICATION_POLL_INTERVAL_MS);
+};
+
+const runScheduledNotificationRefresh = async () => {
+  if (!canPollNotifications()) {
+    return;
+  }
+  await refreshUnreadAndMaybeRevalidate();
+  scheduleNotificationPoll();
+};
+
+const refreshNowAndRestartNotificationPoll = (allowHidden = false) => {
+  clearNotificationPollTimer();
+  if (disposed || !authStore.isAuthenticated) {
+    return;
+  }
+  if (!allowHidden && document.visibilityState !== 'visible') {
+    return;
+  }
+
+  void refreshUnreadAndMaybeRevalidate().finally(scheduleNotificationPoll);
 };
 
 const syncSessionViewers = () => {
   const nextViewerID = currentViewerID();
   notificationStore.setViewer(nextViewerID);
   searchSession.setViewer(nextViewerID);
-  refreshUnreadAndMaybeRevalidate();
+  if (nextViewerID === null) {
+    clearNotificationPollTimer();
+    return;
+  }
+  refreshNowAndRestartNotificationPoll(true);
 };
 
 // AppShell is the sole unread coordinator. Identity changes invalidate old
@@ -61,22 +117,38 @@ const syncSessionViewers = () => {
 watch(() => currentViewerID(), syncSessionViewers, { immediate: true });
 watch(() => route.name, (name) => {
   if (name === 'Notifications' && authStore.isAuthenticated) {
-    refreshUnreadAndMaybeRevalidate();
+    refreshNowAndRestartNotificationPoll(true);
   }
 });
 
 const handleVisibilityChange = () => {
-  if (document.visibilityState === 'visible' && authStore.isAuthenticated) {
-    refreshUnreadAndMaybeRevalidate();
+  if (document.visibilityState === 'visible') {
+    refreshNowAndRestartNotificationPoll();
+  } else {
+    clearNotificationPollTimer();
   }
+};
+
+const handleOnline = () => {
+  refreshNowAndRestartNotificationPoll();
+};
+
+const handlePageShow = () => {
+  refreshNowAndRestartNotificationPoll();
 };
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('pageshow', handlePageShow);
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
+  clearNotificationPollTimer();
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('online', handleOnline);
+  window.removeEventListener('pageshow', handlePageShow);
 });
 </script>
 
