@@ -27,7 +27,6 @@ var (
 	notificationConsumerLag                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_notification_consumer_lag", Help: "Notification projection consumer lag."})
 	consumerInboxRows                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_consumer_inbox_rows_total", Help: "ConsumerInbox rows retained for a consumer."}, []string{"consumer"})
 	notificationProjectionFailures               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_notification_projection_failures_total", Help: "Notification projection failures by stage."}, []string{"stage"})
-	notificationProjectionDLQ                    = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_notification_projection_dlq_total", Help: "Malformed notification activity messages sent to the DLQ."})
 	notificationProjectionLatency                = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_notification_projection_latency_seconds", Help: "Notification projection batch latency in seconds.", Buckets: prometheus.DefBuckets})
 	likePipelineDepth                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
 	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
@@ -81,7 +80,7 @@ var (
 func init() {
 	registry.MustRegister(
 		httpRequestsTotal, httpRequestDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
-		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, notificationProjectionFailures, notificationProjectionDLQ, notificationProjectionLatency, likePipelineDepth,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -161,7 +160,7 @@ func ObservePostEmbeddingProcessingDuration(duration time.Duration) {
 }
 func RecordKafkaConsumerRecovery(consumer, outcome, code string) {
 	switch consumer {
-	case "like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding":
+	case "like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding", "notification_projection":
 	default:
 		return
 	}
@@ -191,7 +190,6 @@ func SetConsumerInboxRows(consumer string, value float64) {
 func RecordNotificationProjectionFailure(stage string) {
 	notificationProjectionFailures.WithLabelValues(stage).Inc()
 }
-func RecordNotificationProjectionDLQ() { notificationProjectionDLQ.Inc() }
 func ObserveNotificationProjectionLatency(duration time.Duration) {
 	notificationProjectionLatency.Observe(duration.Seconds())
 }

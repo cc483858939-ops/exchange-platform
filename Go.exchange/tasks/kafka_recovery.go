@@ -45,6 +45,7 @@ const (
 	kafkaConsumerUserBehaviorProjection    = "user_behavior_projection"
 	kafkaConsumerRecommendationMetrics     = "recommendation_metrics"
 	kafkaConsumerPostEmbedding             = "post_embedding"
+	kafkaConsumerNotificationProjection    = "notification_projection"
 	kafkaRecoveryOutcomeMessageApplied     = "message_applied"
 	kafkaRecoveryOutcomeBatchApplied       = "batch_applied"
 	kafkaRecoveryOutcomeMessageNoop        = "message_noop"
@@ -187,31 +188,7 @@ func waitForKafkaRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-type consumerDLQPayload struct {
-	Consumer        string              `json:"consumer"`
-	SourceTopic     string              `json:"source_topic"`
-	SourcePartition int                 `json:"source_partition"`
-	SourceOffset    int64               `json:"source_offset"`
-	SourceKey       []byte              `json:"source_key"`
-	SourceValue     []byte              `json:"source_value"`
-	SourceTime      time.Time           `json:"source_time,omitempty"`
-	SourceHeaders   []consumerDLQHeader `json:"source_headers,omitempty"`
-	EventID         string              `json:"event_id,omitempty"`
-	ErrorClass      string              `json:"error_class"`
-	ErrorCode       string              `json:"error_code"`
-	Reason          string              `json:"reason"`
-	Attempts        int                 `json:"attempts"`
-	FailedAt        time.Time           `json:"failed_at"`
-}
-
-type consumerDLQHeader struct {
-	Key   string `json:"key"`
-	Value []byte `json:"value"`
-}
-
-type rawKafkaMessagePublisher interface {
-	PublishRaw(context.Context, string, ...kafka.Message) error
-}
+type rawKafkaMessagePublisher = eventing.RawPublisher
 
 type eventingRawKafkaMessagePublisher struct {
 	kafkaConfig config.KafkaConfig
@@ -221,12 +198,14 @@ func (p eventingRawKafkaMessagePublisher) PublishRaw(ctx context.Context, topic 
 	return eventing.PublishRawMessages(ctx, p.kafkaConfig, topic, messages...)
 }
 
-func buildConsumerDLQMessage(consumer string, source kafka.Message, processErr error, attempts int, failedAt time.Time) (kafka.Message, error) {
-	if processErr == nil {
-		return kafka.Message{}, errors.New("consumer DLQ failure is required")
+func deadLetterFailureFromProcessError(err error, attempts int, failedAt time.Time) (eventing.DeadLetterFailure, error) {
+	if err == nil {
+		return eventing.DeadLetterFailure{}, errors.New("consumer DLQ failure is required")
 	}
-	if kafkaFailureClassOf(processErr) == "" || kafkaFailureCode(processErr) == "" {
-		return kafka.Message{}, errors.New("consumer DLQ failure must have a classified error and stable code")
+	class := kafkaFailureClassOf(err)
+	code := kafkaFailureCode(err)
+	if class == "" || code == "" {
+		return eventing.DeadLetterFailure{}, errors.New("consumer DLQ failure must have a classified error and stable code")
 	}
 	if attempts < 1 {
 		attempts = 1
@@ -236,35 +215,22 @@ func buildConsumerDLQMessage(consumer string, source kafka.Message, processErr e
 	} else {
 		failedAt = failedAt.UTC()
 	}
-
-	payload := consumerDLQPayload{
-		Consumer: consumer, SourceTopic: source.Topic, SourcePartition: source.Partition, SourceOffset: source.Offset,
-		SourceKey: cloneKafkaBytes(source.Key), SourceValue: cloneKafkaBytes(source.Value), SourceTime: source.Time,
-		EventID: bestEffortKafkaEventID(source.Value), ErrorClass: string(kafkaFailureClassOf(processErr)),
-		ErrorCode: kafkaFailureCode(processErr), Reason: processErr.Error(), Attempts: attempts, FailedAt: failedAt,
-	}
-	if len(source.Headers) > 0 {
-		payload.SourceHeaders = make([]consumerDLQHeader, 0, len(source.Headers))
-		for _, header := range source.Headers {
-			payload.SourceHeaders = append(payload.SourceHeaders, consumerDLQHeader{Key: header.Key, Value: cloneKafkaBytes(header.Value)})
-		}
-	}
-
-	value, err := json.Marshal(payload)
-	if err != nil {
-		return kafka.Message{}, fmt.Errorf("marshal consumer DLQ payload: %w", err)
-	}
-	key := fmt.Sprintf("%s:%s:%d:%d", consumer, source.Topic, source.Partition, source.Offset)
-	return kafka.Message{Key: []byte(key), Value: value, Time: failedAt}, nil
+	return eventing.DeadLetterFailure{Class: string(class), Code: code, Reason: err.Error(), Attempts: attempts, FailedAt: failedAt}, nil
 }
 
-func cloneKafkaBytes(value []byte) []byte {
-	if value == nil {
-		return nil
+func buildClassifiedDeadLetterMessage(consumer string, source kafka.Message, processErr error, attempts int, failedAt time.Time) (kafka.Message, error) {
+	if processErr == nil {
+		return kafka.Message{}, errors.New("consumer DLQ failure is required")
 	}
-	cloned := make([]byte, len(value))
-	copy(cloned, value)
-	return cloned
+	failure, err := deadLetterFailureFromProcessError(processErr, attempts, failedAt)
+	if err != nil {
+		return kafka.Message{}, err
+	}
+	record, err := eventing.NewDeadLetterRecord(consumer, bestEffortKafkaEventID(source.Value), source, failure)
+	if err != nil {
+		return kafka.Message{}, err
+	}
+	return eventing.BuildDeadLetterMessage(record)
 }
 
 func bestEffortKafkaEventID(raw []byte) string {
@@ -290,7 +256,7 @@ func publishConsumerDLQ(ctx context.Context, publisher rawKafkaMessagePublisher,
 	if publisher == nil {
 		return retryableKafkaError(kafkaFailureCodeDLQPublish, errors.New("consumer DLQ publisher is unavailable"))
 	}
-	dlqMessage, err := buildConsumerDLQMessage(consumer, source, processErr, attempts, time.Now().UTC())
+	dlqMessage, err := buildClassifiedDeadLetterMessage(consumer, source, processErr, attempts, time.Now().UTC())
 	if err != nil {
 		return retryableKafkaError(kafkaFailureCodeDLQPublish, err)
 	}

@@ -80,7 +80,6 @@ type KafkaConfig struct {
 	RecommendationEventsTopic      string   `mapstructure:"recommendation_events_topic"`
 	PostEmbeddingTopic             string   `mapstructure:"post_embedding_topic"`
 	ActivityEventsTopic            string   `mapstructure:"activity_events_topic"`
-	NotificationDLQTopic           string   `mapstructure:"notification_dlq_topic"`
 	ConsumerDLQTopic               string   `mapstructure:"consumer_dlq_topic"`
 	TopicReplicationFactor         int      `mapstructure:"topic_replication_factor"`
 	UserBehaviorPartitions         int      `mapstructure:"user_behavior_partitions"`
@@ -88,7 +87,6 @@ type KafkaConfig struct {
 	RecommendationEventsPartitions int      `mapstructure:"recommendation_events_partitions"`
 	PostEmbeddingPartitions        int      `mapstructure:"post_embedding_partitions"`
 	ActivityEventsPartitions       int      `mapstructure:"activity_events_partitions"`
-	NotificationDLQPartitions      int      `mapstructure:"notification_dlq_partitions"`
 	ConsumerDLQPartitions          int      `mapstructure:"consumer_dlq_partitions"`
 	UserBehaviorGroupID            string   `mapstructure:"user_behavior_group_id"`
 	LikeSnapshotGroupID            string   `mapstructure:"like_snapshot_group_id"`

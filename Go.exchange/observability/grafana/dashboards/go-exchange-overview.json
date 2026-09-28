@@ -301,7 +301,7 @@
       "datasource": "Prometheus",
       "gridPos": {"h": 6, "w": 8, "x": 0, "y": 28},
       "id": 12,
-      "targets": [{"expr": "increase(go_exchange_notification_projection_dlq_total{job=\"go-exchange-worker\"}[15m])", "refId": "A"}],
+      "targets": [{"expr": "increase(go_exchange_kafka_consumer_recovery_total{job=\"go-exchange-worker\",consumer=\"notification_projection\",outcome=\"message_dlq\"}[15m])", "refId": "A"}],
       "title": "Notification DLQ",
       "type": "timeseries"
     }

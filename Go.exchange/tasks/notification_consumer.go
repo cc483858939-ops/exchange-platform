@@ -75,7 +75,7 @@ func notificationConsumerConfigured() bool {
 	return config.AppConfig != nil &&
 		strings.TrimSpace(config.AppConfig.Kafka.ActivityEventsTopic) != "" &&
 		strings.TrimSpace(config.AppConfig.Kafka.NotificationGroupID) != "" &&
-		strings.TrimSpace(config.AppConfig.Kafka.NotificationDLQTopic) != ""
+		strings.TrimSpace(config.AppConfig.Kafka.ConsumerDLQTopic) != ""
 }
 
 func startNotificationProjectionConsumer(ctx context.Context, wg *sync.WaitGroup) {
@@ -180,11 +180,18 @@ func processNotificationBatch(ctx context.Context, messages []kafka.Message, pub
 	for _, message := range messages {
 		record, err := decodeNotificationActivity(message)
 		if err != nil {
-			if dlqErr := publishNotificationDLQ(ctx, publisher, message, err); dlqErr != nil {
+			if config.AppConfig == nil {
+				return errors.New("notification consumer configuration is not initialized")
+			}
+			if kafkaFailureClassOf(err) != kafkaFailurePermanent {
+				err = permanentKafkaError(kafkaFailureCodeInvalidPayload, err)
+			}
+			if dlqErr := publishConsumerDLQ(ctx, publisher, config.AppConfig.Kafka.ConsumerDLQTopic, kafkaConsumerNotificationProjection, message, err, 1); dlqErr != nil {
 				metrics.RecordNotificationProjectionFailure("dlq")
+				metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(dlqErr))
 				return fmt.Errorf("publish notification DLQ: %w", dlqErr)
 			}
-			metrics.RecordNotificationProjectionDLQ()
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCode(err))
 			continue
 		}
 		records = append(records, record)
@@ -203,30 +210,30 @@ func processNotificationBatch(ctx context.Context, messages []kafka.Message, pub
 func decodeNotificationActivity(message kafka.Message) (notificationActivityRecord, error) {
 	envelope, err := eventing.DecodeEnvelope(message.Value)
 	if err != nil {
-		return notificationActivityRecord{}, err
+		return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeDecodeEnvelope, err)
 	}
 	if _, err := uuid.Parse(strings.TrimSpace(envelope.ID)); err != nil {
-		return notificationActivityRecord{}, errors.New("notification activity id must be a UUID")
+		return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("notification activity id must be a UUID"))
 	}
 	if envelope.SchemaVersion < 1 || strings.TrimSpace(envelope.AggregateType) == "" || strings.TrimSpace(envelope.AggregateID) == "" || envelope.OccurredAt.IsZero() {
-		return notificationActivityRecord{}, errors.New("notification activity envelope is missing required fields")
+		return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("notification activity envelope is missing required fields"))
 	}
 	var payloadObject map[string]json.RawMessage
 	if len(envelope.Payload) == 0 || json.Unmarshal(envelope.Payload, &payloadObject) != nil || payloadObject == nil {
-		return notificationActivityRecord{}, errors.New("notification activity payload must be a JSON object")
+		return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("notification activity payload must be a JSON object"))
 	}
 	record := notificationActivityRecord{Message: message, Envelope: envelope}
 	switch envelope.Type {
 	case eventing.EventTypePostReactionApplied:
 		if envelope.SchemaVersion != 1 || envelope.AggregateType != "post_reaction" {
-			return notificationActivityRecord{}, errors.New("unsupported post reaction activity schema")
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, errors.New("unsupported post reaction activity schema"))
 		}
 		var payload eventing.PostReactionAppliedPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return notificationActivityRecord{}, fmt.Errorf("decode post reaction activity payload: %w", err)
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeDecodePayload, fmt.Errorf("decode post reaction activity payload: %w", err))
 		}
 		if payload.ActorID == 0 || payload.PostID == 0 || payload.PostAuthorID == 0 || payload.ReactionVersion <= 0 || payload.StateChangedAt.IsZero() || !payload.StateChangedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != fmt.Sprintf("%d:%d", payload.ActorID, payload.PostID) {
-			return notificationActivityRecord{}, errors.New("invalid post reaction activity payload")
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("invalid post reaction activity payload"))
 		}
 		if !payload.Liked || payload.ActorID == payload.PostAuthorID {
 			return record, nil
@@ -239,14 +246,14 @@ func decodeNotificationActivity(message kafka.Message) (notificationActivityReco
 		}
 	case eventing.EventTypeReplyCreated:
 		if envelope.SchemaVersion != 1 || envelope.AggregateType != "post" {
-			return notificationActivityRecord{}, errors.New("unsupported reply activity schema")
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, errors.New("unsupported reply activity schema"))
 		}
 		var payload eventing.ReplyCreatedPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return notificationActivityRecord{}, fmt.Errorf("decode reply activity payload: %w", err)
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeDecodePayload, fmt.Errorf("decode reply activity payload: %w", err))
 		}
 		if payload.ReplyPostID == 0 || payload.ParentPostID == 0 || payload.ConversationID == 0 || payload.ActorID == 0 || payload.ParentAuthorID == 0 || payload.CreatedAt.IsZero() || !payload.CreatedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != strconv.FormatUint(uint64(payload.ReplyPostID), 10) {
-			return notificationActivityRecord{}, errors.New("invalid reply activity payload")
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("invalid reply activity payload"))
 		}
 		if payload.ActorID == payload.ParentAuthorID {
 			return record, nil
@@ -258,14 +265,14 @@ func decodeNotificationActivity(message kafka.Message) (notificationActivityReco
 		}
 	case eventing.EventTypeUserFollowCreated:
 		if envelope.SchemaVersion != 1 || envelope.AggregateType != "user_follow" {
-			return notificationActivityRecord{}, errors.New("unsupported follow activity schema")
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, errors.New("unsupported follow activity schema"))
 		}
 		var payload eventing.UserFollowCreatedPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return notificationActivityRecord{}, fmt.Errorf("decode follow activity payload: %w", err)
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeDecodePayload, fmt.Errorf("decode follow activity payload: %w", err))
 		}
 		if payload.FollowID == 0 || payload.FollowerID == 0 || payload.FollowingID == 0 || payload.FollowerID == payload.FollowingID || payload.CreatedAt.IsZero() || !payload.CreatedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != strconv.FormatUint(uint64(payload.FollowID), 10) {
-			return notificationActivityRecord{}, errors.New("invalid follow activity payload")
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("invalid follow activity payload"))
 		}
 		if payload.FollowerID == payload.FollowingID {
 			return record, nil
@@ -489,36 +496,4 @@ func uniqueUintIDs(ids []uint) []uint {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
-}
-
-type notificationDLQPayload struct {
-	SourceTopic     string    `json:"source_topic"`
-	SourcePartition int       `json:"source_partition"`
-	SourceOffset    int64     `json:"source_offset"`
-	SourceKey       string    `json:"source_key"`
-	EventID         string    `json:"event_id,omitempty"`
-	Reason          string    `json:"reason"`
-	RawValue        string    `json:"raw_value"`
-	FailedAt        time.Time `json:"failed_at"`
-}
-
-func publishNotificationDLQ(ctx context.Context, publisher interface {
-	PublishRaw(context.Context, string, ...kafka.Message) error
-}, message kafka.Message, reason error) error {
-	if config.AppConfig == nil || strings.TrimSpace(config.AppConfig.Kafka.NotificationDLQTopic) == "" {
-		return errors.New("notification DLQ topic is not configured")
-	}
-	var envelope struct {
-		ID string `json:"id"`
-	}
-	_ = json.Unmarshal(message.Value, &envelope)
-	payload, err := json.Marshal(notificationDLQPayload{
-		SourceTopic: message.Topic, SourcePartition: message.Partition, SourceOffset: message.Offset,
-		SourceKey: string(message.Key), EventID: envelope.ID, Reason: reason.Error(), RawValue: string(message.Value), FailedAt: time.Now().UTC(),
-	})
-	if err != nil {
-		return err
-	}
-	key := fmt.Sprintf("%s:%d:%d", message.Topic, message.Partition, message.Offset)
-	return publisher.PublishRaw(ctx, config.AppConfig.Kafka.NotificationDLQTopic, kafka.Message{Key: []byte(key), Value: payload, Time: time.Now().UTC()})
 }

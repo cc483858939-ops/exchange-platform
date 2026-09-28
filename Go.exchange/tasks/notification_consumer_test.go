@@ -1,10 +1,12 @@
 package tasks
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/eventing"
 	"Go.exchange/models"
 
@@ -19,6 +21,36 @@ func notificationMessage(t *testing.T, envelope eventing.Envelope) kafka.Message
 		t.Fatal(err)
 	}
 	return kafka.Message{Topic: "goexchange.activity.events.v1", Partition: 2, Offset: 8, Value: raw}
+}
+
+func TestNotificationMalformedMessageUsesUnifiedConsumerDLQ(t *testing.T) {
+	originalConfig := config.AppConfig
+	config.AppConfig = &config.Config{Kafka: config.KafkaConfig{ConsumerDLQTopic: "goexchange.consumer.dlq.v1"}}
+	t.Cleanup(func() { config.AppConfig = originalConfig })
+
+	message := kafka.Message{
+		Topic: "goexchange.activity.events.v1", Partition: 2, Offset: 8,
+		Key: []byte{0x00, 0xff}, Value: []byte{0xff, 0x00},
+		Headers: []kafka.Header{{Key: "trace", Value: []byte{0x00, 0xff}}},
+	}
+	publisher := &fakeRawKafkaMessagePublisher{}
+	if err := processNotificationBatch(context.Background(), []kafka.Message{message}, publisher); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.topics) != 1 || publisher.topics[0] != "goexchange.consumer.dlq.v1" || len(publisher.messages) != 1 {
+		t.Fatalf("published topics=%v messages=%d", publisher.topics, len(publisher.messages))
+	}
+	record, err := eventing.DecodeDeadLetterRecord(publisher.messages[0].Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Consumer != kafkaConsumerNotificationProjection || record.Source.Topic != message.Topic || record.Source.Partition != message.Partition || record.Source.Offset != message.Offset ||
+		string(record.Source.Key) != string(message.Key) || string(record.Source.Value) != string(message.Value) || len(record.Source.Headers) != 1 || string(record.Source.Headers[0].Value) != string(message.Headers[0].Value) {
+		t.Fatalf("dead letter source was not preserved: %+v", record)
+	}
+	if record.Failure.Class != string(kafkaFailurePermanent) || record.Failure.Code != kafkaFailureCodeDecodeEnvelope {
+		t.Fatalf("failure=%+v want permanent decode failure", record.Failure)
+	}
 }
 
 func TestDecodeNotificationActivityMapsDomainEvents(t *testing.T) {

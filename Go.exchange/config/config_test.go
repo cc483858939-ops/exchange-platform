@@ -163,10 +163,9 @@ func TestTranslationConfigDefaultsAndEnvironmentOverrides(t *testing.T) {
 
 func TestValidateEventingConfigByRuntime(t *testing.T) {
 	cfg := &Config{Kafka: KafkaConfig{
-		ActivityEventsTopic:  "activity",
-		ConsumerDLQTopic:     "consumer-dlq",
-		NotificationGroupID:  "notifications",
-		NotificationDLQTopic: "notification-dlq",
+		ActivityEventsTopic: "activity",
+		ConsumerDLQTopic:    "consumer-dlq",
+		NotificationGroupID: "notifications",
 	}}
 	if err := ValidateAPIEventingConfig(cfg); err != nil {
 		t.Fatalf("valid API config error=%v", err)
@@ -191,11 +190,6 @@ func TestValidateEventingConfigByRuntime(t *testing.T) {
 	cfg.Kafka.NotificationGroupID = ""
 	if err := ValidateWorkerEventingConfig(cfg); err == nil {
 		t.Fatal("worker without notification group must fail")
-	}
-	cfg.Kafka.NotificationGroupID = "notifications"
-	cfg.Kafka.NotificationDLQTopic = ""
-	if err := ValidateWorkerEventingConfig(cfg); err == nil {
-		t.Fatal("Worker without notification DLQ must fail")
 	}
 }
 

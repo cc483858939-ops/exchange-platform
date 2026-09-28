@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/eventing"
+
 	"github.com/segmentio/kafka-go"
 )
 
@@ -142,35 +144,35 @@ func TestBuildConsumerDLQMessagePreservesReplayData(t *testing.T) {
 	}
 	failedAt := time.Date(2026, 9, 23, 2, 3, 4, 567, time.FixedZone("UTC+8", 8*60*60))
 	processErr := permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("snapshot values are invalid"))
-	dlqMessage, err := buildConsumerDLQMessage(kafkaConsumerLikeSnapshotProjection, source, processErr, 1, failedAt)
+	dlqMessage, err := buildClassifiedDeadLetterMessage(kafkaConsumerLikeSnapshotProjection, source, processErr, 1, failedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, want := string(dlqMessage.Key), "like_snapshot_projection:snapshots:2:9912"; got != want {
 		t.Fatalf("DLQ key=%q want=%q", got, want)
 	}
-	var payload consumerDLQPayload
+	var payload eventing.DeadLetterRecord
 	if err := json.Unmarshal(dlqMessage.Value, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Consumer != kafkaConsumerLikeSnapshotProjection || payload.SourceTopic != source.Topic || payload.SourcePartition != source.Partition || payload.SourceOffset != source.Offset {
+	if payload.SchemaVersion != eventing.DeadLetterSchemaVersion || payload.Consumer != kafkaConsumerLikeSnapshotProjection || payload.Source.Topic != source.Topic || payload.Source.Partition != source.Partition || payload.Source.Offset != source.Offset {
 		t.Fatalf("source location metadata not preserved: %+v", payload)
 	}
-	if !bytes.Equal(payload.SourceKey, source.Key) || !bytes.Equal(payload.SourceValue, source.Value) {
-		t.Fatalf("source bytes changed: key=%v value=%v", payload.SourceKey, payload.SourceValue)
+	if !bytes.Equal(payload.Source.Key, source.Key) || !bytes.Equal(payload.Source.Value, source.Value) {
+		t.Fatalf("source bytes changed: key=%v value=%v", payload.Source.Key, payload.Source.Value)
 	}
-	if !payload.SourceTime.Equal(source.Time) || payload.EventID != "evt-123" {
-		t.Fatalf("source time/event ID=%s/%q want=%s/evt-123", payload.SourceTime, payload.EventID, source.Time)
+	if !payload.Source.Time.Equal(source.Time) || payload.EventID != "evt-123" {
+		t.Fatalf("source time/event ID=%s/%q want=%s/evt-123", payload.Source.Time, payload.EventID, source.Time)
 	}
-	if len(payload.SourceHeaders) != len(source.Headers) {
-		t.Fatalf("headers=%d want=%d", len(payload.SourceHeaders), len(source.Headers))
+	if len(payload.Source.Headers) != len(source.Headers) {
+		t.Fatalf("headers=%d want=%d", len(payload.Source.Headers), len(source.Headers))
 	}
 	for index, header := range source.Headers {
-		if payload.SourceHeaders[index].Key != header.Key || !bytes.Equal(payload.SourceHeaders[index].Value, header.Value) {
-			t.Fatalf("header[%d]=%+v want=%+v", index, payload.SourceHeaders[index], header)
+		if payload.Source.Headers[index].Key != header.Key || !bytes.Equal(payload.Source.Headers[index].Value, header.Value) {
+			t.Fatalf("header[%d]=%+v want=%+v", index, payload.Source.Headers[index], header)
 		}
 	}
-	if payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeInvalidPayload || payload.Reason != processErr.Error() || payload.Attempts != 1 || !payload.FailedAt.Equal(failedAt.UTC()) {
+	if payload.Failure.Class != string(kafkaFailurePermanent) || payload.Failure.Code != kafkaFailureCodeInvalidPayload || payload.Failure.Reason != processErr.Error() || payload.Failure.Attempts != 1 || !payload.Failure.FailedAt.Equal(failedAt.UTC()) {
 		t.Fatalf("failure metadata not preserved: %+v", payload)
 	}
 	if !bytes.Equal(source.Value, sourceValue) {
@@ -181,35 +183,35 @@ func TestBuildConsumerDLQMessagePreservesReplayData(t *testing.T) {
 func TestBuildConsumerDLQMessageAllowsMalformedArbitraryBytes(t *testing.T) {
 	value := append([]byte(`{"id":"`), 0xff)
 	value = append(value, []byte(`"}`)...)
-	message, err := buildConsumerDLQMessage("consumer", kafka.Message{Topic: "source", Key: []byte{0xfe}, Value: value}, permanentKafkaError(kafkaFailureCodeDecodeEnvelope, errors.New("invalid JSON")), 1, time.Now())
+	message, err := buildClassifiedDeadLetterMessage("consumer", kafka.Message{Topic: "source", Key: []byte{0xfe}, Value: value}, permanentKafkaError(kafkaFailureCodeDecodeEnvelope, errors.New("invalid JSON")), 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var payload consumerDLQPayload
+	var payload eventing.DeadLetterRecord
 	if err := json.Unmarshal(message.Value, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.EventID != "" || !bytes.Equal(payload.SourceKey, []byte{0xfe}) || !bytes.Equal(payload.SourceValue, value) {
+	if payload.EventID != "" || !bytes.Equal(payload.Source.Key, []byte{0xfe}) || !bytes.Equal(payload.Source.Value, value) {
 		t.Fatalf("malformed source bytes were not preserved: %+v", payload)
 	}
 }
 
 func TestBuildConsumerDLQMessagePreservesNilAndEmptyBytes(t *testing.T) {
-	message, err := buildConsumerDLQMessage("consumer", kafka.Message{
+	message, err := buildClassifiedDeadLetterMessage("consumer", kafka.Message{
 		Topic: "source", Key: []byte{}, Value: nil,
 		Headers: []kafka.Header{{Key: "empty", Value: []byte{}}, {Key: "nil", Value: nil}},
 	}, permanentKafkaError(kafkaFailureCodeDecodeEnvelope, errors.New("invalid JSON")), 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var payload consumerDLQPayload
+	var payload eventing.DeadLetterRecord
 	if err := json.Unmarshal(message.Value, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.SourceKey == nil || len(payload.SourceKey) != 0 || payload.SourceValue != nil {
-		t.Fatalf("source nil/empty bytes changed: key=%#v value=%#v", payload.SourceKey, payload.SourceValue)
+	if payload.Source.Key == nil || len(payload.Source.Key) != 0 || payload.Source.Value != nil {
+		t.Fatalf("source nil/empty bytes changed: key=%#v value=%#v", payload.Source.Key, payload.Source.Value)
 	}
-	if len(payload.SourceHeaders) != 2 || payload.SourceHeaders[0].Value == nil || payload.SourceHeaders[1].Value != nil {
-		t.Fatalf("header nil/empty bytes changed: %#v", payload.SourceHeaders)
+	if len(payload.Source.Headers) != 2 || payload.Source.Headers[0].Value == nil || payload.Source.Headers[1].Value != nil {
+		t.Fatalf("header nil/empty bytes changed: %#v", payload.Source.Headers)
 	}
 }

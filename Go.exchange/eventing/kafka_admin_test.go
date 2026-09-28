@@ -3,6 +3,7 @@ package eventing
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +15,8 @@ import (
 
 func validKafkaTopicConfig() config.KafkaConfig {
 	return config.KafkaConfig{
-		Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", PostEmbeddingTopic: "embedding", ActivityEventsTopic: "activity", NotificationDLQTopic: "notification-dlq", ConsumerDLQTopic: "consumer-dlq",
-		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, PostEmbeddingPartitions: 6, ActivityEventsPartitions: 12, NotificationDLQPartitions: 3, ConsumerDLQPartitions: 6,
+		Brokers: []string{"kafka:9092"}, UserBehaviorTopic: "behavior", LikeSnapshotTopic: "snapshot", RecommendationEventsTopic: "recommendation", PostEmbeddingTopic: "embedding", ActivityEventsTopic: "activity", ConsumerDLQTopic: "consumer-dlq",
+		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6, RecommendationEventsPartitions: 12, PostEmbeddingPartitions: 6, ActivityEventsPartitions: 12, ConsumerDLQPartitions: 6,
 	}
 }
 
@@ -24,8 +25,8 @@ func TestRequiredKafkaTopics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 7 {
-		t.Fatalf("topics=%d want=7", len(specs))
+	if len(specs) != 6 {
+		t.Fatalf("topics=%d want=6", len(specs))
 	}
 	want := []TopicSpec{
 		{Name: "behavior", Partitions: 12, ReplicationFactor: 1},
@@ -33,11 +34,10 @@ func TestRequiredKafkaTopics(t *testing.T) {
 		{Name: "recommendation", Partitions: 12, ReplicationFactor: 1},
 		{Name: "embedding", Partitions: 6, ReplicationFactor: 1},
 		{Name: "activity", Partitions: 12, ReplicationFactor: 1},
-		{Name: "notification-dlq", Partitions: 3, ReplicationFactor: 1},
-		{Name: "consumer-dlq", Partitions: 6, ReplicationFactor: 1},
+		{Name: "consumer-dlq", Partitions: 6, ReplicationFactor: 1, ConfigEntries: []kafka.ConfigEntry{{ConfigName: "retention.ms", ConfigValue: "2592000000"}}},
 	}
 	for index := range want {
-		if specs[index] != want[index] {
+		if !reflect.DeepEqual(specs[index], want[index]) {
 			t.Fatalf("spec[%d]=%+v want=%+v", index, specs[index], want[index])
 		}
 	}
@@ -52,7 +52,7 @@ func TestRequiredKafkaTopicsRejectsInvalidConfiguration(t *testing.T) {
 		{name: "empty topic", edit: func(cfg *config.KafkaConfig) { cfg.UserBehaviorTopic = " " }},
 		{name: "empty consumer DLQ topic", edit: func(cfg *config.KafkaConfig) { cfg.ConsumerDLQTopic = " " }},
 		{name: "duplicate topic", edit: func(cfg *config.KafkaConfig) { cfg.UserBehaviorTopic = cfg.RecommendationEventsTopic }},
-		{name: "duplicate consumer DLQ topic", edit: func(cfg *config.KafkaConfig) { cfg.ConsumerDLQTopic = cfg.NotificationDLQTopic }},
+		{name: "duplicate consumer DLQ topic", edit: func(cfg *config.KafkaConfig) { cfg.ConsumerDLQTopic = cfg.ActivityEventsTopic }},
 		{name: "invalid partitions", edit: func(cfg *config.KafkaConfig) { cfg.UserBehaviorPartitions = 0 }},
 		{name: "invalid consumer DLQ partitions", edit: func(cfg *config.KafkaConfig) { cfg.ConsumerDLQPartitions = 0 }},
 		{name: "invalid replication factor", edit: func(cfg *config.KafkaConfig) { cfg.TopicReplicationFactor = 0 }},

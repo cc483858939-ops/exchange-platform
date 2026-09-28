@@ -117,11 +117,11 @@ func TestLikeSnapshotConsumerPermanentMessageDoesNotBlockFollowingMessage(t *tes
 	if reader.closeCalls != 1 {
 		t.Fatalf("reader close calls=%d want 1", reader.closeCalls)
 	}
-	var dlqPayload consumerDLQPayload
+	var dlqPayload eventing.DeadLetterRecord
 	if err := json.Unmarshal(publisher.messages[0].Value, &dlqPayload); err != nil {
 		t.Fatal(err)
 	}
-	if dlqPayload.SourceOffset != 100 || dlqPayload.ErrorCode != kafkaFailureCodeDecodeEnvelope || dlqPayload.Attempts != 1 {
+	if dlqPayload.Source.Offset != 100 || dlqPayload.Failure.Code != kafkaFailureCodeDecodeEnvelope || dlqPayload.Failure.Attempts != 1 {
 		t.Fatalf("poison message DLQ metadata=%+v", dlqPayload)
 	}
 }
@@ -139,12 +139,12 @@ func TestLikeSnapshotMalformedEnvelopeIsDLQedWithoutApplyRetries(t *testing.T) {
 	if applyCalls != 0 || len(publisher.messages) != 1 {
 		t.Fatalf("apply calls=%d DLQ publishes=%d want 0/1", applyCalls, len(publisher.messages))
 	}
-	var payload consumerDLQPayload
+	var payload eventing.DeadLetterRecord
 	if err := json.Unmarshal(publisher.messages[0].Value, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeDecodeEnvelope {
-		t.Fatalf("DLQ classification=%s/%s", payload.ErrorClass, payload.ErrorCode)
+	if payload.Failure.Class != string(kafkaFailurePermanent) || payload.Failure.Code != kafkaFailureCodeDecodeEnvelope {
+		t.Fatalf("DLQ classification=%s/%s", payload.Failure.Class, payload.Failure.Code)
 	}
 }
 

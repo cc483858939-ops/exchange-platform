@@ -33,9 +33,6 @@ func ValidateWorkerEventingConfig(cfg *Config) error {
 	if strings.TrimSpace(cfg.Kafka.NotificationGroupID) == "" {
 		return errors.New("Kafka notification consumer group is not configured")
 	}
-	if strings.TrimSpace(cfg.Kafka.NotificationDLQTopic) == "" {
-		return errors.New("Kafka notification DLQ topic is not configured")
-	}
 	return nil
 }
 

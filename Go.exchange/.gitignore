@@ -1,4 +1,9 @@
 .secrets/
 /docs/
+!/docs/
+/docs/*
+!/docs/runbooks/
+/docs/runbooks/*
+!/docs/runbooks/kafka-dlq.md
 /.codex/
 /.devdata/

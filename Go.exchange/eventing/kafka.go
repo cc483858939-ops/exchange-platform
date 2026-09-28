@@ -23,6 +23,12 @@ type BatchPublisher interface {
 	PublishBatch(context.Context, []Envelope) error
 }
 
+// RawPublisher publishes already-encoded Kafka messages to an explicit topic.
+// It is intended for infrastructure paths such as DLQ replay.
+type RawPublisher interface {
+	PublishRaw(context.Context, string, ...kafka.Message) error
+}
+
 type KafkaPublisher struct {
 	config  config.KafkaConfig
 	mu      sync.Mutex
@@ -71,6 +77,22 @@ func (p *KafkaPublisher) PublishBatch(ctx context.Context, events []Envelope) er
 		}
 	}
 	return nil
+}
+
+func (p *KafkaPublisher) PublishRaw(ctx context.Context, topic string, messages ...kafka.Message) error {
+	if p == nil {
+		return errors.New("kafka publisher is nil")
+	}
+	if strings.TrimSpace(topic) == "" {
+		return errors.New("Kafka topic is required")
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	if len(normalizedBrokers(p.config.Brokers)) == 0 {
+		return errors.New("kafka brokers are required")
+	}
+	return p.writer(topic).WriteMessages(ctx, messages...)
 }
 
 // PublishRawMessages is used only for infrastructure side channels such as a

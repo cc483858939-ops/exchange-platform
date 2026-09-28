@@ -42,7 +42,6 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	SetOutboxOldestRowAgeSeconds(7)
 	SetConsumerInboxRows("goexchange-notification-projection-v1", 13)
 	RecordNotificationProjectionFailure("database")
-	RecordNotificationProjectionDLQ()
 	ObserveNotificationProjectionLatency(time.Second)
 	RecordRecommendationTelemetryEvent("accepted", "impression", "")
 	RecordRecommendationTelemetryProjection("applied")
@@ -67,7 +66,7 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 }
 
 func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
-	consumers := []string{"like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding"}
+	consumers := []string{"like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding", "notification_projection"}
 	outcomes := []string{"message_applied", "batch_applied", "message_noop", "retry_attempt", "retry_exhausted", "message_dlq", "dlq_publish_failed", "redelivery_required"}
 	codes := []string{"none", "decode_envelope", "unsupported_event_type", "unsupported_schema", "decode_payload", "invalid_payload", "database_unavailable", "database_transaction", "dlq_publish", "kafka_commit", "provider_retryable", "provider_permanent", "provider_contract_invalid", "source_changed", "internal_state"}
 	for _, consumer := range consumers {

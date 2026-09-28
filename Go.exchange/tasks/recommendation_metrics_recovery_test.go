@@ -124,11 +124,11 @@ func TestRecommendationMetricsPermanentMessageDoesNotDropFollowingValidMessage(t
 	if !applied || len(publisher.messages) != 1 || len(reader.commits) != 1 || len(reader.commits[0]) != 2 {
 		t.Fatalf("applied=%t DLQ=%d commits=%#v", applied, len(publisher.messages), reader.commits)
 	}
-	var payload consumerDLQPayload
+	var payload eventing.DeadLetterRecord
 	if err := json.Unmarshal(publisher.messages[0].Value, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if publisher.topics[0] != cfg.ConsumerDLQTopic || payload.Consumer != kafkaConsumerRecommendationMetrics || payload.SourceOffset != 200 || payload.ErrorCode != kafkaFailureCodeDecodeEnvelope {
+	if publisher.topics[0] != cfg.ConsumerDLQTopic || payload.Consumer != kafkaConsumerRecommendationMetrics || payload.Source.Offset != 200 || payload.Failure.Code != kafkaFailureCodeDecodeEnvelope {
 		t.Fatalf("DLQ topic=%q payload=%+v", publisher.topics[0], payload)
 	}
 }

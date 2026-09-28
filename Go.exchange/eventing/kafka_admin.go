@@ -24,6 +24,7 @@ type TopicSpec struct {
 	Name              string
 	Partitions        int
 	ReplicationFactor int
+	ConfigEntries     []kafka.ConfigEntry
 }
 
 // RequiredKafkaTopics is the single source of the required Kafka topic set.
@@ -41,8 +42,7 @@ func RequiredKafkaTopics(cfg config.KafkaConfig) ([]TopicSpec, error) {
 		{Name: cfg.RecommendationEventsTopic, Partitions: cfg.RecommendationEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.PostEmbeddingTopic, Partitions: cfg.PostEmbeddingPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.ActivityEventsTopic, Partitions: cfg.ActivityEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
-		{Name: cfg.NotificationDLQTopic, Partitions: cfg.NotificationDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
-		{Name: cfg.ConsumerDLQTopic, Partitions: cfg.ConsumerDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: cfg.ConsumerDLQTopic, Partitions: cfg.ConsumerDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor, ConfigEntries: []kafka.ConfigEntry{{ConfigName: "retention.ms", ConfigValue: "2592000000"}}},
 	}
 	seen := make(map[string]struct{}, len(specs))
 	for index := range specs {
@@ -135,9 +135,9 @@ func KafkaConnectInternalTopicSpecs(cfg config.KafkaConfig) ([]TopicSpec, error)
 		return nil, errors.New("kafka topic replication factor must be at least 1")
 	}
 	return []TopicSpec{
-		{Name: "goexchange.connect.configs", Partitions: 1, ReplicationFactor: cfg.TopicReplicationFactor},
-		{Name: "goexchange.connect.offsets", Partitions: 25, ReplicationFactor: cfg.TopicReplicationFactor},
-		{Name: "goexchange.connect.status", Partitions: 5, ReplicationFactor: cfg.TopicReplicationFactor},
+		{Name: "goexchange.connect.configs", Partitions: 1, ReplicationFactor: cfg.TopicReplicationFactor, ConfigEntries: []kafka.ConfigEntry{{ConfigName: "cleanup.policy", ConfigValue: "compact"}}},
+		{Name: "goexchange.connect.offsets", Partitions: 25, ReplicationFactor: cfg.TopicReplicationFactor, ConfigEntries: []kafka.ConfigEntry{{ConfigName: "cleanup.policy", ConfigValue: "compact"}}},
+		{Name: "goexchange.connect.status", Partitions: 5, ReplicationFactor: cfg.TopicReplicationFactor, ConfigEntries: []kafka.ConfigEntry{{ConfigName: "cleanup.policy", ConfigValue: "compact"}}},
 	}, nil
 }
 
@@ -235,7 +235,7 @@ func provisionKafkaTopics(ctx context.Context, admin kafkaTopicAdmin, specs []To
 			Topic:             spec.Name,
 			NumPartitions:     spec.Partitions,
 			ReplicationFactor: spec.ReplicationFactor,
-			ConfigEntries:     kafkaTopicConfigEntries(spec.Name),
+			ConfigEntries:     spec.ConfigEntries,
 		})
 	}
 	if len(missing) > 0 {
@@ -244,15 +244,6 @@ func provisionKafkaTopics(ctx context.Context, admin kafkaTopicAdmin, specs []To
 		}
 	}
 	return verifyKafkaTopicMetadata(ctx, admin, specs, options)
-}
-
-func kafkaTopicConfigEntries(topic string) []kafka.ConfigEntry {
-	switch topic {
-	case "goexchange.connect.configs", "goexchange.connect.offsets", "goexchange.connect.status":
-		return []kafka.ConfigEntry{{ConfigName: "cleanup.policy", ConfigValue: "compact"}}
-	default:
-		return nil
-	}
 }
 
 func verifyKafkaTopicMetadata(ctx context.Context, admin kafkaTopicAdmin, specs []TopicSpec, options kafkaProvisioningOptions) error {

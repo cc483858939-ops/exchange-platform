@@ -220,9 +220,13 @@ jobs:
             TestCanonicalPostDeletePGRedisIdentityE2E \
             TestCanonicalPostLikeRedisToPostgresProjectionIntegration \
             TestLikeSnapshotProjectionIntegrationRecoverySemantics \
+            TestLikeSnapshotDLQReplayDuplicateAndStaleSafetyIntegration \
             TestUserBehaviorProjectionRecoverySemanticsIntegration \
             TestRecommendationMetricsProjectionRecoverySemanticsIntegration \
             TestPostEmbeddingProjectionRecoverySemanticsIntegration \
+            TestPostEmbeddingDLQReplaySkipsCurrentProjectionIntegration \
+            TestNotificationDLQReplayDedupesAndMalformedUsesUnifiedTopicIntegration \
+            TestKafkaDLQReplayAuditPersistenceIntegration \
             TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration \
             TestPostLikeHotPathDoesNotLoadPostgres \
             TestPostLikeSafeExpiryRecoveryIntegration \
@@ -285,6 +289,9 @@ jobs:
       - name: Provision topics idempotently
         run: go run ./cmd/kafka-init
 
+      - name: Verify Kafka DLQ round-trip and replay
+        run: go test ./dlq -run Kafka -count=1
+
       - name: Assert broker exposes all provisioned topics
         shell: bash
         run: |
@@ -318,7 +325,6 @@ jobs:
             "goexchange.recommendation.events.v1"
             "goexchange.post.embedding.v1"
             "goexchange.activity.events.v1"
-            "goexchange.notification.projection.dlq.v1"
             "goexchange.consumer.dlq.v1"
             "goexchange.connect.configs"
             "goexchange.connect.offsets"
@@ -356,8 +362,14 @@ jobs:
           }
 
           assert_partition_count "goexchange.activity.events.v1" "12"
-          assert_partition_count "goexchange.notification.projection.dlq.v1" "3"
           assert_partition_count "goexchange.consumer.dlq.v1" "6"
+
+          dlq_config="$(docker exec "$kafka_container" kafka-configs.sh --bootstrap-server localhost:9092 --entity-type topics --entity-name goexchange.consumer.dlq.v1 --describe)"
+          if ! printf '%s\n' "$dlq_config" | grep -Fq 'retention.ms=2592000000'; then
+            echo "Consumer DLQ retention.ms is not configured for 30 days"
+            printf '%s\n' "$dlq_config"
+            exit 1
+          fi
   frontend:
     name: Frontend / Test and Build
     runs-on: ubuntu-latest

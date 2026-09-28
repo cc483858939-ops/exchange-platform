@@ -37,7 +37,7 @@ groups:
           description: Notification projection failures occurred during the last five minutes.
 
       - alert: GoExchangeNotificationDLQEvent
-        expr: increase(go_exchange_notification_projection_dlq_total{job="go-exchange-worker"}[15m]) > 0
+        expr: increase(go_exchange_kafka_consumer_recovery_total{job="go-exchange-worker",consumer="notification_projection",outcome="message_dlq"}[15m]) > 0
         labels:
           severity: warning
         annotations:

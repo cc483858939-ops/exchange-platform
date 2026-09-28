@@ -203,12 +203,12 @@ func TestPostEmbeddingPermanentDecodeFailureGoesToDLQAndCommits(t *testing.T) {
 	if len(reader.publisher.messages) != 1 || len(reader.publisher.topics) != 1 || reader.publisher.topics[0] != postEmbeddingRecoveryConfig().ConsumerDLQTopic {
 		t.Fatalf("DLQ topics=%v messages=%d", reader.publisher.topics, len(reader.publisher.messages))
 	}
-	var payload consumerDLQPayload
+	var payload eventing.DeadLetterRecord
 	if err := json.Unmarshal(reader.publisher.messages[0].Value, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Consumer != kafkaConsumerPostEmbedding || payload.SourceTopic != message.Topic || payload.SourcePartition != message.Partition || payload.SourceOffset != message.Offset ||
-		payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeDecodeEnvelope || string(payload.SourceValue) != string(message.Value) {
+	if payload.Consumer != kafkaConsumerPostEmbedding || payload.Source.Topic != message.Topic || payload.Source.Partition != message.Partition || payload.Source.Offset != message.Offset ||
+		payload.Failure.Class != string(kafkaFailurePermanent) || payload.Failure.Code != kafkaFailureCodeDecodeEnvelope || string(payload.Source.Value) != string(message.Value) {
 		t.Fatalf("DLQ payload=%+v", payload)
 	}
 	assertPostEmbeddingRecoveryIncrement(t, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeDecodeEnvelope, messageDLQBefore)
@@ -543,12 +543,12 @@ func TestPostEmbeddingConsumerPermanentProviderErrorsGoToDLQAndCommit(t *testing
 			if len(reader.publisher.messages) != 1 {
 				t.Fatalf("DLQ messages=%d want=1", len(reader.publisher.messages))
 			}
-			var payload consumerDLQPayload
+			var payload eventing.DeadLetterRecord
 			if err := json.Unmarshal(reader.publisher.messages[0].Value, &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload.ErrorCode != kafkaFailureCodeProviderPermanent {
-				t.Fatalf("DLQ code=%q want=%q", payload.ErrorCode, kafkaFailureCodeProviderPermanent)
+			if payload.Failure.Code != kafkaFailureCodeProviderPermanent {
+				t.Fatalf("DLQ code=%q want=%q", payload.Failure.Code, kafkaFailureCodeProviderPermanent)
 			}
 		})
 	}
@@ -656,12 +656,12 @@ func TestPostEmbeddingInvalidProviderContractsGoToDLQ(t *testing.T) {
 			if !errors.Is(err, reader.stopErr) || reader.commitCalls != 1 || embedder.calls != 1 || store.writeCalls != 0 || len(reader.publisher.messages) != 1 {
 				t.Fatalf("err=%v commits=%d provider=%d writes=%d DLQ=%d", err, reader.commitCalls, embedder.calls, store.writeCalls, len(reader.publisher.messages))
 			}
-			var payload consumerDLQPayload
+			var payload eventing.DeadLetterRecord
 			if err := json.Unmarshal(reader.publisher.messages[0].Value, &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeProviderContractInvalid {
-				t.Fatalf("DLQ failure=%s/%s", payload.ErrorClass, payload.ErrorCode)
+			if payload.Failure.Class != string(kafkaFailurePermanent) || payload.Failure.Code != kafkaFailureCodeProviderContractInvalid {
+				t.Fatalf("DLQ failure=%s/%s", payload.Failure.Class, payload.Failure.Code)
 			}
 		})
 	}
@@ -708,12 +708,12 @@ func TestPostEmbeddingRealProviderContractFailuresGoToDLQWithoutRetry(t *testing
 			if !errors.Is(consumeErr, reader.stopErr) || requestCount != 1 || reader.commitCalls != 1 || len(reader.committed) != 1 || reader.committed[0].Offset != message.Offset || store.writeCalls != 0 || len(store.upserted) != 0 || len(reader.publisher.messages) != 1 {
 				t.Fatalf("err=%v requests=%d commits=%d committed=%d writes=%d DLQ=%d", consumeErr, requestCount, reader.commitCalls, len(reader.committed), store.writeCalls, len(reader.publisher.messages))
 			}
-			var payload consumerDLQPayload
+			var payload eventing.DeadLetterRecord
 			if err := json.Unmarshal(reader.publisher.messages[0].Value, &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload.Consumer != kafkaConsumerPostEmbedding || payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeProviderContractInvalid {
-				t.Fatalf("DLQ consumer=%q failure=%s/%s", payload.Consumer, payload.ErrorClass, payload.ErrorCode)
+			if payload.Consumer != kafkaConsumerPostEmbedding || payload.Failure.Class != string(kafkaFailurePermanent) || payload.Failure.Code != kafkaFailureCodeProviderContractInvalid {
+				t.Fatalf("DLQ consumer=%q failure=%s/%s", payload.Consumer, payload.Failure.Class, payload.Failure.Code)
 			}
 			assertPostEmbeddingRecoveryIncrement(t, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeProviderContractInvalid, dlqBefore)
 			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable); got != retryableBefore {
@@ -795,12 +795,12 @@ func TestPostEmbeddingOpenAICompatibleProviderHTTPStatusRecovery(t *testing.T) {
 				t.Fatalf("message_dlq=%v want %v", got, dlqBefore+float64(test.wantDLQ))
 			}
 			if test.wantDLQ == 1 {
-				var payload consumerDLQPayload
+				var payload eventing.DeadLetterRecord
 				if err := json.Unmarshal(reader.publisher.messages[0].Value, &payload); err != nil {
 					t.Fatal(err)
 				}
-				if payload.Consumer != kafkaConsumerPostEmbedding || payload.ErrorClass != string(kafkaFailurePermanent) || payload.ErrorCode != kafkaFailureCodeProviderPermanent {
-					t.Fatalf("DLQ consumer=%q failure=%s/%s", payload.Consumer, payload.ErrorClass, payload.ErrorCode)
+				if payload.Consumer != kafkaConsumerPostEmbedding || payload.Failure.Class != string(kafkaFailurePermanent) || payload.Failure.Code != kafkaFailureCodeProviderPermanent {
+					t.Fatalf("DLQ consumer=%q failure=%s/%s", payload.Consumer, payload.Failure.Class, payload.Failure.Code)
 				}
 			}
 		})

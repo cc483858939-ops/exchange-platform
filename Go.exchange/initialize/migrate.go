@@ -62,6 +62,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.OutboxEvent{},
 			&models.Notification{},
 			&models.ConsumerInbox{},
+			&models.KafkaDLQReplay{},
 			&models.PostBehavior{},
 			&models.PostReaction{},
 			&models.RecommendationDailyMetric{},
