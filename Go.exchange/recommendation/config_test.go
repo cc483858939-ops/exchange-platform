@@ -50,22 +50,48 @@ func TestRecommendationTraceDispatcherSettingsDefaultAndNormalize(t *testing.T) 
 	if defaults.PersistTimeoutMS != 5000 || defaults.QueueCapacity != 256 || defaults.WorkerCount != 1 || defaults.ShutdownDrainTimeoutMS != 5000 {
 		t.Fatalf("trace dispatcher defaults=%#v", defaults)
 	}
+	if defaults.CleanupIntervalSeconds != config.DefaultRecommendationTraceCleanupIntervalSeconds ||
+		defaults.CleanupCatchupIntervalSeconds != config.DefaultRecommendationTraceCleanupCatchupIntervalSeconds ||
+		defaults.CleanupResultBatchSize != config.DefaultRecommendationTraceCleanupResultBatchSize ||
+		defaults.CleanupRequestBatchSize != config.DefaultRecommendationTraceCleanupRequestBatchSize ||
+		defaults.CleanupRunBudgetSeconds != config.DefaultRecommendationTraceCleanupRunBudgetSeconds ||
+		defaults.CleanupMaxResultRowsPerRun != config.DefaultRecommendationTraceCleanupMaxResultRowsPerRun ||
+		defaults.CleanupMaxRequestRowsPerRun != config.DefaultRecommendationTraceCleanupMaxRequestRowsPerRun {
+		t.Fatalf("trace cleanup defaults=%#v", defaults)
+	}
 	configured := config.RecommendationConfig{Trace: config.RecommendationTraceConfig{
 		PersistTimeoutMS: 1200, QueueCapacity: 32, WorkerCount: 3, ShutdownDrainTimeoutMS: 2400,
+		CleanupIntervalSeconds: 300, CleanupCatchupIntervalSeconds: 30,
+		CleanupResultBatchSize: 250, CleanupRequestBatchSize: 25,
+		CleanupRunBudgetSeconds: 20, CleanupMaxResultRowsPerRun: 2000,
+		CleanupMaxRequestRowsPerRun: 250,
 	}}
 	got := NormalizeConfig(configured, nil).Trace
 	if got.PersistTimeoutMS != 1200 || got.QueueCapacity != 32 || got.WorkerCount != 3 || got.ShutdownDrainTimeoutMS != 2400 {
 		t.Fatalf("normalized trace dispatcher settings=%#v", got)
 	}
+	if got.CleanupIntervalSeconds != 300 || got.CleanupCatchupIntervalSeconds != 30 ||
+		got.CleanupResultBatchSize != 250 || got.CleanupRequestBatchSize != 25 ||
+		got.CleanupRunBudgetSeconds != 20 || got.CleanupMaxResultRowsPerRun != 2000 ||
+		got.CleanupMaxRequestRowsPerRun != 250 {
+		t.Fatalf("normalized trace cleanup settings=%#v", got)
+	}
 }
 
-func TestRecommendationTraceDispatcherSettingsDoNotChangeRankerHash(t *testing.T) {
+func TestRecommendationTraceOperationalSettingsDoNotChangeRankerHash(t *testing.T) {
 	base := DefaultConfig()
 	changed := base
 	changed.Trace.PersistTimeoutMS = 1200
 	changed.Trace.QueueCapacity = 32
 	changed.Trace.WorkerCount = 3
 	changed.Trace.ShutdownDrainTimeoutMS = 2400
+	changed.Trace.CleanupIntervalSeconds = 120
+	changed.Trace.CleanupCatchupIntervalSeconds = 30
+	changed.Trace.CleanupResultBatchSize = 200
+	changed.Trace.CleanupRequestBatchSize = 50
+	changed.Trace.CleanupRunBudgetSeconds = 15
+	changed.Trace.CleanupMaxResultRowsPerRun = 1000
+	changed.Trace.CleanupMaxRequestRowsPerRun = 250
 	if got, want := RankerConfigHash(changed, "post_embedding_v1"), RankerConfigHash(base, "post_embedding_v1"); got != want {
 		t.Fatalf("trace dispatcher settings changed ranker hash: got=%q want=%q", got, want)
 	}
@@ -344,13 +370,13 @@ func TestNormalizedRecommendationConfigExplicitZeroDoesNotRelaxPositiveOnlyField
 		NegativeConfidenceSaturationScale: 0,
 		ServedHistoryLimit:                0,
 		Diversity:                         config.RecommendationDiversityConfig{AuthorWindowSize: 0},
-		Trace:                             config.RecommendationTraceConfig{CleanupBatchSize: 0},
+		Trace:                             config.RecommendationTraceConfig{CleanupResultBatchSize: 0},
 	}}
 
 	cfg := NormalizeConfig(configured.Recommendation, configured.RecommendationPresence)
 	if cfg.SignalHalfLifeDays != 14 || cfg.PositivePostWeightCap != 7 ||
 		cfg.NegativeConfidenceSaturationScale != 12 || cfg.ServedHistoryLimit != 1000 ||
-		cfg.Diversity.AuthorWindowSize != 8 || cfg.Trace.CleanupBatchSize != 5000 {
+		cfg.Diversity.AuthorWindowSize != 8 || cfg.Trace.CleanupResultBatchSize != config.DefaultRecommendationTraceCleanupResultBatchSize {
 		t.Fatalf("positive-only fields changed by explicit zero: %#v", cfg)
 	}
 }

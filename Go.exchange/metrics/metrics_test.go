@@ -155,6 +155,38 @@ func TestHandlerExposesBoundedRecommendationTraceMetrics(t *testing.T) {
 	}
 }
 
+func TestHandlerExposesRecommendationTraceCleanupMetrics(t *testing.T) {
+	AddRecommendationTraceCleanupRows("result", 12)
+	AddRecommendationTraceCleanupRows("request", 7)
+	AddRecommendationTraceCleanupRows("request-123", 999)
+	RecordRecommendationTraceCleanupRun("caught_up", time.Second)
+	RecordRecommendationTraceCleanupRun("budget_reached", 2*time.Second)
+	RecordRecommendationTraceCleanupRun("error", 3*time.Second)
+	RecordRecommendationTraceCleanupRun("database error text", time.Second)
+	SetRecommendationTraceCleanupBacklogLikely(true)
+
+	r := httptest.NewRecorder()
+	Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := r.Body.String()
+	for _, metric := range []string{
+		`go_exchange_recommendation_trace_cleanup_rows_total{table="result"} 12`,
+		`go_exchange_recommendation_trace_cleanup_rows_total{table="request"} 7`,
+		`go_exchange_recommendation_trace_cleanup_runs_total{outcome="caught_up"} 1`,
+		`go_exchange_recommendation_trace_cleanup_runs_total{outcome="budget_reached"} 1`,
+		`go_exchange_recommendation_trace_cleanup_runs_total{outcome="error"} 1`,
+		"go_exchange_recommendation_trace_cleanup_duration_seconds_count 3",
+		"go_exchange_recommendation_trace_cleanup_backlog_likely 1",
+	} {
+		if !strings.Contains(body, metric) {
+			t.Fatalf("metric %q missing from exposition: %s", metric, body)
+		}
+	}
+	if strings.Contains(body, "request-123") || strings.Contains(body, "database error text") {
+		t.Fatalf("unbounded cleanup label escaped into metrics: %s", body)
+	}
+	SetRecommendationTraceCleanupBacklogLikely(false)
+}
+
 func prometheusMetricValue(t *testing.T, prefix string) float64 {
 	t.Helper()
 	r := httptest.NewRecorder()

@@ -138,14 +138,68 @@ type RecommendationExplorationConfig struct {
 }
 
 type RecommendationTraceConfig struct {
-	ResultRetentionDays    int `mapstructure:"result_retention_days"`
-	RequestRetentionDays   int `mapstructure:"request_retention_days"`
-	CleanupIntervalHours   int `mapstructure:"cleanup_interval_hours"`
-	CleanupBatchSize       int `mapstructure:"cleanup_batch_size"`
-	PersistTimeoutMS       int `mapstructure:"persist_timeout_ms"`
-	QueueCapacity          int `mapstructure:"queue_capacity"`
-	WorkerCount            int `mapstructure:"worker_count"`
-	ShutdownDrainTimeoutMS int `mapstructure:"shutdown_drain_timeout_ms"`
+	ResultRetentionDays           int `mapstructure:"result_retention_days"`
+	RequestRetentionDays          int `mapstructure:"request_retention_days"`
+	CleanupIntervalSeconds        int `mapstructure:"cleanup_interval_seconds"`
+	CleanupCatchupIntervalSeconds int `mapstructure:"cleanup_catchup_interval_seconds"`
+	CleanupResultBatchSize        int `mapstructure:"cleanup_result_batch_size"`
+	CleanupRequestBatchSize       int `mapstructure:"cleanup_request_batch_size"`
+	CleanupRunBudgetSeconds       int `mapstructure:"cleanup_run_budget_seconds"`
+	CleanupMaxResultRowsPerRun    int `mapstructure:"cleanup_max_result_rows_per_run"`
+	CleanupMaxRequestRowsPerRun   int `mapstructure:"cleanup_max_request_rows_per_run"`
+	PersistTimeoutMS              int `mapstructure:"persist_timeout_ms"`
+	QueueCapacity                 int `mapstructure:"queue_capacity"`
+	WorkerCount                   int `mapstructure:"worker_count"`
+	ShutdownDrainTimeoutMS        int `mapstructure:"shutdown_drain_timeout_ms"`
+}
+
+const (
+	DefaultRecommendationTraceResultRetentionDays           = 30
+	DefaultRecommendationTraceRequestRetentionDays          = 90
+	DefaultRecommendationTraceCleanupIntervalSeconds        = 600
+	DefaultRecommendationTraceCleanupCatchupIntervalSeconds = 60
+	DefaultRecommendationTraceCleanupResultBatchSize        = 5000
+	DefaultRecommendationTraceCleanupRequestBatchSize       = 500
+	DefaultRecommendationTraceCleanupRunBudgetSeconds       = 60
+	DefaultRecommendationTraceCleanupMaxResultRowsPerRun    = 100000
+	DefaultRecommendationTraceCleanupMaxRequestRowsPerRun   = 5000
+)
+
+func (c RecommendationTraceConfig) Normalized() RecommendationTraceConfig {
+	if c.ResultRetentionDays <= 0 {
+		c.ResultRetentionDays = DefaultRecommendationTraceResultRetentionDays
+	}
+	if c.RequestRetentionDays <= 0 {
+		c.RequestRetentionDays = DefaultRecommendationTraceRequestRetentionDays
+	}
+	if c.RequestRetentionDays < c.ResultRetentionDays {
+		c.RequestRetentionDays = c.ResultRetentionDays
+	}
+	if c.RequestRetentionDays < DefaultRecommendationTraceRequestRetentionDays {
+		c.RequestRetentionDays = DefaultRecommendationTraceRequestRetentionDays
+	}
+	if c.CleanupIntervalSeconds <= 0 {
+		c.CleanupIntervalSeconds = DefaultRecommendationTraceCleanupIntervalSeconds
+	}
+	if c.CleanupCatchupIntervalSeconds <= 0 {
+		c.CleanupCatchupIntervalSeconds = DefaultRecommendationTraceCleanupCatchupIntervalSeconds
+	}
+	if c.CleanupResultBatchSize <= 0 {
+		c.CleanupResultBatchSize = DefaultRecommendationTraceCleanupResultBatchSize
+	}
+	if c.CleanupRequestBatchSize <= 0 {
+		c.CleanupRequestBatchSize = DefaultRecommendationTraceCleanupRequestBatchSize
+	}
+	if c.CleanupRunBudgetSeconds <= 0 {
+		c.CleanupRunBudgetSeconds = DefaultRecommendationTraceCleanupRunBudgetSeconds
+	}
+	if c.CleanupMaxResultRowsPerRun <= 0 {
+		c.CleanupMaxResultRowsPerRun = DefaultRecommendationTraceCleanupMaxResultRowsPerRun
+	}
+	if c.CleanupMaxRequestRowsPerRun <= 0 {
+		c.CleanupMaxRequestRowsPerRun = DefaultRecommendationTraceCleanupMaxRequestRowsPerRun
+	}
+	return c
 }
 
 type RecommendationCandidateCaps struct {

@@ -111,8 +111,13 @@ recommendation:
   trace:
     result_retention_days: 30
     request_retention_days: 90
-    cleanup_interval_hours: 6
-    cleanup_batch_size: 5000
+    cleanup_interval_seconds: 600
+    cleanup_catchup_interval_seconds: 60
+    cleanup_result_batch_size: 5000
+    cleanup_request_batch_size: 500
+    cleanup_run_budget_seconds: 60
+    cleanup_max_result_rows_per_run: 100000
+    cleanup_max_request_rows_per_run: 5000
     persist_timeout_ms: 5000
     queue_capacity: 256
     worker_count: 1

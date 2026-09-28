@@ -30,8 +30,16 @@ func DefaultConfig() config.RecommendationConfig {
 			SemanticDuplicateThreshold: 0.92, SemanticDuplicatePenalty: 1,
 		},
 		Trace: config.RecommendationTraceConfig{
-			ResultRetentionDays: 30, RequestRetentionDays: 90, CleanupIntervalHours: 6, CleanupBatchSize: 5000,
-			PersistTimeoutMS: defaultTracePersistTimeoutMS, QueueCapacity: defaultTraceQueueCapacity,
+			ResultRetentionDays:           config.DefaultRecommendationTraceResultRetentionDays,
+			RequestRetentionDays:          config.DefaultRecommendationTraceRequestRetentionDays,
+			CleanupIntervalSeconds:        config.DefaultRecommendationTraceCleanupIntervalSeconds,
+			CleanupCatchupIntervalSeconds: config.DefaultRecommendationTraceCleanupCatchupIntervalSeconds,
+			CleanupResultBatchSize:        config.DefaultRecommendationTraceCleanupResultBatchSize,
+			CleanupRequestBatchSize:       config.DefaultRecommendationTraceCleanupRequestBatchSize,
+			CleanupRunBudgetSeconds:       config.DefaultRecommendationTraceCleanupRunBudgetSeconds,
+			CleanupMaxResultRowsPerRun:    config.DefaultRecommendationTraceCleanupMaxResultRowsPerRun,
+			CleanupMaxRequestRowsPerRun:   config.DefaultRecommendationTraceCleanupMaxRequestRowsPerRun,
+			PersistTimeoutMS:              defaultTracePersistTimeoutMS, QueueCapacity: defaultTraceQueueCapacity,
 			WorkerCount: defaultTraceWorkerCount, ShutdownDrainTimeoutMS: defaultTraceShutdownDrainTimeoutMS,
 		},
 		Candidates: config.RecommendationCandidatesConfig{
@@ -190,11 +198,26 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	if set.Trace.RequestRetentionDays > 0 {
 		cfg.Trace.RequestRetentionDays = set.Trace.RequestRetentionDays
 	}
-	if set.Trace.CleanupIntervalHours > 0 {
-		cfg.Trace.CleanupIntervalHours = set.Trace.CleanupIntervalHours
+	if set.Trace.CleanupIntervalSeconds > 0 {
+		cfg.Trace.CleanupIntervalSeconds = set.Trace.CleanupIntervalSeconds
 	}
-	if set.Trace.CleanupBatchSize > 0 {
-		cfg.Trace.CleanupBatchSize = set.Trace.CleanupBatchSize
+	if set.Trace.CleanupCatchupIntervalSeconds > 0 {
+		cfg.Trace.CleanupCatchupIntervalSeconds = set.Trace.CleanupCatchupIntervalSeconds
+	}
+	if set.Trace.CleanupResultBatchSize > 0 {
+		cfg.Trace.CleanupResultBatchSize = set.Trace.CleanupResultBatchSize
+	}
+	if set.Trace.CleanupRequestBatchSize > 0 {
+		cfg.Trace.CleanupRequestBatchSize = set.Trace.CleanupRequestBatchSize
+	}
+	if set.Trace.CleanupRunBudgetSeconds > 0 {
+		cfg.Trace.CleanupRunBudgetSeconds = set.Trace.CleanupRunBudgetSeconds
+	}
+	if set.Trace.CleanupMaxResultRowsPerRun > 0 {
+		cfg.Trace.CleanupMaxResultRowsPerRun = set.Trace.CleanupMaxResultRowsPerRun
+	}
+	if set.Trace.CleanupMaxRequestRowsPerRun > 0 {
+		cfg.Trace.CleanupMaxRequestRowsPerRun = set.Trace.CleanupMaxRequestRowsPerRun
 	}
 	if set.Trace.PersistTimeoutMS > 0 {
 		cfg.Trace.PersistTimeoutMS = set.Trace.PersistTimeoutMS
@@ -278,21 +301,7 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	if cfg.Diversity.SemanticDuplicatePenalty < 0 {
 		cfg.Diversity.SemanticDuplicatePenalty = 1
 	}
-	if cfg.Trace.ResultRetentionDays <= 0 {
-		cfg.Trace.ResultRetentionDays = 30
-	}
-	if cfg.Trace.RequestRetentionDays < cfg.Trace.ResultRetentionDays {
-		cfg.Trace.RequestRetentionDays = cfg.Trace.ResultRetentionDays
-	}
-	if cfg.Trace.RequestRetentionDays < 90 {
-		cfg.Trace.RequestRetentionDays = 90
-	}
-	if cfg.Trace.CleanupIntervalHours <= 0 {
-		cfg.Trace.CleanupIntervalHours = 6
-	}
-	if cfg.Trace.CleanupBatchSize <= 0 {
-		cfg.Trace.CleanupBatchSize = 5000
-	}
+	cfg.Trace = cfg.Trace.Normalized()
 	if cfg.Trace.PersistTimeoutMS <= 0 {
 		cfg.Trace.PersistTimeoutMS = defaultTracePersistTimeoutMS
 	}

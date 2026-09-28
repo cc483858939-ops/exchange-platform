@@ -54,7 +54,15 @@ func testDefaultRecommendationConfig() config.RecommendationConfig {
 	cfg.Trace = config.RecommendationTraceConfig{
 		PersistTimeoutMS: defaultTracePersistTimeoutMS, QueueCapacity: defaultTraceQueueCapacity,
 		WorkerCount: defaultTraceWorkerCount, ShutdownDrainTimeoutMS: defaultTraceShutdownDrainTimeoutMS,
-		ResultRetentionDays: 30, RequestRetentionDays: 90, CleanupIntervalHours: 6, CleanupBatchSize: 5000,
+		ResultRetentionDays:           config.DefaultRecommendationTraceResultRetentionDays,
+		RequestRetentionDays:          config.DefaultRecommendationTraceRequestRetentionDays,
+		CleanupIntervalSeconds:        config.DefaultRecommendationTraceCleanupIntervalSeconds,
+		CleanupCatchupIntervalSeconds: config.DefaultRecommendationTraceCleanupCatchupIntervalSeconds,
+		CleanupResultBatchSize:        config.DefaultRecommendationTraceCleanupResultBatchSize,
+		CleanupRequestBatchSize:       config.DefaultRecommendationTraceCleanupRequestBatchSize,
+		CleanupRunBudgetSeconds:       config.DefaultRecommendationTraceCleanupRunBudgetSeconds,
+		CleanupMaxResultRowsPerRun:    config.DefaultRecommendationTraceCleanupMaxResultRowsPerRun,
+		CleanupMaxRequestRowsPerRun:   config.DefaultRecommendationTraceCleanupMaxRequestRowsPerRun,
 	}
 	cfg.Candidates = config.RecommendationCandidatesConfig{
 		Personalized: config.RecommendationCandidateCaps{Semantic: 200, Following: 150, Recent: 150, Trending: 150, Merged: 500},

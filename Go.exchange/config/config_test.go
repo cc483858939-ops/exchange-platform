@@ -239,6 +239,57 @@ func TestRecommendationProfileMaterializationDefaultsAllNonPositiveValues(t *tes
 	}
 }
 
+func TestRecommendationTraceConfigDefaultsAndNormalizesCleanupValues(t *testing.T) {
+	defaults := (RecommendationTraceConfig{}).Normalized()
+	want := RecommendationTraceConfig{
+		ResultRetentionDays:           DefaultRecommendationTraceResultRetentionDays,
+		RequestRetentionDays:          DefaultRecommendationTraceRequestRetentionDays,
+		CleanupIntervalSeconds:        DefaultRecommendationTraceCleanupIntervalSeconds,
+		CleanupCatchupIntervalSeconds: DefaultRecommendationTraceCleanupCatchupIntervalSeconds,
+		CleanupResultBatchSize:        DefaultRecommendationTraceCleanupResultBatchSize,
+		CleanupRequestBatchSize:       DefaultRecommendationTraceCleanupRequestBatchSize,
+		CleanupRunBudgetSeconds:       DefaultRecommendationTraceCleanupRunBudgetSeconds,
+		CleanupMaxResultRowsPerRun:    DefaultRecommendationTraceCleanupMaxResultRowsPerRun,
+		CleanupMaxRequestRowsPerRun:   DefaultRecommendationTraceCleanupMaxRequestRowsPerRun,
+	}
+	if defaults != want {
+		t.Fatalf("default recommendation trace config=%+v want=%+v", defaults, want)
+	}
+
+	partial := (RecommendationTraceConfig{
+		ResultRetentionDays:           -1,
+		RequestRetentionDays:          30,
+		CleanupIntervalSeconds:        120,
+		CleanupCatchupIntervalSeconds: 0,
+		CleanupResultBatchSize:        -5,
+		CleanupRequestBatchSize:       25,
+		CleanupRunBudgetSeconds:       -1,
+		CleanupMaxResultRowsPerRun:    500,
+		CleanupMaxRequestRowsPerRun:   0,
+	}).Normalized()
+	if partial.ResultRetentionDays != want.ResultRetentionDays || partial.RequestRetentionDays != want.RequestRetentionDays ||
+		partial.CleanupIntervalSeconds != 120 || partial.CleanupCatchupIntervalSeconds != want.CleanupCatchupIntervalSeconds ||
+		partial.CleanupResultBatchSize != want.CleanupResultBatchSize || partial.CleanupRequestBatchSize != 25 ||
+		partial.CleanupRunBudgetSeconds != want.CleanupRunBudgetSeconds || partial.CleanupMaxResultRowsPerRun != 500 ||
+		partial.CleanupMaxRequestRowsPerRun != want.CleanupMaxRequestRowsPerRun {
+		t.Fatalf("partially normalized recommendation trace config=%+v", partial)
+	}
+
+	custom := (RecommendationTraceConfig{
+		ResultRetentionDays: 60, RequestRetentionDays: 90,
+		CleanupIntervalSeconds: 300, CleanupCatchupIntervalSeconds: 30,
+		CleanupResultBatchSize: 100, CleanupRequestBatchSize: 20,
+		CleanupRunBudgetSeconds: 15, CleanupMaxResultRowsPerRun: 1000,
+		CleanupMaxRequestRowsPerRun: 100,
+	}).Normalized()
+	if custom.ResultRetentionDays != 60 || custom.RequestRetentionDays != 90 || custom.CleanupIntervalSeconds != 300 ||
+		custom.CleanupCatchupIntervalSeconds != 30 || custom.CleanupResultBatchSize != 100 ||
+		custom.CleanupRequestBatchSize != 20 || custom.CleanupRunBudgetSeconds != 15 ||
+		custom.CleanupMaxResultRowsPerRun != 1000 || custom.CleanupMaxRequestRowsPerRun != 100 {
+		t.Fatalf("custom recommendation trace config changed: %+v", custom)
+	}
+}
+
 func TestLikeStateEnvironmentDefaultsAndOverrides(t *testing.T) {
 	for _, key := range []string{
 		"LIKE_STATE_EXPIRY_ENABLED",

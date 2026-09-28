@@ -51,7 +51,10 @@ var (
 	recommendationTracePersist                   = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_persist_total", Help: "Asynchronous recommendation serving trace persistence outcomes."}, []string{"outcome"})
 	recommendationTracePersistDuration           = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_trace_persist_duration_seconds", Help: "Asynchronous recommendation serving trace persistence duration in seconds.", Buckets: prometheus.DefBuckets})
 	recommendationTraceCleanupFailures           = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_failures_total", Help: "Recommendation serving trace cleanup failures."})
-	recommendationTraceCleanupRows               = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_rows_total", Help: "Recommendation serving trace rows cleaned up."})
+	recommendationTraceCleanupRows               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_rows_total", Help: "Recommendation serving trace rows cleaned up by table."}, []string{"table"})
+	recommendationTraceCleanupRuns               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_trace_cleanup_runs_total", Help: "Recommendation serving trace cleanup runs by outcome."}, []string{"outcome"})
+	recommendationTraceCleanupDuration           = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_trace_cleanup_duration_seconds", Help: "Recommendation serving trace cleanup run duration in seconds.", Buckets: prometheus.DefBuckets})
+	recommendationTraceCleanupBacklogLikely      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_recommendation_trace_cleanup_backlog_likely", Help: "Whether recommendation trace cleanup may have eligible backlog remaining."})
 	recommendationProfileLoad                    = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_profile_load_total", Help: "Materialized recommendation profile load outcomes."}, []string{"status"})
 	recommendationProfileAge                     = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_profile_age_seconds", Help: "Age in seconds of materialized profiles used for serving.", Buckets: prometheus.DefBuckets})
 	recommendationProfileMaterialization         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_profile_materialization_total", Help: "Recommendation profile materialization outcomes."}, []string{"result"})
@@ -82,7 +85,7 @@ func init() {
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
-		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceEnqueue, recommendationTraceQueueDepth, recommendationTracePersist, recommendationTracePersistDuration, recommendationTraceCleanupFailures, recommendationTraceCleanupRows,
+		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceEnqueue, recommendationTraceQueueDepth, recommendationTracePersist, recommendationTracePersistDuration, recommendationTraceCleanupFailures, recommendationTraceCleanupRows, recommendationTraceCleanupRuns, recommendationTraceCleanupDuration, recommendationTraceCleanupBacklogLikely,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
 		translationRequests, translationRequestDuration, translationCacheOperations, translationProviderRequests, translationProviderDuration,
 		rateLimitDecisions, rateLimitErrors,
@@ -110,6 +113,13 @@ func init() {
 	for _, outcome := range []string{"success", "error", "timeout"} {
 		recommendationTracePersist.WithLabelValues(outcome)
 	}
+	for _, table := range []string{"result", "request"} {
+		recommendationTraceCleanupRows.WithLabelValues(table)
+	}
+	for _, outcome := range []string{"caught_up", "budget_reached", "error"} {
+		recommendationTraceCleanupRuns.WithLabelValues(outcome)
+	}
+	recommendationTraceCleanupBacklogLikely.Set(0)
 }
 
 func Middleware() gin.HandlerFunc {
@@ -264,10 +274,32 @@ func RecordRecommendationTracePersist(outcome string, duration time.Duration) {
 	recommendationTracePersistDuration.Observe(duration.Seconds())
 }
 func RecordRecommendationTraceCleanupFailure() { recommendationTraceCleanupFailures.Inc() }
-func AddRecommendationTraceCleanupRows(count int) {
-	if count > 0 {
-		recommendationTraceCleanupRows.Add(float64(count))
+func AddRecommendationTraceCleanupRows(table string, count int64) {
+	if table != "result" && table != "request" {
+		return
 	}
+	if count > 0 {
+		recommendationTraceCleanupRows.WithLabelValues(table).Add(float64(count))
+	}
+}
+func RecordRecommendationTraceCleanupRun(outcome string, duration time.Duration) {
+	switch outcome {
+	case "caught_up", "budget_reached", "error":
+		recommendationTraceCleanupRuns.WithLabelValues(outcome).Inc()
+	default:
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	recommendationTraceCleanupDuration.Observe(duration.Seconds())
+}
+func SetRecommendationTraceCleanupBacklogLikely(backlogLikely bool) {
+	value := 0.0
+	if backlogLikely {
+		value = 1
+	}
+	recommendationTraceCleanupBacklogLikely.Set(value)
 }
 
 func RecordRecommendationProfileLoad(status string) {

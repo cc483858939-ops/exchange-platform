@@ -46,9 +46,15 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	config.AppConfig = &config.Config{
 		Recommendation: config.RecommendationConfig{
 			Trace: config.RecommendationTraceConfig{
-				ResultRetentionDays:  120,
-				RequestRetentionDays: 90,
-				CleanupBatchSize:     5000,
+				ResultRetentionDays:           120,
+				RequestRetentionDays:          90,
+				CleanupIntervalSeconds:        600,
+				CleanupCatchupIntervalSeconds: 60,
+				CleanupResultBatchSize:        5,
+				CleanupRequestBatchSize:       5,
+				CleanupRunBudgetSeconds:       60,
+				CleanupMaxResultRowsPerRun:    1000,
+				CleanupMaxRequestRowsPerRun:   1000,
 			},
 		},
 	}
@@ -75,6 +81,12 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
 	}
+	articleTwo := models.Post{
+		AuthorID: user.ID, Content: "trace cleanup cascade body", Visibility: "public",
+	}
+	if err := db.Create(&articleTwo).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	newRequest := func(createdAt time.Time) models.RecommendationRequest {
@@ -92,14 +104,27 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	requestA := newRequest(now.AddDate(0, 0, -100))
 	requestB := newRequest(now.AddDate(0, 0, -10))
 	requestC := newRequest(now.AddDate(0, 0, -121))
-	requestIDs := []string{requestA.RequestID, requestB.RequestID, requestC.RequestID}
+	recentRequests := make([]models.RecommendationRequest, 0, 11)
+	oldRequests := []models.RecommendationRequest{requestC}
+	for i := 0; i < 11; i++ {
+		recentRequests = append(recentRequests, newRequest(now.AddDate(0, 0, -10)))
+		oldRequests = append(oldRequests, newRequest(now.AddDate(0, 0, -121)))
+	}
+	requestRows := []models.RecommendationRequest{requestA, requestB}
+	requestRows = append(requestRows, recentRequests...)
+	requestRows = append(requestRows, oldRequests...)
+	requestIDs := make([]string, 0, len(requestRows))
+	for _, request := range requestRows {
+		requestIDs = append(requestIDs, request.RequestID)
+	}
 	t.Cleanup(func() {
 		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationResultTrace{})
 		db.Unscoped().Where("request_id IN ?", requestIDs).Delete(&models.RecommendationRequest{})
+		db.Unscoped().Where("id = ?", articleTwo.ID).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", article.ID).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
-	if err := db.Create(&[]models.RecommendationRequest{requestA, requestB, requestC}).Error; err != nil {
+	if err := db.Create(&requestRows).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -115,15 +140,43 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 	traceB.RequestID = requestB.RequestID
 	traceB.CreatedAt = now.AddDate(0, 0, -10)
 	traceB.ExpiresAt = now.Add(-time.Hour)
-	if err := db.Create(&traceA).Error; err != nil {
-		t.Fatal(err)
+	traceRows := []models.RecommendationResultTrace{traceA, traceB}
+	for _, request := range recentRequests {
+		trace := traceB
+		trace.RequestID = request.RequestID
+		trace.CreatedAt = request.CreatedAt
+		traceRows = append(traceRows, trace)
 	}
-	if err := db.Create(&traceB).Error; err != nil {
+	for _, request := range oldRequests {
+		firstTrace := traceA
+		firstTrace.RequestID = request.RequestID
+		firstTrace.Position = 1
+		firstTrace.CreatedAt = request.CreatedAt
+		secondTrace := firstTrace
+		secondTrace.Position = 2
+		secondTrace.PostID = articleTwo.ID
+		traceRows = append(traceRows, firstTrace, secondTrace)
+	}
+	if err := db.Create(&traceRows).Error; err != nil {
 		t.Fatal(err)
 	}
 
-	if err := cleanupRecommendationTraceOnce(context.Background(), now, cfg.RequestRetentionDays, cfg.CleanupBatchSize); err != nil {
+	runResult, err := runRecommendationTraceCleanup(
+		context.Background(),
+		cfg,
+		func() time.Time { return now },
+		func(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+			return deleteExpiredRecommendationResultTraceBatch(ctx, db, cutoff, limit)
+		},
+		func(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+			return deleteOldRecommendationRequestBatch(ctx, db, cutoff, limit)
+		},
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !runResult.CaughtUp || runResult.BudgetReached || runResult.Cycles != 3 || runResult.ResultRows != 12 || runResult.RequestRows != 12 {
+		t.Fatalf("cleanup run result=%+v", runResult)
 	}
 
 	var requestCount int64
@@ -154,10 +207,44 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 		t.Fatalf("expired request B trace count=%d, want 0", traceCount)
 	}
 
+	var recentRequestCount int64
+	if err := db.Model(&models.RecommendationRequest{}).Where("request_id IN ?", requestIDsFor(recentRequests)).Count(&recentRequestCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if recentRequestCount != int64(len(recentRequests)) {
+		t.Fatalf("recent request count=%d, want %d", recentRequestCount, len(recentRequests))
+	}
+	if err := db.Model(&models.RecommendationResultTrace{}).Where("request_id IN ?", requestIDsFor(recentRequests)).Count(&traceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if traceCount != 0 {
+		t.Fatalf("expired multi-batch trace count=%d, want 0", traceCount)
+	}
+	if err := db.Model(&models.RecommendationRequest{}).Where("request_id IN ?", requestIDsFor(oldRequests)).Count(&requestCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("expired request count=%d, want 0", requestCount)
+	}
+	if err := db.Model(&models.RecommendationResultTrace{}).Where("request_id IN ?", requestIDsFor(oldRequests)).Count(&traceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if traceCount != 0 {
+		t.Fatalf("cascaded child trace count=%d, want 0", traceCount)
+	}
+
 	if err := db.Model(&models.RecommendationRequest{}).Where("request_id = ?", requestC.RequestID).Count(&requestCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if requestCount != 0 {
 		t.Fatalf("request C count=%d, want 0", requestCount)
 	}
+}
+
+func requestIDsFor(requests []models.RecommendationRequest) []string {
+	ids := make([]string, 0, len(requests))
+	for _, request := range requests {
+		ids = append(ids, request.RequestID)
+	}
+	return ids
 }
