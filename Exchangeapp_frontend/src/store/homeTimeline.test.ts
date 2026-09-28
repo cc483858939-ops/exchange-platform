@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedPost } from '../types/Feed';
+import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 import {
   captureBookmarkStateSyncVersion,
   syncHydratedPostBookmarkState,
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   getPublicPostRecommendations: vi.fn(),
   getFollowingTimeline: vi.fn(),
   getPostLikeStates: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   likePost: vi.fn(),
   unlikePost: vi.fn(),
   getPostRepostStates: vi.fn(),
@@ -65,6 +67,10 @@ vi.mock('../services/repostService', () => ({
   getPostRepostStates: mocks.getPostRepostStates,
   repostPost: mocks.repostPost,
   undoRepostPost: mocks.undoRepostPost,
+}));
+
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
 }));
 
 vi.mock('../services/bookmarkService', () => ({
@@ -202,6 +208,7 @@ describe('home timeline session store', () => {
     mocks.bookmarkPost.mockReset();
     mocks.unbookmarkPost.mockReset();
     mocks.deletePost.mockReset().mockResolvedValue(undefined);
+    mocks.getPostEngagementStates.mockReset().mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
   });
 
   it('does not refetch a loaded tab after clean Home re-entry', async () => {

@@ -8,6 +8,7 @@ import PostDetailView from './PostDetailView.vue';
 import { useReplyDraftStore } from '../store/replyDraft';
 import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
+import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   handoffStore: null as any,
   consumeHandoff: vi.fn(),
   getPostById: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   getPostLikeState: vi.fn(),
   getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   likePost: vi.fn(),
@@ -69,6 +71,15 @@ vi.mock('../store/postDetailHandoff', () => ({
 vi.mock('../services/postService', () => ({
   getPostById: mocks.getPostById,
   deletePost: mocks.deletePost,
+}));
+
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
+}));
+mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromDetailMocks(postIDs, {
+  like: mocks.getPostLikeState,
+  repost: mocks.getPostRepostState,
+  bookmark: () => Promise.reject(new Error('unavailable')),
 }));
 
 vi.mock('../services/likeService', () => ({

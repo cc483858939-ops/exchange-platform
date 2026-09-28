@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimelineItem } from '../services/postService';
 import type { FeedPost } from '../types/Feed';
 import type { ProfileTimelineItem } from './profileSession';
+import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 import {
   captureBookmarkStateSyncVersion,
   registerHomeTimelineSync,
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   getPostLikeStates: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   likePost: vi.fn(),
   unlikePost: vi.fn(),
   getPostRepostStates: vi.fn(),
@@ -72,6 +74,10 @@ vi.mock('../services/repostService', () => ({
   getPostRepostStates: mocks.getPostRepostStates,
   repostPost: mocks.repostPost,
   undoRepostPost: mocks.undoRepostPost,
+}));
+
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
 }));
 
 vi.mock('../services/bookmarkService', () => ({
@@ -226,6 +232,7 @@ describe('profile session store', () => {
     mocks.bookmarkPost.mockReset();
     mocks.unbookmarkPost.mockReset();
     mocks.deletePost.mockReset().mockResolvedValue(undefined);
+    mocks.getPostEngagementStates.mockReset().mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
   });
 
   it('reuses profile, initial posts, and follow data on clean re-entry', async () => {

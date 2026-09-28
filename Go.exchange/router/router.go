@@ -104,6 +104,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.PUT("/me/notifications/:id/read", controllers.MarkMyNotificationRead)
 		api.PUT("/me/notifications/read-all", controllers.MarkMyNotificationsReadAll)
 		api.POST("/posts", controllers.NewCreatePostHandlerWithRateLimit(applicationLimiter, enableApplicationRateLimit))
+		api.POST("/posts/engagement-states", controllers.GetPostEngagementStates)
 		api.POST("/posts/repost-states", controllers.GetPostRepostStates)
 		api.POST("/posts/bookmark-states", controllers.GetPostBookmarkStates)
 		api.POST("/posts/:id/translation", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionTranslation, ratelimit.FailOpen, controllers.NewPostTranslationHandler(translationService))...)

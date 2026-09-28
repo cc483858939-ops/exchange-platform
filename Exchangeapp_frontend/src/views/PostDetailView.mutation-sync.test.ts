@@ -6,9 +6,11 @@ import { createPinia } from 'pinia';
 import { reactive } from 'vue';
 import PostDetailView from './PostDetailView.vue';
 import type { Post } from '../types/Post';
+import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
 
 const mocks = vi.hoisted(() => ({
   getPostById: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   getPostLikeState: vi.fn(),
   likePost: vi.fn(),
   unlikePost: vi.fn(),
@@ -79,6 +81,15 @@ vi.mock('../services/postService', () => ({
   getPostById: mocks.getPostById,
   deletePost: mocks.deletePost,
 }));
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
+}));
+mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromDetailMocks(postIDs, {
+  like: mocks.getPostLikeState,
+  repost: mocks.getPostRepostState,
+  bookmark: mocks.getPostBookmarkStates,
+}));
+
 vi.mock('../services/likeService', () => ({
   getPostLikeState: mocks.getPostLikeState,
   likePost: mocks.likePost,

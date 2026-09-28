@@ -2,10 +2,8 @@ import { defineStore } from 'pinia';
 import { reactive, ref, watch } from 'vue';
 import {
   getBookmarks,
-  getPostBookmarkStates,
 } from '../services/bookmarkService';
-import { getPostLikeStates } from '../services/likeService';
-import { getPostRepostStates } from '../services/repostService';
+import { getPostEngagementStates } from '../services/engagementService';
 import type { Post } from '../types/Post';
 import type {
   FeedBookmarkStateUpdate,
@@ -182,6 +180,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
@@ -193,27 +192,21 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const current = () => isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
       && hydrationGeneration === likeHydrationGeneration.value;
     try {
-      const response = await getPostLikeStates(postIDs);
+      const response = await responsePromise;
       if (!current()) return;
-      const ready = new Set<number>();
-      response.items.forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        if (!revision || !engagementMutations.isRevisionCurrent('like', item.post_id, revision)) return;
-        const post = findPost(item.post_id);
-        if (!post) return;
-        ready.add(item.post_id);
-        applyFeedLikeStateUpdate(post, {
-          postId: item.post_id,
-          likes: item.likes,
-          liked: item.liked,
-          status: 'ready',
-        });
-      });
-      response.unavailable_post_ids.forEach((postID) => {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
-        if (ready.has(postID) || !revision || !engagementMutations.isRevisionCurrent('like', postID, revision)) return;
+        if (!revision || !engagementMutations.isRevisionCurrent('like', postID, revision)) return;
         const post = findPost(postID);
-        if (post) applyFeedLikeStateUpdate(post, { postId: postID, likes: 0, liked: false, status: 'unavailable' });
+        if (!post) return;
+        const like = states.get(postID)?.like;
+        applyFeedLikeStateUpdate(post, {
+          postId: postID,
+          likes: like?.status === 'ready' ? like.likes : 0,
+          liked: like?.status === 'ready' ? like.liked : false,
+          status: like?.status === 'ready' ? 'ready' : 'unavailable',
+        });
       });
     } catch {
       if (current()) markLikeUnavailable(posts, revisions);
@@ -237,6 +230,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
@@ -248,27 +242,21 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const current = () => isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
       && hydrationGeneration === repostHydrationGeneration.value;
     try {
-      const response = await getPostRepostStates(postIDs);
+      const response = await responsePromise;
       if (!current()) return;
-      const ready = new Set<number>();
-      response.items.forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        if (!revision || !engagementMutations.isRevisionCurrent('repost', item.post_id, revision)) return;
-        const post = findPost(item.post_id);
-        if (!post) return;
-        ready.add(item.post_id);
-        applyFeedRepostStateUpdate(post, {
-          postId: item.post_id,
-          reposts: item.reposts,
-          reposted: item.reposted,
-          status: 'ready',
-        });
-      });
-      response.unavailable_post_ids.forEach((postID) => {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
-        if (ready.has(postID) || !revision || !engagementMutations.isRevisionCurrent('repost', postID, revision)) return;
+        if (!revision || !engagementMutations.isRevisionCurrent('repost', postID, revision)) return;
         const post = findPost(postID);
-        if (post) applyFeedRepostStateUpdate(post, { postId: postID, reposts: 0, reposted: false, status: 'unavailable' });
+        if (!post) return;
+        const repost = states.get(postID)?.repost;
+        applyFeedRepostStateUpdate(post, {
+          postId: postID,
+          reposts: repost?.status === 'ready' ? repost.reposts : 0,
+          reposted: repost?.status === 'ready' ? repost.reposted : false,
+          status: repost?.status === 'ready' ? 'ready' : 'unavailable',
+        });
       });
     } catch {
       if (current()) markRepostUnavailable(posts, revisions);
@@ -292,6 +280,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
@@ -303,33 +292,43 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const current = () => isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
       && hydrationGeneration === bookmarkHydrationGeneration.value;
     try {
-      const response = await getPostBookmarkStates(postIDs);
+      const response = await responsePromise;
       if (!current()) return;
-      response.items.forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        if (!revision || !engagementMutations.isRevisionCurrent('bookmark', item.post_id, revision)) return;
-        const post = findPost(item.post_id);
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      postIDs.forEach((postID) => {
+        const revision = revisions.get(postID);
+        if (!revision || !engagementMutations.isRevisionCurrent('bookmark', postID, revision)) return;
+        const post = findPost(postID);
         if (!post) return;
-        if (!item.bookmarked) {
-          items.value = items.value.filter(candidate => candidate.id !== item.post_id);
-          loadedPostIDs.delete(item.post_id);
+        const bookmark = states.get(postID)?.bookmark;
+        if (bookmark?.status !== 'ready' || !bookmark.bookmarked) {
+          items.value = items.value.filter(candidate => candidate.id !== postID);
+          loadedPostIDs.delete(postID);
           return;
         }
         applyFeedBookmarkStateUpdate(post, {
-          postId: item.post_id,
+          postId: postID,
           bookmarked: true,
           status: 'ready',
         });
       });
-      response.unavailable_post_ids.forEach((postID) => {
-        const revision = revisions.get(postID);
-        if (!revision || !engagementMutations.isRevisionCurrent('bookmark', postID, revision)) return;
-        items.value = items.value.filter(candidate => candidate.id !== postID);
-        loadedPostIDs.delete(postID);
-      });
     } catch {
       if (current()) markBookmarkUnavailable(posts, revisions);
     }
+  };
+
+  const hydrateEngagementStates = (
+    posts: FeedPost[],
+    capturedRequestVersion: number,
+    capturedViewerID: number,
+    capturedGeneration: number,
+  ) => {
+    const postIDs = Array.from(new Set(posts.map(post => post.id)));
+    if (postIDs.length === 0) return;
+    const responsePromise = getPostEngagementStates(postIDs);
+    void hydrateLikeStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateRepostStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateBookmarkStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
   };
 
   const loadInitial = async (force = false) => {
@@ -355,9 +354,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
       loaded.value = true;
       if (capturedFreshnessVersion === freshnessVersion) stale.value = false;
       revalidateError.value = '';
-      void hydrateLikeStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
-      void hydrateRepostStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
-      void hydrateBookmarkStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
+      void hydrateEngagementStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
     } catch {
       if (isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)) {
         initialError.value = 'Bookmarks could not be loaded.';
@@ -395,9 +392,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
       ) return;
       const newPosts = appendBookmarkPosts(response.items ?? []);
       nextCursor.value = response.next_cursor;
-      void hydrateLikeStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
-      void hydrateRepostStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
-      void hydrateBookmarkStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
+      void hydrateEngagementStates(newPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
     } catch {
       if (isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
         && capturedPagingVersion === pagingVersion.value) {
@@ -457,9 +452,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
       nextCursor.value = response.next_cursor;
       if (capturedFreshnessVersion === freshnessVersion) stale.value = false;
       revalidating.value = false;
-      void hydrateLikeStates(freshPosts.filter(post => post.likeStatus === 'unknown'), capturedRequestVersion, capturedViewerID, capturedGeneration);
-      void hydrateRepostStates(freshPosts.filter(post => post.repostStatus === 'unknown'), capturedRequestVersion, capturedViewerID, capturedGeneration);
-      void hydrateBookmarkStates(freshPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
+      void hydrateEngagementStates(freshPosts, capturedRequestVersion, capturedViewerID, capturedGeneration);
     } catch {
       if (isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)) {
         stale.value = true;

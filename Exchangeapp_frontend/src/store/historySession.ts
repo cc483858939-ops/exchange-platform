@@ -1,11 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { getLikedHistory } from '../services/historyService';
-import { getPostLikeStates } from '../services/likeService';
-import {
-  getPostBookmarkStates,
-} from '../services/bookmarkService';
-import { getPostRepostStates } from '../services/repostService';
+import { getPostEngagementStates } from '../services/engagementService';
 import type { Post } from '../types/Post';
 import type {
   FeedBookmarkStateUpdate,
@@ -230,6 +226,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) {
@@ -247,53 +244,40 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await getPostLikeStates(postIDs);
+      const response = await responsePromise;
       if (!current()) {
         return;
       }
 
-      const readyPostIDs = new Set<number>();
-      (response.items ?? []).forEach((item) => {
-        if (deletedPostIDs.has(item.post_id)) {
-          return;
-        }
-        const revision = revisions.get(item.post_id);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('like', item.post_id, revision)
-          || !findPost(item.post_id)
-        ) {
-          return;
-        }
-
-        if (!item.liked) {
-          removePostWithSnapshot(item.post_id);
-          return;
-        }
-
-        readyPostIDs.add(item.post_id);
-        const post = findPost(item.post_id);
-        if (post) {
-          applyFeedLikeStateUpdate(post, {
-            postId: item.post_id,
-            likes: item.likes,
-            liked: true,
-            status: 'ready',
-          });
-        }
-      });
-
-      (response.unavailable_post_ids ?? []).forEach((postID) => {
-        if (deletedPostIDs.has(postID) || readyPostIDs.has(postID)) {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      postIDs.forEach((postID) => {
+        if (deletedPostIDs.has(postID)) {
           return;
         }
         const revision = revisions.get(postID);
-        const post = findPost(postID);
         if (
-          revision
-          && engagementMutations.isRevisionCurrent('like', postID, revision)
-          && post
+          !revision
+          || !engagementMutations.isRevisionCurrent('like', postID, revision)
+          || !findPost(postID)
         ) {
+          return;
+        }
+
+        const like = states.get(postID)?.like;
+        if (like?.status === 'ready' && !like.liked) {
+          removePostWithSnapshot(postID);
+          return;
+        }
+
+        const post = findPost(postID);
+        if (post && like?.status === 'ready') {
+          applyFeedLikeStateUpdate(post, {
+            postId: postID,
+            likes: like.likes,
+            liked: true,
+            status: 'ready',
+          });
+        } else if (post) {
           setFeedPostLikeUnavailable(post);
         }
       });
@@ -340,6 +324,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
@@ -355,39 +340,23 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await getPostRepostStates(postIDs);
+      const response = await responsePromise;
       if (!current()) return;
-      const readyIDs = new Set<number>();
-      response.items.forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        const post = findPost(item.post_id);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('repost', item.post_id, revision)
-          || !post
-        ) return;
-        readyIDs.add(item.post_id);
-        applyFeedRepostStateUpdate(post, {
-          postId: item.post_id,
-          reposts: item.reposts,
-          reposted: item.reposted,
-          status: 'ready',
-        });
-      });
-      response.unavailable_post_ids.forEach((postID) => {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
         const post = findPost(postID);
         if (
-          readyIDs.has(postID)
-          || !revision
+          !revision
           || !engagementMutations.isRevisionCurrent('repost', postID, revision)
           || !post
         ) return;
+        const repost = states.get(postID)?.repost;
         applyFeedRepostStateUpdate(post, {
           postId: postID,
-          reposts: 0,
-          reposted: false,
-          status: 'unavailable',
+          reposts: repost?.status === 'ready' ? repost.reposts : 0,
+          reposted: repost?.status === 'ready' ? repost.reposted : false,
+          status: repost?.status === 'ready' ? 'ready' : 'unavailable',
         });
       });
     } catch {
@@ -417,6 +386,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
@@ -432,42 +402,41 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await getPostBookmarkStates(postIDs);
+      const response = await responsePromise;
       if (!current()) return;
-      const readyIDs = new Set<number>();
-      (response.items ?? []).forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        const post = findPost(item.post_id);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('bookmark', item.post_id, revision)
-          || !post
-        ) return;
-        readyIDs.add(item.post_id);
-        applyFeedBookmarkStateUpdate(post, {
-          postId: item.post_id,
-          bookmarked: item.bookmarked,
-          status: 'ready',
-        });
-      });
-      (response.unavailable_post_ids ?? []).forEach((postID) => {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
         const post = findPost(postID);
         if (
-          readyIDs.has(postID)
-          || !revision
+          !revision
           || !engagementMutations.isRevisionCurrent('bookmark', postID, revision)
           || !post
         ) return;
+        const bookmark = states.get(postID)?.bookmark;
         applyFeedBookmarkStateUpdate(post, {
           postId: postID,
-          bookmarked: false,
-          status: 'unavailable',
+          bookmarked: bookmark?.status === 'ready' ? bookmark.bookmarked : false,
+          status: bookmark?.status === 'ready' ? 'ready' : 'unavailable',
         });
       });
     } catch {
       if (current()) markBookmarkUnavailableLocal(posts, revisions);
     }
+  };
+
+  const hydrateEngagementStates = (
+    posts: FeedPost[],
+    capturedRequestVersion: number,
+    capturedViewerID: number,
+    capturedGeneration: number,
+  ) => {
+    const postIDs = Array.from(new Set(posts.map(post => post.id)));
+    if (postIDs.length === 0) return;
+    const responsePromise = getPostEngagementStates(postIDs);
+    void hydrateLikeStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateRepostStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateBookmarkStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
   };
 
   const loadInitial = async (force = false) => {
@@ -505,19 +474,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         stale.value = false;
       }
       revalidateError.value = '';
-      void hydrateLikeStates(
-        newPosts,
-        capturedRequestVersion,
-        capturedViewerID,
-        capturedGeneration,
-      );
-      void hydrateRepostStates(
-        newPosts,
-        capturedRequestVersion,
-        capturedViewerID,
-        capturedGeneration,
-      );
-      void hydrateBookmarkStates(
+      void hydrateEngagementStates(
         newPosts,
         capturedRequestVersion,
         capturedViewerID,
@@ -567,19 +524,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       }
       const newPosts = appendHistoryPosts(response.items ?? []);
       nextCursor.value = response.next_cursor;
-      void hydrateLikeStates(
-        newPosts,
-        capturedRequestVersion,
-        capturedViewerID,
-        capturedGeneration,
-      );
-      void hydrateRepostStates(
-        newPosts,
-        capturedRequestVersion,
-        capturedViewerID,
-        capturedGeneration,
-      );
-      void hydrateBookmarkStates(
+      void hydrateEngagementStates(
         newPosts,
         capturedRequestVersion,
         capturedViewerID,
@@ -675,21 +620,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       if (capturedFreshnessVersion === freshnessVersion) {
         stale.value = false;
       }
-      const freshForHydration = freshPosts.filter(post => post.likeStatus === 'unknown');
-      void hydrateLikeStates(
-        freshForHydration,
-        capturedRequestVersion,
-        capturedViewerID,
-        capturedGeneration,
-      );
-      void hydrateRepostStates(
-        freshPosts.filter(post => post.repostStatus === 'unknown'),
-        capturedRequestVersion,
-        capturedViewerID,
-        capturedGeneration,
-      );
-      void hydrateBookmarkStates(
-        freshPosts.filter(post => post.bookmarkStatus === 'unknown'),
+      void hydrateEngagementStates(
+        freshPosts.filter(post => (
+          post.likeStatus === 'unknown'
+          || post.repostStatus === 'unknown'
+          || post.bookmarkStatus === 'unknown'
+        )),
         capturedRequestVersion,
         capturedViewerID,
         capturedGeneration,

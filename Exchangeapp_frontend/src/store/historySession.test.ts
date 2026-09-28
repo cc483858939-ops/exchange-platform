@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import type { Post } from '../types/Post';
+import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 import { useHistorySessionStore } from './historySession';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
   getLikedHistory: vi.fn(),
   getPostLikeStates: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   unlikePost: vi.fn(),
   getPostRepostStates: vi.fn(),
   repostPost: vi.fn(),
@@ -45,6 +47,9 @@ vi.mock('./sessionSync', () => ({
     mocks.historySync?.applyExternalBookmarkStateLocal?.(update);
   }),
   markOwnProfileTimelineStale: vi.fn(),
+}));
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
 }));
 vi.mock('../services/bookmarkService', () => ({
   getPostBookmarkStates: mocks.getPostBookmarkStates,
@@ -131,6 +136,7 @@ describe('historySession store', () => {
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostRepostStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
     mocks.unlikePost.mockResolvedValue({ likes: 3, liked: false });
     mocks.repostPost.mockReset();
     mocks.undoRepostPost.mockReset();

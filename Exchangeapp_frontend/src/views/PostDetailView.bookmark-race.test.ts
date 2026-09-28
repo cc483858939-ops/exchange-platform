@@ -6,6 +6,7 @@ import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostDetailView from './PostDetailView.vue';
 import type { Post } from '../types/Post';
+import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
 import {
   captureBookmarkStateSyncVersion,
   registerBookmarksSessionSync,
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   handoffStore: null as any,
   consumeHandoff: vi.fn(),
   getPostById: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   deletePost: vi.fn(),
   getPostLikeState: vi.fn(),
   likePost: vi.fn(),
@@ -74,6 +76,15 @@ vi.mock('../store/postDetailHandoff', () => ({
 vi.mock('../services/postService', () => ({
   deletePost: mocks.deletePost,
   getPostById: mocks.getPostById,
+}));
+
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
+}));
+mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromDetailMocks(postIDs, {
+  like: mocks.getPostLikeState,
+  repost: mocks.getPostRepostState,
+  bookmark: mocks.getPostBookmarkStates,
 }));
 
 vi.mock('../services/likeService', () => ({

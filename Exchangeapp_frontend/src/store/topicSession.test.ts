@@ -5,11 +5,13 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Post } from '../types/Post';
+import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as { isAuthenticated: boolean; currentIdentity: { id: number } | null } | null,
   getTopicPosts: vi.fn(),
   getPostLikeStates: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   getPostRepostStates: vi.fn(),
   getPostBookmarkStates: vi.fn(),
   likePost: vi.fn(),
@@ -33,6 +35,9 @@ vi.mock('../services/likeService', () => ({
   getPostLikeStates: mocks.getPostLikeStates,
   likePost: mocks.likePost,
   unlikePost: mocks.unlikePost,
+}));
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
 }));
 vi.mock('../services/repostService', () => ({
   getPostRepostStates: mocks.getPostRepostStates,
@@ -113,6 +118,7 @@ describe('topicSession store', () => {
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostRepostStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
     mocks.likePost.mockResolvedValue({ likes: 4, liked: true });
     mocks.unlikePost.mockResolvedValue({ likes: 2, liked: false });
     mocks.repostPost.mockResolvedValue({ reposts: 5, reposted: true });

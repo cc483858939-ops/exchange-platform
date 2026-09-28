@@ -553,9 +553,8 @@ import ReplyComposer from '../components/replies/ReplyComposer.vue';
 import ReplyList from '../components/replies/ReplyList.vue';
 import { createPostReply, deletePostReply, getPostReplies } from '../services/replyService';
 import { deletePost, getPostById } from '../services/postService';
-import { getPostLikeState } from '../services/likeService';
+import { getPostEngagementStates } from '../services/engagementService';
 import { getPostBookmarkStates } from '../services/bookmarkService';
-import { getPostRepostState } from '../services/repostService';
 import { consumePendingRecommendationAttribution } from '../services/recommendationAttribution';
 import { getRecommendationTelemetry } from '../services/recommendationTelemetry';
 import { createPostViewEventID, getPostViewTelemetry } from '../services/postViewTelemetry';
@@ -1321,96 +1320,7 @@ const confirmDeletePost = async () => {
   }
 };
 
-const loadLikeState = async (id: string, detailVersion: number) => {
-  if (!authStore.isAuthenticated) {
-    return;
-  }
-
-  const postID = Number(id);
-  if (
-    !Number.isSafeInteger(postID)
-    || postID <= 0
-    || currentDetailPostID.value !== postID
-    || post.value?.id !== postID
-  ) return;
-
-  const requestVersion = ++likeRequestVersion;
-  const revision = detailEngagementMutations.captureRevision('like', postID);
-  const isCurrentRequest = () => (
-    detailVersion === detailRequestVersion
-    && requestVersion === likeRequestVersion
-    && currentDetailPostID.value === postID
-    && post.value?.id === postID
-  );
-  const isCurrentHydration = () => isCurrentRequest()
-    && detailEngagementMutations.isRevisionCurrent('like', postID, revision);
-  likeStateLoading.value = true;
-  likeError.value = '';
-
-  try {
-    const response = await getPostLikeState(id);
-    if (!isCurrentHydration()) return;
-
-    liked.value = response.liked;
-    likeCount.value = clampCount(response.likes);
-  } catch {
-    if (isCurrentHydration()) {
-      likeError.value = 'Like status is unavailable. You can still try again.';
-    }
-  } finally {
-    if (isCurrentRequest()) {
-      likeStateLoading.value = false;
-    }
-  }
-};
-
-const loadRepostState = async (id: string, detailVersion: number) => {
-  if (!authStore.isAuthenticated) {
-    return;
-  }
-
-  const postID = Number(id);
-  if (
-    !Number.isSafeInteger(postID)
-    || postID <= 0
-    || currentDetailPostID.value !== postID
-    || post.value?.id !== postID
-  ) return;
-
-  const requestVersion = ++repostRequestVersion;
-  const revision = detailEngagementMutations.captureRevision('repost', postID);
-  const isCurrentRequest = () => (
-    detailVersion === detailRequestVersion
-    && requestVersion === repostRequestVersion
-    && currentDetailPostID.value === postID
-    && post.value?.id === postID
-  );
-  const isCurrentHydration = () => isCurrentRequest()
-    && detailEngagementMutations.isRevisionCurrent('repost', postID, revision);
-  repostStateLoading.value = true;
-  repostError.value = '';
-  repostStateUnavailable.value = false;
-
-  try {
-    const response = await getPostRepostState(id);
-    if (!isCurrentHydration()) return;
-
-    reposted.value = response.reposted;
-    repostCount.value = clampCount(response.reposts);
-    repostStateUnavailable.value = false;
-  } catch {
-    if (isCurrentHydration()) {
-      repostError.value = 'Repost status is unavailable. You can still try again.';
-      repostStateUnavailable.value = true;
-    }
-  } finally {
-    if (isCurrentRequest()) {
-      repostStateLoading.value = false;
-    }
-  }
-};
-
-const loadBookmarkState = async (id: string, detailVersion: number) => {
+const loadEngagementStates = async (id: string, detailVersion: number) => {
   if (!authStore.isAuthenticated) return;
   const postID = Number(id);
   if (
@@ -1420,38 +1330,82 @@ const loadBookmarkState = async (id: string, detailVersion: number) => {
     || post.value?.id !== postID
   ) return;
 
-  const requestVersion = ++bookmarkRequestVersion;
-  const revision = detailEngagementMutations.captureRevision('bookmark', postID);
-  const isCurrentRequest = () => (
+  const requestVersions = {
+    like: ++likeRequestVersion,
+    repost: ++repostRequestVersion,
+    bookmark: ++bookmarkRequestVersion,
+  };
+  const revisions = {
+    like: detailEngagementMutations.captureRevision('like', postID),
+    repost: detailEngagementMutations.captureRevision('repost', postID),
+    bookmark: detailEngagementMutations.captureRevision('bookmark', postID),
+  };
+  const isCurrentRequest = (kind: 'like' | 'repost' | 'bookmark') => (
     detailVersion === detailRequestVersion
-    && requestVersion === bookmarkRequestVersion
+    && requestVersions[kind] === {
+      like: likeRequestVersion,
+      repost: repostRequestVersion,
+      bookmark: bookmarkRequestVersion,
+    }[kind]
     && currentDetailPostID.value === postID
     && post.value?.id === postID
   );
-  const isCurrentHydration = () => isCurrentRequest()
-    && detailEngagementMutations.isRevisionCurrent('bookmark', postID, revision);
+  const isCurrentHydration = (kind: 'like' | 'repost' | 'bookmark') => (
+    isCurrentRequest(kind)
+    && detailEngagementMutations.isRevisionCurrent(kind, postID, revisions[kind])
+  );
+  likeStateLoading.value = true;
+  repostStateLoading.value = true;
   bookmarkStateLoading.value = true;
+  likeError.value = '';
+  repostError.value = '';
   bookmarkError.value = '';
   bookmarkStateUnavailable.value = false;
+  repostStateUnavailable.value = false;
   try {
-    const response = await getPostBookmarkStates([postID]);
-    if (!isCurrentHydration()) return;
+    const response = await getPostEngagementStates([postID]);
     const item = response.items.find(candidate => candidate.post_id === postID);
-    if (item) {
-      bookmarked.value = item.bookmarked;
-      return;
+    if (isCurrentHydration('like')) {
+      if (item?.like.status === 'ready') {
+        liked.value = item.like.liked;
+        likeCount.value = clampCount(item.like.likes);
+      } else {
+        likeError.value = 'Like status is unavailable. You can still try again.';
+      }
     }
-    bookmarkStateUnavailable.value = true;
-    bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
+    if (isCurrentHydration('repost')) {
+      if (item?.repost.status === 'ready') {
+        reposted.value = item.repost.reposted;
+        repostCount.value = clampCount(item.repost.reposts);
+      } else {
+        repostError.value = 'Repost status is unavailable. You can still try again.';
+        repostStateUnavailable.value = true;
+      }
+    }
+    if (isCurrentHydration('bookmark')) {
+      if (item?.bookmark.status === 'ready') {
+        bookmarked.value = item.bookmark.bookmarked;
+      } else {
+        bookmarkStateUnavailable.value = true;
+        bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
+      }
+    }
   } catch {
-    if (isCurrentHydration()) {
+    if (isCurrentHydration('like')) {
+      likeError.value = 'Like status is unavailable. You can still try again.';
+    }
+    if (isCurrentHydration('repost')) {
+      repostError.value = 'Repost status is unavailable. You can still try again.';
+      repostStateUnavailable.value = true;
+    }
+    if (isCurrentHydration('bookmark')) {
       bookmarkStateUnavailable.value = true;
       bookmarkError.value = 'Bookmark status is unavailable. You can still try again.';
     }
   } finally {
-    if (isCurrentRequest()) {
-      bookmarkStateLoading.value = false;
-    }
+    if (isCurrentRequest('like')) likeStateLoading.value = false;
+    if (isCurrentRequest('repost')) repostStateLoading.value = false;
+    if (isCurrentRequest('bookmark')) bookmarkStateLoading.value = false;
   }
 };
 
@@ -2114,9 +2068,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
       if (postBodyRef.value) {
         startRead(id, detailVersion);
       }
-      void loadLikeState(id, detailVersion);
-      void loadRepostState(id, detailVersion);
-      void loadBookmarkState(id, detailVersion);
+      void loadEngagementStates(id, detailVersion);
     }
     void loadInitialReplies(id, detailVersion);
   } catch (error) {

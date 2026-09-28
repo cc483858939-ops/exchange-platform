@@ -8,6 +8,7 @@ import HistoryView from './HistoryView.vue';
 import { useHistorySessionStore } from '../store/historySession';
 import type { Post } from '../types/Post';
 import { postToFeedPost } from '../utils/feedPost';
+import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   getLikedHistory: vi.fn(),
   getPostLikeStates: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   unlikePost: vi.fn(),
   externalLike: vi.fn(),
   historySync: null as any,
@@ -33,6 +35,12 @@ vi.mock('../store/auth', () => ({
 vi.mock('../services/historyService', () => ({
   getLikedHistory: mocks.getLikedHistory,
 }));
+
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
+}));
+
+mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
 
 vi.mock('../services/likeService', () => ({
   getPostLikeStates: mocks.getPostLikeStates,
@@ -192,6 +200,7 @@ describe('HistoryView', () => {
     setAuth(null);
     mocks.getLikedHistory.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.getPostEngagementStates.mockClear();
     mocks.unlikePost.mockResolvedValue({ likes: 0, liked: false });
     setWindowScrollY(0);
   });
@@ -419,6 +428,10 @@ describe('HistoryView', () => {
   it('loads the current viewer once, maps Posts, and opts PostCard out of feed telemetry', async () => {
     setAuth(7);
     mocks.getLikedHistory.mockResolvedValue({ items: [post(42)], next_cursor: null });
+    mocks.getPostLikeStates.mockResolvedValue({
+      items: [{ post_id: 42, likes: 3, liked: false }],
+      unavailable_post_ids: [],
+    });
     const wrapper = mountHistory();
     await flushPromises();
 
@@ -426,7 +439,7 @@ describe('HistoryView', () => {
     expect(mocks.getLikedHistory).toHaveBeenCalledWith({ limit: 20 });
     const card = wrapper.find('.history-post');
     expect(card.attributes('data-id')).toBe('42');
-    expect(card.attributes('data-status')).toBe('unknown');
+    expect(card.attributes('data-status')).toBe('ready');
     expect(card.attributes('data-liked')).toBe('false');
     expect(card.attributes('data-track-view')).toBe('false');
     expect(mocks.getPostLikeStates).toHaveBeenCalledWith([42]);

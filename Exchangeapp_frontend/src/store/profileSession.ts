@@ -15,9 +15,7 @@ import {
   unfollowUser,
   type UserFollowState,
 } from '../services/userService';
-import { getPostLikeStates } from '../services/likeService';
-import { getPostBookmarkStates } from '../services/bookmarkService';
-import { getPostRepostStates } from '../services/repostService';
+import { getPostEngagementStates } from '../services/engagementService';
 import type { Post } from '../types/Post';
 import type {
   FeedBookmarkStateUpdate,
@@ -488,6 +486,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     postIds: number[],
     capturedViewerGeneration: number,
     isCurrent: () => boolean,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
@@ -496,37 +495,22 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       engagementMutations.captureRevision('like', id),
     ]));
     try {
-      const response = await getPostLikeStates(uniqueIDs);
+      const response = await responsePromise;
       if (!isCurrent() || capturedViewerGeneration !== viewerGeneration.value) return;
-      const readyIDs = new Set<number>();
-      response.items.forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('like', item.post_id, revision)
-          || !findPost(item.post_id)
-        ) return;
-        readyIDs.add(item.post_id);
-        applyLikeStateUpdateEverywhere({
-          postId: item.post_id,
-          likes: item.likes,
-          liked: item.liked,
-          status: 'ready',
-        });
-      });
-      response.unavailable_post_ids.forEach((postId) => {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      uniqueIDs.forEach((postId) => {
         const revision = revisions.get(postId);
         if (
-          readyIDs.has(postId)
-          || !revision
+          !revision
           || !engagementMutations.isRevisionCurrent('like', postId, revision)
           || !findPost(postId)
         ) return;
+        const like = states.get(postId)?.like;
         applyLikeStateUpdateEverywhere({
           postId,
-          likes: 0,
-          liked: false,
-          status: 'unavailable',
+          likes: like?.status === 'ready' ? like.likes : 0,
+          liked: like?.status === 'ready' ? like.liked : false,
+          status: like?.status === 'ready' ? 'ready' : 'unavailable',
         });
       });
     } catch {
@@ -555,6 +539,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const hydrateRepostStates = async (
     postIds: number[],
     isCurrent: () => boolean,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
@@ -563,37 +548,22 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       engagementMutations.captureRevision('repost', id),
     ]));
     try {
-      const response = await getPostRepostStates(uniqueIDs);
+      const response = await responsePromise;
       if (!isCurrent()) return;
-      const readyIDs = new Set<number>();
-      response.items.forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('repost', item.post_id, revision)
-          || !findPost(item.post_id)
-        ) return;
-        readyIDs.add(item.post_id);
-        applyRepostStateUpdateEverywhere({
-          postId: item.post_id,
-          reposts: item.reposts,
-          reposted: item.reposted,
-          status: 'ready',
-        }, revision.version);
-      });
-      response.unavailable_post_ids.forEach((postId) => {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      uniqueIDs.forEach((postId) => {
         const revision = revisions.get(postId);
         if (
-          readyIDs.has(postId)
-          || !revision
+          !revision
           || !engagementMutations.isRevisionCurrent('repost', postId, revision)
           || !findPost(postId)
         ) return;
+        const repost = states.get(postId)?.repost;
         applyRepostStateUpdateEverywhere({
           postId,
-          reposts: 0,
-          reposted: false,
-          status: 'unavailable',
+          reposts: repost?.status === 'ready' ? repost.reposts : 0,
+          reposted: repost?.status === 'ready' ? repost.reposted : false,
+          status: repost?.status === 'ready' ? 'ready' : 'unavailable',
         }, revision.version);
       });
     } catch {
@@ -622,6 +592,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
   const hydrateBookmarkStates = async (
     postIds: number[],
     isCurrent: () => boolean,
+    responsePromise: ReturnType<typeof getPostEngagementStates>,
   ) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
@@ -630,35 +601,21 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       engagementMutations.captureRevision('bookmark', id),
     ]));
     try {
-      const response = await getPostBookmarkStates(uniqueIDs);
+      const response = await responsePromise;
       if (!isCurrent()) return;
-      const readyIDs = new Set<number>();
-      response.items.forEach((item) => {
-        const revision = revisions.get(item.post_id);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('bookmark', item.post_id, revision)
-          || !findPost(item.post_id)
-        ) return;
-        readyIDs.add(item.post_id);
-        applyBookmarkStateUpdateEverywhere({
-          postId: item.post_id,
-          bookmarked: item.bookmarked,
-          status: 'ready',
-        }, revision.version);
-      });
-      response.unavailable_post_ids.forEach((postId) => {
+      const states = new Map(response.items.map(item => [item.post_id, item]));
+      uniqueIDs.forEach((postId) => {
         const revision = revisions.get(postId);
         if (
-          readyIDs.has(postId)
-          || !revision
+          !revision
           || !engagementMutations.isRevisionCurrent('bookmark', postId, revision)
           || !findPost(postId)
         ) return;
+        const bookmark = states.get(postId)?.bookmark;
         applyBookmarkStateUpdateEverywhere({
           postId,
-          bookmarked: false,
-          status: 'unavailable',
+          bookmarked: bookmark?.status === 'ready' ? bookmark.bookmarked : false,
+          status: bookmark?.status === 'ready' ? 'ready' : 'unavailable',
         }, revision.version);
       });
     } catch {
@@ -666,6 +623,19 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         markBookmarkUnavailableLocal(uniqueIDs, revisions);
       }
     }
+  };
+
+  const hydrateEngagementStates = (
+    postIDs: number[],
+    capturedViewerGeneration: number,
+    isCurrent: () => boolean,
+  ) => {
+    const uniqueIDs = Array.from(new Set(postIDs));
+    if (uniqueIDs.length === 0) return;
+    const responsePromise = getPostEngagementStates(uniqueIDs);
+    void hydrateLikeStates(uniqueIDs, capturedViewerGeneration, isCurrent, responsePromise);
+    void hydrateRepostStates(uniqueIDs, isCurrent, responsePromise);
+    void hydrateBookmarkStates(uniqueIDs, isCurrent, responsePromise);
   };
 
   const appendTimelineItems = (session: ProfileSessionEntry, activities: TimelineItem[]) => {
@@ -754,29 +724,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       }
       if (authStore.isAuthenticated && capturedViewerID !== null) {
         const capturedTimelineGeneration = session.timelineGeneration;
-        void hydrateLikeStates(
+        void hydrateEngagementStates(
           newItems.map((item) => item.post.id),
           capturedViewerGeneration,
-          () => currentTimelineSession(
-            userID,
-            session,
-            capturedTimelineGeneration,
-            capturedViewerID,
-            capturedViewerGeneration,
-          ),
-        );
-        void hydrateRepostStates(
-          newItems.map((item) => item.post.id),
-          () => currentTimelineSession(
-            userID,
-            session,
-            capturedTimelineGeneration,
-            capturedViewerID,
-            capturedViewerGeneration,
-          ),
-        );
-        void hydrateBookmarkStates(
-          newItems.map((item) => item.post.id),
           () => currentTimelineSession(
             userID,
             session,
@@ -836,29 +786,9 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       }
       if (authStore.isAuthenticated && capturedViewerID !== null) {
         const capturedTimelineGeneration = session.timelineGeneration;
-        void hydrateLikeStates(
+        void hydrateEngagementStates(
           newItems.map((item) => item.post.id),
           capturedViewerGeneration,
-          () => currentTimelineSession(
-            userID,
-            session,
-            capturedTimelineGeneration,
-            capturedViewerID,
-            capturedViewerGeneration,
-          ),
-        );
-        void hydrateRepostStates(
-          newItems.map((item) => item.post.id),
-          () => currentTimelineSession(
-            userID,
-            session,
-            capturedTimelineGeneration,
-            capturedViewerID,
-            capturedViewerGeneration,
-          ),
-        );
-        void hydrateBookmarkStates(
-          newItems.map((item) => item.post.id),
           () => currentTimelineSession(
             userID,
             session,

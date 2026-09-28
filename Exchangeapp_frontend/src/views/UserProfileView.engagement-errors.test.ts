@@ -67,6 +67,14 @@ vi.mock('../services/postService', () => ({
   deletePost: mocks.deletePost,
 }));
 
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: vi.fn((postIDs: number[]) => (
+    import('../test-utils/engagementServiceMock').then(({ engagementResponseFromBatchMocks }) => (
+      engagementResponseFromBatchMocks(postIDs, mocks)
+    ))
+  )),
+}));
+
 vi.mock('../services/likeService', () => ({
   getPostLikeStates: mocks.getPostLikeStates,
   likePost: mocks.likePost,

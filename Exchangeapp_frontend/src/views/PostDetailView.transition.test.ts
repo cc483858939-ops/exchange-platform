@@ -7,6 +7,7 @@ import { createPinia } from 'pinia';
 import PostDetailView from './PostDetailView.vue';
 import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
+import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   handoffStore: null as any,
   consumeHandoff: vi.fn(),
   getPostById: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   getPostLikeState: vi.fn(),
   getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   likePost: vi.fn(),
@@ -66,6 +68,15 @@ vi.mock('../store/postDetailHandoff', () => ({
 vi.mock('../services/postService', () => ({
   deletePost: mocks.deletePost,
   getPostById: mocks.getPostById,
+}));
+
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
+}));
+mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromDetailMocks(postIDs, {
+  like: mocks.getPostLikeState,
+  repost: mocks.getPostRepostState,
+  bookmark: () => Promise.reject(new Error('unavailable')),
 }));
 
 vi.mock('../services/likeService', () => ({
@@ -264,8 +275,8 @@ describe('PostDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-loading').exists()).toBe(false);
     expect(mounted.find('.post-detail__body').text()).toBe('Authoritative post body');
     expect(mocks.getPostById).toHaveBeenCalledTimes(1);
-    expect(mocks.getPostLikeState).toHaveBeenCalledTimes(1);
-    expect(mocks.getPostRepostState).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostEngagementStates).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostEngagementStates).toHaveBeenCalledWith([42]);
     expect(mocks.getPostReplies).toHaveBeenCalledTimes(1);
   });
 
@@ -278,7 +289,7 @@ describe('PostDetailView warm and cold transition', () => {
     expect(mounted.find('.detail-loading').exists()).toBe(false);
     expect(mounted.find('.detail-state--error').text()).toContain('This post does not exist.');
     expect(mocks.postViewTelemetry.enqueue).not.toHaveBeenCalled();
-    expect(mocks.getPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.getPostEngagementStates).not.toHaveBeenCalled();
     expect(mocks.getPostReplies).not.toHaveBeenCalled();
   });
 

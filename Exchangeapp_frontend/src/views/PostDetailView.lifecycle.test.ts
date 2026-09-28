@@ -5,10 +5,12 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia } from 'pinia';
 import { PostReadTracker } from '../services/postReadTracker';
 import PostDetailView from './PostDetailView.vue';
+import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
 import { formatCompactEngagementCount } from '../utils/engagementCount';
 
 const mocks = vi.hoisted(() => ({
   getPostById: vi.fn(),
+  getPostEngagementStates: vi.fn(),
   getPostLikeState: vi.fn(),
   getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
   getPostReplies: vi.fn(),
@@ -74,6 +76,15 @@ vi.mock('../services/postService', () => ({
 
 vi.mock('../services/userService', () => ({
   getUser: mocks.getUser,
+}));
+
+vi.mock('../services/engagementService', () => ({
+  getPostEngagementStates: mocks.getPostEngagementStates,
+}));
+mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromDetailMocks(postIDs, {
+  like: mocks.getPostLikeState,
+  repost: mocks.getPostRepostState,
+  bookmark: () => Promise.reject(new Error('unavailable')),
 }));
 
 vi.mock('../services/likeService', () => ({
