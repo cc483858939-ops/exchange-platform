@@ -46,19 +46,23 @@ func TestClaimCleanupBatchEligibilityReclaimAndTokenCASIntegration(t *testing.T)
 		t.Fatalf("first claim count=%d want 3: %+v", len(firstClaims), firstClaims)
 	}
 	wantFirstIDs := []string{uploadingExpired.MediaID, uploadedExpired.MediaID, pendingExpired.MediaID}
+	wantFirstAttempts := map[string]int64{
+		uploadingExpired.MediaID: uploadingExpired.CleanupAttempts + 1,
+		uploadedExpired.MediaID:  uploadedExpired.CleanupAttempts + 1,
+		pendingExpired.MediaID:   pendingExpired.CleanupAttempts + 1,
+	}
+	firstByID := make(map[string]postmediaupload.CleanupClaim, len(firstClaims))
 	for index, claim := range firstClaims {
 		if claim.MediaID != wantFirstIDs[index] {
 			t.Fatalf("claim order=%v want cleanup_after order=%v", cleanupClaimIDs(firstClaims), wantFirstIDs)
 		}
-		if claim.ClaimToken == "" || claim.CleanupAttempts != 2 && claim.MediaID == pendingExpired.MediaID {
+		if claim.ClaimToken == "" || claim.CleanupAttempts != wantFirstAttempts[claim.MediaID] {
 			t.Fatalf("claim has invalid token or attempts: %+v", claim)
 		}
+		firstByID[claim.MediaID] = claim
 		if claim.OriginalObjectKey != "gc-fixture/"+claim.MediaID+"/original" || claim.MediumObjectKey != "gc-fixture/"+claim.MediaID+"/medium" || claim.LargeObjectKey != "gc-fixture/"+claim.MediaID+"/large" || claim.ManifestObjectKey != "gc-fixture/"+claim.MediaID+"/manifest" {
 			t.Fatalf("claim omitted tracked object keys: %+v", claim)
 		}
-	}
-	if firstClaims[0].CleanupAttempts != 1 || firstClaims[1].CleanupAttempts != 1 || firstClaims[2].CleanupAttempts != 2 {
-		t.Fatalf("unexpected first claim attempt counters: %+v", firstClaims)
 	}
 	for _, future := range []models.PostMediaUpload{activePending, uploadingFuture, uploadedFuture, retryFuture} {
 		var stored models.PostMediaUpload
@@ -99,7 +103,17 @@ func TestClaimCleanupBatchEligibilityReclaimAndTokenCASIntegration(t *testing.T)
 		}
 	}
 
-	retryClaim := newByID[pendingExpired.MediaID]
+	previousPendingClaim, ok := firstByID[pendingExpired.MediaID]
+	if !ok {
+		t.Fatalf("initial pending claim not found for media %q", pendingExpired.MediaID)
+	}
+	retryClaim, ok := newByID[pendingExpired.MediaID]
+	if !ok {
+		t.Fatalf("reclaimed pending claim not found for media %q", pendingExpired.MediaID)
+	}
+	if retryClaim.CleanupAttempts != previousPendingClaim.CleanupAttempts+1 {
+		t.Fatalf("reclaimed pending cleanup attempts=%d want %d", retryClaim.CleanupAttempts, previousPendingClaim.CleanupAttempts+1)
+	}
 	retryAt := reclaimTime.Add(5 * time.Minute)
 	longError := strings.Repeat("é", 700)
 	if err := postmediaupload.ScheduleCleanupRetry(context.Background(), db, retryClaim, retryAt, longError); err != nil {
@@ -109,8 +123,8 @@ func TestClaimCleanupBatchEligibilityReclaimAndTokenCASIntegration(t *testing.T)
 	if err := db.Where("media_id = ?", retryClaim.MediaID).Take(&waiting).Error; err != nil {
 		t.Fatal(err)
 	}
-	if waiting.Status != postmediaupload.StatusCleanupPending || waiting.CleanupClaimToken != nil || waiting.CleanupClaimedAt != nil || waiting.CleanupAttempts != 2 || !waiting.CleanupAfter.Equal(retryAt) || waiting.LastCleanupError == nil || len(*waiting.LastCleanupError) > postmediaupload.MaxCleanupErrorBytes {
-		t.Fatalf("retry state=%+v", waiting)
+	if waiting.Status != postmediaupload.StatusCleanupPending || waiting.CleanupClaimToken != nil || waiting.CleanupClaimedAt != nil || waiting.CleanupAttempts != retryClaim.CleanupAttempts || !waiting.CleanupAfter.Equal(retryAt) || waiting.LastCleanupError == nil || len(*waiting.LastCleanupError) > postmediaupload.MaxCleanupErrorBytes {
+		t.Fatalf("retry state=%+v want attempts=%d", waiting, retryClaim.CleanupAttempts)
 	}
 	if claims, err := postmediaupload.ClaimCleanupBatch(context.Background(), db, retryAt.Add(-time.Second), claimTimeout, 10); err != nil || len(claims) != 0 {
 		t.Fatalf("row was claimable before retry_at: claims=%+v err=%v", claims, err)
@@ -119,7 +133,7 @@ func TestClaimCleanupBatchEligibilityReclaimAndTokenCASIntegration(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(thirdClaims) != 1 || thirdClaims[0].MediaID != retryClaim.MediaID || thirdClaims[0].ClaimToken == retryClaim.ClaimToken || thirdClaims[0].CleanupAttempts != 3 {
+	if len(thirdClaims) != 1 || thirdClaims[0].MediaID != retryClaim.MediaID || thirdClaims[0].ClaimToken == retryClaim.ClaimToken || thirdClaims[0].CleanupAttempts != retryClaim.CleanupAttempts+1 {
 		t.Fatalf("retry row was not reclaimed with a fresh token: %+v", thirdClaims)
 	}
 	if err := postmediaupload.CompleteCleanup(context.Background(), db, retryClaim); !errors.Is(err, postmediaupload.ErrStaleCleanupClaim) {
