@@ -8,7 +8,6 @@ import {
   AuthRefreshCoordinationUnavailableError,
   clearPersistedAuthSession,
   createTokenRevision,
-  migrateLegacyAuthSession,
   readPersistedAuthSession,
   runWithAuthMutationLock,
   subscribeToPersistedAuthChanges,
@@ -95,46 +94,13 @@ describe('auth session persistence', () => {
     expect(readPersistedAuthSession()).toEqual(session);
   });
 
-  it('migrates a valid legacy pair once and keeps auth_user separate', () => {
+  it('does not treat legacy credentials as a persisted auth session', () => {
     localStorage.setItem('token', tokenFor(7, 'sid-7'));
     localStorage.setItem('refresh_token', 'legacy-refresh');
     localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify({ id: 7, username: 'alice' }));
 
-    const migrated = migrateLegacyAuthSession();
-
-    expect(migrated).toMatchObject({
-      schemaVersion: 2,
-      sessionId: 'sid-7',
-      userId: 7,
-      accessToken: tokenFor(7, 'sid-7'),
-      refreshToken: 'legacy-refresh',
-    });
-    expect(migrated?.tokenRevision).toBeTruthy();
-    expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).not.toBeNull();
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
-    expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBe(JSON.stringify({ id: 7, username: 'alice' }));
-  });
-
-  it('clears incomplete legacy credentials and incompatible profile state', () => {
-    localStorage.setItem('token', tokenFor(7, 'sid-7'));
-    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify({ id: 7, username: 'alice' }));
-
-    expect(migrateLegacyAuthSession()).toBeNull();
+    expect(readPersistedAuthSession()).toBeNull();
     expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
-    expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
-  });
-
-  it('does not overwrite an existing v2 snapshot during legacy migration', () => {
-    const current = sessionFor();
-    localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(current));
-    localStorage.setItem('token', 'stale-legacy-access');
-    localStorage.setItem('refresh_token', 'stale-legacy-refresh');
-
-    expect(migrateLegacyAuthSession()).toEqual(current);
-    expect(localStorage.getItem('token')).toBe('stale-legacy-access');
   });
 
   it('creates opaque secure token revisions', () => {

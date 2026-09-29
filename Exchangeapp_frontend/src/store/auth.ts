@@ -3,12 +3,10 @@ import { computed, onScopeDispose, ref } from 'vue';
 import axios from 'axios';
 import { apiBaseUrl } from '../api';
 import {
-  AUTH_SESSION_STORAGE_KEY,
   AUTH_USER_STORAGE_KEY,
   AuthRefreshCoordinationUnavailableError,
   clearPersistedAuthSession,
   createTokenRevision,
-  migrateLegacyAuthSession,
   removeLegacyAuthCredentials,
   readPersistedAuthSession,
   runWithAuthMutationLock,
@@ -112,9 +110,7 @@ const readStoredIdentity = (expectedUserId: number): AuthIdentity | null => {
 };
 
 const initializePersistedSession = (): PersistedAuthSession | null => {
-  const canonicalKeyExists = localStorage.getItem(AUTH_SESSION_STORAGE_KEY) !== null;
-  const session = readPersistedAuthSession()
-    ?? (canonicalKeyExists ? null : migrateLegacyAuthSession());
+  const session = readPersistedAuthSession();
   if (session) {
     removeLegacyAuthCredentials();
   } else {

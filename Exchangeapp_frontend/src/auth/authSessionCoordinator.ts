@@ -135,39 +135,6 @@ export const clearPersistedAuthSession = (): void => {
   removeLegacyAuthCredentials();
 };
 
-export const migrateLegacyAuthSession = (): PersistedAuthSession | null => {
-  const store = storage();
-  if (!store) {
-    return null;
-  }
-
-  // A present v2 key is authoritative, even when it is malformed.
-  if (store.getItem(AUTH_SESSION_STORAGE_KEY) !== null) {
-    return readPersistedAuthSession();
-  }
-
-  const accessToken = store.getItem(legacyAccessTokenKey)?.trim() ?? '';
-  const refreshToken = store.getItem(legacyRefreshTokenKey)?.trim() ?? '';
-  const metadata = decodeAuthTokenMetadata(accessToken);
-  if (accessToken && refreshToken && metadata) {
-    const session: PersistedAuthSession = {
-      schemaVersion: 2,
-      tokenRevision: createTokenRevision(),
-      sessionId: metadata.sessionId,
-      userId: metadata.userId,
-      accessToken,
-      refreshToken,
-    };
-    writePersistedAuthSession(session);
-    return readPersistedAuthSession();
-  }
-
-  store.removeItem(legacyAccessTokenKey);
-  store.removeItem(legacyRefreshTokenKey);
-  store.removeItem(AUTH_USER_STORAGE_KEY);
-  return null;
-};
-
 export const runWithAuthMutationLock = async <T>(
   operation: () => Promise<T> | T,
   options: { requireLock?: boolean } = {},

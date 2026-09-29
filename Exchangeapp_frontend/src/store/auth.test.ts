@@ -93,17 +93,6 @@ const persistedSession = (
   refreshToken,
 });
 
-const seedLegacyAuth = (
-  identity = fullIdentity,
-  accessLabel = 'alice-access',
-  refreshToken = 'alice-refresh',
-  sessionId = `sid-${identity.id}`,
-) => {
-  localStorage.setItem('token', tokenFor(accessLabel, identity.id, sessionId));
-  localStorage.setItem('refresh_token', refreshToken);
-  localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(identity));
-};
-
 const seedV2Auth = (
   identity = fullIdentity,
   accessLabel = 'alice-access',
@@ -194,20 +183,20 @@ describe('auth store cross-tab session coordination', () => {
     });
   });
 
-  it('migrates valid legacy credentials and restores only the matching identity', () => {
-    seedLegacyAuth();
+  it('requires re-login when only legacy credentials are present', () => {
+    localStorage.setItem('token', tokenFor('alice-access'));
+    localStorage.setItem('refresh_token', 'alice-refresh');
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(fullIdentity));
     const store = createAuthStore();
 
-    expect(store.token).toBe(bearerFor('alice-access'));
-    expect(store.refreshToken).toBe('alice-refresh');
-    expect(store.currentIdentity).toEqual(fullIdentity);
-    expect(store.isAuthenticated).toBe(true);
-    expect(readStoredSession()).toMatchObject({
-      sessionId: 'sid-7', userId: 7, accessToken: tokenFor('alice-access'), refreshToken: 'alice-refresh',
-    });
-    expect(readStoredSession()?.tokenRevision).toBeTruthy();
+    expect(store.token).toBeNull();
+    expect(store.refreshToken).toBeNull();
+    expect(store.currentIdentity).toBeNull();
+    expect(store.isAuthenticated).toBe(false);
+    expect(readStoredSession()).toBeNull();
     expect(localStorage.getItem('token')).toBeNull();
     expect(localStorage.getItem('refresh_token')).toBeNull();
+    expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
   });
 
   it('does not restore profile data for another user than the credential snapshot', () => {
@@ -236,7 +225,9 @@ describe('auth store cross-tab session coordination', () => {
 
   it('does not fall back to valid legacy credentials when a v2 snapshot is malformed', () => {
     localStorage.setItem(AUTH_SESSION_STORAGE_KEY, '{');
-    seedLegacyAuth();
+    localStorage.setItem('token', tokenFor('alice-access'));
+    localStorage.setItem('refresh_token', 'alice-refresh');
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(fullIdentity));
 
     const store = createAuthStore();
 
@@ -355,7 +346,7 @@ describe('auth store cross-tab session coordination', () => {
   });
 
   it('rotates credentials without advancing the authentication session version', async () => {
-    seedLegacyAuth();
+    seedV2Auth();
     const store = createAuthStore();
     const revisionBefore = readStoredSession()?.tokenRevision;
     const refreshedIdentity = { ...fullIdentity, display_name: 'New', avatar_url: '/new.webp' };
@@ -376,7 +367,7 @@ describe('auth store cross-tab session coordination', () => {
   });
 
   it('preserves credentials after timeout, network failure, and server failure', async () => {
-    seedLegacyAuth();
+    seedV2Auth();
     const store = createAuthStore();
     const timeout = Object.assign(new Error('Request timed out'), {
       isAxiosError: true, code: 'ECONNABORTED',
@@ -398,7 +389,7 @@ describe('auth store cross-tab session coordination', () => {
     'AUTH_REFRESH_EXPIRED',
     'AUTH_REFRESH_REUSED',
   ])('clears the same session after fatal refresh rejection %s', async code => {
-    seedLegacyAuth();
+    seedV2Auth();
     const store = createAuthStore();
     mocks.post.mockRejectedValueOnce({
       isAxiosError: true,
@@ -416,7 +407,7 @@ describe('auth store cross-tab session coordination', () => {
   });
 
   it('rejects refresh without Web Locks and preserves authentication', async () => {
-    seedLegacyAuth();
+    seedV2Auth();
     const store = createAuthStore();
     setLocks(undefined);
 
@@ -441,7 +432,7 @@ describe('auth store cross-tab session coordination', () => {
   });
 
   it('clears auth synchronously on logout and conditionally removes persisted credentials', async () => {
-    seedLegacyAuth();
+    seedV2Auth();
     const store = createAuthStore();
     const versionBefore = store.sessionVersion;
 
