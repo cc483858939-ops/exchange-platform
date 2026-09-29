@@ -50,6 +50,17 @@
       <path d="m15 15 4.25 4.25" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
     </template>
 
+    <template v-else-if="props.name === 'topics'">
+      <path
+        d="M9 3 7 21M17 3l-2 18M4 9h16M3 15h16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </template>
+
     <template v-else-if="props.name === 'history'">
       <circle cx="12" cy="12" r="8.25" fill="none" stroke="currentColor" stroke-width="1.8" />
       <path d="M12 7.5v4.75l3.25 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
@@ -365,6 +376,7 @@ type AppIconName =
   | 'home'
   | 'exchange'
   | 'search'
+  | 'topics'
   | 'history'
   | 'notifications'
   | 'profile'

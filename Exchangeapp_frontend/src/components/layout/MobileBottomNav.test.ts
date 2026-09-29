@@ -146,15 +146,15 @@ describe('MobileBottomNav', () => {
     const wrapper = mountNav();
     const labels = wrapper.findAll('.mobile-bottom-nav__item').map(item => item.text().trim());
 
-    expect(labels).toEqual(['Home', 'Search', 'Exchange', 'Notifications', 'Profile']);
+    expect(labels).toEqual(['Home', 'Search', 'Topics', 'Exchange', 'Notifications', 'Profile']);
   });
 
-  it('renders the same five destinations anonymously', () => {
+  it('renders the same six destinations anonymously', () => {
     setState(false);
     const wrapper = mountNav();
     const labels = wrapper.findAll('.mobile-bottom-nav__item').map(item => item.text().trim());
 
-    expect(labels).toEqual(['Home', 'Search', 'Exchange', 'Notifications', 'Profile']);
+    expect(labels).toEqual(['Home', 'Search', 'Topics', 'Exchange', 'Notifications', 'Profile']);
   });
 
   it('gates anonymous protected destinations without fabricating a profile id', () => {
@@ -166,17 +166,27 @@ describe('MobileBottomNav', () => {
     expect(links[0].attributes('data-route-name')).toBe('Home');
     expect(links[1].attributes('data-route-name')).toBe('Login');
     expect(links[1].attributes('data-route-query-return-to')).toBe('/search?q=alice');
-    expect(links[2].attributes('data-route-name')).toBe('CurrencyExchange');
-    expect(links[3].attributes('data-route-name')).toBe('Login');
-    expect(links[3].attributes('data-route-query-return-to')).toBe('/notifications');
+    expect(links[2].attributes('data-route-name')).toBe('TopicDirectory');
+    expect(links[3].attributes('data-route-name')).toBe('CurrencyExchange');
     expect(links[4].attributes('data-route-name')).toBe('Login');
-    expect(links[4].attributes('data-route-query-intent')).toBe('profile');
-    expect(links[4].attributes('data-route-id')).toBeUndefined();
+    expect(links[4].attributes('data-route-query-return-to')).toBe('/notifications');
+    expect(links[5].attributes('data-route-name')).toBe('Login');
+    expect(links[5].attributes('data-route-query-intent')).toBe('profile');
+    expect(links[5].attributes('data-route-id')).toBeUndefined();
+  });
+
+  it.each([true, false])('routes Topics directly for authenticated=%s users', (authenticated) => {
+    setState(authenticated, 'Topic');
+    const wrapper = mountNav();
+    const topics = wrapper.findAll('.mobile-bottom-nav__item')[2];
+
+    expect(topics.attributes('data-route-name')).toBe('TopicDirectory');
+    expect(topics.attributes('aria-current')).toBe('page');
   });
 
   it('routes the authenticated Profile item to the current identity', () => {
     const wrapper = mountNav();
-    const profile = wrapper.findAll('.mobile-bottom-nav__item')[4];
+    const profile = wrapper.findAll('.mobile-bottom-nav__item')[5];
 
     expect(profile.attributes('data-route-name')).toBe('UserProfile');
     expect(profile.attributes('data-route-id')).toBe('123');
@@ -208,6 +218,7 @@ describe('MobileBottomNav', () => {
       27,
       26,
       26,
+      26,
       25,
     ]);
   });
@@ -216,6 +227,8 @@ describe('MobileBottomNav', () => {
     for (const [routeName, params] of [
       ['Home', {}],
       ['UserSearch', {}],
+      ['TopicDirectory', {}],
+      ['Topic', {}],
       ['CurrencyExchange', {}],
       ['Notifications', {}],
       ['UserProfile', { id: '123' }],
@@ -238,15 +251,16 @@ describe('MobileBottomNav', () => {
     expect(links[2].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
     expect(links[3].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
     expect(links[4].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
+    expect(links[5].find('.mobile-bottom-nav__icon').classes()).not.toContain('mobile-bottom-nav__icon--active');
   });
 
-  it('keeps anonymous navigation at five items with the authenticated optical sizes', () => {
+  it('keeps anonymous navigation at six items with the authenticated optical sizes', () => {
     setState(false, 'Home');
     const wrapper = mountNav();
     const icons = wrapper.findAll('.test-icon');
 
-    expect(wrapper.findAll('.mobile-bottom-nav__item')).toHaveLength(5);
-    expect(icons.map(icon => Number(icon.attributes('data-size')))).toEqual([25, 27, 26, 26, 25]);
+    expect(wrapper.findAll('.mobile-bottom-nav__item')).toHaveLength(6);
+    expect(icons.map(icon => Number(icon.attributes('data-size')))).toEqual([25, 27, 26, 26, 26, 25]);
     expect(wrapper.findAll('.mobile-bottom-nav__icon--active')).toHaveLength(1);
     expect(wrapper.findAll('.mobile-bottom-nav__item')[0].find('.mobile-bottom-nav__icon').classes())
       .toContain('mobile-bottom-nav__icon--active');
@@ -265,8 +279,8 @@ describe('MobileBottomNav', () => {
 
   it.each([
     ['Search', 'UserSearch', 1],
-    ['Notifications', 'Notifications', 3],
-    ['Profile', 'UserProfile', 4],
+    ['Notifications', 'Notifications', 4],
+    ['Profile', 'UserProfile', 5],
   ] as const)('keeps guest %s on its Login destination without reselect interception', (
     _label,
     routeName,
@@ -350,7 +364,7 @@ describe('MobileBottomNav', () => {
 
   it('reselects CurrencyExchange to the top', () => {
     const routeName = 'CurrencyExchange';
-    const index = 2;
+    const index = 3;
     setState(true, routeName);
     const wrapper = mountNav();
     const event = dispatchClick(wrapper, index);
@@ -363,7 +377,7 @@ describe('MobileBottomNav', () => {
   it('signals an active Notifications reselect without scrolling the window', () => {
     setState(true, 'Notifications');
     const wrapper = mountNav();
-    const event = dispatchClick(wrapper, 3);
+    const event = dispatchClick(wrapper, 4);
 
     expect(event.defaultPrevented).toBe(true);
     expect(mocks.notificationStore.requestNotificationReselect).toHaveBeenCalledTimes(1);
@@ -373,7 +387,7 @@ describe('MobileBottomNav', () => {
   it('reselects the own Profile root to the top', () => {
     setState(true, 'UserProfile', { id: '123' });
     const wrapper = mountNav();
-    const event = dispatchClick(wrapper, 4);
+    const event = dispatchClick(wrapper, 5);
 
     expect(event.defaultPrevented).toBe(true);
     expect(mocks.profileSession.requestProfileReselect).toHaveBeenCalledTimes(1);
@@ -392,7 +406,7 @@ describe('MobileBottomNav', () => {
   ])('preserves %s-click link behavior on the own Profile root', (_label, init) => {
     setState(true, 'UserProfile', { id: '123' });
     const wrapper = mountNav();
-    const event = dispatchClick(wrapper, 4, init);
+    const event = dispatchClick(wrapper, 5, init);
 
     expect(event.defaultPrevented).toBe(false);
     expect(mocks.profileSession.requestProfileReselect).not.toHaveBeenCalled();
@@ -406,8 +420,8 @@ describe('MobileBottomNav', () => {
   ])('navigates from the %s Profile surface without reselect scrolling', (routeName, params) => {
     setState(true, routeName, params);
     const wrapper = mountNav();
-    const profile = wrapper.findAll('.mobile-bottom-nav__item')[4];
-    const event = dispatchClick(wrapper, 4);
+    const profile = wrapper.findAll('.mobile-bottom-nav__item')[5];
+    const event = dispatchClick(wrapper, 5);
 
     expect(event.defaultPrevented).toBe(false);
     expect(mocks.profileSession.requestProfileReselect).not.toHaveBeenCalled();
@@ -419,8 +433,8 @@ describe('MobileBottomNav', () => {
   it('navigates from another user Profile without reselect scrolling', () => {
     setState(true, 'UserProfile', { id: '456' });
     const wrapper = mountNav();
-    const profile = wrapper.findAll('.mobile-bottom-nav__item')[4];
-    const event = dispatchClick(wrapper, 4);
+    const profile = wrapper.findAll('.mobile-bottom-nav__item')[5];
+    const event = dispatchClick(wrapper, 5);
 
     expect(event.defaultPrevented).toBe(false);
     expect(mocks.profileSession.requestProfileReselect).not.toHaveBeenCalled();
@@ -450,7 +464,7 @@ describe('MobileBottomNav', () => {
     const matchMedia = window.matchMedia as unknown as ReturnType<typeof vi.fn>;
     matchMedia.mockImplementation((query: string) => ({ matches: query.includes('prefers-reduced-motion') }));
     const wrapper = mountNav();
-    const event = dispatchClick(wrapper, 2);
+    const event = dispatchClick(wrapper, 3);
 
     expect(event.defaultPrevented).toBe(true);
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
@@ -477,12 +491,14 @@ describe('MobileBottomNav', () => {
   it.each([
     ['Home', {}, 0],
     ['UserSearch', {}, 1],
-    ['CurrencyExchange', {}, 2],
-    ['Notifications', {}, 3],
-    ['UserProfile', { id: '123' }, 4],
-    ['UserFollowing', { id: '123' }, 4],
-    ['UserFollowers', { id: ['123'] }, 4],
-    ['History', {}, 4],
+    ['TopicDirectory', {}, 2],
+    ['Topic', {}, 2],
+    ['CurrencyExchange', {}, 3],
+    ['Notifications', {}, 4],
+    ['UserProfile', { id: '123' }, 5],
+    ['UserFollowing', { id: '123' }, 5],
+    ['UserFollowers', { id: ['123'] }, 5],
+    ['History', {}, 5],
   ])('marks the matching %s surface active', (routeName, params, activeIndex) => {
     setState(true, routeName, params);
     const wrapper = mountNav();
@@ -499,6 +515,29 @@ describe('MobileBottomNav', () => {
     setState(true, 'UserProfile', { id: '456' });
     const wrapper = mountNav();
 
-    expect(wrapper.findAll('.mobile-bottom-nav__item')[4].attributes('aria-current')).toBeUndefined();
+    expect(wrapper.findAll('.mobile-bottom-nav__item')[5].attributes('aria-current')).toBeUndefined();
+  });
+
+  it('navigates from a Topic detail to the directory without intercepting the click', () => {
+    setState(false, 'Topic', { slug: 'japan' });
+    const wrapper = mountNav();
+    const topics = wrapper.findAll('.mobile-bottom-nav__item')[2];
+    const event = dispatchClick(wrapper, 2);
+
+    expect(topics.attributes('data-route-name')).toBe('TopicDirectory');
+    expect(topics.attributes('aria-current')).toBe('page');
+    expect(event.defaultPrevented).toBe(false);
+    expect(window.scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('reselects the TopicDirectory root to the top', () => {
+    setState(false, 'TopicDirectory');
+    const wrapper = mountNav();
+    const topics = wrapper.findAll('.mobile-bottom-nav__item')[2];
+    const event = dispatchClick(wrapper, 2);
+
+    expect(topics.attributes('data-route-name')).toBe('TopicDirectory');
+    expect(event.defaultPrevented).toBe(true);
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
   });
 });

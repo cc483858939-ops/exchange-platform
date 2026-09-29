@@ -52,7 +52,7 @@ type RouteDestination = {
 type NavigationItem = {
   label: string;
   routeName: string;
-  icon: 'home' | 'search' | 'exchange' | 'notifications' | 'profile';
+  icon: 'home' | 'search' | 'topics' | 'exchange' | 'notifications' | 'profile';
   iconSize: number;
   to: RouteDestination;
 };
@@ -118,6 +118,7 @@ const navigationItems = computed<NavigationItem[]>(() => {
   return [
     { label: 'Home', routeName: 'Home', icon: 'home', iconSize: 25, to: homeDestination.value },
     { label: 'Search', routeName: 'UserSearch', icon: 'search', iconSize: 27, to: searchDestination.value },
+    { label: 'Topics', routeName: 'TopicDirectory', icon: 'topics', iconSize: 26, to: { name: 'TopicDirectory' } },
     { label: 'Exchange', routeName: 'CurrencyExchange', icon: 'exchange', iconSize: 26, to: { name: 'CurrencyExchange' } },
     { label: 'Notifications', routeName: 'Notifications', icon: 'notifications', iconSize: 26, to: notificationsDestination.value },
     {
@@ -152,6 +153,9 @@ const isItemActive = (item: NavigationItem) => {
   if (item.routeName === 'UserProfile') {
     return isOwnProfileRoute();
   }
+  if (item.routeName === 'TopicDirectory') {
+    return route.name === 'TopicDirectory' || route.name === 'Topic';
+  }
   return route.name === item.routeName;
 };
 
@@ -171,6 +175,7 @@ const isReselectableRoot = (item: NavigationItem) => {
   return (
     item.routeName === 'Home'
     || item.routeName === 'UserSearch'
+    || item.routeName === 'TopicDirectory'
     || item.routeName === 'CurrencyExchange'
     || item.routeName === 'Notifications'
   ) && routeName === item.routeName;
@@ -248,7 +253,7 @@ const notificationBadge = computed(() => (
   .mobile-bottom-nav__items {
     display: grid;
     height: var(--mobile-bottom-nav-height);
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .mobile-bottom-nav__item {

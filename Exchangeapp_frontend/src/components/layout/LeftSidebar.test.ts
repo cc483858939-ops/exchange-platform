@@ -117,6 +117,7 @@ describe('LeftSidebar navigation', () => {
     expect(wrapper.findAll('.left-sidebar__nav > a').map(link => link.text().trim())).toEqual([
       'Home',
       'Search',
+      'Topics',
       'Notifications',
       'History',
       'Exchange',
@@ -134,16 +135,31 @@ describe('LeftSidebar navigation', () => {
     expect(links[0].attributes('data-route-name')).toBe('Home');
     expect(links[1].attributes('data-route-name')).toBe('Login');
     expect(links[1].attributes('data-route-query-return-to')).toBe('/search');
-    expect(links[2].attributes('data-route-name')).toBe('Login');
-    expect(links[2].attributes('data-route-query-return-to')).toBe('/notifications');
+    expect(links[2].attributes('data-route-name')).toBe('TopicDirectory');
+    expect(links[2].classes()).toContain('left-sidebar__link--compact-only');
     expect(links[3].attributes('data-route-name')).toBe('Login');
-    expect(links[3].attributes('data-route-query-return-to')).toBe('/history');
-    expect(links[4].attributes('data-route-name')).toBe('CurrencyExchange');
-    expect(links[5].attributes('data-route-name')).toBe('Login');
-    expect(links[5].attributes('data-route-query-intent')).toBe('profile');
-    expect(links[5].attributes('data-route-id')).toBeUndefined();
+    expect(links[3].attributes('data-route-query-return-to')).toBe('/notifications');
+    expect(links[4].attributes('data-route-name')).toBe('Login');
+    expect(links[4].attributes('data-route-query-return-to')).toBe('/history');
+    expect(links[5].attributes('data-route-name')).toBe('CurrencyExchange');
     expect(links[6].attributes('data-route-name')).toBe('Login');
-    expect(links[6].attributes('data-route-query-return-to')).toBe('/posts/new');
+    expect(links[6].attributes('data-route-query-intent')).toBe('profile');
+    expect(links[6].attributes('data-route-id')).toBeUndefined();
+    expect(links[7].attributes('data-route-name')).toBe('Login');
+    expect(links[7].attributes('data-route-query-return-to')).toBe('/posts/new');
+  });
+
+  it.each([
+    ['TopicDirectory', true],
+    ['Topic', true],
+    ['Home', false],
+  ])('marks Topics active on %s routes', (routeName, active) => {
+    mocks.route.name = routeName;
+    const wrapper = mountSidebar();
+    const topics = wrapper.get('.left-sidebar__nav > a[aria-label="Topics"]');
+
+    expect(topics.classes()).toContain('left-sidebar__link--compact-only');
+    expect(topics.classes().includes('left-sidebar__link--active')).toBe(active);
   });
 
   it('does not expose a stale notification badge to guests', () => {
@@ -358,7 +374,7 @@ describe('LeftSidebar navigation', () => {
     expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
   });
 
-  it.each(['Search', 'Notifications', 'History', 'Exchange', 'Profile', 'Post'])(
+  it.each(['Search', 'Topics', 'Notifications', 'History', 'Exchange', 'Profile', 'Post'])(
     'does not intercept the %s navigation item',
     (label) => {
       mocks.authStore.isAuthenticated = true;
@@ -399,6 +415,7 @@ describe('LeftSidebar navigation', () => {
 
     expect(iconSize('home')).toBe('26');
     expect(iconSize('search')).toBe('26');
+    expect(iconSize('topics')).toBe('26');
     expect(iconSize('notifications')).toBe('26');
     expect(iconSize('history')).toBe('26');
     expect(iconSize('profile')).toBe('26');

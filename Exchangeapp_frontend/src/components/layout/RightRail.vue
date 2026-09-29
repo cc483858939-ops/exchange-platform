@@ -3,10 +3,19 @@
     <section class="right-rail__section" aria-labelledby="right-rail-topics-heading">
       <p class="right-rail__eyebrow">EXPLORE</p>
       <h2 id="right-rail-topics-heading">Topics</h2>
-      <p v-if="topicsUnavailable" class="right-rail__status" role="status">Topics unavailable</p>
-      <nav v-else-if="topics.length > 0" class="right-rail__topics" aria-label="Topics">
+      <p v-if="topicDirectory.status === 'idle' || topicDirectory.loading" class="right-rail__status" role="status" aria-live="polite">
+        Loading topics…
+      </p>
+      <div v-else-if="topicDirectory.unavailable" class="right-rail__topic-error">
+        <p class="right-rail__status" role="alert">{{ topicDirectory.error }}</p>
+        <button class="right-rail__retry" type="button" @click="topicDirectory.retry()">Retry</button>
+      </div>
+      <p v-else-if="topicDirectory.items.length === 0" class="right-rail__status">
+        No topics available.
+      </p>
+      <nav v-else class="right-rail__topics" aria-label="Topics">
         <RouterLink
-          v-for="topic in topics"
+          v-for="topic in topicDirectory.items"
           :key="topic.slug"
           class="right-rail__topic"
           :to="{ name: 'Topic', params: { slug: topic.slug } }"
@@ -29,25 +38,14 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onMounted } from 'vue';
 import { useRoute } from 'vue-router';
-import { getTopics, type TopicSummary } from '../../services/topicService';
+import { useTopicDirectoryStore } from '../../store/topicDirectory';
 
 const route = useRoute();
-const topics = ref<TopicSummary[]>([]);
-const topicsUnavailable = ref(false);
-let active = true;
+const topicDirectory = useTopicDirectoryStore();
 
-onMounted(async () => {
-  try {
-    const response = await getTopics();
-    if (active) topics.value = response.items ?? [];
-  } catch {
-    if (active) topicsUnavailable.value = true;
-  }
-});
-
-onBeforeUnmount(() => { active = false; });
+onMounted(() => { void topicDirectory.ensureLoaded(); });
 </script>
 
 <style scoped>
@@ -120,6 +118,30 @@ h2 {
 
 .right-rail__status {
   margin-top: var(--space-3);
+}
+
+.right-rail__topic-error {
+  margin-top: var(--space-3);
+}
+
+.right-rail__retry {
+  min-height: 36px;
+  margin-top: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.right-rail__retry:hover,
+.right-rail__retry:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .right-rail__links {

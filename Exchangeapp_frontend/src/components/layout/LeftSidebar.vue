@@ -17,6 +17,7 @@
         :class="{
           'left-sidebar__link--compact-only': item.compactOnly,
           'left-sidebar__link--primary': item.primary,
+          'left-sidebar__link--active': isNavigationActive(item),
         }"
         :to="navigationDestination(item)"
         :aria-label="item.label"
@@ -86,6 +87,7 @@ const currentProfileID = computed(() => {
 const navigation = [
   { name: 'Home', label: 'Home', icon: 'home' as const, iconSize: 26, compactOnly: false },
   { name: 'UserSearch', label: 'Search', icon: 'search' as const, iconSize: 26, compactOnly: false },
+  { name: 'TopicDirectory', label: 'Topics', icon: 'topics' as const, iconSize: 26, compactOnly: true },
   { name: 'Notifications', label: 'Notifications', icon: 'notifications' as const, iconSize: 26, compactOnly: false },
   { name: 'History', label: 'History', icon: 'history' as const, iconSize: 26, compactOnly: false },
   { name: 'CurrencyExchange', label: 'Exchange', icon: 'exchange' as const, iconSize: 26, compactOnly: true },
@@ -153,6 +155,10 @@ const visibleNavigation = computed(() => navigation.filter((item) => (
   || !authStore.isAuthenticated
   || currentProfileID.value !== null
 )));
+
+const isNavigationActive = (item: typeof navigation[number]) => item.name === 'TopicDirectory'
+  ? route.name === 'TopicDirectory' || route.name === 'Topic'
+  : route.name === item.name;
 
 const isStandardActivation = (event: MouseEvent) => event.button === 0
   && !event.metaKey
@@ -260,12 +266,14 @@ const notificationBadge = computed(() => (
   color: var(--color-text);
 }
 
-.left-sidebar__link.router-link-active {
+.left-sidebar__link.router-link-active,
+.left-sidebar__link--active {
   color: var(--color-text);
   font-weight: 750;
 }
 
-.left-sidebar__link.router-link-active .app-icon {
+.left-sidebar__link.router-link-active .app-icon,
+.left-sidebar__link--active .app-icon {
   color: var(--color-accent);
 }
 
