@@ -123,6 +123,7 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		Constraints: []string{
 			"fk_post_reaction_user",
 			"fk_post_reaction_post",
+			"chk_post_reaction_version_positive",
 		},
 	},
 	{

@@ -162,6 +162,13 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
 	})
 
+	withIntegrationSavepoint(t, tx, "missing_post_reaction_version_constraint", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "post_reaction") + " DROP CONSTRAINT chk_post_reaction_version_positive").Error; err != nil {
+			t.Fatalf("drop Post reaction version constraint: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
+	})
+
 	withIntegrationSavepoint(t, tx, "missing_post_index", func() {
 		if err := tx.Exec("DROP INDEX " + qualifiedIntegrationTable(primarySchema, "idx_posts_author_created")).Error; err != nil {
 			t.Fatalf("drop Post author index: %v", err)

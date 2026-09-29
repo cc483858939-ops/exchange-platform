@@ -42,7 +42,7 @@ func requirePostgresCheckViolation(t *testing.T, caseName string, err error, wan
 	return requirePostgresErrorCode(t, caseName, err, "23514", wantConstraints...)
 }
 
-func TestRecommendationExplorationSchemaMigrationIntegration(t *testing.T) {
+func TestRecommendationExplorationConstraintsIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -55,20 +55,14 @@ func TestRecommendationExplorationSchemaMigrationIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.RecommendationRequest{}, &models.RecommendationResultTrace{}, &models.RecommendationDailyMetric{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec("ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS freshness_component DOUBLE PRECISION NOT NULL DEFAULT 0").Error; err != nil {
+	if err := applyRecommendationExplorationConstraints(db); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRecommendationExplorationSchema(db); err != nil {
-		t.Fatal(err)
-	}
-	if err := applyRecommendationExplorationSchema(db); err != nil {
+	if err := applyRecommendationExplorationConstraints(db); err != nil {
 		t.Fatal(err)
 	}
 
-	var freshnessColumns, explorationTraceColumns, explorationRequestColumns, explorationMetricColumns int
-	if err := db.Raw(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'recommendation_result_traces' AND column_name = 'freshness_component'`).Scan(&freshnessColumns).Error; err != nil {
-		t.Fatal(err)
-	}
+	var explorationTraceColumns, explorationRequestColumns, explorationMetricColumns int
 	if err := db.Raw(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'recommendation_result_traces' AND column_name IN ('exploration_opportunity', 'selection_mode', 'exploration_reason', 'exploration_semantic')`).Scan(&explorationTraceColumns).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +72,8 @@ func TestRecommendationExplorationSchemaMigrationIntegration(t *testing.T) {
 	if err := db.Raw(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'recommendation_daily_metrics' AND column_name IN ('exploration_opportunity', 'selection_mode', 'exploration_reason')`).Scan(&explorationMetricColumns).Error; err != nil {
 		t.Fatal(err)
 	}
-	if freshnessColumns != 0 || explorationTraceColumns != 4 || explorationRequestColumns != 3 || explorationMetricColumns != 3 {
-		t.Fatalf("freshness=%d trace=%d request=%d metric=%d", freshnessColumns, explorationTraceColumns, explorationRequestColumns, explorationMetricColumns)
+	if explorationTraceColumns != 4 || explorationRequestColumns != 3 || explorationMetricColumns != 3 {
+		t.Fatalf("trace=%d request=%d metric=%d", explorationTraceColumns, explorationRequestColumns, explorationMetricColumns)
 	}
 
 	var primaryKeyColumns string

@@ -108,28 +108,3 @@ func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 		t.Fatalf("coexisting embedding rows changed: v1=%+v v2=%+v", persistedV1, persistedV2)
 	}
 }
-
-func TestLegacyPostEmbeddingJobCleanupIntegration(t *testing.T) {
-	dsn := os.Getenv("POSTGRES_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec("CREATE TABLE IF NOT EXISTS article_embedding_jobs (id BIGSERIAL PRIMARY KEY)").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := RunMigrationsWithDB(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
-	var exists bool
-	if err := db.Raw("SELECT to_regclass('public.article_embedding_jobs') IS NOT NULL").Scan(&exists).Error; err != nil {
-		t.Fatal(err)
-	}
-	if exists {
-		t.Fatal("article_embedding_jobs still exists after legacy cleanup")
-	}
-}

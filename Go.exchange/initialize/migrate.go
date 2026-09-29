@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"Go.exchange/embeddingstate"
 	"Go.exchange/global"
@@ -35,13 +34,6 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 			return fmt.Errorf("enable pgvector extension: %w", err)
 		}
-		if err := prepareDevDataMirrorUniqueIndexes(tx); err != nil {
-			return err
-		}
-		if err := applyPostArticleCleanup(tx); err != nil {
-			return err
-		}
-
 		if err := tx.AutoMigrate(
 			&models.User{},
 			&models.UserFollow{},
@@ -72,14 +64,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
 		}
-		if err := applyDevDataMirrorCoverColumns(tx); err != nil {
-			return err
-		}
 		if err := applyEmbeddingServingStateSchema(tx); err != nil {
-			return err
-		}
-
-		if err := applyLegacyPostEmbeddingJobCleanup(tx); err != nil {
 			return err
 		}
 		if err := applyPostSchemaConstraints(tx); err != nil {
@@ -112,7 +97,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		if err := applyPostBehaviorConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyRecommendationTrendingSchemaCleanup(tx); err != nil {
+		if err := applyRecommendationTrendingConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyRecommendationRetrievalV3Indexes(tx); err != nil {
@@ -121,13 +106,13 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		if err := applyRecommendationTraceConstraints(tx); err != nil {
 			return err
 		}
-		if err := applyRecommendationExplorationSchema(tx); err != nil {
+		if err := applyRecommendationExplorationConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
 			return err
 		}
-		if err := applyRecommendationLanguageAffinitySchema(tx); err != nil {
+		if err := applyRecommendationLanguageAffinityConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyOutboxSchema(tx); err != nil {
@@ -138,13 +123,6 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		}
 		if err := applyDevDataMirrorConstraints(tx); err != nil {
 			return err
-		}
-		if err := tx.Exec(`
-UPDATE post_reaction
-SET liked = (reaction = 1)
-WHERE reaction_version = 0
-`).Error; err != nil {
-			return fmt.Errorf("backfill post reaction tombstones: %w", err)
 		}
 		if err := validateMigratedSchema(tx); err != nil {
 			return err
@@ -178,68 +156,6 @@ ON CONFLICT (id) DO NOTHING`, embeddingstate.ServingStateID, embeddingstate.Defa
 	return nil
 }
 
-// applyDevDataMirrorCoverColumns is an explicit, idempotent migration for the
-// DevData profile-cover metadata. The NOT NULL defaults make it safe for
-// existing mirror rows and keep this storage contract independent from the
-// runtime User cover column.
-func applyDevDataMirrorCoverColumns(tx *gorm.DB) error {
-	for _, statement := range []string{
-		"ALTER TABLE devdata_mirror_accounts ADD COLUMN IF NOT EXISTS source_cover_url VARCHAR(512) NOT NULL DEFAULT ''",
-		"ALTER TABLE devdata_mirror_accounts ADD COLUMN IF NOT EXISTS cover_object_key VARCHAR(512) NOT NULL DEFAULT ''",
-		"ALTER TABLE devdata_mirror_accounts ADD COLUMN IF NOT EXISTS cover_content_hash VARCHAR(64) NOT NULL DEFAULT ''",
-	} {
-		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply DevData mirror cover columns: %w", err)
-		}
-	}
-	return nil
-}
-
-// prepareDevDataMirrorUniqueIndexes transfers the old explicitly-created
-// single/composite UNIQUE constraints to the GORM-owned unique indexes below.
-//
-// GORM's PostgreSQL AutoMigrate inspects single-column UNIQUE constraints. If
-// it sees one that is not represented by a `unique` field tag, it tries to
-// drop the conventionally named `uni_<table>_<column>` constraint. The old
-// DevData migration used different explicit names, so the second migration
-// could fail while trying to drop a constraint that never existed. Removing
-// the old explicit constraints before AutoMigrate makes the transfer
-// transactional and lets the model's exact unique-index names be the sole
-// owner on fresh and existing databases. Composite constraints are included
-// as well so no old ownership variant survives the transfer.
-func prepareDevDataMirrorUniqueIndexes(tx *gorm.DB) error {
-	for _, model := range []interface{}{
-		&models.DevDataMirrorAccount{},
-		&models.DevDataMirrorPost{},
-	} {
-		if !tx.Migrator().HasTable(model) {
-			continue
-		}
-		table := "devdata_mirror_accounts"
-		if _, ok := model.(*models.DevDataMirrorPost); ok {
-			table = "devdata_mirror_posts"
-		}
-		for _, constraint := range []string{
-			"ucon_devdata_mirror_accounts_registry_key",
-			"ucon_devdata_mirror_accounts_platform_source_user",
-			"ucon_devdata_mirror_accounts_local_user",
-			"ucon_devdata_mirror_posts_platform_source_post",
-			"ucon_devdata_mirror_posts_local_post",
-		} {
-			if strings.HasPrefix(constraint, "ucon_devdata_mirror_accounts_") && table != "devdata_mirror_accounts" {
-				continue
-			}
-			if strings.HasPrefix(constraint, "ucon_devdata_mirror_posts_") && table != "devdata_mirror_posts" {
-				continue
-			}
-			if err := tx.Exec("ALTER TABLE " + table + " DROP CONSTRAINT IF EXISTS " + constraint).Error; err != nil {
-				return fmt.Errorf("prepare DevData unique index ownership for %s: %w", table, err)
-			}
-		}
-	}
-	return nil
-}
-
 // applyDevDataMirrorConstraints is deliberately kept out of the runtime
 // schema canaries. DevData is an operator/showcase dependency and must not
 // make the API or worker readiness contract stricter. Unique indexes are
@@ -268,27 +184,8 @@ func applyDevDataMirrorConstraints(tx *gorm.DB) error {
 	return nil
 }
 
-// applyLegacyPostEmbeddingJobCleanup removes the obsolete one-off work table.
-// It does not migrate or rewrite any content rows.
-func applyLegacyPostEmbeddingJobCleanup(tx *gorm.DB) error {
-	if err := tx.Exec("DROP TABLE IF EXISTS article_embedding_jobs").Error; err != nil {
-		return fmt.Errorf("drop legacy post embedding jobs: %w", err)
-	}
-	return nil
-}
-
-func applyPostArticleCleanup(tx *gorm.DB) error {
-	if err := tx.Exec("DROP TABLE IF EXISTS post_articles").Error; err != nil {
-		return fmt.Errorf("drop post article table: %w", err)
-	}
-	return nil
-}
-
 func applyPostMediaConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE post_media ALTER COLUMN large_url SET NOT NULL",
-		"ALTER TABLE post_media ALTER COLUMN width SET NOT NULL",
-		"ALTER TABLE post_media ALTER COLUMN height SET NOT NULL",
 		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS fk_post_media_post",
 		"ALTER TABLE post_media ADD CONSTRAINT fk_post_media_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE post_media DROP CONSTRAINT IF EXISTS chk_post_media_type",
@@ -348,9 +245,6 @@ func applyPostMediaUploadConstraints(tx *gorm.DB) error {
 
 func applyPostSchemaConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"UPDATE posts SET language = 'und' WHERE language IS NULL OR btrim(language) = ''",
-		"ALTER TABLE posts ALTER COLUMN language SET DEFAULT 'und'",
-		"ALTER TABLE posts ALTER COLUMN language SET NOT NULL",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_language_supported",
 		"ALTER TABLE posts ADD CONSTRAINT chk_posts_language_supported CHECK (language IN ('zh', 'ja', 'en', 'und'))",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_author",
@@ -516,16 +410,14 @@ func applyPostReactionConstraints(tx *gorm.DB) error {
 		"ALTER TABLE post_reaction ADD CONSTRAINT fk_post_reaction_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE post_reaction DROP CONSTRAINT IF EXISTS fk_post_reaction_post",
 		"ALTER TABLE post_reaction ADD CONSTRAINT fk_post_reaction_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
-		"ALTER TABLE post_reaction ALTER COLUMN liked DROP DEFAULT",
-		"ALTER TABLE post_reaction ADD COLUMN IF NOT EXISTS state_changed_at TIMESTAMPTZ",
-		"UPDATE post_reaction SET state_changed_at = COALESCE(state_changed_at, updated_at, CURRENT_TIMESTAMP)",
-		"ALTER TABLE post_reaction ALTER COLUMN state_changed_at SET NOT NULL",
+		"ALTER TABLE post_reaction DROP CONSTRAINT IF EXISTS chk_post_reaction_version_positive",
+		"ALTER TABLE post_reaction ADD CONSTRAINT chk_post_reaction_version_positive CHECK (reaction_version > 0)",
 		"CREATE INDEX IF NOT EXISTS idx_post_reaction_user_liked_state ON post_reaction (user_id, liked, state_changed_at DESC, post_id)",
 		"CREATE INDEX IF NOT EXISTS idx_post_behavior_user_view_seen ON post_behaviors (user_id, action, last_seen_at DESC, id DESC) WHERE action = 'view'",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply post reaction constraint: %w", err)
+			return fmt.Errorf("apply post reaction constraints: %w", err)
 		}
 	}
 	return nil
@@ -546,18 +438,14 @@ func applyPostBehaviorConstraints(tx *gorm.DB) error {
 	return nil
 }
 
-func applyRecommendationTrendingSchemaCleanup(tx *gorm.DB) error {
+func applyRecommendationTrendingConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_popular_candidates",
-		"ALTER TABLE recommendation_requests DROP COLUMN IF EXISTS popular_candidate_count",
-		"ALTER TABLE recommendation_result_traces DROP COLUMN IF EXISTS from_popular",
-		"ALTER TABLE recommendation_result_traces DROP COLUMN IF EXISTS popularity_component",
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_trending_candidates",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_trending_candidates CHECK (trending_candidate_count >= 0)",
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply recommendation trending schema cleanup: %w", err)
+			return fmt.Errorf("apply recommendation trending constraints: %w", err)
 		}
 	}
 	return nil
@@ -565,7 +453,6 @@ func applyRecommendationTrendingSchemaCleanup(tx *gorm.DB) error {
 
 func applyRecommendationRetrievalV3Indexes(tx *gorm.DB) error {
 	statements := []string{
-		"DROP INDEX IF EXISTS idx_posts_recommendation_popular",
 		"CREATE INDEX IF NOT EXISTS idx_posts_recommendation_recent ON posts (created_at DESC, id DESC) WHERE deleted_at IS NULL AND visibility = 'public' AND reply_to_post_id IS NULL",
 		"CREATE INDEX IF NOT EXISTS idx_posts_recommendation_trending ON posts (created_at DESC, id DESC) WHERE deleted_at IS NULL AND visibility = 'public' AND reply_to_post_id IS NULL AND (like_count > 0 OR reply_count > 0)",
 	}
@@ -578,14 +465,6 @@ func applyRecommendationRetrievalV3Indexes(tx *gorm.DB) error {
 }
 func applyRecommendationMetricsConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS feed_dwell_count BIGINT",
-		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS feed_visible_time_ms BIGINT",
-		"UPDATE recommendation_daily_metrics SET feed_dwell_count = 0 WHERE feed_dwell_count IS NULL",
-		"UPDATE recommendation_daily_metrics SET feed_visible_time_ms = 0 WHERE feed_visible_time_ms IS NULL",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_dwell_count SET DEFAULT 0",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_visible_time_ms SET DEFAULT 0",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_dwell_count SET NOT NULL",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN feed_visible_time_ms SET NOT NULL",
 		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_feed_dwell_count",
 		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_feed_visible_time",
 		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_feed_dwell_count CHECK (feed_dwell_count >= 0)",
@@ -604,7 +483,6 @@ func applyRecommendationTraceConstraints(tx *gorm.DB) error {
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_fallback CHECK (fallback_reason IN ('', 'no_positive_profile', 'insufficient_fresh_candidates'))",
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_personalization_mode",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_personalization_mode CHECK (personalization_mode IN ('semantic_social', 'social_only', 'cold_start'))",
-		"DROP INDEX IF EXISTS uidx_recommendation_result_trace_request_article",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_recommendation_result_trace_request_post ON recommendation_result_traces (request_id, post_id)",
 		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_post ON recommendation_result_traces (post_id)",
 		"CREATE INDEX IF NOT EXISTS idx_recommendation_result_trace_created ON recommendation_result_traces (created_at)",
@@ -622,18 +500,8 @@ func applyRecommendationTraceConstraints(tx *gorm.DB) error {
 	return nil
 }
 
-func applyRecommendationExplorationSchema(tx *gorm.DB) error {
+func applyRecommendationExplorationConstraints(tx *gorm.DB) error {
 	statements := []string{
-		"ALTER TABLE recommendation_requests ADD COLUMN IF NOT EXISTS exploration_target_count INTEGER",
-		"ALTER TABLE recommendation_requests ADD COLUMN IF NOT EXISTS exploration_opportunity_count INTEGER",
-		"ALTER TABLE recommendation_requests ADD COLUMN IF NOT EXISTS exploration_result_count INTEGER",
-		"UPDATE recommendation_requests SET exploration_target_count = COALESCE(exploration_target_count, 0), exploration_opportunity_count = COALESCE(exploration_opportunity_count, 0), exploration_result_count = COALESCE(exploration_result_count, 0)",
-		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_target_count SET DEFAULT 0",
-		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_opportunity_count SET DEFAULT 0",
-		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_result_count SET DEFAULT 0",
-		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_target_count SET NOT NULL",
-		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_opportunity_count SET NOT NULL",
-		"ALTER TABLE recommendation_requests ALTER COLUMN exploration_result_count SET NOT NULL",
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_exploration_target",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_exploration_target CHECK (exploration_target_count >= 0 AND exploration_target_count <= requested_limit)",
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_exploration_opportunity",
@@ -641,20 +509,6 @@ func applyRecommendationExplorationSchema(tx *gorm.DB) error {
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_exploration_result",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_exploration_result CHECK (exploration_result_count >= 0 AND exploration_result_count <= exploration_opportunity_count AND exploration_result_count <= result_count)",
 
-		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS exploration_opportunity BOOLEAN",
-		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS selection_mode VARCHAR(16)",
-		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS exploration_reason VARCHAR(32)",
-		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS exploration_semantic DOUBLE PRECISION",
-		"UPDATE recommendation_result_traces SET exploration_opportunity = COALESCE(exploration_opportunity, FALSE), selection_mode = COALESCE(NULLIF(selection_mode, ''), 'ranked'), exploration_reason = COALESCE(exploration_reason, ''), exploration_semantic = COALESCE(exploration_semantic, 0)",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_opportunity SET DEFAULT FALSE",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN selection_mode SET DEFAULT 'ranked'",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_reason SET DEFAULT ''",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_semantic SET DEFAULT 0",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_opportunity SET NOT NULL",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN selection_mode SET NOT NULL",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_reason SET NOT NULL",
-		"ALTER TABLE recommendation_result_traces ALTER COLUMN exploration_semantic SET NOT NULL",
-		"ALTER TABLE recommendation_result_traces DROP COLUMN IF EXISTS freshness_component",
 		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_selection_mode",
 		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_selection_mode CHECK (selection_mode IN ('ranked', 'exploration'))",
 		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_exploration_reason",
@@ -664,16 +518,6 @@ func applyRecommendationExplorationSchema(tx *gorm.DB) error {
 		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_provenance",
 		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_provenance CHECK ((selection_mode = 'ranked' AND exploration_reason = '' AND exploration_semantic = 0) OR (exploration_opportunity AND selection_mode = 'exploration' AND exploration_reason IN ('recent', 'novel_author', 'recent_novel_author')))",
 
-		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS exploration_opportunity BOOLEAN",
-		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS selection_mode VARCHAR(16)",
-		"ALTER TABLE recommendation_daily_metrics ADD COLUMN IF NOT EXISTS exploration_reason VARCHAR(32)",
-		"UPDATE recommendation_daily_metrics SET exploration_opportunity = COALESCE(exploration_opportunity, FALSE), selection_mode = COALESCE(NULLIF(selection_mode, ''), 'ranked'), exploration_reason = COALESCE(exploration_reason, '')",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_opportunity SET DEFAULT FALSE",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN selection_mode SET DEFAULT 'ranked'",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_reason SET DEFAULT ''",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_opportunity SET NOT NULL",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN selection_mode SET NOT NULL",
-		"ALTER TABLE recommendation_daily_metrics ALTER COLUMN exploration_reason SET NOT NULL",
 		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_selection_mode",
 		"ALTER TABLE recommendation_daily_metrics ADD CONSTRAINT chk_recommendation_metric_selection_mode CHECK (selection_mode IN ('ranked', 'exploration'))",
 		"ALTER TABLE recommendation_daily_metrics DROP CONSTRAINT IF EXISTS chk_recommendation_metric_exploration_reason",
@@ -685,7 +529,7 @@ func applyRecommendationExplorationSchema(tx *gorm.DB) error {
 	}
 	for _, statement := range statements {
 		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply recommendation exploration schema: %w", err)
+			return fmt.Errorf("apply recommendation exploration constraints: %w", err)
 		}
 	}
 	return nil

@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestRecommendationLanguageAffinityMigrationIntegration(t *testing.T) {
+func TestRecommendationLanguageAffinityConstraintsIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("SKIPPED — POSTGRES_TEST_DSN unavailable")
@@ -25,10 +25,10 @@ func TestRecommendationLanguageAffinityMigrationIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.UserRecoProfile{}, &models.RecommendationRequest{}, &models.RecommendationResultTrace{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRecommendationLanguageAffinitySchema(db); err != nil {
+	if err := applyRecommendationLanguageAffinityConstraints(db); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRecommendationLanguageAffinitySchema(db); err != nil {
+	if err := applyRecommendationLanguageAffinityConstraints(db); err != nil {
 		t.Fatal(err)
 	}
 
@@ -39,10 +39,10 @@ SELECT COUNT(*)
 FROM information_schema.columns
 WHERE table_schema = current_schema()
   AND table_name = ?
-  AND column_name IN ?`, table, languageAffinityMigrationColumns(table)).Scan(&count).Error; err != nil {
+  AND column_name IN ?`, table, languageAffinityConstraintColumns(table)).Scan(&count).Error; err != nil {
 			t.Fatal(err)
 		}
-		want := len(languageAffinityMigrationColumns(table))
+		want := len(languageAffinityConstraintColumns(table))
 		if count != want {
 			t.Fatalf("table=%s language columns=%d want=%d", table, count, want)
 		}
@@ -73,7 +73,7 @@ WHERE connamespace = current_schema()::regnamespace
 
 }
 
-func languageAffinityMigrationColumns(table string) []string {
+func languageAffinityConstraintColumns(table string) []string {
 	switch table {
 	case "user_reco_profiles":
 		return []string{"language_zh_weight", "language_ja_weight", "language_en_weight", "language_evidence"}

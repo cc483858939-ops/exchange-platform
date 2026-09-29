@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"Go.exchange/models"
 
@@ -146,6 +147,7 @@ WHERE conrelid = 'posts'::regclass
 		validPostIDs = append(validPostIDs, validPost.ID)
 	}
 	t.Cleanup(func() {
+		db.Unscoped().Where("user_id = ? AND post_id = ?", user.ID, article.ID).Delete(&models.PostReaction{})
 		db.Unscoped().Where("post_id = ?", article.ID).Delete(&models.PostRepost{})
 		if len(validPostIDs) > 0 {
 			db.Unscoped().Where("id IN ?", validPostIDs).Delete(&models.Post{})
@@ -175,33 +177,15 @@ WHERE conrelid = 'posts'::regclass
 		t.Fatal("database accepted a negative article view_count")
 	}
 
-	legacyTx := db.Begin()
-	if legacyTx.Error != nil {
-		t.Fatal(legacyTx.Error)
+	versionAt := time.Now().UTC()
+	zeroVersion := models.PostReaction{
+		UserID: user.ID, PostID: article.ID, Reaction: models.PostReactionLike,
+		Liked: true, Version: 0, UpdatedAt: versionAt, StateChangedAt: versionAt,
 	}
-	defer legacyTx.Rollback()
-	legacyUser := models.User{Username: "language-legacy-" + uuid.NewString(), Password: "test"}
-	if err := legacyTx.Create(&legacyUser).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := legacyTx.Exec("ALTER TABLE posts ALTER COLUMN language DROP NOT NULL").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := legacyTx.Exec("ALTER TABLE posts DROP CONSTRAINT chk_posts_language_supported").Error; err != nil {
-		t.Fatal(err)
-	}
-	var legacyPostID uint
-	if err := legacyTx.Raw("INSERT INTO posts (author_id, content, language, visibility) VALUES (?, ?, ?, ?) RETURNING id", legacyUser.ID, "legacy blank language", "", "public").Scan(&legacyPostID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := applyPostSchemaConstraints(legacyTx); err != nil {
-		t.Fatal(err)
-	}
-	var migratedLanguage string
-	if err := legacyTx.Raw("SELECT language FROM posts WHERE id = ?", legacyPostID).Scan(&migratedLanguage).Error; err != nil {
-		t.Fatal(err)
-	}
-	if migratedLanguage != "und" {
-		t.Fatalf("legacy blank language migrated to %q want und", migratedLanguage)
+	requirePostgresCheckViolation(t, "zero reaction version", db.Create(&zeroVersion).Error, "chk_post_reaction_version_positive")
+	positiveVersion := zeroVersion
+	positiveVersion.Version = 1
+	if err := db.Create(&positiveVersion).Error; err != nil {
+		t.Fatalf("database rejected reaction version 1: %v", err)
 	}
 }

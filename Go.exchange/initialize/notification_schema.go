@@ -14,16 +14,6 @@ func applyOutboxSchema(tx *gorm.DB) error {
 		return errors.New("outbox_events table is missing")
 	}
 	statements := []string{
-		"ALTER TABLE outbox_events ALTER COLUMN id SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN topic SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN partition_key SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN event_type SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN schema_version SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN aggregate_type SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN aggregate_id SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN message SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN occurred_at SET NOT NULL",
-		"ALTER TABLE outbox_events ALTER COLUMN created_at SET NOT NULL",
 		"ALTER TABLE outbox_events DROP CONSTRAINT IF EXISTS chk_outbox_events_id",
 		"ALTER TABLE outbox_events ADD CONSTRAINT chk_outbox_events_id CHECK (id IS NOT NULL)",
 		"ALTER TABLE outbox_events DROP CONSTRAINT IF EXISTS chk_outbox_events_topic",
@@ -52,7 +42,6 @@ func applyOutboxSchema(tx *gorm.DB) error {
 		"ALTER TABLE outbox_events ADD CONSTRAINT chk_outbox_events_envelope_aggregate_id CHECK (message->>'aggregate_id' = aggregate_id)",
 		"CREATE INDEX IF NOT EXISTS idx_outbox_events_created_id ON outbox_events (created_at ASC, id ASC)",
 		"CREATE INDEX IF NOT EXISTS idx_outbox_events_type_created ON outbox_events (event_type, created_at DESC)",
-		"DROP INDEX IF EXISTS idx_outbox_events_pending",
 		`CREATE OR REPLACE FUNCTION reject_outbox_event_update() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'outbox_events is append-only';
@@ -74,14 +63,6 @@ func applyNotificationSchema(tx *gorm.DB) error {
 		return errors.New("notifications table is missing")
 	}
 	statements := []string{
-		"ALTER TABLE notifications ALTER COLUMN recipient_id SET NOT NULL",
-		"ALTER TABLE notifications ALTER COLUMN actor_id SET NOT NULL",
-		"ALTER TABLE notifications ALTER COLUMN notification_type SET NOT NULL",
-		"ALTER TABLE notifications ALTER COLUMN dedupe_key SET NOT NULL",
-		"ALTER TABLE notifications ALTER COLUMN source_version SET NOT NULL",
-		"ALTER TABLE notifications ALTER COLUMN activity_at SET NOT NULL",
-		"ALTER TABLE notifications ALTER COLUMN created_at SET NOT NULL",
-		"ALTER TABLE notifications ALTER COLUMN updated_at SET NOT NULL",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_type",
 		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'user_followed'))",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_recipient_actor",
@@ -100,8 +81,6 @@ func applyNotificationSchema(tx *gorm.DB) error {
 		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_recipient FOREIGN KEY (recipient_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_actor",
 		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
-		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_article",
-		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_comment",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_post",
 		"ALTER TABLE notifications ADD CONSTRAINT fk_notifications_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE RESTRICT",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_notifications_dedupe_key ON notifications (dedupe_key)",
