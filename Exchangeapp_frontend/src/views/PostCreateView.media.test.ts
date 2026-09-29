@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
     push: vi.fn(),
     replace: vi.fn(),
   },
+  route: null as any,
+  beforeRouteLeave: null as any,
+  beforeRouteUpdate: null as any,
   feedStore: { registerPublishedPost: vi.fn() },
   profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
@@ -29,9 +32,16 @@ const mocks = vi.hoisted(() => ({
   createLocalImagePreviewGenerator: vi.fn(),
 }));
 
-vi.mock('vue-router', () => ({
-  useRouter: () => mocks.router,
-}));
+vi.mock('vue-router', async () => {
+  const { reactive } = await import('vue');
+  mocks.route = reactive({ name: 'PostCreate', query: {}, params: {}, fullPath: '/posts/new' });
+  return {
+    useRouter: () => mocks.router,
+    useRoute: () => mocks.route,
+    onBeforeRouteLeave: (guard: unknown) => { mocks.beforeRouteLeave = guard; },
+    onBeforeRouteUpdate: (guard: unknown) => { mocks.beforeRouteUpdate = guard; },
+  };
+});
 
 vi.mock('../store/auth', async () => {
   const { reactive } = await import('vue');

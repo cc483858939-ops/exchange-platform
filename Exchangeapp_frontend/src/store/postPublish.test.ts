@@ -23,6 +23,10 @@ const mocks = vi.hoisted(() => ({
   randomUUID: vi.fn(),
   captureBookmarkStateSyncVersion: vi.fn(),
   syncHydratedPostBookmarkState: vi.fn(),
+  deletePostDraft: vi.fn(),
+  getPostDraft: vi.fn(),
+  listPostDrafts: vi.fn(),
+  savePostDraft: vi.fn(),
 }));
 
 vi.mock('../services/postService', () => ({
@@ -49,6 +53,13 @@ vi.mock('./profileSession', () => ({
 vi.mock('./sessionSync', () => ({
   captureBookmarkStateSyncVersion: mocks.captureBookmarkStateSyncVersion,
   syncHydratedPostBookmarkState: mocks.syncHydratedPostBookmarkState,
+}));
+
+vi.mock('../storage/postDraftRepository', () => ({
+  deletePostDraft: mocks.deletePostDraft,
+  getPostDraft: mocks.getPostDraft,
+  listPostDrafts: mocks.listPostDrafts,
+  savePostDraft: mocks.savePostDraft,
 }));
 
 const operationUUID = (value: number) => (
@@ -111,6 +122,10 @@ describe('postPublish store', () => {
     mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
     mocks.syncHydratedPostBookmarkState.mockReturnValue(true);
+    mocks.deletePostDraft.mockResolvedValue(true);
+    mocks.getPostDraft.mockResolvedValue(null);
+    mocks.listPostDrafts.mockResolvedValue([]);
+    mocks.savePostDraft.mockResolvedValue(undefined);
     const draft = usePostDraftStore();
     draft.clear();
     draft.setViewer(7);
@@ -152,6 +167,46 @@ describe('postPublish store', () => {
       bookmarked: false,
       status: 'unavailable',
     });
+  });
+
+  it('deletes the source durable draft only after publishing it succeeds', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Saved source draft');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const store = usePostPublishStore();
+
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') {
+      throw new Error('publish was not accepted');
+    }
+    expect(result.operation.sourceDraftID).toBe(sourceDraftID);
+    await flushPromises();
+
+    expect(mocks.deletePostDraft).toHaveBeenCalledWith(7, sourceDraftID);
+    expect(result.operation.phase).toBe('succeeded');
+    expect(draft.content).toBe('');
+  });
+
+  it('preserves the source durable draft when publishing fails', async () => {
+    mocks.createPost.mockRejectedValueOnce(new Error('offline'));
+    const draft = usePostDraftStore();
+    draft.setContent('Keep saved on failure');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const store = usePostPublishStore();
+
+    const result = store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') {
+      throw new Error('publish was not accepted');
+    }
+    await flushPromises();
+
+    expect(result.operation.sourceDraftID).toBe(sourceDraftID);
+    expect(result.operation.phase).toBe('failed');
+    expect(mocks.deletePostDraft).not.toHaveBeenCalled();
+    expect(draft.draftID).toBe(sourceDraftID);
+    expect(draft.content).toBe('Keep saved on failure');
   });
 
   it('hydrates a published post bookmark state without changing the global post default', async () => {

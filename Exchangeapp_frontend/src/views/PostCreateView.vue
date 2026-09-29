@@ -10,6 +10,15 @@
         <AppIcon name="arrow-left" :size="20" />
       </button>
       <h1>Post</h1>
+      <button
+        v-if="authStore.isAuthenticated && savedDrafts.length > 0"
+        class="composer-header__drafts"
+        type="button"
+        @click="showDrafts"
+      >
+        Drafts
+      </button>
+      <span v-else class="composer-header__spacer" aria-hidden="true"></span>
     </header>
 
     <section
@@ -205,22 +214,65 @@
         {{ publishLabel }}
       </span>
     </form>
+
+    <PostDraftExitDialog
+      v-if="exitDialogOpen"
+      :is-saved-draft="exitDialogIsSavedDraft"
+      :busy="exitDialogBusy"
+      :error="exitDialogError"
+      @cancel="finishExitDecision(false)"
+      @discard="discardWorkingDraft"
+      @save="saveWorkingDraftBeforeExit"
+    />
+
+    <PostDraftsDialog
+      v-if="draftsDialogOpen"
+      :drafts="savedDrafts"
+      :loading="draftsLoading"
+      :busy="deleteDraftBusy"
+      :error="draftsError"
+      @close="draftsDialogOpen = false"
+      @open-draft="openSavedDraft"
+      @delete-draft="requestDeleteDraft"
+    />
+
+    <ConfirmDialog
+      v-if="pendingDeleteDraftID"
+      title="Delete draft?"
+      description="This draft will be removed from this device."
+      confirm-label="Delete"
+      danger
+      :busy="deleteDraftBusy"
+      :error="deleteDraftError"
+      @confirm="confirmDeleteDraft"
+      @cancel="cancelDeleteDraft"
+    />
   </main>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import {
+  onBeforeRouteLeave,
+  onBeforeRouteUpdate,
+  useRoute,
+  useRouter,
+  type RouteLocationNormalized,
+} from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { usePostDraftStore } from '../store/postDraft';
 import { usePostPublishStore } from '../store/postPublish';
 import AppIcon from '../components/icons/AppIcon.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
+import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
+import PostDraftExitDialog from '../components/composer/PostDraftExitDialog.vue';
+import PostDraftsDialog from '../components/composer/PostDraftsDialog.vue';
 import EmojiPickerPopover, {
   type EmojiPickerCloseReason,
 } from '../components/composer/EmojiPickerPopover.vue';
 import type { PostMedia } from '../types/Post';
+import type { PersistedPostDraft } from '../storage/postDraftRepository';
 import {
   createLocalImagePreviewGenerator,
   type LocalImagePreviewGenerator,
@@ -234,9 +286,26 @@ const maxContentHeight = 360;
 const allowedMediaTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const postDraft = usePostDraftStore();
 const postPublishStore = usePostPublishStore();
+
+const savedDrafts = shallowRef<PersistedPostDraft[]>([]);
+const draftsDialogOpen = ref(false);
+const draftsLoading = ref(false);
+const draftsError = ref('');
+const exitDialogOpen = ref(false);
+const exitDialogIsSavedDraft = ref(false);
+const exitDialogBusy = ref(false);
+const exitDialogError = ref('');
+const pendingDeleteDraftID = ref<string | null>(null);
+const deleteDraftBusy = ref(false);
+const deleteDraftError = ref('');
+let resolveExitDecision: ((allowNavigation: boolean) => void) | null = null;
+let beforeUnloadAttached = false;
+let draftRouteLoadVersion = 0;
+let draftListRequestVersion = 0;
 
 const validationAttempted = ref(false);
 const mediaError = ref('');
@@ -275,6 +344,11 @@ const previewPreparationFailureMessage = 'Could not prepare this image preview. 
 const currentIdentity = computed(() => authStore.currentIdentity);
 const currentUserID = computed(() => (
   authStore.isAuthenticated ? currentIdentity.value?.id ?? null : null
+));
+const routeDraftID = computed(() => (
+  typeof route.query.draft === 'string' && route.query.draft.trim()
+    ? route.query.draft.trim()
+    : null
 ));
 const currentPublishOperation = computed(() => (
   postDraft.publishOperationID
@@ -681,6 +755,228 @@ const goBack = () => {
   goHome();
 };
 
+const finishExitDecision = (allowNavigation: boolean) => {
+  const resolve = resolveExitDecision;
+  resolveExitDecision = null;
+  exitDialogOpen.value = false;
+  exitDialogBusy.value = false;
+  exitDialogError.value = '';
+  resolve?.(allowNavigation);
+};
+
+const requestExitDecision = () => new Promise<boolean>((resolve) => {
+  if (resolveExitDecision) {
+    resolveExitDecision(false);
+  }
+  resolveExitDecision = resolve;
+  exitDialogIsSavedDraft.value = postDraft.isSavedDraft;
+  exitDialogBusy.value = false;
+  exitDialogError.value = '';
+  exitDialogOpen.value = true;
+});
+
+const refreshSavedDrafts = async () => {
+  const requestVersion = ++draftListRequestVersion;
+  draftsError.value = '';
+  if (typeof currentUserID.value !== 'number' || currentUserID.value <= 0) {
+    savedDrafts.value = [];
+    draftsLoading.value = false;
+    return;
+  }
+
+  draftsLoading.value = true;
+  try {
+    const drafts = await postDraft.listSavedDrafts();
+    if (requestVersion === draftListRequestVersion) {
+      savedDrafts.value = drafts;
+    }
+  } catch {
+    if (requestVersion === draftListRequestVersion) {
+      savedDrafts.value = [];
+      draftsError.value = 'Saved drafts are unavailable on this device.';
+    }
+  } finally {
+    if (requestVersion === draftListRequestVersion) {
+      draftsLoading.value = false;
+    }
+  }
+};
+
+const loadRouteDraft = async () => {
+  const requestVersion = ++draftRouteLoadVersion;
+  const requestedDraftID = routeDraftID.value;
+  const requestedViewerID = currentUserID.value;
+
+  if (!requestedDraftID) {
+    if (postDraft.publishOperationID === null && postDraft.draftID !== null) {
+      postDraft.closeWorkingDraft();
+    }
+    return;
+  }
+  if (typeof requestedViewerID !== 'number' || requestedViewerID <= 0) {
+    return;
+  }
+  if (postDraft.publishOperationID !== null) {
+    return;
+  }
+  if (postDraft.draftID === requestedDraftID && postDraft.viewerID === requestedViewerID) {
+    return;
+  }
+
+  let loaded = false;
+  try {
+    loaded = await postDraft.loadSavedDraft(requestedDraftID);
+  } catch {
+    loaded = false;
+  }
+  if (
+    requestVersion !== draftRouteLoadVersion
+    || routeDraftID.value !== requestedDraftID
+    || currentUserID.value !== requestedViewerID
+  ) {
+    return;
+  }
+  if (!loaded) {
+    if (postDraft.publishOperationID === null) {
+      postDraft.closeWorkingDraft();
+    }
+    try {
+      await router.replace({ name: 'PostCreate' });
+    } catch {
+      // An unavailable saved draft should not prevent opening a fresh composer.
+    }
+    return;
+  }
+  await refreshSavedDrafts();
+};
+
+const allowComposerExit = async () => {
+  if (postDraft.publishOperationID !== null) {
+    return false;
+  }
+  if (postDraft.hasUnsavedChanges && !(await requestExitDecision())) {
+    return false;
+  }
+  return postDraft.closeWorkingDraft();
+};
+
+const getRouteDraftID = (target: Pick<RouteLocationNormalized, 'query'>) => (
+  typeof target.query.draft === 'string' && target.query.draft.trim()
+    ? target.query.draft.trim()
+    : null
+);
+
+onBeforeRouteLeave(() => {
+  if (postDraft.publishOperationID !== null) {
+    return true;
+  }
+  return allowComposerExit();
+});
+
+onBeforeRouteUpdate((to, from) => {
+  if (to.name !== 'PostCreate' || from.name !== 'PostCreate') {
+    return true;
+  }
+  if (getRouteDraftID(to) === getRouteDraftID(from)) {
+    return true;
+  }
+  if (postDraft.publishOperationID !== null) {
+    return false;
+  }
+  return allowComposerExit();
+});
+
+const showDrafts = () => {
+  draftsDialogOpen.value = true;
+  void refreshSavedDrafts();
+};
+
+const openSavedDraft = async (id: string) => {
+  draftsDialogOpen.value = false;
+  if (routeDraftID.value === id) {
+    return;
+  }
+  try {
+    await router.push({ name: 'PostCreate', query: { draft: id } });
+  } catch {
+    // The route guard leaves the existing composer untouched when navigation is canceled.
+  }
+  await nextTick();
+  if (routeDraftID.value !== id) {
+    draftsDialogOpen.value = true;
+  }
+};
+
+const requestDeleteDraft = (id: string) => {
+  pendingDeleteDraftID.value = id;
+  deleteDraftError.value = '';
+};
+
+const cancelDeleteDraft = () => {
+  if (!deleteDraftBusy.value) {
+    pendingDeleteDraftID.value = null;
+    deleteDraftError.value = '';
+  }
+};
+
+const confirmDeleteDraft = async () => {
+  const id = pendingDeleteDraftID.value;
+  if (!id || deleteDraftBusy.value) return;
+  deleteDraftBusy.value = true;
+  deleteDraftError.value = '';
+  try {
+    const deleted = await postDraft.deleteSavedDraft(id);
+    if (!deleted) {
+      deleteDraftError.value = 'This draft could not be deleted. Refresh the list and try again.';
+      return;
+    }
+    pendingDeleteDraftID.value = null;
+    await refreshSavedDrafts();
+  } catch {
+    deleteDraftError.value = 'Could not delete this draft on this device. Try again.';
+  } finally {
+    deleteDraftBusy.value = false;
+  }
+};
+
+const saveWorkingDraftBeforeExit = async () => {
+  if (exitDialogBusy.value) return;
+  exitDialogBusy.value = true;
+  exitDialogError.value = '';
+  try {
+    await postDraft.saveCurrentDraft();
+    await refreshSavedDrafts();
+    finishExitDecision(true);
+  } catch {
+    exitDialogError.value = 'Could not save this draft on this device. Try again or discard it.';
+  } finally {
+    exitDialogBusy.value = false;
+  }
+};
+
+const discardWorkingDraft = () => {
+  if (postDraft.closeWorkingDraft()) {
+    finishExitDecision(true);
+  }
+};
+
+const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+  if (!postDraft.hasUnsavedChanges) return;
+  event.preventDefault();
+  event.returnValue = '';
+};
+
+const syncBeforeUnloadListener = (hasUnsavedChanges: boolean) => {
+  if (typeof window === 'undefined') return;
+  if (hasUnsavedChanges && !beforeUnloadAttached) {
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    beforeUnloadAttached = true;
+  } else if (!hasUnsavedChanges && beforeUnloadAttached) {
+    window.removeEventListener('beforeunload', handleBeforeUnload);
+    beforeUnloadAttached = false;
+  }
+};
+
 const submitPost = async () => {
   if (isSubmitting.value) {
     return;
@@ -733,15 +1029,23 @@ watch(content, () => {
 });
 
 watch(
-  currentUserID,
-  viewerID => {
+  [currentUserID, routeDraftID],
+  ([viewerID]) => {
     emojiPickerOpen.value = false;
     postDraft.setViewer(viewerID);
+    void refreshSavedDrafts();
+    void loadRouteDraft();
   },
   { immediate: true },
 );
 
 watch(() => postDraft.media, syncPreviews, { deep: true, immediate: true });
+
+watch(
+  () => postDraft.hasUnsavedChanges,
+  syncBeforeUnloadListener,
+  { immediate: true, flush: 'sync' },
+);
 
 watch(isSubmitting, submitting => {
   if (submitting) {
@@ -754,6 +1058,15 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  draftRouteLoadVersion += 1;
+  draftListRequestVersion += 1;
+  if (beforeUnloadAttached) {
+    window.removeEventListener('beforeunload', handleBeforeUnload);
+    beforeUnloadAttached = false;
+  }
+  if (resolveExitDecision) {
+    finishExitDecision(false);
+  }
   previewLifecycleActive = false;
   previewQueue.length = 0;
   queuedPreviewFiles.clear();
@@ -1017,6 +1330,30 @@ onBeforeUnmount(() => {
 .composer-character-count--over {
   color: var(--color-danger);
   font-weight: 750;
+}
+
+.composer-header__drafts,
+.composer-header__spacer {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.composer-header__drafts {
+  min-height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.composer-header__drafts:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .media-picker {

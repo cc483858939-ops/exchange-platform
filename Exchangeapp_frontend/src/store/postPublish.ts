@@ -28,6 +28,7 @@ export type PublishOperationMedia = {
 export type PublishOperation = {
   id: string;
   publisherUserID: number;
+  sourceDraftID: string | null;
   content: string;
   media: PublishOperationMedia[];
   phase: PublishPhase;
@@ -198,6 +199,14 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   };
 
   const reconcileSuccessfulPost = (operation: PublishOperation, post: Post) => {
+    if (operation.sourceDraftID) {
+      void postDraft
+        .deletePublishedSourceDraft(operation.publisherUserID, operation.sourceDraftID)
+        .catch(() => {
+          // A local draft deletion failure must not turn a confirmed post into a publish retry.
+        });
+    }
+
     if (currentViewerID() !== operation.publisherUserID) {
       return;
     }
@@ -318,6 +327,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     const operation: PublishOperation = {
       id: createClientOperationID(),
       publisherUserID,
+      sourceDraftID: postDraft.isSavedDraft ? postDraft.draftID : null,
       content: postDraft.content.trim(),
       media: postDraft.media.map(media => ({
         draftMediaID: media.id,
