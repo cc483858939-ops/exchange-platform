@@ -5,197 +5,146 @@ import { createPinia, setActivePinia } from 'pinia';
 import { useReplyDraftStore } from './replyDraft';
 
 const mocks = vi.hoisted(() => ({
-  createClientOperationID: vi.fn(),
+  getReplyDraft: vi.fn(),
+  saveReplyDraft: vi.fn(),
+  deleteReplyDraftIfUnchanged: vi.fn(),
 }));
 
-vi.mock('../utils/clientOperationId', () => ({
-  createClientOperationID: mocks.createClientOperationID,
+vi.mock('../storage/replyStorage', () => ({
+  getReplyDraft: mocks.getReplyDraft,
+  saveReplyDraft: mocks.saveReplyDraft,
+  deleteReplyDraftIfUnchanged: mocks.deleteReplyDraftIfUnchanged,
 }));
 
-let operationSequence = 0;
+const saved = (viewerID = 7, parentPostID = 42, content = 'saved reply') => ({
+  key: `${viewerID}:${parentPostID}`,
+  viewerID,
+  parentPostID,
+  content,
+  createdAt: 1,
+  updatedAt: 2,
+});
 
-const operationUUID = (value: number) => (
-  `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
-);
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+};
 
 describe('replyDraft store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    operationSequence = 0;
-    mocks.createClientOperationID.mockReset().mockImplementation(() => operationUUID(++operationSequence));
+    mocks.getReplyDraft.mockReset().mockResolvedValue(null);
+    mocks.saveReplyDraft.mockReset().mockResolvedValue(undefined);
+    mocks.deleteReplyDraftIfUnchanged.mockReset().mockResolvedValue('deleted');
   });
 
-  it('starts without a viewer or drafts', () => {
+  it('keeps ordinary typing in memory until the user explicitly saves', async () => {
     const store = useReplyDraftStore();
+    store.setViewer(7);
+    store.setDraft(42, '  hello\nworld  ');
 
-    expect(store.viewerID).toBeNull();
-    expect(store.drafts).toEqual({});
-    expect(store.submissionOperations).toEqual({});
-    expect(store.getDraft(42)).toBe('');
+    expect(store.getDraft(42)).toBe('  hello\nworld  ');
+    expect(store.hasUnsavedChanges(42)).toBe(true);
+    expect(mocks.saveReplyDraft).not.toHaveBeenCalled();
+
+    expect(await store.saveDraft(42)).toBe('saved');
+    expect(mocks.saveReplyDraft).toHaveBeenCalledWith(expect.objectContaining({
+      viewerID: 7,
+      parentPostID: 42,
+      content: '  hello\nworld  ',
+    }));
+    expect(store.hasUnsavedChanges(42)).toBe(false);
+
+    store.setDraft(42, 'edited');
+    expect(store.hasUnsavedChanges(42)).toBe(true);
   });
 
-  it('preserves drafts when the same viewer is bound again', () => {
-    const store = useReplyDraftStore();
-
-    expect(store.setViewer(7)).toBe(true);
-    store.setDraft(42, 'hello');
-    const prepared = store.prepareSubmission(42, 'hello');
-
-    expect(store.setViewer(7)).toBe(false);
-    expect(store.getDraft(42)).toBe('hello');
-    expect(prepared.reused).toBe(false);
-    const retry = store.prepareSubmission(42, 'hello');
-    expect(retry.reused).toBe(true);
-    expect(retry.operation).toEqual(prepared.operation);
-  });
-
-  it('keeps drafts isolated per post', () => {
+  it('restores viewer and parent scoped drafts without losing raw content', async () => {
+    mocks.getReplyDraft.mockImplementation(async (viewerID: number, postID: number) => (
+      viewerID === 7 && postID === 42 ? saved(7, 42, '  first\nsecond  ') : null
+    ));
     const store = useReplyDraftStore();
     store.setViewer(7);
 
-    store.setDraft(42, 'draft A');
-    store.setDraft('43', 'draft B');
-
-    expect(store.getDraft(42)).toBe('draft A');
-    expect(store.getDraft('43')).toBe('draft B');
+    expect(await store.hydrateSavedDraft(42)).toBe('loaded');
+    expect(await store.hydrateSavedDraft(43)).toBe('empty');
+    expect(store.getDraft(42)).toBe('  first\nsecond  ');
+    expect(store.getDraft(43)).toBe('');
+    expect(store.hasUnsavedChanges(42)).toBe(false);
   });
 
-  it('clears drafts when the viewer changes or logs out', () => {
+  it('does not overwrite text entered while draft hydration is pending', async () => {
+    const request = deferred<ReturnType<typeof saved> | null>();
+    mocks.getReplyDraft.mockReturnValueOnce(request.promise);
     const store = useReplyDraftStore();
     store.setViewer(7);
-    store.setDraft(42, 'private draft');
-    store.prepareSubmission(42, 'private draft');
+    const loading = store.hydrateSavedDraft(42);
 
-    expect(store.setViewer(8)).toBe(true);
-    expect(store.viewerID).toBe(8);
-    expect(store.getDraft(42)).toBe('');
-    expect(store.submissionOperations).toEqual({});
+    store.setDraft(42, 'newer user text');
+    request.resolve(saved());
 
-    store.setDraft(43, 'viewer 8 draft');
-    expect(store.setViewer(null)).toBe(true);
-    expect(store.viewerID).toBeNull();
-    expect(store.drafts).toEqual({});
-    expect(store.submissionOperations).toEqual({});
+    expect(await loading).toBe('stale');
+    expect(store.getDraft(42)).toBe('newer user text');
+    expect(store.hasUnsavedChanges(42)).toBe(true);
   });
 
-  it('preserves raw whitespace and newlines', () => {
-    const store = useReplyDraftStore();
-    store.setViewer(7);
-    const raw = '  hello\nworld  ';
-
-    store.setDraft(42, raw);
-
-    expect(store.getDraft(42)).toBe(raw);
-  });
-
-  it('reuses the operation for the same canonical content and whitespace-only edits', () => {
+  it('treats canonical whitespace edits as durably bound but raw saved edits as dirty', async () => {
     const store = useReplyDraftStore();
     store.setViewer(7);
     store.setDraft(42, 'hello');
+    expect(store.bindSubmission(42, 'operation-a', 'hello')).toBe(true);
+    expect(store.hasUnsavedChanges(42)).toBe(false);
 
-    const first = store.prepareSubmission(42, 'hello');
     store.setDraft(42, '  hello  ');
-    const retry = store.prepareSubmission('42', ' hello ');
+    expect(store.getBoundOperationID(42)).toBe('operation-a');
+    expect(store.hasUnsavedChanges(42)).toBe(false);
 
-    expect(first.reused).toBe(false);
-    expect(retry.reused).toBe(true);
-    expect(retry.operation).toEqual(first.operation);
-    expect(retry.operation.content).toBe('hello');
-    expect(mocks.createClientOperationID).toHaveBeenCalledTimes(1);
+    store.setDraft(42, 'different');
+    expect(store.getBoundOperationID(42)).toBeNull();
+    expect(store.hasUnsavedChanges(42)).toBe(true);
   });
 
-  it('creates a new operation when canonical content changes and keeps operations per post', () => {
+  it('requires an explicit empty save to remove a saved reply draft', async () => {
+    mocks.getReplyDraft.mockResolvedValue(saved(7, 42, 'saved reply'));
     const store = useReplyDraftStore();
     store.setViewer(7);
-    store.setDraft(42, 'hello');
-    const first = store.prepareSubmission(42, 'hello');
-
-    store.setDraft(42, 'hello again');
-    expect(store.submissionOperations['42']).toBeUndefined();
-    const edited = store.prepareSubmission(42, 'hello again');
-    const otherPost = store.prepareSubmission(43, 'hello again');
-
-    expect(first.reused).toBe(false);
-    expect(edited.reused).toBe(false);
-    expect(edited.operation.id).not.toBe(first.operation.id);
-    expect(edited.operation.content).toBe('hello again');
-    expect(otherPost.reused).toBe(false);
-    expect(otherPost.operation.id).not.toBe(edited.operation.id);
-    expect(store.submissionOperations).toEqual({
-      '42': edited.operation,
-      '43': otherPost.operation,
-    });
-  });
-
-  it('clears submission operations with drafts, clearAll, and viewer changes', () => {
-    const store = useReplyDraftStore();
-    store.setViewer(7);
-    store.setDraft(42, 'draft A');
-    store.prepareSubmission(42, 'draft A');
-    store.setDraft(43, 'draft B');
-    store.prepareSubmission(43, 'draft B');
-
-    store.clearDraft(42);
-    expect(store.submissionOperations['42']).toBeUndefined();
-    expect(store.submissionOperations['43']).toBeDefined();
-
-    store.clearAll();
-    expect(store.drafts).toEqual({});
-    expect(store.submissionOperations).toEqual({});
-
-    store.setDraft(42, 'viewer 7');
-    store.prepareSubmission(42, 'viewer 7');
-    store.setViewer(8);
-    expect(store.submissionOperations).toEqual({});
-  });
-
-  it('clears a submission only when the requested operation ID still matches', () => {
-    const store = useReplyDraftStore();
-    store.setViewer(7);
-    const first = store.prepareSubmission(42, 'draft A');
-    store.clearSubmissionOperation(42, 'stale-operation');
-    expect(store.submissionOperations['42']).toEqual(first.operation);
-
-    store.clearSubmissionOperation(42, first.operation.id);
-    expect(store.submissionOperations).toEqual({});
-  });
-
-  it('removes a post draft when its content becomes empty', () => {
-    const store = useReplyDraftStore();
-    store.setViewer(7);
-    store.setDraft(42, 'draft A');
-    store.setDraft(43, 'draft B');
-
+    await store.hydrateSavedDraft(42);
     store.setDraft(42, '');
 
+    expect(store.hasUnsavedChanges(42)).toBe(true);
+    expect(mocks.deleteReplyDraftIfUnchanged).not.toHaveBeenCalled();
+    expect(await store.saveDraft(42)).toBe('deleted');
+    expect(mocks.deleteReplyDraftIfUnchanged).toHaveBeenCalledWith(7, 42, 'saved reply');
+    expect(store.hasSavedDraft(42)).toBe(false);
+    expect(store.hasUnsavedChanges(42)).toBe(false);
+  });
+
+  it('keeps viewer and parent state isolated and clears only memory on account changes', async () => {
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    store.setDraft(42, 'A');
+    store.setDraft(43, 'B');
+    expect(store.getDraft(42)).toBe('A');
+    expect(store.getDraft(43)).toBe('B');
+
+    store.setViewer(8);
     expect(store.getDraft(42)).toBe('');
-    expect(store.getDraft(43)).toBe('draft B');
-    expect(store.drafts).toEqual({ '43': 'draft B' });
+    expect(mocks.deleteReplyDraftIfUnchanged).not.toHaveBeenCalled();
+    store.setViewer(null);
+    expect(store.viewerID).toBeNull();
   });
 
-  it('ignores writes without a valid viewer or post ID', () => {
-    const store = useReplyDraftStore();
-    const invalidPostIDs: Array<number | string> = [0, -1, NaN, Infinity, 1.5, 'abc', '42.5'];
-
-    invalidPostIDs.forEach(postID => store.setDraft(postID, 'should not persist'));
-    expect(store.drafts).toEqual({});
-
-    store.setViewer(7);
-    invalidPostIDs.forEach(postID => store.setDraft(postID, 'should not persist'));
-
-    expect(store.drafts).toEqual({});
-    invalidPostIDs.forEach(postID => expect(store.getDraft(postID)).toBe(''));
-  });
-
-  it('clears all post drafts without changing the viewer', () => {
+  it('discards editor changes back to a saved baseline without deleting it', async () => {
+    mocks.getReplyDraft.mockResolvedValue(saved(7, 42, 'saved version'));
     const store = useReplyDraftStore();
     store.setViewer(7);
-    store.setDraft(42, 'draft A');
-    store.setDraft(43, 'draft B');
+    await store.hydrateSavedDraft(42);
+    store.setDraft(42, 'unsaved edit');
 
-    store.clearAll();
-
-    expect(store.viewerID).toBe(7);
-    expect(store.drafts).toEqual({});
+    expect(store.discardChanges(42)).toBe(true);
+    expect(store.getDraft(42)).toBe('saved version');
+    expect(store.hasUnsavedChanges(42)).toBe(false);
+    expect(mocks.deleteReplyDraftIfUnchanged).not.toHaveBeenCalled();
   });
 });

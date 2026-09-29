@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   router: { back: vi.fn(), push: vi.fn(), replace: vi.fn() },
   route: { params: { id: '42' }, query: {}, hash: '' },
   routeLeave: vi.fn(),
+  replySubmissionStore: null as any,
   authStore: {
     isAuthenticated: true,
     token: 'Bearer test-token',
@@ -62,12 +63,16 @@ vi.mock('vue-router', () => ({
   onBeforeRouteLeave: (guard: (to: { name?: string }) => void) => {
     mocks.routeLeave.mockImplementation(guard);
   },
+  onBeforeRouteUpdate: vi.fn(),
 }));
 
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../store/feed', () => ({ useFeedStore: () => mocks.feedStore }));
 vi.mock('../store/postDetailHandoff', () => ({
   usePostDetailHandoffStore: () => ({ consume: vi.fn(() => null) }),
+}));
+vi.mock('../store/replySubmission', () => ({
+  useReplySubmissionStore: () => mocks.replySubmissionStore,
 }));
 vi.mock('../store/sessionSync', () => ({
   beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
@@ -228,6 +233,38 @@ describe('PostDetailView mutation synchronization', () => {
     originalHistoryURL = window.location.href;
     window.history.replaceState({ back: null }, '', originalHistoryURL);
     mocks.getPostById.mockResolvedValue(post);
+    const operationState = reactive({ operations: [] as any[] });
+    mocks.replySubmissionStore = Object.assign(operationState, {
+      activateViewer: vi.fn().mockResolvedValue(undefined),
+      ensureContextHydrated: vi.fn().mockResolvedValue(null),
+      getOperation: vi.fn((viewerID: number, parentPostID: number) => operationState.operations.find(operation => (
+        operation.viewerID === viewerID && operation.parentPostID === parentPostID
+      )) ?? null),
+      getBlockReason: vi.fn(() => null),
+      startOrRetry: vi.fn(async (parentPostID: number, content: string) => {
+        const operation: any = {
+          id: 'reply-op', viewerID: 7, parentPostID, content,
+          sourceDraftContent: null, phase: 'publishing', failureKind: null,
+          error: '', startedAt: 1, post: null, durableOwned: true, cleanupPending: false,
+        };
+        try {
+          operation.post = await mocks.createPostReply(String(parentPostID), content, { idempotencyKey: operation.id });
+          operation.phase = 'succeeded';
+          operation.durableOwned = false;
+        } catch {
+          operation.phase = 'failed';
+          operation.failureKind = 'retryable';
+          operation.error = 'Reply failed. Retry safely.';
+        }
+        operationState.operations.push(operation);
+        return { status: 'accepted', operation };
+      }),
+      retry: vi.fn().mockResolvedValue(true),
+      retryCleanup: vi.fn().mockResolvedValue(true),
+      abandonFailedOperation: vi.fn().mockResolvedValue(true),
+      adoptHydratedOperation: vi.fn().mockReturnValue(false),
+      acknowledgeSucceededOperation: vi.fn().mockReturnValue(true),
+    });
     mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
     mocks.getPostRepostState.mockResolvedValue({ reposts: 0, reposted: false });
     mocks.getPostReplies.mockResolvedValue({ items: [reply(9)], next_cursor: null });
@@ -921,6 +958,7 @@ describe('PostDetailView mutation synchronization', () => {
 
   it('syncs absolute comment counts after create and delete success', async () => {
     mocks.createPostReply.mockResolvedValueOnce(ownReply(10));
+    mocks.getPostById.mockResolvedValueOnce(post).mockResolvedValueOnce({ ...post, reply_count: 3 });
     mocks.deletePostReply.mockResolvedValueOnce(undefined);
     const mounted = mountDetail();
     await flushPromises();

@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => ({
     enqueue: vi.fn(),
   },
   routeLeave: vi.fn(),
+  replySubmissionStore: null as any,
   router: {
     back: vi.fn(),
     push: vi.fn(),
@@ -74,6 +75,7 @@ vi.mock('vue-router', () => ({
   onBeforeRouteLeave: (guard: (to: { name?: string }) => void) => {
     mocks.routeLeave.mockImplementation(guard);
   },
+  onBeforeRouteUpdate: vi.fn(),
 }));
 
 vi.mock('../store/auth', async () => {
@@ -86,6 +88,10 @@ vi.mock('../store/auth', async () => {
 
 vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
+}));
+
+vi.mock('../store/replySubmission', () => ({
+  useReplySubmissionStore: () => mocks.replySubmissionStore,
 }));
 
 vi.mock('../store/postDetailHandoff', () => ({
@@ -205,6 +211,26 @@ describe('PostDetailView reply composer identity', () => {
     mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
     mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
     mocks.createPostReply.mockResolvedValue({ id: 101 });
+    mocks.replySubmissionStore = {
+      operations: [],
+      activateViewer: vi.fn().mockResolvedValue(undefined),
+      ensureContextHydrated: vi.fn().mockResolvedValue(null),
+      getOperation: vi.fn(() => null),
+      getBlockReason: vi.fn(() => null),
+      startOrRetry: vi.fn().mockResolvedValue({
+        status: 'accepted',
+        operation: {
+          id: 'reply-operation', viewerID: 7, parentPostID: 42, content: 'reply without enrichment',
+          sourceDraftContent: null, phase: 'publishing', failureKind: null, error: '', startedAt: 1,
+          post: null, durableOwned: true, cleanupPending: false,
+        },
+      }),
+      retry: vi.fn().mockResolvedValue(true),
+      retryCleanup: vi.fn().mockResolvedValue(true),
+      abandonFailedOperation: vi.fn().mockResolvedValue(true),
+      adoptHydratedOperation: vi.fn().mockReturnValue(false),
+      acknowledgeSucceededOperation: vi.fn().mockReturnValue(true),
+    };
     mocks.consumeAttribution.mockReturnValue(null);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
@@ -269,11 +295,7 @@ describe('PostDetailView reply composer identity', () => {
     await wrapper.get('.reply-composer').trigger('submit');
     await flushPromises();
 
-    expect(mocks.createPostReply).toHaveBeenCalledWith(
-      '42',
-      'reply without enrichment',
-      { idempotencyKey: expect.any(String) },
-    );
+    expect(mocks.replySubmissionStore.startOrRetry).toHaveBeenCalledWith(42, 'reply without enrichment');
     expect(mocks.getUser).not.toHaveBeenCalled();
   });
 

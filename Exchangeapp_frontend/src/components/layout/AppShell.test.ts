@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   authStore: null as any,
   notificationStore: null as any,
   postPublishStore: null as any,
+  replySubmissionStore: null as any,
   searchSession: null as any,
   route: null as any,
 }));
@@ -25,6 +26,10 @@ vi.mock('../../store/notification', () => ({
 
 vi.mock('../../store/postPublish', () => ({
   usePostPublishStore: () => mocks.postPublishStore,
+}));
+
+vi.mock('../../store/replySubmission', () => ({
+  useReplySubmissionStore: () => mocks.replySubmissionStore,
 }));
 
 vi.mock('../../store/searchSession', () => ({
@@ -113,6 +118,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     };
     mocks.searchSession = { setViewer: vi.fn() };
     mocks.postPublishStore = { activateViewer: vi.fn().mockResolvedValue(undefined) };
+    mocks.replySubmissionStore = { activateViewer: vi.fn().mockResolvedValue(undefined) };
     mocks.route = reactive({ name: 'Home' });
   });
 
@@ -136,6 +142,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     expect(wrapper.find('.app-layout__mobile-links').exists()).toBe(false);
     expect(mocks.searchSession.setViewer).toHaveBeenCalledWith(7);
     expect(mocks.postPublishStore.activateViewer).toHaveBeenCalledWith(7);
+    expect(mocks.replySubmissionStore.activateViewer).toHaveBeenCalledWith(7);
     expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(1);
   });
 
@@ -147,6 +154,7 @@ describe('AppShell mobile structure and notification freshness', () => {
 
     expect(mocks.notificationStore.refreshUnreadCount).not.toHaveBeenCalled();
     expect(mocks.postPublishStore.activateViewer).toHaveBeenCalledWith(null);
+    expect(mocks.replySubmissionStore.activateViewer).toHaveBeenCalledWith(null);
     await vi.advanceTimersByTimeAsync(NOTIFICATION_POLL_INTERVAL_MS * 3);
     expect(mocks.notificationStore.refreshUnreadCount).not.toHaveBeenCalled();
     unmountShell(wrapper);

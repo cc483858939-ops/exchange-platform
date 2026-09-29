@@ -59,6 +59,7 @@ vi.mock('vue-router', () => ({
   onBeforeRouteLeave: (guard: (to: { name?: string }) => void) => {
     mocks.routeLeave.mockImplementation(guard);
   },
+  onBeforeRouteUpdate: vi.fn(),
 }));
 
 vi.mock('../store/auth', () => ({

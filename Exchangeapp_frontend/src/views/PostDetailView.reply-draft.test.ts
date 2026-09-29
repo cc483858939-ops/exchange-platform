@@ -7,123 +7,67 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostDetailView from './PostDetailView.vue';
 import { useReplyDraftStore } from '../store/replyDraft';
 import type { Post } from '../types/Post';
-import type { FeedPost } from '../types/Feed';
-import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
-  router: {
-    back: vi.fn(),
-    push: vi.fn(),
-    replace: vi.fn(),
-  },
+  router: { back: vi.fn(), push: vi.fn(), replace: vi.fn() },
   routeLeave: vi.fn(),
+  routeUpdate: vi.fn(),
   authStore: null as any,
-  feedStore: {
-    viewerID: 7,
-    markPostDeleted: vi.fn(),
-  },
+  replySubmissionStore: null as any,
+  feedStore: { viewerID: 7, markPostDeleted: vi.fn() },
   handoffStore: null as any,
-  consumeHandoff: vi.fn(),
   getPostById: vi.fn(),
   getPostEngagementStates: vi.fn(),
   getPostLikeState: vi.fn(),
-  getPostRepostState: vi.fn().mockResolvedValue({ reposts: 0, reposted: false }),
+  getPostRepostState: vi.fn(),
   likePost: vi.fn(),
   unlikePost: vi.fn(),
   getPostReplies: vi.fn(),
-  createPostReply: vi.fn(),
-  createClientOperationID: vi.fn(),
   deletePostReply: vi.fn(),
   deletePost: vi.fn(),
+  getReplyDraft: vi.fn(),
+  saveReplyDraft: vi.fn(),
+  deleteReplyDraftIfUnchanged: vi.fn(),
   consumeAttribution: vi.fn(),
-  telemetry: {
-    recordReadEnd: vi.fn(),
-    flush: vi.fn(),
-  },
-  postViewTelemetry: {
-    enqueue: vi.fn(),
-  },
-  externalRemoval: vi.fn(),
-  externalReplyCount: vi.fn(),
+  telemetry: { recordReadEnd: vi.fn(), flush: vi.fn() },
+  postViewTelemetry: { enqueue: vi.fn() },
 }));
 
 vi.mock('vue-router', () => ({
   useRoute: () => mocks.route,
   useRouter: () => mocks.router,
-  onBeforeRouteLeave: (guard: (to: { name?: string }) => void) => {
-    mocks.routeLeave.mockImplementation(guard);
+  onBeforeRouteLeave: (guard: any) => mocks.routeLeave.mockImplementation(guard),
+  onBeforeRouteUpdate: (guard: any) => mocks.routeUpdate.mockImplementation(guard),
+}));
+
+vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
+vi.mock('../store/feed', () => ({ useFeedStore: () => mocks.feedStore }));
+vi.mock('../store/postDetailHandoff', () => ({ usePostDetailHandoffStore: () => mocks.handoffStore }));
+vi.mock('../store/replySubmission', () => ({ useReplySubmissionStore: () => mocks.replySubmissionStore }));
+vi.mock('../services/postService', () => ({ getPostById: mocks.getPostById, deletePost: mocks.deletePost }));
+vi.mock('../services/engagementService', () => ({ getPostEngagementStates: mocks.getPostEngagementStates }));
+vi.mock('../services/likeService', () => ({ getPostLikeState: mocks.getPostLikeState, likePost: mocks.likePost, unlikePost: mocks.unlikePost }));
+vi.mock('../services/repostService', () => ({ getPostRepostState: mocks.getPostRepostState, repostPost: vi.fn(), undoRepostPost: vi.fn() }));
+vi.mock('../services/replyService', () => ({ getPostReplies: mocks.getPostReplies, deletePostReply: mocks.deletePostReply }));
+vi.mock('../storage/replyStorage', () => ({
+  getReplyDraft: mocks.getReplyDraft,
+  saveReplyDraft: mocks.saveReplyDraft,
+  deleteReplyDraftIfUnchanged: mocks.deleteReplyDraftIfUnchanged,
+}));
+vi.mock('../services/recommendationAttribution', () => ({ consumePendingRecommendationAttribution: mocks.consumeAttribution }));
+vi.mock('../services/recommendationTelemetry', () => ({ getRecommendationTelemetry: () => mocks.telemetry }));
+vi.mock('../services/postViewTelemetry', () => ({ createPostViewEventID: () => 'view-id', getPostViewTelemetry: () => mocks.postViewTelemetry }));
+vi.mock('../services/postReadTracker', () => ({
+  createPostReadGeometry: () => ({ postTopDoc: 0, postHeight: 1, currentViewportBottomDoc: 1 }),
+  PostReadTracker: class {
+    start() {}
+    updateGeometry() {}
+    recordScroll() {}
+    pause() {}
+    resume() {}
+    finish(exitType: string) { return { exitType }; }
   },
-}));
-
-vi.mock('../store/auth', () => ({
-  useAuthStore: () => mocks.authStore,
-}));
-
-vi.mock('../store/feed', () => ({
-  useFeedStore: () => mocks.feedStore,
-}));
-
-vi.mock('../store/postDetailHandoff', () => ({
-  usePostDetailHandoffStore: () => mocks.handoffStore,
-}));
-
-vi.mock('../services/postService', () => ({
-  getPostById: mocks.getPostById,
-  deletePost: mocks.deletePost,
-}));
-
-vi.mock('../services/engagementService', () => ({
-  getPostEngagementStates: mocks.getPostEngagementStates,
-}));
-mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => engagementResponseFromDetailMocks(postIDs, {
-  like: mocks.getPostLikeState,
-  repost: mocks.getPostRepostState,
-  bookmark: () => Promise.reject(new Error('unavailable')),
-}));
-
-vi.mock('../services/likeService', () => ({
-  getPostLikeState: mocks.getPostLikeState,
-  likePost: mocks.likePost,
-  unlikePost: mocks.unlikePost,
-}));
-
-vi.mock('../services/repostService', () => ({
-  getPostRepostState: mocks.getPostRepostState,
-  repostPost: vi.fn(),
-  undoRepostPost: vi.fn(),
-}));
-
-vi.mock('../services/replyService', () => ({
-  getPostReplies: mocks.getPostReplies,
-  createPostReply: mocks.createPostReply,
-  deletePostReply: mocks.deletePostReply,
-}));
-
-vi.mock('../utils/clientOperationId', () => ({
-  createClientOperationID: mocks.createClientOperationID,
-}));
-
-vi.mock('../services/recommendationAttribution', () => ({
-  consumePendingRecommendationAttribution: mocks.consumeAttribution,
-}));
-
-vi.mock('../services/recommendationTelemetry', () => ({
-  getRecommendationTelemetry: () => mocks.telemetry,
-}));
-
-vi.mock('../services/postViewTelemetry', () => ({
-  createPostViewEventID: () => '00000000-0000-4000-8000-000000000042',
-  getPostViewTelemetry: () => mocks.postViewTelemetry,
-}));
-
-vi.mock('../store/sessionSync', () => ({
-  beginBookmarkStateMutation: vi.fn(),
-  registerPostDetailSessionSync: vi.fn(),
-  syncExternalPostLikeState: vi.fn(),
-  syncExternalPostRepostState: vi.fn(),
-  syncExternalPostRemoval: mocks.externalRemoval,
-  syncExternalReplyCount: mocks.externalReplyCount,
 }));
 
 const post = (id = 42, overrides: Partial<Post> = {}): Post => ({
@@ -131,12 +75,7 @@ const post = (id = 42, overrides: Partial<Post> = {}): Post => ({
   created_at: '2026-08-27T13:42:00.000Z',
   updated_at: '2026-08-27T13:42:00.000Z',
   published_at: '2026-08-27T13:42:00.000Z',
-  author: {
-    id: 7,
-    username: 'author',
-    display_name: 'Author',
-    avatar_url: '',
-  },
+  author: { id: 7, username: 'author', display_name: 'Author', avatar_url: '' },
   content: `Post ${id} body`,
   language: 'und',
   conversation_id: id,
@@ -154,839 +93,237 @@ const post = (id = 42, overrides: Partial<Post> = {}): Post => ({
   ...overrides,
 });
 
-const warmPost = (id = 42): FeedPost => ({
-  id,
-  author: {
-    id: 7,
-    username: 'author',
-    display_name: 'Author',
-    avatar_url: '',
-  },
-  content: `Post ${id} body`,
-  language: 'und',
-  media: [],
-  createdAt: '2026-08-27T13:42:00.000Z',
-  likeCount: 3,
-  replyCount: 0,
-  viewCount: 12,
-  liked: false,
-  likeStatus: 'ready',
-  repostCount: 0,
-  reposted: false,
-  repostStatus: 'ready',
-  bookmarked: false,
-  bookmarkStatus: 'ready',
-});
-
-const viewerMedia = [{
-  type: 'image' as const,
-  url: '/post.png',
-  large_url: '/post-large.png',
-  width: 1200,
-  height: 800,
-  position: 0,
-}];
-
-const reply = (id: number, postID = 42): Post => ({
-  id,
-  created_at: '2026-08-27T13:42:00.000Z',
-  updated_at: '2026-08-27T13:42:00.000Z',
-  published_at: '2026-08-27T13:42:00.000Z',
-  author: {
-    id: 8,
-    username: 'commenter',
-    display_name: 'Commenter',
-    avatar_url: '',
-  },
-  content: `Reply ${id}`,
-  language: 'und',
-  conversation_id: postID,
-  reply_to_post_id: postID,
-  quote_post_id: null,
-  reply_to_post: null,
-  quote_post: null,
-  visibility: 'public',
-  media: [],
-  like_count: 0,
-  repost_count: 0,
-  reply_count: 0,
-  view_count: 0,
-  deleted: false,
-});
-
-const deferred = <T>() => {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
+const flushAsync = async () => {
+  await flushPromises();
+  for (let index = 0; index < 4; index += 1) await nextTick();
 };
 
-let operationSequence = 0;
-
-const operationUUID = (value: number) => (
-  `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
-);
-
-const observerRecords: Array<{ callback: IntersectionObserverCallback; disconnected: boolean }> = [];
-
-class TestIntersectionObserver {
-  private readonly record: { callback: IntersectionObserverCallback; disconnected: boolean };
-
-  constructor(callback: IntersectionObserverCallback) {
-    this.record = { callback, disconnected: false };
-    observerRecords.push(this.record);
-  }
-
-  observe() {}
-
-  unobserve() {}
-
-  disconnect() {
-    this.record.disconnected = true;
-  }
-
-  takeRecords(): IntersectionObserverEntry[] {
-    return [];
-  }
-}
-
 let pinia: Pinia;
-let scrollIntoViewMock: ReturnType<typeof vi.fn>;
-
+let wrapper: ReturnType<typeof mount> | null;
 const draftStore = () => useReplyDraftStore(pinia);
-
-const textareaValue = (wrapper: ReturnType<typeof mount>) => (
-  (wrapper.get('.reply-composer__textarea').element as HTMLTextAreaElement).value
-);
 
 const mountDetail = () => mount(PostDetailView, {
   attachTo: document.body,
   global: {
     plugins: [pinia],
     stubs: {
-      AppIcon: {
-        props: ['name', 'size'],
-        template: '<span class="test-icon" :data-icon="name" />',
-      },
-      AuthorIdentity: { template: '<span class="test-author" />' },
-      LikeAction: {
-        props: ['liked', 'count', 'disabled', 'loading', 'pending', 'ariaLabel', 'variant'],
-        emits: ['toggle'],
-        template: '<button class="test-like" type="button" @click="$emit(\'toggle\')">{{ count }}</button>',
-      },
-      PostMediaViewer: {
-        props: ['media', 'initialIndex', 'desktopContext'],
-        emits: ['close'],
-        template: '<div class="test-media-viewer" :data-desktop-context="String(desktopContext)"><slot name="context" /><button class="test-close-media-viewer" type="button" @click="$emit(\'close\')">Close</button></div>',
-      },
-      ReplyItem: {
-        props: ['reply'],
-        template: '<article class="test-reply-item" :data-reply-id="String(reply.id)">{{ reply.content }}</article>',
-      },
+      AppIcon: { props: ['name'], template: '<span :data-icon="name" />' },
+      AuthorIdentity: { template: '<span />' },
+      LikeAction: { template: '<button />' },
+      RepostAction: { template: '<button />' },
+      BookmarkAction: { template: '<button />' },
+      PostMediaGrid: { emits: ['open'], template: '<button class="test-open-media" type="button" @click="$emit(\'open\', 0)" />' },
+      PostMediaViewer: { template: '<div><slot name="context" /></div>' },
+      ReplyList: { template: '<div />' },
+      ReplyItem: { template: '<div />' },
       RouterLink: { template: '<a><slot /></a>' },
     },
   },
 });
 
-describe('PostDetailView persistent reply drafts', () => {
-  let wrapper: ReturnType<typeof mount> | null = null;
+const makeSubmissionStore = () => {
+  const state = reactive({ operations: [] as any[] });
+  return Object.assign(state, {
+    activeViewerID: 7,
+    recoveryError: '',
+    currentViewerID: 7,
+    activateViewer: vi.fn(async () => undefined),
+    ensureContextHydrated: vi.fn(async () => null),
+    getOperation: vi.fn((viewerID: number, parentPostID: number) => state.operations.find(operation => (
+      operation.viewerID === viewerID && operation.parentPostID === parentPostID
+    )) ?? null),
+    getBlockReason: vi.fn(() => null),
+    startOrRetry: vi.fn(async (parentPostID: number, content: string) => {
+      const operation = {
+        id: 'reply-operation', viewerID: 7, parentPostID, content: content.trim(),
+        sourceDraftContent: null, phase: 'publishing', failureKind: null,
+        error: '', startedAt: 1, post: null, durableOwned: true, cleanupPending: false,
+      };
+      draftStore().bindSubmission(parentPostID, operation.id, operation.content);
+      state.operations.push(operation);
+      return { status: 'accepted', operation };
+    }),
+    retry: vi.fn(async () => true),
+    abandonFailedOperation: vi.fn(async () => true),
+    adoptHydratedOperation: vi.fn(() => false),
+    acknowledgeSucceededOperation: vi.fn(() => true),
+  });
+};
 
+describe('PostDetail reply draft durability UX', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    operationSequence = 0;
-    mocks.createClientOperationID.mockImplementation(() => operationUUID(++operationSequence));
     pinia = createPinia();
-    scrollIntoViewMock = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: scrollIntoViewMock,
-    });
-    mocks.route = reactive({
-      params: { id: '42' },
-      query: {},
-      hash: '',
-    });
-    mocks.router.back.mockReset();
-    mocks.router.push.mockReset();
-    mocks.router.replace.mockReset();
-    mocks.router.push.mockResolvedValue(undefined);
-    mocks.router.replace.mockResolvedValue(undefined);
+    wrapper = null;
+    mocks.route = reactive({ params: { id: '42' }, query: {}, hash: '' });
     mocks.authStore = reactive({
       isAuthenticated: true,
-      token: 'Bearer test-token',
-      currentIdentity: {
-        id: 7,
-        username: 'viewer',
-        display_name: 'Viewer',
-        avatar_url: '',
-      },
+      token: 'Bearer token',
+      currentIdentity: { id: 7, username: 'alice', display_name: 'Alice', avatar_url: '' },
     });
-    mocks.feedStore.viewerID = 7;
-    mocks.feedStore.markPostDeleted.mockReturnValue(true);
-    mocks.handoffStore = { consume: mocks.consumeHandoff };
-    mocks.consumeHandoff.mockReturnValue(null);
-    mocks.getPostById.mockImplementation((id: string) => Promise.resolve(post(Number(id))));
-    mocks.getPostLikeState.mockResolvedValue({ liked: false, likes: 3 });
-    mocks.getPostReplies.mockReset().mockResolvedValue({ items: [], next_cursor: null });
-    mocks.createPostReply.mockReset();
-    mocks.deletePost.mockResolvedValue(undefined);
-    mocks.consumeAttribution.mockReturnValue(null);
-    mocks.telemetry.flush.mockResolvedValue(undefined);
+    mocks.replySubmissionStore = makeSubmissionStore();
+    mocks.handoffStore = { consume: vi.fn(() => null) };
+    mocks.getPostById.mockImplementation(async (id: string | number) => post(Number(id)));
+    mocks.getPostEngagementStates.mockResolvedValue({ items: [] });
+    mocks.getPostLikeState.mockResolvedValue({ likes: 3, liked: false });
+    mocks.getPostRepostState.mockResolvedValue({ reposts: 0, reposted: false });
+    mocks.getPostReplies.mockResolvedValue({ items: [], next_cursor: null });
+    mocks.getReplyDraft.mockResolvedValue(null);
+    mocks.saveReplyDraft.mockResolvedValue(undefined);
+    mocks.deleteReplyDraftIfUnchanged.mockResolvedValue('deleted');
+    mocks.consumeAttribution.mockReturnValue({ source: 'recommendation' });
+    mocks.router.back.mockReset();
+    mocks.router.push.mockReset().mockResolvedValue(undefined);
+    mocks.router.replace.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     wrapper?.unmount();
     wrapper = null;
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    observerRecords.splice(0);
+    document.body.innerHTML = '';
   });
 
-  it('restores a draft after leaving and returning to the same post', async () => {
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('draft 42');
-    expect(draftStore().getDraft(42)).toBe('draft 42');
-
-    wrapper.unmount();
-    wrapper = null;
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(textareaValue(wrapper)).toBe('draft 42');
-  });
-
-  it('keeps drafts isolated while navigating between posts', async () => {
-    wrapper = mountDetail();
-    await flushPromises();
-    await wrapper.get('.reply-composer__textarea').setValue('draft A');
-
-    mocks.route.params.id = '43';
-    await flushPromises();
-    expect(textareaValue(wrapper)).toBe('');
-    await wrapper.get('.reply-composer__textarea').setValue('draft B');
-
-    mocks.route.params.id = '42';
-    await flushPromises();
-
-    expect(textareaValue(wrapper)).toBe('draft A');
-    expect(draftStore().getDraft(43)).toBe('draft B');
-  });
-
-  it('does not mount or expose the draft during warm handoff loading', async () => {
-    const request = deferred<Post>();
-    draftStore().setViewer(7);
-    draftStore().setDraft(42, 'warm-hidden draft');
-    mocks.consumeHandoff.mockReturnValueOnce(warmPost());
-    mocks.getPostById.mockReturnValueOnce(request.promise);
-
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(wrapper.find('.post-conversation').exists()).toBe(false);
-    expect(wrapper.find('.reply-composer__textarea').exists()).toBe(false);
-
-    request.resolve(post());
-    await flushPromises();
-
-    expect(textareaValue(wrapper)).toBe('warm-hidden draft');
-  });
-
-  it('increments locally after a fresh reply without an extra parent fetch', async () => {
-    const request = deferred<Post>();
-    mocks.createPostReply.mockReturnValueOnce(request.promise);
-    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 3 }));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('  useful reply  ');
-    await wrapper.get('.reply-composer').trigger('submit');
-
-    expect(mocks.createPostReply).toHaveBeenCalledWith('42', 'useful reply', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(draftStore().getDraft(42)).toBe('  useful reply  ');
-
-    request.resolve(reply(101));
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(textareaValue(wrapper)).toBe('');
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('4');
-    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
-    expect(mocks.externalReplyCount).toHaveBeenCalledWith({
-      postId: 42,
-      replyCount: 4,
-    });
-  });
-
-  it('preserves the draft on failure and allows retry without retyping', async () => {
-    mocks.createPostReply
-      .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce(reply(102));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('retry me');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('retry me');
-    expect(draftStore().submissionOperations['42']).toEqual({
-      id: operationUUID(1),
-      content: 'retry me',
-    });
-    expect(wrapper.get('.reply-error').text()).toBe('Reply failed. Please try again.');
-
-    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'retry me', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(draftStore().submissionOperations).toEqual({});
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
-    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
-    expect(mocks.externalReplyCount).toHaveBeenCalledTimes(1);
-    expect(mocks.externalReplyCount).toHaveBeenCalledWith({ postId: 42, replyCount: 1 });
-  });
-
-  it('preserves the reply operation after timeout and retries with the same key', async () => {
-    mocks.createPostReply
-      .mockRejectedValueOnce(Object.assign(new Error('Request timed out'), {
-        isAxiosError: true,
-        code: 'ECONNABORTED',
-      }))
-      .mockResolvedValueOnce(reply(121));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    const textarea = wrapper.get('.reply-composer__textarea');
-    await textarea.setValue('keep my timeout reply');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('keep my timeout reply');
-    expect(draftStore().submissionOperations['42']).toEqual({
-      id: operationUUID(1),
-      content: 'keep my timeout reply',
-    });
-    expect(wrapper.get('.reply-error').text()).toBe('Reply failed. Please try again.');
-    expect(wrapper.get('.reply-composer__submit').attributes('disabled')).toBeUndefined();
-
-    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(1, '42', 'keep my timeout reply', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'keep my timeout reply', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(draftStore().submissionOperations).toEqual({});
-    expect(wrapper.get('.reply-composer__submit').text()).toBe('Reply');
-  });
-
-  it('uses a new operation after editing a failed reply', async () => {
-    mocks.createPostReply
-      .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce(reply(110));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    const textarea = wrapper.get('.reply-composer__textarea');
-    await textarea.setValue('first version');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-    const failedOperation = draftStore().submissionOperations['42'];
-
-    await textarea.setValue('edited version');
-    expect(draftStore().submissionOperations['42']).toBeUndefined();
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(1, '42', 'first version', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'edited version', {
-      idempotencyKey: operationUUID(2),
-    });
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(failedOperation?.id).not.toBe(operationUUID(2));
-    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
-  });
-
-  it('uses a fresh operation when the same text is submitted after success', async () => {
-    mocks.createPostReply
-      .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce(reply(111))
-      .mockResolvedValueOnce(reply(112));
-    wrapper = mountDetail();
-    await flushPromises();
-    const textarea = wrapper.get('.reply-composer__textarea');
-
-    await textarea.setValue('same reply');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-    await textarea.setValue('same reply');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(1, '42', 'same reply', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'same reply', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(3, '42', 'same reply', {
-      idempotencyKey: operationUUID(2),
-    });
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('2');
-    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
-    expect(mocks.externalReplyCount).toHaveBeenNthCalledWith(1, { postId: 42, replyCount: 1 });
-    expect(mocks.externalReplyCount).toHaveBeenNthCalledWith(2, { postId: 42, replyCount: 2 });
-  });
-
-  it('reuses the failed operation after leaving and returning to the post', async () => {
-    mocks.createPostReply.mockRejectedValueOnce(new Error('offline'));
-    wrapper = mountDetail();
-    await flushPromises();
-    await wrapper.get('.reply-composer__textarea').setValue('retry after return');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-    const firstOperationID = draftStore().submissionOperations['42']?.id;
-    expect(firstOperationID).toBe(operationUUID(1));
-
-    wrapper.unmount();
-    wrapper = null;
-    mocks.createPostReply.mockResolvedValueOnce(reply(113));
-    mocks.getPostById.mockReset().mockImplementation(() => (
-      Promise.resolve(post(42, { reply_count: 1 }))
-    ));
-    mocks.getPostReplies.mockReset().mockResolvedValue({
-      items: [reply(113)],
-      next_cursor: null,
+  it('hydrates the exact saved reply and only persists again on explicit Save draft', async () => {
+    mocks.getReplyDraft.mockResolvedValue({
+      key: '7:42', viewerID: 7, parentPostID: 42, content: '  saved\nreply  ', createdAt: 1, updatedAt: 2,
     });
     wrapper = mountDetail();
-    await flushPromises();
-    expect(draftStore().submissionOperations['42']?.id).toBe(firstOperationID);
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(1, '42', 'retry after return', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'retry after return', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
-    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
-    expect(mocks.externalReplyCount).toHaveBeenCalledWith({ postId: 42, replyCount: 1 });
-    expect(wrapper.findAll('.test-reply-item')).toHaveLength(1);
-    expect(wrapper.find('.test-reply-item').attributes('data-reply-id')).toBe('113');
-  });
-
-  it('keeps a successful reply when retry count reconciliation fails', async () => {
-    mocks.createPostReply
-      .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce(reply(115));
-    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 3 }));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('count refresh failure');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-    mocks.getPostById.mockRejectedValueOnce(new Error('refresh offline'));
-
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(wrapper.find('.test-reply-item').attributes('data-reply-id')).toBe('115');
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(draftStore().submissionOperations).toEqual({});
-    expect(wrapper.find('.reply-error').exists()).toBe(false);
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('3');
-    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
-    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
-  });
-
-  it('does not apply retry reconciliation after navigating to a different post', async () => {
-    const countRequest = deferred<Post>();
-    const retryRequest = deferred<Post>();
-    mocks.createPostReply
-      .mockRejectedValueOnce(new Error('offline'))
-      .mockReturnValueOnce(retryRequest.promise);
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('retry then navigate');
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-    mocks.getPostById.mockReturnValueOnce(countRequest.promise);
-
-    await wrapper.get('.reply-composer').trigger('submit');
-    retryRequest.resolve(reply(116));
-    await flushPromises();
-    await nextTick();
-    mocks.route.params.id = '43';
-    await flushPromises();
-
-    countRequest.resolve(post(42, { reply_count: 99 }));
-    await flushPromises();
-
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('0');
-    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
-  });
-
-  it('retires a conflicting operation but preserves the draft for a new retry', async () => {
-    mocks.createPostReply
-      .mockRejectedValueOnce({
-        response: { status: 409, data: { code: 'POST_IDEMPOTENCY_CONFLICT' } },
-      })
-      .mockResolvedValueOnce(reply(114));
-    wrapper = mountDetail();
-    await flushPromises();
-    await wrapper.get('.reply-composer__textarea').setValue('conflicted reply');
-
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-    expect(draftStore().getDraft(42)).toBe('conflicted reply');
-    expect(draftStore().submissionOperations['42']).toBeUndefined();
-
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(1, '42', 'conflicted reply', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'conflicted reply', {
-      idempotencyKey: operationUUID(2),
-    });
-  });
-
-  it('does not clear a newer draft that replaces the submitted snapshot', async () => {
-    const request = deferred<Post>();
-    mocks.createPostReply.mockReturnValueOnce(request.promise);
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('draft A');
-    await wrapper.get('.reply-composer').trigger('submit');
-    draftStore().setDraft(42, 'draft B');
-    const newerOperation = draftStore().prepareSubmission(42, 'draft B');
-
-    request.resolve(reply(103));
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('draft B');
-    expect(textareaValue(wrapper)).toBe('draft B');
-    expect(newerOperation.reused).toBe(false);
-    expect(draftStore().submissionOperations['42']).toEqual(newerOperation.operation);
-  });
-
-  it('clears a late successful Post A reply without mutating Post B', async () => {
-    const request = deferred<Post>();
-    mocks.createPostReply.mockReturnValueOnce(request.promise);
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('draft A');
-    await wrapper.get('.reply-composer').trigger('submit');
-
-    mocks.route.params.id = '43';
-    await flushPromises();
-    draftStore().setDraft(43, 'draft B');
-
-    request.resolve(reply(104, 42));
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(draftStore().getDraft(43)).toBe('draft B');
-    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
-  });
-
-  it('preserves drafts across same-viewer identity replacement', async () => {
-    wrapper = mountDetail();
-    await flushPromises();
-    await wrapper.get('.reply-composer__textarea').setValue('same viewer draft');
-
-    mocks.authStore.currentIdentity = {
-      id: 7,
-      username: 'viewer-renewed',
-      display_name: 'Viewer Renewed',
-      avatar_url: '',
-    };
-    await nextTick();
-
-    expect(draftStore().viewerID).toBe(7);
-    expect(draftStore().getDraft(42)).toBe('same viewer draft');
-  });
-
-  it('clears drafts when the account changes or logs out', async () => {
-    wrapper = mountDetail();
-    await flushPromises();
-    await wrapper.get('.reply-composer__textarea').setValue('private draft');
-
-    mocks.authStore.currentIdentity = {
-      id: 8,
-      username: 'other-viewer',
-      display_name: 'Other Viewer',
-      avatar_url: '',
-    };
-    await nextTick();
-
-    expect(draftStore().viewerID).toBe(8);
-    expect(draftStore().getDraft(42)).toBe('');
-
-    mocks.authStore.isAuthenticated = false;
-    mocks.authStore.currentIdentity = null;
-    await flushPromises();
-
-    expect(draftStore().viewerID).toBeNull();
-    expect(draftStore().drafts).toEqual({});
-    expect(wrapper.find('.reply-composer').exists()).toBe(false);
-  });
-
-  it('clears a draft for a current canonical 404 but preserves it for a generic failure', async () => {
-    draftStore().setViewer(7);
-    draftStore().setDraft(42, 'remove on 404');
-    mocks.getPostById.mockRejectedValueOnce({ response: { status: 404 } });
-
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(wrapper.find('.detail-state--error').text()).toContain('This post does not exist.');
-
-    wrapper.unmount();
-    wrapper = null;
-    draftStore().setDraft(42, 'keep on network error');
-    mocks.getPostById.mockRejectedValueOnce(new Error('offline'));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('keep on network error');
-  });
-
-  it.each([
-    ['success', null],
-    ['terminal 404', { response: { status: 404 } }],
-  ])('clears the current draft after an original Post delete %s', async (_label, error) => {
-    draftStore().setViewer(7);
-    draftStore().setDraft(42, 'post draft');
-    if (error) {
-      mocks.deletePost.mockRejectedValueOnce(error);
-    } else {
-      mocks.deletePost.mockResolvedValueOnce(undefined);
-    }
-
-    wrapper = mountDetail();
-    await flushPromises();
-    await wrapper.get('.post-detail__delete').trigger('click');
-    await wrapper.get('.confirm-dialog__button--confirm').trigger('click');
-    await flushPromises();
-
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(mocks.externalRemoval).toHaveBeenCalledWith(42);
-  });
-
-  it('restores a draft before consuming ?reply=1 and focuses exactly once', async () => {
-    mocks.route.query = { reply: '1' };
-    draftStore().setViewer(7);
-    draftStore().setDraft(42, 'unfinished reply');
-
-    wrapper = mountDetail();
-    await flushPromises();
-
-    expect(textareaValue(wrapper)).toBe('unfinished reply');
-    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(wrapper.get('.reply-composer__textarea').element);
-    expect(mocks.router.replace).toHaveBeenCalledTimes(1);
-    expect(mocks.router.replace).toHaveBeenCalledWith(expect.objectContaining({ query: {} }));
-    expect(draftStore().getDraft(42)).toBe('unfinished reply');
-  });
-
-  it('focuses the existing draft from the Post Reply action', async () => {
-    draftStore().setViewer(7);
-    draftStore().setDraft(42, 'existing draft');
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.post-detail__reply').trigger('click');
-    await flushPromises();
-
-    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(wrapper.get('.reply-composer__textarea').element);
-    expect(textareaValue(wrapper)).toBe('existing draft');
-  });
-
-  it('reuses the draft and focuses the context composer from the desktop media rail', async () => {
-    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('shared draft');
-    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
-    await nextTick();
-
-    expect(wrapper.get('.test-media-viewer').attributes('data-desktop-context')).toBe('true');
-    expect(wrapper.findAll('.reply-composer__textarea')).toHaveLength(2);
-    expect((wrapper.findAll('.reply-composer__textarea')[1].element as HTMLTextAreaElement).value)
-      .toBe('shared draft');
-
-    await wrapper.find('.test-media-viewer .post-detail__reply').trigger('click');
-    await nextTick();
-
-    expect(document.activeElement).toBe(wrapper.findAll('.reply-composer__textarea')[1].element);
-  });
-
-  it('synchronizes edits from the overlay composer back to the underlying draft', async () => {
-    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.reply-composer__textarea').setValue('draft A');
-    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
-    await nextTick();
+    await flushAsync();
 
     const textareas = wrapper.findAll('.reply-composer__textarea');
-    await textareas[1].setValue('draft from viewer');
+    expect(textareas.length).toBeGreaterThanOrEqual(1);
+    expect((textareas[0]!.element as HTMLTextAreaElement).value).toBe('  saved\nreply  ');
+    expect(mocks.saveReplyDraft).not.toHaveBeenCalled();
 
-    expect(draftStore().getDraft(42)).toBe('draft from viewer');
-
-    await wrapper.get('.test-close-media-viewer').trigger('click');
-    await nextTick();
-
-    expect(textareaValue(wrapper)).toBe('draft from viewer');
+    await textareas[0]!.setValue('  updated reply  ');
+    await wrapper.find('.reply-composer__draft-action').trigger('click');
+    await flushAsync();
+    expect(mocks.saveReplyDraft).toHaveBeenCalledWith(expect.objectContaining({ content: '  updated reply  ' }));
+    expect(draftStore().hasUnsavedChanges(42)).toBe(false);
   });
 
-  it('submits an overlay reply once and updates the shared replies and count', async () => {
-    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
-    mocks.createPostReply.mockResolvedValueOnce(reply(101));
+  it('keeps normal and media-context composers synchronized and disables both after durable acceptance', async () => {
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: [{
+      type: 'image', url: '/image.png', large_url: '/image-large.png', width: 800, height: 600, position: 0,
+    }] }));
     wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await flushAsync();
+    await wrapper.get('.test-open-media').trigger('click');
     await nextTick();
-    await wrapper.findAll('.post-media-context .reply-composer__textarea')[0].setValue('  media reply  ');
-    await wrapper.get('.post-media-context .reply-composer').trigger('submit');
-    await flushPromises();
+    const textareas = wrapper.findAll('.reply-composer__textarea');
+    expect(textareas.length).toBe(2);
+    await textareas[0]!.setValue('shared reply');
+    await nextTick();
+    expect((textareas[1]!.element as HTMLTextAreaElement).value).toBe('shared reply');
 
-    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
-    expect(mocks.createPostReply).toHaveBeenCalledWith('42', 'media reply', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.externalReplyCount).toHaveBeenCalledTimes(1);
-    expect(mocks.externalReplyCount).toHaveBeenCalledWith({ postId: 42, replyCount: 1 });
+    await wrapper.find('.reply-composer').trigger('submit');
+    await flushAsync();
+    expect(mocks.replySubmissionStore.startOrRetry).toHaveBeenCalledWith(42, 'shared reply');
+    expect(textareas.every(textarea => (textarea.element as HTMLTextAreaElement).disabled)).toBe(true);
+  });
+
+  it('registers beforeunload only for unsaved text and removes the warning after durable binding', async () => {
+    wrapper = mountDetail();
+    await flushAsync();
+    const emptyEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(emptyEvent);
+    expect(emptyEvent.defaultPrevented).toBe(false);
+
+    const textarea = wrapper.get('.reply-composer__textarea');
+    await textarea.setValue('unsaved');
+    await nextTick();
+    const dirtyEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirtyEvent);
+    expect(dirtyEvent.defaultPrevented).toBe(true);
+
+    await wrapper.find('.reply-composer').trigger('submit');
+    await flushAsync();
+    const durableEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(durableEvent);
+    expect(durableEvent.defaultPrevented).toBe(false);
+
+    mocks.replySubmissionStore.operations[0].phase = 'failed';
+    mocks.replySubmissionStore.operations[0].failureKind = 'retryable';
+    await flushAsync();
+    await textarea.setValue('edited after acceptance');
+    await nextTick();
+    const editedEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(editedEvent);
+    expect(editedEvent.defaultPrevented).toBe(true);
+  });
+
+  it('cancels SPA leave without finishing recommendation read telemetry', async () => {
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('unsaved reply');
+
+    const navigation = mocks.routeLeave({ name: 'Home' });
+    await nextTick();
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(true);
+    await wrapper.get('.reply-draft-exit-dialog__button--cancel').trigger('click');
+
+    expect(await navigation).toBe(false);
+    expect(draftStore().getDraft(42)).toBe('unsaved reply');
+    expect(mocks.telemetry.recordReadEnd).not.toHaveBeenCalled();
+  });
+
+  it('saves a reply before allowing leave and finishing read telemetry', async () => {
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('save before leaving');
+
+    const navigation = mocks.routeLeave({ name: 'Home' });
+    await nextTick();
+    await wrapper.get('.reply-draft-exit-dialog__button--save').trigger('click');
+    expect(await navigation).toBe(true);
+    expect(mocks.saveReplyDraft).toHaveBeenCalledWith(expect.objectContaining({ content: 'save before leaving' }));
+    expect(mocks.telemetry.recordReadEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps navigation blocked and reply dirty if Save draft fails', async () => {
+    mocks.saveReplyDraft.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('preserve me');
+
+    const navigation = mocks.routeLeave({ name: 'Home' });
+    await nextTick();
+    await wrapper.get('.reply-draft-exit-dialog__button--save').trigger('click');
+    await flushAsync();
+
+    expect(wrapper.find('.reply-draft-exit-dialog__error').text()).toContain('Could not save this reply draft');
+    expect(draftStore().getDraft(42)).toBe('preserve me');
+    expect(draftStore().hasUnsavedChanges(42)).toBe(true);
+    expect(mocks.telemetry.recordReadEnd).not.toHaveBeenCalled();
+    wrapper.get('.reply-draft-exit-dialog__button--cancel').trigger('click');
+    expect(await navigation).toBe(false);
+  });
+
+  it('uses the same exit decision for parent changes but skips same-parent query changes', async () => {
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('route update draft');
+
+    expect(await mocks.routeUpdate(
+      { params: { id: '42' }, query: { reply: '1' } },
+      { params: { id: '42' }, query: {} },
+    )).toBe(true);
+    const navigation = mocks.routeUpdate(
+      { params: { id: '43' }, query: {} },
+      { params: { id: '42' }, query: {} },
+    );
+    await nextTick();
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(true);
+    await wrapper.get('.reply-draft-exit-dialog__button--discard').trigger('click');
+    expect(await navigation).toBe(true);
     expect(draftStore().getDraft(42)).toBe('');
-    expect(wrapper.get('.post-media-context .post-detail__reply').text()).toBe('1');
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
-    expect(wrapper.findAll('.test-reply-item')).toHaveLength(2);
-    expect(wrapper.findAll('.test-reply-item').every(item => item.attributes('data-reply-id') === '101'))
-      .toBe(true);
-    expect(wrapper.findAll('.reply-composer__textarea').every(textarea => (
-      (textarea.element as HTMLTextAreaElement).value === ''
-    ))).toBe(true);
-    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
   });
 
-  it('blocks a second overlay submit while the first reply request is pending', async () => {
-    const request = deferred<Post>();
-    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
-    mocks.createPostReply.mockReturnValueOnce(request.promise);
+  it('preserves an unresolved durable operation after the parent returns 404', async () => {
+    mocks.getPostById.mockRejectedValueOnce({ response: { status: 404 } });
     wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
-    await nextTick();
-    const overlayForm = wrapper.get('.post-media-context .reply-composer');
-    await wrapper.get('.post-media-context .reply-composer__textarea').setValue('pending reply');
-    await overlayForm.trigger('submit');
-    await nextTick();
-    await overlayForm.trigger('submit');
-
-    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
-
-    request.resolve(reply(102));
-    await flushPromises();
-  });
-
-  it('shares the failed overlay operation with the normal composer retry', async () => {
-    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
-    mocks.createPostReply
-      .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce(reply(103));
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
-    await nextTick();
-    await wrapper.get('.post-media-context .reply-composer__textarea').setValue('retry from viewer');
-    await wrapper.get('.post-media-context .reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
-    expect(draftStore().getDraft(42)).toBe('retry from viewer');
-    expect(wrapper.get('.post-media-context .reply-error').text())
-      .toBe('Reply failed. Please try again.');
-    expect(wrapper.get('.post-media-context .post-detail__reply').text()).toBe('0');
-    expect(wrapper.find('.test-reply-item').exists()).toBe(false);
-    expect(wrapper.find('.test-media-viewer').exists()).toBe(true);
-
-    mocks.getPostById.mockResolvedValueOnce(post(42, { reply_count: 1 }));
-    await wrapper.get('.test-close-media-viewer').trigger('click');
-    await nextTick();
-    await wrapper.get('.reply-composer').trigger('submit');
-    await flushPromises();
-
-    expect(mocks.createPostReply).toHaveBeenCalledTimes(2);
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(1, '42', 'retry from viewer', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, '42', 'retry from viewer', {
-      idempotencyKey: operationUUID(1),
-    });
-    expect(draftStore().getDraft(42)).toBe('');
-    expect(wrapper.get('.post-detail > .post-detail__engagement .post-detail__reply').text()).toBe('1');
-    expect(wrapper.find('.test-media-viewer').exists()).toBe(false);
-  });
-
-  it('routes overlay manual Load more through PostDetail without a second observer', async () => {
-    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
-    mocks.getPostById.mockResolvedValueOnce(post(42, { media: viewerMedia }));
-    mocks.getPostReplies
-      .mockReset()
-      .mockResolvedValueOnce({ items: [], next_cursor: 'next-page' })
-      .mockResolvedValueOnce({ items: [reply(202)], next_cursor: null });
-    wrapper = mountDetail();
-    await flushPromises();
-
-    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
-    await nextTick();
-
-    expect(observerRecords).toHaveLength(1);
-    await wrapper.get('.post-media-context .reply-list__load-more').trigger('click');
-    await flushPromises();
-
-    expect(mocks.getPostReplies).toHaveBeenCalledTimes(2);
-    expect(mocks.getPostReplies).toHaveBeenNthCalledWith(2, '42', {
-      limit: 20,
-      cursor: 'next-page',
-    });
-    expect(observerRecords).toHaveLength(1);
-    expect(wrapper.findAll('.test-reply-item')).toHaveLength(2);
+    await flushAsync();
+    expect(mocks.getReplyDraft).not.toHaveBeenCalled();
+    expect(mocks.replySubmissionStore.startOrRetry).not.toHaveBeenCalled();
   });
 });

@@ -231,8 +231,14 @@
           ref="composerRef"
           :author="replyComposerAuthor"
           v-model="replyDraftContent"
+          :disabled="replyComposerDisabled"
           :submitting="replySubmitting"
+          :draft-action-visible="replyDraftActionVisible"
+          :draft-action-label="replyDraftActionLabel"
+          :draft-action-disabled="replyPreparing || replyDraftHydrating || replySubmitting || replyDraftSaveBusy"
+          :draft-action-busy="replyDraftSaveBusy"
           @submit="handleCreateReply"
+          @save-draft="saveCurrentReplyDraft"
         />
         <button
           v-else
@@ -243,7 +249,17 @@
           Log in to reply
         </button>
 
+        <p v-if="replyDraftHydrating" class="replies-state" role="status" aria-live="polite">Loading draft…</p>
+        <ReplySubmissionStatus
+          v-if="!mediaViewer"
+          :operation="currentReplyOperation"
+          :busy="replyStatusBusy"
+          :error="replyDiscardOperationID ? '' : replyStatusError"
+          @retry="retryCurrentReply"
+          @discard="requestDiscardReplyAttempt"
+        />
         <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
+        <p v-if="replyDraftSaveError" class="reply-error" role="alert">{{ replyDraftSaveError }}</p>
         <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
           {{ replyBookmarkError }}
         </p>
@@ -446,14 +462,28 @@
           >{{ bookmarkError }}</p>
 
           <template v-if="detailPresentation.kind === 'post'">
+            <ReplySubmissionStatus
+              v-if="mediaViewer"
+              :operation="currentReplyOperation"
+              :busy="replyStatusBusy"
+              :error="replyDiscardOperationID ? '' : replyStatusError"
+              @retry="retryCurrentReply"
+              @discard="requestDiscardReplyAttempt"
+            />
             <ReplyComposer
               v-if="authStore.isAuthenticated"
               :key="postId"
               ref="mediaContextComposerRef"
               :author="replyComposerAuthor"
               v-model="replyDraftContent"
+              :disabled="replyComposerDisabled"
               :submitting="replySubmitting"
+              :draft-action-visible="replyDraftActionVisible"
+              :draft-action-label="replyDraftActionLabel"
+              :draft-action-disabled="replyPreparing || replyDraftHydrating || replySubmitting || replyDraftSaveBusy"
+              :draft-action-busy="replyDraftSaveBusy"
               @submit="handleCreateReply"
+              @save-draft="saveCurrentReplyDraft"
             />
             <button
               v-else
@@ -465,6 +495,7 @@
             </button>
 
             <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
+            <p v-if="replyDraftSaveError" class="reply-error" role="alert">{{ replyDraftSaveError }}</p>
             <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
               {{ replyBookmarkError }}
             </p>
@@ -534,12 +565,35 @@
       @confirm="confirmDeleteReply"
       @cancel="cancelDeleteReply"
     />
+
+    <ReplyDraftExitDialog
+      v-if="replyExitDialogOpen"
+      :is-saved-draft="replyDraftStore.hasSavedDraft(currentDetailPostID ?? 0)"
+      :busy="replyExitDialogBusy"
+      :error="replyExitDialogError"
+      @cancel="resolveReplyExit(false)"
+      @discard="discardReplyAndLeave"
+      @save="saveReplyAndLeave"
+    />
+
+    <ConfirmDialog
+      v-if="replyDiscardOperationID"
+      title="Discard this reply attempt?"
+      description="This reply may already have been posted. Discarding stops recovery on this device and does not delete anything already published. Check the conversation before sending the same reply again."
+      confirm-label="Discard attempt"
+      cancel-label="Cancel"
+      danger
+      :busy="replyStatusBusy"
+      :error="replyStatusError"
+      @confirm="confirmDiscardReplyAttempt"
+      @cancel="cancelDiscardReplyAttempt"
+    />
   </main>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 import AuthorIdentity from '../components/AuthorIdentity.vue';
 import LinkifiedText from '../components/content/LinkifiedText.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
@@ -550,8 +604,10 @@ import LikeAction from '../components/engagement/LikeAction.vue';
 import RepostAction from '../components/engagement/RepostAction.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import ReplyComposer from '../components/replies/ReplyComposer.vue';
+import ReplyDraftExitDialog from '../components/replies/ReplyDraftExitDialog.vue';
 import ReplyList from '../components/replies/ReplyList.vue';
-import { createPostReply, deletePostReply, getPostReplies } from '../services/replyService';
+import ReplySubmissionStatus from '../components/replies/ReplySubmissionStatus.vue';
+import { deletePostReply, getPostReplies } from '../services/replyService';
 import { deletePost, getPostById } from '../services/postService';
 import { getPostEngagementStates } from '../services/engagementService';
 import { getPostBookmarkStates } from '../services/bookmarkService';
@@ -564,6 +620,7 @@ import { useAuthStore } from '../store/auth';
 import { usePostDetailHandoffStore } from '../store/postDetailHandoff';
 import { useFeedStore } from '../store/feed';
 import { useReplyDraftStore } from '../store/replyDraft';
+import { useReplySubmissionStore } from '../store/replySubmission';
 import { createEngagementMutationCoordinator } from '../store/engagementMutationCoordinator';
 import {
   releaseEngagementMutationLease,
@@ -605,6 +662,7 @@ const authStore = useAuthStore();
 const postDetailHandoff = usePostDetailHandoffStore();
 const feedStore = useFeedStore();
 const replyDraftStore = useReplyDraftStore();
+const replySubmissionStore = useReplySubmissionStore();
 const currentIdentity = computed(() => (
   authStore.isAuthenticated ? authStore.currentIdentity : null
 ));
@@ -616,6 +674,12 @@ const currentDetailPostID = computed<number | null>(() => {
   if (!/^\d+$/.test(value)) return null;
   const id = Number(value);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
+});
+const currentReplyOperation = computed(() => {
+  const viewerID = currentViewerID.value;
+  const parentPostID = currentDetailPostID.value;
+  if (viewerID === null || parentPostID === null) return null;
+  return replySubmissionStore.getOperation(viewerID, parentPostID);
 });
 const detailEngagementMutations = createEngagementMutationCoordinator();
 const replyBookmarkMutations = createEngagementMutationCoordinator();
@@ -667,8 +731,35 @@ const repliesInitialLoading = ref(false);
 const repliesLoadingMore = ref(false);
 const repliesError = ref('');
 const repliesLoadMoreError = ref('');
-const replySubmitting = ref(false);
+const replyPreparing = ref(false);
+const replyDraftHydrating = ref(false);
+const replyDraftSaveBusy = ref(false);
+const replyDraftSaveError = ref('');
 const replyError = ref('');
+const replyStatusBusy = ref(false);
+const replyStatusError = ref('');
+const replyDiscardOperationID = ref<string | null>(null);
+const replyExitDialogOpen = ref(false);
+const replyExitDialogBusy = ref(false);
+const replyExitDialogError = ref('');
+const replySubmitting = computed(() => (
+  replyPreparing.value || currentReplyOperation.value?.phase === 'publishing'
+));
+const replyComposerDisabled = computed(() => (
+  replyDraftHydrating.value || replyPreparing.value || replySubmitting.value
+));
+const replyDraftDirty = computed(() => {
+  const postID = currentDetailPostID.value;
+  return postID !== null && replyDraftStore.hasUnsavedChanges(postID);
+});
+const replyDraftActionVisible = computed(() => replyDraftDirty.value);
+const replyDraftActionLabel = computed(() => {
+  const postID = currentDetailPostID.value;
+  if (postID !== null && replyDraftStore.getDraft(postID) === '' && replyDraftStore.hasSavedDraft(postID)) {
+    return 'Delete draft';
+  }
+  return replyDraftStore.hasSavedDraft(postID ?? 0) ? 'Save changes' : 'Save draft';
+});
 const deletingReplyId = ref<number | null>(null);
 const deleteReplyCandidateId = ref<number | null>(null);
 const replyDeleteError = ref('');
@@ -696,6 +787,9 @@ let repliesRequestVersion = 0;
 let replyDeleteRequestVersion = 0;
 let replyIntentTask: Promise<void> | null = null;
 let replyIntentRetryRequested = false;
+let replyExitDecisionResolver: ((allow: boolean) => void) | null = null;
+const reconciledReplyOperationIDs = new Set<string>();
+let beforeUnloadAttached = false;
 
 let tracking: RecommendationTracking | null = null;
 let trackedPostID = '';
@@ -1184,7 +1278,9 @@ const resetRepliesState = () => {
   repliesLoadingMore.value = false;
   repliesError.value = '';
   repliesLoadMoreError.value = '';
-  replySubmitting.value = false;
+  replyPreparing.value = false;
+  replyStatusError.value = '';
+  replyDraftSaveError.value = '';
   replyError.value = '';
   replyBookmarkError.value = '';
   deletingReplyId.value = null;
@@ -1288,7 +1384,6 @@ const confirmDeletePost = async () => {
       return false;
     }
     syncExternalPostRemoval(postID);
-    replyDraftStore.clearDraft(postID);
     finishRead('route_leave');
     void recommendationTelemetry.flush(false);
     deletePostConfirmOpen.value = false;
@@ -1815,86 +1910,129 @@ const retryLoadMoreReplies = () => {
 };
 
 const handleCreateReply = async (content: string) => {
-  if (!post.value || !authStore.isAuthenticated || replySubmitting.value) {
-    return;
-  }
+  const parentPostID = currentDetailPostID.value;
+  if (!post.value || !authStore.isAuthenticated || replySubmitting.value || parentPostID === null) return;
 
-  const id = postId.value;
-  const numericPostID = Number(id);
-  const submittingViewerID = currentViewerID.value;
-  if (
-    submittingViewerID === null
-    || !Number.isSafeInteger(numericPostID)
-    || numericPostID <= 0
-  ) {
-    return;
-  }
-  replyDraftStore.setViewer(submittingViewerID);
-  const submittedDraftSnapshot = replyDraftStore.getDraft(numericPostID);
-  const preparedSubmission = replyDraftStore.prepareSubmission(numericPostID, content);
-  const replyOperation = preparedSubmission.operation;
-  const isReplyRetry = preparedSubmission.reused;
-  const detailVersion = detailRequestVersion;
-  replySubmitting.value = true;
+  replyDraftStore.setViewer(currentViewerID.value);
+  replyPreparing.value = true;
   replyError.value = '';
-
+  replyStatusError.value = '';
   try {
-    const created = await createPostReply(id, content, {
-      idempotencyKey: replyOperation.id,
-    });
-    if (replyDraftStore.viewerID === submittingViewerID) {
-      replyDraftStore.clearSubmissionOperation(numericPostID, replyOperation.id);
-      if (replyDraftStore.getDraft(numericPostID) === submittedDraftSnapshot) {
-        replyDraftStore.clearDraft(numericPostID);
-      }
+    const result = await replySubmissionStore.startOrRetry(parentPostID, content);
+    if (result.status === 'rejected') {
+      replyError.value = result.reason === 'persistence_unavailable'
+        ? 'Couldn’t prepare this reply for reliable sending. Your reply was preserved. Try again.'
+        : 'Sign in before replying.';
+    } else if (result.status === 'blocked') {
+      replyError.value = result.reason === 'cleanup_pending'
+        ? 'The previous reply is posted, but this device could not finish its cleanup. Try again.'
+        : 'Resolve the previous reply attempt before sending another reply to this post.';
     }
+  } catch {
+    replyError.value = 'Couldn’t prepare this reply for reliable sending. Your reply was preserved. Try again.';
+  } finally {
+    replyPreparing.value = false;
+  }
+};
 
-    if (detailVersion !== detailRequestVersion || postId.value !== id) {
-      return;
+const saveCurrentReplyDraft = async () => {
+  const parentPostID = currentDetailPostID.value;
+  if (parentPostID === null || replyDraftSaveBusy.value || replyComposerDisabled.value) return;
+  replyDraftSaveBusy.value = true;
+  replyDraftSaveError.value = '';
+  try {
+    const result = await replyDraftStore.saveDraft(parentPostID);
+    if (result === 'changed') {
+      replyDraftSaveError.value = 'This reply draft changed elsewhere. Review it and try again.';
     }
+  } catch {
+    replyDraftSaveError.value = 'Could not save this reply draft on this device. Try again or discard it.';
+  } finally {
+    replyDraftSaveBusy.value = false;
+  }
+};
 
-    replies.value = mergeReplies([created].concat(replies.value));
-    void hydrateReplyBookmarkStates([created], detailVersion);
-    repliesError.value = '';
-    if (isReplyRetry) {
-      try {
-        const refreshedParent = await getPostById(id);
-        if (detailVersion !== detailRequestVersion || postId.value !== id) {
-          return;
-        }
-        replyCount.value = clampCount(refreshedParent.reply_count);
-        syncExternalReplyCount({
-          postId: numericPostID,
-          replyCount: replyCount.value,
-        });
-      } catch {
-        // The reply succeeded; keep the last known count until a later refresh.
-      }
-    } else {
-      replyCount.value = clampCount(replyCount.value + 1);
-      syncExternalReplyCount({
-        postId: numericPostID,
-        replyCount: replyCount.value,
-      });
-    }
-  } catch (error) {
-    const response = (error as {
-      response?: { status?: number; data?: { code?: string } };
-    } | null)?.response;
-    if (
-      response?.status === 409
-      && response.data?.code === 'POST_IDEMPOTENCY_CONFLICT'
-      && replyDraftStore.viewerID === submittingViewerID
-    ) {
-      replyDraftStore.clearSubmissionOperation(numericPostID, replyOperation.id);
-    }
-    if (detailVersion === detailRequestVersion) {
-      replyError.value = 'Reply failed. Please try again.';
+const retryCurrentReply = async () => {
+  const operation = currentReplyOperation.value;
+  if (!operation || operation.phase !== 'failed' || operation.failureKind !== 'retryable') return;
+  replyStatusBusy.value = true;
+  replyStatusError.value = '';
+  try {
+    if (!await replySubmissionStore.retry(operation.id)) {
+      replyStatusError.value = 'Could not prepare this retry on this device. Try again.';
     }
   } finally {
-    if (detailVersion === detailRequestVersion) {
-      replySubmitting.value = false;
+    replyStatusBusy.value = false;
+  }
+};
+
+const requestDiscardReplyAttempt = () => {
+  const operation = currentReplyOperation.value;
+  if (operation?.phase === 'failed') {
+    replyStatusError.value = '';
+    replyDiscardOperationID.value = operation.id;
+  }
+};
+
+const cancelDiscardReplyAttempt = () => {
+  if (replyStatusBusy.value) return;
+  replyDiscardOperationID.value = null;
+  replyStatusError.value = '';
+};
+
+const confirmDiscardReplyAttempt = async () => {
+  const operationID = replyDiscardOperationID.value;
+  if (!operationID || replyStatusBusy.value) return;
+  replyStatusBusy.value = true;
+  replyStatusError.value = '';
+  try {
+    if (await replySubmissionStore.abandonFailedOperation(operationID)) {
+      replyDiscardOperationID.value = null;
+    } else {
+      replyStatusError.value = 'Could not discard this reply attempt on this device. It remains unresolved.';
     }
+  } finally {
+    replyStatusBusy.value = false;
+  }
+};
+
+const reconcileSucceededReply = async (operationID: string) => {
+  const operation = replySubmissionStore.operations.find(item => item.id === operationID) ?? null;
+  const currentPostID = currentDetailPostID.value;
+  const viewerID = currentViewerID.value;
+  if (
+    !operation
+    || operation.id !== operationID
+    || operation.phase !== 'succeeded'
+    || operation.viewerID !== viewerID
+    || operation.parentPostID !== currentPostID
+    || !post.value
+    || reconciledReplyOperationIDs.has(operationID)
+  ) return;
+
+  reconciledReplyOperationIDs.add(operationID);
+  const detailVersion = detailRequestVersion;
+  if (operation.post) {
+    replies.value = mergeReplies([operation.post].concat(replies.value));
+    void hydrateReplyBookmarkStates([operation.post], detailVersion);
+    repliesError.value = '';
+  }
+  try {
+    const refreshedParent = await getPostById(String(operation.parentPostID));
+    if (
+      detailVersion === detailRequestVersion
+      && postId.value === String(operation.parentPostID)
+      && currentViewerID.value === operation.viewerID
+    ) {
+      replyCount.value = clampCount(refreshedParent.reply_count);
+      syncExternalReplyCount({ postId: operation.parentPostID, replyCount: replyCount.value });
+    }
+  } catch {
+    // The reply remains successful; keep the last known count until a later refresh.
+  }
+  if (!operation.durableOwned) {
+    replySubmissionStore.acknowledgeSucceededOperation(operation.id);
+    reconciledReplyOperationIDs.delete(operation.id);
   }
 };
 
@@ -2060,6 +2198,8 @@ const consumeReplyIntent = async () => {
 
 const loadDetail = async (id: string, isAuthenticated: boolean) => {
   const detailVersion = ++detailRequestVersion;
+  replyDraftHydrating.value = isAuthenticated && currentViewerID.value !== null;
+  replyStatusError.value = '';
   closeMediaViewer();
   finishRead('navigate_to_post');
   if (isAuthenticated) void recommendationTelemetry.flush(false);
@@ -2071,6 +2211,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
   handoffPost.value = null;
 
   if (!isValidPostID(id)) {
+    replyDraftHydrating.value = false;
     postError.value = 'This post URL is not valid.';
     return;
   }
@@ -2094,6 +2235,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     replyCount.value = clampCount(loadedPost.reply_count);
     viewCount.value = clampCount(loadedPost.view_count);
     postLoading.value = false;
+    void hydrateReplyContext(id, detailVersion, isAuthenticated ? currentViewerID.value : null);
     await nextTick();
     if (
       detailVersion !== detailRequestVersion
@@ -2113,11 +2255,9 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     void loadInitialReplies(id, detailVersion);
   } catch (error) {
     if (detailVersion === detailRequestVersion) {
+      replyDraftHydrating.value = false;
       handoffPost.value = null;
       const status = (error as { response?: { status?: number } }).response?.status;
-      if (status === 404) {
-        replyDraftStore.clearDraft(Number(id));
-      }
       postError.value = status === 404
         ? 'This post does not exist.'
         : 'The post could not be loaded.';
@@ -2131,6 +2271,121 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
 
 const retryPost = () => {
   void loadDetail(postId.value, authStore.isAuthenticated);
+};
+
+const hydrateReplyContext = async (id: string, detailVersion: number, viewerID: number | null) => {
+  if (viewerID === null || !authStore.isAuthenticated || !isValidPostID(id)) {
+    if (detailVersion === detailRequestVersion && postId.value === id) replyDraftHydrating.value = false;
+    return;
+  }
+  replyDraftStore.setViewer(viewerID);
+  replyDraftHydrating.value = true;
+  replyStatusError.value = '';
+  try {
+    const draftResult = await replyDraftStore.hydrateSavedDraft(Number(id));
+    if (
+      detailVersion !== detailRequestVersion
+      || postId.value !== id
+      || currentViewerID.value !== viewerID
+    ) return;
+    const workingRevision = replyDraftStore.captureWorkingRevision(Number(id));
+    if (workingRevision === null) return;
+    await replySubmissionStore.ensureContextHydrated(viewerID, Number(id));
+    if (
+      detailVersion !== detailRequestVersion
+      || postId.value !== id
+      || currentViewerID.value !== viewerID
+    ) return;
+    if (draftResult !== 'stale') {
+      replySubmissionStore.adoptHydratedOperation(viewerID, Number(id), workingRevision);
+    }
+  } catch {
+    if (detailVersion === detailRequestVersion && postId.value === id) {
+      replyError.value = 'Reply recovery could not be checked on this device. New replies are blocked until storage is available.';
+    }
+  } finally {
+    if (
+      detailVersion === detailRequestVersion
+      && postId.value === id
+      && currentViewerID.value === viewerID
+    ) replyDraftHydrating.value = false;
+  }
+};
+
+const settleReplyExit = (allow: boolean) => {
+  replyExitDialogOpen.value = false;
+  replyExitDialogBusy.value = false;
+  const resolve = replyExitDecisionResolver;
+  replyExitDecisionResolver = null;
+  resolve?.(allow);
+};
+
+const resolveReplyExit = (allow: boolean) => {
+  if (replyExitDialogBusy.value) return;
+  replyExitDialogError.value = '';
+  settleReplyExit(allow);
+};
+
+const discardReplyAndLeave = () => {
+  const parentPostID = currentDetailPostID.value;
+  if (replyExitDialogBusy.value) return;
+  if (parentPostID !== null) replyDraftStore.discardChanges(parentPostID);
+  settleReplyExit(true);
+};
+
+const saveReplyAndLeave = async () => {
+  const parentPostID = currentDetailPostID.value;
+  if (parentPostID === null || replyExitDialogBusy.value) return;
+  replyExitDialogBusy.value = true;
+  replyExitDialogError.value = '';
+  try {
+    const result = await replyDraftStore.saveDraft(parentPostID);
+    if (result === 'changed') throw new Error('Reply draft changed elsewhere.');
+    settleReplyExit(true);
+  } catch {
+    replyExitDialogBusy.value = false;
+    replyExitDialogError.value = 'Could not save this reply draft on this device. Try again or discard it.';
+  }
+};
+
+const decideReplyLeave = async (): Promise<boolean> => {
+  if (replyPreparing.value) return false;
+  const parentPostID = currentDetailPostID.value;
+  if (parentPostID === null || !replyDraftStore.hasUnsavedChanges(parentPostID)) return true;
+  if (replyExitDecisionResolver) return false;
+  replyExitDialogError.value = '';
+  replyExitDialogOpen.value = true;
+  return new Promise<boolean>(resolve => {
+    replyExitDecisionResolver = resolve;
+  });
+};
+
+const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+  if (!replyDraftDirty.value) return;
+  event.preventDefault();
+  event.returnValue = '';
+};
+
+const syncBeforeUnloadListener = (dirty: boolean) => {
+  if (dirty && !beforeUnloadAttached) {
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    beforeUnloadAttached = true;
+  } else if (!dirty && beforeUnloadAttached) {
+    window.removeEventListener('beforeunload', handleBeforeUnload);
+    beforeUnloadAttached = false;
+  }
+};
+
+const reconcileSucceededOperations = () => {
+  const viewerID = currentViewerID.value;
+  const parentPostID = currentDetailPostID.value;
+  if (viewerID === null || parentPostID === null || !post.value) return;
+  const successes = replySubmissionStore.operations.filter(operation => (
+    operation.viewerID === viewerID
+    && operation.parentPostID === parentPostID
+    && operation.phase === 'succeeded'
+  ));
+  for (const operation of successes) void reconcileSucceededReply(operation.id);
 };
 
 const goBack = () => {
@@ -2151,9 +2406,8 @@ watch(
 );
 
 watch(currentViewerID, (viewerID, previousViewerID) => {
-  if (viewerID === previousViewerID) {
-    return;
-  }
+  replyDraftStore.setViewer(viewerID);
+  if (viewerID === previousViewerID) return;
   deleteRequestVersion += 1;
   deletePending.value = false;
   deleteError.value = '';
@@ -2162,15 +2416,10 @@ watch(currentViewerID, (viewerID, previousViewerID) => {
   deletingReplyId.value = null;
   deleteReplyCandidateId.value = null;
   replyDeleteError.value = '';
+  if (viewerID !== null && post.value) {
+    void hydrateReplyContext(postId.value, detailRequestVersion, viewerID);
+  }
 });
-
-watch(
-  currentViewerID,
-  viewerID => {
-    replyDraftStore.setViewer(viewerID);
-  },
-  { immediate: true },
-);
 
 watch(
   [() => route.query.reply, post, () => authStore.isAuthenticated, replySubmitting],
@@ -2182,9 +2431,29 @@ watch(
   { flush: 'post' },
 );
 
-onBeforeRouteLeave(to => {
+watch(replyDraftDirty, syncBeforeUnloadListener, { immediate: true });
+watch(
+  [() => replySubmissionStore.operations, post, currentDetailPostID, currentViewerID],
+  reconcileSucceededOperations,
+  { deep: true, flush: 'post' },
+);
+
+const toPostID = (params: Record<string, unknown>) => {
+  const value = String(params.id ?? '').trim();
+  return isValidPostID(value) ? Number(value) : null;
+};
+
+onBeforeRouteUpdate(async (to, from) => {
+  if (toPostID(to.params) === toPostID(from.params)) return true;
+  return decideReplyLeave();
+});
+
+onBeforeRouteLeave(async to => {
+  const allowed = await decideReplyLeave();
+  if (!allowed) return false;
   finishRead(to.name === 'Recommendations' ? 'back_to_recommendation' : 'route_leave');
   if (authStore.isAuthenticated) void recommendationTelemetry.flush(false);
+  return true;
 });
 
 onMounted(() => {
@@ -2196,6 +2465,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  syncBeforeUnloadListener(false);
   registerPostDetailSessionSync(null);
   finishRead('route_leave');
   if (authStore.isAuthenticated) void recommendationTelemetry.flush(false);

@@ -50,6 +50,16 @@
           @select="insertEmoji"
           @close="handleEmojiPickerClose"
         />
+        <button
+          v-if="draftActionVisible"
+          class="reply-composer__draft-action"
+          type="button"
+          :disabled="draftActionDisabled || disabled || submitting"
+          :aria-busy="draftActionBusy ? 'true' : undefined"
+          @click="emit('save-draft')"
+        >
+          {{ draftActionBusy ? 'Saving…' : draftActionLabel }}
+        </button>
       </div>
       <span v-if="exceedsMaxLength" class="reply-composer__validation" role="alert">
         {{ contentLength }}/{{ maxContentLength }} characters. Please shorten your reply.
@@ -80,16 +90,25 @@ const props = withDefaults(defineProps<{
   disabled?: boolean;
   modelValue?: string;
   submitting?: boolean;
+  draftActionLabel?: string;
+  draftActionVisible?: boolean;
+  draftActionDisabled?: boolean;
+  draftActionBusy?: boolean;
 }>(), {
   author: null,
   disabled: false,
   modelValue: '',
   submitting: false,
+  draftActionLabel: 'Save draft',
+  draftActionVisible: false,
+  draftActionDisabled: false,
+  draftActionBusy: false,
 });
 
 const emit = defineEmits<{
   'update:modelValue': [value: string];
   submit: [content: string];
+  'save-draft': [];
 }>();
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
@@ -302,7 +321,34 @@ watch(
 }
 
 .reply-composer__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   grid-column: 1;
+}
+
+.reply-composer__draft-action {
+  min-height: 34px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reply-composer__draft-action:hover:not(:disabled),
+.reply-composer__draft-action:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-accent);
+}
+
+.reply-composer__draft-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .reply-composer__emoji {

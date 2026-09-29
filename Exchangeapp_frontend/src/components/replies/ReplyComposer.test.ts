@@ -255,4 +255,29 @@ describe('ReplyComposer avatar and reply behavior', () => {
     expect(wrapper.emitted('update:modelValue')).toEqual([['']]);
     expect(wrapper.get('textarea').element.value).toBe('');
   });
+
+  it('shows an explicit draft action and emits only when activated', async () => {
+    wrapper = mount(ReplyComposer, {
+      props: { author: author(), modelValue: 'draft text', draftActionVisible: true },
+    });
+
+    const action = wrapper.get('.reply-composer__draft-action');
+    expect(action.text()).toBe('Save draft');
+    await action.trigger('click');
+    expect(wrapper.emitted('save-draft')).toHaveLength(1);
+  });
+
+  it('disables the draft action during hydration, saving, or submission', async () => {
+    wrapper = mount(ReplyComposer, {
+      props: { author: author(), draftActionVisible: true, draftActionDisabled: true },
+    });
+    expect(wrapper.get('.reply-composer__draft-action').attributes('disabled')).toBeDefined();
+
+    await wrapper.setProps({ draftActionDisabled: false, draftActionBusy: true });
+    expect(wrapper.get('.reply-composer__draft-action').text()).toBe('Saving…');
+    expect(wrapper.get('.reply-composer__draft-action').attributes('aria-busy')).toBe('true');
+
+    await wrapper.setProps({ draftActionBusy: false, submitting: true });
+    expect(wrapper.get('.reply-composer__draft-action').attributes('disabled')).toBeDefined();
+  });
 });
