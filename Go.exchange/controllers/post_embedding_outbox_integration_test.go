@@ -55,8 +55,8 @@ func openPostEmbeddingOutboxIntegrationDatabase(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig := global.Db, config.AppConfig
-	global.Db = db
+	originalDB, originalConfig := global.APIDb, config.AppConfig
+	global.APIDb = db
 	config.AppConfig = &config.Config{
 		Embedding: config.EmbeddingConfig{Enabled: true},
 		Kafka: config.KafkaConfig{
@@ -65,7 +65,7 @@ func openPostEmbeddingOutboxIntegrationDatabase(t *testing.T) *gorm.DB {
 		},
 	}
 	t.Cleanup(func() {
-		global.Db = originalDB
+		global.APIDb = originalDB
 		config.AppConfig = originalConfig
 	})
 	return db

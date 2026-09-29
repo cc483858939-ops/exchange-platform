@@ -45,7 +45,7 @@ func GetMyLikedHistory(ctx *gin.Context) {
 }
 
 func loadLikedHistoryPageFromDB(ctx context.Context, viewerID uint, limit int, cursor *likedHistoryCursor) (postPageResponse, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
 	}
 	if viewerID == 0 || limit <= 0 {
@@ -53,7 +53,7 @@ func loadLikedHistoryPageFromDB(ctx context.Context, viewerID uint, limit int, c
 	}
 
 	var response postPageResponse
-	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").Error; err != nil {
 			return err
 		}

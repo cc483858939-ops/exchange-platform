@@ -34,9 +34,6 @@ const runtimeSchemaStateID uint = 1
 type SchemaValidationOptions struct {
 	RequiredVersion     int64
 	IncludeWorkerTables bool
-	// EmbeddingEnabled is retained for caller compatibility. PostEmbedding
-	// is part of the API schema contract regardless of runtime feature flags.
-	EmbeddingEnabled bool
 }
 
 type SchemaValidationError struct {

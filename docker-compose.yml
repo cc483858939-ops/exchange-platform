@@ -57,19 +57,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      outbox-cutover:
-        condition: service_completed_successfully
-
-  outbox-cutover:
-    <<: *go-service
-    command: ["go", "run", "./cmd/outbox-cutover"]
-    environment:
-      <<: *go-environment
-      OUTBOX_CUTOVER_CONFIRM_PRELAUNCH: "${OUTBOX_CUTOVER_CONFIRM_PRELAUNCH:-false}"
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: "no"
 
   kafka-init:
     <<: *go-service

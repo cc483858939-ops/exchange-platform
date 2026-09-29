@@ -32,7 +32,6 @@ const (
 	postMediaObjectPrefix         = postmedia.UserV1ObjectPrefix
 	maxPostMediaImageSize         = postmediaimage.MaxSourceBytes
 	postMediaUploadCleanupTimeout = 5 * time.Second
-	profileAvatarObjectPrefix     = "profile-avatars/"
 	maxProfileAvatarImageSize     = 2 << 20
 )
 
@@ -73,15 +72,15 @@ var removeStoredObject = func(ctx context.Context, objectKey string) error {
 }
 
 var createPendingPostMediaUpload = func(ctx context.Context, upload models.PostMediaUpload) error {
-	return postmediaupload.CreateUploading(ctx, global.Db, upload)
+	return postmediaupload.CreateUploading(ctx, global.APIDb, upload)
 }
 
 var markPendingPostMediaUploadUploaded = func(ctx context.Context, mediaID string, ownerID uint, uploadedAt, cleanupAfter time.Time) error {
-	return postmediaupload.MarkUploaded(ctx, global.Db, mediaID, ownerID, uploadedAt, cleanupAfter)
+	return postmediaupload.MarkUploaded(ctx, global.APIDb, mediaID, ownerID, uploadedAt, cleanupAfter)
 }
 
 var deletePendingPostMediaUpload = func(ctx context.Context, mediaID string, ownerID uint) error {
-	return postmediaupload.DeleteAfterObjectCleanup(ctx, global.Db, mediaID, ownerID)
+	return postmediaupload.DeleteAfterObjectCleanup(ctx, global.APIDb, mediaID, ownerID)
 }
 
 var statProfileAvatarObject = func(ctx context.Context, objectKey string) (storedObjectInfo, bool, error) {
@@ -433,7 +432,10 @@ func isAllowedObjectKey(objectKey string) bool {
 	if strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n") {
 		return false
 	}
-	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) || profilecover.IsDevDataPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
+	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) ||
+		profilecover.IsDevDataPublicObjectKey(objectKey) ||
+		strings.HasPrefix(objectKey, profileavatar.UserV1ObjectPrefix) ||
+		strings.HasPrefix(objectKey, profileavatar.DevDataV1ObjectPrefix)
 }
 
 func isMissingStoredObjectError(err error) bool {

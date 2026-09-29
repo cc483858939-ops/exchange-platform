@@ -16,12 +16,12 @@ type requestContextTestKey struct{}
 
 func TestGetPostByIDPassesRequestContextToDetailLoader(t *testing.T) {
 	originalCacheLoader := loadPostDetailCache
-	originalDB := global.Db
+	originalDB := global.APIDb
 	t.Cleanup(func() {
 		loadPostDetailCache = originalCacheLoader
-		global.Db = originalDB
+		global.APIDb = originalDB
 	})
-	global.Db = nil
+	global.APIDb = nil
 
 	var receivedContext context.Context
 	publishedAt := time.Now().UTC()
@@ -47,12 +47,12 @@ func TestGetPostByIDPassesRequestContextToDetailLoader(t *testing.T) {
 
 func TestGetPostByIDSuppressesResponseWhenRequestIsCanceled(t *testing.T) {
 	originalCacheLoader := loadPostDetailCache
-	originalDB := global.Db
+	originalDB := global.APIDb
 	t.Cleanup(func() {
 		loadPostDetailCache = originalCacheLoader
-		global.Db = originalDB
+		global.APIDb = originalDB
 	})
-	global.Db = nil
+	global.APIDb = nil
 
 	requestContext, cancel := context.WithCancel(context.WithValue(context.Background(), requestContextTestKey{}, "detail"))
 	cancel()

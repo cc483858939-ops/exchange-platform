@@ -140,7 +140,6 @@ func CloseDatabasePools() {
 	for _, db := range handles {
 		_ = CloseDatabase(db)
 	}
-	global.Db = nil
 	global.APIDb = nil
 	global.WorkerDb = nil
 	global.MaintenanceDb = nil

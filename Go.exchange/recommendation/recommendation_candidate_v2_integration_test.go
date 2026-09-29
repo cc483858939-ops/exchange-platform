@@ -11,7 +11,6 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/embeddings"
 	"Go.exchange/embeddingstate"
-	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
 
@@ -45,14 +44,12 @@ func openRecommendationCandidateIntegrationDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig := global.Db, config.AppConfig
-	global.Db = db
+	originalConfig := config.AppConfig
 	config.AppConfig = nil
 	t.Cleanup(func() {
-		global.Db = originalDB
 		config.AppConfig = originalConfig
 	})
-	if err := initialize.RunMigrations(); err != nil {
+	if err := initialize.RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)

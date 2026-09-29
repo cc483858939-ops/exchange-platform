@@ -155,9 +155,9 @@ func TestPersistPostGraphRollsBackPostWhenMediaInsertFailsIntegration(t *testing
 	}
 	t.Cleanup(func() { db.Exec("ALTER TABLE post_media DROP CONSTRAINT IF EXISTS " + constraintName) })
 
-	previousDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = previousDB })
+	previousDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = previousDB })
 	var post models.Post
 	media := []validatedPostMedia{{MediaID: mediaID, MediaType: "image", PublicURL: mediaURL}}
 	err := persistPostGraph(context.Background(), &post, fixture.Author.ID, "atomic media failure", createPostRequest{Content: "atomic media failure"}, media, time.Now().UTC())
@@ -225,9 +225,9 @@ func TestExpiredUploadedMediaRemainsBindableUntilGCClaimsItIntegration(t *testin
 	}
 	t.Cleanup(func() { db.Unscoped().Where("media_id = ?", mediaID).Delete(&models.PostMediaUpload{}) })
 
-	previousDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = previousDB })
+	previousDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = previousDB })
 	var post models.Post
 	media := []validatedPostMedia{{MediaID: mediaID, MediaType: "image", PublicURL: mediaURL}}
 	if err := persistPostGraph(context.Background(), &post, fixture.Author.ID, "grace expired but unclaimed", createPostRequest{Content: "grace expired but unclaimed"}, media, now); err != nil {
@@ -267,9 +267,9 @@ func TestPostMediaGCClaimWinsAgainstCreateIntegration(t *testing.T) {
 		t.Fatalf("GC claim=%+v err=%v", claims, err)
 	}
 
-	previousDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = previousDB })
+	previousDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = previousDB })
 	var post models.Post
 	media := []validatedPostMedia{{MediaID: mediaID, MediaType: "image", PublicURL: mediaURL}}
 	err = persistPostGraph(context.Background(), &post, fixture.Author.ID, "gc already claimed media", createPostRequest{Content: "gc already claimed media"}, media, now)
@@ -306,9 +306,9 @@ func TestPostMediaCreateLockWinsAgainstGCSkipLockedIntegration(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Unscoped().Where("media_id = ?", mediaID).Delete(&models.PostMediaUpload{}) })
 
-	previousDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = previousDB })
+	previousDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = previousDB })
 	originalLock := lockPendingPostMediaUploads
 	locked := make(chan struct{}, 1)
 	release := make(chan struct{})

@@ -202,11 +202,11 @@ func hydratePostResponseRepostCountsFromDB(db *gorm.DB, responses []postResponse
 }
 
 func loadPublicAuthorByID(ctx context.Context, id uint) (publicAuthorResponse, error) {
-	if id == 0 || global.Db == nil {
+	if id == 0 || global.APIDb == nil {
 		return publicAuthorResponse{}, errors.New("database is not initialized")
 	}
 	var user models.User
-	if err := global.Db.WithContext(ctx).Select("id, username, display_name, avatar_url").First(&user, id).Error; err != nil {
+	if err := global.APIDb.WithContext(ctx).Select("id, username, display_name, avatar_url").First(&user, id).Error; err != nil {
 		return publicAuthorResponse{}, err
 	}
 	return publicAuthorFromUser(user), nil
@@ -231,11 +231,11 @@ func loadPublicAuthorsByIDsFromDB(ctx context.Context, ids []uint) (map[uint]pub
 	if len(uniqueIDs) == 0 {
 		return authors, nil
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return nil, errors.New("database is not initialized")
 	}
 	var users []models.User
-	if err := global.Db.WithContext(ctx).Select("id, username, display_name, avatar_url").Where("id IN ?", uniqueIDs).Find(&users).Error; err != nil {
+	if err := global.APIDb.WithContext(ctx).Select("id, username, display_name, avatar_url").Where("id IN ?", uniqueIDs).Find(&users).Error; err != nil {
 		return nil, err
 	}
 	for _, user := range users {
@@ -275,10 +275,10 @@ func hydratePostResponseAuthors(ctx context.Context, responses []postResponse) e
 }
 
 func loadPublicUserByID(ctx context.Context, id uint) (publicUserResponse, error) {
-	if id == 0 || global.Db == nil {
+	if id == 0 || global.APIDb == nil {
 		return publicUserResponse{}, errors.New("database is not initialized")
 	}
-	db := global.Db.WithContext(ctx)
+	db := global.APIDb.WithContext(ctx)
 	var user models.User
 	if err := db.Select("id, username, display_name, bio, avatar_url, cover_image_url, created_at").First(&user, id).Error; err != nil {
 		return publicUserResponse{}, err
@@ -295,11 +295,11 @@ func loadPublicUserByID(ctx context.Context, id uint) (publicUserResponse, error
 }
 
 func loadActivePublicUserByID(ctx context.Context, id uint) error {
-	if id == 0 || global.Db == nil {
+	if id == 0 || global.APIDb == nil {
 		return errors.New("database is not initialized")
 	}
 	var user models.User
-	return global.Db.WithContext(ctx).Select("id").First(&user, id).Error
+	return global.APIDb.WithContext(ctx).Select("id").First(&user, id).Error
 }
 
 func preloadPostAuthor(query *gorm.DB) *gorm.DB {

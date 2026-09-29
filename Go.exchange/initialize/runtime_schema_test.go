@@ -324,7 +324,7 @@ func TestDefaultSchemaValidationOptionsUsesBinaryVersion(t *testing.T) {
 	if options.RequiredVersion != RequiredSchemaVersion {
 		t.Fatalf("expected required schema version %d, got %d", RequiredSchemaVersion, options.RequiredVersion)
 	}
-	if options.IncludeWorkerTables || options.EmbeddingEnabled {
+	if options.IncludeWorkerTables {
 		t.Fatalf("default API schema options unexpectedly require worker tables: %#v", options)
 	}
 }

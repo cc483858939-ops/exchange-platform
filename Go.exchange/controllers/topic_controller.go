@@ -85,7 +85,7 @@ func GetTopicPosts(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		writeTopicInternalError(ctx)
 		return
 	}
@@ -171,7 +171,7 @@ func decodeTopicPostCursor(raw string) (topicPostCursor, error) {
 }
 
 func loadTopicPostsPageFromDB(ctx context.Context, topic config.CuratedTopic, limit int, cursor *topicPostCursor) (postPageResponse, error) {
-	db := global.Db
+	db := global.APIDb
 	if db == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
 	}

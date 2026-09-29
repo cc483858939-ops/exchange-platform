@@ -23,9 +23,9 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
-	previousDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = previousDB })
+	previousDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = previousDB })
 	redisClient := openPostLikeIntegrationRedis(t)
 
 	owner := models.User{Username: "purge-owner-" + uuid.NewString(), Password: "test"}

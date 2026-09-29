@@ -10,7 +10,6 @@ import (
 	"Go.exchange/embeddings"
 	"Go.exchange/embeddingstate"
 	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
 
@@ -35,16 +34,14 @@ func openRecommendationProfileControllerIntegrationDB(t *testing.T) *gorm.DB {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalConfig := global.Db, config.AppConfig
-	global.Db = db
+	originalConfig := config.AppConfig
 	config.AppConfig = &config.Config{
 		Embedding: config.EmbeddingConfig{},
 	}
 	t.Cleanup(func() {
-		global.Db = originalDB
 		config.AppConfig = originalConfig
 	})
-	if err := initialize.RunMigrations(); err != nil {
+	if err := initialize.RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)

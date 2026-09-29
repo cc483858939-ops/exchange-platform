@@ -1,5 +1,5 @@
 // Package avatarimage contains the single image transformation contract used
-// by user uploads, DevData refreshes, and legacy avatar migration.
+// by user uploads and DevData refreshes.
 package avatarimage
 
 import (

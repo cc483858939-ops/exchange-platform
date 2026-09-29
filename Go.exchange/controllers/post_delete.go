@@ -56,11 +56,11 @@ func parsePostDeleteID(raw string) (uint, error) {
 
 func deletePostInTransactionFromDB(ctx context.Context, postID, viewerID uint) (postDeleteResult, error) {
 	var deleteResult postDeleteResult
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return deleteResult, errors.New("database is not initialized")
 	}
 
-	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var post models.Post
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, postID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

@@ -30,7 +30,6 @@ import (
 
 const (
 	avatarSourceHost           = "pbs.twimg.com"
-	avatarObjectPrefix         = "profile-avatars/devdata/"
 	avatarLocalURLPrefix       = "/api/files/"
 	avatarMaxBytes       int64 = 2 << 20
 	avatarMaxRedirects         = 3
@@ -272,39 +271,22 @@ func isValidWebP(body []byte) bool {
 	return foundImageChunk
 }
 
-// BuildAvatarObjectKey returns the frozen DevData avatar namespace. The
-// registry component is sanitized into one path segment and the hash and
-// extension are validated before they are placed in the key.
+// BuildAvatarObjectKey returns the current optimized DevData avatar namespace.
+// The registry component is sanitized into one path segment and the derivative
+// hash and extension are validated before they are placed in the key.
 func BuildAvatarObjectKey(registryKey, contentHash, extension string) (string, error) {
 	safeKey := sanitizeAvatarRegistryKey(registryKey)
 	if safeKey == "" {
 		return "", errors.New("registry key cannot produce a safe avatar path")
 	}
 	if !isLowerHexHash(contentHash) {
-		return "", errors.New("avatar content hash must be lowercase SHA-256")
-	}
-	extension = strings.ToLower(strings.TrimSpace(extension))
-	if extension != ".jpg" && extension != ".png" && extension != ".webp" {
-		return "", errors.New("avatar extension is not supported")
-	}
-	return avatarObjectPrefix + safeKey + "/" + contentHash + extension, nil
-}
-
-// BuildAvatarObjectKeyV1 returns the optimized DevData avatar namespace. The
-// legacy builder above remains unchanged so existing rows stay readable.
-func BuildAvatarObjectKeyV1(registryKey, derivativeHash, extension string) (string, error) {
-	safeKey := sanitizeAvatarRegistryKey(registryKey)
-	if safeKey == "" {
-		return "", errors.New("registry key cannot produce a safe avatar path")
-	}
-	if !isLowerHexHash(derivativeHash) {
 		return "", errors.New("avatar derivative hash must be lowercase SHA-256")
 	}
 	extension = strings.ToLower(strings.TrimSpace(extension))
 	if extension != ".jpg" && extension != ".png" {
-		return "", errors.New("avatar V1 extension is not supported")
+		return "", errors.New("avatar derivative extension is not supported")
 	}
-	return profileavatar.DevDataV1ObjectPrefix + safeKey + "/" + derivativeHash + extension, nil
+	return profileavatar.DevDataV1ObjectPrefix + safeKey + "/" + contentHash + extension, nil
 }
 
 func sanitizeAvatarRegistryKey(raw string) string {
@@ -339,8 +321,6 @@ func avatarContentTypeForExtension(extension string) string {
 		return "image/jpeg"
 	case ".png":
 		return "image/png"
-	case ".webp":
-		return "image/webp"
 	default:
 		return ""
 	}
@@ -356,7 +336,7 @@ func avatarResolutionUsable(source SnapshotAccount, resolution AvatarResolution)
 	if !isLowerHexHash(resolution.ContentHash) {
 		return false
 	}
-	objectKey, err := BuildAvatarObjectKeyV1(source.RegistryKey, resolution.ContentHash, extensionFromAvatarObjectKey(resolution.ObjectKey))
+	objectKey, err := BuildAvatarObjectKey(source.RegistryKey, resolution.ContentHash, extensionFromAvatarObjectKey(resolution.ObjectKey))
 	if err != nil || resolution.ObjectKey != objectKey || resolution.LocalURL != avatarLocalURL(objectKey) {
 		return false
 	}
@@ -364,7 +344,7 @@ func avatarResolutionUsable(source SnapshotAccount, resolution AvatarResolution)
 }
 
 func extensionFromAvatarObjectKey(objectKey string) string {
-	for _, extension := range []string{".jpg", ".png", ".webp"} {
+	for _, extension := range []string{".jpg", ".png"} {
 		if strings.HasSuffix(strings.ToLower(objectKey), extension) {
 			return extension
 		}
@@ -424,7 +404,7 @@ func prepareAvatarMirrorsForAccounts(ctx context.Context, registry SourceRegistr
 			report.Failed++
 			continue
 		}
-		objectKey, err := BuildAvatarObjectKeyV1(configured.Key, derivative.ContentHash, derivative.Extension)
+		objectKey, err := BuildAvatarObjectKey(configured.Key, derivative.ContentHash, derivative.Extension)
 		if err != nil {
 			report.Failed++
 			continue
@@ -574,11 +554,7 @@ func VerifyAvatars(ctx context.Context, db *gorm.DB, registry SourceRegistry, st
 
 		expectedKey := ""
 		if account.AvatarObjectKey != "" {
-			if strings.HasPrefix(account.AvatarObjectKey, profileavatar.DevDataV1ObjectPrefix) {
-				expectedKey, _ = BuildAvatarObjectKeyV1(configured.Key, account.AvatarContentHash, extensionFromAvatarObjectKey(account.AvatarObjectKey))
-			} else {
-				expectedKey, _ = BuildAvatarObjectKey(configured.Key, account.AvatarContentHash, extensionFromAvatarObjectKey(account.AvatarObjectKey))
-			}
+			expectedKey, _ = BuildAvatarObjectKey(configured.Key, account.AvatarContentHash, extensionFromAvatarObjectKey(account.AvatarObjectKey))
 		}
 		if expectedKey == "" || account.AvatarObjectKey != expectedKey {
 			valid = false

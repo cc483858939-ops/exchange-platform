@@ -53,7 +53,6 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	readiness := runtimehealth.NewAPIReadiness(runtimehealth.APIOptions{
 		Role:                  "api",
 		RequiredSchemaVersion: initialize.RequiredSchemaVersion,
-		EmbeddingEnabled:      config.AppConfig != nil && config.AppConfig.Embedding.Enabled,
 	})
 	translationConfig := config.AppConfig.Translation.Normalized()
 	translationService := translation.NewService(
@@ -76,9 +75,6 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 		},
 	)
 	apiDB := global.APIDb
-	if apiDB == nil {
-		apiDB = global.Db
-	}
 	recommendationDependencies, err := recommendation.NewGormServiceDependencies(apiDB, global.RedisDB)
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation dependencies: %w", err)

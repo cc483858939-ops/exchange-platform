@@ -16,11 +16,7 @@ import (
 const migrationAdvisoryLockKey int64 = 525716197623
 
 func RunMigrations() error {
-	db := global.MaintenanceDb
-	if db == nil {
-		db = global.Db
-	}
-	return RunMigrationsWithDB(context.Background(), db)
+	return RunMigrationsWithDB(context.Background(), global.MaintenanceDb)
 }
 
 func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
@@ -36,9 +32,6 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}
 
-		if err := prepareLegacyOutboxSchema(tx); err != nil {
-			return err
-		}
 		if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 			return fmt.Errorf("enable pgvector extension: %w", err)
 		}

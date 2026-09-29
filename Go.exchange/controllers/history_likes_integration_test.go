@@ -75,9 +75,9 @@ func TestLikedHistoryIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	users := []models.User{
 		{Username: "liked-history-viewer-" + uuid.NewString(), Password: "secret"},
@@ -167,7 +167,7 @@ func TestLikedHistoryIntegration(t *testing.T) {
 	createReaction(softAuthorArticle.ID, viewer.ID, true, baseTime.Add(14*time.Hour), 1)
 
 	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
-	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
+	global.APIDb = db.Session(&gorm.Session{Logger: queryLogger})
 	page1, status, body := requestLikedHistory(t, viewer.ID, "limit=2")
 	if status != http.StatusOK || len(page1.Items) != 2 || page1.NextCursor == nil {
 		t.Fatalf("page1 status=%d body=%s response=%#v", status, body, page1)

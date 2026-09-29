@@ -42,9 +42,9 @@ func TestUserPublicEndpointsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	target := models.User{Username: "profile-target-" + uuid.NewString(), Password: "secret"}
 	other := models.User{Username: "profile-other-" + uuid.NewString(), Password: "secret"}
@@ -182,15 +182,15 @@ func TestPublicUserProfileSocialCountsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig := global.Db, config.AppConfig
-	global.Db = db
+	originalDB, originalConfig := global.APIDb, config.AppConfig
+	global.APIDb = db
 	config.AppConfig = &config.Config{
 		Kafka: config.KafkaConfig{
 			ActivityEventsTopic: "goexchange.activity.events.v1",
 		},
 	}
 	t.Cleanup(func() {
-		global.Db = originalDB
+		global.APIDb = originalDB
 		config.AppConfig = originalConfig
 	})
 	newUser := func(label string) models.User {
@@ -320,9 +320,9 @@ func TestEditableUserProfileIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	target := models.User{
 		Username:    "editable-target-" + uuid.NewString(),
@@ -509,9 +509,9 @@ func TestUserSearchIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	token := strings.ReplaceAll(uuid.NewString(), "-", "")
 	query := "alice" + token

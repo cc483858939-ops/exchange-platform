@@ -1,11 +1,11 @@
 package models_test
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
-	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
 
@@ -28,10 +28,7 @@ func openUserRecoProfileIntegrationDB(t *testing.T) *gorm.DB {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
-	if err := initialize.RunMigrations(); err != nil {
+	if err := initialize.RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	return db

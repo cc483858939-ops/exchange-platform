@@ -41,8 +41,7 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB, originalWorkerDB, originalConfig := global.Db, global.WorkerDb, config.AppConfig
-	global.Db = db
+	originalWorkerDB, originalConfig := global.WorkerDb, config.AppConfig
 	global.WorkerDb = db
 	config.AppConfig = &config.Config{
 		Recommendation: config.RecommendationConfig{
@@ -60,7 +59,7 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 		},
 	}
 	t.Cleanup(func() {
-		global.Db, global.WorkerDb = originalDB, originalWorkerDB
+		global.WorkerDb = originalWorkerDB
 		config.AppConfig = originalConfig
 	})
 

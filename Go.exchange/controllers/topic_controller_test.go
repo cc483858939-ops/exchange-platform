@@ -74,8 +74,8 @@ func TestGetTopicsHidesConfigurationErrors(t *testing.T) {
 
 func TestGetTopicPostsParsesLimitsAndReturnsEmptyArray(t *testing.T) {
 	originalConfigLoader, originalPageLoader := loadTopicConfiguration, loadTopicPostsPage
-	originalDB := global.Db
-	global.Db = &gorm.DB{}
+	originalDB := global.APIDb
+	global.APIDb = &gorm.DB{}
 	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) { return topicTestCatalog(), nil }
 	var gotLimits []int
 	loadTopicPostsPage = func(_ context.Context, _ config.CuratedTopic, limit int, cursor *topicPostCursor) (postPageResponse, error) {
@@ -86,7 +86,7 @@ func TestGetTopicPostsParsesLimitsAndReturnsEmptyArray(t *testing.T) {
 		return postPageResponse{Items: make([]postResponse, 0)}, nil
 	}
 	t.Cleanup(func() {
-		loadTopicConfiguration, loadTopicPostsPage, global.Db = originalConfigLoader, originalPageLoader, originalDB
+		loadTopicConfiguration, loadTopicPostsPage, global.APIDb = originalConfigLoader, originalPageLoader, originalDB
 	})
 
 	for _, test := range []struct {
@@ -109,15 +109,15 @@ func TestGetTopicPostsParsesLimitsAndReturnsEmptyArray(t *testing.T) {
 
 func TestGetTopicPostsRejectsBadQueriesAndUnknownTopics(t *testing.T) {
 	originalConfigLoader, originalPageLoader := loadTopicConfiguration, loadTopicPostsPage
-	originalDB := global.Db
-	global.Db = &gorm.DB{}
+	originalDB := global.APIDb
+	global.APIDb = &gorm.DB{}
 	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) { return topicTestCatalog(), nil }
 	loadTopicPostsPage = func(context.Context, config.CuratedTopic, int, *topicPostCursor) (postPageResponse, error) {
 		t.Fatal("page loader should not run for invalid input")
 		return postPageResponse{}, nil
 	}
 	t.Cleanup(func() {
-		loadTopicConfiguration, loadTopicPostsPage, global.Db = originalConfigLoader, originalPageLoader, originalDB
+		loadTopicConfiguration, loadTopicPostsPage, global.APIDb = originalConfigLoader, originalPageLoader, originalDB
 	})
 
 	for _, rawLimit := range []string{"0", "-1", "bad"} {

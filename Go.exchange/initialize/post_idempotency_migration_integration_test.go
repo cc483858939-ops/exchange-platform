@@ -1,12 +1,12 @@
 package initialize
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
 	"testing"
 
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -24,10 +24,7 @@ func TestPostClientPublishIdentityMigrationEnforcesPairAndAuthorScopedUniqueness
 	if err != nil {
 		t.Fatal(err)
 	}
-	previousDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = previousDB })
-	if err := RunMigrations(); err != nil {
+	if err := RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 

@@ -152,10 +152,10 @@ func writePostBookmarkError(ctx *gin.Context, err error) {
 }
 
 func mutatePostBookmarkFromDB(ctx context.Context, userID, postID uint, bookmarked bool) (postBookmarkMutationResult, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return postBookmarkMutationResult{}, errors.New("database is not initialized")
 	}
-	db := global.Db.WithContext(ctx)
+	db := global.APIDb.WithContext(ctx)
 	if userID == 0 || postID == 0 {
 		return postBookmarkMutationResult{}, errPostBookmarkUnavailable
 	}
@@ -185,10 +185,10 @@ func loadPostBookmarkStatesFromDB(ctx context.Context, userID uint, postIDs []ui
 		States:      make(map[uint]postBookmarkStateResult, len(postIDs)),
 		Unavailable: make([]uint, 0),
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return result, errors.New("database is not initialized")
 	}
-	db := global.Db.WithContext(ctx)
+	db := global.APIDb.WithContext(ctx)
 	if userID == 0 {
 		return result, errors.New("invalid bookmark viewer")
 	}
@@ -232,7 +232,7 @@ func loadPostBookmarkStatesFromDB(ctx context.Context, userID uint, postIDs []ui
 }
 
 func loadPostBookmarkHistoryPageFromDB(ctx context.Context, viewerID uint, limit int, cursor *bookmarkHistoryCursor) (postPageResponse, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
 	}
 	if viewerID == 0 || limit <= 0 {
@@ -240,7 +240,7 @@ func loadPostBookmarkHistoryPageFromDB(ctx context.Context, viewerID uint, limit
 	}
 
 	var response postPageResponse
-	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").Error; err != nil {
 			return err
 		}

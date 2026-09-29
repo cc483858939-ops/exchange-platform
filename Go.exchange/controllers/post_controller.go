@@ -57,8 +57,8 @@ var invalidatePostCreateParentDetailCache = func(postID uint) error {
 }
 
 func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
-	if err := initializePostLikeState(ctx, postID); err != nil && global.Db != nil {
-		global.Db.Logger.Error(ctx, "failed to initialize post like state", err)
+	if err := initializePostLikeState(ctx, postID); err != nil && global.APIDb != nil {
+		global.APIDb.Logger.Error(ctx, "failed to initialize post like state", err)
 	}
 }
 
@@ -238,10 +238,10 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 }
 
 func persistPostGraph(ctx context.Context, post *models.Post, userID uint, content string, req createPostRequest, media []validatedPostMedia, now time.Time) error {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return errors.New("database is not initialized")
 	}
-	return global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var parentAuthor uint
 		*post = models.Post{
 			AuthorID: userID, Content: content, Language: postlanguage.Detect(content), ReplyToPostID: req.ReplyToPostID,

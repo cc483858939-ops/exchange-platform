@@ -5,46 +5,41 @@ import (
 	"testing"
 )
 
-func TestParseUserAvatarURLAcceptsLegacyAndV1(t *testing.T) {
+func TestParseUserAvatarURLAcceptsV1JPGAndPNG(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	for _, testCase := range []struct {
 		value string
-		kind  UserAvatarURLKind
 		key   string
 	}{
-		{
-			value: "/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.webp",
-			kind:  UserAvatarURLLegacy,
-			key:   "profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.webp",
-		},
-		{
-			value: "/api/files/profile-avatars/users/v1/42/" + hash + ".png",
-			kind:  UserAvatarURLV1,
-			key:   "profile-avatars/users/v1/42/" + hash + ".png",
-		},
+		{value: "/api/files/profile-avatars/users/v1/42/" + hash + ".jpg", key: "profile-avatars/users/v1/42/" + hash + ".jpg"},
+		{value: "/api/files/profile-avatars/users/v1/42/" + hash + ".png", key: "profile-avatars/users/v1/42/" + hash + ".png"},
 	} {
-		key, kind, err := ParseUserAvatarURL(testCase.value, 42)
-		if err != nil || key != testCase.key || kind != testCase.kind {
-			t.Fatalf("ParseUserAvatarURL(%q)=(%q,%q,%v)", testCase.value, key, kind, err)
+		key, err := ParseUserAvatarURL(testCase.value, 42)
+		if err != nil || key != testCase.key {
+			t.Fatalf("ParseUserAvatarURL(%q)=(%q,%v)", testCase.value, key, err)
 		}
 	}
 }
 
-func TestParseUserAvatarURLRejectsUnsafeOrWrongURLs(t *testing.T) {
+func TestParseUserAvatarURLRejectsLegacyAndUnsafeURLs(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	for _, value := range []string{
-		"/api/files/profile-avatars/99/550e8400-e29b-41d4-a716-446655440000.jpg",
+		"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg",
+		"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.png",
+		"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.webp",
+		"/api/files/profile-avatars/users/v1/99/" + hash + ".jpg",
 		"/api/files/profile-avatars/users/v1/42/" + strings.ToUpper(hash) + ".jpg",
 		"/api/files/profile-avatars/users/v1/42/" + hash[:63] + ".jpg",
+		"/api/files/profile-avatars/users/v1/42/" + strings.Repeat("g", 64) + ".jpg",
 		"/api/files/profile-avatars/users/v1/42/" + hash + ".webp",
 		"/api/files/profile-avatars/users/v1/42/" + hash + ".jpg?cache=1",
 		"/api/files/profile-avatars/users/v1/42/" + hash + ".jpg#fragment",
 		"/api/files/profile-avatars/users/v1/42/nested/" + hash + ".jpg",
-		"/api/files/profile-avatars/42/../550e8400-e29b-41d4-a716-446655440000.jpg",
+		"/api/files/profile-avatars/users/v1/42/../" + hash + ".jpg",
 		"https://example.com/avatar.jpg",
 		"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg\r\n",
 	} {
-		if _, _, err := ParseUserAvatarURL(value, 42); err == nil {
+		if _, err := ParseUserAvatarURL(value, 42); err == nil {
 			t.Fatalf("unsafe avatar URL accepted: %q", value)
 		}
 	}

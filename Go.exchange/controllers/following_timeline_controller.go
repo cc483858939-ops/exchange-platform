@@ -17,11 +17,11 @@ var loadActiveFollowingViewer = loadActiveFollowingViewerFromDB
 var loadFollowingTimelinePage = loadFollowingTimelinePageFromDB
 
 func loadActiveFollowingViewerFromDB(ctx context.Context, id uint) error {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return errors.New("database is not initialized")
 	}
 	var user models.User
-	return global.Db.WithContext(ctx).Select("id").First(&user, id).Error
+	return global.APIDb.WithContext(ctx).Select("id").First(&user, id).Error
 }
 
 func GetFollowingTimeline(ctx *gin.Context) {
@@ -60,13 +60,13 @@ func GetFollowingTimeline(ctx *gin.Context) {
 }
 
 func loadFollowingTimelinePageFromDB(ctx context.Context, viewerID uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return timelinePageResponse{}, errors.New("database is not initialized")
 	}
 	if limit <= 0 {
 		return timelinePageResponse{}, errors.New("invalid limit")
 	}
-	db := global.Db.WithContext(ctx)
+	db := global.APIDb.WithContext(ctx)
 
 	now := time.Now().UTC()
 	query := `

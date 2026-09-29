@@ -183,17 +183,6 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  outbox-cutover:
-    <<: [*backend-image, *service-defaults]
-    entrypoint: ["/app/go-exchange-outbox-cutover"]
-    environment:
-      DATABASE_DSN: "${DATABASE_DSN:?DATABASE_DSN is required}"
-      OUTBOX_CUTOVER_CONFIRM_PRELAUNCH: "${OUTBOX_CUTOVER_CONFIRM_PRELAUNCH:-false}"
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: "no"
-
   migrate:
     <<: [*backend-image, *service-defaults]
     entrypoint: ["/app/go-exchange-migrate"]
@@ -202,8 +191,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      outbox-cutover:
-        condition: service_completed_successfully
     restart: "no"
 
   post-media-gc:

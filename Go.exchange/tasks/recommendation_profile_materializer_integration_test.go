@@ -63,8 +63,7 @@ func openRecommendationProfileMaterializerIntegrationDB(t *testing.T) *gorm.DB {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalWorkerDB, originalConfig := global.Db, global.WorkerDb, config.AppConfig
-	global.Db = db
+	originalWorkerDB, originalConfig := global.WorkerDb, config.AppConfig
 	global.WorkerDb = db
 	config.AppConfig = &config.Config{
 		Embedding: config.EmbeddingConfig{
@@ -72,10 +71,10 @@ func openRecommendationProfileMaterializerIntegrationDB(t *testing.T) *gorm.DB {
 		},
 	}
 	t.Cleanup(func() {
-		global.Db, global.WorkerDb = originalDB, originalWorkerDB
+		global.WorkerDb = originalWorkerDB
 		config.AppConfig = originalConfig
 	})
-	if err := initialize.RunMigrations(); err != nil {
+	if err := initialize.RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)

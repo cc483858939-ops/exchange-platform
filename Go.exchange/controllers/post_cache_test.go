@@ -276,14 +276,14 @@ func TestHydratePostResponseAuthorsRejectsMissingAuthor(t *testing.T) {
 func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *testing.T) {
 	originalCacheLoader := loadPostDetailCache
 	originalAuthorLoader := loadPublicAuthorsByIDs
-	originalDB := global.Db
+	originalDB := global.APIDb
 	t.Cleanup(func() {
 		loadPostDetailCache = originalCacheLoader
 		loadPublicAuthorsByIDs = originalAuthorLoader
-		global.Db = originalDB
+		global.APIDb = originalDB
 	})
 
-	global.Db = nil
+	global.APIDb = nil
 	loadPublicAuthorsByIDs = func(context.Context, []uint) (map[uint]publicAuthorResponse, error) {
 		t.Fatal("cache hit must not hydrate post authors")
 		return nil, nil
@@ -334,7 +334,7 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 	}
 
 	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
-	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
+	global.APIDb = db.Session(&gorm.Session{Logger: queryLogger})
 	originalCacheLoader := loadPostDetailCache
 	t.Cleanup(func() { loadPostDetailCache = originalCacheLoader })
 
@@ -468,14 +468,14 @@ func TestIsPublicPostResponseAt(t *testing.T) {
 func TestLoadPostDetailRejectsInvalidCachedResponseAndBestEffortDeletes(t *testing.T) {
 	originalCacheLoader := loadPostDetailCache
 	originalInvalidator := invalidatePostDetailCacheKey
-	originalDB := global.Db
+	originalDB := global.APIDb
 	t.Cleanup(func() {
 		loadPostDetailCache = originalCacheLoader
 		invalidatePostDetailCacheKey = originalInvalidator
-		global.Db = originalDB
+		global.APIDb = originalDB
 	})
 
-	global.Db = nil
+	global.APIDb = nil
 	now := time.Now().UTC()
 	future := now.Add(time.Hour)
 	loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
@@ -540,12 +540,12 @@ func TestLoadPostDetailMissFiltersDeletedPostsIntegration(t *testing.T) {
 	}
 
 	originalCacheLoader := loadPostDetailCache
-	originalDB := global.Db
+	originalDB := global.APIDb
 	t.Cleanup(func() {
 		loadPostDetailCache = originalCacheLoader
-		global.Db = originalDB
+		global.APIDb = originalDB
 	})
-	global.Db = db
+	global.APIDb = db
 	loadPostDetailCache = func(_ context.Context, _ string, loader func() (postResponse, error)) (postResponse, error) {
 		return loader()
 	}

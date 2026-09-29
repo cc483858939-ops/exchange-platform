@@ -34,9 +34,9 @@ func TestPostRepostIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	owner := models.User{Username: "repost-owner-" + uuid.NewString(), Password: "secret"}
 	viewer := models.User{Username: "repost-viewer-" + uuid.NewString(), Password: "secret"}
@@ -144,11 +144,11 @@ func TestPublicPostRepostCountHydrationAndCacheFreshnessIntegration(t *testing.T
 		t.Fatal(err)
 	}
 
-	originalDB, originalRedis, originalCacheLoader := global.Db, global.RedisDB, loadPostDetailCache
-	global.Db = db
+	originalDB, originalRedis, originalCacheLoader := global.APIDb, global.RedisDB, loadPostDetailCache
+	global.APIDb = db
 	global.RedisDB = nil
 	t.Cleanup(func() {
-		global.Db = originalDB
+		global.APIDb = originalDB
 		global.RedisDB = originalRedis
 		loadPostDetailCache = originalCacheLoader
 	})
@@ -259,11 +259,11 @@ func TestPublicPostRepostCountsHydrateTimelineRecommendationsAndRepliesIntegrati
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalRedis := global.Db, global.RedisDB
-	global.Db = db
+	originalDB, originalRedis := global.APIDb, global.RedisDB
+	global.APIDb = db
 	global.RedisDB = nil
 	t.Cleanup(func() {
-		global.Db = originalDB
+		global.APIDb = originalDB
 		global.RedisDB = originalRedis
 	})
 
@@ -368,9 +368,9 @@ func TestSoftDeletedReposterExcludedFromRepostStateIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	users := []models.User{
 		{Username: "repost-count-viewer-" + uuid.NewString(), Password: "secret"},

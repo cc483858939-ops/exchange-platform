@@ -116,7 +116,7 @@ func translatePost(ctx *gin.Context, service translation.Service) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid target language"})
 		return
 	}
-	db := global.Db
+	db := global.APIDb
 	if db != nil {
 		db = db.WithContext(ctx.Request.Context())
 	}

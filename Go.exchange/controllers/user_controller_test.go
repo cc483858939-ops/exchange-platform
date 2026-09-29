@@ -16,8 +16,8 @@ import (
 )
 
 func TestDecodeUserProfilePatchValidation(t *testing.T) {
-	validAvatar := "/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg"
 	validV1Avatar := "/api/files/profile-avatars/users/v1/42/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
+	validV1JPGAvatar := "/api/files/profile-avatars/users/v1/42/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg"
 	invalidBodies := []string{
 		"{}",
 		"{\"website\":\"example\"}",
@@ -29,6 +29,9 @@ func TestDecodeUserProfilePatchValidation(t *testing.T) {
 		"{\"bio\":[]}",
 		"{\"avatar_url\":null}",
 		"{\"avatar_url\":false}",
+		"{\"avatar_url\":\"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg\"}",
+		"{\"avatar_url\":\"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.png\"}",
+		"{\"avatar_url\":\"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.webp\"}",
 		"{\"avatar_url\":\"/api/files/profile-avatars/99/550e8400-e29b-41d4-a716-446655440000.jpg\"}",
 		"{\"avatar_url\":\"https://example.com/avatar.jpg\"}",
 		"{\"avatar_url\":\"/api/files/article-covers/550e8400-e29b-41d4-a716-446655440000.jpg\"}",
@@ -59,9 +62,9 @@ func TestDecodeUserProfilePatchValidation(t *testing.T) {
 	if err != nil || len(partial) != 1 || partial["bio"] != "FX" {
 		t.Fatalf("unexpected partial update: %#v err=%v", partial, err)
 	}
-	avatarOnly, err := decodeUserProfilePatch(strings.NewReader("{\"avatar_url\":\""+validAvatar+"\"}"), 42)
-	if err != nil || avatarOnly["avatar_url"] != validAvatar {
-		t.Fatalf("unexpected valid avatar update: %#v err=%v", avatarOnly, err)
+	jpgOnly, err := decodeUserProfilePatch(strings.NewReader("{\"avatar_url\":\""+validV1JPGAvatar+"\"}"), 42)
+	if err != nil || jpgOnly["avatar_url"] != validV1JPGAvatar {
+		t.Fatalf("unexpected valid V1 JPG avatar update: %#v err=%v", jpgOnly, err)
 	}
 	v1Only, err := decodeUserProfilePatch(strings.NewReader("{\"avatar_url\":\""+validV1Avatar+"\"}"), 42)
 	if err != nil || v1Only["avatar_url"] != validV1Avatar {

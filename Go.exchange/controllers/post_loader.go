@@ -54,7 +54,7 @@ var loadPostDetailCache = func(ctx context.Context, key string, loader func() (p
 }
 
 func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
-	db := global.Db
+	db := global.APIDb
 	if db != nil {
 		db = db.WithContext(ctx)
 	}

@@ -31,7 +31,6 @@ printf 'Clearing only the persistent DevData snapshot/checkpoint volume...\n'
   'find /app/.devdata -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
 
 printf 'Re-running the guarded database and eventing initialization steps...\n'
-"${compose[@]}" run --rm outbox-cutover
 "${compose[@]}" run --rm migrate
 "${compose[@]}" run --rm kafka-init
 "${compose[@]}" run --rm cdc-init

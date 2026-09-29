@@ -268,10 +268,8 @@ cd ..
 docker compose --env-file deploy/.env -f deploy/compose.prod.yml up -d
 ```
 
-一次性初始化按以下依赖顺序执行：`outbox-cutover` → `migrate` → `kafka-init` →
-`kafka-connect` → `cdc-init` → API / Worker。已有旧 Outbox schema 时，先备份并检查
-状态；只有确认要执行受保护的 prelaunch cutover 时，才在 `deploy/.env` 中显式设置
-`OUTBOX_CUTOVER_CONFIRM_PRELAUNCH=true`。
+一次性初始化按以下依赖顺序执行：`migrate` → `kafka-init` → `kafka-connect` →
+`cdc-init` → API / Worker。仓库不再支持 historical pre-final Outbox schemas。
 
 前端在 Cloudflare Pages 构建时使用：
 

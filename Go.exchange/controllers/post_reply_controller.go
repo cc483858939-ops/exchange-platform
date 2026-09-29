@@ -41,12 +41,12 @@ func GetPostReplies(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
 
-	db := global.Db.WithContext(ctx.Request.Context())
+	db := global.APIDb.WithContext(ctx.Request.Context())
 	var post models.Post
 	if err := db.
 		Select("id").

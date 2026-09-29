@@ -61,9 +61,9 @@ func TestWorkerBootstrapClosesDatabaseAndSkipsRuntimeStartWhenRedisFails(t *test
 	if calls.startTasks != 0 || calls.startHealth != 0 || calls.waitForShutdown != 0 {
 		t.Fatalf("runtime started after failed bootstrap: calls=%+v", calls)
 	}
-	if global.Db != nil || global.APIDb != nil || global.WorkerDb != nil || global.RedisDB != nil || global.MinioClient != nil {
-		t.Fatalf("globals published after failed bootstrap: Db=%p APIDb=%p WorkerDb=%p RedisDB=%p MinioClient=%p",
-			global.Db, global.APIDb, global.WorkerDb, global.RedisDB, global.MinioClient)
+	if global.APIDb != nil || global.WorkerDb != nil || global.MaintenanceDb != nil || global.RedisDB != nil || global.MinioClient != nil {
+		t.Fatalf("globals published after failed bootstrap: APIDb=%p WorkerDb=%p MaintenanceDb=%p RedisDB=%p MinioClient=%p",
+			global.APIDb, global.WorkerDb, global.MaintenanceDb, global.RedisDB, global.MinioClient)
 	}
 }
 
@@ -94,10 +94,10 @@ func assertWorkerBootstrapSucceedsWithoutMinIOOrJWT(t *testing.T) {
 		calls.loadedConfig.Storage.AccessKey != "" || calls.loadedConfig.Storage.SecretKey != "" {
 		t.Fatalf("test config unexpectedly needs MinIO: %#v", calls.loadedConfig.Storage)
 	}
-	if global.Db != nil || global.APIDb != nil || global.WorkerDb != runtime.database ||
+	if global.APIDb != nil || global.WorkerDb != runtime.database || global.MaintenanceDb != nil ||
 		global.RedisDB != runtime.redisClient || global.MinioClient != nil {
-		t.Fatalf("unexpected Worker globals: Db=%p APIDb=%p WorkerDb=%p RedisDB=%p MinioClient=%p",
-			global.Db, global.APIDb, global.WorkerDb, global.RedisDB, global.MinioClient)
+		t.Fatalf("unexpected Worker globals: APIDb=%p WorkerDb=%p MaintenanceDb=%p RedisDB=%p MinioClient=%p",
+			global.APIDb, global.WorkerDb, global.MaintenanceDb, global.RedisDB, global.MinioClient)
 	}
 }
 
@@ -119,22 +119,22 @@ func prepareWorkerBootstrapTest(t *testing.T) {
 	}
 	t.Setenv("MINIO_ENDPOINT", unavailableMinIOEndpoint)
 
-	oldDb := global.Db
 	oldAPIDb := global.APIDb
 	oldWorkerDb := global.WorkerDb
+	oldMaintenanceDb := global.MaintenanceDb
 	oldRedisDB := global.RedisDB
 	oldMinioClient := global.MinioClient
 	oldAppConfig := config.AppConfig
-	global.Db = nil
 	global.APIDb = nil
 	global.WorkerDb = nil
+	global.MaintenanceDb = nil
 	global.RedisDB = nil
 	global.MinioClient = nil
 	config.AppConfig = nil
 	t.Cleanup(func() {
-		global.Db = oldDb
 		global.APIDb = oldAPIDb
 		global.WorkerDb = oldWorkerDb
+		global.MaintenanceDb = oldMaintenanceDb
 		global.RedisDB = oldRedisDB
 		global.MinioClient = oldMinioClient
 		config.AppConfig = oldAppConfig

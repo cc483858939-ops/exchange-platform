@@ -19,13 +19,13 @@ func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
 	}
 
 	previousConfig := AppConfig
-	previousDB, previousAPIDB, previousWorkerDB := global.Db, global.APIDb, global.WorkerDb
+	previousAPIDB, previousWorkerDB, previousMaintenanceDB := global.APIDb, global.WorkerDb, global.MaintenanceDb
 	previousRedis, previousStorage := global.RedisDB, global.MinioClient
-	global.Db, global.APIDb, global.WorkerDb = nil, nil, nil
+	global.APIDb, global.WorkerDb, global.MaintenanceDb = nil, nil, nil
 	global.RedisDB, global.MinioClient = nil, nil
 	t.Cleanup(func() {
 		AppConfig = previousConfig
-		global.Db, global.APIDb, global.WorkerDb = previousDB, previousAPIDB, previousWorkerDB
+		global.APIDb, global.WorkerDb, global.MaintenanceDb = previousAPIDB, previousWorkerDB, previousMaintenanceDB
 		global.RedisDB, global.MinioClient = previousRedis, previousStorage
 	})
 
@@ -36,7 +36,7 @@ func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
 	if cfg.Database.MaxOpenConns != 4 || AppConfig != cfg {
 		t.Fatalf("loaded config was not returned and published: cfg=%+v AppConfig=%p", cfg.Database, AppConfig)
 	}
-	if global.Db != nil || global.APIDb != nil || global.WorkerDb != nil || global.RedisDB != nil || global.MinioClient != nil {
+	if global.APIDb != nil || global.WorkerDb != nil || global.MaintenanceDb != nil || global.RedisDB != nil || global.MinioClient != nil {
 		t.Fatal("loading config initialized an external resource")
 	}
 }

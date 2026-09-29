@@ -595,7 +595,6 @@ run_deploy() {
 
   if [[ "$backend_runtime_changed" == "yes" ]]; then
     create_database_backup
-    run_initialization outbox-cutover
     run_initialization migrate
     run_initialization kafka-init
     run_initialization cdc-init

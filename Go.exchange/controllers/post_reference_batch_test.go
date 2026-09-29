@@ -277,9 +277,9 @@ func TestGetPostRepliesBatchesSharedParentReferenceIntegration(t *testing.T) {
 	}
 
 	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
-	originalDB := global.Db
-	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db.Session(&gorm.Session{Logger: queryLogger})
+	t.Cleanup(func() { global.APIDb = originalDB })
 	ctx, recorder := newReplyIntegrationContext(http.MethodGet, "/api/posts/"+strconvUint(fixture.Article.ID)+"/replies?limit=50", strconvUint(fixture.Article.ID), "", fixture.Commenter.ID)
 	GetPostReplies(ctx)
 	if recorder.Code != http.StatusOK {

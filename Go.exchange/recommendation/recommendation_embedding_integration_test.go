@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -29,12 +28,6 @@ func TestSemanticEmbeddingRecallUsesExactNearestNeighborAndExclusionsIntegration
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() {
-		global.Db = originalDB
-	})
-
 	viewer := models.User{Username: "semantic-viewer-" + uuid.NewString(), Password: "test"}
 	author := models.User{Username: "semantic-author-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&viewer).Error; err != nil {
@@ -118,12 +111,6 @@ func TestSemanticEmbeddingRecallFiltersActiveVersionIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostEmbedding{}, &models.PostBehavior{}, &models.PostReaction{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() {
-		global.Db = originalDB
-	})
-
 	viewer := models.User{Username: "semantic-version-viewer-" + uuid.NewString(), Password: "test"}
 	author := models.User{Username: "semantic-version-author-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&viewer).Error; err != nil {

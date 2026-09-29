@@ -88,11 +88,11 @@ func createPostPayloadFingerprint(content string, req createPostRequest) (string
 var loadClientPublishPostFn = loadClientPublishPost
 
 func loadClientPublishPost(ctx context.Context, authorID uint, clientPublishID uuid.UUID) (models.Post, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return models.Post{}, errors.New("database is not initialized")
 	}
 	var post models.Post
-	query := global.Db.WithContext(ctx).Unscoped().Model(&models.Post{}).
+	query := global.APIDb.WithContext(ctx).Unscoped().Model(&models.Post{}).
 		Where("posts.author_id = ? AND posts.client_publish_id = ?", authorID, clientPublishID)
 	if err := preloadPostAuthor(query).First(&post).Error; err != nil {
 		return models.Post{}, err
@@ -108,8 +108,8 @@ func buildPostCreateResponse(ctx context.Context, post models.Post, media []post
 	response.Media = media
 	ensurePostResponseMedia(&response)
 	var db *gorm.DB
-	if global.Db != nil {
-		db = global.Db.WithContext(ctx)
+	if global.APIDb != nil {
+		db = global.APIDb.WithContext(ctx)
 	}
 	if err := hydratePostResponseReferencesFromDB(db, &response, now); err != nil {
 		return postResponse{}, err
@@ -118,14 +118,14 @@ func buildPostCreateResponse(ctx context.Context, post models.Post, media []post
 }
 
 func buildStoredPostCreateResponse(ctx context.Context, post models.Post, now time.Time) (postResponse, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return postResponse{}, errors.New("database is not initialized")
 	}
 	response, err := postResponseFromModel(post)
 	if err != nil {
 		return postResponse{}, err
 	}
-	db := global.Db.WithContext(ctx)
+	db := global.APIDb.WithContext(ctx)
 	if err := hydratePostResponseMediaFromDB(db, &response); err != nil {
 		return postResponse{}, err
 	}

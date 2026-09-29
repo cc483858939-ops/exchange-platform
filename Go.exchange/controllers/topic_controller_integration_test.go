@@ -23,9 +23,9 @@ func TestTopicFeedMembershipOrderingAndCursorIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.DevDataMirrorAccount{}, &models.DevDataMirrorPost{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	originalLoader := loadTopicConfiguration
 	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) {

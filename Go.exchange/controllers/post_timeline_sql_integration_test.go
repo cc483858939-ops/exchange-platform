@@ -28,9 +28,9 @@ func TestPostTimelineQueriesUseLimitWithoutOffsetIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
-	originalDB := global.Db
-	global.Db = db.Session(&gorm.Session{Logger: queryLogger})
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db.Session(&gorm.Session{Logger: queryLogger})
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	viewer := models.User{Username: "timeline-sql-viewer-" + uuid.NewString(), Password: "test"}
 	target := models.User{Username: "timeline-sql-target-" + uuid.NewString(), Password: "test"}

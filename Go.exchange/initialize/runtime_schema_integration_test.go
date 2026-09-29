@@ -136,7 +136,7 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 		t.Fatalf("restore isolated schema validation search path: %v", err)
 	}
 
-	apiOptions := SchemaValidationOptions{RequiredVersion: RequiredSchemaVersion, EmbeddingEnabled: false}
+	apiOptions := SchemaValidationOptions{RequiredVersion: RequiredSchemaVersion}
 	workerOptions := SchemaValidationOptions{RequiredVersion: RequiredSchemaVersion, IncludeWorkerTables: true}
 	expectIntegrationSchemaCode(t, tx, apiOptions, "")
 	expectIntegrationSchemaCode(t, tx, workerOptions, "")

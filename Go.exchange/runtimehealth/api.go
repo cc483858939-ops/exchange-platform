@@ -52,7 +52,6 @@ type APIOptions struct {
 	Role                  string
 	RequiredSchemaVersion int64
 	Interval              time.Duration
-	EmbeddingEnabled      bool
 	Now                   func() time.Time
 	DatabasePing          func(context.Context) error
 	SchemaCheck           func(context.Context) error
@@ -90,9 +89,8 @@ func NewAPIReadiness(options APIOptions) *APIReadiness {
 	}
 	if options.SchemaCheck == nil {
 		options.SchemaCheck = func(ctx context.Context) error {
-			return initialize.CheckRuntimeSchema(ctx, global.Db, initialize.SchemaValidationOptions{
-				RequiredVersion:  options.RequiredSchemaVersion,
-				EmbeddingEnabled: options.EmbeddingEnabled,
+			return initialize.CheckRuntimeSchema(ctx, global.APIDb, initialize.SchemaValidationOptions{
+				RequiredVersion: options.RequiredSchemaVersion,
 			})
 		}
 	}
@@ -321,10 +319,10 @@ func containsString(values []string, wanted string) bool {
 }
 
 func defaultDatabasePing(ctx context.Context) error {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return errors.New("database is not initialized")
 	}
-	db, err := global.Db.DB()
+	db, err := global.APIDb.DB()
 	if err != nil {
 		return err
 	}

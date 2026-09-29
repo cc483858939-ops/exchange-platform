@@ -47,14 +47,14 @@ func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			originalCacheLoader := loadPostDetailCache
 			originalInvalidator := invalidatePostDetailCacheKey
-			originalDB := global.Db
+			originalDB := global.APIDb
 			t.Cleanup(func() {
 				loadPostDetailCache = originalCacheLoader
 				invalidatePostDetailCacheKey = originalInvalidator
-				global.Db = originalDB
+				global.APIDb = originalDB
 			})
 
-			global.Db = nil
+			global.APIDb = nil
 			loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
 				return testCase.response, nil
 			}

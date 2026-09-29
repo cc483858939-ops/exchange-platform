@@ -85,9 +85,9 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	users := []models.User{
 		{Username: "timeline-viewer-" + uuid.NewString(), Password: "secret"},

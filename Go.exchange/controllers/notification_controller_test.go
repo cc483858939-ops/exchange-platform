@@ -37,9 +37,9 @@ func TestNotificationReadIdempotencyAndIsolationIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.Notification{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	recipient := models.User{Username: "notification-recipient-" + uuid.NewString(), Password: "test"}
 	actor := models.User{Username: "notification-actor-" + uuid.NewString(), Password: "test"}

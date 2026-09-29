@@ -52,15 +52,15 @@ func TestFollowGraphIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB, originalConfig := global.Db, config.AppConfig
-	global.Db = db
+	originalDB, originalConfig := global.APIDb, config.AppConfig
+	global.APIDb = db
 	config.AppConfig = &config.Config{
 		Kafka: config.KafkaConfig{
 			ActivityEventsTopic: "goexchange.activity.events.v1",
 		},
 	}
 	t.Cleanup(func() {
-		global.Db = originalDB
+		global.APIDb = originalDB
 		config.AppConfig = originalConfig
 	})
 
@@ -253,9 +253,9 @@ func TestFollowConnectionListsIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 	newUser := func(label string) models.User {
 		return models.User{Username: "connections-" + label + "-" + uuid.NewString(), Password: "test", DisplayName: label}
 	}

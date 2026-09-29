@@ -37,7 +37,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	global.Db = db
 	global.APIDb = db
 	global.WorkerDb = nil
 	defer func() {

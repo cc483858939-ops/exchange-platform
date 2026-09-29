@@ -710,7 +710,6 @@ func TestUploadProfileAvatarRequiresActiveViewer(t *testing.T) {
 
 func TestFileObjectKeyAllowlistAcceptsPublicMediaVariantsAndRejectsPrivateKeys(t *testing.T) {
 	for _, valid := range []string{
-		"profile-avatars/devdata/mkbhd/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg",
 		"profile-avatars/users/v1/42/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.png",
 		"profile-avatars/devdata/v1/mkbhd/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg",
 		"profile-covers/devdata/v1/mkbhd/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg",
@@ -724,6 +723,9 @@ func TestFileObjectKeyAllowlistAcceptsPublicMediaVariantsAndRejectsPrivateKeys(t
 		}
 	}
 	for _, objectKey := range []string{
+		"profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg",
+		"profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.webp",
+		"profile-avatars/devdata/mkbhd/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg",
 		"profile-avatars/devdata/mkbhd/../avatar.jpg",
 		"profile-avatars/devdata/mkbhd/avatar\r\n.jpg",
 		"profile-covers/devdata/v1/mkbhd/../0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.jpg",
@@ -752,7 +754,6 @@ func TestFileCacheControlMakesOnlyV1PublicMediaImmutable(t *testing.T) {
 		{key: "profile-avatars/users/v1/42/" + strings.Repeat("a", 64) + ".jpg", want: "public, max-age=31536000, immutable"},
 		{key: "profile-avatars/devdata/v1/mkbhd/" + strings.Repeat("b", 64) + ".png", want: "public, max-age=31536000, immutable"},
 		{key: "profile-covers/devdata/v1/mkbhd/" + strings.Repeat("c", 64) + ".jpg", want: "public, max-age=31536000, immutable"},
-		{key: "profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg", want: "public, max-age=86400"},
 		{key: "post-media/42/image.jpg", want: "public, max-age=86400"},
 		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/medium.jpg", want: "public, max-age=31536000, immutable"},
 		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/large.png", want: "public, max-age=31536000, immutable"},

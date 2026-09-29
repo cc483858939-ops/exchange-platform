@@ -27,14 +27,14 @@ type postLikeBaseline struct {
 
 var (
 	loadPostLikeBaselineFromDB = func(ctx context.Context, postID uint) (postLikeBaseline, error) {
-		db := global.Db
+		db := global.APIDb
 		if db != nil {
 			db = db.WithContext(ctx)
 		}
 		return loadActivePostLikeBaselineFromDB(db, postID)
 	}
 	loadPostLikeBaselinesFromDB = func(ctx context.Context, postIDs []uint) (map[uint]postLikeBaseline, error) {
-		db := global.Db
+		db := global.APIDb
 		if db != nil {
 			db = db.WithContext(ctx)
 		}

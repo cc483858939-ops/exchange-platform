@@ -187,7 +187,7 @@ func TestPrepareAvatarMirrorsContentAddressesAndContinuesPerAccount(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	bKey, err := BuildAvatarObjectKeyV1(registry.Accounts[1].Key, bDerivative.ContentHash, bDerivative.Extension)
+	bKey, err := BuildAvatarObjectKey(registry.Accounts[1].Key, bDerivative.ContentHash, bDerivative.Extension)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestPrepareAvatarMirrorsContentAddressesAndContinuesPerAccount(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		expectedKey, err := BuildAvatarObjectKeyV1(key, derivative.ContentHash, derivative.Extension)
+		expectedKey, err := BuildAvatarObjectKey(key, derivative.ContentHash, derivative.Extension)
 		if err != nil || resolution.ObjectKey != expectedKey || resolution.ContentHash != derivative.ContentHash || resolution.LocalURL != avatarLocalURL(expectedKey) {
 			t.Fatalf("resolution %q=%#v expected_key=%q err=%v", key, resolution, expectedKey, err)
 		}
@@ -235,33 +235,22 @@ func TestPrepareAvatarMirrorsContentAddressesAndContinuesPerAccount(t *testing.T
 	}
 }
 
-func TestBuildAvatarObjectKeySanitizesRegistryAndKeepsHashNamespace(t *testing.T) {
-	hash := strings.Repeat("a", sha256.Size*2)
-	key, err := BuildAvatarObjectKey("MKBHD", hash, ".jpg")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != "profile-avatars/devdata/mkbhd/"+hash+".jpg" {
-		t.Fatalf("key=%q", key)
-	}
-	for _, badHash := range []string{strings.Repeat("A", sha256.Size*2), "../" + strings.Repeat("a", 62)} {
-		if _, err := BuildAvatarObjectKey("MKBHD", badHash, ".jpg"); err == nil {
-			t.Fatalf("bad hash accepted: %q", badHash)
-		}
-	}
-}
-
-func TestBuildAvatarObjectKeyV1UsesDerivativeHashAndOnlyOutputFormats(t *testing.T) {
+func TestBuildAvatarObjectKeyUsesV1DerivativeHashAndOnlyOutputFormats(t *testing.T) {
 	hash := strings.Repeat("b", sha256.Size*2)
-	key, err := BuildAvatarObjectKeyV1("MKBHD", hash, ".png")
+	key, err := BuildAvatarObjectKey("MKBHD", hash, ".png")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if key != "profile-avatars/devdata/v1/mkbhd/"+hash+".png" {
 		t.Fatalf("key=%q", key)
 	}
+	for _, badHash := range []string{strings.ToUpper(hash), "../" + strings.Repeat("b", 62)} {
+		if _, err := BuildAvatarObjectKey("MKBHD", badHash, ".jpg"); err == nil {
+			t.Fatalf("bad hash accepted: %q", badHash)
+		}
+	}
 	for _, extension := range []string{".webp", ".gif"} {
-		if _, err := BuildAvatarObjectKeyV1("MKBHD", hash, extension); err == nil {
+		if _, err := BuildAvatarObjectKey("MKBHD", hash, extension); err == nil {
 			t.Fatalf("unsupported V1 extension accepted: %q", extension)
 		}
 	}
@@ -274,7 +263,7 @@ func TestAvatarResolutionUsableRequiresV1Shape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v1Key, err := BuildAvatarObjectKeyV1(source.RegistryKey, derivative.ContentHash, derivative.Extension)
+	v1Key, err := BuildAvatarObjectKey(source.RegistryKey, derivative.ContentHash, derivative.Extension)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,10 +272,7 @@ func TestAvatarResolutionUsableRequiresV1Shape(t *testing.T) {
 		t.Fatalf("valid V1 resolution was rejected: %#v", v1)
 	}
 	legacyHash := sha256.Sum256(avatarJPEGFixture(t))
-	legacyKey, err := BuildAvatarObjectKey(source.RegistryKey, hexHash(legacyHash), ".jpg")
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacyKey := "profile-avatars/devdata/" + strings.ToLower(source.RegistryKey) + "/" + hexHash(legacyHash) + ".jpg"
 	legacy := v1
 	legacy.ObjectKey = legacyKey
 	legacy.LocalURL = avatarLocalURL(legacyKey)
@@ -296,7 +282,7 @@ func TestAvatarResolutionUsableRequiresV1Shape(t *testing.T) {
 	}
 }
 
-func TestVerifyAvatarsAcceptsMixedLegacyAndV1State(t *testing.T) {
+func TestVerifyAvatarsRejectsLegacyState(t *testing.T) {
 	db := openDevDataIntegrationDB(t)
 	data := newSyncIntegrationData()
 	data.Registry.Accounts = data.Registry.Accounts[:2]
@@ -319,15 +305,12 @@ func TestVerifyAvatarsAcceptsMixedLegacyAndV1State(t *testing.T) {
 
 	legacyBody := avatarJPEGFixture(t)
 	legacyHash := sha256.Sum256(legacyBody)
-	legacyKey, err := BuildAvatarObjectKey(accountA.RegistryKey, hexHash(legacyHash), ".jpg")
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacyKey := "profile-avatars/devdata/" + strings.ToLower(accountA.RegistryKey) + "/" + hexHash(legacyHash) + ".jpg"
 	v1Derivative, err := avatarimage.Optimize(avatarPNGFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	v1Key, err := BuildAvatarObjectKeyV1(accountB.RegistryKey, v1Derivative.ContentHash, v1Derivative.Extension)
+	v1Key, err := BuildAvatarObjectKey(accountB.RegistryKey, v1Derivative.ContentHash, v1Derivative.Extension)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,11 +337,11 @@ func TestVerifyAvatarsAcceptsMixedLegacyAndV1State(t *testing.T) {
 	store.objects[v1Key] = fakeAvatarObject{body: v1Derivative.Body, size: int64(len(v1Derivative.Body)), contentType: v1Derivative.ContentType}
 
 	report, err := VerifyAvatars(context.Background(), db, data.Registry, store)
-	if err != nil {
-		t.Fatalf("mixed-state verification: %v report=%#v", err, report)
+	if err == nil {
+		t.Fatalf("legacy avatar state was accepted: report=%#v", report)
 	}
-	if report.Invalid != 0 || report.LocalURLs != 2 || report.ObjectsPresent != 2 {
-		t.Fatalf("mixed-state report=%#v", report)
+	if report.Invalid != 1 || report.LocalURLs != 2 || report.ObjectsPresent != 2 {
+		t.Fatalf("legacy rejection report=%#v", report)
 	}
 }
 

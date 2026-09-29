@@ -40,9 +40,9 @@ func TestGormRecommendationResponseMapperRequiresDB(t *testing.T) {
 }
 
 func TestGetPostByIDReturnsServerErrorForReferenceHydrationFailure(t *testing.T) {
-	previousDB := global.Db
+	previousDB := global.APIDb
 	previousCache := loadPostDetailCache
-	global.Db = nil
+	global.APIDb = nil
 	loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
 		quoteID := uint(99)
 		publishedAt := time.Now().UTC()
@@ -54,7 +54,7 @@ func TestGetPostByIDReturnsServerErrorForReferenceHydrationFailure(t *testing.T)
 		}, nil
 	}
 	t.Cleanup(func() {
-		global.Db = previousDB
+		global.APIDb = previousDB
 		loadPostDetailCache = previousCache
 	})
 
@@ -70,10 +70,10 @@ func TestGetPostByIDReturnsServerErrorForReferenceHydrationFailure(t *testing.T)
 }
 
 func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) {
-	previousDB := global.Db
+	previousDB := global.APIDb
 	previousAuthorLoader := loadPostAuthorForCreate
 	previousPersist := persistPostGraphFn
-	global.Db = nil
+	global.APIDb = nil
 	loadPostAuthorForCreate = func(_ context.Context, id uint) (publicAuthorResponse, error) {
 		return publicAuthorResponse{ID: id, Username: "author"}, nil
 	}
@@ -90,7 +90,7 @@ func TestCreatePostReturnsServerErrorForReferenceHydrationFailure(t *testing.T) 
 		return nil
 	}
 	t.Cleanup(func() {
-		global.Db = previousDB
+		global.APIDb = previousDB
 		loadPostAuthorForCreate = previousAuthorLoader
 		persistPostGraphFn = previousPersist
 	})

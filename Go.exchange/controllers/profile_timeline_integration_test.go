@@ -53,9 +53,9 @@ func openProfileTimelineIntegrationDB(t *testing.T) *gorm.DB {
 
 func TestProfileTimelineActivityIntegration(t *testing.T) {
 	db := openProfileTimelineIntegrationDB(t)
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	users := []models.User{
 		{Username: "profile-timeline-target-" + uuid.NewString(), Password: "secret"},
@@ -187,9 +187,9 @@ func TestProfileTimelineActivityIntegration(t *testing.T) {
 
 func TestProfileTimelineCursorIntegration(t *testing.T) {
 	db := openProfileTimelineIntegrationDB(t)
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	users := []models.User{
 		{Username: "profile-cursor-target-" + uuid.NewString(), Password: "secret"},

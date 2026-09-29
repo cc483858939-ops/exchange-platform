@@ -39,11 +39,10 @@ func openPostEmbeddingIntegrationDatabase(t *testing.T) *gorm.DB {
 	); err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalWorkerDB := global.Db, global.WorkerDb
-	global.Db = db
+	originalWorkerDB := global.WorkerDb
 	global.WorkerDb = db
-	t.Cleanup(func() { global.Db, global.WorkerDb = originalDB, originalWorkerDB })
-	if err := initialize.RunMigrations(); err != nil {
+	t.Cleanup(func() { global.WorkerDb = originalWorkerDB })
+	if err := initialize.RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)

@@ -18,7 +18,7 @@ func CreateExchangeRate(ctx *gin.Context) {
 		return
 	}
 	exchangeRate.Date = time.Now()
-	if err := global.Db.WithContext(ctx.Request.Context()).Create(&exchangeRate).Error; err != nil {
+	if err := global.APIDb.WithContext(ctx.Request.Context()).Create(&exchangeRate).Error; err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
@@ -29,7 +29,7 @@ func CreateExchangeRate(ctx *gin.Context) {
 }
 func GetExchangeRates(ctx *gin.Context) {
 	var exchangeRates []models.ExchangeRate
-	if err := global.Db.WithContext(ctx.Request.Context()).Find(&exchangeRates).Error; err != nil {
+	if err := global.APIDb.WithContext(ctx.Request.Context()).Find(&exchangeRates).Error; err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}

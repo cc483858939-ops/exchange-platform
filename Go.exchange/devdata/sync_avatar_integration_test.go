@@ -88,7 +88,7 @@ func integrationAvatarResolution(t *testing.T, source SnapshotAccount, body []by
 	if err != nil {
 		t.Fatal(err)
 	}
-	objectKey, err := BuildAvatarObjectKeyV1(source.RegistryKey, derivative.ContentHash, derivative.Extension)
+	objectKey, err := BuildAvatarObjectKey(source.RegistryKey, derivative.ContentHash, derivative.Extension)
 	if err != nil {
 		t.Fatal(err)
 	}

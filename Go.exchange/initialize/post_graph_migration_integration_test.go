@@ -1,11 +1,10 @@
 package initialize
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
-
-	"Go.exchange/global"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -21,10 +20,7 @@ func TestPostGraphSchemaIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
-	if err := RunMigrations(); err != nil {
+	if err := RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 

@@ -203,10 +203,10 @@ func writePostRepostError(ctx *gin.Context, err error) {
 }
 
 func loadPostRepostStateFromDB(ctx context.Context, userID, postID uint) (postRepostStateResult, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return postRepostStateResult{}, errors.New("database is not initialized")
 	}
-	return loadPostRepostStateWithDB(global.Db.WithContext(ctx), userID, postID, time.Now().UTC())
+	return loadPostRepostStateWithDB(global.APIDb.WithContext(ctx), userID, postID, time.Now().UTC())
 }
 
 func loadPostRepostStateWithDB(db *gorm.DB, userID, postID uint, now time.Time) (postRepostStateResult, error) {
@@ -234,12 +234,12 @@ func loadPostRepostStateWithDB(db *gorm.DB, userID, postID uint, now time.Time) 
 }
 
 func mutatePostRepostFromDB(ctx context.Context, userID, postID uint, reposted bool) (postRepostMutationResult, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return postRepostMutationResult{}, errors.New("database is not initialized")
 	}
 
 	var result postRepostMutationResult
-	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := requirePublicPost(tx, postID, time.Now().UTC()); err != nil {
 			return err
 		}
@@ -268,13 +268,13 @@ func loadPostRepostStatesFromDB(ctx context.Context, userID uint, postIDs []uint
 		States:      make(map[uint]postRepostStateResult, len(postIDs)),
 		Unavailable: make([]uint, 0),
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return result, errors.New("database is not initialized")
 	}
 	if len(postIDs) == 0 {
 		return result, nil
 	}
-	db := global.Db.WithContext(ctx)
+	db := global.APIDb.WithContext(ctx)
 
 	now := time.Now().UTC()
 	var availableIDs []uint

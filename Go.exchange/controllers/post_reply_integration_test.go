@@ -42,15 +42,15 @@ func openReplyIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostMediaUpload{}, &models.PostBehavior{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
-	originalDB, originalConfig := global.Db, config.AppConfig
-	global.Db = db
+	originalDB, originalConfig := global.APIDb, config.AppConfig
+	global.APIDb = db
 	config.AppConfig = &config.Config{
 		Kafka: config.KafkaConfig{
 			ActivityEventsTopic: "goexchange.activity.events.v1",
 		},
 	}
 	t.Cleanup(func() {
-		global.Db = originalDB
+		global.APIDb = originalDB
 		config.AppConfig = originalConfig
 	})
 	return db

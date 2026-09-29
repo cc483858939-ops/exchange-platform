@@ -1,11 +1,10 @@
 package initialize
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
-
-	"Go.exchange/global"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -25,11 +24,8 @@ func TestDevDataMirrorSchemaIntegrationIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sqlDB.Close()
-	previous := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = previous })
 	for attempt := 1; attempt <= 3; attempt++ {
-		if err := RunMigrations(); err != nil {
+		if err := RunMigrationsWithDB(context.Background(), db); err != nil {
 			t.Fatalf("migration #%d: %v", attempt, err)
 		}
 	}

@@ -97,7 +97,6 @@ func bootstrapWorkerWithDependencies(deps workerBootstrapDeps) (*workerRuntime, 
 		return nil, bootstrapErr
 	}
 
-	global.Db = nil
 	global.APIDb = nil
 	global.WorkerDb = db
 	global.RedisDB = redisClient

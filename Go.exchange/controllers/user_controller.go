@@ -45,12 +45,12 @@ type userSearchQueryRow struct {
 }
 
 var loadActiveProfileViewer = func(ctx context.Context, userID uint) (models.User, error) {
-	if userID == 0 || global.Db == nil {
+	if userID == 0 || global.APIDb == nil {
 		return models.User{}, errors.New("database is not initialized")
 	}
 
 	var user models.User
-	if err := global.Db.WithContext(ctx).Select("id").First(&user, userID).Error; err != nil {
+	if err := global.APIDb.WithContext(ctx).Select("id").First(&user, userID).Error; err != nil {
 		return models.User{}, err
 	}
 	return user, nil
@@ -135,7 +135,7 @@ func escapeUserSearchLike(value string) string {
 }
 
 func searchUsersFromDB(ctx context.Context, viewerID uint, query string, limit, offset int) (userConnectionPageResponse, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return userConnectionPageResponse{}, errors.New("database is not initialized")
 	}
 
@@ -152,7 +152,7 @@ func searchUsersFromDB(ctx context.Context, viewerID uint, query string, limit, 
 		ELSE 6
 	END`
 	orderBy := clause.OrderBy{Expression: clause.Expr{SQL: rankSQL + ", LOWER(candidate.username) ASC, candidate.id ASC", Vars: []any{query, query, prefixPattern, prefixPattern, containsPattern, containsPattern}}}
-	queryDB := global.Db.WithContext(ctx).Table("users AS candidate").
+	queryDB := global.APIDb.WithContext(ctx).Table("users AS candidate").
 		Select(`candidate.id AS user_id, candidate.username AS username, candidate.display_name AS display_name, candidate.bio AS bio, candidate.avatar_url AS avatar_url, candidate.created_at AS user_created_at, viewer_follow.id AS viewer_follow_id`).
 		Joins("LEFT JOIN user_follows AS viewer_follow ON viewer_follow.follower_id = ? AND viewer_follow.following_id = candidate.id", viewerID).
 		Where("candidate.deleted_at IS NULL").
@@ -289,7 +289,7 @@ func decodeProfileAvatarURL(raw json.RawMessage, viewerID uint) (string, error) 
 }
 
 func validateProfileAvatarURL(value string, viewerID uint) error {
-	_, _, err := profileavatar.ParseUserAvatarURL(value, viewerID)
+	_, err := profileavatar.ParseUserAvatarURL(value, viewerID)
 	return err
 }
 
@@ -332,11 +332,11 @@ func UpdateUserProfile(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
-	if result := global.Db.WithContext(ctx.Request.Context()).Model(&models.User{}).Where("id = ?", viewerID).Updates(updates); result.Error != nil {
+	if result := global.APIDb.WithContext(ctx.Request.Context()).Model(&models.User{}).Where("id = ?", viewerID).Updates(updates); result.Error != nil {
 		if handleRequestDBError(ctx, result.Error) {
 			return
 		}

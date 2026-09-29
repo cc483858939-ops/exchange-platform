@@ -75,11 +75,11 @@ var unfollowAndLoadState = unfollowAndLoadStateFromDB
 var loadUserConnections = loadUserConnectionsFromDB
 
 func loadActiveFollowUserFromDB(ctx context.Context, id uint) error {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return errors.New("database is not initialized")
 	}
 	var user models.User
-	return global.Db.WithContext(ctx).Select("id").First(&user, id).Error
+	return global.APIDb.WithContext(ctx).Select("id").First(&user, id).Error
 }
 
 func readFollowState(db *gorm.DB, viewerID, targetID uint) (userFollowState, error) {
@@ -129,14 +129,14 @@ func readUserFollowCounts(db *gorm.DB, targetID uint) (userFollowCounts, error) 
 }
 
 func loadFollowStateFromDB(ctx context.Context, viewerID, targetID uint) (userFollowState, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return userFollowState{}, errors.New("database is not initialized")
 	}
-	return readFollowState(global.Db.WithContext(ctx), viewerID, targetID)
+	return readFollowState(global.APIDb.WithContext(ctx), viewerID, targetID)
 }
 
 func loadUserConnectionsFromDB(ctx context.Context, viewerID, targetID uint, kind followConnectionKind, limit, offset int) (userConnectionPageResponse, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return userConnectionPageResponse{}, errors.New("database is not initialized")
 	}
 	listedUserJoin := "JOIN users AS listed_user ON listed_user.id = target_follow.follower_id AND listed_user.deleted_at IS NULL"
@@ -147,7 +147,7 @@ func loadUserConnectionsFromDB(ctx context.Context, viewerID, targetID uint, kin
 	default:
 		return userConnectionPageResponse{}, errors.New("invalid follow connection kind")
 	}
-	query := global.Db.WithContext(ctx).Table("user_follows AS target_follow").
+	query := global.APIDb.WithContext(ctx).Table("user_follows AS target_follow").
 		Select(`listed_user.id AS user_id, listed_user.username AS username, listed_user.display_name AS display_name, listed_user.bio AS bio, listed_user.avatar_url AS avatar_url, listed_user.created_at AS user_created_at, viewer_follow.id AS viewer_follow_id`).
 		Joins(listedUserJoin).
 		Joins("LEFT JOIN user_follows AS viewer_follow ON viewer_follow.follower_id = ? AND viewer_follow.following_id = listed_user.id", viewerID).
@@ -176,12 +176,12 @@ func loadUserConnectionsFromDB(ctx context.Context, viewerID, targetID uint, kin
 }
 
 func followAndLoadStateFromDB(ctx context.Context, viewerID, targetID uint) (userFollowState, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return userFollowState{}, errors.New("database is not initialized")
 	}
 
 	var state userFollowState
-	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		follow := models.UserFollow{FollowerID: viewerID, FollowingID: targetID}
 		result := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "follower_id"}, {Name: "following_id"}},
@@ -216,12 +216,12 @@ func followAndLoadStateFromDB(ctx context.Context, viewerID, targetID uint) (use
 }
 
 func unfollowAndLoadStateFromDB(ctx context.Context, viewerID, targetID uint) (userFollowState, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return userFollowState{}, errors.New("database is not initialized")
 	}
 
 	var state userFollowState
-	err := global.Db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where(
 			"follower_id = ? AND following_id = ?",
 			viewerID,

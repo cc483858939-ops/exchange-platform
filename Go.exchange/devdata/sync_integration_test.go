@@ -15,7 +15,6 @@ import (
 
 	"Go.exchange/embeddings"
 	"Go.exchange/embeddingstate"
-	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
 	"Go.exchange/postmedia"
@@ -47,13 +46,10 @@ func openDevDataIntegrationDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("get PostgreSQL test database handle: %v", err)
 	}
-	previous := global.Db
-	global.Db = db
 	t.Cleanup(func() {
-		global.Db = previous
 		_ = sqlDB.Close()
 	})
-	if err := initialize.RunMigrations(); err != nil {
+	if err := initialize.RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatalf("run DevData integration migrations: %v", err)
 	}
 	previousServingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)

@@ -60,7 +60,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 		}
 	})
 
-	originalDB, originalWorkerDB, originalRedis, originalConfig := global.Db, global.WorkerDb, global.RedisDB, config.AppConfig
+	originalWorkerDB, originalRedis, originalConfig := global.WorkerDb, global.RedisDB, config.AppConfig
 	snapshotGroup := "like-snapshot-projection-" + uuid.NewString()
 	behaviorGroup := "like-behavior-projection-" + uuid.NewString()
 	var actor models.User
@@ -74,7 +74,6 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 		UserBehaviorGroupID: behaviorGroup,
 		ActivityEventsTopic: "goexchange.activity.events.v1",
 	}}
-	global.Db = db
 	global.WorkerDb = db
 	global.RedisDB = redisClient
 
@@ -109,7 +108,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 			db.Unscoped().Where("user_id IN ?", dirtyUserIDs).Delete(&models.UserRecoProfileDirty{})
 			db.Unscoped().Where("id IN ?", dirtyUserIDs).Delete(&models.User{})
 		}
-		global.Db, global.WorkerDb, global.RedisDB, config.AppConfig = originalDB, originalWorkerDB, originalRedis, originalConfig
+		global.WorkerDb, global.RedisDB, config.AppConfig = originalWorkerDB, originalRedis, originalConfig
 	})
 
 	actor = models.User{Username: "like-projection-actor-" + uuid.NewString(), Password: "test"}

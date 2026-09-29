@@ -15,11 +15,6 @@ import (
 
 var ErrIncrementalSnapshotChanged = errors.New("rolling snapshot changed during incremental refresh")
 
-// ErrIncrementalSnapshotConflict is retained as a compatibility alias for
-// callers that used the original name before the conflict decision was
-// centralized in WriteIncrementalSnapshotIfUnchanged.
-var ErrIncrementalSnapshotConflict = ErrIncrementalSnapshotChanged
-
 // ReadIncrementalBaseline loads the complete rolling snapshot and returns the
 // fingerprint of the exact bytes that were decoded. A partial, stale, or
 // malformed baseline is never accepted as an incremental starting point.

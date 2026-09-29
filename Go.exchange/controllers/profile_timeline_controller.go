@@ -46,13 +46,13 @@ func GetUserTimeline(ctx *gin.Context) {
 }
 
 func loadUserTimelinePageFromDB(ctx context.Context, userID uint, limit int, cursor *timelineCursor) (timelinePageResponse, error) {
-	if global.Db == nil {
+	if global.APIDb == nil {
 		return timelinePageResponse{}, errors.New("database is not initialized")
 	}
 	if limit <= 0 {
 		return timelinePageResponse{}, errors.New("invalid limit")
 	}
-	db := global.Db.WithContext(ctx)
+	db := global.APIDb.WithContext(ctx)
 
 	now := time.Now().UTC()
 	query := `

@@ -70,7 +70,7 @@ Do not delete the whole queue.
 
 In `TestCanonicalPostLikeRedisToPostgresProjectionIntegration` cleanup, delete `models.UserRecoProfileDirty` for the exact actor/author IDs before deleting those users.
 
-Register cleanup immediately after swapping `global.Db`, `global.RedisDB`, and `config.AppConfig`, before creating fixture rows. Use zero-ID guards so a setup failure still restores globals and closes Redis safely.
+Register cleanup immediately after swapping `global.APIDb`, `global.RedisDB`, and `config.AppConfig`, before creating fixture rows. Use zero-ID guards so a setup failure still restores globals and closes Redis safely.
 
 Retain cleanup for:
 

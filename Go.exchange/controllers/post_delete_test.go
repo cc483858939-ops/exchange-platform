@@ -202,9 +202,9 @@ func openPostDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
 func TestDeletePostIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openPostDeleteIntegrationDatabase(t)
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	owner := models.User{Username: "delete-owner-" + uuid.NewString(), Password: "test"}
 	other := models.User{Username: "delete-other-" + uuid.NewString(), Password: "test"}
@@ -290,9 +290,9 @@ func TestDeletePostIntegration(t *testing.T) {
 
 func TestDeletePostCancellationRollsBackReplyAndRepostChanges(t *testing.T) {
 	db := openPostDeleteIntegrationDatabase(t)
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
+	originalDB := global.APIDb
+	global.APIDb = db
+	t.Cleanup(func() { global.APIDb = originalDB })
 
 	owner := models.User{Username: "delete-cancel-owner-" + uuid.NewString(), Password: "test"}
 	reposter := models.User{Username: "delete-cancel-reposter-" + uuid.NewString(), Password: "test"}

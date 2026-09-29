@@ -139,11 +139,11 @@ func GetMyNotifications(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
-	db := global.Db.WithContext(ctx.Request.Context())
+	db := global.APIDb.WithContext(ctx.Request.Context())
 	query := visibleNotificationsForViewer(db, viewerID, time.Now().UTC())
 	if cursor != nil {
 		query = query.Where("(n.activity_at < ?) OR (n.activity_at = ? AND n.id < ?)", cursor.ActivityAt, cursor.ActivityAt, cursor.ID)
@@ -185,12 +185,12 @@ func GetMyUnreadNotificationCount(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
 	var count int64
-	db := global.Db.WithContext(ctx.Request.Context())
+	db := global.APIDb.WithContext(ctx.Request.Context())
 	query := visibleNotificationsForViewer(db, viewerID, time.Now().UTC())
 	if err := query.Where("n.read_at IS NULL").Count(&count).Error; err != nil {
 		if handleRequestDBError(ctx, err) {
@@ -213,12 +213,12 @@ func MarkMyNotificationRead(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid notification id"})
 		return
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
 	readAt := time.Now().UTC()
-	db := global.Db.WithContext(ctx.Request.Context())
+	db := global.APIDb.WithContext(ctx.Request.Context())
 	result := db.Model(&models.Notification{}).
 		Where("id = ? AND recipient_id = ? AND read_at IS NULL", id, viewerID).
 		Updates(map[string]interface{}{"read_at": readAt, "updated_at": readAt})
@@ -257,12 +257,12 @@ func MarkMyNotificationsReadAll(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
 		return
 	}
-	if global.Db == nil {
+	if global.APIDb == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
 		return
 	}
 	readAt := time.Now().UTC()
-	result := global.Db.WithContext(ctx.Request.Context()).Model(&models.Notification{}).
+	result := global.APIDb.WithContext(ctx.Request.Context()).Model(&models.Notification{}).
 		Where("recipient_id = ? AND read_at IS NULL", viewerID).
 		Updates(map[string]interface{}{"read_at": readAt, "updated_at": readAt})
 	if result.Error != nil {

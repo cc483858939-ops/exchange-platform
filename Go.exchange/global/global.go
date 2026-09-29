@@ -7,11 +7,8 @@ import (
 )
 
 var (
-	// Db remains the API database alias for existing controller and service code.
-	Db *gorm.DB
-
 	// APIDb, WorkerDb, and MaintenanceDb use separate pools and startup timeout
-	// settings. Db must remain an alias of APIDb.
+	// settings.
 	APIDb         *gorm.DB
 	WorkerDb      *gorm.DB
 	MaintenanceDb *gorm.DB

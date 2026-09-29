@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -24,11 +23,7 @@ func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
-
-	if err := RunMigrations(); err != nil {
+	if err := RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	var runtimeState models.RuntimeSchemaState
@@ -123,14 +118,10 @@ func TestLegacyPostEmbeddingJobCleanupIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalDB := global.Db
-	global.Db = db
-	t.Cleanup(func() { global.Db = originalDB })
-
 	if err := db.Exec("CREATE TABLE IF NOT EXISTS article_embedding_jobs (id BIGSERIAL PRIMARY KEY)").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := RunMigrations(); err != nil {
+	if err := RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 

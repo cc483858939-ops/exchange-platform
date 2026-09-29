@@ -108,7 +108,6 @@ func refreshWorkerSchemaReadiness(ctx context.Context) error {
 	return initialize.CheckRuntimeSchema(ctx, global.WorkerDb, initialize.SchemaValidationOptions{
 		RequiredVersion:     initialize.RequiredSchemaVersion,
 		IncludeWorkerTables: true,
-		EmbeddingEnabled:    config.AppConfig != nil && config.AppConfig.Embedding.Enabled,
 	})
 }
 
