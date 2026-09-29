@@ -160,9 +160,9 @@ func parsePostMediaSourceURL(rawURL, allowedHost string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// BuildPostMediaObjectKey returns the DevData Medium derivative key. WebP
-// source files use a JPEG derivative; callers that need all variants should
-// use postmedia.BuildDevDataV1ObjectPaths.
+// BuildPostMediaObjectKey is kept as a small compatibility helper for local
+// DevData callers. It now returns the V1 Medium object key; new code should
+// use postmedia.BuildDevDataV1ObjectPaths when it also needs Original/Large.
 func BuildPostMediaObjectKey(registryKey, sourcePostID, contentHash, extension string) (string, error) {
 	derivativeExtension := strings.ToLower(strings.TrimSpace(extension))
 	if derivativeExtension == ".webp" {

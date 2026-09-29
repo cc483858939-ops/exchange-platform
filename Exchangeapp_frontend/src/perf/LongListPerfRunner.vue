@@ -145,7 +145,6 @@ import {
   createPerfScenarioPlans,
   PERF_EXECUTIONS_PER_SCENARIO,
   scenarioPlanLabel,
-  type PerfScenarioPlan,
 } from './runnerPlan';
 import {
   applyPendingExecution,
@@ -173,7 +172,6 @@ import {
   getPerfGitHead,
   type PerfEnvironment,
   type PerfRunnerState,
-  type PerfScenarioConfig,
   type PerfSuiteResult,
 } from './types';
 
@@ -423,7 +421,7 @@ const continueSuite = (): void => {
       requirement.height,
       requirement.tolerance,
     )) {
-      const waiting = markViewportWaiting(current, requirement);
+      const waiting = markViewportWaiting(current);
       if (!persistSession(waiting)) return;
       session.value = waiting;
       publishRunnerState(waiting, requirement);

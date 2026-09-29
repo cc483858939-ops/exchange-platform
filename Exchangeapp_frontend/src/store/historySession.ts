@@ -164,15 +164,6 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return true;
   };
 
-  const updateSnapshotRepostState = (postID: number, update: FeedRepostStateUpdate) => {
-    const snapshot = removedSnapshots.get(postID);
-    if (!snapshot) {
-      return false;
-    }
-    applyFeedRepostStateUpdate(snapshot.post, update);
-    return true;
-  };
-
   const removePostWithSnapshot = (postID: number) => {
     const index = items.value.findIndex(post => post.id === postID);
     if (index < 0) {

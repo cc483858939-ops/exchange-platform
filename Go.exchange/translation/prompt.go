@@ -91,3 +91,9 @@ func BuildPrompt(sourceLanguage, targetLanguage, content string) (string, string
 	}
 	return system, BuildUserPrompt(content), nil
 }
+
+// BuildTranslationPrompt is an explicit alias for callers that prefer the
+// domain name in the function identifier.
+func BuildTranslationPrompt(sourceLanguage, targetLanguage, content string) (string, string, error) {
+	return BuildPrompt(sourceLanguage, targetLanguage, content)
+}

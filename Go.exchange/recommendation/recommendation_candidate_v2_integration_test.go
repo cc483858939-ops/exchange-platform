@@ -11,6 +11,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/embeddings"
 	"Go.exchange/embeddingstate"
+	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
 

@@ -178,12 +178,10 @@ const PostCardStub = defineComponent({
 const makeTimeline = ({
   forYouItems = [],
   followingItems = [],
-  recentlyPublishedPosts = [],
   forYouLoading = false,
 }: {
   forYouItems?: any[];
   followingItems?: FeedPost[];
-  recentlyPublishedPosts?: FeedPost[];
   forYouLoading?: boolean;
 } = {}) => {
   const scrollTop = reactive<Record<FeedTab, number>>({
@@ -727,7 +725,6 @@ describe('HomeView virtualization', () => {
     mocks.feedStore.recentlyPublishedPosts = recentPosts;
     mocks.homeTimeline = makeTimeline({
       forYouItems: [makeRecommendation(2), makeRecommendation(3)],
-      recentlyPublishedPosts: recentPosts,
       forYouLoading: true,
     });
     rowHeights.set(0, 180);

@@ -531,7 +531,6 @@ const timelineInitialLoading = computed(() => activeSession.value?.timelineIniti
 const timelineLoadingMore = computed(() => activeSession.value?.timelineLoadingMore ?? false);
 const timelineInitialError = computed(() => activeSession.value?.timelineInitialError ?? '');
 const timelineLoadMoreError = computed(() => activeSession.value?.timelineLoadMoreError ?? '');
-const nextCursor = computed(() => activeSession.value?.nextCursor ?? null);
 const hasMore = computed(() => activeSession.value?.hasMore ?? false);
 const followState = computed<UserFollowState | null>(() => activeSession.value?.followState ?? null);
 const followLoading = computed(() => activeSession.value?.followLoading ?? false);
@@ -1452,7 +1451,7 @@ watch(
   },
 );
 
-watch(userId, (nextID, previousID) => {
+watch(userId, (_nextID, previousID) => {
   beginProfileRestoreEpoch();
   const previousNumericID = Number(previousID);
   if (Number.isSafeInteger(previousNumericID) && previousNumericID > 0) {

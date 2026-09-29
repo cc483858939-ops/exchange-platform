@@ -222,13 +222,6 @@ const medianOrNull = (values: number[]): number | null => {
   return validValues.length > 0 ? round(median(validValues)) : null;
 };
 
-const sumOrNull = (values: number[]): number | null => {
-  const validValues = finiteValues(values);
-  return validValues.length > 0
-    ? round(validValues.reduce((total, value) => total + value, 0))
-    : null;
-};
-
 const scenarioKey = (run: PerfRawRun): string => [
   run.scenario.viewport,
   run.scenario.count,

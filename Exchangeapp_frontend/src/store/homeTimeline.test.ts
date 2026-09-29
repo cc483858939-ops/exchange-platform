@@ -98,8 +98,6 @@ import {
 import { useProfileSessionStore } from './profileSession';
 import {
   isEngagementMutationLeased,
-  releaseEngagementMutationLease,
-  tryBeginEngagementMutationLease,
 } from './engagementMutationLease';
 import { GUEST_RECOMMENDATION_SESSION_STORAGE_KEY } from '../utils/guestRecommendationSession';
 

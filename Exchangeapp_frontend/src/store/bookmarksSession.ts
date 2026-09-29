@@ -57,11 +57,6 @@ const normalizeID = (value: unknown): number | null => (
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
 );
 
-const normalizeCount = (value: unknown) => {
-  const count = Number(value);
-  return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : null;
-};
-
 export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
   const authStore = useAuthStore();
   const viewerID = ref<number | null>(null);

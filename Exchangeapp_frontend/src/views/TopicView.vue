@@ -101,7 +101,6 @@ import {
 import {
   useVirtualizer,
   type VirtualItem,
-  type Virtualizer,
 } from '@tanstack/vue-virtual';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -124,7 +123,6 @@ const scrollViewportRef = ref<HTMLElement | null>(null);
 const sentinelRef = ref<HTMLElement | null>(null);
 const topicViewActive = ref(true);
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
-type TopicVirtualizer = Virtualizer<HTMLElement, HTMLElement>;
 
 const topicVirtualizerOptions = computed(() => ({
   count: topicSession.items.length,

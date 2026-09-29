@@ -237,13 +237,6 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     }
   };
 
-  const touchSession = (userID: number) => {
-    const session = sessions.get(userID);
-    if (!session) return null;
-    session.lastAccessedAt = nextAccessTime();
-    return session;
-  };
-
   const ensureSession = (rawUserID: unknown) => {
     const userID = normalizeID(rawUserID);
     if (userID === null) return null;

@@ -764,7 +764,6 @@ export const applyPendingExecution = (
 
 export const markViewportWaiting = (
   session: PerfTopLevelSuiteSession,
-  requirement: PerfViewportRequirement,
 ): PerfTopLevelSuiteSession => ({
   ...session,
   status: 'waiting-for-viewport',

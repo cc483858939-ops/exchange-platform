@@ -106,7 +106,7 @@ describe('RecommendationTelemetryClient delivery', () => {
     mocks.post.mockImplementationOnce(() => new Promise(resolve => {
       resolveNormal = resolve;
     }));
-    mocks.fetch.mockImplementation(async (_url: string, request: RequestInit) => ({
+    mocks.fetch.mockImplementation(async () => ({
       ok: true,
       status: 200,
       json: async () => ({ ...responseFor([]), results: [] }),

@@ -69,7 +69,6 @@ const {
   loaded,
   initialLoading,
   initialError,
-  nextOffset,
   hasMore,
   loadingMore,
   loadMoreError,

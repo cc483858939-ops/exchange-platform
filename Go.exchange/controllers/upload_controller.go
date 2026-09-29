@@ -32,6 +32,7 @@ const (
 	postMediaObjectPrefix         = postmedia.UserV1ObjectPrefix
 	maxPostMediaImageSize         = postmediaimage.MaxSourceBytes
 	postMediaUploadCleanupTimeout = 5 * time.Second
+	profileAvatarObjectPrefix     = "profile-avatars/"
 	maxProfileAvatarImageSize     = 2 << 20
 )
 
@@ -432,10 +433,7 @@ func isAllowedObjectKey(objectKey string) bool {
 	if strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n") {
 		return false
 	}
-	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) ||
-		profilecover.IsDevDataPublicObjectKey(objectKey) ||
-		strings.HasPrefix(objectKey, profileavatar.UserV1ObjectPrefix) ||
-		strings.HasPrefix(objectKey, profileavatar.DevDataV1ObjectPrefix)
+	return postmedia.IsPublicObjectKey(objectKey) || profilecover.IsPublicObjectKey(objectKey) || profilecover.IsDevDataPublicObjectKey(objectKey) || strings.HasPrefix(objectKey, profileAvatarObjectPrefix)
 }
 
 func isMissingStoredObjectError(err error) bool {

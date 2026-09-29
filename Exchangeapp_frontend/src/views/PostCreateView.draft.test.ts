@@ -325,7 +325,7 @@ describe('PostCreateView durable drafts and exit protection', () => {
   it('keeps the newer route draft when an older hydration resolves later', async () => {
     const pendingA = deferred<PersistedPostDraft | null>();
     const pendingB = deferred<PersistedPostDraft | null>();
-    mocks.getPostDraft.mockImplementation((viewerID: number, id: string) => (
+    mocks.getPostDraft.mockImplementation((_viewerID: number, id: string) => (
       id === 'draft-a' ? pendingA.promise : pendingB.promise
     ));
     mocks.route.query = { draft: 'draft-a' };

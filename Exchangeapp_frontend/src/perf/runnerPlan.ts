@@ -1,4 +1,4 @@
-import type { PerfFixture, PerfRunType, PerfScenarioConfig, PerfViewport } from './types';
+import type { PerfFixture, PerfScenarioConfig, PerfViewport } from './types';
 
 export const PERF_COUNTS = [20, 50, 100, 200, 300] as const;
 export const PERF_APPEND_BASES = [20, 100, 200, 280] as const;

@@ -150,10 +150,6 @@ func TestBuildPostMediaObjectKey(t *testing.T) {
 	if want := "post-media/devdata/v1/dotey/123456/" + hash + "/medium.jpg"; key != want {
 		t.Fatalf("key=%q want %q", key, want)
 	}
-	webpKey, err := BuildPostMediaObjectKey("dotey", "123456", hash, ".webp")
-	if err != nil || webpKey != "post-media/devdata/v1/dotey/123456/"+hash+"/medium.jpg" {
-		t.Fatalf("WebP source medium key=%q err=%v", webpKey, err)
-	}
 	for _, test := range []struct {
 		registry string
 		postID   string

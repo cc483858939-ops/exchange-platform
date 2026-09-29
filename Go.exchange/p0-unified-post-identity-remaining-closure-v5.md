@@ -325,7 +325,7 @@ The test must:
 
 Reuse the real store, relay, envelope, inbox, and projection functions. Do not directly insert the expected P2 `PostReaction` and do not update the expected P2 `Post.like_count` from the test.
 
-Configure unique consumer group IDs and required activity topic values in the test, and restore `global.APIDb`, `global.RedisDB`, and `config.AppConfig` in cleanup.
+Configure unique consumer group IDs and required activity topic values in the test, and restore `global.Db`, `global.RedisDB`, and `config.AppConfig` in cleanup.
 
 Phase gate:
 
