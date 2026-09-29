@@ -42,8 +42,9 @@ export type ReplySubmissionBlockReason =
 
 export type StartReplySubmissionResult =
   | { status: 'accepted'; operation: ReplySubmissionOperation }
+  | { status: 'resolved_previous'; operationID: string }
   | { status: 'blocked'; reason: ReplySubmissionBlockReason }
-  | { status: 'rejected'; reason: 'unauthenticated' | 'persistence_unavailable' };
+  | { status: 'rejected'; reason: 'unauthenticated' | 'persistence_unavailable' | 'editor_changed' };
 
 const normalizeViewerID = (value: unknown): number | null => (
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
@@ -103,6 +104,8 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
   const runningOperationIDs = new Set<string>();
   const abandoningOperationIDs = new Set<string>();
   const reconciledOperationIDs = new Set<string>();
+  const completedSucceededOperationIDs = new Set<string>();
+  const finalizationTasks = new Map<string, Promise<boolean>>();
 
   const getOperation = (viewerID: number, parentPostID: number): ReplySubmissionOperation | null => {
     const owned = operations.value.find(operation => (
@@ -141,6 +144,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     operations.value = [];
     reconciledOperationIDs.clear();
     abandoningOperationIDs.clear();
+    completedSucceededOperationIDs.clear();
   };
 
   const markDraftSourceResolved = async (operation: ReplySubmissionOperation) => {
@@ -176,8 +180,10 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     }
   };
 
-  const finalizeSuccessfulOperation = async (operation: ReplySubmissionOperation): Promise<boolean> => {
+  const performSuccessfulOperationFinalization = async (operation: ReplySubmissionOperation): Promise<boolean> => {
     if (!operation.durableOwned || operation.phase !== 'succeeded') return !operation.durableOwned;
+    if (activeViewerID.value === operation.viewerID
+      && await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed') return false;
     operation.cleanupPending = true;
     upsertOperation(operation);
 
@@ -216,6 +222,18 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     return true;
   };
 
+  const finalizeSuccessfulOperation = (operation: ReplySubmissionOperation): Promise<boolean> => {
+    const pending = finalizationTasks.get(operation.id);
+    if (pending) return pending;
+    const task = performSuccessfulOperationFinalization(operation);
+    finalizationTasks.set(operation.id, task);
+    const clearTask = () => {
+      if (finalizationTasks.get(operation.id) === task) finalizationTasks.delete(operation.id);
+    };
+    void task.then(clearTask, clearTask);
+    return task;
+  };
+
   const runOperation = async (operation: ReplySubmissionOperation) => {
     if (runningOperationIDs.has(operation.id) || operation.phase !== 'publishing') return;
     if (currentViewerID.value !== operation.viewerID) return;
@@ -226,6 +244,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         idempotencyKey: operation.id,
       });
       operation.phase = 'succeeded';
+      completedSucceededOperationIDs.add(operation.id);
       operation.failureKind = null;
       operation.error = '';
       operation.post = created;
@@ -273,6 +292,9 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         if (activeViewerID.value !== normalized) return;
         const restored = records.map(restoreOperation);
         operations.value = operations.value.filter(operation => operation.viewerID !== normalized).concat(restored);
+        for (const operation of restored) {
+          if (operation.phase === 'succeeded') completedSucceededOperationIDs.add(operation.id);
+        }
         hydratedViewers.add(normalized);
         delete recoveryErrors.value[String(normalized)];
         for (const operation of restored) {
@@ -300,16 +322,17 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       throw new Error('Reply operation storage is not available.');
     }
     const existing = getOwnedOperation(viewerID, parentPostID);
-    if (existing) return existing;
+    if (existing) return { ...existing };
     // Viewer listing is authoritative, but read the exact slot as a defense against a
     // concurrent tab creating an operation after the list was hydrated.
     const record = await getReplySubmissionOperation(viewerID, parentPostID);
     if (!record || activeViewerID.value !== viewerID) return null;
     const operation = restoreOperation(record);
+    if (operation.phase === 'succeeded') completedSucceededOperationIDs.add(operation.id);
     upsertOperation(operation);
     if (operation.phase === 'publishing') void runOperation(operation);
     else if (operation.phase === 'succeeded') void finalizeSuccessfulOperation(operation);
-    return operation;
+    return { ...operation };
   };
 
   const getBlockReason = (viewerID: number, parentPostID: number): ReplySubmissionBlockReason | null => {
@@ -348,27 +371,55 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
 
   const startOrRetry = async (parentPostID: number, rawContent: string): Promise<StartReplySubmissionResult> => {
     const viewerID = currentViewerID.value;
-    const canonicalContent = rawContent.trim();
     if (viewerID === null) return { status: 'rejected', reason: 'unauthenticated' };
-    if (!Number.isSafeInteger(parentPostID) || parentPostID <= 0 || !canonicalContent) {
+    if (!Number.isSafeInteger(parentPostID) || parentPostID <= 0) {
       return { status: 'rejected', reason: 'persistence_unavailable' };
     }
 
+    let operationAtContext: ReplySubmissionOperation | null;
     try {
-      await ensureContextHydrated(viewerID, parentPostID);
+      operationAtContext = await ensureContextHydrated(viewerID, parentPostID);
     } catch {
       return { status: 'rejected', reason: 'persistence_unavailable' };
     }
     if (recoveryErrors.value[String(viewerID)]) {
       return { status: 'rejected', reason: 'persistence_unavailable' };
     }
+    if (await replyDraftStore.awaitPendingSave(parentPostID) === 'failed') {
+      return { status: 'rejected', reason: 'persistence_unavailable' };
+    }
+    if (currentViewerID.value !== viewerID) return { status: 'rejected', reason: 'unauthenticated' };
 
     let existing = getOwnedOperation(viewerID, parentPostID);
-    if (existing?.phase === 'succeeded') {
-      await finalizeSuccessfulOperation(existing);
-      existing = getOwnedOperation(viewerID, parentPostID);
-      if (existing) return { status: 'blocked', reason: 'cleanup_pending' };
+    const operationFinishedDuringThisAction = operationAtContext?.durableOwned === true
+      && completedSucceededOperationIDs.has(operationAtContext.id);
+    const succeededOperation = existing?.phase === 'succeeded'
+      ? existing
+      : operationAtContext?.durableOwned && operationAtContext.phase === 'succeeded'
+        ? getOperation(viewerID, parentPostID) ?? operationAtContext
+        : operationFinishedDuringThisAction
+          ? getOperation(viewerID, parentPostID) ?? operationAtContext
+          : null;
+    if (succeededOperation || operationFinishedDuringThisAction) {
+      const operationID = succeededOperation?.id ?? operationAtContext!.id;
+      const cleanupTarget = succeededOperation?.phase === 'succeeded' && succeededOperation.durableOwned
+        ? succeededOperation
+        : null;
+      const resolved = cleanupTarget
+        ? await finalizeSuccessfulOperation(cleanupTarget)
+        : true;
+      if (!resolved || getOwnedOperation(viewerID, parentPostID)) {
+        return { status: 'blocked', reason: 'cleanup_pending' };
+      }
+      return { status: 'resolved_previous', operationID };
     }
+
+    const currentRaw = replyDraftStore.getDraft(parentPostID);
+    if (currentRaw.trim() !== rawContent.trim()) {
+      return { status: 'rejected', reason: 'editor_changed' };
+    }
+    const canonicalContent = currentRaw.trim();
+    if (!canonicalContent) return { status: 'rejected', reason: 'persistence_unavailable' };
 
     if (existing?.phase === 'publishing') {
       return canonicalContent === existing.content
@@ -386,7 +437,6 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         : { status: 'rejected', reason: 'persistence_unavailable' };
     }
 
-    const currentRaw = replyDraftStore.getDraft(parentPostID);
     const savedContent = replyDraftStore.getSavedContent(parentPostID);
     const sourceDraftContent = savedContent !== undefined
       && savedContent !== null
@@ -430,6 +480,12 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       || operation.failureKind !== 'retryable'
       || !operation.durableOwned
     ) return false;
+    if (await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed'
+      || currentViewerID.value !== operation.viewerID
+      || runningOperationIDs.has(operation.id)
+      || operation.phase !== 'failed'
+      || operation.failureKind !== 'retryable'
+      || !operation.durableOwned) return false;
     return transitionToPublishing(operation);
   };
 
@@ -444,6 +500,12 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       || abandoningOperationIDs.has(operation.id)
       || operation.failureKind === null
     ) return false;
+    if (await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed'
+      || currentViewerID.value !== operation.viewerID
+      || operation.phase !== 'failed'
+      || !operation.durableOwned
+      || runningOperationIDs.has(operation.id)
+      || abandoningOperationIDs.has(operation.id)) return false;
     abandoningOperationIDs.add(operation.id);
     let deleted = false;
     try {
@@ -466,7 +528,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
 
   const adoptHydratedOperation = (viewerID: number, parentPostID: number, expectedWorkingRevision: number) => {
     const operation = getOperation(viewerID, parentPostID);
-    return operation
+    return operation && operation.phase !== 'succeeded'
       ? replyDraftStore.adoptHydratedSubmission(parentPostID, operation, expectedWorkingRevision)
       : false;
   };

@@ -259,6 +259,7 @@
           @discard="requestDiscardReplyAttempt"
         />
         <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
+        <p v-if="replyNotice" class="reply-notice" role="status" aria-live="polite">{{ replyNotice }}</p>
         <p v-if="replyDraftSaveError" class="reply-error" role="alert">{{ replyDraftSaveError }}</p>
         <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
           {{ replyBookmarkError }}
@@ -495,6 +496,7 @@
             </button>
 
             <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
+            <p v-if="replyNotice" class="reply-notice" role="status" aria-live="polite">{{ replyNotice }}</p>
             <p v-if="replyDraftSaveError" class="reply-error" role="alert">{{ replyDraftSaveError }}</p>
             <p v-if="replyBookmarkError" class="reply-error" role="status" aria-live="polite">
               {{ replyBookmarkError }}
@@ -746,12 +748,13 @@ const replySubmitting = computed(() => (
   replyPreparing.value || currentReplyOperation.value?.phase === 'publishing'
 ));
 const replyComposerDisabled = computed(() => (
-  replyDraftHydrating.value || replyPreparing.value || replySubmitting.value
+  replyDraftHydrating.value || replyPreparing.value || replySubmitting.value || replyDraftSaveBusy.value
 ));
 const replyDraftDirty = computed(() => {
   const postID = currentDetailPostID.value;
   return postID !== null && replyDraftStore.hasUnsavedChanges(postID);
 });
+const replyNotice = ref('');
 const replyDraftActionVisible = computed(() => replyDraftDirty.value);
 const replyDraftActionLabel = computed(() => {
   const postID = currentDetailPostID.value;
@@ -1057,7 +1060,10 @@ const replyComposerAuthor = computed<PublicAuthor | null>(() => {
 
 const replyDraftContent = computed({
   get: () => replyDraftStore.getDraft(Number(postId.value)),
-  set: value => replyDraftStore.setDraft(Number(postId.value), value),
+  set: value => {
+    replyDraftStore.setDraft(Number(postId.value), value);
+    replyNotice.value = '';
+  },
 });
 
 const focusReplyComposer = async () => {
@@ -1282,6 +1288,7 @@ const resetRepliesState = () => {
   replyStatusError.value = '';
   replyDraftSaveError.value = '';
   replyError.value = '';
+  replyNotice.value = '';
   replyBookmarkError.value = '';
   deletingReplyId.value = null;
   deleteReplyCandidateId.value = null;
@@ -1911,22 +1918,34 @@ const retryLoadMoreReplies = () => {
 
 const handleCreateReply = async (content: string) => {
   const parentPostID = currentDetailPostID.value;
-  if (!post.value || !authStore.isAuthenticated || replySubmitting.value || parentPostID === null) return;
+  if (
+    !post.value
+    || !authStore.isAuthenticated
+    || replySubmitting.value
+    || replyPreparing.value
+    || replyDraftSaveBusy.value
+    || parentPostID === null
+  ) return;
 
   replyDraftStore.setViewer(currentViewerID.value);
   replyPreparing.value = true;
   replyError.value = '';
+  replyNotice.value = '';
   replyStatusError.value = '';
   try {
     const result = await replySubmissionStore.startOrRetry(parentPostID, content);
     if (result.status === 'rejected') {
-      replyError.value = result.reason === 'persistence_unavailable'
-        ? 'Couldn’t prepare this reply for reliable sending. Your reply was preserved. Try again.'
-        : 'Sign in before replying.';
+      replyError.value = result.reason === 'editor_changed'
+        ? 'Your reply changed while it was being prepared. Review it and try again.'
+        : result.reason === 'persistence_unavailable'
+          ? 'Couldn’t prepare this reply for reliable sending. Your reply was preserved. Try again.'
+          : 'Sign in before replying.';
     } else if (result.status === 'blocked') {
       replyError.value = result.reason === 'cleanup_pending'
         ? 'The previous reply is posted, but this device could not finish its cleanup. Try again.'
         : 'Resolve the previous reply attempt before sending another reply to this post.';
+    } else if (result.status === 'resolved_previous') {
+      replyNotice.value = 'The previous reply was already posted and has finished cleanup. Review your reply before sending another one.';
     }
   } catch {
     replyError.value = 'Couldn’t prepare this reply for reliable sending. Your reply was preserved. Try again.';
@@ -1937,7 +1956,12 @@ const handleCreateReply = async (content: string) => {
 
 const saveCurrentReplyDraft = async () => {
   const parentPostID = currentDetailPostID.value;
-  if (parentPostID === null || replyDraftSaveBusy.value || replyComposerDisabled.value) return;
+  if (
+    parentPostID === null
+    || replyDraftSaveBusy.value
+    || replyDraftStore.isSavePending(parentPostID)
+    || replyComposerDisabled.value
+  ) return;
   replyDraftSaveBusy.value = true;
   replyDraftSaveError.value = '';
   try {
@@ -2329,6 +2353,10 @@ const resolveReplyExit = (allow: boolean) => {
 const discardReplyAndLeave = () => {
   const parentPostID = currentDetailPostID.value;
   if (replyExitDialogBusy.value) return;
+  if (parentPostID !== null && replyDraftStore.isSavePending(parentPostID)) {
+    replyExitDialogError.value = 'Wait for the reply draft save to finish before discarding changes.';
+    return;
+  }
   if (parentPostID !== null) replyDraftStore.discardChanges(parentPostID);
   settleReplyExit(true);
 };
@@ -2337,23 +2365,39 @@ const saveReplyAndLeave = async () => {
   const parentPostID = currentDetailPostID.value;
   if (parentPostID === null || replyExitDialogBusy.value) return;
   replyExitDialogBusy.value = true;
+  replyDraftSaveBusy.value = true;
   replyExitDialogError.value = '';
   try {
-    const result = await replyDraftStore.saveDraft(parentPostID);
-    if (result === 'changed') throw new Error('Reply draft changed elsewhere.');
+    const pendingSave = await replyDraftStore.awaitPendingSave(parentPostID);
+    if (pendingSave === 'failed') throw new Error('Reply draft save did not complete.');
+    if (pendingSave === 'none') {
+      const result = await replyDraftStore.saveDraft(parentPostID);
+      if (result === 'changed') throw new Error('Reply draft changed elsewhere.');
+    }
+    if (replyDraftStore.hasUnsavedChanges(parentPostID)) throw new Error('Reply draft remains changed.');
     settleReplyExit(true);
   } catch {
     replyExitDialogBusy.value = false;
     replyExitDialogError.value = 'Could not save this reply draft on this device. Try again or discard it.';
+  } finally {
+    replyDraftSaveBusy.value = false;
   }
 };
 
 const decideReplyLeave = async (): Promise<boolean> => {
   if (replyPreparing.value) return false;
   const parentPostID = currentDetailPostID.value;
-  if (parentPostID === null || !replyDraftStore.hasUnsavedChanges(parentPostID)) return true;
+  if (parentPostID === null) return true;
   if (replyExitDecisionResolver) return false;
-  replyExitDialogError.value = '';
+  const pendingSave = await replyDraftStore.awaitPendingSave(parentPostID);
+  if (replyExitDecisionResolver) return false;
+  if (pendingSave === 'failed') {
+    replyDraftSaveError.value = 'Could not save this reply draft on this device. Try again or discard it.';
+    replyExitDialogError.value = 'The pending reply draft save failed. Save it again, discard the changes, or cancel navigation.';
+  } else {
+    replyExitDialogError.value = '';
+  }
+  if (!replyDraftStore.hasUnsavedChanges(parentPostID)) return true;
   replyExitDialogOpen.value = true;
   return new Promise<boolean>(resolve => {
     replyExitDecisionResolver = resolve;
@@ -2822,6 +2866,12 @@ onBeforeUnmount(() => {
 .reply-error {
   margin: var(--space-3) 0 0;
   color: var(--color-danger);
+  font-size: 12px;
+}
+
+.reply-notice {
+  margin: var(--space-3) 0 0;
+  color: var(--color-text-secondary);
   font-size: 12px;
 }
 

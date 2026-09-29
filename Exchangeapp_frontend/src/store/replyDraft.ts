@@ -35,6 +35,7 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
   const workingRevisions = new Map<string, number>();
   const hydrationRevisions = new Map<string, number>();
   const savedWriteRevisions = new Map<string, number>();
+  const pendingSaveTasks = new Map<string, Promise<SaveReplyDraftResult>>();
   let saveSequence = 0;
 
   const bumpWorkingRevision = (key: string) => {
@@ -52,6 +53,7 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     workingRevisions.clear();
     hydrationRevisions.clear();
     savedWriteRevisions.clear();
+    pendingSaveTasks.clear();
   };
 
   const setViewer = (nextViewerID: number | null): boolean => {
@@ -88,12 +90,12 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     if (viewerID.value === null || normalized === null) return false;
     const key = keyFor(normalized);
     const content = draftsByPost.value[key] ?? '';
+    const saved = savedContentByPost.value[key];
+    if (saved !== undefined && saved !== null) return content !== saved;
     const boundContent = boundOperationContentByPost.value[key];
     if (boundOperationIDByPost.value[key] && boundContent !== undefined
       && content.trim() === boundContent) return false;
-    const saved = savedContentByPost.value[key];
-    if (saved === undefined || saved === null) return content.length > 0;
-    return content !== saved;
+    return content.length > 0;
   };
 
   const setDraft = (postID: number | string, content: string) => {
@@ -140,10 +142,10 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     return record ? 'loaded' : 'empty';
   };
 
-  const saveDraft = async (postID: number | string): Promise<SaveReplyDraftResult> => {
-    const normalized = normalizePostID(postID);
-    const saveViewerID = viewerID.value;
-    if (saveViewerID === null || normalized === null) throw new Error('Sign in before saving a reply draft.');
+  const performSaveDraft = async (
+    normalized: number,
+    saveViewerID: number,
+  ): Promise<SaveReplyDraftResult> => {
     const key = keyFor(normalized);
     const content = draftsByPost.value[key] ?? '';
     const baseline = savedContentByPost.value[key] ?? null;
@@ -187,6 +189,45 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     return 'saved';
   };
 
+  const isSavePending = (postID: number | string): boolean => {
+    const normalized = normalizePostID(postID);
+    return viewerID.value !== null
+      && normalized !== null
+      && pendingSaveTasks.has(keyFor(normalized));
+  };
+
+  const awaitPendingSave = async (postID: number | string): Promise<'none' | 'completed' | 'failed'> => {
+    const normalized = normalizePostID(postID);
+    if (viewerID.value === null || normalized === null) return 'none';
+    const task = pendingSaveTasks.get(keyFor(normalized));
+    if (!task) return 'none';
+    try {
+      const result = await task;
+      return result === 'changed' ? 'failed' : 'completed';
+    } catch {
+      return 'failed';
+    }
+  };
+
+  const saveDraft = (postID: number | string): Promise<SaveReplyDraftResult> => {
+    const normalized = normalizePostID(postID);
+    const saveViewerID = viewerID.value;
+    if (saveViewerID === null || normalized === null) {
+      return Promise.reject(new Error('Sign in before saving a reply draft.'));
+    }
+    const key = keyFor(normalized);
+    const existing = pendingSaveTasks.get(key);
+    if (existing) return existing;
+
+    const task = performSaveDraft(normalized, saveViewerID);
+    pendingSaveTasks.set(key, task);
+    const clearTask = () => {
+      if (pendingSaveTasks.get(key) === task) pendingSaveTasks.delete(key);
+    };
+    void task.then(clearTask, clearTask);
+    return task;
+  };
+
   const discardChanges = (postID: number | string) => {
     const normalized = normalizePostID(postID);
     if (viewerID.value === null || normalized === null) return false;
@@ -214,11 +255,16 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
 
   const adoptHydratedSubmission = (
     postID: number | string,
-    operation: { id: string; content: string; sourceDraftContent: string | null },
+    operation: {
+      id: string;
+      content: string;
+      sourceDraftContent: string | null;
+      phase: 'publishing' | 'failed' | 'succeeded';
+    },
     expectedWorkingRevision: number,
   ) => {
     const normalized = normalizePostID(postID);
-    if (viewerID.value === null || normalized === null) return false;
+    if (viewerID.value === null || normalized === null || operation.phase === 'succeeded') return false;
     const key = keyFor(normalized);
     if ((workingRevisions.get(key) ?? 0) !== expectedWorkingRevision) return false;
     const saved = savedContentByPost.value[key] ?? null;
@@ -306,6 +352,8 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     hasSavedDraft,
     getBoundOperationID,
     hasUnsavedChanges,
+    isSavePending,
+    awaitPendingSave,
     setDraft,
     captureWorkingRevision,
     hydrateSavedDraft,

@@ -98,6 +98,13 @@ const flushAsync = async () => {
   for (let index = 0; index < 4; index += 1) await nextTick();
 };
 
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+};
+
 let pinia: Pinia;
 let wrapper: ReturnType<typeof mount> | null;
 const draftStore = () => useReplyDraftStore(pinia);
@@ -222,6 +229,47 @@ describe('PostDetail reply draft durability UX', () => {
     expect(textareas.every(textarea => (textarea.element as HTMLTextAreaElement).disabled)).toBe(true);
   });
 
+  it('disables both composers and blocks Reply while an explicit draft Save is pending', async () => {
+    const write = deferred<void>();
+    mocks.saveReplyDraft.mockReturnValueOnce(write.promise);
+    mocks.getPostById.mockResolvedValueOnce(post(42, { media: [{
+      type: 'image', url: '/image.png', large_url: '/image-large.png', width: 800, height: 600, position: 0,
+    }] }));
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.test-open-media').trigger('click');
+    await nextTick();
+    const textareas = wrapper.findAll('.reply-composer__textarea');
+    await textareas[0]!.setValue('save before reply');
+    await wrapper.find('.reply-composer__draft-action').trigger('click');
+    await nextTick();
+
+    expect(mocks.saveReplyDraft).toHaveBeenCalledTimes(1);
+    expect(textareas.every(textarea => (textarea.element as HTMLTextAreaElement).disabled)).toBe(true);
+    expect(wrapper.findAll('.reply-composer__draft-action').every(action => action.attributes('disabled') !== undefined)).toBe(true);
+    await wrapper.find('.reply-composer').trigger('submit');
+    expect(mocks.replySubmissionStore.startOrRetry).not.toHaveBeenCalled();
+
+    write.resolve();
+    await flushAsync();
+  });
+
+  it('reports successful cleanup without presenting it as a Reply failure', async () => {
+    mocks.replySubmissionStore.startOrRetry.mockResolvedValueOnce({
+      status: 'resolved_previous', operationID: 'previous-operation',
+    });
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('new reply');
+    await wrapper.find('.reply-composer').trigger('submit');
+    await flushAsync();
+
+    expect(wrapper.find('.reply-notice').text()).toContain('previous reply was already posted');
+    expect(wrapper.find('.reply-error').exists()).toBe(false);
+    expect((wrapper.get('.reply-composer__textarea').element as HTMLTextAreaElement).value).toBe('new reply');
+    expect(mocks.replySubmissionStore.startOrRetry).toHaveBeenCalledTimes(1);
+  });
+
   it('registers beforeunload only for unsaved text and removes the warning after durable binding', async () => {
     wrapper = mountDetail();
     await flushAsync();
@@ -258,7 +306,7 @@ describe('PostDetail reply draft durability UX', () => {
     await wrapper.get('.reply-composer__textarea').setValue('unsaved reply');
 
     const navigation = mocks.routeLeave({ name: 'Home' });
-    await nextTick();
+    await flushAsync();
     expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(true);
     await wrapper.get('.reply-draft-exit-dialog__button--cancel').trigger('click');
 
@@ -273,11 +321,91 @@ describe('PostDetail reply draft durability UX', () => {
     await wrapper.get('.reply-composer__textarea').setValue('save before leaving');
 
     const navigation = mocks.routeLeave({ name: 'Home' });
-    await nextTick();
+    await flushAsync();
     await wrapper.get('.reply-draft-exit-dialog__button--save').trigger('click');
     expect(await navigation).toBe(true);
     expect(mocks.saveReplyDraft).toHaveBeenCalledWith(expect.objectContaining({ content: 'save before leaving' }));
     expect(mocks.telemetry.recordReadEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for an already pending successful Save before leaving without a dialog', async () => {
+    const write = deferred<void>();
+    mocks.saveReplyDraft.mockReturnValueOnce(write.promise);
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('durable before leave');
+    void wrapper.get('.reply-composer__draft-action').trigger('click');
+    await nextTick();
+
+    let navigationSettled = false;
+    const navigation = mocks.routeLeave({ name: 'Home' }).then((allowed: boolean) => {
+      navigationSettled = true;
+      return allowed;
+    });
+    await flushAsync();
+    expect(navigationSettled).toBe(false);
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(false);
+    expect(mocks.telemetry.recordReadEnd).not.toHaveBeenCalled();
+
+    write.resolve();
+    await flushAsync();
+    expect(await navigation).toBe(true);
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(false);
+    expect(mocks.telemetry.recordReadEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the exit dialog after a pending Save fails and exposes the failure', async () => {
+    const write = deferred<void>();
+    mocks.saveReplyDraft.mockReturnValueOnce(write.promise);
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('keep after failed save');
+    void wrapper.get('.reply-composer__draft-action').trigger('click');
+    await nextTick();
+
+    let navigationSettled = false;
+    const navigation = mocks.routeLeave({ name: 'Home' }).then((allowed: boolean) => {
+      navigationSettled = true;
+      return allowed;
+    });
+    await flushAsync();
+    expect(navigationSettled).toBe(false);
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(false);
+
+    write.reject(new Error('IndexedDB unavailable'));
+    await flushAsync();
+    expect(navigationSettled).toBe(false);
+    expect(wrapper.get('.reply-draft-exit-dialog__error').text()).toContain('pending reply draft save failed');
+    expect(draftStore().hasUnsavedChanges(42)).toBe(true);
+    wrapper.get('.reply-draft-exit-dialog__button--cancel').trigger('click');
+    expect(await navigation).toBe(false);
+    expect(mocks.telemetry.recordReadEnd).not.toHaveBeenCalled();
+  });
+
+  it('does not let Discard settle navigation while a later Save is still pending', async () => {
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('discard only after saves settle');
+    let navigationSettled = false;
+    const navigation = mocks.routeLeave({ name: 'Home' }).then((allowed: boolean) => {
+      navigationSettled = true;
+      return allowed;
+    });
+    await flushAsync();
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(true);
+
+    const write = deferred<void>();
+    mocks.saveReplyDraft.mockReturnValueOnce(write.promise);
+    const saving = draftStore().saveDraft(42);
+    await wrapper.get('.reply-draft-exit-dialog__button--discard').trigger('click');
+    expect(navigationSettled).toBe(false);
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(true);
+    expect(wrapper.get('.reply-draft-exit-dialog__error').text()).toContain('Wait for the reply draft save');
+
+    write.resolve();
+    expect(await saving).toBe('saved');
+    await wrapper.get('.reply-draft-exit-dialog__button--discard').trigger('click');
+    expect(await navigation).toBe(true);
   });
 
   it('keeps navigation blocked and reply dirty if Save draft fails', async () => {
@@ -287,7 +415,7 @@ describe('PostDetail reply draft durability UX', () => {
     await wrapper.get('.reply-composer__textarea').setValue('preserve me');
 
     const navigation = mocks.routeLeave({ name: 'Home' });
-    await nextTick();
+    await flushAsync();
     await wrapper.get('.reply-draft-exit-dialog__button--save').trigger('click');
     await flushAsync();
 
@@ -296,6 +424,34 @@ describe('PostDetail reply draft durability UX', () => {
     expect(draftStore().hasUnsavedChanges(42)).toBe(true);
     expect(mocks.telemetry.recordReadEnd).not.toHaveBeenCalled();
     wrapper.get('.reply-draft-exit-dialog__button--cancel').trigger('click');
+    expect(await navigation).toBe(false);
+  });
+
+  it('keeps saved raw whitespace edits dirty even when canonical submission content stays bound', async () => {
+    mocks.getReplyDraft.mockResolvedValue({
+      key: '7:42', viewerID: 7, parentPostID: 42, content: 'hello', createdAt: 1, updatedAt: 2,
+    });
+    wrapper = mountDetail();
+    await flushAsync();
+    await wrapper.find('.reply-composer').trigger('submit');
+    await flushAsync();
+    expect(draftStore().getBoundOperationID(42)).toBe('reply-operation');
+
+    mocks.replySubmissionStore.operations[0].phase = 'failed';
+    await flushAsync();
+    await wrapper.get('.reply-composer__textarea').setValue('  hello  ');
+
+    expect(draftStore().getBoundOperationID(42)).toBe('reply-operation');
+    expect(draftStore().hasUnsavedChanges(42)).toBe(true);
+    expect(wrapper.get('.reply-composer__draft-action').text()).toBe('Save changes');
+    const beforeUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(beforeUnload);
+    expect(beforeUnload.defaultPrevented).toBe(true);
+
+    const navigation = mocks.routeLeave({ name: 'Home' });
+    await flushAsync();
+    expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(true);
+    await wrapper.get('.reply-draft-exit-dialog__button--cancel').trigger('click');
     expect(await navigation).toBe(false);
   });
 
@@ -312,7 +468,7 @@ describe('PostDetail reply draft durability UX', () => {
       { params: { id: '43' }, query: {} },
       { params: { id: '42' }, query: {} },
     );
-    await nextTick();
+    await flushAsync();
     expect(wrapper.find('.reply-draft-exit-dialog').exists()).toBe(true);
     await wrapper.get('.reply-draft-exit-dialog__button--discard').trigger('click');
     expect(await navigation).toBe(true);

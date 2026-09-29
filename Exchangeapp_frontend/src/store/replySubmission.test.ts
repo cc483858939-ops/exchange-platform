@@ -153,6 +153,8 @@ describe('replySubmission store', () => {
 
   it('does not auto-retry failed operations and reuses the original operation on an exact retry', async () => {
     mocks.records.set('7:42', record({ phase: 'failed', failureKind: 'retryable', error: 'offline' }));
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'hello');
     await store().activateViewer(7);
     await flushPromises();
     expect(mocks.createPostReply).not.toHaveBeenCalled();
@@ -167,6 +169,8 @@ describe('replySubmission store', () => {
 
   it('blocks edited content and idempotency conflicts without generating a replacement key', async () => {
     mocks.records.set('7:42', record({ phase: 'failed', failureKind: 'retryable' }));
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'edited');
     await store().activateViewer(7);
     expect(await store().startOrRetry(42, 'edited')).toEqual({ status: 'blocked', reason: 'unresolved_reply' });
     expect(mocks.createPostReply).not.toHaveBeenCalled();
@@ -175,6 +179,7 @@ describe('replySubmission store', () => {
     const existing = store().getOperation(7, 42)!;
     existing.failureKind = 'idempotency_conflict';
     existing.phase = 'failed';
+    drafts().setDraft(42, 'hello');
     expect(await store().startOrRetry(42, 'hello')).toEqual({ status: 'blocked', reason: 'idempotency_conflict' });
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
   });
@@ -200,6 +205,7 @@ describe('replySubmission store', () => {
 
   it('durably transitions a retry before calling HTTP', async () => {
     mocks.records.set('7:42', record({ phase: 'failed', failureKind: 'retryable' }));
+    drafts().setViewer(7);
     await store().activateViewer(7);
     const storageModule = await import('../storage/replyStorage');
     const update = vi.mocked(storageModule.updateReplySubmissionOperation);
@@ -215,6 +221,48 @@ describe('replySubmission store', () => {
     expect(await retrying).toBe(true);
     await flushPromises();
     expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-a' });
+  });
+
+  it('waits for a pending Save before transitioning a failed operation to publishing', async () => {
+    mocks.records.set('7:42', record({ phase: 'failed', failureKind: 'retryable' }));
+    drafts().setViewer(7);
+    await store().activateViewer(7);
+    drafts().setDraft(42, 'saved editor');
+    const storageModule = await import('../storage/replyStorage');
+    const write = deferred<void>();
+    vi.mocked(storageModule.saveReplyDraft).mockReturnValueOnce(write.promise);
+    const saving = drafts().saveDraft(42);
+    const retrying = store().retry('operation-a');
+    await flushPromises();
+
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+    expect(vi.mocked(storageModule.updateReplySubmissionOperation)).not.toHaveBeenCalled();
+
+    write.resolve();
+    expect(await saving).toBe('saved');
+    expect(await retrying).toBe(true);
+    await flushPromises();
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-a' });
+  });
+
+  it('does not abandon a failed operation while its parent draft Save is unresolved', async () => {
+    mocks.records.set('7:42', record({ phase: 'failed', failureKind: 'retryable' }));
+    drafts().setViewer(7);
+    await store().activateViewer(7);
+    drafts().setDraft(42, 'edited draft');
+    const storageModule = await import('../storage/replyStorage');
+    const write = deferred<void>();
+    vi.mocked(storageModule.saveReplyDraft).mockReturnValueOnce(write.promise);
+    const saving = drafts().saveDraft(42);
+    const abandoning = store().abandonFailedOperation('operation-a');
+    await flushPromises();
+
+    expect(vi.mocked(storageModule.deleteReplySubmissionOperation)).not.toHaveBeenCalled();
+    const saveFailure = expect(saving).rejects.toThrow('quota');
+    write.reject(new Error('quota'));
+    expect(await abandoning).toBe(false);
+    await saveFailure;
+    expect(mocks.records.has('7:42')).toBe(true);
   });
 
   it('abandons only after durable conditional deletion and preserves the editor', async () => {
@@ -278,10 +326,11 @@ describe('replySubmission store', () => {
     expect(drafts().hasSavedDraft(42)).toBe(false);
   });
 
-  it('keeps successful operations succeeded and retries cleanup before a new reply', async () => {
+  it('resolves a succeeded operation on one click and requires a later click for the next reply', async () => {
     drafts().setViewer(7);
     drafts().setDraft(42, 'first');
     await drafts().saveDraft(42);
+    mocks.createClientOperationID.mockReturnValueOnce('operation-a').mockReturnValueOnce('operation-b');
     const storageModule = await import('../storage/replyStorage');
     const conditionalDelete = vi.mocked(storageModule.deleteReplyDraftIfUnchanged);
     conditionalDelete.mockRejectedValueOnce(new Error('temporary storage failure'));
@@ -291,9 +340,161 @@ describe('replySubmission store', () => {
     expect(store().getOperation(7, 42)).toMatchObject({ phase: 'succeeded', durableOwned: true, cleanupPending: true });
     expect(mocks.records.get('7:42')?.phase).toBe('succeeded');
 
+    const cleanupOnly = await store().startOrRetry(42, 'first');
+    expect(cleanupOnly).toEqual({ status: 'resolved_previous', operationID: 'operation-a' });
+    expect(mocks.createClientOperationID).toHaveBeenCalledTimes(1);
+    expect(mocks.replaceReplySubmissionOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
+    expect(drafts().getDraft(42)).toBe('');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+
+    drafts().setDraft(42, 'second');
     const next = await store().startOrRetry(42, 'second');
-    expect(next).toMatchObject({ status: 'accepted', operation: { id: 'operation-new' } });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, 42, 'second', { idempotencyKey: 'operation-new' });
+    expect(next).toMatchObject({ status: 'accepted', operation: { id: 'operation-b' } });
+    expect(mocks.createClientOperationID).toHaveBeenCalledTimes(2);
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, 42, 'second', { idempotencyKey: 'operation-b' });
+  });
+
+  it('preserves newer editor content when a succeeded operation is cleaned up', async () => {
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'first');
+    await drafts().saveDraft(42);
+    mocks.createClientOperationID.mockReturnValueOnce('operation-a').mockReturnValueOnce('operation-b');
+    const storageModule = await import('../storage/replyStorage');
+    vi.mocked(storageModule.deleteReplyDraftIfUnchanged).mockRejectedValueOnce(new Error('temporary storage failure'));
+
+    await store().startOrRetry(42, 'first');
+    await flushPromises();
+    expect(store().getOperation(7, 42)).toMatchObject({ phase: 'succeeded', durableOwned: true });
+
+    drafts().setDraft(42, 'new reply');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+    const cleanupOnly = await store().startOrRetry(42, 'new reply');
+
+    expect(cleanupOnly).toEqual({ status: 'resolved_previous', operationID: 'operation-a' });
+    expect(drafts().getDraft(42)).toBe('new reply');
+    expect(mocks.createClientOperationID).toHaveBeenCalledTimes(1);
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
+
+    const next = await store().startOrRetry(42, 'new reply');
+    expect(next).toMatchObject({ status: 'accepted', operation: { id: 'operation-b' } });
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, 42, 'new reply', { idempotencyKey: 'operation-b' });
+  });
+
+  it('does not adopt a recovered succeeded operation into the composer', async () => {
+    mocks.records.set('7:42', record({
+      phase: 'succeeded', post: replyPost(), sourceDraftContent: null,
+    }));
+    drafts().setViewer(7);
+    await store().activateViewer(7);
+    await flushPromises();
+    await drafts().hydrateSavedDraft(42);
+    const workingRevision = drafts().captureWorkingRevision(42)!;
+
+    expect(store().adoptHydratedOperation(7, 42, workingRevision)).toBe(false);
+    expect(drafts().getDraft(42)).toBe('');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+  });
+
+  it('waits for a successful Save before creating an operation and capturing its source draft', async () => {
+    const write = deferred<void>();
+    const storageModule = await import('../storage/replyStorage');
+    vi.mocked(storageModule.saveReplyDraft).mockImplementationOnce(async draft => {
+      await write.promise;
+      mocks.drafts.set(draft.key, draft);
+    });
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'hello');
+    const saving = drafts().saveDraft(42);
+    const starting = store().startOrRetry(42, 'hello');
+    await flushPromises();
+
+    expect(drafts().isSavePending(42)).toBe(true);
+    expect(mocks.createClientOperationID).not.toHaveBeenCalled();
+    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+
+    write.resolve();
+    expect(await saving).toBe('saved');
+    expect(await starting).toMatchObject({
+      status: 'accepted', operation: { content: 'hello', sourceDraftContent: 'hello' },
+    });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-new' });
+  });
+
+  it('waits for the draft Save before resolving succeeded-operation cleanup and never creates B', async () => {
+    const write = deferred<void>();
+    const storageModule = await import('../storage/replyStorage');
+    vi.mocked(storageModule.saveReplyDraft).mockImplementationOnce(async draft => {
+      await write.promise;
+      mocks.drafts.set(draft.key, draft);
+    });
+    mocks.records.set('7:42', record({
+      phase: 'succeeded', post: replyPost(), sourceDraftContent: 'older saved content',
+    }));
+    mocks.drafts.set('7:42', {
+      key: '7:42', viewerID: 7, parentPostID: 42,
+      content: 'older saved content', createdAt: 1, updatedAt: 2,
+    });
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'new saved content');
+    const saving = drafts().saveDraft(42);
+    const starting = store().startOrRetry(42, 'new saved content');
+    await flushPromises();
+
+    expect(vi.mocked(storageModule.deleteReplyDraftIfUnchanged)).not.toHaveBeenCalled();
+    expect(vi.mocked(storageModule.deleteReplySubmissionOperation)).not.toHaveBeenCalled();
+    expect(mocks.createClientOperationID).not.toHaveBeenCalled();
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+
+    write.resolve();
+    expect(await saving).toBe('saved');
+    expect(await starting).toEqual({ status: 'resolved_previous', operationID: 'operation-a' });
+    expect(mocks.drafts.get('7:42')?.content).toBe('new saved content');
+    expect(mocks.createClientOperationID).not.toHaveBeenCalled();
+    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
+  it('blocks submission without allocating an operation when the pending Save fails', async () => {
+    const write = deferred<void>();
+    const storageModule = await import('../storage/replyStorage');
+    vi.mocked(storageModule.saveReplyDraft).mockReturnValueOnce(write.promise);
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'preserved reply');
+    const saving = drafts().saveDraft(42);
+    const saveFailure = expect(saving).rejects.toThrow('quota');
+    const starting = store().startOrRetry(42, 'preserved reply');
+    await flushPromises();
+
+    expect(mocks.createClientOperationID).not.toHaveBeenCalled();
+    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+
+    write.reject(new Error('quota'));
+    expect(await starting).toEqual({ status: 'rejected', reason: 'persistence_unavailable' });
+    await saveFailure;
+    expect(drafts().getDraft(42)).toBe('preserved reply');
+  });
+
+  it('re-reads the editor after Save and rejects stale submission content', async () => {
+    const write = deferred<void>();
+    const storageModule = await import('../storage/replyStorage');
+    vi.mocked(storageModule.saveReplyDraft).mockReturnValueOnce(write.promise);
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'hello');
+    const saving = drafts().saveDraft(42);
+    const starting = store().startOrRetry(42, 'hello');
+    await flushPromises();
+    drafts().setDraft(42, 'newer editor content');
+
+    write.resolve();
+    await saving;
+    expect(await starting).toEqual({ status: 'rejected', reason: 'editor_changed' });
+    expect(mocks.createClientOperationID).not.toHaveBeenCalled();
+    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+    expect(drafts().getDraft(42)).toBe('newer editor content');
   });
 
   it('does not create a new key while succeeded cleanup remains unavailable', async () => {
@@ -332,6 +533,7 @@ describe('replySubmission store', () => {
     await store().activateViewer(7);
     mocks.authStore.currentIdentity.id = 8;
     await store().activateViewer(8);
+    drafts().setDraft(42, 'other user');
 
     expect(store().getOperation(7, 42)).toBeNull();
     expect(await store().startOrRetry(42, 'other user')).toMatchObject({

@@ -27,8 +27,9 @@ const saved = (viewerID = 7, parentPostID = 42, content = 'saved reply') => ({
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 };
 
 describe('replyDraft store', () => {
@@ -89,7 +90,7 @@ describe('replyDraft store', () => {
     expect(store.hasUnsavedChanges(42)).toBe(true);
   });
 
-  it('treats canonical whitespace edits as durably bound but raw saved edits as dirty', async () => {
+  it('keeps canonical whitespace edits clean when there is no saved draft baseline', async () => {
     const store = useReplyDraftStore();
     store.setViewer(7);
     store.setDraft(42, 'hello');
@@ -103,6 +104,98 @@ describe('replyDraft store', () => {
     store.setDraft(42, 'different');
     expect(store.getBoundOperationID(42)).toBeNull();
     expect(store.hasUnsavedChanges(42)).toBe(true);
+  });
+
+  it('treats raw whitespace edits to a saved draft as dirty even while its operation stays bound', async () => {
+    mocks.getReplyDraft.mockResolvedValue(saved(7, 42, 'hello'));
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    await store.hydrateSavedDraft(42);
+    expect(store.bindSubmission(42, 'operation-a', 'hello')).toBe(true);
+
+    store.setDraft(42, '  hello  ');
+
+    expect(store.getBoundOperationID(42)).toBe('operation-a');
+    expect(store.hasUnsavedChanges(42)).toBe(true);
+  });
+
+  it('rejects succeeded operations from composer adoption but still adopts publishing and failed operations', () => {
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+
+    expect(store.adoptHydratedSubmission(42, {
+      id: 'succeeded', content: 'old reply', sourceDraftContent: null, phase: 'succeeded',
+    }, 0)).toBe(false);
+    expect(store.getDraft(42)).toBe('');
+    expect(store.getBoundOperationID(42)).toBeNull();
+
+    expect(store.adoptHydratedSubmission(42, {
+      id: 'publishing', content: 'publishing reply', sourceDraftContent: null, phase: 'publishing',
+    }, 0)).toBe(true);
+    expect(store.getDraft(42)).toBe('publishing reply');
+    store.discardChanges(42);
+
+    expect(store.adoptHydratedSubmission(43, {
+      id: 'failed', content: 'failed reply', sourceDraftContent: null, phase: 'failed',
+    }, 0)).toBe(true);
+    expect(store.getDraft(43)).toBe('failed reply');
+  });
+
+  it('tracks one pending save per parent and lets submission share its completion barrier', async () => {
+    const write = deferred<void>();
+    mocks.saveReplyDraft.mockReturnValueOnce(write.promise);
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    store.setDraft(42, 'hello');
+
+    const saving = store.saveDraft(42);
+    const duplicateSave = store.saveDraft(42);
+    const barrier = store.awaitPendingSave(42);
+
+    expect(duplicateSave).not.toBe(saving);
+    expect(mocks.saveReplyDraft).toHaveBeenCalledTimes(1);
+    expect(store.isSavePending(42)).toBe(true);
+    expect(store.isSavePending(43)).toBe(false);
+    expect(await store.awaitPendingSave(43)).toBe('none');
+
+    write.resolve();
+    expect(await saving).toBe('saved');
+    expect(await duplicateSave).toBe('saved');
+    expect(await barrier).toBe('completed');
+    expect(store.isSavePending(42)).toBe(false);
+  });
+
+  it('reports a failed barrier when a pending save changes elsewhere or rejects', async () => {
+    const write = deferred<void>();
+    mocks.saveReplyDraft.mockReturnValueOnce(write.promise);
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    store.setDraft(42, 'hello');
+
+    const saving = store.saveDraft(42);
+    const saveFailure = expect(saving).rejects.toThrow('quota');
+    const barrier = store.awaitPendingSave(42);
+    write.reject(new Error('quota'));
+
+    expect(await barrier).toBe('failed');
+    await saveFailure;
+    expect(store.isSavePending(42)).toBe(false);
+  });
+
+  it('treats a conditional delete changed result as a failed save barrier', async () => {
+    mocks.getReplyDraft.mockResolvedValue(saved(7, 42, 'newer saved version'));
+    mocks.deleteReplyDraftIfUnchanged.mockResolvedValueOnce('changed');
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    await store.hydrateSavedDraft(42);
+    store.setDraft(42, '');
+
+    const saving = store.saveDraft(42);
+    const barrier = store.awaitPendingSave(42);
+
+    expect(await saving).toBe('changed');
+    expect(await barrier).toBe('failed');
+    expect(store.getSavedContent(42)).toBe('newer saved version');
   });
 
   it('requires an explicit empty save to remove a saved reply draft', async () => {
