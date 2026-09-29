@@ -35,11 +35,12 @@ type DeadLetterSource struct {
 
 // DeadLetterFailure carries task-classified processing failure metadata.
 type DeadLetterFailure struct {
-	Class    string    `json:"class"`
-	Code     string    `json:"code"`
-	Reason   string    `json:"reason"`
-	Attempts int       `json:"attempts"`
-	FailedAt time.Time `json:"failed_at"`
+	Class           string    `json:"class"`
+	Code            string    `json:"code"`
+	Reason          string    `json:"reason"`
+	ReasonTruncated bool      `json:"reason_truncated,omitempty"`
+	Attempts        int       `json:"attempts"`
+	FailedAt        time.Time `json:"failed_at"`
 }
 
 // DeadLetterRecord is the single application consumer DLQ wire contract.
@@ -86,7 +87,9 @@ func ValidateDeadLetterRecord(record DeadLetterRecord) error {
 }
 
 func EncodeDeadLetterRecord(record DeadLetterRecord) ([]byte, error) {
-	record.Failure.Reason = truncateDeadLetterReason(record.Failure.Reason)
+	reason, truncated := truncateDeadLetterReason(record.Failure.Reason)
+	record.Failure.Reason = reason
+	record.Failure.ReasonTruncated = record.Failure.ReasonTruncated || truncated
 	if err := ValidateDeadLetterRecord(record); err != nil {
 		return nil, err
 	}
@@ -127,7 +130,9 @@ func NewDeadLetterRecord(consumer, eventID string, source kafka.Message, failure
 	}
 	record.Failure.Class = strings.TrimSpace(record.Failure.Class)
 	record.Failure.Code = strings.TrimSpace(record.Failure.Code)
-	record.Failure.Reason = truncateDeadLetterReason(record.Failure.Reason)
+	reason, truncated := truncateDeadLetterReason(record.Failure.Reason)
+	record.Failure.Reason = reason
+	record.Failure.ReasonTruncated = record.Failure.ReasonTruncated || truncated
 	if record.Failure.FailedAt.IsZero() {
 		record.Failure.FailedAt = time.Now().UTC()
 	} else {
@@ -157,13 +162,13 @@ func cloneDeadLetterBytes(value []byte) []byte {
 	return cloned
 }
 
-func truncateDeadLetterReason(reason string) string {
+func truncateDeadLetterReason(reason string) (string, bool) {
 	if len(reason) <= MaxDeadLetterReasonBytes {
-		return reason
+		return reason, false
 	}
 	end := MaxDeadLetterReasonBytes
 	for end > 0 && !utf8.ValidString(reason[:end]) {
 		end--
 	}
-	return reason[:end]
+	return reason[:end], true
 }

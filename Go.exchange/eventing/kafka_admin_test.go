@@ -34,7 +34,10 @@ func TestRequiredKafkaTopics(t *testing.T) {
 		{Name: "recommendation", Partitions: 12, ReplicationFactor: 1},
 		{Name: "embedding", Partitions: 6, ReplicationFactor: 1},
 		{Name: "activity", Partitions: 12, ReplicationFactor: 1},
-		{Name: "consumer-dlq", Partitions: 6, ReplicationFactor: 1, ConfigEntries: []kafka.ConfigEntry{{ConfigName: "retention.ms", ConfigValue: "2592000000"}}},
+		{Name: "consumer-dlq", Partitions: 6, ReplicationFactor: 1, ConfigEntries: []kafka.ConfigEntry{
+			{ConfigName: "cleanup.policy", ConfigValue: "delete"},
+			{ConfigName: "retention.ms", ConfigValue: "2592000000"},
+		}},
 	}
 	for index := range want {
 		if !reflect.DeepEqual(specs[index], want[index]) {

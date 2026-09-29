@@ -370,6 +370,11 @@ jobs:
             printf '%s\n' "$dlq_config"
             exit 1
           fi
+          if ! printf '%s\n' "$dlq_config" | grep -Fq 'cleanup.policy=delete'; then
+            echo "Consumer DLQ cleanup.policy is not explicitly configured as delete"
+            printf '%s\n' "$dlq_config"
+            exit 1
+          fi
   frontend:
     name: Frontend / Test and Build
     runs-on: ubuntu-latest
@@ -408,6 +413,9 @@ jobs:
       - name: Build backend image
         run: docker build -f Go.exchange/Dockerfile.prod -t goexchange-backend:ci Go.exchange
 
+      - name: Verify kafka-dlq image executable
+        run: docker run --rm --entrypoint /bin/sh goexchange-backend:ci -c 'test -x /app/go-exchange-kafka-dlq'
+
       - name: Validate production Compose and maintenance scripts
         env:
           TWITTER_AUTH_TOKEN: ci-placeholder
@@ -416,6 +424,22 @@ jobs:
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile maintenance config --quiet
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile rss --profile devdata config --quiet
           docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile observability config --quiet
+          docker compose --env-file deploy/.env.example -f deploy/compose.prod.yml --profile maintenance config --format json > "$RUNNER_TEMP/maintenance-dsn-isolation.json"
+          python3 - "$RUNNER_TEMP/maintenance-dsn-isolation.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              services = json.load(source)["services"]
+
+          def environment(service):
+              value = services[service].get("environment", {})
+              return dict(value) if isinstance(value, dict) else dict(item.split("=", 1) for item in value)
+
+          assert environment("kafka-dlq").get("KAFKA_DLQ_DATABASE_DSN"), "maintenance CLI is missing its audit DSN"
+          for name in ("api", "worker"):
+              assert "KAFKA_DLQ_DATABASE_DSN" not in environment(name), f"{name} received the maintenance audit DSN"
+          PY
           python3 scripts/tests/worker-runtime-isolation-test.py
           bash -n \
             scripts/backup-postgres.sh \

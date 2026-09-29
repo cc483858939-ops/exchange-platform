@@ -66,6 +66,21 @@ func OpenMaintenanceDatabase(cfg *Config) (*gorm.DB, error) {
 	return OpenMaintenanceDatabaseWithDSN(cfg, databaseDSN(cfg))
 }
 
+// KafkaDLQDatabaseDSN returns the isolated credential used only for replay
+// audit writes. It intentionally does not fall back to DATABASE_DSN or the
+// application config's database DSN.
+func KafkaDLQDatabaseDSN() string {
+	return strings.TrimSpace(os.Getenv("KAFKA_DLQ_DATABASE_DSN"))
+}
+
+func OpenKafkaDLQDatabase(cfg *Config) (*gorm.DB, error) {
+	dsn := KafkaDLQDatabaseDSN()
+	if dsn == "" {
+		return nil, errors.New("KAFKA_DLQ_DATABASE_DSN is not configured")
+	}
+	return OpenMaintenanceDatabaseWithDSN(cfg, dsn)
+}
+
 func OpenMaintenanceDatabaseWithDSN(cfg *Config, dsn string) (*gorm.DB, error) {
 	if cfg == nil {
 		return nil, errors.New("maintenance database configuration is nil")

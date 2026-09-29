@@ -134,7 +134,13 @@ func consumeNotificationMessages(ctx context.Context, reader notificationMessage
 			return err
 		}
 		if err := reader.CommitMessages(ctx, batch...); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			PipelineFailure(PipelineNotificationProjection, "kafka_commit_failed", 0)
+			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
+			return commitErr
 		}
 		if statsReader, ok := reader.(notificationLagReader); ok {
 			lag := statsReader.Stats().Lag
@@ -175,6 +181,12 @@ func (p rawNotificationPublisher) PublishRaw(ctx context.Context, topic string, 
 func processNotificationBatch(ctx context.Context, messages []kafka.Message, publisher interface {
 	PublishRaw(context.Context, string, ...kafka.Message) error
 }) error {
+	return processNotificationBatchWithRetry(ctx, messages, publisher, defaultKafkaRetryPolicy)
+}
+
+func processNotificationBatchWithRetry(ctx context.Context, messages []kafka.Message, publisher interface {
+	PublishRaw(context.Context, string, ...kafka.Message) error
+}, policy kafkaRetryPolicy) error {
 	started := time.Now()
 	records := make([]notificationActivityRecord, 0, len(messages))
 	for _, message := range messages {
@@ -199,12 +211,42 @@ func processNotificationBatch(ctx context.Context, messages []kafka.Message, pub
 	if len(records) == 0 {
 		return nil
 	}
-	if err := applyNotificationRecords(ctx, records); err != nil {
+	if err := retryNotificationDatabaseApply(ctx, policy, func() error {
+		return applyNotificationRecords(ctx, records)
+	}); err != nil {
 		metrics.RecordNotificationProjectionFailure("database")
-		return err
+		return fmt.Errorf("apply notification records: %w", err)
 	}
 	metrics.ObserveNotificationProjectionLatency(time.Since(started))
 	return nil
+}
+
+func retryNotificationDatabaseApply(ctx context.Context, policy kafkaRetryPolicy, apply func() error) error {
+	if apply == nil {
+		return errors.New("notification database apply operation is nil")
+	}
+	attempts := 0
+	err := retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
+		log.Printf("[NotificationProjection] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
+	}, func() error {
+		attempts++
+		if applyErr := apply(); applyErr != nil {
+			return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, applyErr)
+		}
+		return nil
+	})
+	if err == nil {
+		return nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts >= policy.MaxAttempts {
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCode(err))
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(err))
+	}
+	return err
 }
 
 func decodeNotificationActivity(message kafka.Message) (notificationActivityRecord, error) {

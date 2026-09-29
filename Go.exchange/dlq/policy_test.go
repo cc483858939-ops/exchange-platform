@@ -46,6 +46,9 @@ func TestReplayPolicyAllowsConfiguredConsumerTopicPairs(t *testing.T) {
 		if err != nil || policy.SafetyMode != mode {
 			t.Fatalf("consumer=%s policy=%+v err=%v want mode=%s", consumer, policy, err, mode)
 		}
+		if consumer == "user_behavior_projection" && policy.SafetyDescription != "ConsumerInbox + versioned post reaction gate" {
+			t.Fatalf("user behavior safety description=%q", policy.SafetyDescription)
+		}
 	}
 }
 

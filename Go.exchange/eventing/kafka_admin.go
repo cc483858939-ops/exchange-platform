@@ -42,7 +42,10 @@ func RequiredKafkaTopics(cfg config.KafkaConfig) ([]TopicSpec, error) {
 		{Name: cfg.RecommendationEventsTopic, Partitions: cfg.RecommendationEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.PostEmbeddingTopic, Partitions: cfg.PostEmbeddingPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
 		{Name: cfg.ActivityEventsTopic, Partitions: cfg.ActivityEventsPartitions, ReplicationFactor: cfg.TopicReplicationFactor},
-		{Name: cfg.ConsumerDLQTopic, Partitions: cfg.ConsumerDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor, ConfigEntries: []kafka.ConfigEntry{{ConfigName: "retention.ms", ConfigValue: "2592000000"}}},
+		{Name: cfg.ConsumerDLQTopic, Partitions: cfg.ConsumerDLQPartitions, ReplicationFactor: cfg.TopicReplicationFactor, ConfigEntries: []kafka.ConfigEntry{
+			{ConfigName: "cleanup.policy", ConfigValue: "delete"},
+			{ConfigName: "retention.ms", ConfigValue: "2592000000"},
+		}},
 	}
 	seen := make(map[string]struct{}, len(specs))
 	for index := range specs {

@@ -233,6 +233,15 @@ services:
         condition: service_started
     restart: "no"
 
+  kafka-dlq:
+    profiles: ["maintenance"]
+    <<: [*backend-image, *service-defaults]
+    entrypoint: ["/app/go-exchange-kafka-dlq"]
+    environment:
+      KAFKA_BROKERS: "${KAFKA_BROKERS:-kafka:9092}"
+      KAFKA_DLQ_DATABASE_DSN: "${KAFKA_DLQ_DATABASE_DSN:?KAFKA_DLQ_DATABASE_DSN is required}"
+    restart: "no"
+
   kafka-init:
     <<: [*backend-image, *service-defaults]
     entrypoint: ["/app/go-exchange-kafka-init"]

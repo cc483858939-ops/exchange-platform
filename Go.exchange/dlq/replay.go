@@ -21,21 +21,22 @@ const (
 )
 
 type ReplayPlan struct {
-	DLQTopic        string           `json:"dlq_topic"`
-	DLQPartition    int              `json:"dlq_partition"`
-	DLQOffset       int64            `json:"dlq_offset"`
-	Consumer        string           `json:"consumer"`
-	EventID         string           `json:"event_id,omitempty"`
-	SourceTopic     string           `json:"source_topic"`
-	SourcePartition int              `json:"source_partition"`
-	SourceOffset    int64            `json:"source_offset"`
-	SafetyMode      ReplaySafetyMode `json:"safety_mode"`
-	ErrorClass      string           `json:"error_class"`
-	ErrorCode       string           `json:"error_code"`
-	FailedAt        time.Time        `json:"failed_at"`
-	KeySize         int              `json:"key_size"`
-	ValueSize       int              `json:"value_size"`
-	HeaderCount     int              `json:"header_count"`
+	DLQTopic          string           `json:"dlq_topic"`
+	DLQPartition      int              `json:"dlq_partition"`
+	DLQOffset         int64            `json:"dlq_offset"`
+	Consumer          string           `json:"consumer"`
+	EventID           string           `json:"event_id,omitempty"`
+	SourceTopic       string           `json:"source_topic"`
+	SourcePartition   int              `json:"source_partition"`
+	SourceOffset      int64            `json:"source_offset"`
+	SafetyMode        ReplaySafetyMode `json:"safety_mode"`
+	SafetyDescription string           `json:"safety_description"`
+	ErrorClass        string           `json:"error_class"`
+	ErrorCode         string           `json:"error_code"`
+	FailedAt          time.Time        `json:"failed_at"`
+	KeySize           int              `json:"key_size"`
+	ValueSize         int              `json:"value_size"`
+	HeaderCount       int              `json:"header_count"`
 }
 
 func BuildReplayPlan(located LocatedRecord, registry ReplayPolicyRegistry) (ReplayPlan, error) {
@@ -51,7 +52,7 @@ func BuildReplayPlan(located LocatedRecord, registry ReplayPolicyRegistry) (Repl
 		DLQTopic: located.DLQTopic, DLQPartition: located.DLQPartition, DLQOffset: located.DLQOffset,
 		Consumer: record.Consumer, EventID: record.EventID,
 		SourceTopic: record.Source.Topic, SourcePartition: record.Source.Partition, SourceOffset: record.Source.Offset,
-		SafetyMode: policy.SafetyMode, ErrorClass: record.Failure.Class, ErrorCode: record.Failure.Code,
+		SafetyMode: policy.SafetyMode, SafetyDescription: policy.SafetyDescription, ErrorClass: record.Failure.Class, ErrorCode: record.Failure.Code,
 		FailedAt: record.Failure.FailedAt, KeySize: len(record.Source.Key), ValueSize: len(record.Source.Value),
 		HeaderCount: len(record.Source.Headers),
 	}, nil

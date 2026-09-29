@@ -25,10 +25,8 @@ import (
 func TestLikeSnapshotDLQReplayDuplicateAndStaleSafetyIntegration(t *testing.T) {
 	db := openKafkaDLQReplayIntegrationDatabase(t, &models.User{}, &models.Post{}, &models.ConsumerInbox{})
 	groupID := "like-snapshot-dlq-replay-" + uuid.NewString()
-	applicationConfig := config.KafkaConfig{
-		LikeSnapshotTopic: "goexchange.post.like.snapshot.v1", LikeSnapshotGroupID: groupID,
-		ConsumerDLQTopic: "goexchange.consumer.dlq.v1",
-	}
+	applicationConfig := replayIntegrationKafkaConfig()
+	applicationConfig.LikeSnapshotGroupID = groupID
 	originalConfig := config.AppConfig
 	config.AppConfig = &config.Config{Kafka: applicationConfig}
 	t.Cleanup(func() { config.AppConfig = originalConfig })
@@ -89,9 +87,7 @@ func TestPostEmbeddingDLQReplaySkipsCurrentProjectionIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	applicationConfig := config.KafkaConfig{
-		PostEmbeddingTopic: "goexchange.post.embedding.v1", ConsumerDLQTopic: "goexchange.consumer.dlq.v1",
-	}
+	applicationConfig := replayIntegrationKafkaConfig()
 	envelope, err := eventing.NewPostEmbeddingRequestedEnvelope(uuid.NewString(), post.ID, now)
 	if err != nil {
 		t.Fatal(err)
@@ -121,10 +117,8 @@ func TestNotificationDLQReplayDedupesAndMalformedUsesUnifiedTopicIntegration(t *
 	if err := initialize.RunMigrationsWithDB(context.Background(), db); err != nil {
 		t.Fatalf("initialize notification integration schema: %v", err)
 	}
-	applicationConfig := config.KafkaConfig{
-		ActivityEventsTopic: "goexchange.activity.events.v1", NotificationGroupID: "notification-dlq-replay-" + uuid.NewString(),
-		ConsumerDLQTopic: "goexchange.consumer.dlq.v1",
-	}
+	applicationConfig := replayIntegrationKafkaConfig()
+	applicationConfig.NotificationGroupID = "notification-dlq-replay-" + uuid.NewString()
 	originalConfig, originalWorkerDB := config.AppConfig, global.WorkerDb
 	config.AppConfig = &config.Config{Kafka: applicationConfig}
 	global.WorkerDb = db
@@ -192,6 +186,17 @@ func TestNotificationDLQReplayDedupesAndMalformedUsesUnifiedTopicIntegration(t *
 	}
 	if deadLetter.Consumer != kafkaConsumerNotificationProjection || deadLetter.Source.Topic != applicationConfig.ActivityEventsTopic || deadLetter.Failure.Code != kafkaFailureCodeDecodeEnvelope {
 		t.Fatalf("unified notification dead letter=%+v", deadLetter)
+	}
+}
+
+func replayIntegrationKafkaConfig() config.KafkaConfig {
+	return config.KafkaConfig{
+		UserBehaviorTopic:         "goexchange.user.behavior.v1",
+		LikeSnapshotTopic:         "goexchange.post.like.snapshot.v1",
+		RecommendationEventsTopic: "goexchange.recommendation.events.v1",
+		PostEmbeddingTopic:        "goexchange.post.embedding.v1",
+		ActivityEventsTopic:       "goexchange.activity.events.v1",
+		ConsumerDLQTopic:          "goexchange.consumer.dlq.v1",
 	}
 }
 

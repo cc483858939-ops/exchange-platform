@@ -3,16 +3,43 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
+	"Go.exchange/global"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 )
+
+type fakeNotificationMessageReader struct {
+	message     kafka.Message
+	fetchCalls  int
+	commitErr   error
+	commitCalls int
+}
+
+func (r *fakeNotificationMessageReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
+	r.fetchCalls++
+	if err := ctx.Err(); err != nil {
+		return kafka.Message{}, err
+	}
+	if r.fetchCalls == 1 {
+		return r.message, nil
+	}
+	return kafka.Message{}, errors.New("no additional notification messages")
+}
+
+func (r *fakeNotificationMessageReader) CommitMessages(_ context.Context, _ ...kafka.Message) error {
+	r.commitCalls++
+	return r.commitErr
+}
+
+func (*fakeNotificationMessageReader) Close() error { return nil }
 
 func notificationMessage(t *testing.T, envelope eventing.Envelope) kafka.Message {
 	t.Helper()
@@ -50,6 +77,75 @@ func TestNotificationMalformedMessageUsesUnifiedConsumerDLQ(t *testing.T) {
 	}
 	if record.Failure.Class != string(kafkaFailurePermanent) || record.Failure.Code != kafkaFailureCodeDecodeEnvelope {
 		t.Fatalf("failure=%+v want permanent decode failure", record.Failure)
+	}
+}
+
+func TestNotificationDatabaseApplyRetriesThenSucceeds(t *testing.T) {
+	attempts := 0
+	err := retryNotificationDatabaseApply(context.Background(), kafkaRetryPolicy{MaxAttempts: 3}, func() error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("database transaction failed")
+		}
+		return nil
+	})
+	if err != nil || attempts != 3 {
+		t.Fatalf("retry result err=%v attempts=%d", err, attempts)
+	}
+}
+
+func TestNotificationDatabaseRetryExhaustionRequiresRedelivery(t *testing.T) {
+	attempts := 0
+	err := retryNotificationDatabaseApply(context.Background(), kafkaRetryPolicy{MaxAttempts: 2}, func() error {
+		attempts++
+		return errors.New("database transaction failed")
+	})
+	if err == nil || attempts != 2 || kafkaFailureClassOf(err) != kafkaFailureRetryable || kafkaFailureCode(err) != kafkaFailureCodeDatabaseTransaction {
+		t.Fatalf("retry exhaustion err=%v class=%q code=%q attempts=%d", err, kafkaFailureClassOf(err), kafkaFailureCode(err), attempts)
+	}
+}
+
+func TestNotificationDatabaseFailureIsNotSentToDLQ(t *testing.T) {
+	originalConfig, originalDB := config.AppConfig, global.WorkerDb
+	config.AppConfig = &config.Config{Kafka: config.KafkaConfig{
+		ConsumerDLQTopic: "goexchange.consumer.dlq.v1", NotificationGroupID: "notification-test-group",
+	}}
+	global.WorkerDb = nil
+	t.Cleanup(func() { config.AppConfig, global.WorkerDb = originalConfig, originalDB })
+
+	now := time.Now().UTC()
+	envelope, err := eventing.NewUserFollowCreatedEnvelope(uuid.NewString(), eventing.UserFollowCreatedPayload{
+		FollowID: 10, FollowerID: 11, FollowingID: 12, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &fakeRawKafkaMessagePublisher{}
+	err = processNotificationBatchWithRetry(context.Background(), []kafka.Message{notificationMessage(t, envelope)}, publisher, kafkaRetryPolicy{MaxAttempts: 2})
+	if err == nil || kafkaFailureClassOf(err) != kafkaFailureRetryable || kafkaFailureCode(err) != kafkaFailureCodeDatabaseTransaction {
+		t.Fatalf("database error=%v class=%q code=%q", err, kafkaFailureClassOf(err), kafkaFailureCode(err))
+	}
+	if len(publisher.topics) != 0 || len(publisher.messages) != 0 {
+		t.Fatalf("retryable DB failure was sent to DLQ: topics=%v messages=%d", publisher.topics, len(publisher.messages))
+	}
+}
+
+func TestNotificationCommitFailureIsRetryableAndRequiresRedelivery(t *testing.T) {
+	originalConfig := config.AppConfig
+	config.AppConfig = &config.Config{Kafka: config.KafkaConfig{ConsumerDLQTopic: "goexchange.consumer.dlq.v1"}}
+	t.Cleanup(func() { config.AppConfig = originalConfig })
+
+	reader := &fakeNotificationMessageReader{
+		message:   kafka.Message{Topic: "goexchange.activity.events.v1", Partition: 2, Offset: 8, Value: []byte("bad-json")},
+		commitErr: errors.New("commit acknowledgement unknown"),
+	}
+	publisher := &fakeRawKafkaMessagePublisher{}
+	err := consumeNotificationMessages(context.Background(), reader, publisher)
+	if kafkaFailureClassOf(err) != kafkaFailureRetryable || kafkaFailureCode(err) != kafkaFailureCodeKafkaCommit || reader.commitCalls != 1 {
+		t.Fatalf("commit error=%v class=%q code=%q commits=%d", err, kafkaFailureClassOf(err), kafkaFailureCode(err), reader.commitCalls)
+	}
+	if len(publisher.messages) != 1 {
+		t.Fatalf("commit failure triggered additional DLQ publishes: messages=%d", len(publisher.messages))
 	}
 }
 

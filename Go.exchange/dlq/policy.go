@@ -18,9 +18,10 @@ const (
 )
 
 type ReplayPolicy struct {
-	Consumer    string
-	SourceTopic string
-	SafetyMode  ReplaySafetyMode
+	Consumer          string
+	SourceTopic       string
+	SafetyMode        ReplaySafetyMode
+	SafetyDescription string
 }
 
 type ReplayPolicyRegistry struct {
@@ -33,11 +34,11 @@ func NewReplayPolicyRegistry(cfg config.KafkaConfig) (ReplayPolicyRegistry, erro
 		return ReplayPolicyRegistry{}, errors.New("consumer DLQ topic is required")
 	}
 	policies := []ReplayPolicy{
-		{Consumer: "like_snapshot_projection", SourceTopic: cfg.LikeSnapshotTopic, SafetyMode: ReplaySafetyVersioned},
-		{Consumer: "user_behavior_projection", SourceTopic: cfg.UserBehaviorTopic, SafetyMode: ReplaySafetyInbox},
-		{Consumer: "recommendation_metrics", SourceTopic: cfg.RecommendationEventsTopic, SafetyMode: ReplaySafetyInbox},
-		{Consumer: "post_embedding", SourceTopic: cfg.PostEmbeddingTopic, SafetyMode: ReplaySafetyReconcile},
-		{Consumer: "notification_projection", SourceTopic: cfg.ActivityEventsTopic, SafetyMode: ReplaySafetyInbox},
+		{Consumer: "like_snapshot_projection", SourceTopic: cfg.LikeSnapshotTopic, SafetyMode: ReplaySafetyVersioned, SafetyDescription: "versioned like snapshot gate"},
+		{Consumer: "user_behavior_projection", SourceTopic: cfg.UserBehaviorTopic, SafetyMode: ReplaySafetyInbox, SafetyDescription: "ConsumerInbox + versioned post reaction gate"},
+		{Consumer: "recommendation_metrics", SourceTopic: cfg.RecommendationEventsTopic, SafetyMode: ReplaySafetyInbox, SafetyDescription: "ConsumerInbox deduplication"},
+		{Consumer: "post_embedding", SourceTopic: cfg.PostEmbeddingTopic, SafetyMode: ReplaySafetyReconcile, SafetyDescription: "current projection reconciliation"},
+		{Consumer: "notification_projection", SourceTopic: cfg.ActivityEventsTopic, SafetyMode: ReplaySafetyInbox, SafetyDescription: "ConsumerInbox + notification version and dedupe gates"},
 	}
 	registry := ReplayPolicyRegistry{dlqTopic: strings.TrimSpace(cfg.ConsumerDLQTopic), byPair: make(map[string]ReplayPolicy, len(policies))}
 	for _, policy := range policies {

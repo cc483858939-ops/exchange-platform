@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -61,6 +62,7 @@ type selectorOptions struct {
 	scanLimit    int
 	json         bool
 	execute      bool
+	confirmPlan  string
 }
 
 type listRow struct {
@@ -78,8 +80,19 @@ type listRow struct {
 }
 
 type listJSON struct {
-	Records []listRow      `json:"records"`
-	Scan    dlq.ScanResult `json:"scan"`
+	Records    []listRow      `json:"records"`
+	Scan       dlq.ScanResult `json:"scan"`
+	Executable bool           `json:"executable"`
+}
+
+type batchReplayPlanJSON struct {
+	PlanVersion int                      `json:"plan_version"`
+	Consumer    string                   `json:"consumer"`
+	Selectors   dlq.BatchReplaySelectors `json:"selectors"`
+	Records     []dlq.ReplayPlan         `json:"records"`
+	Scan        dlq.ScanResult           `json:"scan"`
+	Executable  bool                     `json:"executable"`
+	PlanHash    string                   `json:"plan_hash"`
 }
 
 func runCLI(ctx context.Context, args []string, applicationConfig *config.Config, deps cliDependencies, out, errOut io.Writer) int {
@@ -135,7 +148,7 @@ func runList(ctx context.Context, args []string, applicationConfig *config.Confi
 		rows = append(rows, rowFor(located))
 	}
 	if options.json {
-		if err := json.NewEncoder(out).Encode(listJSON{Records: rows, Scan: scan}); err != nil {
+		if err := json.NewEncoder(out).Encode(listJSON{Records: rows, Scan: scan, Executable: scanComplete(scan)}); err != nil {
 			fmt.Fprintf(errOut, "write list output: %v\n", err)
 			return 1
 		}
@@ -156,6 +169,7 @@ func runShow(ctx context.Context, args []string, applicationConfig *config.Confi
 	fs.SetOutput(errOut)
 	partition := fs.Int("partition", -1, "DLQ partition")
 	offset := fs.Int64("offset", -1, "DLQ offset")
+	includePayload := fs.Bool("include-payload", false, "include source key/value/header values; may expose sensitive business data")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -173,7 +187,7 @@ func runShow(ctx context.Context, args []string, applicationConfig *config.Confi
 		fmt.Fprintf(errOut, "read Kafka DLQ record: %v\n", err)
 		return 1
 	}
-	writeLocatedRecord(out, located)
+	writeLocatedRecord(out, located, *includePayload)
 	return 0
 }
 
@@ -207,7 +221,11 @@ func runReplay(ctx context.Context, args []string, applicationConfig *config.Con
 		return 1
 	}
 	if options.execute && !single && !hasNarrowingSelector(*options) {
-		fmt.Fprintln(errOut, "refusing broad replay: add at least one narrowing selector")
+		fmt.Fprintln(errOut, "refusing batch replay: require at least one strong selector: --error-code, --event-id, --failed-after, or --failed-before")
+		return 1
+	}
+	if options.execute && !single && strings.TrimSpace(options.confirmPlan) == "" {
+		fmt.Fprintln(errOut, "batch replay requires --confirm-plan <sha256:...>; run a dry-run first")
 		return 1
 	}
 	if options.execute && options.limit > dlq.MaxLimit {
@@ -235,6 +253,7 @@ func runReplay(ctx context.Context, args []string, applicationConfig *config.Con
 			fmt.Fprintf(errOut, "scan Kafka DLQ: %v\n", err)
 			return 1
 		}
+		sortLocatedRecords(records)
 	}
 	registry, err := dlq.NewReplayPolicyRegistry(applicationConfig.Kafka)
 	if err != nil {
@@ -251,6 +270,22 @@ func runReplay(ctx context.Context, args []string, applicationConfig *config.Con
 		plans = append(plans, plan)
 	}
 	if !options.execute {
+		if !single {
+			selectors := dlq.NormalizeBatchReplaySelectors(filter)
+			planHash, hashErr := dlq.BuildBatchReplayPlanHash(applicationConfig.Kafka.ConsumerDLQTopic, selectors, records)
+			if hashErr != nil {
+				fmt.Fprintf(errOut, "build batch replay plan hash: %v\n", hashErr)
+				return 1
+			}
+			if err := json.NewEncoder(out).Encode(batchReplayPlanJSON{
+				PlanVersion: dlq.BatchReplayPlanVersion, Consumer: strings.TrimSpace(options.consumer),
+				Selectors: selectors, Records: plans, Scan: scan, Executable: scanComplete(scan), PlanHash: planHash,
+			}); err != nil {
+				fmt.Fprintf(errOut, "write batch replay plan: %v\n", err)
+				return 1
+			}
+			return 0
+		}
 		for _, plan := range plans {
 			if err := json.NewEncoder(out).Encode(plan); err != nil {
 				fmt.Fprintf(errOut, "write replay plan: %v\n", err)
@@ -260,6 +295,22 @@ func runReplay(ctx context.Context, args []string, applicationConfig *config.Con
 		writeScanSummary(out, scan)
 		fmt.Fprintf(out, "dry-run plans=%d; no Kafka publish or audit write performed\n", len(plans))
 		return 0
+	}
+	if !single {
+		if !scanComplete(scan) {
+			fmt.Fprintf(errOut, "refusing replay: %s\n", incompleteSelectionReason(scan))
+			return 1
+		}
+		selectors := dlq.NormalizeBatchReplaySelectors(filter)
+		currentPlanHash, hashErr := dlq.BuildBatchReplayPlanHash(applicationConfig.Kafka.ConsumerDLQTopic, selectors, records)
+		if hashErr != nil {
+			fmt.Fprintf(errOut, "build batch replay plan hash: %v\n", hashErr)
+			return 1
+		}
+		if strings.TrimSpace(options.confirmPlan) != currentPlanHash {
+			fmt.Fprintln(errOut, "replay plan changed; run dry-run again")
+			return 1
+		}
 	}
 	if len(plans) == 0 {
 		fmt.Fprintln(out, "no matching DLQ records")
@@ -345,6 +396,7 @@ func bindSelectors(fs *flag.FlagSet, includeLocation, includeExecute bool) *sele
 	fs.IntVar(&options.scanLimit, "scan-limit", dlq.DefaultScanLimit, "maximum DLQ records inspected (1..100000)")
 	if includeExecute {
 		fs.BoolVar(&options.execute, "execute", false, "publish replay messages and persist audit records")
+		fs.StringVar(&options.confirmPlan, "confirm-plan", "", "required batch replay plan hash from a current dry-run")
 	} else {
 		fs.BoolVar(&options.json, "json", false, "emit safe list metadata as JSON")
 	}
@@ -357,8 +409,9 @@ func (o selectorOptions) filter() (dlq.Filter, error) {
 		return dlq.Filter{}, err
 	}
 	filter := dlq.Filter{
-		Consumer: o.consumer, SourceTopic: o.sourceTopic, ErrorClass: o.errorClass, ErrorCode: o.errorCode,
-		EventID: o.eventID, Limit: limit, ScanLimit: scanLimit,
+		Consumer: strings.TrimSpace(o.consumer), SourceTopic: strings.TrimSpace(o.sourceTopic),
+		ErrorClass: strings.TrimSpace(o.errorClass), ErrorCode: strings.TrimSpace(o.errorCode),
+		EventID: strings.TrimSpace(o.eventID), Limit: limit, ScanLimit: scanLimit,
 	}
 	if o.partition >= 0 {
 		partition := o.partition
@@ -408,8 +461,8 @@ func normalizeLimits(limit, scanLimit int) (int, int, error) {
 }
 
 func hasNarrowingSelector(options selectorOptions) bool {
-	return options.errorCode != "" || options.eventID != "" || options.failedAfter != "" ||
-		options.failedBefore != "" || options.sourceTopic != ""
+	return strings.TrimSpace(options.errorCode) != "" || strings.TrimSpace(options.eventID) != "" ||
+		strings.TrimSpace(options.failedAfter) != "" || strings.TrimSpace(options.failedBefore) != ""
 }
 
 func hasReplayFilter(options selectorOptions) bool {
@@ -428,27 +481,68 @@ func rowFor(located dlq.LocatedRecord) listRow {
 }
 
 func writeScanSummary(out io.Writer, scan dlq.ScanResult) {
-	fmt.Fprintf(out, "scanned=%d matched=%d returned=%d truncated=%t\n", scan.Scanned, scan.Matched, scan.Returned, scan.Truncated)
-	if scan.Truncated {
-		fmt.Fprintln(out, "scan limit reached; narrow the filters or increase --scan-limit")
+	fmt.Fprintf(out, "scanned=%d matched=%d returned=%d invalid=%d scan_truncated=%t match_truncated=%t executable=%t\n",
+		scan.Scanned, scan.Matched, scan.Returned, scan.Invalid, scan.ScanTruncated, scan.MatchTruncated, scanComplete(scan))
+	if scan.ScanTruncated {
+		fmt.Fprintln(out, "scan limit reached; selection does not cover the complete DLQ snapshot")
+	}
+	if scan.MatchTruncated {
+		fmt.Fprintln(out, "matching records exceed --limit; selection is incomplete")
+	}
+	if scan.Invalid > 0 {
+		fmt.Fprintln(out, "malformed DLQ records were encountered; batch execute is disabled")
 	}
 }
 
-func writeLocatedRecord(out io.Writer, located dlq.LocatedRecord) {
+func writeLocatedRecord(out io.Writer, located dlq.LocatedRecord, includePayload bool) {
 	record := located.Record
 	fmt.Fprintf(out, "dlq_topic=%s\ndlq_partition=%d\ndlq_offset=%d\nkafka_time=%s\n",
 		located.DLQTopic, located.DLQPartition, located.DLQOffset, located.KafkaTime.UTC().Format(time.RFC3339Nano))
 	fmt.Fprintf(out, "consumer=%s\nevent_id=%s\nsource_topic=%s\nsource_partition=%d\nsource_offset=%d\nsource_time=%s\n",
 		record.Consumer, record.EventID, record.Source.Topic, record.Source.Partition, record.Source.Offset, record.Source.Time.UTC().Format(time.RFC3339Nano))
-	fmt.Fprintf(out, "error_class=%s\nerror_code=%s\nattempts=%d\nfailed_at=%s\nreason=%s\n",
-		record.Failure.Class, record.Failure.Code, record.Failure.Attempts, record.Failure.FailedAt.UTC().Format(time.RFC3339Nano), record.Failure.Reason)
-	fmt.Fprintf(out, "key_base64=%s\nkey_preview=%q\n", base64.StdEncoding.EncodeToString(record.Source.Key), safePreview(record.Source.Key))
-	fmt.Fprintf(out, "value_base64=%s\nvalue_preview=%q\n", base64.StdEncoding.EncodeToString(record.Source.Value), safePreview(record.Source.Value))
-	fmt.Fprintf(out, "headers=%d\n", len(record.Source.Headers))
+	fmt.Fprintf(out, "error_class=%s\nerror_code=%s\nattempts=%d\nfailed_at=%s\nreason_truncated=%t\nreason=%s\n",
+		record.Failure.Class, record.Failure.Code, record.Failure.Attempts, record.Failure.FailedAt.UTC().Format(time.RFC3339Nano),
+		record.Failure.ReasonTruncated, record.Failure.Reason)
+	fmt.Fprintf(out, "key_size=%d\nvalue_size=%d\nheaders=%d\n", len(record.Source.Key), len(record.Source.Value), len(record.Source.Headers))
 	for index, header := range record.Source.Headers {
-		fmt.Fprintf(out, "header[%d].key=%q header[%d].value_base64=%s header[%d].value_preview=%q\n",
-			index, header.Key, index, base64.StdEncoding.EncodeToString(header.Value), index, safePreview(header.Value))
+		fmt.Fprintf(out, "header[%d].key=%q\n", index, header.Key)
 	}
+	if includePayload {
+		fmt.Fprintf(out, "key_base64=%s\nkey_preview=%q\n", base64.StdEncoding.EncodeToString(record.Source.Key), safePreview(record.Source.Key))
+		fmt.Fprintf(out, "value_base64=%s\nvalue_preview=%q\n", base64.StdEncoding.EncodeToString(record.Source.Value), safePreview(record.Source.Value))
+		for index, header := range record.Source.Headers {
+			fmt.Fprintf(out, "header[%d].value_base64=%s header[%d].value_preview=%q\n",
+				index, base64.StdEncoding.EncodeToString(header.Value), index, safePreview(header.Value))
+		}
+	}
+}
+
+func scanComplete(scan dlq.ScanResult) bool {
+	return !scan.ScanTruncated && !scan.MatchTruncated && scan.Invalid == 0 && scan.Matched <= scan.Returned
+}
+
+func incompleteSelectionReason(scan dlq.ScanResult) string {
+	switch {
+	case scan.ScanTruncated:
+		return "DLQ scan did not cover the complete snapshot"
+	case scan.MatchTruncated:
+		return "matching records exceed --limit"
+	case scan.Matched > scan.Returned:
+		return "matching records exceed --limit"
+	case scan.Invalid > 0:
+		return "malformed DLQ records were encountered in the scanned range"
+	default:
+		return "candidate selection is incomplete"
+	}
+}
+
+func sortLocatedRecords(records []dlq.LocatedRecord) {
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].DLQPartition != records[j].DLQPartition {
+			return records[i].DLQPartition < records[j].DLQPartition
+		}
+		return records[i].DLQOffset < records[j].DLQOffset
+	})
 }
 
 func safePreview(value []byte) string {
@@ -480,7 +574,7 @@ func getReader(applicationConfig *config.Config, deps cliDependencies) (dlq.Read
 }
 
 func openMaintenanceAudit(applicationConfig *config.Config) (dlq.AuditRepository, io.Closer, error) {
-	db, err := config.OpenMaintenanceDatabase(applicationConfig)
+	db, err := config.OpenKafkaDLQDatabase(applicationConfig)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -124,7 +125,10 @@ func TestDecodeDeadLetterRecordRejectsMalformedJSONAndUnknownVersion(t *testing.
 }
 
 func TestDeadLetterReasonIsCappedWithoutTruncatingSourceBytes(t *testing.T) {
-	source := kafka.Message{Topic: "source", Key: []byte{0xfe}, Value: bytes.Repeat([]byte{0xff}, MaxDeadLetterReasonBytes+10)}
+	source := kafka.Message{
+		Topic: "source", Key: []byte{0xfe}, Value: bytes.Repeat([]byte{0xff}, MaxDeadLetterReasonBytes+10),
+		Headers: []kafka.Header{{Key: "large", Value: bytes.Repeat([]byte{0xff}, MaxDeadLetterReasonBytes+20)}},
+	}
 	record, err := NewDeadLetterRecord("consumer", "", source, DeadLetterFailure{
 		Class: "permanent", Code: "decode_payload", Reason: strings.Repeat("x", MaxDeadLetterReasonBytes+200), Attempts: 1, FailedAt: time.Now(),
 	})
@@ -134,8 +138,29 @@ func TestDeadLetterReasonIsCappedWithoutTruncatingSourceBytes(t *testing.T) {
 	if len(record.Failure.Reason) > MaxDeadLetterReasonBytes {
 		t.Fatalf("reason bytes=%d max=%d", len(record.Failure.Reason), MaxDeadLetterReasonBytes)
 	}
-	if !bytes.Equal(record.Source.Key, source.Key) || !bytes.Equal(record.Source.Value, source.Value) {
+	if !record.Failure.ReasonTruncated {
+		t.Fatal("truncated reason was not marked")
+	}
+	if !bytes.Equal(record.Source.Key, source.Key) || !bytes.Equal(record.Source.Value, source.Value) || len(record.Source.Headers) != 1 || !bytes.Equal(record.Source.Headers[0].Value, source.Headers[0].Value) {
 		t.Fatal("source bytes were truncated")
+	}
+	encoded, err := EncodeDeadLetterRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeDeadLetterRecord(encoded)
+	if err != nil || !decoded.Failure.ReasonTruncated {
+		t.Fatalf("encoded truncation marker=%t err=%v", decoded.Failure.ReasonTruncated, err)
+	}
+	normal, err := EncodeDeadLetterRecord(validDeadLetterRecord())
+	if err != nil || bytes.Contains(normal, []byte(`"reason_truncated"`)) {
+		t.Fatalf("normal reason truncation marker should be omitted: %s err=%v", normal, err)
+	}
+
+	unicodeReason := strings.Repeat("界", MaxDeadLetterReasonBytes)
+	truncated, didTruncate := truncateDeadLetterReason(unicodeReason)
+	if !didTruncate || len(truncated) > MaxDeadLetterReasonBytes || !utf8.ValidString(truncated) {
+		t.Fatalf("UTF-8 truncation invalid: truncated=%t bytes=%d valid=%t", didTruncate, len(truncated), utf8.ValidString(truncated))
 	}
 }
 

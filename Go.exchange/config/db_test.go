@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -8,6 +9,21 @@ import (
 func TestOpenMaintenanceDatabaseRequiresConfig(t *testing.T) {
 	if db, err := OpenMaintenanceDatabase(nil); db != nil || err == nil {
 		t.Fatalf("OpenMaintenanceDatabase(nil)=(%v, %v), want error", db, err)
+	}
+}
+
+func TestKafkaDLQDatabaseDSNUsesDedicatedEnvironmentOnly(t *testing.T) {
+	t.Setenv("DATABASE_DSN", "postgres://application/full-access")
+	t.Setenv("KAFKA_DLQ_DATABASE_DSN", " ")
+	if got := KafkaDLQDatabaseDSN(); got != "" {
+		t.Fatalf("KafkaDLQDatabaseDSN()=%q, want empty", got)
+	}
+	if db, err := OpenKafkaDLQDatabase(&Config{}); db != nil || err == nil || !strings.Contains(err.Error(), "KAFKA_DLQ_DATABASE_DSN") {
+		t.Fatalf("OpenKafkaDLQDatabase without dedicated DSN=(%v,%v)", db, err)
+	}
+	t.Setenv("KAFKA_DLQ_DATABASE_DSN", " postgres://audit/minimal ")
+	if got := KafkaDLQDatabaseDSN(); got != "postgres://audit/minimal" {
+		t.Fatalf("KafkaDLQDatabaseDSN()=%q", got)
 	}
 }
 

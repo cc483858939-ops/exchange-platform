@@ -19,6 +19,7 @@ const (
 	DefaultScanLimit      = 10000
 	MaxLimit              = 500
 	MaxScanLimit          = 100000
+	MaxInvalidSamples     = 20
 	kafkaOperationTimeout = 15 * time.Second
 )
 
@@ -45,10 +46,19 @@ type Filter struct {
 }
 
 type ScanResult struct {
-	Scanned   int  `json:"scanned"`
-	Matched   int  `json:"matched"`
-	Returned  int  `json:"returned"`
-	Truncated bool `json:"truncated"`
+	Scanned        int                     `json:"scanned"`
+	Matched        int                     `json:"matched"`
+	Returned       int                     `json:"returned"`
+	Invalid        int                     `json:"invalid"`
+	ScanTruncated  bool                    `json:"scan_truncated"`
+	MatchTruncated bool                    `json:"match_truncated"`
+	InvalidSamples []InvalidRecordLocation `json:"invalid_samples,omitempty"`
+}
+
+type InvalidRecordLocation struct {
+	Partition int    `json:"partition"`
+	Offset    int64  `json:"offset"`
+	Error     string `json:"error"`
 }
 
 type Reader interface {
@@ -198,12 +208,14 @@ func (r *KafkaDLQReader) Scan(ctx context.Context, filter Filter) ([]LocatedReco
 			rangeInfo.next = message.Offset + 1
 			located, decodeErr := locatedDeadLetter(message)
 			if decodeErr != nil {
-				_ = reader.Close()
-				return nil, result, decodeErr
+				recordInvalidDLQ(&result, message.Partition, message.Offset, decodeErr)
+				continue
 			}
 			if filter.matches(located.Record) {
 				result.Matched++
-				locatedRecords = append(locatedRecords, located)
+				if len(locatedRecords) < limit {
+					locatedRecords = append(locatedRecords, located)
+				}
 			}
 		}
 		_ = reader.Close()
@@ -211,22 +223,45 @@ func (r *KafkaDLQReader) Scan(ctx context.Context, filter Filter) ([]LocatedReco
 			break
 		}
 	}
-	result.Truncated = scanLimitHasRemaining(result.Scanned, scanLimit, ranges)
-	sort.Slice(locatedRecords, func(i, j int) bool {
-		left, right := locatedRecords[i], locatedRecords[j]
-		if !left.Record.Failure.FailedAt.Equal(right.Record.Failure.FailedAt) {
-			return left.Record.Failure.FailedAt.After(right.Record.Failure.FailedAt)
-		}
-		if left.DLQPartition != right.DLQPartition {
-			return left.DLQPartition < right.DLQPartition
-		}
-		return left.DLQOffset > right.DLQOffset
-	})
-	if len(locatedRecords) > limit {
-		locatedRecords = locatedRecords[:limit]
-	}
-	result.Returned = len(locatedRecords)
+	finalizeScanResult(&result, len(locatedRecords), scanLimit, ranges)
 	return locatedRecords, result, nil
+}
+
+func recordInvalidDLQ(result *ScanResult, partition int, offset int64, err error) {
+	if result == nil {
+		return
+	}
+	result.Invalid++
+	if len(result.InvalidSamples) >= MaxInvalidSamples {
+		return
+	}
+	result.InvalidSamples = append(result.InvalidSamples, InvalidRecordLocation{
+		Partition: partition, Offset: offset, Error: boundedInvalidRecordError(err),
+	})
+}
+
+func finalizeScanResult(result *ScanResult, returned, scanLimit int, ranges []scanRange) {
+	if result == nil {
+		return
+	}
+	result.Returned = returned
+	result.MatchTruncated = result.Matched > result.Returned
+	result.ScanTruncated = scanLimitHasRemaining(result.Scanned, scanLimit, ranges)
+}
+
+func boundedInvalidRecordError(err error) string {
+	if err == nil {
+		return "invalid DLQ record"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "unsupported dead letter schema version"):
+		return "unsupported dead-letter schema version"
+	case strings.Contains(message, "decode dead letter record"):
+		return "malformed dead-letter JSON"
+	default:
+		return "invalid dead-letter contract"
+	}
 }
 
 type scanRange struct {

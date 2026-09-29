@@ -2,6 +2,7 @@ package dlq
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -53,6 +54,34 @@ func TestScanLimitReportsPossibleRemainingRecords(t *testing.T) {
 				t.Fatalf("truncated=%t want=%t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestScanResultSeparatesScanAndMatchTruncation(t *testing.T) {
+	result := ScanResult{Scanned: 5, Matched: 4}
+	finalizeScanResult(&result, 2, 5, []scanRange{{next: 10, last: 10}})
+	if result.ScanTruncated || !result.MatchTruncated || result.Returned != 2 {
+		t.Fatalf("match-only truncation=%+v", result)
+	}
+	result = ScanResult{Scanned: 5, Matched: 2}
+	finalizeScanResult(&result, 2, 5, []scanRange{{next: 10, last: 11}})
+	if !result.ScanTruncated || result.MatchTruncated {
+		t.Fatalf("scan-only truncation=%+v", result)
+	}
+}
+
+func TestInvalidRecordSamplesAreBoundedAndDoNotExposePayload(t *testing.T) {
+	var result ScanResult
+	for offset := int64(0); offset < MaxInvalidSamples+5; offset++ {
+		recordInvalidDLQ(&result, 2, offset, errors.New("decode DLQ record: secret raw payload"))
+	}
+	if result.Invalid != MaxInvalidSamples+5 || len(result.InvalidSamples) != MaxInvalidSamples {
+		t.Fatalf("invalid=%d samples=%d", result.Invalid, len(result.InvalidSamples))
+	}
+	for _, sample := range result.InvalidSamples {
+		if sample.Error != "invalid dead-letter contract" || strings.Contains(sample.Error, "secret raw payload") {
+			t.Fatalf("invalid sample exposes raw error: %+v", sample)
+		}
 	}
 }
 
@@ -125,6 +154,79 @@ func TestKafkaDLQRoundTripIntegration(t *testing.T) {
 	}
 }
 
+func TestKafkaDLQScanContinuesAfterMalformedRecordIntegration(t *testing.T) {
+	applicationConfig, publisher := kafkaIntegrationSetup(t)
+	defer publisher.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	eventID := uuid.NewString()
+	failedAt := time.Now().UTC()
+	source := kafka.Message{Topic: applicationConfig.Kafka.UserBehaviorTopic, Partition: 1, Offset: 1, Key: []byte("malformed-scan-test")}
+	record, err := eventing.NewDeadLetterRecord("user_behavior_projection", eventID, source, eventing.DeadLetterFailure{
+		Class: "permanent", Code: "decode_envelope", Reason: "scan continuation", Attempts: 1, FailedAt: failedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMessage, err := eventing.BuildDeadLetterMessage(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMessage.Key = []byte("malformed-scan-integration-" + eventID)
+	secondEventID := uuid.NewString()
+	secondRecord, err := eventing.NewDeadLetterRecord("user_behavior_projection", secondEventID, source, eventing.DeadLetterFailure{
+		Class: "permanent", Code: "decode_envelope", Reason: "second scan continuation", Attempts: 1, FailedAt: failedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondValidMessage, err := eventing.BuildDeadLetterMessage(secondRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondValidMessage.Key = append([]byte(nil), validMessage.Key...)
+	malformedMessage := kafka.Message{Key: append([]byte(nil), validMessage.Key...), Value: []byte("not-json"), Time: failedAt}
+	if err := publisher.PublishRaw(ctx, applicationConfig.Kafka.ConsumerDLQTopic, malformedMessage, validMessage, secondValidMessage); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewKafkaDLQReader(applicationConfig.Kafka)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := failedAt.Add(-time.Second)
+	located, scan, err := reader.Scan(ctx, Filter{
+		Consumer: "user_behavior_projection", EventID: eventID, FailedAfter: &after, Limit: 10, ScanLimit: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(located) != 1 || located[0].Record.EventID != eventID || scan.Invalid < 1 || len(scan.InvalidSamples) == 0 {
+		t.Fatalf("scan did not continue past malformed record: records=%d result=%+v", len(located), scan)
+	}
+	if _, err := reader.ReadAt(ctx, scan.InvalidSamples[0].Partition, scan.InvalidSamples[0].Offset); err == nil {
+		t.Fatal("ReadAt accepted malformed DLQ record")
+	}
+	limited, limitScan, err := reader.Scan(ctx, Filter{
+		Consumer: "user_behavior_projection", FailedAfter: &after, Limit: 10, ScanLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = limited
+	if !limitScan.ScanTruncated {
+		t.Fatalf("scan limit did not expose an incomplete snapshot: %+v", limitScan)
+	}
+	matching, matchScan, err := reader.Scan(ctx, Filter{
+		Consumer: "user_behavior_projection", ErrorCode: "decode_envelope", FailedAfter: &after, Limit: 1, ScanLimit: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matching) != 1 || matchScan.Matched <= matchScan.Returned || !matchScan.MatchTruncated {
+		t.Fatalf("match limit did not expose truncation: records=%d result=%+v", len(matching), matchScan)
+	}
+}
+
 func TestKafkaReplayIntegration(t *testing.T) {
 	applicationConfig, publisher := kafkaIntegrationSetup(t)
 	defer publisher.Close()
@@ -189,18 +291,37 @@ func TestKafkaReplayIntegration(t *testing.T) {
 
 func kafkaIntegrationSetup(t *testing.T) (*config.Config, *eventing.KafkaPublisher) {
 	t.Helper()
-	if strings.TrimSpace(os.Getenv("KAFKA_BROKERS")) == "" {
-		t.Skip("set KAFKA_BROKERS to run Kafka DLQ integration test")
-	}
-	applicationConfig, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	publisher, err := eventing.NewKafkaPublisher(applicationConfig.Kafka)
+	kafkaConfig := kafkaIntegrationConfig(t)
+	applicationConfig := &config.Config{Kafka: kafkaConfig}
+	publisher, err := eventing.NewKafkaPublisher(kafkaConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return applicationConfig, publisher
+}
+
+func kafkaIntegrationConfig(t *testing.T) config.KafkaConfig {
+	t.Helper()
+	brokers := make([]string, 0)
+	for _, broker := range strings.Split(os.Getenv("KAFKA_BROKERS"), ",") {
+		if broker = strings.TrimSpace(broker); broker != "" {
+			brokers = append(brokers, broker)
+		}
+	}
+	if len(brokers) == 0 {
+		t.Skip("set KAFKA_BROKERS to run Kafka DLQ integration test")
+	}
+	return config.KafkaConfig{
+		Brokers:           brokers,
+		UserBehaviorTopic: "goexchange.user.behavior.v1", UserBehaviorGroupID: "goexchange-user-behavior-projection-v1",
+		LikeSnapshotTopic: "goexchange.post.like.snapshot.v1", LikeSnapshotGroupID: "goexchange-like-snapshot-projection-v1",
+		RecommendationEventsTopic: "goexchange.recommendation.events.v1", RecommendationMetricsGroupID: "goexchange-recommendation-metrics-v1",
+		PostEmbeddingTopic: "goexchange.post.embedding.v1", PostEmbeddingGroupID: "goexchange-post-embedding-v1",
+		ActivityEventsTopic: "goexchange.activity.events.v1", NotificationGroupID: "goexchange-notification-projection-v1",
+		ConsumerDLQTopic:       "goexchange.consumer.dlq.v1",
+		TopicReplicationFactor: 1, UserBehaviorPartitions: 12, LikeSnapshotPartitions: 6,
+		RecommendationEventsPartitions: 12, PostEmbeddingPartitions: 6, ActivityEventsPartitions: 12, ConsumerDLQPartitions: 6,
+	}
 }
 
 func kafkaTopicEndOffsets(t *testing.T, ctx context.Context, brokers []string, topic string) map[int]int64 {
