@@ -193,7 +193,7 @@
                 <button
                   class="publish-button"
                   type="submit"
-                  :disabled="!canPublish || isSubmitting || publishBlocked"
+                  :disabled="!canPublish || isSubmitting || publishHardBlocked"
                   :aria-describedby="publishBlocked ? 'publish-blocked-message' : undefined"
                   :aria-busy="isSubmitting"
                 >
@@ -391,6 +391,10 @@ const publishBlockReason = computed(() => {
   );
 });
 const publishBlocked = computed(() => publishBlockReason.value !== null);
+const publishHardBlocked = computed(() => (
+  publishBlockReason.value !== null
+  && publishBlockReason.value !== 'cleanup_pending'
+));
 const publishBlockedMessage = computed(() => {
   switch (publishBlockReason.value) {
     case 'idempotency_conflict':
@@ -418,7 +422,7 @@ const canPublish = computed(() => (
   && Boolean(content.value.trim())
   && contentLength.value <= maxContentLength
   && !previewPreparationBlocked.value
-  && !publishBlocked.value
+  && !publishHardBlocked.value
 ));
 
 const syncContentSelection = () => {

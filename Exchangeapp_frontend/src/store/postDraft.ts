@@ -3,30 +3,26 @@ import { defineStore } from 'pinia';
 import { createClientOperationID } from '../utils/clientOperationId';
 import {
   deletePostDraft,
+  deletePostDraftIfUnchanged,
   getPostDraft,
   listPostDrafts,
   savePostDraft,
   type PersistedPostDraft,
   type PersistedPostDraftMedia,
 } from '../storage/postDraftRepository';
+import {
+  createPostDraftSnapshot,
+  postDraftSnapshotsEqual,
+  type DraftSnapshot,
+  type DraftSnapshotMedia,
+} from '../utils/postDraftSnapshot';
+
+export type { DraftSnapshot, DraftSnapshotMedia } from '../utils/postDraftSnapshot';
 
 export type DraftPostMedia = {
   id: string;
   file: File;
   uploadedURL: string;
-};
-
-export type DraftSnapshotMedia = {
-  id: string;
-  name: string;
-  type: string;
-  size: number;
-  lastModified: number;
-};
-
-export type DraftSnapshot = {
-  content: string;
-  media: DraftSnapshotMedia[];
 };
 
 export type LoadSavedDraftResult =
@@ -40,31 +36,14 @@ const normalizeViewerID = (value: number | null): number | null => (
     : null
 );
 
-const createSnapshot = (content: string, media: DraftPostMedia[]): DraftSnapshot => ({
-  content,
-  media: media.map(item => ({
+const createSnapshot = (content: string, media: DraftPostMedia[]): DraftSnapshot => (
+  createPostDraftSnapshot(content, media.map(item => ({
     id: item.id,
     name: item.file.name,
     type: item.file.type,
     size: item.file.size,
     lastModified: item.file.lastModified,
-  })),
-});
-
-const snapshotsEqual = (left: DraftSnapshot, right: DraftSnapshot) => (
-  left.content === right.content
-  && left.media.length === right.media.length
-  && left.media.every((item, index) => {
-    const other = right.media[index];
-    return Boolean(
-      other
-      && item.id === other.id
-      && item.name === other.name
-      && item.type === other.type
-      && item.size === other.size
-      && item.lastModified === other.lastModified,
-    );
-  })
+  })))
 );
 
 const restoreFile = (item: PersistedPostDraftMedia): File => new File(
@@ -87,7 +66,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     if (!savedSnapshot.value) {
       return hasContent.value;
     }
-    return !snapshotsEqual(currentSnapshot.value, savedSnapshot.value);
+    return !postDraftSnapshotsEqual(currentSnapshot.value, savedSnapshot.value);
   });
   const isSavedDraft = computed(() => draftID.value !== null && savedSnapshot.value !== null);
 
@@ -276,23 +255,33 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     return removed;
   };
 
-  const deletePublishedSourceDraft = async (sourceViewerID: number, id: string): Promise<boolean> => {
+  const resolvePublishedSourceDraft = async (
+    sourceViewerID: number,
+    id: string,
+    expectedSnapshot: DraftSnapshot | null,
+  ): Promise<'deleted' | 'missing' | 'changed'> => {
     const normalizedViewerID = normalizeViewerID(sourceViewerID);
     if (normalizedViewerID === null || !id.trim()) {
-      return false;
+      return 'missing';
     }
-    const removed = await deletePostDraft(normalizedViewerID, id);
+    if (expectedSnapshot === null) {
+      // Legacy operations have no safe version identity, so preserve the draft.
+      return 'changed';
+    }
+
+    const result = await deletePostDraftIfUnchanged(normalizedViewerID, id, expectedSnapshot);
     if (
-      removed
+      result === 'deleted'
       && viewerID.value === normalizedViewerID
       && draftID.value === id
+      && postDraftSnapshotsEqual(savedSnapshot.value, expectedSnapshot)
     ) {
       workingStateVersion += 1;
       draftID.value = null;
       draftCreatedAt.value = null;
       savedSnapshot.value = null;
     }
-    return removed;
+    return result;
   };
 
   const bindPublishOperation = (operationID: string) => {
@@ -356,7 +345,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     loadSavedDraft,
     listSavedDrafts,
     deleteSavedDraft,
-    deletePublishedSourceDraft,
+    resolvePublishedSourceDraft,
     bindPublishOperation,
     releasePublishOperationBinding,
     clearIfBoundTo,

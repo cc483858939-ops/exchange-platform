@@ -3,11 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deletePostDraft,
+  deletePostDraftIfUnchanged,
   getPostDraft,
   listPostDrafts,
   savePostDraft,
   type PersistedPostDraft,
 } from './postDraftRepository';
+import type { DraftSnapshot } from '../utils/postDraftSnapshot';
 
 type RequestHandler = ((event: Event) => void) | null;
 type TestRequest<T> = {
@@ -32,7 +34,10 @@ class TestTransaction {
   private pending = 0;
   private completionScheduled = false;
 
-  constructor(private readonly records: Map<string, PersistedPostDraft>) {}
+  constructor(
+    private readonly records: Map<string, PersistedPostDraft>,
+    private readonly completionDelayMs = 0,
+  ) {}
 
   request<T>(action: () => T): TestRequest<T> {
     const request = createRequest<T>();
@@ -64,7 +69,7 @@ class TestTransaction {
     setTimeout(() => {
       this.completionScheduled = false;
       if (this.pending === 0) this.oncomplete?.(new Event('complete'));
-    }, 0);
+    }, this.completionDelayMs);
   }
 }
 
@@ -122,6 +127,8 @@ class TestIndex {
 
 class TestDatabase {
   readonly stores = new Map<string, Map<string, PersistedPostDraft>>();
+  readonly transactionModes: IDBTransactionMode[] = [];
+  transactionCompletionDelayMs = 0;
   readonly objectStoreNames = {
     contains: (name: string) => this.stores.has(name),
   };
@@ -134,10 +141,11 @@ class TestDatabase {
     return new TestObjectStore(records);
   }
 
-  transaction(name: string, _mode: IDBTransactionMode) {
+  transaction(name: string, mode: IDBTransactionMode) {
     const records = this.stores.get(name);
     if (!records) throw new Error(`Unknown object store ${name}.`);
-    return new TestTransaction(records);
+    this.transactionModes.push(mode);
+    return new TestTransaction(records, this.transactionCompletionDelayMs);
   }
 
   close() {}
@@ -185,6 +193,17 @@ const draft = (
   media: [],
   createdAt: updatedAt - 100,
   updatedAt,
+});
+
+const snapshotOf = (record: PersistedPostDraft): DraftSnapshot => ({
+  content: record.content,
+  media: record.media.map(item => ({
+    id: item.id,
+    name: item.name,
+    type: item.type,
+    size: item.size,
+    lastModified: item.lastModified,
+  })),
 });
 
 const readBlobText = (blob: Blob) => new Promise<string>((resolve, reject) => {
@@ -256,6 +275,102 @@ describe('postDraftRepository', () => {
       .rejects.toThrow('belongs to another viewer');
     expect((await getPostDraft(7, 'known-id'))?.content).toBe('Owner content');
     expect(await getPostDraft(8, 'known-id')).toBeNull();
+  });
+
+  it('atomically deletes an unchanged saved draft after the readwrite transaction completes', async () => {
+    const blob = new Blob(['image'], { type: 'image/png' });
+    const record: PersistedPostDraft = {
+      ...draft('same-version', 7, 100, 'Saved text'),
+      media: [{
+        id: 'media-1',
+        blob,
+        name: 'photo.png',
+        type: 'image/png',
+        size: blob.size,
+        lastModified: 123,
+        uploadedURL: '/old-upload-url',
+      }],
+    };
+    await savePostDraft(record);
+    const database = (globalThis.indexedDB as unknown as TestIndexedDBFactory).database!;
+    database.transactionCompletionDelayMs = 40;
+
+    let settled = false;
+    const result = deletePostDraftIfUnchanged(7, record.id, snapshotOf(record)).then(value => {
+      settled = true;
+      return value;
+    });
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    expect(settled).toBe(false);
+    await expect(result).resolves.toBe('deleted');
+    expect(database.transactionModes.at(-1)).toBe('readwrite');
+    expect(await getPostDraft(7, record.id)).toBeNull();
+  });
+
+  it('preserves a changed draft version with the same ID', async () => {
+    const original = draft('newer-version', 7, 100, 'Original');
+    const newerBlob = new Blob(['new image'], { type: 'image/webp' });
+    const newer: PersistedPostDraft = {
+      ...original,
+      content: 'Edited and saved',
+      media: [{
+        id: 'new-media-id',
+        blob: newerBlob,
+        name: 'new-photo.webp',
+        type: 'image/webp',
+        size: newerBlob.size,
+        lastModified: 456,
+        uploadedURL: '',
+      }],
+      updatedAt: 200,
+    };
+    await savePostDraft(newer);
+
+    await expect(deletePostDraftIfUnchanged(7, original.id, snapshotOf(original)))
+      .resolves.toBe('changed');
+    expect(await getPostDraft(7, original.id)).toMatchObject({
+      content: 'Edited and saved',
+      media: [{ id: 'new-media-id', name: 'new-photo.webp' }],
+      updatedAt: 200,
+    });
+  });
+
+  it('treats missing and wrong-viewer drafts as missing without deleting another viewer data', async () => {
+    const owned = draft('private-draft', 7, 100, 'Private');
+    await savePostDraft(owned);
+
+    await expect(deletePostDraftIfUnchanged(7, 'not-there', snapshotOf(owned)))
+      .resolves.toBe('missing');
+    await expect(deletePostDraftIfUnchanged(8, owned.id, snapshotOf(owned)))
+      .resolves.toBe('missing');
+    expect((await getPostDraft(7, owned.id))?.content).toBe('Private');
+  });
+
+  it('does not treat an uploadedURL-only change as a new source draft version', async () => {
+    const blob = new Blob(['image'], { type: 'image/png' });
+    const original: PersistedPostDraft = {
+      ...draft('uploaded-url-change', 7, 100, 'Same content'),
+      media: [{
+        id: 'media-1',
+        blob,
+        name: 'photo.png',
+        type: 'image/png',
+        size: blob.size,
+        lastModified: 123,
+        uploadedURL: '/first-url',
+      }],
+    };
+    await savePostDraft(original);
+    await savePostDraft({
+      ...original,
+      media: [{ ...original.media[0]!, uploadedURL: '/refreshed-url' }],
+      updatedAt: 200,
+    });
+
+    await expect(deletePostDraftIfUnchanged(7, original.id, snapshotOf(original)))
+      .resolves.toBe('deleted');
+    expect(await getPostDraft(7, original.id)).toBeNull();
   });
 
   it('rejects invalid viewer IDs and blank record IDs', async () => {

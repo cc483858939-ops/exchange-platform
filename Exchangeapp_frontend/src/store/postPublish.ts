@@ -7,7 +7,6 @@ import {
 } from '../services/postService';
 import { getPostBookmarkStates } from '../services/bookmarkService';
 import type { Post } from '../types/Post';
-import { getPostDraft } from '../storage/postDraftRepository';
 import {
   deletePostPublishOperation,
   getPostPublishOperation,
@@ -23,6 +22,10 @@ import { useFeedStore } from './feed';
 import { usePostDraftStore } from './postDraft';
 import { useProfileSessionStore } from './profileSession';
 import { createClientOperationID } from '../utils/clientOperationId';
+import {
+  createPostDraftSnapshot,
+  type DraftSnapshot,
+} from '../utils/postDraftSnapshot';
 import {
   captureBookmarkStateSyncVersion,
   syncHydratedPostBookmarkState,
@@ -41,6 +44,7 @@ export type PublishOperation = {
   id: string;
   publisherUserID: number;
   sourceDraftID: string | null;
+  sourceDraftSnapshot: DraftSnapshot | null;
   content: string;
   media: PublishOperationMedia[];
   phase: PublishPhase;
@@ -351,15 +355,13 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     let sourceDraftClean = operation.sourceDraftID === null;
     if (operation.sourceDraftID) {
       try {
-        const removed = await postDraft.deletePublishedSourceDraft(
+        await postDraft.resolvePublishedSourceDraft(
           operation.publisherUserID,
           operation.sourceDraftID,
+          operation.sourceDraftSnapshot,
         );
-        sourceDraftClean = removed;
-        if (!removed) {
-          // A previous success cleanup may already have removed the source draft.
-          sourceDraftClean = await getPostDraft(operation.publisherUserID, operation.sourceDraftID) === null;
-        }
+        // Deleted, missing, changed, and legacy-without-snapshot all resolve ownership.
+        sourceDraftClean = true;
       } catch {
         sourceDraftClean = false;
       }
@@ -686,10 +688,21 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       }
     }
 
+    const ownsSavedSource = postDraft.isSavedDraft
+      && !postDraft.hasUnsavedChanges
+      && postDraft.draftID !== null
+      && postDraft.savedSnapshot !== null;
+    const sourceDraftSnapshot = ownsSavedSource && postDraft.savedSnapshot
+      ? createPostDraftSnapshot(
+        postDraft.savedSnapshot.content,
+        postDraft.savedSnapshot.media,
+      )
+      : null;
     const operation: PublishOperation = {
       id: createClientOperationID(),
       publisherUserID,
-      sourceDraftID: postDraft.isSavedDraft ? postDraft.draftID : null,
+      sourceDraftID: sourceDraftSnapshot ? postDraft.draftID : null,
+      sourceDraftSnapshot,
       content: postDraft.content.trim(),
       media: postDraft.media.map(media => ({
         draftMediaID: media.id,

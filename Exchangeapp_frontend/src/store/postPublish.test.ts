@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   captureBookmarkStateSyncVersion: vi.fn(),
   syncHydratedPostBookmarkState: vi.fn(),
   deletePostDraft: vi.fn(),
+  deletePostDraftIfUnchanged: vi.fn(),
   getPostDraft: vi.fn(),
   listPostDrafts: vi.fn(),
   savePostDraft: vi.fn(),
@@ -34,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   serializePublishOperation: vi.fn(),
   restorePublishOperation: vi.fn(),
   publishRecords: new Map<number, any>(),
+  sourceDraftRecords: new Map<string, any>(),
 }));
 
 vi.mock('../services/postService', () => ({
@@ -64,6 +66,7 @@ vi.mock('./sessionSync', () => ({
 
 vi.mock('../storage/postDraftRepository', () => ({
   deletePostDraft: mocks.deletePostDraft,
+  deletePostDraftIfUnchanged: mocks.deletePostDraftIfUnchanged,
   getPostDraft: mocks.getPostDraft,
   listPostDrafts: mocks.listPostDrafts,
   savePostDraft: mocks.savePostDraft,
@@ -115,6 +118,7 @@ const persistedFailedOperation = (overrides: Record<string, any> = {}) => mocks.
   id: operationUUID(901),
   publisherUserID: 7,
   sourceDraftID: null,
+  sourceDraftSnapshot: null,
   content: 'Recovered post',
   media: [],
   phase: 'failed',
@@ -163,9 +167,56 @@ describe('postPublish store', () => {
     mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
     mocks.syncHydratedPostBookmarkState.mockReturnValue(true);
     mocks.deletePostDraft.mockResolvedValue(true);
-    mocks.getPostDraft.mockResolvedValue(null);
+    mocks.sourceDraftRecords.clear();
+    mocks.deletePostDraft.mockImplementation(async (viewerID: number, draftID: string) => {
+      const record = mocks.sourceDraftRecords.get(draftID);
+      if (!record || record.viewerID !== viewerID) return false;
+      mocks.sourceDraftRecords.delete(draftID);
+      return true;
+    });
+    mocks.deletePostDraftIfUnchanged.mockImplementation(async (
+      viewerID: number,
+      draftID: string,
+      expected: any,
+    ) => {
+      const record = mocks.sourceDraftRecords.get(draftID);
+      if (!record || record.viewerID !== viewerID) return 'missing';
+      const current = {
+        content: record.content,
+        media: record.media.map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          size: item.size,
+          lastModified: item.lastModified,
+        })),
+      };
+      const equal = Boolean(
+        expected
+        && current.content === expected.content
+        && current.media.length === expected.media.length
+        && current.media.every((item: any, index: number) => {
+          const other = expected.media[index];
+          return other
+            && item.id === other.id
+            && item.name === other.name
+            && item.type === other.type
+            && item.size === other.size
+            && item.lastModified === other.lastModified;
+        }),
+      );
+      if (!equal) return 'changed';
+      mocks.sourceDraftRecords.delete(draftID);
+      return 'deleted';
+    });
+    mocks.getPostDraft.mockImplementation(async (viewerID: number, draftID: string) => {
+      const record = mocks.sourceDraftRecords.get(draftID);
+      return record?.viewerID === viewerID ? record : null;
+    });
     mocks.listPostDrafts.mockResolvedValue([]);
-    mocks.savePostDraft.mockResolvedValue(undefined);
+    mocks.savePostDraft.mockImplementation(async (record: any) => {
+      mocks.sourceDraftRecords.set(record.id, record);
+    });
     mocks.publishRecords.clear();
     mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => (
       mocks.publishRecords.get(viewerID) || null
@@ -186,7 +237,9 @@ describe('postPublish store', () => {
       return true;
     });
     mocks.serializePublishOperation.mockImplementation((operation: any) => ({
+      schemaVersion: 2,
       ...operation,
+      sourceDraftSnapshot: operation.sourceDraftSnapshot ?? null,
       media: operation.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         blob: item.file.slice(0, item.file.size, item.file.type),
@@ -200,6 +253,7 @@ describe('postPublish store', () => {
     }));
     mocks.restorePublishOperation.mockImplementation((record: any) => ({
       ...record,
+      sourceDraftSnapshot: record.sourceDraftSnapshot ?? null,
       media: record.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
@@ -265,11 +319,119 @@ describe('postPublish store', () => {
       throw new Error('publish was not accepted');
     }
     expect(result.operation.sourceDraftID).toBe(sourceDraftID);
+    expect(result.operation.sourceDraftSnapshot).toEqual({ content: 'Saved source draft', media: [] });
+    expect(mocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
     await flushPromises();
 
-    expect(mocks.deletePostDraft).toHaveBeenCalledWith(7, sourceDraftID);
+    expect(mocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(
+      7,
+      sourceDraftID,
+      { content: 'Saved source draft', media: [] },
+    );
     expect(result.operation.phase).toBe('succeeded');
     expect(draft.content).toBe('');
+  });
+
+  it('does not claim source deletion rights when publishing unsaved edits of a saved draft', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Saved version');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    draft.setContent('Unsaved edited version');
+    const store = usePostPublishStore();
+
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+    expect(result.operation.sourceDraftID).toBeNull();
+    expect(result.operation.sourceDraftSnapshot).toBeNull();
+    await flushPromises();
+
+    expect(mocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Saved version');
+  });
+
+  it('captures and deletes the explicitly saved newer source version', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Version one');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    draft.setContent('Version two');
+    await draft.saveCurrentDraft();
+    const store = usePostPublishStore();
+
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+    expect(result.operation.sourceDraftID).toBe(sourceDraftID);
+    expect(result.operation.sourceDraftSnapshot).toEqual({ content: 'Version two', media: [] });
+    await flushPromises();
+
+    expect(mocks.sourceDraftRecords.has(sourceDraftID)).toBe(false);
+    expect(mocks.deletePostDraftIfUnchanged).toHaveBeenLastCalledWith(
+      7,
+      sourceDraftID,
+      { content: 'Version two', media: [] },
+    );
+  });
+
+  it('preserves a newer saved text version after the captured source publish succeeds', async () => {
+    const request = deferred<Post>();
+    mocks.createPost.mockReturnValue(request.promise);
+    const draft = usePostDraftStore();
+    draft.setContent('Version one');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const store = usePostPublishStore();
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+    const oldSnapshot = result.operation.sourceDraftSnapshot;
+
+    draft.setContent('Version two');
+    await draft.saveCurrentDraft();
+    const newerSnapshot = draft.savedSnapshot;
+    request.resolve(publishedPost());
+    await flushPromises();
+
+    expect(mocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(7, sourceDraftID, oldSnapshot);
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Version two');
+    expect(draft.content).toBe('Version two');
+    expect(draft.draftID).toBe(sourceDraftID);
+    expect(draft.savedSnapshot).toEqual(newerSnapshot);
+    expect(draft.hasUnsavedChanges).toBe(false);
+    expect(result.operation.phase).toBe('succeeded');
+    expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, result.operation.id);
+  });
+
+  it('preserves newer media metadata when the source draft ID is reused', async () => {
+    const request = deferred<Post>();
+    mocks.createPost.mockReturnValue(request.promise);
+    const draft = usePostDraftStore();
+    draft.setContent('Same text');
+    const oldMediaID = draft.addMedia(file('old.png'));
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const store = usePostPublishStore();
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+    const oldSnapshot = result.operation.sourceDraftSnapshot;
+
+    draft.removeMedia(oldMediaID);
+    const newerMediaID = draft.addMedia(new File(['new image'], 'new.webp', {
+      type: 'image/webp',
+      lastModified: 5678,
+    }));
+    await draft.saveCurrentDraft();
+    const newerSnapshot = draft.savedSnapshot;
+    request.resolve(publishedPost());
+    await flushPromises();
+
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.media).toMatchObject([
+      { id: newerMediaID, name: 'new.webp', type: 'image/webp', lastModified: 5678 },
+    ]);
+    expect(mocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(7, sourceDraftID, oldSnapshot);
+    expect(draft.draftID).toBe(sourceDraftID);
+    expect(draft.savedSnapshot).toEqual(newerSnapshot);
+    expect(draft.media.map(item => item.id)).toEqual([newerMediaID]);
+    expect(draft.hasUnsavedChanges).toBe(false);
   });
 
   it('preserves the source durable draft when publishing fails', async () => {
@@ -288,7 +450,7 @@ describe('postPublish store', () => {
 
     expect(result.operation.sourceDraftID).toBe(sourceDraftID);
     expect(result.operation.phase).toBe('failed');
-    expect(mocks.deletePostDraft).not.toHaveBeenCalled();
+    expect(mocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
     expect(draft.draftID).toBe(sourceDraftID);
     expect(draft.content).toBe('Keep saved on failure');
   });
@@ -616,9 +778,11 @@ describe('postPublish store', () => {
       throw new Error('second publish was not accepted');
     }
     expect(secondResult.operation.id).not.toBe(first.id);
-    expect(secondResult.operation.sourceDraftID).toBe(sourceDraftID);
+    expect(secondResult.operation.sourceDraftID).toBeNull();
+    expect(secondResult.operation.sourceDraftSnapshot).toBeNull();
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
     await flushPromises();
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Saved source');
   });
 
   it('does not retry a failed operation alongside a different active operation', async () => {
@@ -927,6 +1091,8 @@ describe('postPublish store', () => {
 
   it('rebinds the exact recovered source draft when Retry comes from the status action', async () => {
     const operationID = operationUUID(909);
+    const retryRequest = deferred<Post>();
+    mocks.createPost.mockReturnValue(retryRequest.promise);
     mocks.publishRecords.set(7, persistedFailedOperation({
       id: operationID,
       sourceDraftID: 'saved-source',
@@ -947,6 +1113,7 @@ describe('postPublish store', () => {
 
     await expect(store.retry(operationID)).resolves.toBe(true);
     expect(draft.publishOperationID).toBe(operationID);
+    retryRequest.resolve(publishedPost());
     await flushPromises();
 
     expect(mocks.createPost).toHaveBeenCalledWith(
@@ -1168,16 +1335,7 @@ describe('postPublish store', () => {
     const draft = usePostDraftStore();
     draft.setContent('Saved before publish');
     const sourceDraftID = await draft.saveCurrentDraft();
-    mocks.deletePostDraft.mockRejectedValue(new Error('source draft storage unavailable'));
-    const sourceDraftRecord = {
-      id: sourceDraftID,
-      viewerID: 7,
-      content: 'Saved before publish',
-      media: [],
-      createdAt: 1,
-      updatedAt: 2,
-    };
-    mocks.getPostDraft.mockResolvedValue(sourceDraftRecord);
+    mocks.deletePostDraftIfUnchanged.mockRejectedValue(new Error('source draft storage unavailable'));
     const store = usePostPublishStore();
     const result = await store.startOrRetryDraft();
     expect(result.status).toBe('accepted');
@@ -1193,6 +1351,7 @@ describe('postPublish store', () => {
       post: publishedPost(),
     });
     expect(mocks.deletePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Saved before publish');
 
     draft.setContent('A new post');
     const uuidCalls = mocks.randomUUID.mock.calls.length;
@@ -1206,6 +1365,116 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
     expect(mocks.publishRecords.get(7)?.id).toBe(result.operation.id);
     expect(result.operation.phase).toBe('succeeded');
+  });
+
+  it('retries succeeded source cleanup from the next Post action before creating a new operation', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Saved before publish');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const retryPostRequest = deferred<Post>();
+    mocks.createPost
+      .mockResolvedValueOnce(publishedPost())
+      .mockReturnValueOnce(retryPostRequest.promise);
+    mocks.deletePostDraftIfUnchanged.mockRejectedValueOnce(new Error('temporary storage failure'));
+    const store = usePostPublishStore();
+
+    const first = await store.startOrRetryDraft();
+    expect(first.status).toBe('accepted');
+    if (first.status !== 'accepted') throw new Error('first publish was not accepted');
+    await flushPromises();
+    expect(first.operation.phase).toBe('succeeded');
+    expect(store.getDraftPublishBlockReason(7)).toBe('cleanup_pending');
+
+    draft.setContent('Next post');
+    const uuidCallsBeforeRetry = mocks.randomUUID.mock.calls.length;
+    const replaceCallsBeforeRetry = mocks.replacePostPublishOperation.mock.calls.length;
+    const second = await store.startOrRetryDraft();
+    expect(second.status).toBe('accepted');
+    if (second.status !== 'accepted') throw new Error('next publish was not accepted');
+    await flushPromises();
+
+    expect(second.operation.id).not.toBe(first.operation.id);
+    expect(second.operation.content).toBe('Next post');
+    expect(mocks.sourceDraftRecords.has(sourceDraftID)).toBe(false);
+    expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, first.operation.id);
+    expect(mocks.randomUUID).toHaveBeenCalledTimes(uuidCallsBeforeRetry + 1);
+    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(replaceCallsBeforeRetry + 1);
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+    expect(mocks.createPost).toHaveBeenLastCalledWith(
+      { content: 'Next post', media: [] },
+      { idempotencyKey: second.operation.id },
+    );
+    expect(mocks.deletePostPublishOperation.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.replacePostPublishOperation.mock.invocationCallOrder[1]!);
+    expect(mocks.replacePostPublishOperation.mock.invocationCallOrder[1])
+      .toBeLessThan(mocks.createPost.mock.invocationCallOrder[1]!);
+
+    retryPostRequest.resolve(publishedPost());
+    await flushPromises();
+  });
+
+  it('preserves a changed source draft and retires a recovered succeeded operation during activation', async () => {
+    const sourceDraftID = 'activation-source';
+    const sourceDraftRecord = {
+      id: sourceDraftID,
+      viewerID: 7,
+      content: 'Newer saved version',
+      media: [],
+      createdAt: 1,
+      updatedAt: 3,
+    };
+    mocks.sourceDraftRecords.set(sourceDraftID, sourceDraftRecord);
+    const oldSnapshot = { content: 'Published version', media: [] };
+    const operation = persistedFailedOperation({
+      id: operationUUID(910),
+      sourceDraftID,
+      sourceDraftSnapshot: oldSnapshot,
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: publishedPost(),
+    });
+    mocks.publishRecords.set(7, operation);
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+    await flushPromises();
+
+    expect(mocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(7, sourceDraftID, oldSnapshot);
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Newer saved version');
+    expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operation.id);
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('preserves a legacy source draft whose succeeded operation has no snapshot', async () => {
+    const sourceDraftID = 'legacy-source';
+    mocks.sourceDraftRecords.set(sourceDraftID, {
+      id: sourceDraftID,
+      viewerID: 7,
+      content: 'Keep legacy draft',
+      media: [],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const operation = persistedFailedOperation({
+      id: operationUUID(911),
+      sourceDraftID,
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: publishedPost(),
+    });
+    delete operation.schemaVersion;
+    delete operation.sourceDraftSnapshot;
+    mocks.publishRecords.set(7, operation);
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+    await flushPromises();
+
+    expect(mocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Keep legacy draft');
+    expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operation.id);
   });
 
   it('keeps a successful operation unresolved when its durable delete fails', async () => {

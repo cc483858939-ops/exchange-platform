@@ -1,3 +1,9 @@
+import {
+  createPostDraftSnapshot,
+  postDraftSnapshotsEqual,
+  type DraftSnapshot,
+} from '../utils/postDraftSnapshot';
+
 export type PersistedPostDraftMedia = {
   id: string;
   blob: Blob;
@@ -199,5 +205,47 @@ export const deletePostDraft = (viewerID: number, draftID: string): Promise<bool
     });
     await completed;
     return deleted;
+  });
+};
+
+export type DeleteDraftIfUnchangedResult = 'deleted' | 'missing' | 'changed';
+
+export const deletePostDraftIfUnchanged = (
+  viewerID: number,
+  draftID: string,
+  expectedSnapshot: DraftSnapshot,
+): Promise<DeleteDraftIfUnchangedResult> => {
+  assertViewerID(viewerID);
+  if (!draftID.trim()) {
+    return Promise.resolve('missing');
+  }
+
+  return withDatabase(async database => {
+    const transaction = database.transaction(objectStoreName, 'readwrite');
+    const completed = transactionCompletion(transaction);
+    const store = transaction.objectStore(objectStoreName);
+    const result = await new Promise<DeleteDraftIfUnchangedResult>((resolve, reject) => {
+      const getRequest = store.get(draftID);
+      getRequest.onerror = () => reject(getRequest.error || new Error('Could not check the post draft version.'));
+      getRequest.onsuccess = () => {
+        const record = getRequest.result as PersistedPostDraft | undefined;
+        if (!isPersistedPostDraft(record) || record.viewerID !== viewerID) {
+          resolve('missing');
+          return;
+        }
+
+        const currentSnapshot = createPostDraftSnapshot(record.content, record.media);
+        if (!postDraftSnapshotsEqual(currentSnapshot, expectedSnapshot)) {
+          resolve('changed');
+          return;
+        }
+
+        const deleteRequest = store.delete(draftID);
+        deleteRequest.onerror = () => reject(deleteRequest.error || new Error('Could not delete the post draft.'));
+        deleteRequest.onsuccess = () => resolve('deleted');
+      };
+    });
+    await completed;
+    return result;
   });
 };

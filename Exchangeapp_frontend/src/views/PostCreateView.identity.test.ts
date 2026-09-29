@@ -190,7 +190,9 @@ describe('PostCreateView identity and text publishing', () => {
       return true;
     });
     mocks.serializePublishOperation.mockImplementation((operation: any) => ({
+      schemaVersion: 2,
       ...operation,
+      sourceDraftSnapshot: operation.sourceDraftSnapshot ?? null,
       media: operation.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         blob: item.file.slice(0, item.file.size, item.file.type),
@@ -204,6 +206,7 @@ describe('PostCreateView identity and text publishing', () => {
     }));
     mocks.restorePublishOperation.mockImplementation((record: any) => ({
       ...record,
+      sourceDraftSnapshot: record.sourceDraftSnapshot ?? null,
       media: record.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
@@ -273,6 +276,21 @@ describe('PostCreateView identity and text publishing', () => {
     expect(publish.attributes('disabled')).toBeDefined();
     await wrapper.get('#post-content').setValue('A valid post');
     expect(publish.attributes('disabled')).toBeUndefined();
+  });
+
+  it('keeps Post actionable while succeeded-operation cleanup is pending', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Post after cleanup');
+    const publishStore = usePostPublishStore();
+    vi.spyOn(publishStore, 'getDraftPublishBlockReason').mockReturnValue('cleanup_pending');
+    wrapper = mountPage();
+    await nextTick();
+
+    const publish = wrapper.get('.publish-button');
+    expect(publish.attributes('disabled')).toBeUndefined();
+    expect(publish.attributes('aria-describedby')).toBe('publish-blocked-message');
+    expect(wrapper.get('.publish-blocked-message').text())
+      .toContain('Finishing the previous post on this device.');
   });
 
   it('toggles the emoji picker with an accessible control', async () => {
@@ -457,6 +475,7 @@ describe('PostCreateView identity and text publishing', () => {
       id: 'publish-a',
       publisherUserID: 7,
       sourceDraftID: null,
+      sourceDraftSnapshot: null,
       content: 'Post A',
       media: [],
       phase: 'publishing',
@@ -497,6 +516,7 @@ describe('PostCreateView identity and text publishing', () => {
       id: 'publish-a',
       publisherUserID: 7,
       sourceDraftID: null,
+      sourceDraftSnapshot: null,
       content: 'Post A',
       media: [],
       phase: 'publishing' as const,

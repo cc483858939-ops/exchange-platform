@@ -1,4 +1,8 @@
 import type { Post } from '../types/Post';
+import {
+  createPostDraftSnapshot,
+  type DraftSnapshot,
+} from '../utils/postDraftSnapshot';
 
 export type PersistedPublishPhase = 'uploading' | 'publishing' | 'failed' | 'succeeded';
 export type PersistedPublishFailureKind = 'retryable' | 'idempotency_conflict' | null;
@@ -13,6 +17,7 @@ export type PublishOperationValue = {
   id: string;
   publisherUserID: number;
   sourceDraftID: string | null;
+  sourceDraftSnapshot: DraftSnapshot | null;
   content: string;
   media: PublishOperationMediaValue[];
   phase: PersistedPublishPhase;
@@ -33,9 +38,11 @@ export type PersistedPublishOperationMedia = {
 };
 
 export type PersistedPostPublishOperation = {
+  schemaVersion: 1 | 2;
   id: string;
   publisherUserID: number;
   sourceDraftID: string | null;
+  sourceDraftSnapshot: DraftSnapshot | null;
   content: string;
   media: PersistedPublishOperationMedia[];
   phase: PersistedPublishPhase;
@@ -65,13 +72,32 @@ const validPhase = (phase: unknown): phase is PersistedPublishPhase => (
   || phase === 'succeeded'
 );
 
+const isDraftSnapshot = (value: unknown): value is DraftSnapshot => {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = value as Partial<DraftSnapshot>;
+  return typeof snapshot.content === 'string'
+    && Array.isArray(snapshot.media)
+    && snapshot.media.every(item => Boolean(
+      item
+      && typeof item.id === 'string'
+      && item.id.length > 0
+      && typeof item.name === 'string'
+      && typeof item.type === 'string'
+      && Number.isFinite(item.size)
+      && item.size >= 0
+      && Number.isFinite(item.lastModified),
+    ));
+};
+
 const validateRecord = (value: unknown): PersistedPostPublishOperation => {
   if (!value || typeof value !== 'object') {
     throw new Error('The saved publish operation is invalid.');
   }
   const record = value as Partial<PersistedPostPublishOperation>;
+  const schemaVersion = record.schemaVersion === undefined ? 1 : record.schemaVersion;
   if (
-    typeof record.id !== 'string'
+    (schemaVersion !== 1 && schemaVersion !== 2)
+    || typeof record.id !== 'string'
     || !record.id.trim()
     || !validViewerID(record.publisherUserID)
     || !(record.sourceDraftID === null || typeof record.sourceDraftID === 'string')
@@ -88,6 +114,22 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
     || !(record.post === null || (typeof record.post === 'object' && record.post !== null))
   ) {
     throw new Error('The saved publish operation is invalid.');
+  }
+
+  let sourceDraftSnapshot: DraftSnapshot | null = null;
+  if (schemaVersion === 2) {
+    if (record.sourceDraftSnapshot === undefined) {
+      throw new Error('The saved publish source snapshot is invalid.');
+    }
+    if (record.sourceDraftSnapshot !== null) {
+      if (!isDraftSnapshot(record.sourceDraftSnapshot)) {
+        throw new Error('The saved publish source snapshot is invalid.');
+      }
+      sourceDraftSnapshot = createPostDraftSnapshot(
+        record.sourceDraftSnapshot.content,
+        record.sourceDraftSnapshot.media,
+      );
+    }
   }
 
   for (const media of record.media) {
@@ -110,7 +152,12 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
     }
   }
 
-  return record as PersistedPostPublishOperation;
+  return {
+    ...record,
+    schemaVersion,
+    // Records created before schema 2 deliberately retain no deletion authority.
+    sourceDraftSnapshot,
+  } as PersistedPostPublishOperation;
 };
 
 const openDatabase = (): Promise<IDBDatabase> => {
@@ -258,7 +305,14 @@ export const serializePublishOperation = (
   operation: PublishOperationValue,
   updatedAt = Date.now(),
 ): PersistedPostPublishOperation => validateRecord({
+  schemaVersion: 2,
   ...operation,
+  sourceDraftSnapshot: operation.sourceDraftSnapshot === null
+    ? null
+    : createPostDraftSnapshot(
+      operation.sourceDraftSnapshot.content,
+      operation.sourceDraftSnapshot.media,
+    ),
   media: operation.media.map(item => ({
     draftMediaID: item.draftMediaID,
     blob: item.file.slice(0, item.file.size, item.file.type),
@@ -279,6 +333,12 @@ export const restorePublishOperation = (
     id: record.id,
     publisherUserID: record.publisherUserID,
     sourceDraftID: record.sourceDraftID,
+    sourceDraftSnapshot: record.sourceDraftSnapshot === null
+      ? null
+      : createPostDraftSnapshot(
+        record.sourceDraftSnapshot.content,
+        record.sourceDraftSnapshot.media,
+      ),
     content: record.content,
     media: record.media.map(item => ({
       draftMediaID: item.draftMediaID,

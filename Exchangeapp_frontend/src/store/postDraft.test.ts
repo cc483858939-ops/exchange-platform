@@ -5,6 +5,7 @@ import { usePostDraftStore } from './postDraft';
 
 const repositoryMocks = vi.hoisted(() => ({
   deletePostDraft: vi.fn(),
+  deletePostDraftIfUnchanged: vi.fn(),
   getPostDraft: vi.fn(),
   listPostDrafts: vi.fn(),
   savePostDraft: vi.fn(),
@@ -12,6 +13,7 @@ const repositoryMocks = vi.hoisted(() => ({
 
 vi.mock('../storage/postDraftRepository', () => ({
   deletePostDraft: repositoryMocks.deletePostDraft,
+  deletePostDraftIfUnchanged: repositoryMocks.deletePostDraftIfUnchanged,
   getPostDraft: repositoryMocks.getPostDraft,
   listPostDrafts: repositoryMocks.listPostDrafts,
   savePostDraft: repositoryMocks.savePostDraft,
@@ -44,6 +46,7 @@ describe('postDraft store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     repositoryMocks.deletePostDraft.mockReset().mockResolvedValue(true);
+    repositoryMocks.deletePostDraftIfUnchanged.mockReset().mockResolvedValue('deleted');
     repositoryMocks.getPostDraft.mockReset().mockResolvedValue(null);
     repositoryMocks.listPostDrafts.mockReset().mockResolvedValue([]);
     repositoryMocks.savePostDraft.mockReset().mockResolvedValue(undefined);
@@ -268,6 +271,64 @@ describe('postDraft store', () => {
     expect(store.content).toBe('Keep this in memory');
     expect(store.draftID).toBeNull();
     expect(store.hasUnsavedChanges).toBe(true);
+  });
+
+  it('conditionally removes only the owned saved version and clears identity without dropping working content', async () => {
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    store.setContent('Owned source version');
+    const mediaID = store.addMedia(file('owned.png'));
+    const draftID = await store.saveCurrentDraft();
+    const expectedSnapshot = store.savedSnapshot;
+    store.bindPublishOperation('publish-source');
+
+    await expect(store.resolvePublishedSourceDraft(7, draftID, expectedSnapshot))
+      .resolves.toBe('deleted');
+
+    expect(repositoryMocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(
+      7,
+      draftID,
+      expectedSnapshot,
+    );
+    expect(store.draftID).toBeNull();
+    expect(store.savedSnapshot).toBeNull();
+    expect(store.content).toBe('Owned source version');
+    expect(store.media.map(item => item.id)).toEqual([mediaID]);
+    expect(store.hasUnsavedChanges).toBe(true);
+    expect(store.publishOperationID).toBe('publish-source');
+  });
+
+  it('preserves a newer working saved version when old publish cleanup reports changed', async () => {
+    repositoryMocks.deletePostDraftIfUnchanged.mockResolvedValueOnce('changed');
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    store.setContent('Version one');
+    const draftID = await store.saveCurrentDraft();
+    const oldSnapshot = store.savedSnapshot;
+
+    store.setContent('Version two');
+    store.addMedia(file('newer.png'));
+    await store.saveCurrentDraft();
+    const newerSnapshot = store.savedSnapshot;
+    const mediaBeforeCleanup = [...store.media];
+
+    await expect(store.resolvePublishedSourceDraft(7, draftID, oldSnapshot))
+      .resolves.toBe('changed');
+
+    expect(store.content).toBe('Version two');
+    expect(store.media).toEqual(mediaBeforeCleanup);
+    expect(store.draftID).toBe(draftID);
+    expect(store.savedSnapshot).toEqual(newerSnapshot);
+    expect(store.hasUnsavedChanges).toBe(false);
+  });
+
+  it('preserves legacy source drafts when an operation has no version snapshot', async () => {
+    const store = usePostDraftStore();
+    store.setViewer(7);
+
+    await expect(store.resolvePublishedSourceDraft(7, 'legacy-source', null))
+      .resolves.toBe('changed');
+    expect(repositoryMocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
   });
 
   it('binds and clears a publish operation only for its viewer', () => {

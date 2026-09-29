@@ -143,6 +143,25 @@ const makeOperation = (id: string, viewerID: number, name = 'photo.webp') => {
     id,
     publisherUserID: viewerID,
     sourceDraftID: 'saved-draft',
+    sourceDraftSnapshot: {
+      content: 'Exact text',
+      media: [
+        {
+          id: 'media-a',
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          lastModified: file.lastModified,
+        },
+        {
+          id: 'media-b',
+          name: 'second.png',
+          type: 'image/png',
+          size: 6,
+          lastModified: 0,
+        },
+      ],
+    },
     content: 'Exact text',
     media: [
       { draftMediaID: 'media-a', file, uploadedURL: '/media/a' },
@@ -183,9 +202,17 @@ describe('postPublishRepository', () => {
 
     const restoredRecord = await getPostPublishOperation(7);
     expect(restoredRecord).toMatchObject({
+      schemaVersion: 2,
       id: 'operation-a',
       publisherUserID: 7,
       sourceDraftID: 'saved-draft',
+      sourceDraftSnapshot: {
+        content: 'Exact text',
+        media: [
+          { id: 'media-a', name: 'photo.webp', type: 'image/webp' },
+          { id: 'media-b', name: 'second.png', type: 'image/png' },
+        ],
+      },
       content: 'Exact text',
       phase: 'publishing',
       updatedAt: 456,
@@ -195,6 +222,7 @@ describe('postPublishRepository', () => {
       ],
     });
     const restored = restorePublishOperation(restoredRecord!);
+    expect(restored.sourceDraftSnapshot).toEqual(restoredRecord?.sourceDraftSnapshot);
     expect(restored.media.map(item => [item.draftMediaID, item.file.name, item.uploadedURL]))
       .toEqual([
         ['media-a', 'photo.webp', '/media/a'],
@@ -213,5 +241,22 @@ describe('postPublishRepository', () => {
     expect(await deletePostPublishOperation(7, 'operation-a')).toBe(true);
     expect(await getPostPublishOperation(7)).toBeNull();
     expect(await getPostPublishOperation(8)).toMatchObject({ id: 'operation-b' });
+  });
+
+  it('normalizes a legacy operation without a source snapshot to preservation-only state', async () => {
+    const original = serializePublishOperation(makeOperation('legacy-operation', 7), 456);
+    await replacePostPublishOperation(original);
+    const legacyRecord = { ...original } as unknown as Record<string, unknown>;
+    delete legacyRecord.schemaVersion;
+    delete legacyRecord.sourceDraftSnapshot;
+    factory.database!.records.set(7, legacyRecord as unknown as PersistedPostPublishOperation);
+
+    const restoredRecord = await getPostPublishOperation(7);
+    expect(restoredRecord).toMatchObject({
+      schemaVersion: 1,
+      sourceDraftID: 'saved-draft',
+      sourceDraftSnapshot: null,
+    });
+    expect(restorePublishOperation(restoredRecord!).sourceDraftSnapshot).toBeNull();
   });
 });
