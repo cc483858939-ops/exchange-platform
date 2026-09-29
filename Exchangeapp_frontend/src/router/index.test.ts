@@ -2,6 +2,8 @@
 
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTH_USER_STORAGE_KEY, writePersistedAuthSession } from '../auth/authSessionCoordinator';
+import type { PersistedAuthSession } from '../auth/authSessionCoordinator';
 
 vi.mock('element-plus/es/components/message/style/css', () => ({}));
 vi.mock('element-plus/es/components/alert/style/css', () => ({}));
@@ -13,14 +15,26 @@ vi.mock('element-plus/es/components/skeleton/style/css', () => ({}));
 import router, { resolveAuthenticatedGuestOnlyDestination } from './index';
 import { routeScrollBehavior } from './scrollBehavior';
 
-const setAuthenticatedState = (id = 42) => {
-  const payload = btoa(JSON.stringify({ sub: String(id), sid: `sid-${id}` }))
+const tokenFor = (userId: number, sessionId: string): string => {
+  const payload = btoa(JSON.stringify({ sub: String(userId), sid: sessionId }))
     .replace(/=/g, '')
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
-  localStorage.setItem('token', `header.${payload}.signature`);
-  localStorage.setItem('refresh_token', 'refresh-token');
-  localStorage.setItem('auth_user', JSON.stringify({
+  return `header.${payload}.signature`;
+};
+
+const setAuthenticatedState = (id = 42) => {
+  const sessionId = `sid-${id}`;
+  const session: PersistedAuthSession = {
+    schemaVersion: 2,
+    tokenRevision: `revision-${id}`,
+    sessionId,
+    userId: id,
+    accessToken: tokenFor(id, sessionId),
+    refreshToken: `refresh-${id}`,
+  };
+  writePersistedAuthSession(session);
+  localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify({
     id,
     username: 'alice',
     display_name: 'Alice',
