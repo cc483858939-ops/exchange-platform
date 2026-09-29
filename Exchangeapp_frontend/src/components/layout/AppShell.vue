@@ -21,6 +21,7 @@ import { onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '../../store/auth';
 import { useNotificationStore } from '../../store/notification';
+import { usePostPublishStore } from '../../store/postPublish';
 import { useSearchSessionStore } from '../../store/searchSession';
 import LeftSidebar from './LeftSidebar.vue';
 import MobileBottomNav from './MobileBottomNav.vue';
@@ -31,6 +32,7 @@ const NOTIFICATION_POLL_INTERVAL_MS = 60_000;
 const authStore = useAuthStore();
 const route = useRoute();
 const notificationStore = useNotificationStore();
+const postPublishStore = usePostPublishStore();
 const searchSession = useSearchSessionStore();
 let notificationPollTimer: number | null = null;
 let disposed = false;
@@ -105,6 +107,7 @@ const syncSessionViewers = () => {
   const nextViewerID = currentViewerID();
   notificationStore.setViewer(nextViewerID);
   searchSession.setViewer(nextViewerID);
+  void postPublishStore.activateViewer(nextViewerID);
   if (nextViewerID === null) {
     clearNotificationPollTimer();
     return;

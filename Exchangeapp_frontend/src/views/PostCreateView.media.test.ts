@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { nextTick } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostCreateView from './PostCreateView.vue';
@@ -25,6 +26,16 @@ const mocks = vi.hoisted(() => ({
   profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
   uploadPostMedia: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
+  captureBookmarkStateSyncVersion: vi.fn(),
+  syncHydratedPostBookmarkState: vi.fn(),
+  publishRecords: new Map<number, any>(),
+  getPostPublishOperation: vi.fn(),
+  replacePostPublishOperation: vi.fn(),
+  updatePostPublishOperation: vi.fn(),
+  deletePostPublishOperation: vi.fn(),
+  serializePublishOperation: vi.fn(),
+  restorePublishOperation: vi.fn(),
   previewGenerator: {
     generate: vi.fn(),
     dispose: vi.fn(),
@@ -69,6 +80,24 @@ vi.mock('../store/profileSession', () => ({
 vi.mock('../services/postService', () => ({
   createPost: mocks.createPost,
   uploadPostMedia: mocks.uploadPostMedia,
+}));
+
+vi.mock('../services/bookmarkService', () => ({
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
+}));
+
+vi.mock('../store/sessionSync', () => ({
+  captureBookmarkStateSyncVersion: mocks.captureBookmarkStateSyncVersion,
+  syncHydratedPostBookmarkState: mocks.syncHydratedPostBookmarkState,
+}));
+
+vi.mock('../storage/postPublishRepository', () => ({
+  getPostPublishOperation: mocks.getPostPublishOperation,
+  replacePostPublishOperation: mocks.replacePostPublishOperation,
+  updatePostPublishOperation: mocks.updatePostPublishOperation,
+  deletePostPublishOperation: mocks.deletePostPublishOperation,
+  serializePublishOperation: mocks.serializePublishOperation,
+  restorePublishOperation: mocks.restorePublishOperation,
 }));
 
 vi.mock('../utils/localImagePreview', () => ({
@@ -157,9 +186,48 @@ describe('PostCreateView media picker and retry behavior', () => {
     };
     mocks.createPost.mockResolvedValue(publishedPost());
     mocks.uploadPostMedia.mockImplementation(async (file: File) => `/media/${file.name}`);
+    mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
+    mocks.syncHydratedPostBookmarkState.mockReturnValue(true);
     mocks.feedStore.registerPublishedPost.mockReturnValue(true);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
+    mocks.publishRecords.clear();
+    mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => mocks.publishRecords.get(viewerID) || null);
+    mocks.replacePostPublishOperation.mockImplementation(async (record: any) => {
+      mocks.publishRecords.set(record.publisherUserID, record);
+    });
+    mocks.updatePostPublishOperation.mockImplementation(async (record: any) => {
+      if (mocks.publishRecords.get(record.publisherUserID)?.id !== record.id) return false;
+      mocks.publishRecords.set(record.publisherUserID, record);
+      return true;
+    });
+    mocks.deletePostPublishOperation.mockImplementation(async (viewerID: number, id: string) => {
+      if (mocks.publishRecords.get(viewerID)?.id !== id) return false;
+      mocks.publishRecords.delete(viewerID);
+      return true;
+    });
+    mocks.serializePublishOperation.mockImplementation((operation: any) => ({
+      ...operation,
+      media: operation.media.map((item: any) => ({
+        draftMediaID: item.draftMediaID,
+        blob: item.file.slice(0, item.file.size, item.file.type),
+        name: item.file.name,
+        type: item.file.type,
+        size: item.file.size,
+        lastModified: item.file.lastModified,
+        uploadedURL: item.uploadedURL,
+      })),
+      updatedAt: Date.now(),
+    }));
+    mocks.restorePublishOperation.mockImplementation((record: any) => ({
+      ...record,
+      media: record.media.map((item: any) => ({
+        draftMediaID: item.draftMediaID,
+        file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
+        uploadedURL: item.uploadedURL,
+      })),
+    }));
 
     const draft = usePostDraftStore();
     draft.clear();
@@ -583,7 +651,7 @@ describe('PostCreateView media picker and retry behavior', () => {
 
     const operation = usePostPublishStore().latestOperation;
     expect(operation).not.toBeNull();
-    expect(usePostPublishStore().retry(operation!.id)).toBe(true);
+    await expect(usePostPublishStore().retry(operation!.id)).resolves.toBe(true);
     await flushPromises();
 
     expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
@@ -712,7 +780,7 @@ describe('PostCreateView media picker and retry behavior', () => {
 
     const operation = usePostPublishStore().latestOperation;
     expect(operation).not.toBeNull();
-    expect(usePostPublishStore().retry(operation!.id)).toBe(true);
+    await expect(usePostPublishStore().retry(operation!.id)).resolves.toBe(true);
     await flushPromises();
 
     expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(3);
@@ -749,9 +817,54 @@ describe('PostCreateView media picker and retry behavior', () => {
 
     const operation = usePostPublishStore().latestOperation;
     expect(operation).not.toBeNull();
-    expect(usePostPublishStore().retry(operation!.id)).toBe(true);
+    await expect(usePostPublishStore().retry(operation!.id)).resolves.toBe(true);
     await flushPromises();
     expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails closed when the durable operation cannot be prepared', async () => {
+    wrapper = mountPage();
+    await wrapper.get('#post-content').setValue('Keep this draft');
+    mocks.replacePostPublishOperation.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(usePostDraftStore().content).toBe('Keep this draft');
+    expect(usePostDraftStore().publishOperationID).toBeNull();
+    expect(wrapper.get('.composer-validation-error').text()).toBe(
+      'Couldn’t prepare this post for reliable sending. Your draft was preserved. Try again.',
+    );
+  });
+
+  it('locks the composer during durable preflight and only suppresses unload after acceptance', async () => {
+    const persistence = deferred<void>();
+    const postRequest = deferred<ReturnType<typeof publishedPost>>();
+    mocks.replacePostPublishOperation.mockReturnValueOnce(persistence.promise);
+    mocks.createPost.mockReturnValue(postRequest.promise);
+    wrapper = mountPage();
+    await wrapper.get('#post-content').setValue('Reliable send');
+
+    await wrapper.get('form').trigger('submit');
+    await nextTick();
+
+    expect(wrapper.get('#post-content').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('#post-media-input').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.emoji-picker-trigger').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
+    expect(await mocks.beforeRouteLeave()).toBe(false);
+    const beforeDurability = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(beforeDurability);
+    expect(beforeDurability.defaultPrevented).toBe(true);
+
+    persistence.resolve();
+    await flushPromises();
+    expect(usePostDraftStore().publishOperationID).not.toBeNull();
+    const afterDurability = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(afterDurability);
+    expect(afterDurability.defaultPrevented).toBe(false);
   });
 });

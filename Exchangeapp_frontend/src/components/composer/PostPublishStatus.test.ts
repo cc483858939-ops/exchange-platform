@@ -16,12 +16,15 @@ vi.mock('../../store/postPublish', () => ({
 const operationFor = (phase: string, id = 'publish-1') => ({
   id,
   phase,
+  failureKind: phase === 'failed' ? 'retryable' : null,
+  error: '',
 });
 
 describe('PostPublishStatus', () => {
   beforeEach(() => {
     mocks.store = reactive({
       latestOperation: null,
+      recoveryError: '',
       retry: vi.fn(),
     });
   });
@@ -50,6 +53,27 @@ describe('PostPublishStatus', () => {
     expect(retry.text()).toBe('Retry');
     await retry.trigger('click');
     expect(mocks.store.retry).toHaveBeenCalledWith('publish-42');
+  });
+
+  it('does not offer retry for an idempotency conflict', () => {
+    mocks.store.latestOperation = {
+      ...operationFor('failed', 'publish-conflict'),
+      failureKind: 'idempotency_conflict',
+      error: 'This post can’t be retried safely.',
+    };
+
+    const wrapper = mount(PostPublishStatus);
+
+    expect(wrapper.get('[role="status"]').text()).toContain('This post can’t be retried safely.');
+    expect(wrapper.find('button').exists()).toBe(false);
+  });
+
+  it('shows a viewer recovery error without an operation', () => {
+    mocks.store.recoveryError = 'Couldn’t restore the pending post from this device.';
+
+    const wrapper = mount(PostPublishStatus);
+
+    expect(wrapper.get('[role="status"]').text()).toContain('Couldn’t restore the pending post');
   });
 
   it('does not render without a publish operation', () => {

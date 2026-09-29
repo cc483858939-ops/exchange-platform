@@ -31,6 +31,16 @@ const mocks = vi.hoisted(() => ({
   profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
   uploadPostMedia: vi.fn(),
+  getPostBookmarkStates: vi.fn(),
+  captureBookmarkStateSyncVersion: vi.fn(),
+  syncHydratedPostBookmarkState: vi.fn(),
+  publishRecords: new Map<number, any>(),
+  getPostPublishOperation: vi.fn(),
+  replacePostPublishOperation: vi.fn(),
+  updatePostPublishOperation: vi.fn(),
+  deletePostPublishOperation: vi.fn(),
+  serializePublishOperation: vi.fn(),
+  restorePublishOperation: vi.fn(),
 }));
 
 vi.mock('vue-router', async () => {
@@ -70,6 +80,24 @@ vi.mock('../store/profileSession', () => ({
 vi.mock('../services/postService', () => ({
   createPost: mocks.createPost,
   uploadPostMedia: mocks.uploadPostMedia,
+}));
+
+vi.mock('../services/bookmarkService', () => ({
+  getPostBookmarkStates: mocks.getPostBookmarkStates,
+}));
+
+vi.mock('../store/sessionSync', () => ({
+  captureBookmarkStateSyncVersion: mocks.captureBookmarkStateSyncVersion,
+  syncHydratedPostBookmarkState: mocks.syncHydratedPostBookmarkState,
+}));
+
+vi.mock('../storage/postPublishRepository', () => ({
+  getPostPublishOperation: mocks.getPostPublishOperation,
+  replacePostPublishOperation: mocks.replacePostPublishOperation,
+  updatePostPublishOperation: mocks.updatePostPublishOperation,
+  deletePostPublishOperation: mocks.deletePostPublishOperation,
+  serializePublishOperation: mocks.serializePublishOperation,
+  restorePublishOperation: mocks.restorePublishOperation,
 }));
 
 const identity = (id = 7, username = id === 7 ? 'alice' : 'bob') => ({
@@ -140,9 +168,48 @@ describe('PostCreateView identity and text publishing', () => {
     mocks.authStore!.isAuthenticated = true;
     mocks.authStore!.currentIdentity = identity();
     mocks.createPost.mockResolvedValue(publishedPost());
+    mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
+    mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
+    mocks.syncHydratedPostBookmarkState.mockReturnValue(true);
     mocks.feedStore.registerPublishedPost.mockReturnValue(true);
     mocks.router.push.mockResolvedValue(undefined);
     mocks.router.replace.mockResolvedValue(undefined);
+    mocks.publishRecords.clear();
+    mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => mocks.publishRecords.get(viewerID) || null);
+    mocks.replacePostPublishOperation.mockImplementation(async (record: any) => {
+      mocks.publishRecords.set(record.publisherUserID, record);
+    });
+    mocks.updatePostPublishOperation.mockImplementation(async (record: any) => {
+      if (mocks.publishRecords.get(record.publisherUserID)?.id !== record.id) return false;
+      mocks.publishRecords.set(record.publisherUserID, record);
+      return true;
+    });
+    mocks.deletePostPublishOperation.mockImplementation(async (viewerID: number, id: string) => {
+      if (mocks.publishRecords.get(viewerID)?.id !== id) return false;
+      mocks.publishRecords.delete(viewerID);
+      return true;
+    });
+    mocks.serializePublishOperation.mockImplementation((operation: any) => ({
+      ...operation,
+      media: operation.media.map((item: any) => ({
+        draftMediaID: item.draftMediaID,
+        blob: item.file.slice(0, item.file.size, item.file.type),
+        name: item.file.name,
+        type: item.file.type,
+        size: item.file.size,
+        lastModified: item.file.lastModified,
+        uploadedURL: item.uploadedURL,
+      })),
+      updatedAt: Date.now(),
+    }));
+    mocks.restorePublishOperation.mockImplementation((record: any) => ({
+      ...record,
+      media: record.media.map((item: any) => ({
+        draftMediaID: item.draftMediaID,
+        file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
+        uploadedURL: item.uploadedURL,
+      })),
+    }));
 
     const draft = usePostDraftStore();
     draft.clear();
@@ -361,6 +428,7 @@ describe('PostCreateView identity and text publishing', () => {
     await wrapper.get('#post-content').setValue('Survive composer unmount');
 
     await wrapper.get('form').trigger('submit');
+    await flushPromises();
     const operation = usePostPublishStore().latestOperation;
     expect(operation?.phase).toBe('publishing');
     expect(mocks.router.replace).toHaveBeenCalledWith({
@@ -392,6 +460,7 @@ describe('PostCreateView identity and text publishing', () => {
       content: 'Post A',
       media: [],
       phase: 'publishing',
+      failureKind: null,
       error: '',
       startedAt: Date.now(),
       post: null,
@@ -431,6 +500,7 @@ describe('PostCreateView identity and text publishing', () => {
       content: 'Post A',
       media: [],
       phase: 'publishing' as const,
+      failureKind: null,
       error: '',
       startedAt: Date.now(),
       post: null,

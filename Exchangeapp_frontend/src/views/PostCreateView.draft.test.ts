@@ -32,6 +32,13 @@ const mocks = vi.hoisted(() => ({
   getPostBookmarkStates: vi.fn(),
   captureBookmarkStateSyncVersion: vi.fn(),
   syncHydratedPostBookmarkState: vi.fn(),
+  publishOperations: new Map<number, any>(),
+  getPostPublishOperation: vi.fn(),
+  replacePostPublishOperation: vi.fn(),
+  updatePostPublishOperation: vi.fn(),
+  deletePostPublishOperation: vi.fn(),
+  serializePublishOperation: vi.fn(),
+  restorePublishOperation: vi.fn(),
   previewGenerator: {
     generate: vi.fn(),
     dispose: vi.fn(),
@@ -75,6 +82,14 @@ vi.mock('../storage/postDraftRepository', () => ({
   getPostDraft: mocks.getPostDraft,
   listPostDrafts: mocks.listPostDrafts,
   savePostDraft: mocks.savePostDraft,
+}));
+vi.mock('../storage/postPublishRepository', () => ({
+  getPostPublishOperation: mocks.getPostPublishOperation,
+  replacePostPublishOperation: mocks.replacePostPublishOperation,
+  updatePostPublishOperation: mocks.updatePostPublishOperation,
+  deletePostPublishOperation: mocks.deletePostPublishOperation,
+  serializePublishOperation: mocks.serializePublishOperation,
+  restorePublishOperation: mocks.restorePublishOperation,
 }));
 vi.mock('../utils/localImagePreview', () => ({
   createLocalImagePreviewGenerator: () => mocks.previewGenerator,
@@ -140,6 +155,7 @@ describe('PostCreateView durable drafts and exit protection', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.drafts.clear();
+    mocks.publishOperations.clear();
     mocks.route.name = 'PostCreate';
     mocks.route.query = {};
     mocks.route.params = {};
@@ -195,6 +211,43 @@ describe('PostCreateView durable drafts and exit protection', () => {
     mocks.getPostBookmarkStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.captureBookmarkStateSyncVersion.mockReset().mockReturnValue(0);
     mocks.syncHydratedPostBookmarkState.mockReset().mockReturnValue(true);
+    mocks.getPostPublishOperation.mockReset().mockImplementation(async (viewerID: number) => (
+      mocks.publishOperations.get(viewerID) || null
+    ));
+    mocks.replacePostPublishOperation.mockReset().mockImplementation(async (record: any) => {
+      mocks.publishOperations.set(record.publisherUserID, record);
+    });
+    mocks.updatePostPublishOperation.mockReset().mockImplementation(async (record: any) => {
+      if (mocks.publishOperations.get(record.publisherUserID)?.id !== record.id) return false;
+      mocks.publishOperations.set(record.publisherUserID, record);
+      return true;
+    });
+    mocks.deletePostPublishOperation.mockReset().mockImplementation(async (viewerID: number, id: string) => {
+      if (mocks.publishOperations.get(viewerID)?.id !== id) return false;
+      mocks.publishOperations.delete(viewerID);
+      return true;
+    });
+    mocks.serializePublishOperation.mockReset().mockImplementation((operation: any) => ({
+      ...operation,
+      media: operation.media.map((item: any) => ({
+        draftMediaID: item.draftMediaID,
+        blob: item.file.slice(0, item.file.size, item.file.type),
+        name: item.file.name,
+        type: item.file.type,
+        size: item.file.size,
+        lastModified: item.file.lastModified,
+        uploadedURL: item.uploadedURL,
+      })),
+      updatedAt: Date.now(),
+    }));
+    mocks.restorePublishOperation.mockReset().mockImplementation((record: any) => ({
+      ...record,
+      media: record.media.map((item: any) => ({
+        draftMediaID: item.draftMediaID,
+        file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
+        uploadedURL: item.uploadedURL,
+      })),
+    }));
     mocks.previewGenerator.generate.mockReset().mockImplementation(async (file: File) => ({
       blob: file.slice(0, file.size, file.type),
       width: 10,
@@ -454,6 +507,7 @@ describe('PostCreateView durable drafts and exit protection', () => {
     const store = usePostDraftStore();
     store.setContent('Submitted post');
     await wrapper.get('form').trigger('submit');
+    await flushPromises();
     expect(mocks.router.replace).toHaveBeenCalledWith({
       name: 'Home',
       query: { tab: 'for-you' },

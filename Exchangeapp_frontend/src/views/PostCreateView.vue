@@ -132,6 +132,10 @@
               {{ publishError }}
             </p>
 
+            <p v-if="postPublishStore.recoveryError" class="field-error composer-validation-error" role="alert">
+              {{ postPublishStore.recoveryError }}
+            </p>
+
             <p
               v-if="publishBlocked"
               id="publish-blocked-message"
@@ -310,6 +314,7 @@ let draftListRequestVersion = 0;
 const validationAttempted = ref(false);
 const mediaError = ref('');
 const publishError = ref('');
+const publishPreparing = ref(false);
 const contentInput = ref<HTMLTextAreaElement | null>(null);
 const emojiButton = ref<HTMLButtonElement | null>(null);
 const emojiPickerOpen = ref(false);
@@ -363,7 +368,8 @@ const contentLength = computed(() => Array.from(content.value.trim()).length);
 const remainingCharacters = computed(() => maxContentLength - contentLength.value);
 const showCharacterCount = computed(() => remainingCharacters.value <= 1000);
 const isSubmitting = computed(() => (
-  currentPublishOperation.value?.phase === 'uploading'
+  publishPreparing.value
+  || currentPublishOperation.value?.phase === 'uploading'
   || currentPublishOperation.value?.phase === 'publishing'
 ));
 const publishLabel = computed(() => {
@@ -870,6 +876,9 @@ const getRouteDraftID = (target: Pick<RouteLocationNormalized, 'query'>) => (
 );
 
 onBeforeRouteLeave(() => {
+  if (publishPreparing.value) {
+    return false;
+  }
   if (postDraft.publishOperationID !== null) {
     return true;
   }
@@ -882,6 +891,9 @@ onBeforeRouteUpdate((to, from) => {
   }
   if (getRouteDraftID(to) === getRouteDraftID(from)) {
     return true;
+  }
+  if (publishPreparing.value) {
+    return false;
   }
   if (postDraft.publishOperationID !== null) {
     return false;
@@ -964,7 +976,7 @@ const discardWorkingDraft = () => {
 };
 
 const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-  if (!postDraft.hasUnsavedChanges) return;
+  if (!postDraft.hasUnsavedChanges || postDraft.publishOperationID !== null) return;
   event.preventDefault();
   event.returnValue = '';
 };
@@ -1008,13 +1020,26 @@ const submitPost = async () => {
   }
   publishError.value = '';
 
-  const result = postPublishStore.startOrRetryDraft();
+  publishPreparing.value = true;
+  let result: Awaited<ReturnType<typeof postPublishStore.startOrRetryDraft>>;
+  try {
+    result = await postPublishStore.startOrRetryDraft();
+  } catch {
+    publishError.value = 'Couldn’t prepare this post for reliable sending. Your draft was preserved. Try again.';
+    return;
+  } finally {
+    publishPreparing.value = false;
+  }
   if (result.status === 'rejected') {
-    publishError.value = 'Your account could not be verified. Your draft was preserved.';
+    publishError.value = result.reason === 'persistence_unavailable'
+      ? 'Couldn’t prepare this post for reliable sending. Your draft was preserved. Try again.'
+      : 'Your account could not be verified. Your draft was preserved.';
     return;
   }
   if (result.status === 'blocked') {
-    publishError.value = publishBlockedMessage;
+    publishError.value = result.reason === 'idempotency_conflict'
+      ? 'This post can’t be retried safely.'
+      : publishBlockedMessage;
     return;
   }
   try {

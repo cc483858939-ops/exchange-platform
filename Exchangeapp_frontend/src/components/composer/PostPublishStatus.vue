@@ -1,13 +1,13 @@
 <template>
   <aside
-    v-if="operation"
+    v-if="operation || postPublishStore.recoveryError"
     class="post-publish-status"
     role="status"
     aria-live="polite"
   >
     <span class="post-publish-status__message">{{ message }}</span>
     <button
-      v-if="operation.phase === 'failed'"
+      v-if="operation?.phase === 'failed' && operation.failureKind === 'retryable'"
       class="post-publish-status__retry"
       type="button"
       @click="retryPublish"
@@ -30,11 +30,11 @@ const message = computed(() => {
     case 'publishing':
       return 'Posting...';
     case 'failed':
-      return 'Couldn’t confirm this post.';
+      return operation.value?.error || 'Couldn’t confirm this post.';
     case 'succeeded':
       return 'Post sent.';
     default:
-      return '';
+      return postPublishStore.recoveryError;
   }
 });
 

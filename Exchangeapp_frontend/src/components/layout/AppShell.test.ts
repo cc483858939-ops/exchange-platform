@@ -10,6 +10,7 @@ const NOTIFICATION_POLL_INTERVAL_MS = 60_000;
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
   notificationStore: null as any,
+  postPublishStore: null as any,
   searchSession: null as any,
   route: null as any,
 }));
@@ -20,6 +21,10 @@ vi.mock('../../store/auth', () => ({
 
 vi.mock('../../store/notification', () => ({
   useNotificationStore: () => mocks.notificationStore,
+}));
+
+vi.mock('../../store/postPublish', () => ({
+  usePostPublishStore: () => mocks.postPublishStore,
 }));
 
 vi.mock('../../store/searchSession', () => ({
@@ -107,6 +112,7 @@ describe('AppShell mobile structure and notification freshness', () => {
       }),
     };
     mocks.searchSession = { setViewer: vi.fn() };
+    mocks.postPublishStore = { activateViewer: vi.fn().mockResolvedValue(undefined) };
     mocks.route = reactive({ name: 'Home' });
   });
 
@@ -129,6 +135,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     expect(wrapper.find('.app-layout__mobile-account').exists()).toBe(false);
     expect(wrapper.find('.app-layout__mobile-links').exists()).toBe(false);
     expect(mocks.searchSession.setViewer).toHaveBeenCalledWith(7);
+    expect(mocks.postPublishStore.activateViewer).toHaveBeenCalledWith(7);
     expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(1);
   });
 
@@ -139,6 +146,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     await flushAsync();
 
     expect(mocks.notificationStore.refreshUnreadCount).not.toHaveBeenCalled();
+    expect(mocks.postPublishStore.activateViewer).toHaveBeenCalledWith(null);
     await vi.advanceTimersByTimeAsync(NOTIFICATION_POLL_INTERVAL_MS * 3);
     expect(mocks.notificationStore.refreshUnreadCount).not.toHaveBeenCalled();
     unmountShell(wrapper);
@@ -243,6 +251,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     mocks.authStore.isAuthenticated = false;
     mocks.authStore.currentIdentity = null;
     await nextTick();
+    expect(mocks.postPublishStore.activateViewer).toHaveBeenLastCalledWith(null);
     await flushAsync();
     mocks.notificationStore.refreshUnreadCount.mockClear();
 
