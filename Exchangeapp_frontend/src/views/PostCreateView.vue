@@ -142,7 +142,7 @@
               class="publish-blocked-message"
               role="status"
             >
-              Another post is still sending. Wait for it to finish or retry it before posting this draft.
+              {{ publishBlockedMessage }}
             </p>
 
             <div class="composer-toolbar">
@@ -343,7 +343,6 @@ let previewQueueRunning = false;
 const previewQueue: Array<{ id: string; file: File }> = [];
 const queuedPreviewFiles = new Map<string, File>();
 const emojiPickerId = 'post-emoji-picker';
-const publishBlockedMessage = 'Another post is still sending. Wait for it to finish or retry it before posting this draft.';
 const previewPreparationFailureMessage = 'Could not prepare this image preview. Remove the image and try again.';
 
 const currentIdentity = computed(() => authStore.currentIdentity);
@@ -381,15 +380,29 @@ const publishLabel = computed(() => {
   }
   return 'Post';
 });
-const publishBlocked = computed(() => {
+const publishBlockReason = computed(() => {
   const viewerID = currentUserID.value;
   if (typeof viewerID !== 'number' || viewerID <= 0) {
-    return false;
+    return null;
   }
-  return postPublishStore.isDraftBlockedByAnotherPublish(
+  return postPublishStore.getDraftPublishBlockReason(
     viewerID,
     postDraft.publishOperationID,
   );
+});
+const publishBlocked = computed(() => publishBlockReason.value !== null);
+const publishBlockedMessage = computed(() => {
+  switch (publishBlockReason.value) {
+    case 'idempotency_conflict':
+      return 'This post can’t be retried safely.';
+    case 'unresolved_publish':
+      return 'Resolve the previous post attempt before sending another post. Retry or discard the previous attempt first.';
+    case 'cleanup_pending':
+      return 'Finishing the previous post on this device. Try again in a moment.';
+    case 'another_publish_in_flight':
+    default:
+      return 'Another post is still sending. Wait for it to finish or retry it before posting this draft.';
+  }
 });
 const contentError = computed(() => {
   if (contentLength.value > maxContentLength) {
@@ -1002,7 +1015,7 @@ const submitPost = async () => {
   validationAttempted.value = true;
   if (!canPublish.value) {
     if (publishBlocked.value) {
-      publishError.value = publishBlockedMessage;
+      publishError.value = publishBlockedMessage.value;
     } else if (previewPreparationBlocked.value) {
       publishError.value = previewPreparationError.value || 'Wait for image previews to finish before posting.';
     }
@@ -1039,7 +1052,11 @@ const submitPost = async () => {
   if (result.status === 'blocked') {
     publishError.value = result.reason === 'idempotency_conflict'
       ? 'This post can’t be retried safely.'
-      : publishBlockedMessage;
+      : result.reason === 'unresolved_publish'
+        ? 'Resolve the previous post attempt before sending another post. Retry or discard the previous attempt first.'
+        : result.reason === 'cleanup_pending'
+          ? 'Finishing the previous post on this device. Try again in a moment.'
+          : 'Another post is still sending. Wait for it to finish or retry it before posting this draft.';
     return;
   }
   try {

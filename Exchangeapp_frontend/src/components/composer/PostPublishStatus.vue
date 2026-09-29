@@ -9,20 +9,48 @@
     <button
       v-if="operation?.phase === 'failed' && operation.failureKind === 'retryable'"
       class="post-publish-status__retry"
+      :disabled="abandonBusy"
       type="button"
       @click="retryPublish"
     >
       Retry
     </button>
+    <button
+      v-if="operation?.phase === 'failed'"
+      class="post-publish-status__discard"
+      :disabled="abandonBusy"
+      type="button"
+      @click="requestAbandon"
+    >
+      Discard attempt
+    </button>
   </aside>
+
+  <ConfirmDialog
+    v-if="abandonConfirmationOpen"
+    title="Discard this post attempt?"
+    description="This attempt may already have been posted. Discarding stops recovery on this device and does not delete anything already published. Check your profile before posting the same content again."
+    confirm-label="Discard attempt"
+    cancel-label="Cancel"
+    danger
+    :busy="abandonBusy"
+    :error="abandonError"
+    @confirm="confirmAbandon"
+    @cancel="cancelAbandon"
+  />
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { usePostPublishStore } from '../../store/postPublish';
+import ConfirmDialog from '../dialogs/ConfirmDialog.vue';
 
 const postPublishStore = usePostPublishStore();
 const operation = computed(() => postPublishStore.latestOperation);
+const abandonConfirmationOpen = ref(false);
+const abandonOperationID = ref<string | null>(null);
+const abandonBusy = ref(false);
+const abandonError = ref('');
 const message = computed(() => {
   switch (operation.value?.phase) {
     case 'uploading':
@@ -42,6 +70,40 @@ const retryPublish = () => {
   const operationID = operation.value?.id;
   if (operationID) {
     postPublishStore.retry(operationID);
+  }
+};
+
+const requestAbandon = () => {
+  if (operation.value?.phase !== 'failed') return;
+  abandonOperationID.value = operation.value.id;
+  abandonError.value = '';
+  abandonConfirmationOpen.value = true;
+};
+
+const cancelAbandon = () => {
+  if (abandonBusy.value) return;
+  abandonConfirmationOpen.value = false;
+  abandonOperationID.value = null;
+  abandonError.value = '';
+};
+
+const confirmAbandon = async () => {
+  const operationID = abandonOperationID.value;
+  if (!operationID || abandonBusy.value) return;
+
+  abandonBusy.value = true;
+  abandonError.value = '';
+  try {
+    if (await postPublishStore.abandonFailedOperation(operationID)) {
+      abandonConfirmationOpen.value = false;
+      abandonOperationID.value = null;
+      return;
+    }
+    abandonError.value = 'Couldn’t discard this post attempt on this device. Try again.';
+  } catch {
+    abandonError.value = 'Couldn’t discard this post attempt on this device. Try again.';
+  } finally {
+    abandonBusy.value = false;
   }
 };
 </script>
@@ -79,7 +141,24 @@ const retryPublish = () => {
   cursor: pointer;
 }
 
-.post-publish-status__retry:focus-visible {
+.post-publish-status__discard {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.post-publish-status__retry:disabled,
+.post-publish-status__discard:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.post-publish-status__retry:focus-visible,
+.post-publish-status__discard:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;
 }

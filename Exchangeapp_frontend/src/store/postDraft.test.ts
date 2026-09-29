@@ -285,6 +285,31 @@ describe('postDraft store', () => {
     expect(store.content).toBe('');
   });
 
+  it('releases a publish binding without clearing the draft or saved identity', async () => {
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    store.setContent('Saved source draft');
+    const mediaID = store.addMedia(file('source.png'));
+    const draftID = await store.saveCurrentDraft();
+    store.setContent('Edited but preserved');
+    store.bindPublishOperation('publish-abandon');
+    const savedSnapshot = store.savedSnapshot;
+    const mediaBeforeRelease = [...store.media];
+
+    expect(store.releasePublishOperationBinding('publish-abandon', 8)).toBe(false);
+    expect(store.releasePublishOperationBinding('another-operation', 7)).toBe(false);
+    expect(store.releasePublishOperationBinding('publish-abandon', 7)).toBe(true);
+
+    expect(store.publishOperationID).toBeNull();
+    expect(store.viewerID).toBe(7);
+    expect(store.content).toBe('Edited but preserved');
+    expect(store.media).toEqual(mediaBeforeRelease);
+    expect(store.media[0]?.id).toBe(mediaID);
+    expect(store.draftID).toBe(draftID);
+    expect(store.savedSnapshot).toEqual(savedSnapshot);
+    expect(store.hasUnsavedChanges).toBe(true);
+  });
+
   it('clears a publish binding on real draft edits but not uploaded URL hydration', () => {
     const store = usePostDraftStore();
     store.setViewer(7);

@@ -50,6 +50,12 @@ export type PublishOperation = {
   post: Post | null;
 };
 
+export type PublishBlockReason =
+  | 'another_publish_in_flight'
+  | 'idempotency_conflict'
+  | 'unresolved_publish'
+  | 'cleanup_pending';
+
 export type StartPublishResult =
   | {
     status: 'accepted';
@@ -57,7 +63,7 @@ export type StartPublishResult =
   }
   | {
     status: 'blocked';
-    reason: 'another_publish_in_flight' | 'idempotency_conflict';
+    reason: PublishBlockReason;
   }
   | {
     status: 'rejected';
@@ -71,6 +77,8 @@ const publishConflictMessage = 'This post can’t be retried safely.';
 
 class SupersededPublishOperationError extends Error {}
 class PublishPersistenceError extends Error {}
+
+type SuccessCleanupResult = 'resolved' | 'pending';
 
 const normalizeViewerID = (value: unknown) => (
   typeof value === 'number'
@@ -93,7 +101,9 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const profileSessionStore = useProfileSessionStore();
   const operations = ref<PublishOperation[]>([]);
   const recoveryErrors = ref(new Map<number, string>());
+  const unresolvedOperationByViewer = ref(new Map<number, string>());
   const runningOperationIDs = new Set<string>();
+  const abandoningOperationIDs = new Set<string>();
   const hydrationPromises = new Map<number, Promise<void>>();
   const hydratedViewerIDs = new Set<number>();
 
@@ -106,6 +116,33 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const getOperation = (operationID: string | null | undefined) => (
     operationID ? operations.value.find(operation => operation.id === operationID) : undefined
   );
+
+  const getViewerOperation = (viewerID: number) => (
+    operations.value.find(operation => operation.publisherUserID === viewerID)
+  );
+
+  const markOperationUnresolved = (operation: PublishOperation) => {
+    unresolvedOperationByViewer.value.set(operation.publisherUserID, operation.id);
+  };
+
+  const releaseOperationOwnership = (viewerID: number, operationID: string) => {
+    if (unresolvedOperationByViewer.value.get(viewerID) !== operationID) {
+      return false;
+    }
+    unresolvedOperationByViewer.value.delete(viewerID);
+    return true;
+  };
+
+  const removeOperationIfCurrent = (viewerID: number, operationID: string) => {
+    const current = getViewerOperation(viewerID);
+    if (current?.id !== operationID) {
+      return false;
+    }
+    operations.value = operations.value.filter(operation => (
+      operation.publisherUserID !== viewerID || operation.id !== operationID
+    ));
+    return true;
+  };
 
   const latestOperation = computed<PublishOperation | null>(() => {
     const viewerID = currentViewerID();
@@ -203,25 +240,75 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
   };
 
+  const draftMatchesOperation = (operation: PublishOperation) => {
+    const sameBoundWorkingSubmission = postDraft.publishOperationID === operation.id;
+    const sameSavedSource = operation.sourceDraftID !== null
+      && postDraft.isSavedDraft
+      && postDraft.draftID === operation.sourceDraftID;
+
+    if (
+      postDraft.viewerID !== operation.publisherUserID
+      || (operation.sourceDraftID === null && !sameBoundWorkingSubmission)
+      || (operation.sourceDraftID !== null && !sameSavedSource)
+      || postDraft.content.trim() !== operation.content
+      || postDraft.media.length !== operation.media.length
+    ) {
+      return false;
+    }
+
+    return operation.media.every((operationMedia, index) => {
+      const draftMedia = postDraft.media[index];
+      return Boolean(
+        draftMedia
+        && draftMedia.id === operationMedia.draftMediaID
+        && draftMedia.file.name === operationMedia.file.name
+        && draftMedia.file.type === operationMedia.file.type
+        && draftMedia.file.size === operationMedia.file.size
+        && draftMedia.file.lastModified === operationMedia.file.lastModified,
+      );
+    });
+  };
+
+  const getDraftPublishBlockReason = (
+    viewerID: number,
+    boundOperationID: string | null | undefined = null,
+  ): PublishBlockReason | null => {
+    const normalizedViewerID = normalizeViewerID(viewerID);
+    if (normalizedViewerID === null) return null;
+
+    const operationID = unresolvedOperationByViewer.value.get(normalizedViewerID);
+    const operation = operationID ? getOperation(operationID) : undefined;
+    if (!operation) {
+      if (operationID) return 'unresolved_publish';
+      // Running operations are always durable in normal execution. This fallback also
+      // keeps proactive blocking safe if the in-memory phase changes before its owner map.
+      return findInFlightForViewer(normalizedViewerID)
+        ? 'another_publish_in_flight'
+        : null;
+    }
+
+    const sameSubmission = draftMatchesOperation(operation);
+    if (abandoningOperationIDs.has(operation.id)) return 'unresolved_publish';
+    if (isInFlight(operation)) {
+      return operation.id === boundOperationID && sameSubmission
+        ? null
+        : 'another_publish_in_flight';
+    }
+    if (operation.phase === 'failed' && sameSubmission) {
+      return operation.failureKind === 'idempotency_conflict'
+        ? 'idempotency_conflict'
+        : operation.failureKind === 'retryable'
+          ? null
+          : 'unresolved_publish';
+    }
+    if (operation.phase === 'succeeded') return 'cleanup_pending';
+    return 'unresolved_publish';
+  };
+
   const isDraftBlockedByAnotherPublish = (
     viewerID: number,
     boundOperationID: string | null | undefined = null,
-  ) => {
-    const normalizedViewerID = normalizeViewerID(viewerID);
-    if (normalizedViewerID === null) return false;
-    const inFlight = findInFlightForViewer(normalizedViewerID);
-    return Boolean(inFlight && inFlight.id !== boundOperationID);
-  };
-
-  const draftMatchesOperation = (operation: PublishOperation) => (
-    postDraft.viewerID === operation.publisherUserID
-    && postDraft.content.trim() === operation.content
-    && postDraft.media.length === operation.media.length
-    && operation.media.every((media, index) => {
-      const draftMedia = postDraft.media[index];
-      return draftMedia?.id === media.draftMediaID && draftMedia.file === media.file;
-    })
-  );
+  ) => getDraftPublishBlockReason(viewerID, boundOperationID) === 'another_publish_in_flight';
 
   const syncUploadedURLToDraft = (
     operation: PublishOperation,
@@ -257,7 +344,10 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
   };
 
-  const reconcileSuccessfulPost = async (operation: PublishOperation, post: Post) => {
+  const finalizeSuccessfulOperation = async (
+    operation: PublishOperation,
+    post: Post,
+  ): Promise<SuccessCleanupResult> => {
     let sourceDraftClean = operation.sourceDraftID === null;
     if (operation.sourceDraftID) {
       try {
@@ -296,13 +386,43 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
 
     postDraft.clearIfBoundTo(operation.id, operation.publisherUserID);
-    if (sourceDraftClean) {
-      try {
-        await deletePostPublishOperation(operation.publisherUserID, operation.id);
-      } catch {
-        // Startup recovery will retry cleanup without replaying the successful POST.
-      }
+    if (!sourceDraftClean) {
+      return 'pending';
     }
+
+    let deleted = false;
+    try {
+      deleted = await deletePostPublishOperation(operation.publisherUserID, operation.id);
+    } catch {
+      // A confirmed server success remains succeeded; cleanup can be retried later.
+    }
+    if (deleted) {
+      releaseOperationOwnership(operation.publisherUserID, operation.id);
+      return 'resolved';
+    }
+
+    // A false conditional delete is ambiguous until a read proves this operation no
+    // longer owns the durable slot. Never mistake a newer operation for this one.
+    try {
+      const persisted = await getPostPublishOperation(operation.publisherUserID);
+      if (!persisted || persisted.id !== operation.id) {
+        if (persisted) {
+          if (persisted.publisherUserID !== operation.publisherUserID) {
+            return 'pending';
+          }
+        }
+        releaseOperationOwnership(operation.publisherUserID, operation.id);
+        if (persisted) {
+          const replacement = restorePublishOperation(persisted) as PublishOperation;
+          upsertOperation(replacement);
+          markOperationUnresolved(replacement);
+        }
+        return 'resolved';
+      }
+    } catch {
+      // Keep the succeeded operation unresolved until storage confirms it is retired.
+    }
+    return 'pending';
   };
 
   const markFailed = async (
@@ -354,7 +474,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       operation.phase = 'succeeded';
       // If this checkpoint fails, keep the in-memory result successful and continue cleanup.
       await persistBestEffort(operation);
-      await reconcileSuccessfulPost(operation, post);
+      await finalizeSuccessfulOperation(operation, post);
     } catch (error) {
       if (error instanceof SupersededPublishOperationError) return;
       const conflict = posting && isIdempotencyConflict(error);
@@ -366,10 +486,10 @@ export const usePostPublishStore = defineStore('postPublish', () => {
 
   const resumeCurrentViewerOperation = (viewerID: number) => {
     if (currentViewerID() !== viewerID) return;
-    const operation = operations.value.find(candidate => candidate.publisherUserID === viewerID);
+    const operation = getViewerOperation(viewerID);
     if (!operation) return;
     if (operation.phase === 'succeeded' && operation.post) {
-      void reconcileSuccessfulPost(operation, operation.post);
+      void finalizeSuccessfulOperation(operation, operation.post);
     } else if (operation.phase === 'uploading' || operation.phase === 'publishing') {
       void runOperation(operation);
     }
@@ -394,14 +514,16 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           if (operation.phase === 'succeeded' && !operation.post) {
             throw new Error('The successful publish record is incomplete.');
           }
+          markOperationUnresolved(operation);
           upsertOperation(operation);
           recoveryErrors.value.delete(viewerID);
           if (operation.phase === 'succeeded' && operation.post) {
-            await reconcileSuccessfulPost(operation, operation.post);
+            await finalizeSuccessfulOperation(operation, operation.post);
           } else if (operation.phase === 'uploading' || operation.phase === 'publishing') {
             resumeCurrentViewerOperation(viewerID);
           }
         } else {
+          unresolvedOperationByViewer.value.delete(viewerID);
           recoveryErrors.value.delete(viewerID);
         }
         hydratedViewerIDs.add(viewerID);
@@ -437,6 +559,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       || operation.phase !== 'failed'
       || operation.failureKind !== 'retryable'
       || currentViewerID() !== operation.publisherUserID
+      || unresolvedOperationByViewer.value.get(operation.publisherUserID) !== operation.id
+      || abandoningOperationIDs.has(operation.id)
     ) {
       return false;
     }
@@ -446,6 +570,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       && isInFlight(candidate)
     ));
     if (conflictingInFlight) return false;
+    const shouldRebindCurrentDraft = draftMatchesOperation(operation);
 
     const previous = {
       phase: operation.phase,
@@ -464,6 +589,9 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       operation.failureKind = previous.failureKind;
       operation.error = publishPersistenceMessage;
       return false;
+    }
+    if (shouldRebindCurrentDraft) {
+      postDraft.bindPublishOperation(operation.id);
     }
     void runOperation(operation);
     return true;
@@ -484,31 +612,78 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       return { status: 'rejected', reason: 'unauthenticated' };
     }
 
-    const boundOperation = getOperation(postDraft.publishOperationID);
-    if (
-      boundOperation
-      && boundOperation.publisherUserID === publisherUserID
-      && draftMatchesOperation(boundOperation)
-    ) {
-      if (boundOperation.phase === 'failed') {
-        if (boundOperation.failureKind === 'idempotency_conflict') {
-          return { status: 'blocked', reason: 'idempotency_conflict' };
+    const unresolvedOperationID = unresolvedOperationByViewer.value.get(publisherUserID);
+    const unresolvedOperation = unresolvedOperationID
+      ? getOperation(unresolvedOperationID)
+      : undefined;
+    if (unresolvedOperationID && !unresolvedOperation) {
+      // The durable owner must be represented in memory before a new key can be made.
+      return { status: 'blocked', reason: 'unresolved_publish' };
+    }
+
+    if (unresolvedOperation) {
+      if (isInFlight(unresolvedOperation)) {
+        if (
+          postDraft.publishOperationID === unresolvedOperation.id
+          && draftMatchesOperation(unresolvedOperation)
+        ) {
+          return { status: 'accepted', operation: unresolvedOperation };
         }
-        if (!(await retry(boundOperation.id))) {
-          return boundOperation.error === publishPersistenceMessage
+        return { status: 'blocked', reason: 'another_publish_in_flight' };
+      }
+
+      if (unresolvedOperation.phase === 'failed') {
+        if (abandoningOperationIDs.has(unresolvedOperation.id)) {
+          return { status: 'blocked', reason: 'unresolved_publish' };
+        }
+        const sameSubmission = draftMatchesOperation(unresolvedOperation);
+        if (unresolvedOperation.failureKind === 'idempotency_conflict') {
+          return {
+            status: 'blocked',
+            reason: sameSubmission ? 'idempotency_conflict' : 'unresolved_publish',
+          };
+        }
+        if (
+          unresolvedOperation.failureKind !== 'retryable'
+          || !sameSubmission
+        ) {
+          return { status: 'blocked', reason: 'unresolved_publish' };
+        }
+        if (!(await retry(unresolvedOperation.id))) {
+          return unresolvedOperation.error === publishPersistenceMessage
             ? { status: 'rejected', reason: 'persistence_unavailable' }
             : { status: 'blocked', reason: 'another_publish_in_flight' };
         }
-        return { status: 'accepted', operation: boundOperation };
+        postDraft.bindPublishOperation(unresolvedOperation.id);
+        return { status: 'accepted', operation: unresolvedOperation };
       }
-      if (boundOperation.phase !== 'succeeded') {
-        return { status: 'accepted', operation: boundOperation };
-      }
-    }
 
-    const existingInFlight = findInFlightForViewer(publisherUserID);
-    if (existingInFlight) {
-      return { status: 'blocked', reason: 'another_publish_in_flight' };
+      if (unresolvedOperation.phase === 'succeeded' && unresolvedOperation.post) {
+        const cleanup = await finalizeSuccessfulOperation(
+          unresolvedOperation,
+          unresolvedOperation.post,
+        );
+        if (cleanup === 'pending') {
+          return { status: 'blocked', reason: 'cleanup_pending' };
+        }
+        if (currentViewerID() !== publisherUserID) {
+          return { status: 'rejected', reason: 'unauthenticated' };
+        }
+        if (unresolvedOperationByViewer.value.has(publisherUserID)) {
+          const currentReason = getDraftPublishBlockReason(publisherUserID);
+          return {
+            status: 'blocked',
+            reason: currentReason || 'unresolved_publish',
+          };
+        }
+      } else {
+        return { status: 'rejected', reason: 'persistence_unavailable' };
+      }
+    } else {
+      const existingInFlight = findInFlightForViewer(publisherUserID);
+      if (existingInFlight) {
+        return { status: 'blocked', reason: 'another_publish_in_flight' };
+      }
     }
 
     const operation: PublishOperation = {
@@ -535,6 +710,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
 
     // The durable record exists before the working draft is bound or any network starts.
+    markOperationUnresolved(operation);
     postDraft.bindPublishOperation(operation.id);
     upsertOperation(operation);
     recoveryErrors.value.delete(publisherUserID);
@@ -542,14 +718,48 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     return { status: 'accepted', operation };
   };
 
+  const abandonFailedOperation = async (operationID: string): Promise<boolean> => {
+    const operation = getOperation(operationID);
+    if (
+      !operation
+      || operation.phase !== 'failed'
+      || currentViewerID() !== operation.publisherUserID
+      || runningOperationIDs.has(operation.id)
+      || abandoningOperationIDs.has(operation.id)
+      || unresolvedOperationByViewer.value.get(operation.publisherUserID) !== operation.id
+    ) {
+      return false;
+    }
+
+    abandoningOperationIDs.add(operation.id);
+    let deleted: boolean;
+    try {
+      deleted = await deletePostPublishOperation(operation.publisherUserID, operation.id);
+    } catch {
+      return false;
+    } finally {
+      abandoningOperationIDs.delete(operation.id);
+    }
+    if (!deleted) {
+      return false;
+    }
+
+    releaseOperationOwnership(operation.publisherUserID, operation.id);
+    postDraft.releasePublishOperationBinding(operation.id, operation.publisherUserID);
+    removeOperationIfCurrent(operation.publisherUserID, operation.id);
+    return true;
+  };
+
   return {
     operations,
     latestOperation,
     recoveryError,
     getOperation,
+    getDraftPublishBlockReason,
     isDraftBlockedByAnotherPublish,
     activateViewer,
     startOrRetryDraft,
     retry,
+    abandonFailedOperation,
   };
 });

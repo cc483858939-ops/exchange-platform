@@ -519,6 +519,32 @@ describe('PostCreateView identity and text publishing', () => {
     expect(wrapper.get('#post-content').attributes('disabled')).toBeUndefined();
   });
 
+  it('explains that a failed publish attempt must be resolved before another draft can send', async () => {
+    mocks.createPost.mockRejectedValueOnce(new Error('ambiguous response'));
+    const draft = usePostDraftStore();
+    draft.setContent('Original attempt');
+    const store = usePostPublishStore();
+    const first = await store.startOrRetryDraft();
+    expect(first.status).toBe('accepted');
+    await flushPromises();
+    expect(store.latestOperation?.phase).toBe('failed');
+
+    draft.setContent('Different post');
+    wrapper = mountPage();
+    await nextTick();
+
+    expect(wrapper.get('.publish-blocked-message').text())
+      .toContain('Resolve the previous post attempt before sending another post.');
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(wrapper.get('.composer-validation-error').text())
+      .toContain('Retry or discard the previous attempt first.');
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(1);
+  });
+
   it('does not render the composer while logged out', () => {
     mocks.authStore!.isAuthenticated = false;
     mocks.authStore!.currentIdentity = null;

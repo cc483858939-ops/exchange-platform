@@ -304,6 +304,22 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     return true;
   };
 
+  const releasePublishOperationBinding = (
+    operationID: string,
+    expectedViewerID: number,
+  ): boolean => {
+    const normalizedViewerID = normalizeViewerID(expectedViewerID);
+    if (
+      normalizedViewerID === null
+      || normalizedViewerID !== viewerID.value
+      || publishOperationID.value !== operationID
+    ) {
+      return false;
+    }
+    publishOperationID.value = null;
+    return true;
+  };
+
   const clearIfBoundTo = (operationID: string, expectedViewerID: number): boolean => {
     const normalizedViewerID = normalizeViewerID(expectedViewerID);
     if (
@@ -342,6 +358,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     deleteSavedDraft,
     deletePublishedSourceDraft,
     bindPublishOperation,
+    releasePublishOperationBinding,
     clearIfBoundTo,
   };
 });
