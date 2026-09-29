@@ -10,7 +10,6 @@ import (
 	"Go.exchange/embeddings"
 	"Go.exchange/embeddingstate"
 	"Go.exchange/eventing"
-	"Go.exchange/global"
 	"Go.exchange/initialize"
 	"Go.exchange/models"
 

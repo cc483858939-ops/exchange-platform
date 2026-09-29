@@ -16,8 +16,7 @@ import (
 )
 
 func TestDecodeUserProfilePatchValidation(t *testing.T) {
-	validAvatar := "/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg"
-	validV1Avatar := "/api/files/profile-avatars/users/v1/42/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
+	validAvatar := "/api/files/profile-avatars/users/v1/42/" + strings.Repeat("a", 64) + ".png"
 	invalidBodies := []string{
 		"{}",
 		"{\"website\":\"example\"}",
@@ -29,6 +28,9 @@ func TestDecodeUserProfilePatchValidation(t *testing.T) {
 		"{\"bio\":[]}",
 		"{\"avatar_url\":null}",
 		"{\"avatar_url\":false}",
+		"{\"avatar_url\":\"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg\"}",
+		"{\"avatar_url\":\"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.png\"}",
+		"{\"avatar_url\":\"/api/files/profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.webp\"}",
 		"{\"avatar_url\":\"/api/files/profile-avatars/99/550e8400-e29b-41d4-a716-446655440000.jpg\"}",
 		"{\"avatar_url\":\"https://example.com/avatar.jpg\"}",
 		"{\"avatar_url\":\"/api/files/article-covers/550e8400-e29b-41d4-a716-446655440000.jpg\"}",
@@ -62,10 +64,6 @@ func TestDecodeUserProfilePatchValidation(t *testing.T) {
 	avatarOnly, err := decodeUserProfilePatch(strings.NewReader("{\"avatar_url\":\""+validAvatar+"\"}"), 42)
 	if err != nil || avatarOnly["avatar_url"] != validAvatar {
 		t.Fatalf("unexpected valid avatar update: %#v err=%v", avatarOnly, err)
-	}
-	v1Only, err := decodeUserProfilePatch(strings.NewReader("{\"avatar_url\":\""+validV1Avatar+"\"}"), 42)
-	if err != nil || v1Only["avatar_url"] != validV1Avatar {
-		t.Fatalf("unexpected valid V1 avatar update: %#v err=%v", v1Only, err)
 	}
 }
 func TestDecodeUserProfilePatchUnicodeLimits(t *testing.T) {

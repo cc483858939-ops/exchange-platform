@@ -14,6 +14,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/profileavatar"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -355,7 +356,12 @@ func TestEditableUserProfileIntegration(t *testing.T) {
 		t.Fatalf("initial public profile=%#v", initial)
 	}
 
-	avatarURL := "/api/files/profile-avatars/" + strconvUint(target.ID) + "/550e8400-e29b-41d4-a716-446655440000.webp"
+	avatarHash := strings.Repeat("a", 64)
+	avatarKey, err := profileavatar.BuildUserV1ObjectKey(target.ID, avatarHash, ".jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	avatarURL := profileavatar.FilesURLPrefix + avatarKey
 	ctx, recorder := newUserProfilePatchIntegrationContext(strconvUint(target.ID), `{"display_name":"  Updated name  ","bio":"  Updated bio  ","avatar_url":"`+avatarURL+`"}`, target.ID)
 	UpdateUserProfile(ctx)
 	if recorder.Code != http.StatusOK {

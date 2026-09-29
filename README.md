@@ -162,9 +162,9 @@ docker compose up -d api worker db redis kafka minio frontend
 docker compose ps -a
 ```
 
-Compose 会按依赖执行 Outbox schema 检查、数据库迁移、Kafka topic 初始化及 CDC 初始化，并启动 Kafka Connect。一次性初始化服务成功退出属于正常状态；API、Worker 和基础服务应持续运行。
+Compose 会按依赖执行数据库迁移和 Kafka topic 初始化，启动 Kafka Connect 并完成 CDC 初始化。一次性初始化服务成功退出属于正常状态；API、Worker 和基础服务应持续运行。
 
-配置覆盖使用 shell 环境变量、仓库根目录 `.env` 或 `docker compose --env-file <文件路径>`。`Go.exchange/.env.example` 是参考模板，不会被根目录 Compose 自动加载。复用旧数据库时，应先检查 Outbox schema；旧结构的切换由专用命令与显式确认保护。
+配置覆盖使用 shell 环境变量、仓库根目录 `.env` 或 `docker compose --env-file <文件路径>`。`Go.exchange/.env.example` 是参考模板，不会被根目录 Compose 自动加载。本仓库只支持 fresh/current Outbox schema；historical pre-final Outbox schemas 不再受支持。
 
 Embedding 和翻译默认关闭。启用前需配置相应的 `*_ENABLED`、`*_BASE_URL`、`*_MODEL` 及服务所需的 API Key。以上启动命令不启动声明了 GPU 需求的可选 `embedding` 服务；语义推荐需要可用的 embedding 服务与已生成的内容向量。
 
