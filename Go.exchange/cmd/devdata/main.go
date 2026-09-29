@@ -666,18 +666,6 @@ func bestEffortRedis(stderr io.Writer) *redis.Client {
 	return client
 }
 
-func syncAndVerify(ctx context.Context, stdout, stderr io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, options devdata.SyncOptions) error {
-	db, err := initDatabase()
-	if err != nil {
-		return err
-	}
-	redisClient := bestEffortRedis(stderr)
-	if redisClient != nil {
-		defer redisClient.Close()
-	}
-	return syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, options)
-}
-
 func syncAndVerifyWithDB(ctx context.Context, stdout io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, db *gorm.DB, redisClient *redis.Client, options devdata.SyncOptions) error {
 	result, err := devdata.SyncSnapshotWithOptions(ctx, db, registry, snapshot, redisClient, time.Now().UTC(), options)
 	if err != nil {

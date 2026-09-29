@@ -48,11 +48,6 @@ func InvalidatePostDetailCacheByID(id uint) error {
 	return InvalidatePostDetailCacheByIDWithRedis(global.RedisDB, id)
 }
 
-// loadJSONCache 默认使用全局 Redis 的缓存包装函数
-func loadJSONCache[T any](key string, loader func() (T, error)) (T, error) {
-	return loadJSONCacheWithContext(context.Background(), key, loader)
-}
-
 func loadJSONCacheWithContext[T any](ctx context.Context, key string, loader func() (T, error)) (T, error) {
 	if global.RedisDB == nil {
 		return loader()

@@ -1,10 +1,6 @@
 package controllers
 
-import (
-	"time"
-
-	"Go.exchange/recommendation"
-)
+import "Go.exchange/recommendation"
 
 const (
 	recommendationReadPolicyVersion                = recommendation.RecommendationReadPolicyVersion
@@ -24,21 +20,4 @@ const (
 
 func classifyRecommendationRead(foregroundTimeMS int64, scrollProgressPercent int, estimatedReadTimeMS int64, readPolicyVersion string) (string, error) {
 	return recommendation.ClassifyRecommendationRead(foregroundTimeMS, scrollProgressPercent, estimatedReadTimeMS, readPolicyVersion)
-}
-
-func estimatePostReadTime(content string) time.Duration {
-	return recommendation.EstimatePostReadTime(content)
-}
-
-func recommendationReadPolicyVersionValue() string {
-	return recommendation.RecommendationReadPolicyVersion
-}
-
-func recommendationReadOutcomeIsValid(outcome string) bool {
-	switch outcome {
-	case recommendationReadOutcomeQualified, recommendationReadOutcomeQuickBounce, recommendationReadOutcomeNeutral:
-		return true
-	default:
-		return false
-	}
 }

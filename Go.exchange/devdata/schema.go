@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"Go.exchange/models"
-
 	"gorm.io/gorm"
 )
 
@@ -111,16 +109,6 @@ WHERE tablename = ?
 				return fmt.Errorf("DevData metadata index is missing: %s", name)
 			}
 		}
-	}
-	return nil
-}
-
-func validateMetadataModelTables(db *gorm.DB) error {
-	if db == nil {
-		return errors.New("database is not initialized")
-	}
-	if !db.Migrator().HasTable(&models.DevDataMirrorAccount{}) || !db.Migrator().HasTable(&models.DevDataMirrorPost{}) {
-		return errors.New("DevData metadata tables are missing")
 	}
 	return nil
 }

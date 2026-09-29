@@ -16,10 +16,6 @@ func recommendationDBTestContext(db *gorm.DB) context.Context {
 	return context.Background()
 }
 
-func newIntegrationCandidateRepository(db *gorm.DB) (*GormCandidateRepository, error) {
-	return NewGormCandidateRepository(db)
-}
-
 func testDefaultRecommendationConfig() config.RecommendationConfig {
 	cfg := serviceTestConfig()
 	cfg.ServingTimeoutMS = 5000

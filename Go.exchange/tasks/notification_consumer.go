@@ -330,18 +330,6 @@ func decodeNotificationActivity(message kafka.Message) (notificationActivityReco
 	return record, nil
 }
 
-func applyNotificationBatch(ctx context.Context, messages []kafka.Message) error {
-	records := make([]notificationActivityRecord, 0, len(messages))
-	for _, message := range messages {
-		record, err := decodeNotificationActivity(message)
-		if err != nil {
-			return err
-		}
-		records = append(records, record)
-	}
-	return applyNotificationRecords(ctx, records)
-}
-
 func applyNotificationRecords(ctx context.Context, records []notificationActivityRecord) error {
 	if ctx == nil {
 		return errors.New("notification apply context is nil")

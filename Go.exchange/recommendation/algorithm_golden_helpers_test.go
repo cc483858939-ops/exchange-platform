@@ -16,8 +16,6 @@ type recommendationScoreBreakdown = ScoreBreakdown
 type userInterestProfile = ProfileFeatures
 type recommendationLanguagePrior = LanguagePrior
 type recommendationLanguageContext = LanguageContext
-type recommendationSelectionMode = SelectionPhase
-type recommendationRecallSource = CandidateSource
 type recommendationRecallList = CandidateSet
 
 const (
@@ -74,20 +72,8 @@ func rankRecommendationCandidates(profile ProfileFeatures, candidates []RankedCa
 	return RankCandidates(profile, candidates, now, testRankingConfig(cfg), languages...)
 }
 
-func recommendationExplorationSemantic(candidate RankedCandidate, profile ProfileFeatures, cfg config.RecommendationConfig) float64 {
-	return explorationSemantic(candidate, profile, testRankingConfig(cfg))
-}
-
 func recommendationTrendingRaw(post models.Post, now time.Time, cfg config.RecommendationConfig) float64 {
 	return TrendingRaw(post, now, testRankingConfig(cfg).Trending)
-}
-
-func recommendationCandidateBaseBefore(left, right RankedCandidate) bool {
-	return rankedCandidateBefore(left, right)
-}
-
-func validComparableRecommendationEmbedding(left, right []float32) bool {
-	return validComparableEmbedding(left, right)
 }
 
 func fuseRecommendationCandidates(limit, rankConstant int, lists ...CandidateSet) []Candidate {
@@ -96,18 +82,6 @@ func fuseRecommendationCandidates(limit, rankConstant int, lists ...CandidateSet
 
 func recommendationFusionCandidateBefore(left, right Candidate) bool {
 	return fusionCandidateBefore(left, right)
-}
-
-func recommendationBestRecallRank(candidate Candidate) int {
-	return bestRecallRank(candidate)
-}
-
-func recommendationMinNonZeroRank(left, right int) int {
-	return minNonZeroRank(left, right)
-}
-
-func mergeEmbeddingCandidates(limit int, sources ...[]Candidate) []Candidate {
-	return MergeCandidates(limit, sources...)
 }
 
 func balancedPositions(limit, target int) []int {
@@ -133,10 +107,6 @@ func chooseStrictExplorationCandidate(candidates []RankedCandidate, selected []S
 	return chooseStrictExplorationCandidateWithConfig(candidates, selected, available, outPositions, position, testSelectionConfig(cfg), now)
 }
 
-func recommendationAuthorWindowAllows(candidate RankedCandidate, selected []SelectedCandidate, cfg config.RecommendationConfig) bool {
-	return authorWindowAllows(candidate, selected, testSelectionConfig(cfg).Diversity)
-}
-
 func recommendationDiversityPenalty(candidate RankedCandidate, selected []SelectedCandidate, cfg config.RecommendationConfig) float64 {
 	return diversityPenalty(candidate, selected, testSelectionConfig(cfg).Diversity)
 }
@@ -147,46 +117,6 @@ func recommendationIsSemanticDuplicate(candidate RankedCandidate, selected []Sel
 
 func recommendationExplorationReason(candidate RankedCandidate, now time.Time, cfg config.RecommendationConfig) ExplorationReason {
 	return explorationReason(candidate, now, testSelectionConfig(cfg).Exploration)
-}
-
-func recommendationExplorationReasonPriority(reason ExplorationReason) int {
-	return explorationReasonPriority(reason)
-}
-
-func recommendationStrictExplorationBefore(left, right RankedCandidate, now time.Time, cfg config.RecommendationConfig) bool {
-	return strictExplorationBefore(left, right, now, testSelectionConfig(cfg))
-}
-
-func recommendationSelectionBefore(left, right RankedCandidate, phase SelectionPhase) bool {
-	return selectionBefore(left, right, phase)
-}
-
-func diversifyPublicRecommendationCandidates(ranked []RankedCandidate, limit int, requestID string) []RankedCandidate {
-	return DiversifyPublicCandidates(ranked, limit, requestID)
-}
-
-func buildRecommendationLanguageContext(browser LanguageContext, behavior LanguagePrior, evidence float64, cfg config.RecommendationConfig) LanguageContext {
-	return BuildLanguageContext(browser, behavior, evidence, testRankingConfig(cfg).Language)
-}
-
-func normalizedMaterializedRecommendationLanguagePrior(zh, ja, en, evidence float64) (LanguagePrior, float64) {
-	return NormalizeMaterializedLanguagePrior(zh, ja, en, evidence)
-}
-
-func normalizeRecommendationLanguagePrior(prior LanguagePrior) LanguagePrior {
-	return NormalizeLanguagePrior(prior)
-}
-
-func recommendationLanguagePriorPresent(prior LanguagePrior) bool {
-	return languagePriorPresent(prior)
-}
-
-func recommendationLanguageAffinityForPost(language string, context LanguageContext) float64 {
-	return LanguageAffinity(language, context.Combined)
-}
-
-func recommendationPostLanguage(language string) string {
-	return PostLanguage(language)
 }
 
 func recommendationExplorationCountsForSelection(selected []SelectedCandidate, target int) SelectionCounts {

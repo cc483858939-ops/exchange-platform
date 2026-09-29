@@ -13,7 +13,6 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 func TestRuntimeSchemaIntegrationContract(t *testing.T) {
@@ -305,16 +304,6 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	}
 	closedSQLDB.Close()
 	expectIntegrationSchemaCode(t, closedDB, apiOptions, "schema_state_unavailable")
-}
-
-func insertIntegrationState(tx *gorm.DB, current, floor int64) error {
-	return tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&models.RuntimeSchemaState{
-		ID:                 runtimeSchemaStateID,
-		CurrentVersion:     current,
-		CompatibilityFloor: floor,
-		AppliedAt:          time.Now().UTC(),
-		ReleaseRevision:    "integration-test",
-	}).Error
 }
 
 func expectIntegrationSchemaCode(t *testing.T, db *gorm.DB, options SchemaValidationOptions, expected string) {

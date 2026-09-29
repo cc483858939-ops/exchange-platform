@@ -6,16 +6,6 @@ import (
 	"Go.exchange/models"
 )
 
-func isRecommendationEventType(eventType string) bool {
-	switch eventType {
-	case models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick,
-		models.RecommendationEventTypeReadEnd, models.RecommendationEventTypeFeedDwell, models.RecommendationEventTypeNotInterested:
-		return true
-	default:
-		return false
-	}
-}
-
 func validateRecommendationReadPayload(eventType string, input recommendationEventInput, estimatedReadTimeMS int64, readPolicyVersion string) (*int64, *int, *string, *int64, *string, *string, string) {
 	if eventType != models.RecommendationEventTypeReadEnd {
 		if input.ForegroundTimeMS != nil || input.ScrollProgressPercent != nil || input.ExitType != nil {

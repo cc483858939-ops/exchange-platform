@@ -235,8 +235,3 @@ func likeStateServingReadLease() (time.Duration, time.Duration) {
 	}
 	return config.LikeStateTTL(), config.LikeStateReadRenewalThreshold()
 }
-
-func getPostLikeCount(postID uint) (int64, error) {
-	result, err := loadPostLikeStateFromRedis(context.Background(), 0, postID)
-	return result.Likes, err
-}

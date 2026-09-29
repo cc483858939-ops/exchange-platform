@@ -306,10 +306,6 @@ func verifyPostgresCDCSettings(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func ensurePublication(ctx context.Context, db *sql.DB) error {
-	return ensurePublicationForIdentity(ctx, db, ProductionConnectorIdentity())
-}
-
 func ensurePublicationForIdentity(ctx context.Context, db *sql.DB, identity ConnectorIdentity) error {
 	if err := identity.Validate(); err != nil {
 		return err
@@ -335,11 +331,6 @@ func ensurePublicationForIdentity(ctx context.Context, db *sql.DB, identity Conn
 		return fmt.Errorf("CDC publication %s must contain only %s", identity.PublicationName, tableIncludeList(identity))
 	}
 	return nil
-}
-
-func ensureReplicationSlot(ctx context.Context, db *sql.DB) error {
-	_, err := ensureReplicationSlotForIdentity(ctx, db, ProductionConnectorIdentity())
-	return err
 }
 
 func ensureReplicationSlotForIdentity(ctx context.Context, db *sql.DB, identity ConnectorIdentity) (bool, error) {
@@ -378,10 +369,6 @@ func registerConnector(ctx context.Context, connectURL, connectorName string, co
 		return ConnectorStatus{}, err
 	}
 	return waitForConnectorReady(ctx, connectURL, connectorName)
-}
-
-func connectorStatus(ctx context.Context, connectURL string) (ConnectorStatus, error) {
-	return connectorStatusForName(ctx, connectURL, ProductionConnectorIdentity().ConnectorName)
 }
 
 func connectorPresenceForName(ctx context.Context, connectURL, connectorName string) (bool, error) {

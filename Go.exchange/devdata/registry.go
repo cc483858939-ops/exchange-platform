@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -192,9 +191,3 @@ func (registry SourceRegistry) EnabledKeys() []string {
 }
 
 func MirrorUsername(registryKey string) string { return "x_" + registryKey }
-
-func sortedRegistryKeys(registry SourceRegistry) []string {
-	keys := append([]string(nil), registry.EnabledKeys()...)
-	sort.Strings(keys)
-	return keys
-}

@@ -540,16 +540,6 @@ func selectedPostIDs(selected []SelectedCandidate) []uint {
 	return ids
 }
 
-func normalizeRecommendationLimit(limit int) int {
-	if limit <= 0 {
-		return defaultRecommendationLimit
-	}
-	if limit > maxRecommendationLimit {
-		return maxRecommendationLimit
-	}
-	return limit
-}
-
 func userHistoryWindow(now time.Time, cfg config.RecommendationConfig) HistoryWindow {
 	hardMinutes := cfg.ServedHardExclusionMinutes
 	if hardMinutes <= 0 {

@@ -22,11 +22,9 @@ import (
 )
 
 var workerReady atomic.Bool
-var postAnalysisConsumers atomic.Int32
 var userBehaviorConsumers atomic.Int32
 var recommendationMetricsConsumers atomic.Int32
 var likeSnapshotConsumers atomic.Int32
-var likeEventRelayRunning atomic.Bool
 var likeBehaviorRelayWorkers atomic.Int32
 
 const workerReadinessRole = "worker"
@@ -95,19 +93,6 @@ func init() {
 func WorkerReady() bool {
 	return WorkerReadinessSnapshot().Status == "ready"
 }
-func refreshWorkerReadiness(ctx context.Context) error {
-	if err := refreshDatabaseReadiness(ctx); err != nil {
-		return err
-	}
-	if err := refreshWorkerSchemaReadiness(ctx); err != nil {
-		return err
-	}
-	if err := refreshRedisReadiness(ctx); err != nil {
-		return err
-	}
-	return refreshKafkaReadiness(ctx)
-}
-
 func refreshDatabaseReadiness(ctx context.Context) error {
 	if global.WorkerDb == nil {
 		return errors.New("database is not initialized")
