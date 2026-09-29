@@ -125,6 +125,14 @@ const runLeaveGuard = async () => (
 
 const makeBeforeUnloadEvent = () => new Event('beforeunload', { cancelable: true });
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 describe('PostCreateView durable drafts and exit protection', () => {
   let wrapper: VueWrapper | null = null;
 
@@ -239,6 +247,53 @@ describe('PostCreateView durable drafts and exit protection', () => {
     expect(usePostDraftStore().content).toBe('Requested draft');
     expect(usePostDraftStore().draftID).toBe('requested');
     expect(usePostDraftStore().hasUnsavedChanges).toBe(false);
+  });
+
+  it('keeps user input and the requested route when saved-draft hydration becomes stale', async () => {
+    const pendingRead = deferred<PersistedPostDraft | null>();
+    mocks.getPostDraft.mockReturnValueOnce(pendingRead.promise);
+    mocks.route.query = { draft: 'pending' };
+    mocks.route.fullPath = '/posts/new?draft=pending';
+    wrapper = mountPage();
+
+    expect(mocks.getPostDraft).toHaveBeenCalledWith(7, 'pending');
+    const store = usePostDraftStore();
+    store.setContent('Newer user content');
+    pendingRead.resolve(makeDraft('pending', 7, 'Old saved content'));
+    await flushPromises();
+
+    expect(store.content).toBe('Newer user content');
+    expect(store.draftID).toBeNull();
+    expect(store.savedSnapshot).toBeNull();
+    expect(mocks.route.query).toEqual({ draft: 'pending' });
+    expect(mocks.router.replace).not.toHaveBeenCalledWith({ name: 'PostCreate' });
+  });
+
+  it('keeps the newer route draft when an older hydration resolves later', async () => {
+    const pendingA = deferred<PersistedPostDraft | null>();
+    const pendingB = deferred<PersistedPostDraft | null>();
+    mocks.getPostDraft.mockImplementation((viewerID: number, id: string) => (
+      id === 'draft-a' ? pendingA.promise : pendingB.promise
+    ));
+    mocks.route.query = { draft: 'draft-a' };
+    mocks.route.fullPath = '/posts/new?draft=draft-a';
+    wrapper = mountPage();
+    expect(mocks.getPostDraft).toHaveBeenCalledWith(7, 'draft-a');
+
+    mocks.route.query = { draft: 'draft-b' };
+    mocks.route.fullPath = '/posts/new?draft=draft-b';
+    await nextMicrotask();
+    expect(mocks.getPostDraft).toHaveBeenCalledWith(7, 'draft-b');
+
+    pendingB.resolve(makeDraft('draft-b', 7, 'Draft B'));
+    await flushPromises();
+    pendingA.resolve(makeDraft('draft-a', 7, 'Draft A'));
+    await flushPromises();
+
+    expect(usePostDraftStore().content).toBe('Draft B');
+    expect(usePostDraftStore().draftID).toBe('draft-b');
+    expect(mocks.route.query).toEqual({ draft: 'draft-b' });
+    expect(mocks.router.replace).not.toHaveBeenCalledWith({ name: 'PostCreate' });
   });
 
   it('clears a missing or another-viewer draft query to a fresh composer', async () => {

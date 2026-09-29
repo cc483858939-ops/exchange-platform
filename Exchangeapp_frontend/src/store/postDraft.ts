@@ -29,6 +29,11 @@ export type DraftSnapshot = {
   media: DraftSnapshotMedia[];
 };
 
+export type LoadSavedDraftResult =
+  | { status: 'loaded' }
+  | { status: 'not_found' }
+  | { status: 'stale' };
+
 const normalizeViewerID = (value: number | null): number | null => (
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0
     ? value
@@ -120,9 +125,11 @@ export const usePostDraftStore = defineStore('postDraft', () => {
   };
 
   const setContent = (value: string) => {
-    if (content.value !== value) {
-      publishOperationID.value = null;
+    if (content.value === value) {
+      return;
     }
+    workingStateVersion += 1;
+    publishOperationID.value = null;
     content.value = value;
   };
 
@@ -133,6 +140,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
       uploadedURL: '',
     };
     media.value = [...media.value, item];
+    workingStateVersion += 1;
     publishOperationID.value = null;
     return item.id;
   };
@@ -143,6 +151,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
       return false;
     }
     media.value = next;
+    workingStateVersion += 1;
     publishOperationID.value = null;
     return true;
   };
@@ -195,23 +204,31 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     return id;
   };
 
-  const loadSavedDraft = async (id: string): Promise<boolean> => {
+  const loadSavedDraft = async (id: string): Promise<LoadSavedDraftResult> => {
     const loadViewerID = normalizeViewerID(viewerID.value);
     if (loadViewerID === null || !id.trim()) {
-      return false;
+      return { status: 'not_found' };
     }
 
     const requestVersion = ++loadRequestVersion;
+    const stateVersion = workingStateVersion;
     const record = await getPostDraft(loadViewerID, id);
+
+    if (
+      viewerID.value !== loadViewerID
+      || loadRequestVersion !== requestVersion
+      || workingStateVersion !== stateVersion
+    ) {
+      return { status: 'stale' };
+    }
+
     if (
       !record
       || record.id !== id
       || record.viewerID !== loadViewerID
-      || viewerID.value !== loadViewerID
-      || loadRequestVersion !== requestVersion
       || !Array.isArray(record.media)
     ) {
-      return false;
+      return { status: 'not_found' };
     }
 
     let restoredMedia: DraftPostMedia[];
@@ -222,7 +239,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
         uploadedURL: item.uploadedURL,
       }));
     } catch {
-      return false;
+      return { status: 'not_found' };
     }
 
     workingStateVersion += 1;
@@ -232,7 +249,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     draftCreatedAt.value = record.createdAt;
     savedSnapshot.value = createSnapshot(content.value, media.value);
     publishOperationID.value = null;
-    return true;
+    return { status: 'loaded' };
   };
 
   const listSavedDrafts = async (): Promise<PersistedPostDraft[]> => {

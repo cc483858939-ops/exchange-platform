@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PersistedPostDraft } from '../storage/postDraftRepository';
 import { usePostDraftStore } from './postDraft';
 
 const repositoryMocks = vi.hoisted(() => ({
@@ -17,6 +18,27 @@ vi.mock('../storage/postDraftRepository', () => ({
 }));
 
 const file = (name = 'one.png') => new File(['image'], name, { type: 'image/png' });
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
+const persistedDraft = (
+  id = 'saved-id',
+  content = 'Saved post',
+  media: PersistedPostDraft['media'] = [],
+): PersistedPostDraft => ({
+  id,
+  viewerID: 7,
+  content,
+  media,
+  createdAt: 100,
+  updatedAt: 200,
+});
 
 describe('postDraft store', () => {
   beforeEach(() => {
@@ -116,11 +138,10 @@ describe('postDraft store', () => {
 
   it('restores saved File metadata and remains clean', async () => {
     const mediaBlob = new Blob(['restored-image'], { type: 'image/webp' });
-    repositoryMocks.getPostDraft.mockResolvedValue({
-      id: 'saved-id',
-      viewerID: 7,
-      content: 'Restored post',
-      media: [{
+    repositoryMocks.getPostDraft.mockResolvedValue(persistedDraft(
+      'saved-id',
+      'Restored post',
+      [{
         id: 'restored-media-id',
         blob: mediaBlob,
         name: 'restored.webp',
@@ -129,13 +150,11 @@ describe('postDraft store', () => {
         lastModified: 1234,
         uploadedURL: '/uploaded/restored.webp',
       }],
-      createdAt: 100,
-      updatedAt: 200,
-    });
+    ));
     const store = usePostDraftStore();
     store.setViewer(7);
 
-    expect(await store.loadSavedDraft('saved-id')).toBe(true);
+    await expect(store.loadSavedDraft('saved-id')).resolves.toEqual({ status: 'loaded' });
     expect(store.content).toBe('Restored post');
     expect(store.draftID).toBe('saved-id');
     expect(store.media[0]?.id).toBe('restored-media-id');
@@ -148,6 +167,95 @@ describe('postDraft store', () => {
     });
     expect(store.media[0]?.uploadedURL).toBe('/uploaded/restored.webp');
     expect(store.hasUnsavedChanges).toBe(false);
+  });
+
+  it('rejects a pending draft load after newer text input and preserves working identity', async () => {
+    const pendingRead = deferred<PersistedPostDraft | null>();
+    repositoryMocks.getPostDraft.mockReturnValueOnce(pendingRead.promise);
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    store.setContent('Existing saved draft');
+    const existingDraftID = await store.saveCurrentDraft();
+    const existingSnapshot = store.savedSnapshot;
+
+    const load = store.loadSavedDraft('saved-id');
+    store.setContent('Newer user text');
+    pendingRead.resolve(persistedDraft());
+
+    await expect(load).resolves.toEqual({ status: 'stale' });
+    expect(store.content).toBe('Newer user text');
+    expect(store.draftID).toBe(existingDraftID);
+    expect(store.savedSnapshot).toEqual(existingSnapshot);
+    expect(store.hasUnsavedChanges).toBe(true);
+  });
+
+  it('rejects a pending draft load after the user adds media', async () => {
+    const pendingRead = deferred<PersistedPostDraft | null>();
+    repositoryMocks.getPostDraft.mockReturnValueOnce(pendingRead.promise);
+    const store = usePostDraftStore();
+    store.setViewer(7);
+
+    const load = store.loadSavedDraft('saved-id');
+    const mediaID = store.addMedia(file('newer.png'));
+    const oldBlob = new Blob(['old-image'], { type: 'image/png' });
+    pendingRead.resolve(persistedDraft('saved-id', 'Old persisted post', [{
+      id: 'old-media',
+      blob: oldBlob,
+      name: 'old.png',
+      type: 'image/png',
+      size: oldBlob.size,
+      lastModified: 0,
+      uploadedURL: '',
+    }]));
+
+    await expect(load).resolves.toEqual({ status: 'stale' });
+    expect(store.content).toBe('');
+    expect(store.media.map(item => item.id)).toEqual([mediaID]);
+    expect(store.media[0]?.file.name).toBe('newer.png');
+    expect(store.draftID).toBeNull();
+    expect(store.savedSnapshot).toBeNull();
+  });
+
+  it('rejects a pending draft load after the user removes existing media', async () => {
+    const pendingRead = deferred<PersistedPostDraft | null>();
+    repositoryMocks.getPostDraft.mockReturnValueOnce(pendingRead.promise);
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    const mediaID = store.addMedia(file());
+
+    const load = store.loadSavedDraft('saved-id');
+    expect(store.removeMedia(mediaID)).toBe(true);
+    pendingRead.resolve(persistedDraft());
+
+    await expect(load).resolves.toEqual({ status: 'stale' });
+    expect(store.media).toEqual([]);
+    expect(store.draftID).toBeNull();
+    expect(store.savedSnapshot).toBeNull();
+  });
+
+  it('does not treat no-op edits or uploaded URL hydration as working edits', async () => {
+    const pendingRead = deferred<PersistedPostDraft | null>();
+    repositoryMocks.getPostDraft.mockReturnValueOnce(pendingRead.promise);
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    const mediaID = store.addMedia(file());
+
+    const load = store.loadSavedDraft('saved-id');
+    store.setContent('');
+    expect(store.removeMedia('missing-media')).toBe(false);
+    expect(store.setUploadedURL(mediaID, '/media/one.png')).toBe(true);
+    pendingRead.resolve(persistedDraft());
+
+    await expect(load).resolves.toEqual({ status: 'loaded' });
+    expect(store.content).toBe('Saved post');
+    expect(store.draftID).toBe('saved-id');
+  });
+
+  it('reports a missing draft separately from a stale load', async () => {
+    const store = usePostDraftStore();
+    store.setViewer(7);
+
+    await expect(store.loadSavedDraft('missing')).resolves.toEqual({ status: 'not_found' });
   });
 
   it('preserves working content and dirty state after a failed save', async () => {

@@ -260,7 +260,7 @@ import {
   type RouteLocationNormalized,
 } from 'vue-router';
 import { useAuthStore } from '../store/auth';
-import { usePostDraftStore } from '../store/postDraft';
+import { usePostDraftStore, type LoadSavedDraftResult } from '../store/postDraft';
 import { usePostPublishStore } from '../store/postPublish';
 import AppIcon from '../components/icons/AppIcon.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
@@ -823,11 +823,11 @@ const loadRouteDraft = async () => {
     return;
   }
 
-  let loaded = false;
+  let result: LoadSavedDraftResult;
   try {
-    loaded = await postDraft.loadSavedDraft(requestedDraftID);
+    result = await postDraft.loadSavedDraft(requestedDraftID);
   } catch {
-    loaded = false;
+    result = { status: 'not_found' };
   }
   if (
     requestVersion !== draftRouteLoadVersion
@@ -836,8 +836,11 @@ const loadRouteDraft = async () => {
   ) {
     return;
   }
-  if (!loaded) {
-    if (postDraft.publishOperationID === null) {
+  if (result.status === 'stale') {
+    return;
+  }
+  if (result.status === 'not_found') {
+    if (postDraft.publishOperationID === null && !postDraft.hasUnsavedChanges) {
       postDraft.closeWorkingDraft();
     }
     try {
