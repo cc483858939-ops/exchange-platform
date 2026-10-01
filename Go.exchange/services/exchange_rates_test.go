@@ -21,6 +21,12 @@ func (p stubRateProvider) Fetch(context.Context) (RateSnapshot, error) {
 	return p.snapshot, p.err
 }
 
+type rateProviderFunc func(context.Context) (RateSnapshot, error)
+
+func (f rateProviderFunc) Fetch(ctx context.Context) (RateSnapshot, error) {
+	return f(ctx)
+}
+
 type memorySnapshotStore struct {
 	snapshot RateSnapshot
 	err      error
@@ -94,6 +100,87 @@ func TestRateServiceUsesStaleSnapshotWhenProviderFails(t *testing.T) {
 	}
 	if quote.ConvertedAmount != "2.5" || quote.Freshness != FreshnessStale {
 		t.Fatalf("Quote() = %+v, want stale 2.5", quote)
+	}
+}
+
+func TestRateServiceUsesStaleSnapshotWhenProviderTimesOutIndependently(t *testing.T) {
+	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	store := &memorySnapshotStore{snapshot: sampleSnapshot(now.Add(-time.Hour)), hasValue: true}
+	service := NewRateService(
+		stubRateProvider{err: fmt.Errorf("fetch exchange rates: %w", context.DeadlineExceeded)},
+		store,
+		RateServiceOptions{FreshFor: 30 * time.Minute, MaxStale: 24 * time.Hour, Now: func() time.Time { return now }},
+	)
+
+	quote, err := service.Quote(context.Background(), "EUR", "USD", "2")
+	if err != nil {
+		t.Fatalf("Quote() error = %v, want stale snapshot after provider-local timeout", err)
+	}
+	if quote.Freshness != FreshnessStale || quote.ConvertedAmount != "2.5" {
+		t.Fatalf("Quote() = %+v, want stale 2.5", quote)
+	}
+}
+
+func TestRateServiceDoesNotUseStaleSnapshotAfterCallerCancellation(t *testing.T) {
+	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &memorySnapshotStore{snapshot: sampleSnapshot(now.Add(-time.Hour)), hasValue: true}
+	providerCalls := 0
+	provider := rateProviderFunc(func(ctx context.Context) (RateSnapshot, error) {
+		providerCalls++
+		cancel()
+		return RateSnapshot{}, ctx.Err()
+	})
+	service := NewRateService(
+		provider,
+		store,
+		RateServiceOptions{FreshFor: 30 * time.Minute, MaxStale: 24 * time.Hour, Now: func() time.Time { return now }},
+	)
+
+	_, err := service.Quote(ctx, "EUR", "USD", "2")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Quote() error = %v, want context.Canceled", err)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("provider Fetch() calls = %d, want 1", providerCalls)
+	}
+}
+
+func TestRateServiceDoesNotUseStaleSnapshotAfterCallerDeadline(t *testing.T) {
+	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	store := &memorySnapshotStore{snapshot: sampleSnapshot(now.Add(-time.Hour)), hasValue: true}
+	provider := rateProviderFunc(func(ctx context.Context) (RateSnapshot, error) {
+		<-ctx.Done()
+		return RateSnapshot{}, ctx.Err()
+	})
+	service := NewRateService(
+		provider,
+		store,
+		RateServiceOptions{FreshFor: 30 * time.Minute, MaxStale: 24 * time.Hour, Now: func() time.Time { return now }},
+	)
+
+	_, err := service.Quote(ctx, "EUR", "USD", "2")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Quote() error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestRateServiceReturnsNoSnapshotWhenProviderTimesOutWithoutCache(t *testing.T) {
+	service := NewRateService(
+		stubRateProvider{err: fmt.Errorf("fetch exchange rates: %w", context.DeadlineExceeded)},
+		&memorySnapshotStore{},
+		RateServiceOptions{},
+	)
+
+	_, err := service.Quote(context.Background(), "EUR", "USD", "2")
+	if !errors.Is(err, ErrNoRateSnapshot) {
+		t.Fatalf("Quote() error = %v, want ErrNoRateSnapshot", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Quote() error = %v, provider-local timeout must not be returned as caller deadline", err)
 	}
 }
 

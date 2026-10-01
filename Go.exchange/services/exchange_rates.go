@@ -181,7 +181,7 @@ func (s *RateService) snapshot(ctx context.Context) (RateSnapshot, string, error
 	if ctx == nil {
 		return RateSnapshot{}, "", errors.New("exchange-rate snapshot context is nil")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := callerContextError(ctx); err != nil {
 		return RateSnapshot{}, "", err
 	}
 
@@ -189,15 +189,12 @@ func (s *RateService) snapshot(ctx context.Context) (RateSnapshot, string, error
 	if s.store != nil {
 		snapshot, err := s.store.Load(ctx)
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
+			if ctxErr := callerContextError(ctx); ctxErr != nil {
 				return RateSnapshot{}, "", ctxErr
-			}
-			if isContextError(err) {
-				return RateSnapshot{}, "", err
 			}
 		} else if validateSnapshot(snapshot) == nil {
 			cached = snapshot
-			if err := ctx.Err(); err != nil {
+			if err := callerContextError(ctx); err != nil {
 				return RateSnapshot{}, "", err
 			}
 			if s.now().Sub(snapshot.FetchedAt) <= s.freshFor {
@@ -205,21 +202,18 @@ func (s *RateService) snapshot(ctx context.Context) (RateSnapshot, string, error
 			}
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := callerContextError(ctx); err != nil {
 		return RateSnapshot{}, "", err
 	}
 	refreshed, err := s.Refresh(ctx)
 	if err == nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := callerContextError(ctx); ctxErr != nil {
 			return RateSnapshot{}, "", ctxErr
 		}
 		return refreshed, FreshnessFresh, nil
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
+	if ctxErr := callerContextError(ctx); ctxErr != nil {
 		return RateSnapshot{}, "", ctxErr
-	}
-	if isContextError(err) {
-		return RateSnapshot{}, "", err
 	}
 	if !cached.FetchedAt.IsZero() && s.now().Sub(cached.FetchedAt) <= s.maxStale {
 		return cached, FreshnessStale, nil
@@ -227,11 +221,7 @@ func (s *RateService) snapshot(ctx context.Context) (RateSnapshot, string, error
 	return RateSnapshot{}, "", fmt.Errorf("%w: %v", ErrNoRateSnapshot, err)
 }
 
-func isContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-func redisContextError(ctx context.Context) error {
+func callerContextError(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -336,13 +326,13 @@ func (s RedisSnapshotStore) Load(ctx context.Context) (RateSnapshot, error) {
 	if ctx == nil {
 		return RateSnapshot{}, errors.New("exchange-rate snapshot context is nil")
 	}
-	if err := redisContextError(ctx); err != nil {
+	if err := callerContextError(ctx); err != nil {
 		return RateSnapshot{}, err
 	}
 
 	client := s.Client.WithContext(ctx)
 	raw, err := client.Get(s.key()).Result()
-	if ctxErr := redisContextError(ctx); ctxErr != nil {
+	if ctxErr := callerContextError(ctx); ctxErr != nil {
 		return RateSnapshot{}, fmt.Errorf("load exchange-rate snapshot: %w", ctxErr)
 	}
 	if err == redis.Nil {
@@ -365,19 +355,19 @@ func (s RedisSnapshotStore) Save(ctx context.Context, snapshot RateSnapshot, ttl
 	if ctx == nil {
 		return errors.New("exchange-rate snapshot context is nil")
 	}
-	if err := redisContextError(ctx); err != nil {
+	if err := callerContextError(ctx); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return fmt.Errorf("encode exchange-rate snapshot: %w", err)
 	}
-	if err := redisContextError(ctx); err != nil {
+	if err := callerContextError(ctx); err != nil {
 		return err
 	}
 	client := s.Client.WithContext(ctx)
 	if err := client.Set(s.key(), raw, ttl).Err(); err != nil {
-		if ctxErr := redisContextError(ctx); ctxErr != nil {
+		if ctxErr := callerContextError(ctx); ctxErr != nil {
 			return fmt.Errorf("save exchange-rate snapshot: %w", ctxErr)
 		}
 		return fmt.Errorf("save exchange-rate snapshot: %w", err)
