@@ -115,6 +115,38 @@ describe('RepostAction', () => {
     expect(wrapper.get('button').attributes('aria-pressed')).toBe('false');
   });
 
+  it('exposes programmatic activation through the same repost and undo state machine', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountRepostAction();
+    const exposed = wrapper.vm as unknown as { activate: () => void };
+
+    exposed.activate();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.emitted('toggle')).toHaveLength(1);
+    expect(wrapper.get('button').attributes('data-motion')).toBe('reposting');
+
+    await wrapper.setProps({ reposted: true, count: 9 });
+    exposed.activate();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.emitted('toggle')).toHaveLength(2);
+    expect(wrapper.get('button').attributes('data-motion')).toBe('unreposting');
+  });
+
+  it.each([
+    { disabled: true },
+    { loading: true },
+    { pending: true },
+  ])('keeps exposed activation guarded by current props: %o', async props => {
+    const wrapper = mountRepostAction(props);
+    const exposed = wrapper.vm as unknown as { activate: () => void };
+
+    exposed.activate();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.emitted('toggle')).toBeUndefined();
+    expect(wrapper.get('button').attributes('data-motion')).toBe('idle');
+  });
+
   it('removes active visuals immediately when undoing before parent props update', async () => {
     const wrapper = mountRepostAction({ reposted: true, count: 9 });
 

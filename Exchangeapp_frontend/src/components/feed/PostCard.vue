@@ -33,16 +33,6 @@
             class="post-card__menu-item"
             type="button"
             role="menuitem"
-            @click.stop="quotePost"
-          >
-            <AppIcon name="compose" :size="18" />
-            <span>Quote post</span>
-          </button>
-          <button
-            :ref="setMenuItemRef"
-            class="post-card__menu-item"
-            type="button"
-            role="menuitem"
             @click.stop="copyLink"
           >
             <AppIcon name="link" :size="18" />
@@ -189,7 +179,7 @@
         <AppIcon name="reply" :size="18" />
         <span>{{ post.replyCount }}</span>
       </RouterLink>
-      <RepostAction
+      <RepostMenu
         :key="post.id"
         :reposted="post.repostStatus === 'ready' && post.reposted"
         :count="post.repostCount"
@@ -199,6 +189,7 @@
         :ariaLabel="repostLabel"
         variant="compact"
         @toggle="handleRepostActivation"
+        @quote="quotePost"
       />
       <LikeAction
         :key="post.id"
@@ -265,7 +256,7 @@ import PostMediaGrid from '../content/PostMediaGrid.vue';
 import ConfirmDialog from '../dialogs/ConfirmDialog.vue';
 import BookmarkAction from '../engagement/BookmarkAction.vue';
 import LikeAction from '../engagement/LikeAction.vue';
-import RepostAction from '../engagement/RepostAction.vue';
+import RepostMenu from '../engagement/RepostMenu.vue';
 import AppIcon from '../icons/AppIcon.vue';
 import { getPostViewTelemetry } from '../../services/postViewTelemetry';
 import { translatePost } from '../../services/translationService';
@@ -462,7 +453,6 @@ const navigateToLogin = () => {
 };
 
 const quotePost = () => {
-  closeMore();
   const destination = {
     name: 'PostCreate' as const,
     query: { quote: String(props.post.id) },

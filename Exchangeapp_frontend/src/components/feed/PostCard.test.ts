@@ -6,6 +6,7 @@ import { nextTick } from 'vue';
 import PostCard from './PostCard.vue';
 import LikeAction from '../engagement/LikeAction.vue';
 import RepostAction from '../engagement/RepostAction.vue';
+import RepostMenu from '../engagement/RepostMenu.vue';
 import type { FeedPost } from '../../types/Feed';
 import { formatCompactEngagementCount } from '../../utils/engagementCount';
 
@@ -292,11 +293,11 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.emitted('postClick')).toBeUndefined();
   });
 
-  it('opens the quote composer from More actions', async () => {
+  it('opens the quote composer from the Repost options menu', async () => {
     const wrapper = mountPostCard();
-    await wrapper.get('.post-card__more-button').trigger('click');
-    const quoteAction = wrapper.findAll('.post-card__menu-item')
-      .find(item => item.text().includes('Quote post'));
+    await wrapper.get('.repost-menu__disclosure').trigger('click');
+    const quoteAction = wrapper.findAll('[role="menuitem"]')
+      .find(item => item.text() === 'Quote post');
 
     expect(quoteAction).toBeDefined();
     await quoteAction!.trigger('click');
@@ -305,13 +306,15 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       name: 'PostCreate',
       query: { quote: '42' },
     });
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+    expect(mocks.remember).not.toHaveBeenCalled();
   });
 
-  it('preserves the quote composer destination when a guest selects Quote post', async () => {
+  it('preserves the quote composer destination through login from Feed', async () => {
     const wrapper = mountPostCard(basePost(), { requiresAuthForActions: true });
-    await wrapper.get('.post-card__more-button').trigger('click');
-    const quoteAction = wrapper.findAll('.post-card__menu-item')
-      .find(item => item.text().includes('Quote post'));
+    await wrapper.get('.repost-menu__disclosure').trigger('click');
+    const quoteAction = wrapper.findAll('[role="menuitem"]')
+      .find(item => item.text() === 'Quote post');
 
     await quoteAction!.trigger('click');
 
@@ -319,6 +322,16 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       name: 'Login',
       query: { returnTo: '/posts/new?quote=42' },
     });
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+    expect(mocks.remember).not.toHaveBeenCalled();
+  });
+
+  it('keeps Quote out of generic More actions', async () => {
+    const wrapper = mountPostCard();
+    await wrapper.get('.post-card__more-button').trigger('click');
+
+    expect(wrapper.findAll('.post-card__menu-item').map(item => item.text()))
+      .not.toContain('Quote post');
   });
 
   it('captures content, reply, and view navigation with one handoff and one postClick each', async () => {
@@ -670,15 +683,24 @@ describe('PostCard View metric and telemetry lifecycle', () => {
       },
     };
     const wrapper = mountPostCard(post);
+    const repostMenu = wrapper.findComponent(RepostMenu);
     const repostAction = wrapper.findComponent(RepostAction);
     const engagement = wrapper.find('.post-card__engagement').element.children;
 
     expect(wrapper.find('.post-card__repost-context').text()).toBe('Alice reposted');
+    expect(repostMenu.props()).toMatchObject({
+      reposted: true,
+      count: 9,
+      disabled: false,
+      loading: false,
+      pending: false,
+      variant: 'compact',
+    });
     expect(repostAction.props('reposted')).toBe(true);
     expect(repostAction.props('count')).toBe(9);
     expect(Array.from(engagement).map(element => element.className)).toEqual([
       'post-card__metric post-card__reply',
-      'repost-action repost-action--compact repost-action--reposted',
+      'repost-menu repost-menu--compact',
       'stub-like-action',
       'bookmark-action bookmark-action--compact post-card__metric post-card__bookmark',
       'post-card__metric post-card__views',

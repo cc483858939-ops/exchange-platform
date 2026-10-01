@@ -154,6 +154,8 @@ const activate = () => {
   emit('toggle');
 };
 
+defineExpose({ activate });
+
 watch(
   () => props.reposted,
   nextReposted => {

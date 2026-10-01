@@ -5,6 +5,7 @@ import { nextTick, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
 import PostDetailView from './PostDetailView.vue';
+import RepostMenu from '../components/engagement/RepostMenu.vue';
 import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
 import { formatCompactEngagementCount } from '../utils/engagementCount';
@@ -16,6 +17,9 @@ const mocks = vi.hoisted(() => ({
     back: vi.fn(),
     push: vi.fn(),
     replace: vi.fn(),
+    resolve: vi.fn((destination: any) => ({
+      fullPath: `/posts/new?quote=${destination.query.quote}`,
+    })),
   },
   routeLeave: vi.fn(),
   authStore: null as any,
@@ -359,6 +363,52 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.text()).not.toContain('Expired');
     expect(wrapper.text()).not.toContain('Expires');
     expect(wrapper.text()).not.toContain('Keep it useful.');
+  });
+
+  it('renders RepostMenu on a loaded post and routes Quote to its composer', async () => {
+    wrapper = mountDetail();
+    await flushPromises();
+
+    expect(wrapper.findComponent(RepostMenu).props()).toMatchObject({
+      reposted: false,
+      count: 0,
+      loading: false,
+      pending: false,
+      disabled: false,
+      variant: 'detail',
+    });
+    await wrapper.get('.post-detail > .post-detail__engagement .repost-menu__disclosure')
+      .trigger('click');
+    await wrapper.get('.post-detail > .post-detail__engagement [role="menuitem"]:last-child')
+      .trigger('click');
+
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'PostCreate',
+      query: { quote: '42' },
+    });
+    expect(mocks.repostPost).not.toHaveBeenCalled();
+  });
+
+  it('preserves the Quote composer destination through login from Post Detail', async () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail > .post-detail__engagement .repost-menu__disclosure')
+      .trigger('click');
+    await wrapper.get('.post-detail > .post-detail__engagement [role="menuitem"]:last-child')
+      .trigger('click');
+
+    expect(mocks.router.resolve).toHaveBeenCalledWith({
+      name: 'PostCreate',
+      query: { quote: '42' },
+    });
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/new?quote=42' },
+    });
+    expect(mocks.repostPost).not.toHaveBeenCalled();
   });
 
   it('translates the loaded post on demand while preserving the canonical body', async () => {
@@ -917,6 +967,7 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.find('.post-detail__views').text()).toBe('300 Views');
     expect(wrapper.find('.post-detail__reply').element.tagName).toBe('SPAN');
     expect(wrapper.find('.post-detail__like').exists()).toBe(true);
+    expect(wrapper.find('.repost-menu').exists()).toBe(false);
     expect(wrapper.find('.post-conversation').exists()).toBe(false);
     expect(wrapper.find('.test-composer').exists()).toBe(false);
     expect(mocks.getPostLikeState).not.toHaveBeenCalled();

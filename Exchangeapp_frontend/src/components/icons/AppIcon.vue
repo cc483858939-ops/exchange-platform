@@ -171,6 +171,17 @@
       <circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none" />
     </template>
 
+    <template v-else-if="props.name === 'chevron-down'">
+      <path
+        d="m6.5 9 5.5 5.5L17.5 9"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </template>
+
     <template v-else-if="props.name === 'link'">
       <path
         d="m9.5 14.5-1.25 1.25a3.18 3.18 0 1 1-4.5-4.5L6.5 8.5a3.18 3.18 0 0 1 4.5 0m3.5 1 1.25-1.25a3.18 3.18 0 1 1 4.5 4.5L17.5 15.5a3.18 3.18 0 0 1-4.5 0m-3.5-.5 5-5"
@@ -387,6 +398,7 @@ type AppIconName =
   | 'heart'
   | 'bookmark'
   | 'more'
+  | 'chevron-down'
   | 'link'
   | 'analytics'
   | 'eye-off'

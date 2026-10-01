@@ -130,7 +130,7 @@
               <span>{{ replyCount }}</span>
             </button>
 
-            <RepostAction
+            <RepostMenu
               :key="postId"
               :reposted="reposted"
               :count="repostCount"
@@ -140,6 +140,7 @@
               :ariaLabel="detailRepostLabel"
               variant="detail"
               @toggle="toggleRepost"
+              @quote="quotePost"
             />
             <LikeAction
               :key="postId"
@@ -383,7 +384,7 @@
                 <span>{{ replyCount }}</span>
               </button>
 
-              <RepostAction
+              <RepostMenu
                 :key="postId"
                 :reposted="reposted"
                 :count="repostCount"
@@ -393,6 +394,7 @@
                 :ariaLabel="detailRepostLabel"
                 variant="detail"
                 @toggle="toggleRepost"
+                @quote="quotePost"
               />
               <LikeAction
                 :key="postId"
@@ -603,7 +605,7 @@ import PostMediaViewer from '../components/content/PostMediaViewer.vue';
 import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
 import BookmarkAction from '../components/engagement/BookmarkAction.vue';
 import LikeAction from '../components/engagement/LikeAction.vue';
-import RepostAction from '../components/engagement/RepostAction.vue';
+import RepostMenu from '../components/engagement/RepostMenu.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import ReplyComposer from '../components/replies/ReplyComposer.vue';
 import ReplyDraftExitDialog from '../components/replies/ReplyDraftExitDialog.vue';
@@ -1095,6 +1097,24 @@ const navigateToLogin = (returnTo = route.fullPath || `/posts/${postId.value}`) 
     name: 'Login',
     query: { returnTo },
   });
+};
+
+const quotePost = () => {
+  const currentPost = post.value;
+  if (!currentPost) return;
+
+  const destination = {
+    name: 'PostCreate' as const,
+    query: { quote: String(currentPost.id) },
+  };
+
+  if (!authStore.isAuthenticated) {
+    const returnTo = router.resolve(destination).fullPath;
+    void router.push({ name: 'Login', query: { returnTo } });
+    return;
+  }
+
+  void router.push(destination);
 };
 
 const postViewTelemetry = getPostViewTelemetry();
