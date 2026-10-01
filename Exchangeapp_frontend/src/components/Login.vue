@@ -131,5 +131,3 @@ const login = async () => {
   }
 };
 </script>
-
-<style scoped src="../styles/auth-shell.css"></style>
