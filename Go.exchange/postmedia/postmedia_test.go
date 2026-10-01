@@ -46,3 +46,44 @@ func TestBuildDevDataV1ObjectPathsAndPublicAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildDevDataV1ObjectPathsRejectsUnsafeInputs(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	tests := []struct {
+		name                string
+		registryKey         string
+		sourcePostID        string
+		contentHash         string
+		originalExtension   string
+		derivativeExtension string
+	}{
+		{
+			name: "unsafe registry key", registryKey: "../dotey", sourcePostID: "123456",
+			contentHash: hash, originalExtension: ".jpg", derivativeExtension: ".png",
+		},
+		{
+			name: "non-numeric source post ID", registryKey: "dotey", sourcePostID: "not-numeric",
+			contentHash: hash, originalExtension: ".jpg", derivativeExtension: ".png",
+		},
+		{
+			name: "uppercase content hash", registryKey: "dotey", sourcePostID: "123456",
+			contentHash: strings.Repeat("A", 64), originalExtension: ".jpg", derivativeExtension: ".png",
+		},
+		{
+			name: "unsupported original extension", registryKey: "dotey", sourcePostID: "123456",
+			contentHash: hash, originalExtension: ".gif", derivativeExtension: ".png",
+		},
+		{
+			name: "unsupported derivative extension", registryKey: "dotey", sourcePostID: "123456",
+			contentHash: hash, originalExtension: ".jpg", derivativeExtension: ".gif",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := BuildDevDataV1ObjectPaths(test.registryKey, test.sourcePostID, test.contentHash, test.originalExtension, test.derivativeExtension); err == nil {
+				t.Fatal("unsafe object path inputs were accepted")
+			}
+		})
+	}
+}

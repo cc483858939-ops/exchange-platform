@@ -160,21 +160,6 @@ func parsePostMediaSourceURL(rawURL, allowedHost string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// BuildPostMediaObjectKey is kept as a small compatibility helper for local
-// DevData callers. It now returns the V1 Medium object key; new code should
-// use postmedia.BuildDevDataV1ObjectPaths when it also needs Original/Large.
-func BuildPostMediaObjectKey(registryKey, sourcePostID, contentHash, extension string) (string, error) {
-	derivativeExtension := strings.ToLower(strings.TrimSpace(extension))
-	if derivativeExtension == ".webp" {
-		derivativeExtension = ".jpg"
-	}
-	paths, err := postmedia.BuildDevDataV1ObjectPaths(registryKey, sourcePostID, contentHash, extension, derivativeExtension)
-	if err != nil {
-		return "", err
-	}
-	return paths.MediumObjectKey, nil
-}
-
 func postMediaLocalURL(objectKey string) string {
 	return postmedia.PublicURL(objectKey)
 }

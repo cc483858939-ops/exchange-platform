@@ -141,32 +141,6 @@ func TestPostMediaDownloaderRevalidatesRedirects(t *testing.T) {
 	}
 }
 
-func TestBuildPostMediaObjectKey(t *testing.T) {
-	hash := strings.Repeat("a", sha256.Size*2)
-	key, err := BuildPostMediaObjectKey("dotey", "123456", hash, ".jpg")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "post-media/devdata/v1/dotey/123456/" + hash + "/medium.jpg"; key != want {
-		t.Fatalf("key=%q want %q", key, want)
-	}
-	for _, test := range []struct {
-		registry string
-		postID   string
-		hash     string
-		ext      string
-	}{
-		{registry: "../dotey", postID: "123456", hash: hash, ext: ".jpg"},
-		{registry: "dotey", postID: "not-numeric", hash: hash, ext: ".jpg"},
-		{registry: "dotey", postID: "123456", hash: strings.Repeat("A", 64), ext: ".jpg"},
-		{registry: "dotey", postID: "123456", hash: hash, ext: ".gif"},
-	} {
-		if _, err := BuildPostMediaObjectKey(test.registry, test.postID, test.hash, test.ext); err == nil {
-			t.Fatalf("unsafe key inputs accepted: %#v", test)
-		}
-	}
-}
-
 func TestPreparePostMediaMirrorsIsolatesFailuresAndReusesObjects(t *testing.T) {
 	registry := SourceRegistry{
 		Version: SourceRegistryVersion, DefaultMaxPosts: 3,
