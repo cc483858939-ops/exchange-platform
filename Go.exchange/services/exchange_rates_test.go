@@ -3,10 +3,13 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis/v7"
 )
 
 type stubRateProvider struct {
@@ -92,6 +95,115 @@ func TestRateServiceUsesStaleSnapshotWhenProviderFails(t *testing.T) {
 	if quote.ConvertedAmount != "2.5" || quote.Freshness != FreshnessStale {
 		t.Fatalf("Quote() = %+v, want stale 2.5", quote)
 	}
+}
+
+func TestRateServicePropagatesSnapshotLoadCancellation(t *testing.T) {
+	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := functionSnapshotStore{
+		load: func(ctx context.Context) (RateSnapshot, error) {
+			cancel()
+			return sampleSnapshot(now.Add(-time.Hour)), fmt.Errorf("load snapshot: %w", ctx.Err())
+		},
+	}
+	provider := &countingRateProvider{snapshot: sampleSnapshot(now)}
+	service := NewRateService(
+		provider,
+		store,
+		RateServiceOptions{FreshFor: 30 * time.Minute, MaxStale: 24 * time.Hour, Now: func() time.Time { return now }},
+	)
+
+	if _, err := service.Quote(ctx, "EUR", "USD", "2"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Quote() error = %v, want context.Canceled", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider Fetch() calls = %d, want 0 after snapshot load cancellation", provider.calls)
+	}
+}
+
+func TestRateServiceRefreshPreservesSnapshotSaveCancellation(t *testing.T) {
+	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	store := functionSnapshotStore{
+		load: func(context.Context) (RateSnapshot, error) {
+			return RateSnapshot{}, ErrNoRateSnapshot
+		},
+		save: func(context.Context, RateSnapshot, time.Duration) error {
+			return fmt.Errorf("redis write: %w", context.DeadlineExceeded)
+		},
+	}
+	service := NewRateService(
+		stubRateProvider{snapshot: sampleSnapshot(now)},
+		store,
+		RateServiceOptions{Now: func() time.Time { return now }},
+	)
+
+	if _, err := service.Refresh(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Refresh() error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestRedisSnapshotStoreLoadRejectsCancelledContext(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	defer client.Close()
+	store := RedisSnapshotStore{Client: client}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := store.Load(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Load() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRedisSnapshotStoreSaveRejectsCancelledContext(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	defer client.Close()
+	store := RedisSnapshotStore{Client: client}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := store.Save(ctx, sampleSnapshot(time.Now()), time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Save() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRedisSnapshotStoreRejectsNilContext(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	defer client.Close()
+	store := RedisSnapshotStore{Client: client}
+
+	if _, err := store.Load(nil); err == nil {
+		t.Fatal("Load(nil) error = nil, want a context error")
+	}
+	if err := store.Save(nil, sampleSnapshot(time.Now()), time.Hour); err == nil {
+		t.Fatal("Save(nil) error = nil, want a context error")
+	}
+}
+
+type functionSnapshotStore struct {
+	load func(context.Context) (RateSnapshot, error)
+	save func(context.Context, RateSnapshot, time.Duration) error
+}
+
+func (s functionSnapshotStore) Load(ctx context.Context) (RateSnapshot, error) {
+	return s.load(ctx)
+}
+
+func (s functionSnapshotStore) Save(ctx context.Context, snapshot RateSnapshot, ttl time.Duration) error {
+	if s.save == nil {
+		return nil
+	}
+	return s.save(ctx, snapshot, ttl)
+}
+
+type countingRateProvider struct {
+	snapshot RateSnapshot
+	calls    int
+}
+
+func (p *countingRateProvider) Fetch(context.Context) (RateSnapshot, error) {
+	p.calls++
+	return p.snapshot, nil
 }
 
 func TestRateServiceRejectsInvalidInputAndUnsupportedCurrencies(t *testing.T) {
