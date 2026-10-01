@@ -43,6 +43,7 @@ export interface Post {
   like_count: number;
   repost_count: number;
   reply_count: number;
+  quote_count: number;
   view_count: number;
   deleted: false;
 }

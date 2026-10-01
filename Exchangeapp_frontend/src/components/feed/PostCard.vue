@@ -183,6 +183,7 @@
         :key="post.id"
         :reposted="post.repostStatus === 'ready' && post.reposted"
         :count="post.repostCount"
+        :quote-count="post.quoteCount"
         :disabled="repostUnavailable"
         :loading="repostLoading"
         :pending="repostPending"

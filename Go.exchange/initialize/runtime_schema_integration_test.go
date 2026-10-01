@@ -102,8 +102,8 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.Where("id = ?", runtimeSchemaStateID).Take(&publishedState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if publishedState.CurrentVersion != 12 || publishedState.CompatibilityFloor != 12 {
-		t.Fatalf("published schema contract=%d/%d want=12/12", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
+	if publishedState.CurrentVersion != 13 || publishedState.CompatibilityFloor != 13 {
+		t.Fatalf("published schema contract=%d/%d want=13/13", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
 	}
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
@@ -158,6 +158,13 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	withIntegrationSavepoint(t, tx, "missing_post_constraint", func() {
 		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "posts") + " DROP CONSTRAINT chk_posts_visibility_public").Error; err != nil {
 			t.Fatalf("drop Post visibility constraint: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
+	})
+
+	withIntegrationSavepoint(t, tx, "missing_post_quote_count_constraint", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "posts") + " DROP CONSTRAINT chk_posts_quote_count_nonnegative").Error; err != nil {
+			t.Fatalf("drop Post quote count constraint: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
 	})

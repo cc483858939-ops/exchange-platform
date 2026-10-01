@@ -67,3 +67,9 @@ func TestTrendingOrderProducesPostgresOrderBy(t *testing.T) {
 		t.Errorf("half-life var=%#v, want %v", statement.Vars[2], halfLifeHours)
 	}
 }
+
+func TestRecommendationPublicPostProjectionIncludesQuoteCount(t *testing.T) {
+	if !strings.Contains(recommendationPublicPostColumns, "posts.quote_count") {
+		t.Fatalf("recommendation public Post projection is missing quote_count: %s", recommendationPublicPostColumns)
+	}
+}

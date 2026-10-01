@@ -33,6 +33,7 @@ type Post struct {
 
 	LikeCount       int64 `json:"like_count" gorm:"not null;default:0"`
 	ReplyCount      int64 `json:"reply_count" gorm:"not null;default:0"`
+	QuoteCount      int64 `json:"quote_count" gorm:"not null;default:0"`
 	ViewCount       int64 `json:"view_count" gorm:"not null;default:0"`
 	LikeSyncVersion int64 `json:"like_sync_version" gorm:"not null;default:0"`
 }

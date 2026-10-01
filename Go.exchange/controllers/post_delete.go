@@ -43,7 +43,8 @@ var (
 )
 
 type postDeleteResult struct {
-	ParentPostID *uint
+	ParentPostID      *uint
+	QuoteTargetPostID *uint
 }
 
 func parsePostDeleteID(raw string) (uint, error) {
@@ -89,6 +90,24 @@ func deletePostInTransactionFromDB(ctx context.Context, postID, viewerID uint) (
 			}
 			parentID := parent.ID
 			deleteResult.ParentPostID = &parentID
+		}
+		if post.QuotePostID != nil {
+			var target models.Post
+			if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).First(&target, *post.QuotePostID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return errPostQuoteCountConsistency
+				}
+				return err
+			}
+			rowsAffected, err := decrementPostQuoteCount(tx, target.ID)
+			if err != nil {
+				return err
+			}
+			if rowsAffected != 1 {
+				return errPostQuoteCountConsistency
+			}
+			targetID := target.ID
+			deleteResult.QuoteTargetPostID = &targetID
 		}
 
 		if err := deletePostRepostsInTransaction(tx, postID); err != nil {
@@ -159,6 +178,11 @@ func DeletePost(ctx *gin.Context) {
 	if deleteResult.ParentPostID != nil {
 		if err := invalidatePostDeleteDetailCache(*deleteResult.ParentPostID); err != nil {
 			log.Printf("[PostDelete] invalidate parent post detail cache for %d: %v", *deleteResult.ParentPostID, err)
+		}
+	}
+	if deleteResult.QuoteTargetPostID != nil {
+		if err := invalidatePostDeleteDetailCache(*deleteResult.QuoteTargetPostID); err != nil {
+			log.Printf("[PostDelete] invalidate quote target post detail cache for %d: %v", *deleteResult.QuoteTargetPostID, err)
 		}
 	}
 	if err := cleanupDeletedPostLikeState(postID); err != nil {

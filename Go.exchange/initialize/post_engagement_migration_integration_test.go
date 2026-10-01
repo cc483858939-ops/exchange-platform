@@ -47,6 +47,22 @@ WHERE table_schema = current_schema()
 	if column.Nullable != "NO" || !strings.Contains(column.Default, "0") {
 		t.Fatalf("posts.reply_count nullable=%q default=%q", column.Nullable, column.Default)
 	}
+	var quoteColumn struct {
+		Nullable string `gorm:"column:is_nullable"`
+		Default  string `gorm:"column:column_default"`
+	}
+	if err := db.Raw(`
+SELECT is_nullable, COALESCE(column_default, '') AS column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'posts'
+  AND column_name = 'quote_count'
+`).Scan(&quoteColumn).Error; err != nil {
+		t.Fatal(err)
+	}
+	if quoteColumn.Nullable != "NO" || !strings.Contains(quoteColumn.Default, "0") {
+		t.Fatalf("posts.quote_count nullable=%q default=%q", quoteColumn.Nullable, quoteColumn.Default)
+	}
 	var languageColumn struct {
 		Nullable string `gorm:"column:is_nullable"`
 		Default  string `gorm:"column:column_default"`
@@ -125,6 +141,19 @@ WHERE conrelid = 'posts'::regclass
 		!strings.Contains(normalizedDefinition, "0") {
 		t.Fatalf("comment count check definition=%q", definition)
 	}
+	var quoteDefinition string
+	if err := db.Raw(`
+SELECT pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'posts'::regclass
+  AND conname = 'chk_posts_quote_count_nonnegative'
+`).Scan(&quoteDefinition).Error; err != nil {
+		t.Fatal(err)
+	}
+	normalizedQuoteDefinition := strings.ToLower(quoteDefinition)
+	if !strings.Contains(normalizedQuoteDefinition, "quote_count") || !strings.Contains(normalizedQuoteDefinition, ">=") || !strings.Contains(normalizedQuoteDefinition, "0") {
+		t.Fatalf("quote count check definition=%q", quoteDefinition)
+	}
 
 	user := models.User{Username: "engagement-migration-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&user).Error; err != nil {
@@ -175,6 +204,9 @@ WHERE conrelid = 'posts'::regclass
 	}
 	if err := db.Model(&article).Update("view_count", -1).Error; err == nil {
 		t.Fatal("database accepted a negative article view_count")
+	}
+	if err := db.Model(&article).Update("quote_count", -1).Error; err == nil {
+		t.Fatal("database accepted a negative post quote_count")
 	}
 
 	versionAt := time.Now().UTC()

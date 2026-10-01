@@ -66,6 +66,7 @@ const post: FeedPost = {
   createdAt: '2026-08-24T00:00:00.000Z',
   likeCount: 0,
   replyCount: 0,
+  quoteCount: 0,
   viewCount: 0,
   liked: false,
   likeStatus: 'ready',

@@ -5,6 +5,7 @@ import { reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia } from 'pinia';
 import PostDetailView from './PostDetailView.vue';
+import RepostMenu from '../components/engagement/RepostMenu.vue';
 import type { Post } from '../types/Post';
 import type { FeedPost } from '../types/Feed';
 import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
@@ -143,6 +144,7 @@ const canonicalPost = (overrides: Partial<Post> = {}): Post => {
     media: [],
     like_count: 11,
     reply_count: 4,
+    quote_count: 0,
     view_count: 321,
     deleted: false,
     ...overrides,
@@ -164,6 +166,7 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   createdAt: '2026-08-25T00:00:00.000Z',
   likeCount: 10,
   replyCount: 3,
+  quoteCount: 0,
   viewCount: 300,
   liked: true,
   likeStatus: 'ready',
@@ -330,16 +333,19 @@ describe('PostDetailView warm and cold transition', () => {
       content: 'Warm post content',
       likeCount: 10,
       replyCount: 3,
+      quoteCount: 0,
       viewCount: 300,
     }));
     mocks.getPostById.mockReturnValueOnce(request.promise);
 
     mounted = mountDetail();
     await flushPromises();
+    expect(mounted.findComponent(RepostMenu).exists()).toBe(false);
     request.resolve(canonicalPost({
       content: 'Authoritative post body',
       like_count: 11,
       reply_count: 4,
+      quote_count: 9,
       view_count: 321,
     }));
     await flushPromises();
@@ -348,6 +354,7 @@ describe('PostDetailView warm and cold transition', () => {
     expect(mounted.find('.post-detail__body').attributes('aria-busy')).toBeUndefined();
     expect(mounted.find('.post-conversation').exists()).toBe(true);
     expect(mounted.find('.test-like-action').exists()).toBe(true);
+    expect(mounted.findComponent(RepostMenu).props('quoteCount')).toBe(9);
     expect(mounted.find('.detail-warm-loading').exists()).toBe(false);
     expect(mounted.text()).not.toContain('Warm post content');
     expect(mounted.text()).toContain('4');
@@ -424,7 +431,7 @@ describe('PostDetailView warm and cold transition', () => {
       reply_to_post_id: 101,
     });
     mocks.getPostById
-      .mockResolvedValueOnce(canonicalPost({ content: 'Root post 42' }))
+      .mockResolvedValueOnce(canonicalPost({ content: 'Root post 42', quote_count: 9 }))
       .mockResolvedValueOnce(replyA);
     mocks.getPostReplies
       .mockResolvedValueOnce({ items: [replyA], next_cursor: null })
@@ -433,6 +440,7 @@ describe('PostDetailView warm and cold transition', () => {
     mounted = mountDetail();
     await flushPromises();
 
+    expect(mounted.findComponent(RepostMenu).props('quoteCount')).toBe(9);
     expect(mounted.get('.test-comment-list').text()).toContain('101 Reply 101');
 
     mocks.route.params.id = '101';
@@ -441,6 +449,7 @@ describe('PostDetailView warm and cold transition', () => {
     expect(mocks.getPostById).toHaveBeenNthCalledWith(2, '101');
     expect(mocks.getPostReplies).toHaveBeenNthCalledWith(2, '101', { limit: 20 });
     expect(mounted.get('.post-detail__body').text()).toBe('Reply 101');
+    expect(mounted.findComponent(RepostMenu).props('quoteCount')).toBe(0);
     expect(mounted.findAll('.test-reply')).toHaveLength(1);
     expect(mounted.get('.test-comment-list').text()).toBe('201 Reply 201');
   });

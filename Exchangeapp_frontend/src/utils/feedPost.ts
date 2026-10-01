@@ -18,6 +18,14 @@ const safeRepostCount = (reposts: number, fallback = 0) => {
   return count;
 };
 
+const safeQuoteCount = (quotes: number, fallback = 0) => {
+  const count = Number(quotes);
+  if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
+    return Math.max(0, Math.floor(Number(fallback) || 0));
+  }
+  return count;
+};
+
 export function postToFeedPost(
   post: Post,
   context: { repostActor?: PublicAuthor } = {},
@@ -33,6 +41,7 @@ export function postToFeedPost(
     createdAt: post.published_at || post.created_at,
     likeCount: post.like_count ?? 0,
     replyCount: post.reply_count ?? 0,
+    quoteCount: safeQuoteCount(post.quote_count, 0),
     viewCount: Math.max(0, post.view_count),
     liked: false,
     likeStatus: 'unknown',

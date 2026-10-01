@@ -59,6 +59,7 @@ export function createPerfPosts(
       createdAt: new Date(baseTimestamp + index * 60_000).toISOString(),
       likeCount: (position * 7) % 97,
       replyCount: (position * 5) % 31,
+      quoteCount: 0,
       viewCount: position * 113,
       liked: position % 7 === 0,
       likeStatus: 'ready',

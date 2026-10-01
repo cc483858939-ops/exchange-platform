@@ -64,6 +64,7 @@ const basePost = (): FeedPost => ({
   createdAt: '2026-08-17T00:00:00.000Z',
   likeCount: 12,
   replyCount: 3,
+  quoteCount: 0,
   viewCount: 1234,
   liked: false,
   likeStatus: 'ready',
@@ -297,7 +298,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     const wrapper = mountPostCard();
     await wrapper.get('.repost-menu__disclosure').trigger('click');
     const quoteAction = wrapper.findAll('[role="menuitem"]')
-      .find(item => item.text() === 'Quote post');
+      .find(item => item.text().startsWith('Quote post'));
 
     expect(quoteAction).toBeDefined();
     await quoteAction!.trigger('click');
@@ -314,7 +315,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     const wrapper = mountPostCard(basePost(), { requiresAuthForActions: true });
     await wrapper.get('.repost-menu__disclosure').trigger('click');
     const quoteAction = wrapper.findAll('[role="menuitem"]')
-      .find(item => item.text() === 'Quote post');
+      .find(item => item.text().startsWith('Quote post'));
 
     await quoteAction!.trigger('click');
 
@@ -672,6 +673,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     const post = {
       ...basePost(),
       repostCount: 9,
+      quoteCount: 12,
       reposted: true,
       repostContext: {
         actor: {
@@ -691,6 +693,7 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(repostMenu.props()).toMatchObject({
       reposted: true,
       count: 9,
+      quoteCount: 12,
       disabled: false,
       loading: false,
       pending: false,

@@ -134,6 +134,7 @@
               :key="postId"
               :reposted="reposted"
               :count="repostCount"
+              :quote-count="quoteCount"
               :disabled="repostStateUnavailable"
               :loading="repostStateLoading"
               :pending="repostSubmitting"
@@ -388,6 +389,7 @@
                 :key="postId"
                 :reposted="reposted"
                 :count="repostCount"
+                :quote-count="quoteCount"
                 :disabled="repostStateUnavailable"
                 :loading="repostStateLoading"
                 :pending="repostSubmitting"
@@ -713,6 +715,7 @@ const likeSubmitting = computed(() => {
 const likeError = ref('');
 const reposted = ref(false);
 const repostCount = ref(0);
+const quoteCount = ref(0);
 const repostStateLoading = ref(false);
 const repostSubmitting = computed(() => {
   const postID = currentDetailPostID.value;
@@ -1325,6 +1328,7 @@ const resetPostState = () => {
   post.value = null;
   postLoading.value = false;
   postError.value = '';
+  quoteCount.value = 0;
   viewCount.value = 0;
   deletePending.value = false;
   deleteError.value = '';
@@ -2276,6 +2280,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     post.value = loadedPost;
     likeCount.value = clampCount(loadedPost.like_count);
     repostCount.value = clampCount(loadedPost.repost_count);
+    quoteCount.value = clampCount(loadedPost.quote_count);
     replyCount.value = clampCount(loadedPost.reply_count);
     viewCount.value = clampCount(loadedPost.view_count);
     postLoading.value = false;

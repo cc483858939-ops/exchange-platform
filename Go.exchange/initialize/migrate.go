@@ -30,6 +30,10 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockKey).Error; err != nil {
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}
+		previousSchemaVersion, err := readPublishedSchemaVersion(tx)
+		if err != nil {
+			return fmt.Errorf("read pre-migration schema version: %w", err)
+		}
 
 		if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 			return fmt.Errorf("enable pgvector extension: %w", err)
@@ -63,6 +67,11 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.DevDataMirrorPost{},
 		); err != nil {
 			return fmt.Errorf("auto migrate database: %w", err)
+		}
+		if previousSchemaVersion < 13 {
+			if err := backfillPostQuoteCounts(tx); err != nil {
+				return fmt.Errorf("backfill Post quote counts: %w", err)
+			}
 		}
 		if err := applyEmbeddingServingStateSchema(tx); err != nil {
 			return err
@@ -129,6 +138,38 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		}
 		return nil
 	})
+}
+
+func readPublishedSchemaVersion(tx *gorm.DB) (int64, error) {
+	if tx == nil {
+		return 0, errors.New("database transaction is not initialized")
+	}
+	if !tx.Migrator().HasTable(&models.RuntimeSchemaState{}) {
+		return 0, nil
+	}
+	var state models.RuntimeSchemaState
+	err := tx.Select("current_version").Where("id = ?", runtimeSchemaStateID).Take(&state).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return state.CurrentVersion, nil
+}
+
+func backfillPostQuoteCounts(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("database transaction is not initialized")
+	}
+	return tx.Exec(`
+UPDATE posts AS target
+SET quote_count = (
+	SELECT COUNT(*)::bigint
+	FROM posts AS quote
+	WHERE quote.quote_post_id = target.id
+	  AND quote.deleted_at IS NULL
+)`).Error
 }
 
 // applyEmbeddingServingStateSchema owns the singleton constraints and seeds
@@ -265,6 +306,8 @@ func applyPostSchemaConstraints(tx *gorm.DB) error {
 		"ALTER TABLE posts ADD CONSTRAINT chk_posts_like_count_nonnegative CHECK (like_count >= 0)",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_reply_count_nonnegative",
 		"ALTER TABLE posts ADD CONSTRAINT chk_posts_reply_count_nonnegative CHECK (reply_count >= 0)",
+		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_quote_count_nonnegative",
+		"ALTER TABLE posts ADD CONSTRAINT chk_posts_quote_count_nonnegative CHECK (quote_count >= 0)",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_view_count_nonnegative",
 		"ALTER TABLE posts ADD CONSTRAINT chk_posts_view_count_nonnegative CHECK (view_count >= 0)",
 		"ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_like_sync_version_nonnegative",

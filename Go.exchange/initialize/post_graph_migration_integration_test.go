@@ -41,7 +41,7 @@ WHERE table_schema = current_schema()
 	}
 	for _, required := range []string{
 		"author_id", "content", "reply_to_post_id", "quote_post_id", "conversation_id",
-		"visibility", "like_count", "reply_count", "view_count", "like_sync_version",
+		"visibility", "like_count", "reply_count", "quote_count", "view_count", "like_sync_version",
 		"client_publish_id", "client_publish_fingerprint",
 	} {
 		if _, ok := columnSet[required]; !ok {
@@ -204,6 +204,7 @@ WHERE conrelid = 'posts'::regclass
 	for name, column := range map[string]string{
 		"chk_posts_like_count_nonnegative":        "like_count>=0",
 		"chk_posts_reply_count_nonnegative":       "reply_count>=0",
+		"chk_posts_quote_count_nonnegative":       "quote_count>=0",
 		"chk_posts_view_count_nonnegative":        "view_count>=0",
 		"chk_posts_like_sync_version_nonnegative": "like_sync_version>=0",
 	} {

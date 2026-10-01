@@ -28,6 +28,7 @@ const basePost = (): FeedPost => ({
   createdAt: '2026-08-26T00:00:00.000Z',
   likeCount: 10,
   replyCount: 2,
+  quoteCount: 0,
   viewCount: 300,
   liked: true,
   likeStatus: 'ready',

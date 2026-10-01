@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const recommendationPublicPostColumns = "posts.id,posts.created_at,posts.updated_at,posts.author_id,posts.content,posts.language,posts.reply_to_post_id,posts.quote_post_id,posts.conversation_id,posts.visibility,posts.like_count,posts.reply_count,posts.view_count,posts.like_sync_version,posts.deleted_at"
+const recommendationPublicPostColumns = "posts.id,posts.created_at,posts.updated_at,posts.author_id,posts.content,posts.language,posts.reply_to_post_id,posts.quote_post_id,posts.conversation_id,posts.visibility,posts.like_count,posts.reply_count,posts.quote_count,posts.view_count,posts.like_sync_version,posts.deleted_at"
 
 type GormCandidateRepository struct {
 	db *gorm.DB

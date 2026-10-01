@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 12 adds claimable and retryable Post media orphan cleanup.
-const RequiredSchemaVersion int64 = 12
+// Schema 13 adds the canonical Post quote aggregate.
+const RequiredSchemaVersion int64 = 13
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 12
-	PublishedSchemaCompatibilityFloor int64 = 12
+	PublishedSchemaCurrentVersion     int64 = 13
+	PublishedSchemaCompatibilityFloor int64 = 13
 )
 
 const runtimeSchemaStateID uint = 1
@@ -105,6 +105,7 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"chk_posts_conversation_shape",
 			"chk_posts_like_count_nonnegative",
 			"chk_posts_reply_count_nonnegative",
+			"chk_posts_quote_count_nonnegative",
 			"chk_posts_view_count_nonnegative",
 			"chk_posts_like_sync_version_nonnegative",
 			"chk_posts_client_publish_identity",

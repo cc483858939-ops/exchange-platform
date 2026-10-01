@@ -12,6 +12,7 @@ const mountMenu = (props: Partial<{
   loading: boolean;
   pending: boolean;
   disabled: boolean;
+  quoteCount: number;
   ariaLabel: string;
   variant: 'compact' | 'detail';
 }> = {}) => mount(RepostMenu, {
@@ -81,6 +82,28 @@ describe('RepostMenu', () => {
     expect(wrapper.find('[role="menu"]').exists()).toBe(false);
     expect(wrapper.emitted('quote')).toEqual([[]]);
     expect(wrapper.emitted('toggle')).toBeUndefined();
+  });
+
+  it('shows the Quote count with an accessible action label', async () => {
+    const wrapper = mountMenu({ quoteCount: 12 });
+    await disclosure(wrapper).trigger('click');
+    const quoteItem = wrapper.get('[role="menuitem"]:last-child');
+
+    expect(quoteItem.text()).toBe('Quote post12');
+    expect(quoteItem.attributes('aria-label')).toBe('Quote post, 12 existing quotes');
+    expect(quoteItem.get('.repost-menu__item-count').attributes('aria-hidden')).toBe('true');
+    await quoteItem.trigger('click');
+    expect(wrapper.emitted('quote')).toEqual([[]]);
+    expect(wrapper.emitted('toggle')).toBeUndefined();
+  });
+
+  it('keeps zero visible and labels the Quote action without existing quotes', async () => {
+    const wrapper = mountMenu({ quoteCount: 0 });
+    await disclosure(wrapper).trigger('click');
+    const quoteItem = wrapper.get('[role="menuitem"]:last-child');
+
+    expect(quoteItem.text()).toBe('Quote post0');
+    expect(quoteItem.attributes('aria-label')).toBe('Quote post, no existing quotes');
   });
 
   it('routes the menu Repost command through RepostAction activation', async () => {

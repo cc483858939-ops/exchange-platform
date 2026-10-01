@@ -141,6 +141,7 @@ const post = {
   like_count: 3,
   repost_count: 0,
   reply_count: 0,
+  quote_count: 0,
   view_count: 1234,
   deleted: false,
 };

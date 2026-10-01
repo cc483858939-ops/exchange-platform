@@ -24,6 +24,7 @@ export interface FeedPost {
   createdAt: string;
   likeCount: number;
   replyCount: number;
+  quoteCount: number;
   viewCount: number;
   liked: boolean;
   likeStatus: FeedLikeStatus;

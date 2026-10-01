@@ -26,6 +26,7 @@ const post = (overrides: Partial<Post> = {}): Post => ({
   media: [],
   like_count: 4,
   reply_count: 2,
+  quote_count: 0,
   view_count: 18,
   deleted: false,
   ...overrides,
@@ -51,6 +52,7 @@ describe('feed post mapping', () => {
       language: 'und',
       media: [],
       replyCount: 2,
+      quoteCount: 0,
       repostCount: 0,
       reposted: false,
       repostStatus: 'unknown',
@@ -69,5 +71,11 @@ describe('feed post mapping', () => {
 
     expect(feedPost.author).toEqual(canonicalAuthor);
     expect(feedPost.repostContext?.actor).toEqual(actor);
+  });
+
+  it('maps and defensively normalizes the canonical quote count', () => {
+    expect(postToFeedPost(post({ quote_count: 7 })).quoteCount).toBe(7);
+    expect(postToFeedPost(post({ quote_count: -1 })).quoteCount).toBe(0);
+    expect(postToFeedPost(post({ quote_count: Number.NaN })).quoteCount).toBe(0);
   });
 });

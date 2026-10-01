@@ -157,6 +157,7 @@ const canonicalPost = (overrides: Partial<Post> = {}): Post => ({
   media: [],
   like_count: 11,
   reply_count: 4,
+  quote_count: 0,
   view_count: 1234,
   deleted: false,
   ...overrides,
@@ -177,6 +178,7 @@ const post = (overrides: Partial<FeedPost> = {}): FeedPost => ({
   createdAt: '2026-08-27T13:42:00',
   likeCount: 10,
   replyCount: 3,
+  quoteCount: 0,
   viewCount: 300,
   liked: false,
   likeStatus: 'ready',
@@ -366,12 +368,14 @@ describe('PostDetailView post-first surface', () => {
   });
 
   it('renders RepostMenu on a loaded post and routes Quote to its composer', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ quote_count: 9 }));
     wrapper = mountDetail();
     await flushPromises();
 
     expect(wrapper.findComponent(RepostMenu).props()).toMatchObject({
       reposted: false,
       count: 0,
+      quoteCount: 9,
       loading: false,
       pending: false,
       disabled: false,

@@ -91,6 +91,7 @@ const post = (id: number, content = `Post ${id}`): Post => ({
   like_count: 3,
   repost_count: 0,
   reply_count: 1,
+  quote_count: 0,
   view_count: 8,
   deleted: false,
 });

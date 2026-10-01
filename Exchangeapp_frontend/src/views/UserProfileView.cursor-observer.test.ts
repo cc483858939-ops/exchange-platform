@@ -195,6 +195,7 @@ const post = (id: number, authorID: number) => ({
   like_count: 0,
   repost_count: 0,
   reply_count: 0,
+  quote_count: 0,
   view_count: 0,
   deleted: false as const,
 });
@@ -227,6 +228,7 @@ const profileTimelineItem = (id: number, authorID: number) => ({
     createdAt: '2026-08-15T00:00:00.000Z',
     likeCount: 0,
     replyCount: 0,
+    quoteCount: 0,
     viewCount: 0,
     liked: false,
     likeStatus: 'ready' as const,

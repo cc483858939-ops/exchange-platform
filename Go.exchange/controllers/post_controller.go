@@ -219,6 +219,11 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 			log.Printf("[PostCreate] invalidate parent post detail cache for %d: %v", *post.ReplyToPostID, err)
 		}
 	}
+	if post.QuotePostID != nil {
+		if err := invalidatePostCreateParentDetailCache(*post.QuotePostID); err != nil {
+			log.Printf("[PostCreate] invalidate quote target detail cache for %d: %v", *post.QuotePostID, err)
+		}
+	}
 
 	post.Author = models.User{
 		Model:       gorm.Model{ID: author.ID},
@@ -262,7 +267,10 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 			post.ConversationID = &rootID
 		} else if req.QuotePostID != nil {
 			var quoted models.Post
-			if err := publicPostScope(tx.Where("posts.id = ?", *req.QuotePostID), now).First(&quoted).Error; err != nil {
+			if err := publicPostScope(
+				tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("posts.id = ?", *req.QuotePostID),
+				now,
+			).First(&quoted).Error; err != nil {
 				return err
 			}
 			quoteTargetAuthor = quoted.AuthorID
@@ -345,6 +353,13 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 				return err
 			}
 		} else if post.QuotePostID != nil {
+			rowsAffected, err := incrementPostQuoteCount(tx, *post.QuotePostID)
+			if err != nil {
+				return err
+			}
+			if rowsAffected != 1 {
+				return errPostQuoteCountConsistency
+			}
 			activity, err := eventing.NewQuoteCreatedEnvelope(uuid.NewString(), eventing.QuoteCreatedPayload{
 				QuotePostID: post.ID, TargetPostID: *post.QuotePostID,
 				ActorID: userID, TargetAuthorID: quoteTargetAuthor, CreatedAt: now,

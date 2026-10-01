@@ -52,9 +52,13 @@
         class="repost-menu__item"
         type="button"
         role="menuitem"
+        :aria-label="quoteMenuLabel"
         @click.stop="selectQuote"
       >
-        Quote post
+        <span>Quote post</span>
+        <span class="repost-menu__item-count" aria-hidden="true">
+          {{ normalizedQuoteCount }}
+        </span>
       </button>
     </div>
   </div>
@@ -74,12 +78,14 @@ const props = withDefaults(defineProps<{
   loading?: boolean;
   pending?: boolean;
   disabled?: boolean;
+  quoteCount?: number;
   ariaLabel: string;
   variant?: RepostMenuVariant;
 }>(), {
   loading: false,
   pending: false,
   disabled: false,
+  quoteCount: 0,
   variant: 'compact',
 });
 
@@ -95,6 +101,13 @@ const repostActionRef = ref<RepostActionInstance | null>(null);
 const menuOpen = ref(false);
 
 const repostMenuLabel = computed(() => props.reposted ? 'Undo repost' : 'Repost');
+const normalizedQuoteCount = computed(() => {
+  const count = Number(props.quoteCount);
+  return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : 0;
+});
+const quoteMenuLabel = computed(() => normalizedQuoteCount.value === 0
+  ? 'Quote post, no existing quotes'
+  : `Quote post, ${normalizedQuoteCount.value} existing quotes`);
 
 const enabledMenuItems = () => Array.from(
   menuRef.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [],
@@ -267,6 +280,13 @@ onBeforeUnmount(() => {
   font: inherit;
   text-align: left;
   white-space: nowrap;
+}
+
+.repost-menu__item-count {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 @media (hover: hover) and (pointer: fine) {

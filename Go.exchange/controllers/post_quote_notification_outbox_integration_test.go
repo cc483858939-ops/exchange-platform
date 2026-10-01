@@ -40,6 +40,9 @@ func TestQuoteCreatePersistsCanonicalActivityOutboxIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.posts = append(fixture.posts, quote)
+	if got := readPostQuoteCount(t, db, target.ID); got != 1 {
+		t.Fatalf("target quote_count=%d after Quote create, want=1", got)
+	}
 
 	var rows []models.OutboxEvent
 	if err := db.Where("aggregate_id = ? AND event_type = ?", strconv.FormatUint(uint64(quote.ID), 10), eventing.EventTypeQuoteCreated).Find(&rows).Error; err != nil {
@@ -92,8 +95,8 @@ func TestQuoteOutboxInsertFailureRollsBackQuoteIntegration(t *testing.T) {
 	if err := db.Model(&models.OutboxEvent{}).Where("aggregate_id = ? AND event_type = ?", strconv.FormatUint(uint64(quote.ID), 10), eventing.EventTypeQuoteCreated).Count(&outboxCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if quoteCount != 0 || outboxCount != 0 {
-		t.Fatalf("rolled-back quote rows=%d activity outbox rows=%d, want 0/0", quoteCount, outboxCount)
+	if quoteCount != 0 || outboxCount != 0 || readPostQuoteCount(t, db, target.ID) != 0 {
+		t.Fatalf("rolled-back quote rows=%d activity outbox rows=%d target quote_count=%d, want 0/0/0", quoteCount, outboxCount, readPostQuoteCount(t, db, target.ID))
 	}
 }
 
@@ -132,5 +135,8 @@ func TestQuoteClientPublishReplayDoesNotDuplicateActivityIntegration(t *testing.
 	}
 	if postCount != 1 || eventCount != 1 {
 		t.Fatalf("idempotent quote rows=%d activity facts=%d, want 1/1", postCount, eventCount)
+	}
+	if got := readPostQuoteCount(t, db, target.ID); got != 1 {
+		t.Fatalf("target quote_count=%d after idempotent replay, want=1", got)
 	}
 }

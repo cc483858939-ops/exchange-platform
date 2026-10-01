@@ -34,6 +34,7 @@ const feedPost = {
   createdAt: '2026-09-20T12:00:00.000Z',
   likeCount: 3,
   replyCount: 1,
+  quoteCount: 0,
   viewCount: 0,
   liked: false,
   likeStatus: 'ready',

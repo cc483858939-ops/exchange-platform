@@ -21,6 +21,7 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 		Visibility: "public",
 		LikeCount:  17,
 		ReplyCount: 8,
+		QuoteCount: 6,
 		ViewCount:  1234,
 	}
 
@@ -28,8 +29,8 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.LikeCount != 17 || response.RepostCount != 0 || response.ReplyCount != 8 || response.ViewCount != 1234 {
-		t.Fatalf("response like_count=%d repost_count=%d comment_count=%d view_count=%d", response.LikeCount, response.RepostCount, response.ReplyCount, response.ViewCount)
+	if response.LikeCount != 17 || response.RepostCount != 0 || response.ReplyCount != 8 || response.QuoteCount != 6 || response.ViewCount != 1234 {
+		t.Fatalf("response like_count=%d repost_count=%d reply_count=%d quote_count=%d view_count=%d", response.LikeCount, response.RepostCount, response.ReplyCount, response.QuoteCount, response.ViewCount)
 	}
 	payload, err := json.Marshal(response)
 	if err != nil {
@@ -42,18 +43,44 @@ func TestPostResponseIncludesEngagementMetadata(t *testing.T) {
 	if string(fields["repost_count"]) != "0" {
 		t.Fatalf("repost_count JSON=%s want numeric zero", fields["repost_count"])
 	}
+	if string(fields["quote_count"]) != "6" {
+		t.Fatalf("quote_count JSON=%s want numeric 6", fields["quote_count"])
+	}
 	if response.Language != "und" {
 		t.Fatalf("response language=%q want und", response.Language)
 	}
 }
 
+func TestPostResponseSerializesZeroQuoteCount(t *testing.T) {
+	article := models.Post{
+		Model:    gorm.Model{ID: 13, CreatedAt: time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)},
+		AuthorID: 7, Author: models.User{Model: gorm.Model{ID: 7}, Username: "alice"},
+		Content: "no quotes", Language: "und", Visibility: "public",
+	}
+	response, err := newPostResponse(article)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["quote_count"]) != "0" {
+		t.Fatalf("quote_count JSON=%s want numeric zero", fields["quote_count"])
+	}
+}
+
 func TestPostEngagementCacheSchemaVersion(t *testing.T) {
-	if postDetailCacheKey("42") != "post:detail:v4:42" {
+	if postDetailCacheKey("42") != "post:detail:v5:42" {
 		t.Fatalf("post detail cache key=%q", postDetailCacheKey("42"))
 	}
 	for _, column := range []string{
 		"id", "created_at", "updated_at", "author_id", "content", "language", "reply_to_post_id",
-		"quote_post_id", "conversation_id", "visibility", "like_count", "reply_count", "view_count", "like_sync_version",
+		"quote_post_id", "conversation_id", "visibility", "like_count", "reply_count", "quote_count", "view_count", "like_sync_version",
 	} {
 		if !strings.Contains(publicPostSelectColumns, "posts."+column) {
 			t.Fatalf("public post select columns missing posts.%s: %q", column, publicPostSelectColumns)

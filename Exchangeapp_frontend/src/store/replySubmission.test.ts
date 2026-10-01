@@ -78,6 +78,7 @@ const replyPost = (id = 101, parentPostID = 42): Post => ({
   like_count: 0,
   repost_count: 0,
   reply_count: 0,
+  quote_count: 0,
   view_count: 0,
   deleted: false,
 });

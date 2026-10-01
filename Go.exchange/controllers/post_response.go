@@ -59,6 +59,7 @@ type postResponse struct {
 	LikeCount      int64                  `json:"like_count"`
 	RepostCount    int64                  `json:"repost_count"`
 	ReplyCount     int64                  `json:"reply_count"`
+	QuoteCount     int64                  `json:"quote_count"`
 	ViewCount      int64                  `json:"view_count"`
 	Deleted        bool                   `json:"deleted"`
 }
@@ -126,7 +127,8 @@ func newPostResponse(post models.Post) (postResponse, error) {
 		ConversationID: conversationID, ReplyToPostID: post.ReplyToPostID, QuotePostID: post.QuotePostID,
 		Media:      make([]postMediaResponse, 0),
 		Visibility: post.Visibility, LikeCount: post.LikeCount, RepostCount: 0, ReplyCount: post.ReplyCount,
-		ViewCount: post.ViewCount, Deleted: false,
+		QuoteCount: post.QuoteCount,
+		ViewCount:  post.ViewCount, Deleted: false,
 	}, nil
 }
 
