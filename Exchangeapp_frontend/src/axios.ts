@@ -3,10 +3,12 @@ import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { apiBaseUrl } from './api';
 import { API_REQUEST_TIMEOUT_MS } from './utils/requestTimeout';
 import { AuthSessionChangedError, useAuthStore } from './store/auth';
+import type { AuthRequestBinding } from './auth/authRequestBinding';
 
 type RetryableRequestConfig = InternalAxiosRequestConfig & {
   _retry?: boolean;
   _authSessionVersion?: number;
+  _authBinding?: AuthRequestBinding;
 };
 
 type RefreshState = {
@@ -42,7 +44,17 @@ instance.interceptors.request.use(config => {
   const authStore = useAuthStore();
   const authConfig = config as RetryableRequestConfig;
 
-  if (authConfig._authSessionVersion === undefined) {
+  const binding = authConfig._authBinding;
+  if (binding) {
+    if (
+      !authStore.matchesRequestAuthBinding(binding)
+      || (authConfig._authSessionVersion !== undefined
+        && authConfig._authSessionVersion !== binding.sessionVersion)
+    ) {
+      return Promise.reject(new AuthSessionChangedError());
+    }
+    authConfig._authSessionVersion = binding.sessionVersion;
+  } else if (authConfig._authSessionVersion === undefined) {
     authConfig._authSessionVersion = authStore.sessionVersion;
   } else if (authConfig._authSessionVersion !== authStore.sessionVersion) {
     return Promise.reject(new AuthSessionChangedError());
@@ -74,6 +86,9 @@ instance.interceptors.response.use(
     const requestVersion = originalRequest._authSessionVersion;
     if (requestVersion === undefined || requestVersion !== authStore.sessionVersion) {
       return Promise.reject(error);
+    }
+    if (originalRequest._authBinding && !authStore.matchesRequestAuthBinding(originalRequest._authBinding)) {
+      return Promise.reject(new AuthSessionChangedError());
     }
 
     if (!authStore.refreshToken) {
@@ -111,7 +126,9 @@ instance.interceptors.response.use(
       const accessToken = await activeRefreshState.promise;
       if (
         activeRefreshState.sessionVersion !== requestVersion ||
-        authStore.sessionVersion !== requestVersion
+        authStore.sessionVersion !== requestVersion ||
+        (originalRequest._authBinding
+          && !authStore.matchesRequestAuthBinding(originalRequest._authBinding))
       ) {
         return Promise.reject(new AuthSessionChangedError());
       }

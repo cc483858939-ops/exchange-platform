@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => {
     token: null as string | null,
     refreshToken: null as string | null,
     sessionVersion: 0,
+    userID: null as number | null,
+    sessionID: null as string | null,
+    matchesRequestAuthBinding: vi.fn<(binding: { userID: number; sessionID: string; sessionVersion: number }) => boolean>(),
     refreshAccessToken: vi.fn(async () => 'Bearer refreshed'),
     clearAuth: vi.fn(),
     reconcilePersistedAuthState: vi.fn(),
@@ -78,6 +81,7 @@ vi.mock('./store/auth', () => ({
 type TestRequestConfig = InternalAxiosRequestConfig & {
   _retry?: boolean;
   _authSessionVersion?: number;
+  _authBinding?: { userID: number; sessionID: string; sessionVersion: number };
 };
 
 type RequestInterceptor = (config: TestRequestConfig) => TestRequestConfig | Promise<TestRequestConfig>;
@@ -127,6 +131,14 @@ describe('Axios authentication session handling', () => {
     mocks.authStore.token = null;
     mocks.authStore.refreshToken = null;
     mocks.authStore.sessionVersion = 0;
+    mocks.authStore.userID = null;
+    mocks.authStore.sessionID = null;
+    mocks.authStore.matchesRequestAuthBinding.mockClear();
+    mocks.authStore.matchesRequestAuthBinding.mockImplementation(binding => (
+      mocks.authStore.userID === binding.userID
+      && mocks.authStore.sessionID === binding.sessionID
+      && mocks.authStore.sessionVersion === binding.sessionVersion
+    ));
     mocks.authStore.refreshAccessToken.mockReset().mockResolvedValue('Bearer refreshed');
     mocks.authStore.clearAuth.mockReset();
     mocks.authStore.reconcilePersistedAuthState.mockReset();
@@ -156,6 +168,49 @@ describe('Axios authentication session handling', () => {
     await requestInterceptor()(guestRequest);
 
     expect(guestRequest._authSessionVersion).toBe(7);
+  });
+
+  it('validates an explicit auth binding before writing Authorization', async () => {
+    const binding = { userID: 7, sessionID: 'S1', sessionVersion: 5 };
+    mocks.authStore.userID = 7;
+    mocks.authStore.sessionID = 'S1';
+    mocks.authStore.sessionVersion = 5;
+    mocks.authStore.token = 'Bearer Alice';
+    const exact = makeRequest();
+    exact._authBinding = binding;
+    await requestInterceptor()(exact);
+    expect(exact._authSessionVersion).toBe(5);
+    expect(exact.headers.Authorization).toBe('Bearer Alice');
+
+    for (const mismatch of [
+      { userID: 8, sessionID: 'S1', sessionVersion: 5 },
+      { userID: 7, sessionID: 'S2', sessionVersion: 5 },
+      { userID: 7, sessionID: 'S1', sessionVersion: 6 },
+    ]) {
+      const request = makeRequest();
+      request._authBinding = binding;
+      request.headers.Authorization = 'Bearer original';
+      mocks.authStore.userID = mismatch.userID;
+      mocks.authStore.sessionID = mismatch.sessionID;
+      mocks.authStore.sessionVersion = mismatch.sessionVersion;
+      await expect(requestInterceptor()(request)).rejects.toMatchObject({ name: 'AuthSessionChangedError' });
+      expect(request.headers.Authorization).toBe('Bearer original');
+    }
+  });
+
+  it('accepts a rotated token when user, session, and runtime version are unchanged', async () => {
+    const binding = { userID: 7, sessionID: 'S1', sessionVersion: 5 };
+    mocks.authStore.userID = 7;
+    mocks.authStore.sessionID = 'S1';
+    mocks.authStore.sessionVersion = 5;
+    mocks.authStore.token = 'Bearer rotated';
+    const request = makeRequest();
+    request._authBinding = binding;
+
+    await requestInterceptor()(request);
+
+    expect(request.headers.Authorization).toBe('Bearer rotated');
+    expect(request._authSessionVersion).toBe(5);
   });
 
   it('rejects a stale 401 without refreshing, clearing auth, retrying, or rewriting headers', async () => {
@@ -197,6 +252,57 @@ describe('Axios authentication session handling', () => {
     expect(secondRequest._authSessionVersion).toBe(8);
     expect(firstRequest.headers.Authorization).toBe('Bearer A refreshed');
     expect(secondRequest.headers.Authorization).toBe('Bearer A refreshed');
+  });
+
+  it('keeps the original explicit binding through a same-session 401 refresh retry', async () => {
+    const binding = { userID: 7, sessionID: 'S1', sessionVersion: 5 };
+    mocks.authStore.userID = 7;
+    mocks.authStore.sessionID = 'S1';
+    mocks.authStore.sessionVersion = 5;
+    mocks.authStore.refreshToken = 'Alice refresh';
+    mocks.authStore.token = 'Bearer Alice A1';
+    mocks.authStore.refreshAccessToken.mockImplementation(async () => {
+      mocks.authStore.token = 'Bearer Alice A2';
+      return 'Bearer Alice A2';
+    });
+    const request = makeRequest(5, '/posts', 'Bearer Alice A1');
+    request._authBinding = binding;
+
+    await responseErrorInterceptor()(makeUnauthorizedError(request));
+
+    expect(mocks.instance).toHaveBeenCalledTimes(1);
+    expect(request._authBinding).toBe(binding);
+    expect(request.headers.Authorization).toBe('Bearer Alice A2');
+  });
+
+  it('does not retry an explicitly bound 401 after the user or durable session changes', async () => {
+    for (const nextIdentity of [
+      { userID: 8, sessionID: 'S1' },
+      { userID: 7, sessionID: 'S2' },
+    ]) {
+      const refresh = deferred<string>();
+      const binding = { userID: 7, sessionID: 'S1', sessionVersion: 5 };
+      mocks.authStore.userID = binding.userID;
+      mocks.authStore.sessionID = binding.sessionID;
+      mocks.authStore.sessionVersion = binding.sessionVersion;
+      mocks.authStore.refreshToken = 'Alice refresh';
+      mocks.authStore.token = 'Bearer Alice A1';
+      mocks.authStore.refreshAccessToken.mockReturnValue(refresh.promise);
+
+      const request = makeRequest(5, '/posts', 'Bearer Alice A1');
+      request._authBinding = binding;
+      const pendingRetry = responseErrorInterceptor()(makeUnauthorizedError(request));
+
+      mocks.authStore.userID = nextIdentity.userID;
+      mocks.authStore.sessionID = nextIdentity.sessionID;
+      mocks.authStore.token = 'Bearer next identity';
+      refresh.resolve('Bearer stale Alice');
+
+      await expect(pendingRetry).rejects.toMatchObject({ name: 'AuthSessionChangedError' });
+      expect(mocks.instance).not.toHaveBeenCalled();
+      expect(request._authBinding).toBe(binding);
+      expect(request.headers.Authorization).toBe('Bearer Alice A1');
+    }
   });
 
   it('reconciles storage and retries with an already peer-refreshed token', async () => {

@@ -33,6 +33,16 @@
             class="post-card__menu-item"
             type="button"
             role="menuitem"
+            @click.stop="quotePost"
+          >
+            <AppIcon name="compose" :size="18" />
+            <span>Quote post</span>
+          </button>
+          <button
+            :ref="setMenuItemRef"
+            class="post-card__menu-item"
+            type="button"
+            role="menuitem"
             @click.stop="copyLink"
           >
             <AppIcon name="link" :size="18" />
@@ -449,6 +459,20 @@ const navigateToLogin = () => {
     name: 'Login',
     query: { returnTo: router.currentRoute.value.fullPath },
   });
+};
+
+const quotePost = () => {
+  closeMore();
+  const destination = {
+    name: 'PostCreate' as const,
+    query: { quote: String(props.post.id) },
+  };
+  if (props.requiresAuthForActions) {
+    const returnTo = router.resolve(destination).fullPath;
+    void router.push({ name: 'Login', query: { returnTo } });
+    return;
+  }
+  void router.push(destination);
 };
 
 const handleReplyNavigation = (event: MouseEvent) => {

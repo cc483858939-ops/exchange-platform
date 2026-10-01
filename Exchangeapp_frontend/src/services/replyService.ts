@@ -20,7 +20,7 @@ export async function getPostReplies(
 export async function createPostReply(
   postID: number | string,
   content: string,
-  options: CreatePostOptions = {},
+  options: CreatePostOptions,
 ): Promise<Post> {
   const id = normalizeResourceID(postID, 'post');
   return createPost({

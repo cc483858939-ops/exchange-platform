@@ -18,6 +18,7 @@ import { decodeAuthTokenMetadata, normalizeAuthIdentity } from '../utils/authIde
 import type { AuthIdentity } from '../utils/authIdentity';
 import { AuthRequestError } from '../utils/authError';
 import { AUTH_REQUEST_TIMEOUT_MS, isRequestTimeoutError } from '../utils/requestTimeout';
+import type { AuthRequestBinding } from '../auth/authRequestBinding';
 
 const authClient = axios.create({
   baseURL: apiBaseUrl,
@@ -184,6 +185,28 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => Boolean(token.value && refreshToken.value && identity.value));
   const currentIdentity = computed<AuthIdentity | null>(() => identity.value);
+
+  const captureRequestAuthBinding = (): AuthRequestBinding | null => {
+    if (
+      !isAuthenticated.value
+      || !sessionId.value
+      || !sessionUserId.value
+      || identity.value?.id !== sessionUserId.value
+    ) return null;
+    return Object.freeze({
+      userID: sessionUserId.value,
+      sessionID: sessionId.value,
+      sessionVersion: sessionVersion.value,
+    });
+  };
+
+  const matchesRequestAuthBinding = (binding: AuthRequestBinding): boolean => (
+    isAuthenticated.value
+    && identity.value?.id === binding.userID
+    && sessionUserId.value === binding.userID
+    && sessionId.value === binding.sessionID
+    && sessionVersion.value === binding.sessionVersion
+  );
 
   const advanceSessionVersion = (): number => {
     sessionVersion.value += 1;
@@ -463,6 +486,8 @@ export const useAuthStore = defineStore('auth', () => {
     sessionVersion,
     isAuthenticated,
     currentIdentity,
+    captureRequestAuthBinding,
+    matchesRequestAuthBinding,
     login,
     register,
     refreshAccessToken,

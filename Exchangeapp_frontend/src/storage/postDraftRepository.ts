@@ -1,5 +1,6 @@
 import {
   createPostDraftSnapshot,
+  isValidQuotePostID,
   postDraftSnapshotsEqual,
   type DraftSnapshot,
 } from '../utils/postDraftSnapshot';
@@ -18,6 +19,7 @@ export type PersistedPostDraft = {
   id: string;
   viewerID: number;
   content: string;
+  quotePostID: number | null;
   media: PersistedPostDraftMedia[];
   createdAt: number;
   updatedAt: number;
@@ -43,6 +45,9 @@ const isPersistedPostDraft = (value: unknown): value is PersistedPostDraft => {
     && Number.isSafeInteger(draft.viewerID)
     && (draft.viewerID as number) > 0
     && typeof draft.content === 'string'
+    && (draft.quotePostID === undefined
+      || draft.quotePostID === null
+      || isValidQuotePostID(draft.quotePostID))
     && Number.isFinite(draft.createdAt)
     && Number.isFinite(draft.updatedAt)
     && Array.isArray(draft.media)
@@ -60,6 +65,15 @@ const isPersistedPostDraft = (value: unknown): value is PersistedPostDraft => {
       && typeof item.uploadedURL === 'string'
     )),
   );
+};
+
+const normalizePersistedPostDraft = (value: unknown): PersistedPostDraft | null => {
+  if (!isPersistedPostDraft(value)) return null;
+  return {
+    ...value,
+    // Older records predate quote identity and remain normal drafts.
+    quotePostID: value.quotePostID ?? null,
+  };
 };
 
 const openDatabase = (): Promise<IDBDatabase> => new Promise((resolve, reject) => {
@@ -127,7 +141,8 @@ export const listPostDrafts = (viewerID: number): Promise<PersistedPostDraft[]> 
     });
     await completed;
     return records
-      .filter(record => isPersistedPostDraft(record) && record.viewerID === viewerID)
+      .map(normalizePersistedPostDraft)
+      .filter((record): record is PersistedPostDraft => Boolean(record && record.viewerID === viewerID))
       .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
   });
 };
@@ -146,7 +161,8 @@ export const getPostDraft = (
       request.onerror = () => reject(request.error || new Error('Could not read the post draft.'));
     });
     await completed;
-    return isPersistedPostDraft(record) && record.viewerID === viewerID ? record : null;
+    const normalized = normalizePersistedPostDraft(record);
+    return normalized?.viewerID === viewerID ? normalized : null;
   });
 };
 
@@ -155,7 +171,7 @@ export const savePostDraft = (draft: PersistedPostDraft): Promise<void> => {
   if (!draft.id.trim()) {
     throw new TypeError('A post draft ID is required.');
   }
-  if (!isPersistedPostDraft(draft)) {
+  if (draft.quotePostID === undefined || !isPersistedPostDraft(draft)) {
     throw new TypeError('The post draft record is invalid.');
   }
 
@@ -193,8 +209,8 @@ export const deletePostDraft = (viewerID: number, draftID: string): Promise<bool
       const getRequest = store.get(draftID);
       getRequest.onerror = () => reject(getRequest.error || new Error('Could not check the post draft owner.'));
       getRequest.onsuccess = () => {
-        const record = getRequest.result as PersistedPostDraft | undefined;
-        if (!isPersistedPostDraft(record) || record.viewerID !== viewerID) {
+        const record = normalizePersistedPostDraft(getRequest.result);
+        if (!record || record.viewerID !== viewerID) {
           resolve(false);
           return;
         }
@@ -228,13 +244,13 @@ export const deletePostDraftIfUnchanged = (
       const getRequest = store.get(draftID);
       getRequest.onerror = () => reject(getRequest.error || new Error('Could not check the post draft version.'));
       getRequest.onsuccess = () => {
-        const record = getRequest.result as PersistedPostDraft | undefined;
-        if (!isPersistedPostDraft(record) || record.viewerID !== viewerID) {
+        const record = normalizePersistedPostDraft(getRequest.result);
+        if (!record || record.viewerID !== viewerID) {
           resolve('missing');
           return;
         }
 
-        const currentSnapshot = createPostDraftSnapshot(record.content, record.media);
+        const currentSnapshot = createPostDraftSnapshot(record.content, record.media, record.quotePostID);
         if (!postDraftSnapshotsEqual(currentSnapshot, expectedSnapshot)) {
           resolve('changed');
           return;

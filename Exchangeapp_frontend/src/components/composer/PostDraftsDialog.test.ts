@@ -9,6 +9,7 @@ const makeDraft = (id: string, updatedAt: number, content: string, mediaCount = 
   id,
   viewerID: 7,
   content,
+  quotePostID: null,
   media: Array.from({ length: mediaCount }, (_, index) => ({
     id: `${id}-media-${index}`,
     blob: new Blob(['image'], { type: 'image/png' }),

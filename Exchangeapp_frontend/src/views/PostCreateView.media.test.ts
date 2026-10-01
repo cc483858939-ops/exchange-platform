@@ -9,11 +9,7 @@ import { usePostDraftStore } from '../store/postDraft';
 import { usePostPublishStore } from '../store/postPublish';
 
 const mocks = vi.hoisted(() => ({
-  authStore: null as {
-    isAuthenticated: boolean;
-    currentIdentity: { id: number; username: string; display_name: string; avatar_url: string } | null;
-    syncCurrentIdentityProfile: ReturnType<typeof vi.fn>;
-  } | null,
+  authStore: null as any,
   router: {
     back: vi.fn(),
     push: vi.fn(),
@@ -58,6 +54,8 @@ vi.mock('../store/auth', async () => {
   const { reactive } = await import('vue');
   mocks.authStore = reactive({
     isAuthenticated: true,
+    sessionID: 'session-7',
+    sessionVersion: 5,
     currentIdentity: {
       id: 7,
       username: 'alice',
@@ -65,6 +63,22 @@ vi.mock('../store/auth', async () => {
       avatar_url: '',
     },
     syncCurrentIdentityProfile: vi.fn(),
+    captureRequestAuthBinding: () => {
+      const store = mocks.authStore;
+      if (!store.isAuthenticated || !store.currentIdentity?.id) return null;
+      return Object.freeze({
+        userID: store.currentIdentity.id,
+        sessionID: store.sessionID ?? `session-${store.currentIdentity.id}`,
+        sessionVersion: store.sessionVersion,
+      });
+    },
+    matchesRequestAuthBinding: (binding: any) => {
+      const store = mocks.authStore;
+      return Boolean(store.isAuthenticated
+        && store.currentIdentity?.id === binding.userID
+        && (store.sessionID ?? `session-${store.currentIdentity.id}`) === binding.sessionID
+        && store.sessionVersion === binding.sessionVersion);
+    },
   });
   return { useAuthStore: () => mocks.authStore };
 });
@@ -178,6 +192,8 @@ describe('PostCreateView media picker and retry behavior', () => {
     });
     vi.stubGlobal('URL', TestURL);
     mocks.authStore!.isAuthenticated = true;
+    mocks.authStore!.sessionID = 'session-7';
+    mocks.authStore!.sessionVersion = 5;
     mocks.authStore!.currentIdentity = {
       id: 7,
       username: 'alice',
@@ -208,7 +224,9 @@ describe('PostCreateView media picker and retry behavior', () => {
       return true;
     });
     mocks.serializePublishOperation.mockImplementation((operation: any) => ({
+      schemaVersion: 4,
       ...operation,
+      publisherSessionID: operation.publisherSessionID ?? mocks.authStore!.sessionID,
       media: operation.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         blob: item.file.slice(0, item.file.size, item.file.type),
@@ -222,6 +240,7 @@ describe('PostCreateView media picker and retry behavior', () => {
     }));
     mocks.restorePublishOperation.mockImplementation((record: any) => ({
       ...record,
+      quotePostID: record.quotePostID ?? null,
       media: record.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
@@ -587,7 +606,10 @@ describe('PostCreateView media picker and retry behavior', () => {
           { type: 'image', url: '/media/d.png' },
         ],
       },
-      { idempotencyKey: expect.any(String) },
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
   });
 
@@ -618,7 +640,10 @@ describe('PostCreateView media picker and retry behavior', () => {
           { type: 'image', url: '/media/fourth.png' },
         ],
       },
-      { idempotencyKey: expect.any(String) },
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
   });
 
@@ -671,7 +696,10 @@ describe('PostCreateView media picker and retry behavior', () => {
           { type: 'image', url: '/media/fourth.png' },
         ],
       },
-      { idempotencyKey: expect.any(String) },
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
   });
 
@@ -698,7 +726,7 @@ describe('PostCreateView media picker and retry behavior', () => {
     expect(publishStore.latestOperation?.error).toContain('Couldn’t confirm this post');
   });
 
-  it('keeps the background operation running when the authenticated account changes', async () => {
+  it('stops the old-session publish before another request when authentication changes', async () => {
     const files = ['old-a.png', 'old-b.png', 'old-c.png', 'old-d.png'].map(name => imageFile(name));
     const requests = new Map(files.map(file => [file.name, deferred<string>()]));
     mocks.uploadPostMedia.mockImplementation((file: File) => {
@@ -722,36 +750,30 @@ describe('PostCreateView media picker and retry behavior', () => {
       display_name: 'Bob Jones',
       avatar_url: '',
     };
+    mocks.authStore!.sessionID = 'session-8';
+    usePostDraftStore().setViewer(8);
+    usePostDraftStore().setContent('Bob draft stays intact');
     await flushPromises();
     requests.get('old-a.png')!.resolve('/media/old-a.png');
     requests.get('old-b.png')!.resolve('/media/old-b.png');
     await flushPromises();
-    requests.get('old-c.png')!.resolve('/media/old-c.png');
-    requests.get('old-d.png')!.resolve('/media/old-d.png');
     await submitPromise;
     await flushPromises();
 
     expect(mocks.uploadPostMedia.mock.calls.map(([file]) => file.name)).toEqual([
       'old-a.png',
       'old-b.png',
-      'old-c.png',
-      'old-d.png',
     ]);
-    expect(mocks.createPost).toHaveBeenCalledWith(
-      {
-        content: 'Old account draft',
-        media: [
-          { type: 'image', url: '/media/old-a.png' },
-          { type: 'image', url: '/media/old-b.png' },
-          { type: 'image', url: '/media/old-c.png' },
-          { type: 'image', url: '/media/old-d.png' },
-        ],
-      },
-      { idempotencyKey: expect.any(String) },
-    );
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(mocks.publishRecords.get(7)).toMatchObject({
+      phase: 'failed',
+      failureKind: 'auth_context_changed',
+      publisherSessionID: 'session-7',
+    });
     expect(mocks.feedStore.registerPublishedPost).not.toHaveBeenCalled();
     expect(mocks.profileSessionStore.registerPublishedTimelinePost).not.toHaveBeenCalled();
     expect(usePostDraftStore().viewerID).toBe(8);
+    expect(usePostDraftStore().content).toBe('Bob draft stays intact');
     expect(usePostDraftStore().media).toHaveLength(0);
   });
 
@@ -784,7 +806,10 @@ describe('PostCreateView media picker and retry behavior', () => {
     await flushPromises();
 
     expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(3);
-    expect(mocks.uploadPostMedia).toHaveBeenLastCalledWith(second);
+    expect(mocks.uploadPostMedia).toHaveBeenLastCalledWith(
+      second,
+      expect.objectContaining({ authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }) }),
+    );
     expect(mocks.createPost).toHaveBeenCalledWith(
       {
         content: 'Retry this post',
@@ -793,7 +818,10 @@ describe('PostCreateView media picker and retry behavior', () => {
           { type: 'image', url: '/api/files/post-media/7/second.jpg' },
         ],
       },
-      { idempotencyKey: expect.any(String) },
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
   });
 

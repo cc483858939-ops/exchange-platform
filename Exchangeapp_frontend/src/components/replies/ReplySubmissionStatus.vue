@@ -16,6 +16,8 @@
       <p class="reply-submission-status__message" role="status">
         {{ operation.failureKind === 'idempotency_conflict'
           ? 'This reply can’t be retried safely.'
+          : operation.failureKind === 'auth_context_changed'
+            ? 'Your session changed. Discard this attempt and send the reply again.'
           : 'Reply failed. Retry safely.' }}
       </p>
       <div class="reply-submission-status__actions">
@@ -42,7 +44,7 @@
 defineProps<{
   operation: {
     phase: 'publishing' | 'failed' | 'succeeded';
-    failureKind: 'retryable' | 'idempotency_conflict' | null;
+    failureKind: 'retryable' | 'idempotency_conflict' | 'auth_context_changed' | null;
     cleanupPending?: boolean;
   } | null;
   busy?: boolean;

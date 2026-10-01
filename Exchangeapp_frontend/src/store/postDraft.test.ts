@@ -37,6 +37,7 @@ const persistedDraft = (
   id,
   viewerID: 7,
   content,
+  quotePostID: null,
   media,
   createdAt: 100,
   updatedAt: 200,
@@ -89,6 +90,33 @@ describe('postDraft store', () => {
     expect(store.media.find(item => item.id === secondID)?.uploadedURL)
       .toBe('/api/files/post-media/7/two.png');
     expect(store.media.find(item => item.id === firstID)?.uploadedURL).toBe('');
+  });
+
+  it('treats quote identity as a dirty edit without making a quote-only draft publishable', async () => {
+    const store = usePostDraftStore();
+    store.setViewer(7);
+    expect(store.setQuotePostID(42)).toBe(true);
+    expect(store.quotePostID).toBe(42);
+    expect(store.hasUnsavedChanges).toBe(true);
+    expect(store.hasContent).toBe(false);
+    expect(repositoryMocks.savePostDraft).not.toHaveBeenCalled();
+
+    store.setContent('Commentary');
+    const draftID = await store.saveCurrentDraft();
+    expect(repositoryMocks.savePostDraft).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: draftID,
+      quotePostID: 42,
+    }));
+    expect(store.hasUnsavedChanges).toBe(false);
+
+    store.bindPublishOperation('publish-bound');
+    expect(store.setQuotePostID(43)).toBe(true);
+    expect(store.publishOperationID).toBeNull();
+    expect(store.hasUnsavedChanges).toBe(true);
+    expect(store.setQuotePostID(42)).toBe(true);
+    expect(store.hasUnsavedChanges).toBe(false);
+    expect(store.setQuotePostID(0)).toBe(true);
+    expect(store.quotePostID).toBeNull();
   });
 
   it('saves one durable snapshot and tracks edits without treating uploads as edits', async () => {
@@ -169,6 +197,21 @@ describe('postDraft store', () => {
       lastModified: 1234,
     });
     expect(store.media[0]?.uploadedURL).toBe('/uploaded/restored.webp');
+    expect(store.hasUnsavedChanges).toBe(false);
+  });
+
+  it('restores quote identity from a saved draft and keeps the loaded draft clean', async () => {
+    repositoryMocks.getPostDraft.mockResolvedValue({ ...persistedDraft(), quotePostID: 42 });
+    const store = usePostDraftStore();
+    store.setViewer(7);
+
+    await expect(store.loadSavedDraft('saved-id')).resolves.toEqual({ status: 'loaded' });
+    expect(store.quotePostID).toBe(42);
+    expect(store.savedSnapshot?.quotePostID).toBe(42);
+    expect(store.hasUnsavedChanges).toBe(false);
+    store.setQuotePostID(43);
+    expect(store.hasUnsavedChanges).toBe(true);
+    store.setQuotePostID(42);
     expect(store.hasUnsavedChanges).toBe(false);
   });
 

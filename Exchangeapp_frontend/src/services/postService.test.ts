@@ -13,40 +13,47 @@ vi.mock('../axios', () => ({
 }));
 
 describe('postService createPost', () => {
+  const authBinding = Object.freeze({ userID: 7, sessionID: 'session-7', sessionVersion: 5 });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.post.mockResolvedValue({ data: { id: 42, media_url: '/api/files/post-media/42/image.jpg' } });
   });
 
-  it('keeps the existing two-argument request when no option is provided', async () => {
-    await createPost({ content: 'hello', media: [] });
+  it('passes a required authentication binding when no idempotency key is needed', async () => {
+    await createPost({ content: 'hello', media: [] }, { authBinding });
 
-    expect(mocks.post).toHaveBeenCalledWith('/posts', { content: 'hello', media: [] });
+    expect(mocks.post).toHaveBeenCalledWith('/posts', { content: 'hello', media: [] }, {
+      _authBinding: authBinding,
+    });
   });
 
   it('sends a trimmed Idempotency-Key when provided', async () => {
     await createPost(
       { content: 'hello', media: [] },
-      { idempotencyKey: '  00000000-0000-4000-8000-000000000042  ' },
+      { idempotencyKey: '  00000000-0000-4000-8000-000000000042  ', authBinding },
     );
 
     expect(mocks.post).toHaveBeenCalledWith(
       '/posts',
       { content: 'hello', media: [] },
-      { headers: { 'Idempotency-Key': '00000000-0000-4000-8000-000000000042' } },
+      {
+        headers: { 'Idempotency-Key': '00000000-0000-4000-8000-000000000042' },
+        _authBinding: authBinding,
+      },
     );
   });
 
   it('gives post media uploads the extended timeout', async () => {
     const file = new File(['image'], 'image.png', { type: 'image/png' });
 
-    await expect(uploadPostMedia(file)).resolves.toBe('/api/files/post-media/42/image.jpg');
+    await expect(uploadPostMedia(file, { authBinding })).resolves.toBe('/api/files/post-media/42/image.jpg');
 
     expect(mocks.post).toHaveBeenCalledTimes(1);
-    const [path, body, config] = mocks.post.mock.calls[0] as [string, FormData, { timeout: number }];
+    const [path, body, config] = mocks.post.mock.calls[0] as [string, FormData, { timeout: number; _authBinding: typeof authBinding }];
     expect(path).toBe('/uploads/post-media');
     expect(body).toBeInstanceOf(FormData);
     expect(body.get('image')).toBe(file);
-    expect(config).toEqual({ timeout: UPLOAD_REQUEST_TIMEOUT_MS });
+    expect(config).toEqual({ timeout: UPLOAD_REQUEST_TIMEOUT_MS, _authBinding: authBinding });
   });
 });

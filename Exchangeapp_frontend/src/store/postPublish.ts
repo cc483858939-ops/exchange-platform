@@ -18,6 +18,7 @@ import {
   type PersistedPublishPhase,
 } from '../storage/postPublishRepository';
 import { useAuthStore } from './auth';
+import type { AuthRequestBinding } from '../auth/authRequestBinding';
 import { useFeedStore } from './feed';
 import { usePostDraftStore } from './postDraft';
 import { useProfileSessionStore } from './profileSession';
@@ -43,9 +44,11 @@ export type PublishOperationMedia = {
 export type PublishOperation = {
   id: string;
   publisherUserID: number;
+  publisherSessionID: string | null;
   sourceDraftID: string | null;
   sourceDraftSnapshot: DraftSnapshot | null;
   content: string;
+  quotePostID: number | null;
   media: PublishOperationMedia[];
   phase: PublishPhase;
   failureKind: PublishFailureKind;
@@ -81,6 +84,12 @@ const publishConflictMessage = 'This post can’t be retried safely.';
 
 class SupersededPublishOperationError extends Error {}
 class PublishPersistenceError extends Error {}
+class PublishAuthContextChangedError extends Error {
+  constructor() {
+    super('Publish authentication context changed');
+    this.name = 'PublishAuthContextChangedError';
+  }
+}
 
 type SuccessCleanupResult = 'resolved' | 'pending';
 
@@ -116,6 +125,25 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       ? normalizeViewerID(authStore.currentIdentity?.id)
       : null
   );
+
+  const captureOperationAuthBinding = (operation: PublishOperation): AuthRequestBinding => {
+    if (!operation.publisherSessionID) throw new PublishAuthContextChangedError();
+    const binding = authStore.captureRequestAuthBinding();
+    if (
+      !binding
+      || binding.userID !== operation.publisherUserID
+      || binding.sessionID !== operation.publisherSessionID
+    ) throw new PublishAuthContextChangedError();
+    return binding;
+  };
+
+  const operationMatchesCurrentSession = (operation: PublishOperation) => {
+    const binding = authStore.captureRequestAuthBinding();
+    return Boolean(binding
+      && operation.publisherSessionID
+      && binding.userID === operation.publisherUserID
+      && binding.sessionID === operation.publisherSessionID);
+  };
 
   const getOperation = (operationID: string | null | undefined) => (
     operationID ? operations.value.find(operation => operation.id === operationID) : undefined
@@ -255,6 +283,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       || (operation.sourceDraftID === null && !sameBoundWorkingSubmission)
       || (operation.sourceDraftID !== null && !sameSavedSource)
       || postDraft.content.trim() !== operation.content
+      || postDraft.quotePostID !== operation.quotePostID
       || postDraft.media.length !== operation.media.length
     ) {
       return false;
@@ -333,7 +362,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     for (let start = 0; start < pending.length; start += mediaUploadConcurrency) {
       const batch = pending.slice(start, start + mediaUploadConcurrency);
       const results = await Promise.allSettled(batch.map(async media => {
-        const uploadedURL = (await uploadPostMedia(media.file)).trim();
+        const authBinding = captureOperationAuthBinding(operation);
+        const uploadedURL = (await uploadPostMedia(media.file, { authBinding })).trim();
         if (!uploadedURL) throw new Error('The media upload returned no URL.');
         media.uploadedURL = uploadedURL;
         syncUploadedURLToDraft(operation, media, uploadedURL);
@@ -352,6 +382,10 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     operation: PublishOperation,
     post: Post,
   ): Promise<SuccessCleanupResult> => {
+    if (post.author.id !== operation.publisherUserID) {
+      await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+      return 'pending';
+    }
     let sourceDraftClean = operation.sourceDraftID === null;
     if (operation.sourceDraftID) {
       try {
@@ -462,13 +496,18 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       await persistRequired(operation);
       const payload: CreatePostPayload = {
         content: operation.content,
+        ...(operation.quotePostID !== null ? { quote_post_id: operation.quotePostID } : {}),
         media: operation.media.map(media => ({
           type: 'image' as const,
           url: media.uploadedURL,
         })),
       };
+      const authBinding = captureOperationAuthBinding(operation);
       posting = true;
-      const post = await createPost(payload, { idempotencyKey: operation.id });
+      const post = await createPost(payload, { idempotencyKey: operation.id, authBinding });
+      if (post.author.id !== operation.publisherUserID) {
+        throw new PublishAuthContextChangedError();
+      }
 
       operation.post = post;
       operation.error = '';
@@ -480,7 +519,14 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     } catch (error) {
       if (error instanceof SupersededPublishOperationError) return;
       const conflict = posting && isIdempotencyConflict(error);
-      await markFailed(operation, error, conflict ? 'idempotency_conflict' : 'retryable');
+      const authContextChanged = error instanceof PublishAuthContextChangedError
+        || (error instanceof Error && error.name === 'AuthSessionChangedError')
+        || !operationMatchesCurrentSession(operation);
+      await markFailed(
+        operation,
+        error,
+        authContextChanged ? 'auth_context_changed' : conflict ? 'idempotency_conflict' : 'retryable',
+      );
     } finally {
       runningOperationIDs.delete(operation.id);
     }
@@ -493,7 +539,15 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     if (operation.phase === 'succeeded' && operation.post) {
       void finalizeSuccessfulOperation(operation, operation.post);
     } else if (operation.phase === 'uploading' || operation.phase === 'publishing') {
-      void runOperation(operation);
+      if (!operationMatchesCurrentSession(operation)) {
+        void markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+      } else {
+        void runOperation(operation);
+      }
+    } else if (operation.phase === 'failed'
+      && operation.failureKind === 'retryable'
+      && !operationMatchesCurrentSession(operation)) {
+      void markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
     }
   };
 
@@ -508,6 +562,9 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     const hydration = (async () => {
       try {
         const persisted = await getPostPublishOperation(viewerID);
+        // A late IndexedDB read for a viewer that is no longer active must not be
+        // adopted or classified as a session failure. A later activation re-reads it.
+        if (currentViewerID() !== viewerID) return;
         if (persisted) {
           if (persisted.publisherUserID !== viewerID) {
             throw new Error('The saved publish operation belongs to another viewer.');
@@ -515,6 +572,11 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           const operation = restorePublishOperation(persisted) as PublishOperation;
           if (operation.phase === 'succeeded' && !operation.post) {
             throw new Error('The successful publish record is incomplete.');
+          }
+          if (!operationMatchesCurrentSession(operation)) {
+            operation.phase = 'failed';
+            operation.failureKind = 'auth_context_changed';
+            operation.error = publishFailureMessage;
           }
           markOperationUnresolved(operation);
           upsertOperation(operation);
@@ -566,6 +628,10 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     ) {
       return false;
     }
+    if (!operationMatchesCurrentSession(operation)) {
+      await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+      return false;
+    }
     const conflictingInFlight = operations.value.find(candidate => (
       candidate.id !== operation.id
       && candidate.publisherUserID === operation.publisherUserID
@@ -600,17 +666,18 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   };
 
   const startOrRetryDraft = async (): Promise<StartPublishResult> => {
-    const publisherUserID = currentViewerID();
-    if (publisherUserID === null) {
+    const authBinding = authStore.captureRequestAuthBinding();
+    if (!authBinding) {
       return { status: 'rejected', reason: 'unauthenticated' };
     }
+    const publisherUserID = authBinding.userID;
 
     try {
       await ensureHydratedForViewer(publisherUserID);
     } catch {
       return { status: 'rejected', reason: 'persistence_unavailable' };
     }
-    if (currentViewerID() !== publisherUserID) {
+    if (!authStore.matchesRequestAuthBinding(authBinding)) {
       return { status: 'rejected', reason: 'unauthenticated' };
     }
 
@@ -696,14 +763,17 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       ? createPostDraftSnapshot(
         postDraft.savedSnapshot.content,
         postDraft.savedSnapshot.media,
+        postDraft.savedSnapshot.quotePostID,
       )
       : null;
     const operation: PublishOperation = {
       id: createClientOperationID(),
       publisherUserID,
+      publisherSessionID: authBinding.sessionID,
       sourceDraftID: sourceDraftSnapshot ? postDraft.draftID : null,
       sourceDraftSnapshot,
       content: postDraft.content.trim(),
+      quotePostID: postDraft.quotePostID,
       media: postDraft.media.map(media => ({
         draftMediaID: media.id,
         file: media.file,
@@ -720,6 +790,16 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       await replacePostPublishOperation(serialize(operation));
     } catch {
       return { status: 'rejected', reason: 'persistence_unavailable' };
+    }
+
+    if (!authStore.matchesRequestAuthBinding(authBinding)) {
+      operation.phase = 'failed';
+      operation.failureKind = 'auth_context_changed';
+      operation.error = publishFailureMessage;
+      await persistBestEffort(operation);
+      markOperationUnresolved(operation);
+      upsertOperation(operation);
+      return { status: 'rejected', reason: 'unauthenticated' };
     }
 
     // The durable record exists before the working draft is bound or any network starts.

@@ -158,8 +158,26 @@ describe('postPublish store', () => {
     vi.stubGlobal('crypto', { randomUUID: mocks.randomUUID });
     mocks.authStore = reactive({
       isAuthenticated: true,
+      sessionID: 'session-7',
+      sessionVersion: 5,
       currentIdentity: { id: 7, username: 'alice', display_name: 'Alice', avatar_url: '' },
       syncCurrentIdentityProfile: vi.fn(),
+      captureRequestAuthBinding: () => {
+        const store = mocks.authStore;
+        if (!store.isAuthenticated || !store.sessionID || !store.currentIdentity?.id) return null;
+        return Object.freeze({
+          userID: store.currentIdentity.id,
+          sessionID: store.sessionID,
+          sessionVersion: store.sessionVersion,
+        });
+      },
+      matchesRequestAuthBinding: (binding: any) => {
+        const store = mocks.authStore;
+        return Boolean(store.isAuthenticated
+          && store.currentIdentity?.id === binding.userID
+          && store.sessionID === binding.sessionID
+          && store.sessionVersion === binding.sessionVersion);
+      },
     });
     mocks.createPost.mockResolvedValue(publishedPost());
     mocks.uploadPostMedia.mockImplementation(async (item: File) => `/media/${item.name}`);
@@ -183,6 +201,7 @@ describe('postPublish store', () => {
       if (!record || record.viewerID !== viewerID) return 'missing';
       const current = {
         content: record.content,
+        quotePostID: record.quotePostID ?? null,
         media: record.media.map((item: any) => ({
           id: item.id,
           name: item.name,
@@ -194,6 +213,7 @@ describe('postPublish store', () => {
       const equal = Boolean(
         expected
         && current.content === expected.content
+        && current.quotePostID === (expected.quotePostID ?? null)
         && current.media.length === expected.media.length
         && current.media.every((item: any, index: number) => {
           const other = expected.media[index];
@@ -237,8 +257,9 @@ describe('postPublish store', () => {
       return true;
     });
     mocks.serializePublishOperation.mockImplementation((operation: any) => ({
-      schemaVersion: 2,
       ...operation,
+      schemaVersion: 4,
+      publisherSessionID: operation.publisherSessionID ?? mocks.authStore.sessionID,
       sourceDraftSnapshot: operation.sourceDraftSnapshot ?? null,
       media: operation.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
@@ -253,6 +274,8 @@ describe('postPublish store', () => {
     }));
     mocks.restorePublishOperation.mockImplementation((record: any) => ({
       ...record,
+      publisherSessionID: record.publisherSessionID ?? null,
+      quotePostID: record.quotePostID ?? null,
       sourceDraftSnapshot: record.sourceDraftSnapshot ?? null,
       media: record.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
@@ -286,7 +309,10 @@ describe('postPublish store', () => {
     await flushPromises();
     expect(mocks.createPost).toHaveBeenCalledWith(
       { content: 'A background post', media: [] },
-      { idempotencyKey: operation.id },
+      expect.objectContaining({
+        idempotencyKey: operation.id,
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7', sessionVersion: 5 }),
+      }),
     );
     expect(operation?.phase).toBe('succeeded');
     expect(draft.publishOperationID).toBeNull();
@@ -319,14 +345,18 @@ describe('postPublish store', () => {
       throw new Error('publish was not accepted');
     }
     expect(result.operation.sourceDraftID).toBe(sourceDraftID);
-    expect(result.operation.sourceDraftSnapshot).toEqual({ content: 'Saved source draft', media: [] });
+    expect(result.operation.sourceDraftSnapshot).toEqual({
+      content: 'Saved source draft',
+      quotePostID: null,
+      media: [],
+    });
     expect(mocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
     await flushPromises();
 
     expect(mocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(
       7,
       sourceDraftID,
-      { content: 'Saved source draft', media: [] },
+      { content: 'Saved source draft', quotePostID: null, media: [] },
     );
     expect(result.operation.phase).toBe('succeeded');
     expect(draft.content).toBe('');
@@ -362,14 +392,18 @@ describe('postPublish store', () => {
     expect(result.status).toBe('accepted');
     if (result.status !== 'accepted') throw new Error('publish was not accepted');
     expect(result.operation.sourceDraftID).toBe(sourceDraftID);
-    expect(result.operation.sourceDraftSnapshot).toEqual({ content: 'Version two', media: [] });
+    expect(result.operation.sourceDraftSnapshot).toEqual({
+      content: 'Version two',
+      quotePostID: null,
+      media: [],
+    });
     await flushPromises();
 
     expect(mocks.sourceDraftRecords.has(sourceDraftID)).toBe(false);
     expect(mocks.deletePostDraftIfUnchanged).toHaveBeenLastCalledWith(
       7,
       sourceDraftID,
-      { content: 'Version two', media: [] },
+      { content: 'Version two', quotePostID: null, media: [] },
     );
   });
 
@@ -568,14 +602,62 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenNthCalledWith(
       1,
       { content: 'Retry me', media: [] },
-      { idempotencyKey: first.id },
+      expect.objectContaining({ idempotencyKey: first.id, authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }) }),
     );
     expect(mocks.createPost).toHaveBeenNthCalledWith(
       2,
       { content: 'Retry me', media: [] },
-      { idempotencyKey: first.id },
+      expect.objectContaining({ idempotencyKey: first.id, authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }) }),
     );
     expect(draft.publishOperationID).toBeNull();
+  });
+
+  it('persists quote identity and uses it again for the exact retry payload', async () => {
+    mocks.createPost.mockRejectedValueOnce(new Error('ambiguous response'));
+    const draft = usePostDraftStore();
+    draft.setContent('Comment on the source');
+    draft.setQuotePostID(42);
+    const store = usePostPublishStore();
+
+    const first = await store.startOrRetryDraft();
+    expect(first.status).toBe('accepted');
+    await flushPromises();
+    expect(store.latestOperation?.quotePostID).toBe(42);
+    expect(mocks.publishRecords.get(7)?.quotePostID).toBe(42);
+    expect(mocks.createPost.mock.calls[0]?.[0]).toEqual({
+      content: 'Comment on the source',
+      quote_post_id: 42,
+      media: [],
+    });
+
+    mocks.createPost.mockResolvedValueOnce(publishedPost());
+    const retry = await store.startOrRetryDraft();
+    expect(retry.status).toBe('accepted');
+    await flushPromises();
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+    expect(mocks.createPost.mock.calls[1]?.[0]).toEqual(mocks.createPost.mock.calls[0]?.[0]);
+    expect(mocks.createPost.mock.calls[1]?.[1].idempotencyKey)
+      .toBe(mocks.createPost.mock.calls[0]?.[1].idempotencyKey);
+  });
+
+  it('does not treat a changed quote target as the failed operation submission', async () => {
+    mocks.createPost.mockRejectedValueOnce(new Error('ambiguous response'));
+    const draft = usePostDraftStore();
+    draft.setContent('Same words, different quoted post');
+    draft.setQuotePostID(42);
+    const store = usePostPublishStore();
+
+    expect((await store.startOrRetryDraft()).status).toBe('accepted');
+    await flushPromises();
+    expect(store.latestOperation?.phase).toBe('failed');
+    draft.setQuotePostID(43);
+
+    await expect(store.startOrRetryDraft()).resolves.toMatchObject({
+      status: 'blocked',
+      reason: 'unresolved_publish',
+    });
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    expect(store.latestOperation?.quotePostID).toBe(42);
   });
 
   it('blocks an edited failed draft without generating or persisting a replacement operation', async () => {
@@ -684,7 +766,10 @@ describe('postPublish store', () => {
           { type: 'image', url: '/media/second.png' },
         ],
       },
-      { idempotencyKey: operation?.id },
+      expect.objectContaining({
+        idempotencyKey: operation?.id,
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7', sessionVersion: 5 }),
+      }),
     );
   });
 
@@ -737,7 +822,7 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenNthCalledWith(
       3,
       { content: 'Post B', media: [] },
-      { idempotencyKey: secondResult.operation.id },
+      expect.objectContaining({ idempotencyKey: secondResult.operation.id, authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }) }),
     );
     await flushPromises();
   });
@@ -863,7 +948,10 @@ describe('postPublish store', () => {
         { type: 'image', url: '/media/one.png' },
         { type: 'image', url: '/media/two.png' },
       ],
-    }, { idempotencyKey: expect.any(String) });
+    }, expect.objectContaining({
+      idempotencyKey: expect.any(String),
+      authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
     expect(mocks.publishRecords.has(7)).toBe(false);
   });
 
@@ -886,13 +974,18 @@ describe('postPublish store', () => {
 
     // A new Pinia instance models a hard refresh: only IndexedDB remains.
     setActivePinia(createPinia());
+    mocks.authStore.sessionVersion = 42;
     usePostDraftStore().setViewer(7);
     const recoveredStore = usePostPublishStore();
     await recoveredStore.activateViewer(7);
     await flushPromises();
 
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
-    expect(mocks.createPost.mock.calls[1]).toEqual(originalCall);
+    expect(mocks.createPost.mock.calls[1]?.[0]).toEqual(originalCall?.[0]);
+    expect(mocks.createPost.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      idempotencyKey: firstResult.operation.id,
+      authBinding: { userID: 7, sessionID: 'session-7', sessionVersion: 42 },
+    }));
     expect(recoveredStore.latestOperation?.id).toBe(firstResult.operation.id);
     expect(recoveredStore.latestOperation?.phase).toBe('succeeded');
   });
@@ -973,7 +1066,10 @@ describe('postPublish store', () => {
 
     expect(mocks.createPost).toHaveBeenCalledWith(
       { content: 'Resume after switching back', media: [] },
-      { idempotencyKey: operationUUID(87) },
+      expect.objectContaining({
+        idempotencyKey: operationUUID(87),
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
   });
 
@@ -1002,14 +1098,20 @@ describe('postPublish store', () => {
     await flushPromises();
 
     expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
-    expect(mocks.uploadPostMedia).toHaveBeenCalledWith(expect.objectContaining({ name: 'needs-upload.png' }));
+    expect(mocks.uploadPostMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'needs-upload.png' }),
+      expect.objectContaining({ authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }) }),
+    );
     expect(mocks.createPost).toHaveBeenCalledWith({
       content: 'Resume upload',
       media: [
         { type: 'image', url: '/media/already-done.png' },
         { type: 'image', url: '/media/needs-upload.png' },
       ],
-    }, { idempotencyKey: operationUUID(88) });
+    }, expect.objectContaining({
+      idempotencyKey: operationUUID(88),
+      authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('restores failed operations without automatically retrying them', async () => {
@@ -1086,7 +1188,10 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenCalledWith({
       content: 'Saved exact content',
       media: [{ type: 'image', url: '/media/from-operation.png' }],
-    }, { idempotencyKey: operationID });
+    }, expect.objectContaining({
+      idempotencyKey: operationID,
+      authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('rebinds the exact recovered source draft when Retry comes from the status action', async () => {
@@ -1118,7 +1223,10 @@ describe('postPublish store', () => {
 
     expect(mocks.createPost).toHaveBeenCalledWith(
       { content: 'Status retry source', media: [] },
-      { idempotencyKey: operationID },
+      expect.objectContaining({
+        idempotencyKey: operationID,
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
     expect(draft.content).toBe('');
     expect(draft.draftID).toBeNull();
@@ -1402,7 +1510,10 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
     expect(mocks.createPost).toHaveBeenLastCalledWith(
       { content: 'Next post', media: [] },
-      { idempotencyKey: second.operation.id },
+      expect.objectContaining({
+        idempotencyKey: second.operation.id,
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
     expect(mocks.deletePostPublishOperation.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.replacePostPublishOperation.mock.invocationCallOrder[1]!);
@@ -1532,7 +1643,10 @@ describe('postPublish store', () => {
     expect(mocks.publishRecords.get(7)?.id).toBe(result.operation.id);
     expect(mocks.createPost).toHaveBeenCalledWith(
       { content: 'Next post', media: [] },
-      { idempotencyKey: result.operation.id },
+      expect.objectContaining({
+        idempotencyKey: result.operation.id,
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+      }),
     );
 
     nextRequest.resolve(publishedPost());
@@ -1642,5 +1756,151 @@ describe('postPublish store', () => {
     expect(result.operation.phase).toBe('failed');
     expect(result.operation.error).toBe('Couldn’t save publish progress on this device. Retry.');
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start the first media request if the session changes during the durable write', async () => {
+    const write = deferred<void>();
+    mocks.replacePostPublishOperation.mockImplementationOnce(async (record: any) => {
+      await write.promise;
+      mocks.publishRecords.set(record.publisherUserID, record);
+    });
+    const draft = usePostDraftStore();
+    draft.setContent('Alice draft');
+    draft.addMedia(file('alice.png'));
+    const store = usePostPublishStore();
+    const starting = store.startOrRetryDraft();
+    await flushPromises();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+
+    mocks.authStore.currentIdentity = { id: 8, username: 'bob', display_name: 'Bob', avatar_url: '' };
+    mocks.authStore.sessionID = 'session-8';
+    draft.setViewer(8);
+    draft.setContent('Bob draft');
+    write.resolve();
+
+    await expect(starting).resolves.toEqual({ status: 'rejected', reason: 'unauthenticated' });
+    await flushPromises();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(mocks.publishRecords.get(7)).toMatchObject({
+      publisherUserID: 7,
+      publisherSessionID: 'session-7',
+      phase: 'failed',
+      failureKind: 'auth_context_changed',
+    });
+    expect(draft.viewerID).toBe(8);
+    expect(draft.content).toBe('Bob draft');
+  });
+
+  it('fails closed for the same user after a new durable session replaces the owner session', async () => {
+    const record = mocks.serializePublishOperation({
+      id: operationUUID(911),
+      publisherUserID: 7,
+      publisherSessionID: 'session-7',
+      sourceDraftID: null,
+      sourceDraftSnapshot: null,
+      content: 'S1 pending post',
+      media: [{ draftMediaID: 'media', file: file('pending.png'), uploadedURL: '' }],
+      phase: 'uploading',
+      failureKind: null,
+      error: '',
+      startedAt: 911,
+      post: null,
+    });
+    mocks.publishRecords.set(7, record);
+    mocks.authStore.sessionID = 'session-7-new';
+    const draft = usePostDraftStore();
+    draft.setContent('Keep the current draft');
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+    await flushPromises();
+
+    expect(store.latestOperation).toMatchObject({
+      publisherUserID: 7,
+      publisherSessionID: 'session-7',
+      phase: 'failed',
+      failureKind: 'auth_context_changed',
+    });
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(await store.retry(operationUUID(911))).toBe(false);
+    expect(draft.content).toBe('Keep the current draft');
+  });
+
+  it('does not resume an Alice operation when Bob is the active viewer', async () => {
+    const record = mocks.serializePublishOperation({
+      id: operationUUID(912),
+      publisherUserID: 7,
+      publisherSessionID: 'session-7',
+      sourceDraftID: null,
+      sourceDraftSnapshot: null,
+      content: 'Alice pending post',
+      media: [],
+      phase: 'publishing',
+      failureKind: null,
+      error: '',
+      startedAt: 912,
+      post: null,
+    });
+    mocks.publishRecords.set(7, record);
+    mocks.authStore.currentIdentity = { id: 8, username: 'bob', display_name: 'Bob', avatar_url: '' };
+    mocks.authStore.sessionID = 'session-8';
+    await usePostPublishStore().activateViewer(8);
+    await flushPromises();
+
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(mocks.publishRecords.get(7)).toEqual(record);
+  });
+
+  it('blocks a legacy schema 2 operation without rebinding it and preserves its draft for discard', async () => {
+    const legacy = mocks.serializePublishOperation({
+      id: operationUUID(913),
+      publisherUserID: 7,
+      sourceDraftID: null,
+      sourceDraftSnapshot: null,
+      content: 'Legacy text draft',
+      media: [],
+      phase: 'publishing',
+      failureKind: null,
+      error: '',
+      startedAt: 913,
+      post: null,
+    });
+    const { publisherSessionID: _untrusted, ...legacyRecord } = legacy;
+    mocks.publishRecords.set(7, { ...legacyRecord, schemaVersion: 2 });
+    const draft = usePostDraftStore();
+    draft.setContent('Legacy text draft');
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+    await flushPromises();
+
+    expect(store.latestOperation).toMatchObject({ publisherSessionID: null, phase: 'failed', failureKind: 'auth_context_changed' });
+    expect(mocks.publishRecords.get(7)).not.toHaveProperty('publisherSessionID');
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(draft.content).toBe('Legacy text draft');
+    expect(await store.abandonFailedOperation(operationUUID(913))).toBe(true);
+    expect(draft.content).toBe('Legacy text draft');
+  });
+
+  it('rejects a create response from another author without reconciling caches', async () => {
+    mocks.createPost.mockResolvedValueOnce(publishedPost(8));
+    const draft = usePostDraftStore();
+    draft.setContent('Must not cache a foreign response');
+    const store = usePostPublishStore();
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    await flushPromises();
+
+    expect(result.status === 'accepted' && result.operation).toMatchObject({
+      phase: 'failed', failureKind: 'auth_context_changed', post: null,
+    });
+    expect(mocks.feedStore.registerPublishedPost).not.toHaveBeenCalled();
+    expect(mocks.profileSessionStore.registerPublishedTimelinePost).not.toHaveBeenCalled();
+    expect(mocks.authStore.syncCurrentIdentityProfile).not.toHaveBeenCalled();
+    expect(draft.content).toBe('Must not cache a foreign response');
   });
 });

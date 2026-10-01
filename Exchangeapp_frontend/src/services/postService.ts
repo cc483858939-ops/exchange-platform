@@ -1,8 +1,10 @@
 import apiClient from '../axios';
+import type { AxiosRequestConfig } from 'axios';
 import type { PublicAuthor } from '../types/User';
 import type { Post } from '../types/Post';
 import { UPLOAD_REQUEST_TIMEOUT_MS } from '../utils/requestTimeout';
 import { normalizeResourceID } from './resourceId';
+import type { AuthRequestBinding } from '../auth/authRequestBinding';
 
 export type CreatePostMediaPayload = {
   type: 'image';
@@ -16,7 +18,15 @@ export type CreatePostPayload = {
   media?: CreatePostMediaPayload[];
 };
 
-export type CreatePostOptions = {
+export type AuthBoundRequestOptions = {
+  authBinding: AuthRequestBinding;
+};
+
+type AuthBoundAxiosConfig = AxiosRequestConfig & {
+  _authBinding: AuthRequestBinding;
+};
+
+export type CreatePostOptions = AuthBoundRequestOptions & {
   idempotencyKey?: string;
 };
 
@@ -62,24 +72,27 @@ export async function deletePost(postID: number | string): Promise<void> {
 
 export async function createPost(
   payload: CreatePostPayload,
-  options: CreatePostOptions = {},
+  options: CreatePostOptions,
 ): Promise<Post> {
   const idempotencyKey = options.idempotencyKey?.trim();
-  const response = idempotencyKey
-    ? await apiClient.post<Post>('/posts', payload, {
-      headers: { 'Idempotency-Key': idempotencyKey },
-    })
-    : await apiClient.post<Post>('/posts', payload);
+  const config: AuthBoundAxiosConfig = {
+    ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+    _authBinding: options.authBinding,
+  };
+  const response = await apiClient.post<Post>('/posts', payload, config);
   return response.data;
 }
 
-export async function uploadPostMedia(file: File): Promise<string> {
+export async function uploadPostMedia(file: File, options: AuthBoundRequestOptions): Promise<string> {
   const formData = new FormData();
   formData.append('image', file);
   const response = await apiClient.post<{ media_url: string }>(
     '/uploads/post-media',
     formData,
-    { timeout: UPLOAD_REQUEST_TIMEOUT_MS },
+    {
+      timeout: UPLOAD_REQUEST_TIMEOUT_MS,
+      _authBinding: options.authBinding,
+    } as AuthBoundAxiosConfig,
   );
   return response.data.media_url;
 }

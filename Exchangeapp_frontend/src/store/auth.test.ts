@@ -348,6 +348,9 @@ describe('auth store cross-tab session coordination', () => {
   it('rotates credentials without advancing the authentication session version', async () => {
     seedV2Auth();
     const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding();
+    expect(binding).toEqual({ userID: 7, sessionID: 'sid-7', sessionVersion: 0 });
+    expect(Object.isFrozen(binding)).toBe(true);
     const revisionBefore = readStoredSession()?.tokenRevision;
     const refreshedIdentity = { ...fullIdentity, display_name: 'New', avatar_url: '/new.webp' };
     mocks.post.mockResolvedValueOnce({
@@ -358,6 +361,7 @@ describe('auth store cross-tab session coordination', () => {
 
     expect(store.sessionVersion).toBe(0);
     expect(store.token).toBe(bearerFor('alice-access-v2'));
+    expect(store.matchesRequestAuthBinding(binding!)).toBe(true);
     expect(store.refreshToken).toBe('alice-refresh-v2');
     expect(store.currentIdentity).toEqual(refreshedIdentity);
     expect(readStoredSession()).toMatchObject({

@@ -190,6 +190,7 @@ const draft = (
   id,
   viewerID,
   content,
+  quotePostID: null,
   media: [],
   createdAt: updatedAt - 100,
   updatedAt,
@@ -197,6 +198,7 @@ const draft = (
 
 const snapshotOf = (record: PersistedPostDraft): DraftSnapshot => ({
   content: record.content,
+  quotePostID: record.quotePostID,
   media: record.media.map(item => ({
     id: item.id,
     name: item.name,
@@ -268,6 +270,25 @@ describe('postDraftRepository', () => {
     expect(await readBlobText(restored!.media[0]!.blob)).toBe('pixels\u0000binary');
   });
 
+  it('normalizes legacy drafts without quote identity and rejects invalid quote IDs', async () => {
+    const factory = globalThis.indexedDB as unknown as TestIndexedDBFactory;
+    const saved = draft('legacy-no-quote', 7, 100, 'Old post');
+    await savePostDraft(saved);
+    const legacy = { ...saved } as Omit<PersistedPostDraft, 'quotePostID'> & {
+      quotePostID?: number | null;
+    };
+    delete legacy.quotePostID;
+    factory.database!.stores.get('post_drafts')!.set(legacy.id, legacy as PersistedPostDraft);
+
+    await expect(getPostDraft(7, legacy.id)).resolves.toMatchObject({ quotePostID: null });
+    await expect(listPostDrafts(7)).resolves.toContainEqual(expect.objectContaining({
+      id: legacy.id,
+      quotePostID: null,
+    }));
+    expect(() => savePostDraft({ ...draft('invalid-quote', 7, 200), quotePostID: 0 as any }))
+      .toThrow('record is invalid');
+  });
+
   it('does not let another viewer overwrite an existing draft ID', async () => {
     const original = draft('known-id', 7, 100, 'Owner content');
     await savePostDraft(original);
@@ -334,6 +355,16 @@ describe('postDraftRepository', () => {
       media: [{ id: 'new-media-id', name: 'new-photo.webp' }],
       updatedAt: 200,
     });
+  });
+
+  it('preserves a newer saved draft when only its quote target changed', async () => {
+    const original = { ...draft('quote-version', 7, 100, 'Same text'), quotePostID: 10 };
+    const newer = { ...original, quotePostID: 20, updatedAt: 200 };
+    await savePostDraft(newer);
+
+    await expect(deletePostDraftIfUnchanged(7, original.id, snapshotOf(original)))
+      .resolves.toBe('changed');
+    await expect(getPostDraft(7, original.id)).resolves.toMatchObject({ quotePostID: 20 });
   });
 
   it('treats missing and wrong-viewer drafts as missing without deleting another viewer data', async () => {

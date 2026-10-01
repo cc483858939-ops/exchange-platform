@@ -12,6 +12,7 @@ import {
 } from '../storage/postDraftRepository';
 import {
   createPostDraftSnapshot,
+  isValidQuotePostID,
   postDraftSnapshotsEqual,
   type DraftSnapshot,
   type DraftSnapshotMedia,
@@ -36,14 +37,18 @@ const normalizeViewerID = (value: number | null): number | null => (
     : null
 );
 
-const createSnapshot = (content: string, media: DraftPostMedia[]): DraftSnapshot => (
+const createSnapshot = (
+  content: string,
+  media: DraftPostMedia[],
+  quotePostID: number | null,
+): DraftSnapshot => (
   createPostDraftSnapshot(content, media.map(item => ({
     id: item.id,
     name: item.file.name,
     type: item.file.type,
     size: item.file.size,
     lastModified: item.file.lastModified,
-  })))
+  })), quotePostID)
 );
 
 const restoreFile = (item: PersistedPostDraftMedia): File => new File(
@@ -55,16 +60,17 @@ const restoreFile = (item: PersistedPostDraftMedia): File => new File(
 export const usePostDraftStore = defineStore('postDraft', () => {
   const viewerID = ref<number | null>(null);
   const content = ref('');
+  const quotePostID = ref<number | null>(null);
   const media = ref<DraftPostMedia[]>([]);
   const draftID = ref<string | null>(null);
   const draftCreatedAt = ref<number | null>(null);
   const savedSnapshot = ref<DraftSnapshot | null>(null);
   const publishOperationID = ref<string | null>(null);
   const hasContent = computed(() => content.value.length > 0 || media.value.length > 0);
-  const currentSnapshot = computed(() => createSnapshot(content.value, media.value));
+  const currentSnapshot = computed(() => createSnapshot(content.value, media.value, quotePostID.value));
   const hasUnsavedChanges = computed(() => {
     if (!savedSnapshot.value) {
-      return hasContent.value;
+      return hasContent.value || quotePostID.value !== null;
     }
     return !postDraftSnapshotsEqual(currentSnapshot.value, savedSnapshot.value);
   });
@@ -77,6 +83,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     workingStateVersion += 1;
     loadRequestVersion += 1;
     content.value = '';
+    quotePostID.value = null;
     media.value = [];
     draftID.value = null;
     draftCreatedAt.value = null;
@@ -110,6 +117,17 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     workingStateVersion += 1;
     publishOperationID.value = null;
     content.value = value;
+  };
+
+  const setQuotePostID = (postID: number | null) => {
+    const normalized = postID === null || isValidQuotePostID(postID) ? postID : null;
+    if (quotePostID.value === normalized) {
+      return false;
+    }
+    workingStateVersion += 1;
+    publishOperationID.value = null;
+    quotePostID.value = normalized;
+    return true;
   };
 
   const addMedia = (file: File) => {
@@ -154,13 +172,14 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     }
 
     const stateVersion = workingStateVersion;
-    const snapshot = createSnapshot(content.value, media.value);
+    const snapshot = createSnapshot(content.value, media.value, quotePostID.value);
     const id = draftID.value || createClientOperationID();
     const now = Date.now();
     const record: PersistedPostDraft = {
       id,
       viewerID: saveViewerID,
       content: snapshot.content,
+      quotePostID: snapshot.quotePostID,
       media: media.value.map(item => ({
         id: item.id,
         blob: item.file.slice(0, item.file.size, item.file.type),
@@ -223,10 +242,11 @@ export const usePostDraftStore = defineStore('postDraft', () => {
 
     workingStateVersion += 1;
     content.value = record.content;
+    quotePostID.value = record.quotePostID ?? null;
     media.value = restoredMedia;
     draftID.value = record.id;
     draftCreatedAt.value = record.createdAt;
-    savedSnapshot.value = createSnapshot(content.value, media.value);
+    savedSnapshot.value = createSnapshot(content.value, media.value, quotePostID.value);
     publishOperationID.value = null;
     return { status: 'loaded' };
   };
@@ -325,6 +345,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
   return {
     viewerID,
     content,
+    quotePostID,
     media,
     draftID,
     draftCreatedAt,
@@ -338,6 +359,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     closeWorkingDraft,
     setViewer,
     setContent,
+    setQuotePostID,
     addMedia,
     removeMedia,
     setUploadedURL,

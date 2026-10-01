@@ -30,7 +30,7 @@
       <p>Your account is required to publish a post.</p>
       <RouterLink
         class="composer-action"
-        :to="{ name: 'Login', query: { returnTo: '/posts/new' } }"
+        :to="{ name: 'Login', query: { returnTo: composerReturnTo } }"
       >
         Log in
       </RouterLink>
@@ -73,6 +73,61 @@
               @keyup="syncContentSelection"
               @focus="syncContentSelection"
             ></textarea>
+
+            <section
+              v-if="postDraft.quotePostID !== null"
+              class="composer-quote-preview"
+              aria-label="Quoted post"
+            >
+              <div class="composer-quote-preview__header">
+                <span>Quoting post</span>
+                <button
+                  type="button"
+                  class="composer-quote-preview__remove"
+                  :disabled="isSubmitting"
+                  @click="removeQuoteTarget"
+                >
+                  Remove quote
+                </button>
+              </div>
+              <p
+                v-if="quotePreviewState === 'idle' || quotePreviewState === 'loading'"
+                class="composer-quote-preview__status"
+                role="status"
+                aria-live="polite"
+              >
+                Loading quoted post...
+              </p>
+              <div v-else-if="quotePreviewState === 'unavailable'" class="composer-quote-preview__error">
+                <p role="alert">{{ quotePreviewError }}</p>
+                <button
+                  type="button"
+                  class="composer-quote-preview__retry"
+                  :disabled="isSubmitting"
+                  @click="loadQuotePreview"
+                >
+                  Retry loading
+                </button>
+              </div>
+              <article v-else-if="quotePreviewPost" class="composer-quote-preview__post">
+                <AuthorIdentity
+                  :author="quotePreviewPost.author"
+                  :created-at="quotePreviewPost.published_at"
+                  variant="compact"
+                />
+                <p class="composer-quote-preview__content">
+                  <LinkifiedText
+                    :text="quotePreviewPost.content"
+                    :to="{ name: 'PostDetail', params: { id: String(quotePreviewPost.id) } }"
+                  />
+                </p>
+                <PostMediaGrid
+                  v-if="quotePreviewPost.media.length > 0"
+                  :media="quotePreviewPost.media"
+                  loading-policy="lazy"
+                />
+              </article>
+            </section>
 
             <PostMediaGrid
               v-if="previewMedia.length > 0"
@@ -261,13 +316,15 @@ import {
   onBeforeRouteUpdate,
   useRoute,
   useRouter,
-  type RouteLocationNormalized,
 } from 'vue-router';
 import { useAuthStore } from '../store/auth';
 import { usePostDraftStore, type LoadSavedDraftResult } from '../store/postDraft';
 import { usePostPublishStore } from '../store/postPublish';
+import { getPostById } from '../services/postService';
 import AppIcon from '../components/icons/AppIcon.vue';
 import PostMediaGrid from '../components/content/PostMediaGrid.vue';
+import AuthorIdentity from '../components/AuthorIdentity.vue';
+import LinkifiedText from '../components/content/LinkifiedText.vue';
 import UserAvatar from '../components/users/UserAvatar.vue';
 import ConfirmDialog from '../components/dialogs/ConfirmDialog.vue';
 import PostDraftExitDialog from '../components/composer/PostDraftExitDialog.vue';
@@ -275,13 +332,18 @@ import PostDraftsDialog from '../components/composer/PostDraftsDialog.vue';
 import EmojiPickerPopover, {
   type EmojiPickerCloseReason,
 } from '../components/composer/EmojiPickerPopover.vue';
-import type { PostMedia } from '../types/Post';
+import type { Post, PostMedia } from '../types/Post';
 import type { PersistedPostDraft } from '../storage/postDraftRepository';
 import {
   createLocalImagePreviewGenerator,
   type LocalImagePreviewGenerator,
 } from '../utils/localImagePreview';
 import { insertTextAtSelection } from '../utils/textareaInsertion';
+import {
+  composerIntentKey,
+  composerIntentsEqual,
+  parseComposerIntent,
+} from '../utils/composerIntent';
 
 const maxContentLength = 10000;
 const maxMediaCount = 4;
@@ -310,6 +372,8 @@ let resolveExitDecision: ((allowNavigation: boolean) => void) | null = null;
 let beforeUnloadAttached = false;
 let draftRouteLoadVersion = 0;
 let draftListRequestVersion = 0;
+let quotePreviewRequestVersion = 0;
+let suppressedRouteIntentKey: string | null = null;
 
 const validationAttempted = ref(false);
 const mediaError = ref('');
@@ -349,16 +413,20 @@ const currentIdentity = computed(() => authStore.currentIdentity);
 const currentUserID = computed(() => (
   authStore.isAuthenticated ? currentIdentity.value?.id ?? null : null
 ));
+const composerReturnTo = computed(() => route.fullPath);
+const routeIntent = computed(() => parseComposerIntent(route.query));
+const routeIntentKey = computed(() => composerIntentKey(routeIntent.value));
 const routeDraftID = computed(() => (
-  typeof route.query.draft === 'string' && route.query.draft.trim()
-    ? route.query.draft.trim()
-    : null
+  routeIntent.value.kind === 'draft' ? routeIntent.value.draftID : null
 ));
 const currentPublishOperation = computed(() => (
   postDraft.publishOperationID
     ? postPublishStore.getOperation(postDraft.publishOperationID) || null
     : null
 ));
+const quotePreviewState = ref<'idle' | 'loading' | 'loaded' | 'unavailable'>('idle');
+const quotePreviewPost = shallowRef<Post | null>(null);
+const quotePreviewError = ref('');
 const content = computed({
   get: () => postDraft.content,
   set: (value: string) => postDraft.setContent(value),
@@ -421,6 +489,7 @@ const canPublish = computed(() => (
   authStore.isAuthenticated
   && Boolean(content.value.trim())
   && contentLength.value <= maxContentLength
+  && (postDraft.quotePostID === null || quotePreviewState.value === 'loaded')
   && !previewPreparationBlocked.value
   && !publishHardBlocked.value
 ));
@@ -533,6 +602,40 @@ const previewPreparationError = computed(() => previewPreparationItems.value
   .find(item => item.status === 'error')?.error || '');
 
 const previewPreparationBlocked = computed(() => previewPreparationItems.value.length > 0);
+
+const loadQuotePreview = async () => {
+  const requestVersion = ++quotePreviewRequestVersion;
+  const requestedPostID = postDraft.quotePostID;
+  if (requestedPostID === null) {
+    quotePreviewPost.value = null;
+    quotePreviewError.value = '';
+    quotePreviewState.value = 'idle';
+    return;
+  }
+
+  quotePreviewPost.value = null;
+  quotePreviewError.value = '';
+  quotePreviewState.value = 'loading';
+  try {
+    const post = await getPostById(requestedPostID);
+    if (
+      requestVersion !== quotePreviewRequestVersion
+      || postDraft.quotePostID !== requestedPostID
+    ) return;
+    if (post.id !== requestedPostID || (post as unknown as { deleted?: boolean }).deleted === true) {
+      throw new Error('Quoted post is unavailable.');
+    }
+    quotePreviewPost.value = post;
+    quotePreviewState.value = 'loaded';
+  } catch {
+    if (
+      requestVersion !== quotePreviewRequestVersion
+      || postDraft.quotePostID !== requestedPostID
+    ) return;
+    quotePreviewError.value = 'This quoted post is unavailable. Retry loading or remove the quote before posting.';
+    quotePreviewState.value = 'unavailable';
+  }
+};
 
 const revokePreview = (entry: Pick<PreviewEntry, 'url'>) => {
   if (
@@ -825,17 +928,10 @@ const refreshSavedDrafts = async () => {
   }
 };
 
-const loadRouteDraft = async () => {
+const loadRouteDraft = async (requestedDraftID: string) => {
   const requestVersion = ++draftRouteLoadVersion;
-  const requestedDraftID = routeDraftID.value;
   const requestedViewerID = currentUserID.value;
 
-  if (!requestedDraftID) {
-    if (postDraft.publishOperationID === null && postDraft.draftID !== null) {
-      postDraft.closeWorkingDraft();
-    }
-    return;
-  }
   if (typeof requestedViewerID !== 'number' || requestedViewerID <= 0) {
     return;
   }
@@ -876,6 +972,50 @@ const loadRouteDraft = async () => {
   await refreshSavedDrafts();
 };
 
+const loadRouteIntent = async (intent = routeIntent.value) => {
+  // Keep guest quote intent in the URL until login so the guest-state link can
+  // leave without treating an unauthenticated target as an unsaved draft edit.
+  if (!authStore.isAuthenticated) return;
+  if (intent.kind === 'draft') {
+    await loadRouteDraft(intent.draftID);
+    return;
+  }
+  if (postDraft.publishOperationID !== null) {
+    return;
+  }
+  if (postDraft.draftID !== null && !postDraft.closeWorkingDraft()) return;
+  if (intent.kind === 'quote') {
+    postDraft.setQuotePostID(intent.postID);
+  } else if (postDraft.quotePostID !== null) {
+    postDraft.setQuotePostID(null);
+  }
+};
+
+const removeQuoteTarget = async () => {
+  if (isSubmitting.value || postDraft.quotePostID === null) return;
+  postDraft.setQuotePostID(null);
+  quotePreviewRequestVersion += 1;
+  quotePreviewPost.value = null;
+  quotePreviewError.value = '';
+  quotePreviewState.value = 'idle';
+
+  const query = { ...route.query };
+  delete query.quote;
+  const nextIntentKey = composerIntentKey(parseComposerIntent(query));
+  if (nextIntentKey !== routeIntentKey.value) {
+    suppressedRouteIntentKey = nextIntentKey;
+  }
+  try {
+    await router.replace({ name: 'PostCreate', query });
+    await nextTick();
+    if (routeIntentKey.value !== nextIntentKey) {
+      suppressedRouteIntentKey = null;
+    }
+  } catch {
+    suppressedRouteIntentKey = null;
+  }
+};
+
 const allowComposerExit = async () => {
   if (postDraft.publishOperationID !== null) {
     return false;
@@ -885,12 +1025,6 @@ const allowComposerExit = async () => {
   }
   return postDraft.closeWorkingDraft();
 };
-
-const getRouteDraftID = (target: Pick<RouteLocationNormalized, 'query'>) => (
-  typeof target.query.draft === 'string' && target.query.draft.trim()
-    ? target.query.draft.trim()
-    : null
-);
 
 onBeforeRouteLeave(() => {
   if (publishPreparing.value) {
@@ -906,7 +1040,12 @@ onBeforeRouteUpdate((to, from) => {
   if (to.name !== 'PostCreate' || from.name !== 'PostCreate') {
     return true;
   }
-  if (getRouteDraftID(to) === getRouteDraftID(from)) {
+  const toIntent = parseComposerIntent(to.query);
+  const fromIntent = parseComposerIntent(from.query);
+  if (composerIntentsEqual(toIntent, fromIntent)) {
+    return true;
+  }
+  if (suppressedRouteIntentKey === composerIntentKey(toIntent)) {
     return true;
   }
   if (publishPreparing.value) {
@@ -1078,15 +1217,23 @@ watch(content, () => {
 });
 
 watch(
-  [currentUserID, routeDraftID],
-  ([viewerID]) => {
+  [currentUserID, routeIntentKey],
+  ([viewerID, intentKey]) => {
     emojiPickerOpen.value = false;
     postDraft.setViewer(viewerID);
     void refreshSavedDrafts();
-    void loadRouteDraft();
+    if (suppressedRouteIntentKey === intentKey) {
+      suppressedRouteIntentKey = null;
+      return;
+    }
+    void loadRouteIntent();
   },
   { immediate: true },
 );
+
+watch(() => postDraft.quotePostID, () => {
+  void loadQuotePreview();
+}, { immediate: true });
 
 watch(() => postDraft.media, syncPreviews, { deep: true, immediate: true });
 
@@ -1109,6 +1256,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   draftRouteLoadVersion += 1;
   draftListRequestVersion += 1;
+  quotePreviewRequestVersion += 1;
   if (beforeUnloadAttached) {
     window.removeEventListener('beforeunload', handleBeforeUnload);
     beforeUnloadAttached = false;
@@ -1296,6 +1444,76 @@ onBeforeUnmount(() => {
 .composer-input:disabled {
   cursor: not-allowed;
   opacity: 0.66;
+}
+
+.composer-quote-preview {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+
+.composer-quote-preview__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-quote-preview__remove,
+.composer-quote-preview__retry {
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 5px 9px;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-quote-preview__remove:disabled,
+.composer-quote-preview__retry:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.composer-quote-preview__post {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.composer-quote-preview__content,
+.composer-quote-preview__status,
+.composer-quote-preview__error p {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.composer-quote-preview__status {
+  color: var(--color-text-secondary);
+}
+
+.composer-quote-preview__error {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+}
+
+.composer-quote-preview__error p {
+  color: var(--color-danger);
 }
 
 .field-error {

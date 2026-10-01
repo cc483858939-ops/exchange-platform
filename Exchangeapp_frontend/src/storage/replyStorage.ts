@@ -1,7 +1,7 @@
 import type { Post } from '../types/Post';
 
 export type ReplySubmissionPhase = 'publishing' | 'failed' | 'succeeded';
-export type ReplySubmissionFailureKind = 'retryable' | 'idempotency_conflict' | null;
+export type ReplySubmissionFailureKind = 'retryable' | 'idempotency_conflict' | 'auth_context_changed' | null;
 
 export type PersistedReplyDraft = {
   key: string;
@@ -16,6 +16,8 @@ export type PersistedReplySubmissionOperation = {
   key: string;
   id: string;
   viewerID: number;
+  /** Missing only on legacy durable replies that predate session ownership. */
+  viewerSessionID?: string | null;
   parentPostID: number;
   content: string;
   sourceDraftContent: string | null;
@@ -68,7 +70,9 @@ const validateOperation = (value: unknown): PersistedReplySubmissionOperation =>
     || !(record.sourceDraftContent === null || typeof record.sourceDraftContent === 'string')
     || !(record.phase === 'publishing' || record.phase === 'failed' || record.phase === 'succeeded')
     || !(record.failureKind === null || record.failureKind === 'retryable'
-      || record.failureKind === 'idempotency_conflict')
+      || record.failureKind === 'idempotency_conflict' || record.failureKind === 'auth_context_changed')
+    || (record.viewerSessionID !== undefined && record.viewerSessionID !== null
+      && (typeof record.viewerSessionID !== 'string' || !record.viewerSessionID.trim()))
     || typeof record.error !== 'string'
     || typeof record.startedAt !== 'number' || !Number.isFinite(record.startedAt)
     || typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)
@@ -76,7 +80,7 @@ const validateOperation = (value: unknown): PersistedReplySubmissionOperation =>
     || (record.phase !== 'failed' && record.failureKind !== null)
     || (record.phase === 'failed' && record.failureKind === null)
   ) throw new Error('The saved reply operation is invalid.');
-  return record as PersistedReplySubmissionOperation;
+  return { ...record, viewerSessionID: record.viewerSessionID ?? null } as PersistedReplySubmissionOperation;
 };
 
 const openDatabase = (): Promise<IDBDatabase> => {

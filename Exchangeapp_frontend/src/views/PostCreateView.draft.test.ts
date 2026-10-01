@@ -60,8 +60,22 @@ vi.mock('../store/auth', async () => {
   const { reactive: makeReactive } = await import('vue');
   mocks.authStore = makeReactive({
     isAuthenticated: true,
+    sessionID: 'session-7',
+    sessionVersion: 5,
     currentIdentity: { id: 7, username: 'alice', display_name: 'Alice', avatar_url: '' },
     syncCurrentIdentityProfile: vi.fn(),
+    captureRequestAuthBinding: () => {
+      const auth = mocks.authStore;
+      if (!auth.isAuthenticated || !auth.currentIdentity?.id) return null;
+      return Object.freeze({ userID: auth.currentIdentity.id, sessionID: auth.sessionID, sessionVersion: auth.sessionVersion });
+    },
+    matchesRequestAuthBinding: (binding: any) => {
+      const auth = mocks.authStore;
+      return Boolean(auth.isAuthenticated
+        && auth.currentIdentity?.id === binding.userID
+        && auth.sessionID === binding.sessionID
+        && auth.sessionVersion === binding.sessionVersion);
+    },
   });
   return { useAuthStore: () => mocks.authStore };
 });
@@ -112,6 +126,7 @@ const makeDraft = (
   id,
   viewerID,
   content,
+  quotePostID: null,
   media,
   createdAt: updatedAt - 100,
   updatedAt,
@@ -161,6 +176,8 @@ describe('PostCreateView durable drafts and exit protection', () => {
     mocks.route.params = {};
     mocks.route.fullPath = '/posts/new';
     mocks.authStore.isAuthenticated = true;
+    mocks.authStore.sessionID = 'session-7';
+    mocks.authStore.sessionVersion = 5;
     mocks.authStore.currentIdentity = { id: 7, username: 'alice', display_name: 'Alice', avatar_url: '' };
     mocks.savePostDraft.mockImplementation(async (record: PersistedPostDraft) => {
       mocks.drafts.set(record.id, record);
@@ -229,6 +246,8 @@ describe('PostCreateView durable drafts and exit protection', () => {
     });
     mocks.serializePublishOperation.mockReset().mockImplementation((operation: any) => ({
       ...operation,
+      schemaVersion: 4,
+      publisherSessionID: operation.publisherSessionID ?? mocks.authStore.sessionID,
       media: operation.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         blob: item.file.slice(0, item.file.size, item.file.type),
@@ -242,6 +261,8 @@ describe('PostCreateView durable drafts and exit protection', () => {
     }));
     mocks.restorePublishOperation.mockReset().mockImplementation((record: any) => ({
       ...record,
+      publisherSessionID: record.publisherSessionID ?? null,
+      quotePostID: record.quotePostID ?? null,
       media: record.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
         file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),

@@ -76,7 +76,7 @@ const replyPost = (id = 101, parentPostID = 42): Post => ({
 });
 
 const record = (overrides: Partial<any> = {}) => ({
-  key: '7:42', id: 'operation-a', viewerID: 7, parentPostID: 42,
+  key: '7:42', id: 'operation-a', viewerID: 7, viewerSessionID: 'session-7', parentPostID: 42,
   content: 'hello', sourceDraftContent: null, phase: 'publishing',
   failureKind: null, error: '', startedAt: 1, updatedAt: 1, post: null,
   ...overrides,
@@ -97,7 +97,24 @@ describe('replySubmission store', () => {
     setActivePinia(createPinia());
     mocks.records.clear();
     mocks.drafts.clear();
-    mocks.authStore = reactive({ isAuthenticated: true, currentIdentity: { id: 7 } });
+    mocks.authStore = reactive({
+      isAuthenticated: true,
+      currentIdentity: { id: 7 },
+      sessionID: 'session-7',
+      sessionVersion: 5,
+      captureRequestAuthBinding: () => {
+        const auth = mocks.authStore;
+        if (!auth.isAuthenticated || !auth.currentIdentity?.id) return null;
+        return Object.freeze({ userID: auth.currentIdentity.id, sessionID: auth.sessionID, sessionVersion: auth.sessionVersion });
+      },
+      matchesRequestAuthBinding: (binding: any) => {
+        const auth = mocks.authStore;
+        return Boolean(auth.isAuthenticated
+          && auth.currentIdentity?.id === binding.userID
+          && auth.sessionID === binding.sessionID
+          && auth.sessionVersion === binding.sessionVersion);
+      },
+    });
     mocks.createClientOperationID.mockReset().mockReturnValue('operation-new');
     mocks.createPostReply.mockReset().mockResolvedValue(replyPost());
     mocks.replaceReplySubmissionOperation.mockReset().mockImplementation(async (operation: any) => {
@@ -109,7 +126,10 @@ describe('replySubmission store', () => {
 
   it('writes the immutable operation durably before starting reply HTTP', async () => {
     const write = deferred<void>();
-    mocks.replaceReplySubmissionOperation.mockReturnValueOnce(write.promise);
+    mocks.replaceReplySubmissionOperation.mockImplementationOnce(async (operation: any) => {
+      await write.promise;
+      mocks.records.set(operation.key, operation);
+    });
     drafts().setViewer(7);
     drafts().setDraft(42, '  hello  ');
 
@@ -123,7 +143,12 @@ describe('replySubmission store', () => {
     write.resolve();
     expect((await starting).status).toBe('accepted');
     await flushPromises();
-    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-new' });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', expect.objectContaining({
+      idempotencyKey: 'operation-new',
+      authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7', sessionVersion: 5 }),
+    }));
+    mocks.records.set('7:42', mocks.replaceReplySubmissionOperation.mock.calls[0]?.[0]);
+    expect(mocks.records.get('7:42')).toMatchObject({ viewerSessionID: 'session-7' });
   });
 
   it('fails closed when initial persistence fails', async () => {
@@ -145,7 +170,9 @@ describe('replySubmission store', () => {
     await store().activateViewer(7);
     await flushPromises();
 
-    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-a' });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', expect.objectContaining({
+      idempotencyKey: 'operation-a', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
     pending.resolve(replyPost());
     await flushPromises();
@@ -162,7 +189,9 @@ describe('replySubmission store', () => {
     const result = await store().startOrRetry(42, ' hello ');
     expect(result).toMatchObject({ status: 'accepted', operation: { id: 'operation-a' } });
     await flushPromises();
-    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-a' });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', expect.objectContaining({
+      idempotencyKey: 'operation-a', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
     expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
   });
@@ -220,7 +249,9 @@ describe('replySubmission store', () => {
     checkpoint.resolve(true);
     expect(await retrying).toBe(true);
     await flushPromises();
-    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-a' });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', expect.objectContaining({
+      idempotencyKey: 'operation-a', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('waits for a pending Save before transitioning a failed operation to publishing', async () => {
@@ -242,7 +273,9 @@ describe('replySubmission store', () => {
     expect(await saving).toBe('saved');
     expect(await retrying).toBe(true);
     await flushPromises();
-    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-a' });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', expect.objectContaining({
+      idempotencyKey: 'operation-a', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('does not abandon a failed operation while its parent draft Save is unresolved', async () => {
@@ -292,6 +325,42 @@ describe('replySubmission store', () => {
     expect(drafts().getDraft(42)).toBe('saved S2');
     expect(mocks.drafts.get('7:42')?.content).toBe('saved S2');
     expect(mocks.records.has('7:42')).toBe(false);
+  });
+
+  it('fails closed when the same user starts a new session before a recovered reply can send', async () => {
+    mocks.records.set('7:42', record({ viewerSessionID: 'session-7', phase: 'publishing' }));
+    mocks.authStore.sessionID = 'session-7-new';
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'hello');
+
+    await store().activateViewer(7);
+    await flushPromises();
+
+    expect(store().getOperation(7, 42)).toMatchObject({
+      viewerSessionID: 'session-7', phase: 'failed', failureKind: 'auth_context_changed',
+    });
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+    expect(drafts().getDraft(42)).toBe('hello');
+    expect(await store().retry('operation-a')).toBe(false);
+  });
+
+  it('keeps a legacy reply draft and permits discard without adopting the current session', async () => {
+    const { viewerSessionID: _sessionID, ...legacy } = record({ phase: 'publishing' });
+    mocks.records.set('7:42', legacy);
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'legacy reply draft');
+
+    await store().activateViewer(7);
+    await flushPromises();
+
+    expect(store().getOperation(7, 42)).toMatchObject({
+      viewerSessionID: null, phase: 'failed', failureKind: 'auth_context_changed',
+    });
+    expect(mocks.records.get('7:42')?.viewerSessionID).toBeNull();
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+    expect(drafts().getDraft(42)).toBe('legacy reply draft');
+    expect(await store().abandonFailedOperation('operation-a')).toBe(true);
+    expect(drafts().getDraft(42)).toBe('legacy reply draft');
   });
 
   it('does not delete a saved source for an unsaved reply derivative', async () => {
@@ -352,7 +421,9 @@ describe('replySubmission store', () => {
     const next = await store().startOrRetry(42, 'second');
     expect(next).toMatchObject({ status: 'accepted', operation: { id: 'operation-b' } });
     expect(mocks.createClientOperationID).toHaveBeenCalledTimes(2);
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, 42, 'second', { idempotencyKey: 'operation-b' });
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, 42, 'second', expect.objectContaining({
+      idempotencyKey: 'operation-b', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('preserves newer editor content when a succeeded operation is cleaned up', async () => {
@@ -378,7 +449,9 @@ describe('replySubmission store', () => {
 
     const next = await store().startOrRetry(42, 'new reply');
     expect(next).toMatchObject({ status: 'accepted', operation: { id: 'operation-b' } });
-    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, 42, 'new reply', { idempotencyKey: 'operation-b' });
+    expect(mocks.createPostReply).toHaveBeenNthCalledWith(2, 42, 'new reply', expect.objectContaining({
+      idempotencyKey: 'operation-b', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('does not adopt a recovered succeeded operation into the composer', async () => {
@@ -419,7 +492,9 @@ describe('replySubmission store', () => {
     expect(await starting).toMatchObject({
       status: 'accepted', operation: { content: 'hello', sourceDraftContent: 'hello' },
     });
-    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', { idempotencyKey: 'operation-new' });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', expect.objectContaining({
+      idempotencyKey: 'operation-new', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('waits for the draft Save before resolving succeeded-operation cleanup and never creates B', async () => {
@@ -524,8 +599,12 @@ describe('replySubmission store', () => {
     await flushPromises();
 
     expect(mocks.createPostReply).toHaveBeenCalledTimes(2);
-    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'first', { idempotencyKey: 'operation-a' });
-    expect(mocks.createPostReply).toHaveBeenCalledWith(43, 'second', { idempotencyKey: 'operation-b' });
+    expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'first', expect.objectContaining({
+      idempotencyKey: 'operation-a', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
+    expect(mocks.createPostReply).toHaveBeenCalledWith(43, 'second', expect.objectContaining({
+      idempotencyKey: 'operation-b', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
+    }));
   });
 
   it('keeps viewer operations private when account identity changes', async () => {

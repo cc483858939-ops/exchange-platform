@@ -7,18 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostCreateView from './PostCreateView.vue';
 import { usePostDraftStore } from '../store/postDraft';
 import { usePostPublishStore } from '../store/postPublish';
+import type { Post } from '../types/Post';
 
 const mocks = vi.hoisted(() => ({
-  authStore: null as {
-    isAuthenticated: boolean;
-    currentIdentity: {
-      id: number;
-      username: string;
-      display_name: string;
-      avatar_url: string;
-    } | null;
-    syncCurrentIdentityProfile: ReturnType<typeof vi.fn>;
-  } | null,
+  authStore: null as any,
   router: {
     back: vi.fn(),
     push: vi.fn(),
@@ -30,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   feedStore: { registerPublishedPost: vi.fn() },
   profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
+  getPostById: vi.fn(),
   uploadPostMedia: vi.fn(),
   getPostBookmarkStates: vi.fn(),
   captureBookmarkStateSyncVersion: vi.fn(),
@@ -58,6 +51,8 @@ vi.mock('../store/auth', async () => {
   const { reactive } = await import('vue');
   mocks.authStore = reactive({
     isAuthenticated: true,
+    sessionID: 'session-7',
+    sessionVersion: 5,
     currentIdentity: {
       id: 7,
       username: 'alice',
@@ -65,6 +60,22 @@ vi.mock('../store/auth', async () => {
       avatar_url: 'https://example.test/alice.jpg',
     },
     syncCurrentIdentityProfile: vi.fn(),
+    captureRequestAuthBinding: () => {
+      const store = mocks.authStore;
+      if (!store.isAuthenticated || !store.currentIdentity?.id) return null;
+      return Object.freeze({
+        userID: store.currentIdentity.id,
+        sessionID: store.sessionID ?? `session-${store.currentIdentity.id}`,
+        sessionVersion: store.sessionVersion,
+      });
+    },
+    matchesRequestAuthBinding: (binding: any) => {
+      const store = mocks.authStore;
+      return Boolean(store.isAuthenticated
+        && store.currentIdentity?.id === binding.userID
+        && (store.sessionID ?? `session-${store.currentIdentity.id}`) === binding.sessionID
+        && store.sessionVersion === binding.sessionVersion);
+    },
   });
   return { useAuthStore: () => mocks.authStore };
 });
@@ -79,6 +90,7 @@ vi.mock('../store/profileSession', () => ({
 
 vi.mock('../services/postService', () => ({
   createPost: mocks.createPost,
+  getPostById: mocks.getPostById,
   uploadPostMedia: mocks.uploadPostMedia,
 }));
 
@@ -121,6 +133,28 @@ const publishedPost = (authorID = 7) => ({
   media: [],
 });
 
+const quotedPost = (id = 42): Post => ({
+  id,
+  created_at: '2026-09-01T00:00:00.000Z',
+  updated_at: '2026-09-01T00:00:00.000Z',
+  published_at: '2026-09-01T00:00:00.000Z',
+  author: identity(8),
+  content: `Quoted post ${id}`,
+  language: 'en',
+  conversation_id: id,
+  reply_to_post_id: null,
+  quote_post_id: null,
+  reply_to_post: null,
+  quote_post: null,
+  visibility: 'public',
+  media: [],
+  like_count: 0,
+  repost_count: 0,
+  reply_count: 0,
+  view_count: 0,
+  deleted: false,
+});
+
 const EmojiPickerStub = defineComponent({
   name: 'EmojiPickerPopover',
   props: {
@@ -146,7 +180,10 @@ const mountPage = () => mount(PostCreateView, {
     stubs: {
       AppIcon: { template: '<span class="icon-stub" />' },
       EmojiPickerPopover: EmojiPickerStub,
-      RouterLink: { template: '<a><slot /></a>' },
+      RouterLink: {
+        props: ['to'],
+        template: '<a :data-to="JSON.stringify(to)"><slot /></a>',
+      },
     },
   },
 });
@@ -166,8 +203,17 @@ describe('PostCreateView identity and text publishing', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.authStore!.isAuthenticated = true;
+    mocks.authStore!.sessionID = 'session-7';
+    mocks.authStore!.sessionVersion = 5;
     mocks.authStore!.currentIdentity = identity();
+    Object.assign(mocks.route, {
+      name: 'PostCreate',
+      query: {},
+      params: {},
+      fullPath: '/posts/new',
+    });
     mocks.createPost.mockResolvedValue(publishedPost());
+    mocks.getPostById.mockReset().mockImplementation(async (id: number) => quotedPost(id));
     mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
     mocks.syncHydratedPostBookmarkState.mockReturnValue(true);
@@ -190,8 +236,9 @@ describe('PostCreateView identity and text publishing', () => {
       return true;
     });
     mocks.serializePublishOperation.mockImplementation((operation: any) => ({
-      schemaVersion: 2,
       ...operation,
+      schemaVersion: 4,
+      publisherSessionID: operation.publisherSessionID ?? mocks.authStore.sessionID,
       sourceDraftSnapshot: operation.sourceDraftSnapshot ?? null,
       media: operation.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
@@ -206,6 +253,8 @@ describe('PostCreateView identity and text publishing', () => {
     }));
     mocks.restorePublishOperation.mockImplementation((record: any) => ({
       ...record,
+      publisherSessionID: record.publisherSessionID ?? null,
+      quotePostID: record.quotePostID ?? null,
       sourceDraftSnapshot: record.sourceDraftSnapshot ?? null,
       media: record.media.map((item: any) => ({
         draftMediaID: item.draftMediaID,
@@ -371,7 +420,10 @@ describe('PostCreateView identity and text publishing', () => {
     await flushPromises();
     expect(mocks.createPost).toHaveBeenCalledWith(
       { content: 'A post 😂', media: [] },
-      { idempotencyKey: expect.any(String) },
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7', sessionVersion: 5 }),
+      }),
     );
   });
 
@@ -421,7 +473,10 @@ describe('PostCreateView identity and text publishing', () => {
         content: 'A post from the current identity',
         media: [],
       },
-      { idempotencyKey: expect.any(String) },
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7', sessionVersion: 5 }),
+      }),
     );
     expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.feedStore.registerPublishedPost).toHaveBeenCalledWith(
@@ -474,9 +529,11 @@ describe('PostCreateView identity and text publishing', () => {
     publishStore.operations.push({
       id: 'publish-a',
       publisherUserID: 7,
+      publisherSessionID: 'session-7',
       sourceDraftID: null,
       sourceDraftSnapshot: null,
       content: 'Post A',
+      quotePostID: null,
       media: [],
       phase: 'publishing',
       failureKind: null,
@@ -515,9 +572,11 @@ describe('PostCreateView identity and text publishing', () => {
     const foreignOperation = {
       id: 'publish-a',
       publisherUserID: 7,
+      publisherSessionID: 'session-7',
       sourceDraftID: null,
       sourceDraftSnapshot: null,
       content: 'Post A',
+      quotePostID: null,
       media: [],
       phase: 'publishing' as const,
       failureKind: null,
@@ -573,5 +632,122 @@ describe('PostCreateView identity and text publishing', () => {
 
     expect(wrapper.find('form').exists()).toBe(false);
     expect(wrapper.get('.composer-auth-state').text()).toContain('Log in to create a post.');
+  });
+
+  it('initializes quote intent, loads a preview, and still requires commentary', async () => {
+    Object.assign(mocks.route, {
+      query: { quote: '42' },
+      fullPath: '/posts/new?quote=42',
+    });
+    wrapper = mountPage();
+    await flushPromises();
+
+    expect(usePostDraftStore().quotePostID).toBe(42);
+    expect(mocks.getPostById).toHaveBeenCalledWith(42);
+    expect(wrapper.get('.composer-quote-preview').text()).toContain('Quoted post 42');
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
+
+    await wrapper.get('#post-content').setValue('My commentary');
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeUndefined();
+  });
+
+  it('asks before switching between quote targets and discards only after confirmation', async () => {
+    Object.assign(mocks.route, {
+      query: { quote: '42' },
+      fullPath: '/posts/new?quote=42',
+    });
+    wrapper = mountPage();
+    await flushPromises();
+    await wrapper.get('#post-content').setValue('Unsaved commentary');
+
+    const guardPromise = mocks.beforeRouteUpdate(
+      { name: 'PostCreate', query: { quote: '43' } },
+      { name: 'PostCreate', query: { quote: '42' } },
+    );
+    await nextTick();
+    expect(wrapper.find('.post-draft-exit-dialog').exists()).toBe(true);
+    await wrapper.get('.post-draft-exit-dialog__button--discard').trigger('click');
+    await expect(guardPromise).resolves.toBe(true);
+
+    Object.assign(mocks.route, {
+      query: { quote: '43' },
+      fullPath: '/posts/new?quote=43',
+    });
+    await flushPromises();
+    expect(usePostDraftStore().quotePostID).toBe(43);
+    expect(usePostDraftStore().content).toBe('');
+  });
+
+  it('ignores a stale quote preview response after the target changes', async () => {
+    const first = deferred<Post>();
+    const second = deferred<Post>();
+    mocks.getPostById.mockImplementation((id: number) => id === 42 ? first.promise : second.promise);
+    Object.assign(mocks.route, {
+      query: { quote: '42' },
+      fullPath: '/posts/new?quote=42',
+    });
+    wrapper = mountPage();
+    await nextTick();
+
+    const guardPromise = mocks.beforeRouteUpdate(
+      { name: 'PostCreate', query: { quote: '43' } },
+      { name: 'PostCreate', query: { quote: '42' } },
+    );
+    await nextTick();
+    await wrapper.get('.post-draft-exit-dialog__button--discard').trigger('click');
+    await expect(guardPromise).resolves.toBe(true);
+    Object.assign(mocks.route, {
+      query: { quote: '43' },
+      fullPath: '/posts/new?quote=43',
+    });
+    await nextTick();
+    second.resolve(quotedPost(43));
+    await flushPromises();
+    first.resolve(quotedPost(42));
+    await flushPromises();
+
+    expect(usePostDraftStore().quotePostID).toBe(43);
+    expect(wrapper.get('.composer-quote-preview').text()).toContain('Quoted post 43');
+    expect(wrapper.get('.composer-quote-preview').text()).not.toContain('Quoted post 42');
+  });
+
+  it('blocks publishing an unavailable quote until the user removes it', async () => {
+    mocks.getPostById.mockRejectedValue(new Error('not found'));
+    Object.assign(mocks.route, {
+      query: { quote: '42' },
+      fullPath: '/posts/new?quote=42',
+    });
+    wrapper = mountPage();
+    await flushPromises();
+    await wrapper.get('#post-content').setValue('Keep my commentary');
+
+    expect(wrapper.get('.composer-quote-preview__error').text()).toContain('unavailable');
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+
+    await wrapper.get('.composer-quote-preview__remove').trigger('click');
+    await flushPromises();
+    expect(usePostDraftStore().quotePostID).toBeNull();
+    expect(wrapper.find('.composer-quote-preview').exists()).toBe(false);
+    expect(wrapper.get('.publish-button').attributes('disabled')).toBeUndefined();
+    expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'PostCreate', query: {} });
+  });
+
+  it('keeps the exact quote route in the composer login return target', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    Object.assign(mocks.route, {
+      query: { quote: '42' },
+      fullPath: '/posts/new?quote=42',
+    });
+    wrapper = mountPage();
+
+    const loginLink = wrapper.get('.composer-auth-state a');
+    expect(JSON.parse(loginLink.attributes('data-to') || '{}')).toEqual({
+      name: 'Login',
+      query: { returnTo: '/posts/new?quote=42' },
+    });
+    expect(usePostDraftStore().quotePostID).toBeNull();
+    await expect(mocks.beforeRouteLeave()).resolves.toBe(true);
   });
 });

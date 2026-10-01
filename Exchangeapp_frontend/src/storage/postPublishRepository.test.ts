@@ -142,9 +142,11 @@ const makeOperation = (id: string, viewerID: number, name = 'photo.webp') => {
   return {
     id,
     publisherUserID: viewerID,
+    publisherSessionID: `session-${viewerID}`,
     sourceDraftID: 'saved-draft',
     sourceDraftSnapshot: {
       content: 'Exact text',
+      quotePostID: null,
       media: [
         {
           id: 'media-a',
@@ -163,6 +165,7 @@ const makeOperation = (id: string, viewerID: number, name = 'photo.webp') => {
       ],
     },
     content: 'Exact text',
+    quotePostID: null,
     media: [
       { draftMediaID: 'media-a', file, uploadedURL: '/media/a' },
       { draftMediaID: 'media-b', file: new File(['second'], 'second.png', { type: 'image/png' }), uploadedURL: '' },
@@ -196,24 +199,36 @@ describe('postPublishRepository', () => {
 
   it('round-trips media and keeps replace, update, and delete scoped to the current operation', async () => {
     const original = makeOperation('operation-a', 7);
-    const persisted = serializePublishOperation(original, 456);
+    const persisted = serializePublishOperation({
+      ...original,
+      sessionVersion: 55,
+      authBinding: { userID: 7, sessionID: 'runtime-only', sessionVersion: 55 },
+      accessToken: 'never-persist-this',
+    } as any, 456);
+    expect(persisted.schemaVersion).toBe(4);
+    expect(persisted).not.toHaveProperty('sessionVersion');
+    expect(persisted).not.toHaveProperty('authBinding');
+    expect(persisted).not.toHaveProperty('accessToken');
     await replacePostPublishOperation(persisted);
     await replacePostPublishOperation(serializePublishOperation(makeOperation('operation-b', 8), 457));
 
     const restoredRecord = await getPostPublishOperation(7);
     expect(restoredRecord).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 4,
       id: 'operation-a',
       publisherUserID: 7,
+      publisherSessionID: 'session-7',
       sourceDraftID: 'saved-draft',
       sourceDraftSnapshot: {
         content: 'Exact text',
+        quotePostID: null,
         media: [
           { id: 'media-a', name: 'photo.webp', type: 'image/webp' },
           { id: 'media-b', name: 'second.png', type: 'image/png' },
         ],
       },
       content: 'Exact text',
+      quotePostID: null,
       phase: 'publishing',
       updatedAt: 456,
       media: [
@@ -222,6 +237,7 @@ describe('postPublishRepository', () => {
       ],
     });
     const restored = restorePublishOperation(restoredRecord!);
+    expect(restored.publisherSessionID).toBe('session-7');
     expect(restored.sourceDraftSnapshot).toEqual(restoredRecord?.sourceDraftSnapshot);
     expect(restored.media.map(item => [item.draftMediaID, item.file.name, item.uploadedURL]))
       .toEqual([
@@ -249,6 +265,8 @@ describe('postPublishRepository', () => {
     const legacyRecord = { ...original } as unknown as Record<string, unknown>;
     delete legacyRecord.schemaVersion;
     delete legacyRecord.sourceDraftSnapshot;
+    delete legacyRecord.publisherSessionID;
+    delete legacyRecord.quotePostID;
     factory.database!.records.set(7, legacyRecord as unknown as PersistedPostPublishOperation);
 
     const restoredRecord = await getPostPublishOperation(7);
@@ -258,5 +276,73 @@ describe('postPublishRepository', () => {
       sourceDraftSnapshot: null,
     });
     expect(restorePublishOperation(restoredRecord!).sourceDraftSnapshot).toBeNull();
+    expect(restorePublishOperation(restoredRecord!).publisherSessionID).toBeNull();
+  });
+
+  it('restores schema 2 without a durable session owner as untrusted legacy state', async () => {
+    const original = serializePublishOperation(makeOperation('legacy-v2', 7), 789);
+    const { publisherSessionID: _sessionID, quotePostID: _quote, sourceDraftSnapshot, ...legacyV2 } = original;
+    const legacySnapshot = { ...sourceDraftSnapshot! } as Record<string, unknown>;
+    delete legacySnapshot.quotePostID;
+    factory.database!.records.set(7, {
+      ...legacyV2,
+      schemaVersion: 2,
+      sourceDraftSnapshot: legacySnapshot,
+    } as unknown as PersistedPostPublishOperation);
+
+    const restored = await getPostPublishOperation(7);
+
+    expect(restored).toMatchObject({ schemaVersion: 2, publisherSessionID: null });
+    expect(restorePublishOperation(restored!).publisherSessionID).toBeNull();
+    expect(restorePublishOperation(restored!).quotePostID).toBeNull();
+  });
+
+  it('restores the earlier session-bound schema 3 as a non-quote operation', () => {
+    const original = serializePublishOperation(makeOperation('legacy-v3', 7), 900);
+    const { quotePostID: _quote, sourceDraftSnapshot, ...withoutQuote } = original;
+    const legacySnapshot = { ...sourceDraftSnapshot! } as Record<string, unknown>;
+    delete legacySnapshot.quotePostID;
+    const restored = restorePublishOperation({
+      ...withoutQuote,
+      schemaVersion: 3,
+      sourceDraftSnapshot: legacySnapshot as unknown as PersistedPostPublishOperation['sourceDraftSnapshot'],
+    } as PersistedPostPublishOperation);
+
+    expect(restored.publisherSessionID).toBe('session-7');
+    expect(restored.quotePostID).toBeNull();
+    expect(restored.sourceDraftSnapshot?.quotePostID).toBeNull();
+  });
+
+  it('round-trips a quote ID and rejects malformed schema 4 quote identity', () => {
+    const quoted = serializePublishOperation({
+      ...makeOperation('quoted-operation', 7),
+      quotePostID: 42,
+      sourceDraftSnapshot: {
+        ...makeOperation('quoted-source', 7).sourceDraftSnapshot!,
+        quotePostID: 42,
+      },
+    });
+    expect(quoted.schemaVersion).toBe(4);
+    expect(restorePublishOperation(quoted)).toMatchObject({
+      quotePostID: 42,
+      sourceDraftSnapshot: { quotePostID: 42 },
+    });
+
+    const { quotePostID: _quote, ...missingQuote } = quoted;
+    expect(() => restorePublishOperation(missingQuote as PersistedPostPublishOperation))
+      .toThrow('saved publish operation is invalid');
+    expect(() => restorePublishOperation({ ...quoted, quotePostID: 0 }))
+      .toThrow('saved publish operation is invalid');
+    expect(() => restorePublishOperation({
+      ...quoted,
+      sourceDraftSnapshot: { ...quoted.sourceDraftSnapshot!, quotePostID: undefined } as any,
+    })).toThrow('saved publish source snapshot is invalid');
+  });
+
+  it('requires a non-empty session owner for new schema 4 records', () => {
+    expect(() => serializePublishOperation({
+      ...makeOperation('missing-session', 7),
+      publisherSessionID: null,
+    })).toThrow('must be bound to an authentication session');
   });
 });

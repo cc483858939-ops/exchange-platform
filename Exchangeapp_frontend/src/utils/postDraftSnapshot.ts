@@ -8,22 +8,37 @@ export type DraftSnapshotMedia = {
 
 export type DraftSnapshot = {
   content: string;
+  quotePostID: number | null;
   media: DraftSnapshotMedia[];
 };
+
+export const isValidQuotePostID = (value: unknown): value is number => (
+  typeof value === 'number'
+  && Number.isSafeInteger(value)
+  && value > 0
+);
 
 export const createPostDraftSnapshot = (
   content: string,
   media: readonly DraftSnapshotMedia[],
-): DraftSnapshot => ({
-  content,
-  media: media.map(item => ({
-    id: item.id,
-    name: item.name,
-    type: item.type,
-    size: item.size,
-    lastModified: item.lastModified,
-  })),
-});
+  quotePostID: number | null = null,
+): DraftSnapshot => {
+  if (quotePostID !== null && !isValidQuotePostID(quotePostID)) {
+    throw new TypeError('A quote post ID must be a positive safe integer.');
+  }
+
+  return {
+    content,
+    quotePostID,
+    media: media.map(item => ({
+      id: item.id,
+      name: item.name,
+      type: item.type,
+      size: item.size,
+      lastModified: item.lastModified,
+    })),
+  };
+};
 
 export const postDraftSnapshotsEqual = (
   left: DraftSnapshot | null | undefined,
@@ -32,6 +47,7 @@ export const postDraftSnapshotsEqual = (
   left
   && right
   && left.content === right.content
+  && left.quotePostID === right.quotePostID
   && left.media.length === right.media.length
   && left.media.every((item, index) => {
     const other = right.media[index];

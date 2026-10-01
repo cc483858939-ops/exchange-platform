@@ -39,7 +39,11 @@ vi.mock('../../services/translationService', () => ({
 
 vi.mock('vue-router', () => ({
   useRouter: () => ({
-    resolve: () => ({ href: '/posts/42' }),
+    resolve: (destination: any) => {
+      const quote = destination?.query?.quote;
+      const fullPath = typeof quote === 'string' ? `/posts/new?quote=${quote}` : '/posts/42';
+      return { href: fullPath, fullPath };
+    },
     push: mocks.push,
     currentRoute: { value: { fullPath: '/?tab=for-you' } },
   }),
@@ -286,6 +290,35 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     await wrapper.get('.post-card__reply').trigger('click');
     expect(mocks.push).toHaveBeenCalledTimes(3);
     expect(wrapper.emitted('postClick')).toBeUndefined();
+  });
+
+  it('opens the quote composer from More actions', async () => {
+    const wrapper = mountPostCard();
+    await wrapper.get('.post-card__more-button').trigger('click');
+    const quoteAction = wrapper.findAll('.post-card__menu-item')
+      .find(item => item.text().includes('Quote post'));
+
+    expect(quoteAction).toBeDefined();
+    await quoteAction!.trigger('click');
+
+    expect(mocks.push).toHaveBeenCalledWith({
+      name: 'PostCreate',
+      query: { quote: '42' },
+    });
+  });
+
+  it('preserves the quote composer destination when a guest selects Quote post', async () => {
+    const wrapper = mountPostCard(basePost(), { requiresAuthForActions: true });
+    await wrapper.get('.post-card__more-button').trigger('click');
+    const quoteAction = wrapper.findAll('.post-card__menu-item')
+      .find(item => item.text().includes('Quote post'));
+
+    await quoteAction!.trigger('click');
+
+    expect(mocks.push).toHaveBeenCalledWith({
+      name: 'Login',
+      query: { returnTo: '/posts/new?quote=42' },
+    });
   });
 
   it('captures content, reply, and view navigation with one handoff and one postClick each', async () => {

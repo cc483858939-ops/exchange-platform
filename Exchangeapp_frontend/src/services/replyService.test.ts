@@ -27,7 +27,10 @@ describe('replyService createPostReply', () => {
   });
 
   it('routes reply creation through createPost with its idempotency options', async () => {
-    const options = { idempotencyKey: '00000000-0000-4000-8000-000000000042' };
+    const options = {
+      idempotencyKey: '00000000-0000-4000-8000-000000000042',
+      authBinding: { userID: 7, sessionID: 'session-7', sessionVersion: 5 },
+    };
 
     await expect(createPostReply('42', 'reply content', options)).resolves.toEqual({ id: 101 });
 

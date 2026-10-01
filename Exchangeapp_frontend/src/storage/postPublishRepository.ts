@@ -1,11 +1,12 @@
 import type { Post } from '../types/Post';
 import {
   createPostDraftSnapshot,
+  isValidQuotePostID,
   type DraftSnapshot,
 } from '../utils/postDraftSnapshot';
 
 export type PersistedPublishPhase = 'uploading' | 'publishing' | 'failed' | 'succeeded';
-export type PersistedPublishFailureKind = 'retryable' | 'idempotency_conflict' | null;
+export type PersistedPublishFailureKind = 'retryable' | 'idempotency_conflict' | 'auth_context_changed' | null;
 
 export type PublishOperationMediaValue = {
   draftMediaID: string;
@@ -16,9 +17,11 @@ export type PublishOperationMediaValue = {
 export type PublishOperationValue = {
   id: string;
   publisherUserID: number;
+  publisherSessionID: string | null;
   sourceDraftID: string | null;
   sourceDraftSnapshot: DraftSnapshot | null;
   content: string;
+  quotePostID: number | null;
   media: PublishOperationMediaValue[];
   phase: PersistedPublishPhase;
   failureKind: PersistedPublishFailureKind;
@@ -38,12 +41,14 @@ export type PersistedPublishOperationMedia = {
 };
 
 export type PersistedPostPublishOperation = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3 | 4;
   id: string;
   publisherUserID: number;
+  publisherSessionID: string | null;
   sourceDraftID: string | null;
   sourceDraftSnapshot: DraftSnapshot | null;
   content: string;
+  quotePostID: number | null;
   media: PersistedPublishOperationMedia[];
   phase: PersistedPublishPhase;
   failureKind: PersistedPublishFailureKind;
@@ -72,10 +77,15 @@ const validPhase = (phase: unknown): phase is PersistedPublishPhase => (
   || phase === 'succeeded'
 );
 
-const isDraftSnapshot = (value: unknown): value is DraftSnapshot => {
+const isDraftSnapshot = (value: unknown, requireQuoteIdentity: boolean): value is DraftSnapshot => {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as Partial<DraftSnapshot>;
+  const quotePostID = snapshot.quotePostID;
   return typeof snapshot.content === 'string'
+    && (requireQuoteIdentity
+      ? Object.prototype.hasOwnProperty.call(snapshot, 'quotePostID')
+        && (quotePostID === null || isValidQuotePostID(quotePostID))
+      : quotePostID === undefined || quotePostID === null || isValidQuotePostID(quotePostID))
     && Array.isArray(snapshot.media)
     && snapshot.media.every(item => Boolean(
       item
@@ -96,7 +106,7 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
   const record = value as Partial<PersistedPostPublishOperation>;
   const schemaVersion = record.schemaVersion === undefined ? 1 : record.schemaVersion;
   if (
-    (schemaVersion !== 1 && schemaVersion !== 2)
+    (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4)
     || typeof record.id !== 'string'
     || !record.id.trim()
     || !validViewerID(record.publisherUserID)
@@ -105,7 +115,11 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
     || !Array.isArray(record.media)
     || !validPhase(record.phase)
     || !(record.failureKind === null || record.failureKind === 'retryable'
-      || record.failureKind === 'idempotency_conflict')
+      || record.failureKind === 'idempotency_conflict' || record.failureKind === 'auth_context_changed')
+    || ((schemaVersion === 3 || schemaVersion === 4) && (typeof record.publisherSessionID !== 'string'
+      || !record.publisherSessionID.trim()))
+    || (schemaVersion === 4 && (!Object.prototype.hasOwnProperty.call(record, 'quotePostID')
+      || !(record.quotePostID === null || isValidQuotePostID(record.quotePostID))))
     || typeof record.error !== 'string'
     || typeof record.startedAt !== 'number'
     || !Number.isFinite(record.startedAt)
@@ -117,17 +131,18 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
   }
 
   let sourceDraftSnapshot: DraftSnapshot | null = null;
-  if (schemaVersion === 2) {
+  if (schemaVersion === 2 || schemaVersion === 3 || schemaVersion === 4) {
     if (record.sourceDraftSnapshot === undefined) {
       throw new Error('The saved publish source snapshot is invalid.');
     }
     if (record.sourceDraftSnapshot !== null) {
-      if (!isDraftSnapshot(record.sourceDraftSnapshot)) {
+      if (!isDraftSnapshot(record.sourceDraftSnapshot, schemaVersion === 4)) {
         throw new Error('The saved publish source snapshot is invalid.');
       }
       sourceDraftSnapshot = createPostDraftSnapshot(
         record.sourceDraftSnapshot.content,
         record.sourceDraftSnapshot.media,
+        record.sourceDraftSnapshot.quotePostID ?? null,
       );
     }
   }
@@ -153,10 +168,24 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
   }
 
   return {
-    ...record,
     schemaVersion,
+    id: record.id,
+    publisherUserID: record.publisherUserID,
+    publisherSessionID: schemaVersion === 3 || schemaVersion === 4
+      ? record.publisherSessionID as string
+      : null,
+    sourceDraftID: record.sourceDraftID,
     // Records created before schema 2 deliberately retain no deletion authority.
     sourceDraftSnapshot,
+    content: record.content,
+    quotePostID: schemaVersion === 4 ? record.quotePostID as number | null : null,
+    media: record.media as PersistedPublishOperationMedia[],
+    phase: record.phase,
+    failureKind: record.failureKind,
+    error: record.error,
+    startedAt: record.startedAt,
+    updatedAt: record.updatedAt,
+    post: record.post,
   } as PersistedPostPublishOperation;
 };
 
@@ -304,26 +333,45 @@ export const deletePostPublishOperation = async (
 export const serializePublishOperation = (
   operation: PublishOperationValue,
   updatedAt = Date.now(),
-): PersistedPostPublishOperation => validateRecord({
-  schemaVersion: 2,
-  ...operation,
-  sourceDraftSnapshot: operation.sourceDraftSnapshot === null
-    ? null
-    : createPostDraftSnapshot(
-      operation.sourceDraftSnapshot.content,
-      operation.sourceDraftSnapshot.media,
-    ),
-  media: operation.media.map(item => ({
-    draftMediaID: item.draftMediaID,
-    blob: item.file.slice(0, item.file.size, item.file.type),
-    name: item.file.name,
-    type: item.file.type,
-    size: item.file.size,
-    lastModified: item.file.lastModified,
-    uploadedURL: item.uploadedURL,
-  })),
-  updatedAt,
-});
+): PersistedPostPublishOperation => {
+  if (typeof operation.publisherSessionID !== 'string' || !operation.publisherSessionID.trim()) {
+    throw new Error('A publish operation must be bound to an authentication session.');
+  }
+  if (operation.quotePostID !== null && !isValidQuotePostID(operation.quotePostID)) {
+    throw new Error('A publish operation quote ID must be a positive safe integer.');
+  }
+  return validateRecord({
+    schemaVersion: 4,
+    id: operation.id,
+    publisherUserID: operation.publisherUserID,
+    publisherSessionID: operation.publisherSessionID,
+    sourceDraftID: operation.sourceDraftID,
+    sourceDraftSnapshot: operation.sourceDraftSnapshot === null
+      ? null
+      : createPostDraftSnapshot(
+        operation.sourceDraftSnapshot.content,
+        operation.sourceDraftSnapshot.media,
+        operation.sourceDraftSnapshot.quotePostID,
+      ),
+    quotePostID: operation.quotePostID,
+    media: operation.media.map(item => ({
+      draftMediaID: item.draftMediaID,
+      blob: item.file.slice(0, item.file.size, item.file.type),
+      name: item.file.name,
+      type: item.file.type,
+      size: item.file.size,
+      lastModified: item.file.lastModified,
+      uploadedURL: item.uploadedURL,
+    })),
+    content: operation.content,
+    phase: operation.phase,
+    failureKind: operation.failureKind,
+    error: operation.error,
+    startedAt: operation.startedAt,
+    updatedAt,
+    post: operation.post,
+  });
+};
 
 export const restorePublishOperation = (
   persisted: PersistedPostPublishOperation,
@@ -332,14 +380,17 @@ export const restorePublishOperation = (
   return {
     id: record.id,
     publisherUserID: record.publisherUserID,
+    publisherSessionID: record.publisherSessionID,
     sourceDraftID: record.sourceDraftID,
     sourceDraftSnapshot: record.sourceDraftSnapshot === null
       ? null
       : createPostDraftSnapshot(
         record.sourceDraftSnapshot.content,
         record.sourceDraftSnapshot.media,
+        record.sourceDraftSnapshot.quotePostID,
       ),
     content: record.content,
+    quotePostID: record.quotePostID,
     media: record.media.map(item => ({
       draftMediaID: item.draftMediaID,
       file: new File([item.blob], item.name, {
