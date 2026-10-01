@@ -92,16 +92,18 @@ describe('postDraft store', () => {
     expect(store.media.find(item => item.id === firstID)?.uploadedURL).toBe('');
   });
 
-  it('treats quote identity as a dirty edit without making a quote-only draft publishable', async () => {
+  it('keeps a quote-only new composer clean and unsaveable while tracking saved quote identity', async () => {
     const store = usePostDraftStore();
     store.setViewer(7);
     expect(store.setQuotePostID(42)).toBe(true);
     expect(store.quotePostID).toBe(42);
-    expect(store.hasUnsavedChanges).toBe(true);
     expect(store.hasContent).toBe(false);
+    expect(store.hasUnsavedChanges).toBe(false);
+    await expect(store.saveCurrentDraft()).rejects.toThrow('There is no post content or media to save.');
     expect(repositoryMocks.savePostDraft).not.toHaveBeenCalled();
 
     store.setContent('Commentary');
+    expect(store.hasUnsavedChanges).toBe(true);
     const draftID = await store.saveCurrentDraft();
     expect(repositoryMocks.savePostDraft).toHaveBeenLastCalledWith(expect.objectContaining({
       id: draftID,
@@ -117,6 +119,7 @@ describe('postDraft store', () => {
     expect(store.hasUnsavedChanges).toBe(false);
     expect(store.setQuotePostID(0)).toBe(true);
     expect(store.quotePostID).toBeNull();
+    expect(store.hasUnsavedChanges).toBe(true);
   });
 
   it('saves one durable snapshot and tracks edits without treating uploads as edits', async () => {
@@ -233,6 +236,23 @@ describe('postDraft store', () => {
     expect(store.draftID).toBe(existingDraftID);
     expect(store.savedSnapshot).toEqual(existingSnapshot);
     expect(store.hasUnsavedChanges).toBe(true);
+  });
+
+  it('rejects a pending draft load after the user changes quote identity', async () => {
+    const pendingRead = deferred<PersistedPostDraft | null>();
+    repositoryMocks.getPostDraft.mockReturnValueOnce(pendingRead.promise);
+    const store = usePostDraftStore();
+    store.setViewer(7);
+
+    const load = store.loadSavedDraft('saved-id');
+    store.setQuotePostID(43);
+    pendingRead.resolve({ ...persistedDraft(), quotePostID: 42 });
+
+    await expect(load).resolves.toEqual({ status: 'stale' });
+    expect(store.quotePostID).toBe(43);
+    expect(store.draftID).toBeNull();
+    expect(store.savedSnapshot).toBeNull();
+    expect(store.hasUnsavedChanges).toBe(false);
   });
 
   it('rejects a pending draft load after the user adds media', async () => {

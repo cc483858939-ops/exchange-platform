@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   },
   profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
+  getPostById: vi.fn(),
   uploadPostMedia: vi.fn(),
   getPostBookmarkStates: vi.fn(),
   captureBookmarkStateSyncVersion: vi.fn(),
@@ -84,6 +85,7 @@ vi.mock('../store/feed', () => ({ useFeedStore: () => mocks.feedStore }));
 vi.mock('../store/profileSession', () => ({ useProfileSessionStore: () => mocks.profileSessionStore }));
 vi.mock('../services/postService', () => ({
   createPost: mocks.createPost,
+  getPostById: mocks.getPostById,
   uploadPostMedia: mocks.uploadPostMedia,
 }));
 vi.mock('../services/bookmarkService', () => ({ getPostBookmarkStates: mocks.getPostBookmarkStates }));
@@ -113,6 +115,14 @@ const publishedPost = () => ({
   id: 101,
   author: { id: 7, username: 'alice', display_name: 'Alice', avatar_url: '' },
   content: 'posted',
+  media: [],
+});
+
+const quotedPost = (id: number) => ({
+  id,
+  published_at: '2026-09-01T00:00:00.000Z',
+  author: { id: 8, username: 'source', display_name: 'Source user', avatar_url: '' },
+  content: `Quoted post ${id}`,
   media: [],
 });
 
@@ -224,6 +234,7 @@ describe('PostCreateView durable drafts and exit protection', () => {
       return undefined;
     });
     mocks.createPost.mockReset().mockResolvedValue(publishedPost());
+    mocks.getPostById.mockReset().mockImplementation(async (id: number) => quotedPost(id));
     mocks.uploadPostMedia.mockReset().mockImplementation(async (file: File) => `/media/${file.name}`);
     mocks.getPostBookmarkStates.mockReset().mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.captureBookmarkStateSyncVersion.mockReset().mockReturnValue(0);
@@ -321,6 +332,25 @@ describe('PostCreateView durable drafts and exit protection', () => {
     expect(usePostDraftStore().content).toBe('Requested draft');
     expect(usePostDraftStore().draftID).toBe('requested');
     expect(usePostDraftStore().hasUnsavedChanges).toBe(false);
+  });
+
+  it('lets the requested saved draft quote override a quote query', async () => {
+    mocks.drafts.set('draft-abc', {
+      ...makeDraft('draft-abc', 7, 'Saved commentary'),
+      quotePostID: 99,
+    });
+    mocks.route.query = { draft: 'draft-abc', quote: '42' };
+    mocks.route.fullPath = '/posts/new?draft=draft-abc&quote=42';
+    wrapper = mountPage();
+    await flushPromises();
+
+    const store = usePostDraftStore();
+    expect(store.draftID).toBe('draft-abc');
+    expect(store.content).toBe('Saved commentary');
+    expect(store.quotePostID).toBe(99);
+    expect(mocks.getPostById).toHaveBeenCalledWith(99);
+    expect(mocks.getPostById).not.toHaveBeenCalledWith(42);
+    expect(wrapper.get('.composer-quote-preview__content').text()).toBe('Quoted post 99');
   });
 
   it('keeps user input and the requested route when saved-draft hydration becomes stale', async () => {

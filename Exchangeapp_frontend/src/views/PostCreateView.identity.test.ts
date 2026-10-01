@@ -646,9 +646,29 @@ describe('PostCreateView identity and text publishing', () => {
     expect(mocks.getPostById).toHaveBeenCalledWith(42);
     expect(wrapper.get('.composer-quote-preview').text()).toContain('Quoted post 42');
     expect(wrapper.get('.publish-button').attributes('disabled')).toBeDefined();
+    expect(usePostDraftStore().hasUnsavedChanges).toBe(false);
 
     await wrapper.get('#post-content').setValue('My commentary');
+    expect(usePostDraftStore().hasUnsavedChanges).toBe(true);
     expect(wrapper.get('.publish-button').attributes('disabled')).toBeUndefined();
+  });
+
+  it('allows leaving a quote-only composer without opening the draft exit dialog', async () => {
+    Object.assign(mocks.route, {
+      query: { quote: '42' },
+      fullPath: '/posts/new?quote=42',
+    });
+    wrapper = mountPage();
+    await flushPromises();
+
+    const store = usePostDraftStore();
+    expect(store.quotePostID).toBe(42);
+    expect(store.hasContent).toBe(false);
+    expect(store.hasUnsavedChanges).toBe(false);
+    expect(wrapper.get('.composer-quote-preview').text()).toContain('Quoted post 42');
+
+    await expect(mocks.beforeRouteLeave()).resolves.toBe(true);
+    expect(wrapper.find('.post-draft-exit-dialog').exists()).toBe(false);
   });
 
   it('asks before switching between quote targets and discards only after confirmation', async () => {
@@ -693,9 +713,8 @@ describe('PostCreateView identity and text publishing', () => {
       { name: 'PostCreate', query: { quote: '43' } },
       { name: 'PostCreate', query: { quote: '42' } },
     );
-    await nextTick();
-    await wrapper.get('.post-draft-exit-dialog__button--discard').trigger('click');
     await expect(guardPromise).resolves.toBe(true);
+    expect(wrapper.find('.post-draft-exit-dialog').exists()).toBe(false);
     Object.assign(mocks.route, {
       query: { quote: '43' },
       fullPath: '/posts/new?quote=43',

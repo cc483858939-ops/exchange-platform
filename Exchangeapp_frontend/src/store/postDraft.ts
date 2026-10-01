@@ -70,7 +70,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
   const currentSnapshot = computed(() => createSnapshot(content.value, media.value, quotePostID.value));
   const hasUnsavedChanges = computed(() => {
     if (!savedSnapshot.value) {
-      return hasContent.value || quotePostID.value !== null;
+      return hasContent.value;
     }
     return !postDraftSnapshotsEqual(currentSnapshot.value, savedSnapshot.value);
   });
