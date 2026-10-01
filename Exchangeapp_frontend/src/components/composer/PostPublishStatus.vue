@@ -1,6 +1,6 @@
 <template>
   <aside
-    v-if="operation || postPublishStore.recoveryError"
+    v-if="operation || successNotice || postPublishStore.recoveryError"
     class="post-publish-status"
     role="status"
     aria-live="polite"
@@ -47,6 +47,7 @@ import ConfirmDialog from '../dialogs/ConfirmDialog.vue';
 
 const postPublishStore = usePostPublishStore();
 const operation = computed(() => postPublishStore.latestOperation);
+const successNotice = computed(() => postPublishStore.currentSuccessNotice);
 const abandonConfirmationOpen = ref(false);
 const abandonOperationID = ref<string | null>(null);
 const abandonBusy = ref(false);
@@ -60,9 +61,9 @@ const message = computed(() => {
     case 'failed':
       return operation.value?.error || 'Couldn’t confirm this post.';
     case 'succeeded':
-      return 'Post sent.';
+      return 'Post sent. Finishing cleanup...';
     default:
-      return postPublishStore.recoveryError;
+      return successNotice.value ? 'Post sent.' : postPublishStore.recoveryError;
   }
 });
 

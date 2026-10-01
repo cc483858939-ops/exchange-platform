@@ -24,6 +24,7 @@ describe('PostPublishStatus', () => {
   beforeEach(() => {
     mocks.store = reactive({
       latestOperation: null,
+      currentSuccessNotice: null,
       recoveryError: '',
       retry: vi.fn(),
       abandonFailedOperation: vi.fn(),
@@ -33,7 +34,7 @@ describe('PostPublishStatus', () => {
   it.each([
     ['uploading', 'Uploading post...'],
     ['publishing', 'Posting...'],
-    ['succeeded', 'Post sent.'],
+    ['succeeded', 'Post sent. Finishing cleanup...'],
   ])('renders the %s state', (phase, message) => {
     mocks.store.latestOperation = operationFor(phase);
 
@@ -124,6 +125,52 @@ describe('PostPublishStatus', () => {
     const wrapper = mount(PostPublishStatus);
 
     expect(wrapper.get('[role="status"]').text()).toContain('Couldn’t restore the pending post');
+  });
+
+  it('shows a resolved success notice after the full operation is retired', () => {
+    mocks.store.currentSuccessNotice = {
+      operationID: 'publish-success',
+      publisherUserID: 7,
+      postID: 101,
+      completedAt: 1,
+    };
+
+    const wrapper = mount(PostPublishStatus);
+
+    expect(wrapper.get('[role="status"]').text()).toContain('Post sent.');
+    expect(wrapper.find('.post-publish-status__retry').exists()).toBe(false);
+  });
+
+  it('hides the success message when the viewer-scoped notice expires', async () => {
+    mocks.store.currentSuccessNotice = {
+      operationID: 'publish-success',
+      publisherUserID: 7,
+      postID: 101,
+      completedAt: 1,
+    };
+    const wrapper = mount(PostPublishStatus);
+    expect(wrapper.get('[role="status"]').text()).toContain('Post sent.');
+
+    mocks.store.currentSuccessNotice = null;
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+  });
+
+  it('keeps a failed operation and its actions ahead of a success notice', () => {
+    mocks.store.latestOperation = operationFor('failed', 'publish-failed');
+    mocks.store.currentSuccessNotice = {
+      operationID: 'publish-success',
+      publisherUserID: 7,
+      postID: 101,
+      completedAt: 1,
+    };
+
+    const wrapper = mount(PostPublishStatus);
+
+    expect(wrapper.get('[role="status"]').text()).toContain('Couldn’t confirm this post.');
+    expect(wrapper.find('.post-publish-status__retry').exists()).toBe(true);
+    expect(wrapper.find('.post-publish-status__discard').exists()).toBe(true);
   });
 
   it('does not render without a publish operation', () => {

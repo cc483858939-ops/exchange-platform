@@ -333,6 +333,141 @@ describe('postPublish store', () => {
     });
   });
 
+  it('retires resolved publishes, releases their files, and records a lightweight notice', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Release the completed operation');
+    const uploadedFile = file('release-after-publish.png');
+    draft.addMedia(uploadedFile);
+    const store = usePostPublishStore();
+
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+    const operationID = result.operation.id;
+
+    await flushPromises();
+
+    expect(store.operations.some(operation => operation.id === operationID)).toBe(false);
+    expect(store.operations.some(operation => (
+      operation.media.some(media => media.file === uploadedFile)
+    ))).toBe(false);
+    expect(store.latestOperation).toBeNull();
+    expect(store.currentSuccessNotice).toEqual({
+      operationID,
+      publisherUserID: 7,
+      postID: publishedPost().id,
+      completedAt: expect.any(Number),
+    });
+    expect(Object.keys(store.successNotice || {}).sort()).toEqual([
+      'completedAt',
+      'operationID',
+      'postID',
+      'publisherUserID',
+    ]);
+    expect(store.successNotice).not.toHaveProperty('content');
+    expect(store.successNotice).not.toHaveProperty('media');
+    expect(store.successNotice).not.toHaveProperty('post');
+    expect(store.successNotice).not.toHaveProperty('sourceDraftSnapshot');
+  });
+
+  it('expires notices and keeps a newer notice when an older timer fires', async () => {
+    vi.useFakeTimers();
+    const clearTimer = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
+    try {
+      const draft = usePostDraftStore();
+      draft.setContent('Alice post');
+      const store = usePostPublishStore();
+      const first = await store.startOrRetryDraft();
+      expect(first.status).toBe('accepted');
+      await flushPromises();
+      if (first.status !== 'accepted') throw new Error('first publish was not accepted');
+      const firstNoticeID = first.operation.id;
+      expect(store.successNotice?.operationID).toBe(firstNoticeID);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      mocks.authStore.currentIdentity = { id: 8, username: 'bob', display_name: 'Bob', avatar_url: '' };
+      mocks.authStore.sessionID = 'session-8';
+      draft.setViewer(8);
+      expect(store.currentSuccessNotice).toBeNull();
+
+      mocks.authStore.currentIdentity = { id: 7, username: 'alice', display_name: 'Alice', avatar_url: '' };
+      mocks.authStore.sessionID = 'session-7';
+      expect(store.currentSuccessNotice?.operationID).toBe(firstNoticeID);
+
+      mocks.authStore.currentIdentity = { id: 8, username: 'bob', display_name: 'Bob', avatar_url: '' };
+      mocks.authStore.sessionID = 'session-8';
+      draft.setViewer(8);
+      draft.setContent('Bob post');
+      const secondPostRequest = deferred<Post>();
+      mocks.createPost.mockReturnValueOnce(secondPostRequest.promise);
+      const second = await store.startOrRetryDraft();
+      expect(second.status).toBe('accepted');
+      expect(store.successNotice).toBeNull();
+      expect(store.latestOperation?.phase).toBe('publishing');
+
+      if (second.status !== 'accepted') throw new Error('second publish was not accepted');
+      secondPostRequest.resolve(publishedPost(8));
+      await flushPromises();
+      expect(store.successNotice?.operationID).toBe(second.operation.id);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(store.successNotice?.operationID).toBe(second.operation.id);
+      expect(store.currentSuccessNotice?.operationID).toBe(second.operation.id);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(store.successNotice).toBeNull();
+      expect(store.currentSuccessNotice).toBeNull();
+    } finally {
+      clearTimer.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retires a success after read-back confirms its durable owner is gone', async () => {
+    mocks.deletePostPublishOperation.mockImplementationOnce(async (viewerID: number, operationID: string) => {
+      expect(mocks.publishRecords.get(viewerID)?.id).toBe(operationID);
+      mocks.publishRecords.delete(viewerID);
+      return false;
+    });
+    usePostDraftStore().setContent('Owner disappeared before delete confirmation');
+    const store = usePostPublishStore();
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+
+    await flushPromises();
+
+    expect(store.operations.some(operation => operation.id === result.operation.id)).toBe(false);
+    expect(store.latestOperation).toBeNull();
+    expect(store.currentSuccessNotice?.operationID).toBe(result.operation.id);
+  });
+
+  it('retires only the resolved operation when read-back finds a replacement owner', async () => {
+    const replacementID = operationUUID(990);
+    const replacement = persistedFailedOperation({
+      id: replacementID,
+      content: 'Replacement owner',
+      startedAt: 990,
+    });
+    mocks.deletePostPublishOperation.mockImplementationOnce(async (viewerID: number) => {
+      mocks.publishRecords.set(viewerID, replacement);
+      return false;
+    });
+    usePostDraftStore().setContent('Original successful operation');
+    const store = usePostPublishStore();
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+
+    await flushPromises();
+
+    expect(store.operations.some(operation => operation.id === result.operation.id)).toBe(false);
+    expect(store.operations.some(operation => operation.id === replacementID)).toBe(true);
+    expect(store.latestOperation?.id).toBe(replacementID);
+    expect(store.currentSuccessNotice?.operationID).toBe(result.operation.id);
+    expect(mocks.publishRecords.get(7)?.id).toBe(replacementID);
+  });
+
   it('deletes the source durable draft only after publishing it succeeds', async () => {
     const draft = usePostDraftStore();
     draft.setContent('Saved source draft');
@@ -986,8 +1121,12 @@ describe('postPublish store', () => {
       idempotencyKey: firstResult.operation.id,
       authBinding: { userID: 7, sessionID: 'session-7', sessionVersion: 42 },
     }));
-    expect(recoveredStore.latestOperation?.id).toBe(firstResult.operation.id);
-    expect(recoveredStore.latestOperation?.phase).toBe('succeeded');
+    expect(recoveredStore.latestOperation).toBeNull();
+    expect(recoveredStore.currentSuccessNotice).toMatchObject({
+      operationID: firstResult.operation.id,
+      publisherUserID: 7,
+      postID: publishedPost().id,
+    });
   });
 
   it('scopes the visible operation to the authenticated viewer and hides it while logged out', async () => {
@@ -1403,7 +1542,12 @@ describe('postPublish store', () => {
     await store.activateViewer(7);
     await flushPromises();
 
-    expect(store.latestOperation?.phase).toBe('succeeded');
+    expect(store.latestOperation).toBeNull();
+    expect(store.currentSuccessNotice).toMatchObject({
+      operationID: operationUUID(90),
+      publisherUserID: 7,
+      postID: post.id,
+    });
     expect(mocks.createPost).not.toHaveBeenCalled();
     expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operationUUID(90));
     expect(mocks.feedStore.registerPublishedPost).toHaveBeenCalledWith(post, 7);
@@ -1617,6 +1761,8 @@ describe('postPublish store', () => {
 
     expect(result).toEqual({ status: 'blocked', reason: 'cleanup_pending' });
     expect(store.latestOperation).toMatchObject({ id: operationID, phase: 'succeeded' });
+    expect(store.operations.some(operation => operation.id === operationID)).toBe(true);
+    expect(store.currentSuccessNotice).toBeNull();
     expect(mocks.publishRecords.get(7)?.id).toBe(operationID);
     expect(mocks.randomUUID).not.toHaveBeenCalled();
     expect(mocks.replacePostPublishOperation).not.toHaveBeenCalled();
@@ -1837,7 +1983,7 @@ describe('postPublish store', () => {
     expect(draft.content).toBe('Keep the current draft');
   });
 
-  it('keeps a recovered succeeded operation successful after the same user starts a new session', async () => {
+  it('retires a recovered success without replaying it after the same user starts a new session', async () => {
     const operationID = operationUUID(914);
     const record = persistedFailedOperation({
       id: operationID,
@@ -1854,11 +2000,11 @@ describe('postPublish store', () => {
     await store.activateViewer(7);
     await flushPromises();
 
-    expect(store.latestOperation).toMatchObject({
-      id: operationID,
-      phase: 'succeeded',
-      failureKind: null,
-      post: publishedPost(),
+    expect(store.latestOperation).toBeNull();
+    expect(store.currentSuccessNotice).toMatchObject({
+      operationID,
+      publisherUserID: 7,
+      postID: publishedPost().id,
     });
     expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operationID);
     expect(mocks.publishRecords.has(7)).toBe(false);

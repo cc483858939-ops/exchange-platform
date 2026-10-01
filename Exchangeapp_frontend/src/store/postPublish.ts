@@ -57,6 +57,13 @@ export type PublishOperation = {
   post: Post | null;
 };
 
+export type PublishSuccessNotice = Readonly<{
+  operationID: string;
+  publisherUserID: number;
+  postID: number;
+  completedAt: number;
+}>;
+
 export type PublishBlockReason =
   | 'another_publish_in_flight'
   | 'idempotency_conflict'
@@ -78,6 +85,7 @@ export type StartPublishResult =
   };
 
 const mediaUploadConcurrency = 2;
+const publishSuccessNoticeDurationMs = 4000;
 const publishFailureMessage = 'Couldn’t confirm this post. Retry safely.';
 const publishPersistenceMessage = 'Couldn’t save publish progress on this device. Retry.';
 const publishConflictMessage = 'This post can’t be retried safely.';
@@ -113,10 +121,12 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const postDraft = usePostDraftStore();
   const profileSessionStore = useProfileSessionStore();
   const operations = ref<PublishOperation[]>([]);
+  const successNotice = ref<PublishSuccessNotice | null>(null);
   const recoveryErrors = ref(new Map<number, string>());
   const unresolvedOperationByViewer = ref(new Map<number, string>());
   const runningOperationIDs = new Set<string>();
   const abandoningOperationIDs = new Set<string>();
+  let successNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   const hydrationPromises = new Map<number, Promise<void>>();
   const hydratedViewerIDs = new Set<number>();
 
@@ -176,6 +186,41 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     return true;
   };
 
+  const retireResolvedOperation = (viewerID: number, operationID: string) => {
+    removeOperationIfCurrent(viewerID, operationID);
+  };
+
+  const clearSuccessNotice = (operationID?: string) => {
+    if (operationID && successNotice.value?.operationID !== operationID) {
+      return false;
+    }
+
+    successNotice.value = null;
+    if (successNoticeTimer !== null) {
+      clearTimeout(successNoticeTimer);
+      successNoticeTimer = null;
+    }
+    return true;
+  };
+
+  const recordPublishSuccessNotice = (operation: PublishOperation, post: Post) => {
+    if (successNoticeTimer !== null) {
+      clearTimeout(successNoticeTimer);
+    }
+
+    const notice = Object.freeze({
+      operationID: operation.id,
+      publisherUserID: operation.publisherUserID,
+      postID: post.id,
+      completedAt: Date.now(),
+    });
+    successNotice.value = notice;
+    successNoticeTimer = setTimeout(
+      () => clearSuccessNotice(notice.operationID),
+      publishSuccessNoticeDurationMs,
+    );
+  };
+
   const latestOperation = computed<PublishOperation | null>(() => {
     const viewerID = currentViewerID();
     if (viewerID === null) return null;
@@ -185,6 +230,13 @@ export const usePostPublishStore = defineStore('postPublish', () => {
         ? operation
         : latest
     ), null);
+  });
+
+  const currentSuccessNotice = computed<PublishSuccessNotice | null>(() => {
+    const viewerID = currentViewerID();
+    if (viewerID === null) return null;
+    const notice = successNotice.value;
+    return notice?.publisherUserID === viewerID ? notice : null;
   });
 
   const recoveryError = computed(() => {
@@ -438,6 +490,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
     if (deleted) {
       releaseOperationOwnership(operation.publisherUserID, operation.id);
+      recordPublishSuccessNotice(operation, post);
+      retireResolvedOperation(operation.publisherUserID, operation.id);
       return 'resolved';
     }
 
@@ -457,6 +511,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           upsertOperation(replacement);
           markOperationUnresolved(replacement);
         }
+        recordPublishSuccessNotice(operation, post);
+        retireResolvedOperation(operation.publisherUserID, operation.id);
         return 'resolved';
       }
     } catch {
@@ -663,6 +719,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       operation.error = publishPersistenceMessage;
       return false;
     }
+    clearSuccessNotice();
     if (shouldRebindCurrentDraft) {
       postDraft.bindPublishOperation(operation.id);
     }
@@ -808,6 +865,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
 
     // The durable record exists before the working draft is bound or any network starts.
+    clearSuccessNotice();
     markOperationUnresolved(operation);
     postDraft.bindPublishOperation(operation.id);
     upsertOperation(operation);
@@ -851,6 +909,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   return {
     operations,
     latestOperation,
+    successNotice,
+    currentSuccessNotice,
     recoveryError,
     getOperation,
     getDraftPublishBlockReason,
