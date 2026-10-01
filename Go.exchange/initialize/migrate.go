@@ -163,13 +163,17 @@ func backfillPostQuoteCounts(tx *gorm.DB) error {
 		return errors.New("database transaction is not initialized")
 	}
 	return tx.Exec(`
+WITH active_quote_counts AS (
+	SELECT quote_post_id AS target_id, COUNT(*)::bigint AS quote_count
+	FROM posts
+	WHERE quote_post_id IS NOT NULL
+	  AND deleted_at IS NULL
+	GROUP BY quote_post_id
+)
 UPDATE posts AS target
-SET quote_count = (
-	SELECT COUNT(*)::bigint
-	FROM posts AS quote
-	WHERE quote.quote_post_id = target.id
-	  AND quote.deleted_at IS NULL
-)`).Error
+SET quote_count = counts.quote_count
+FROM active_quote_counts AS counts
+WHERE target.id = counts.target_id`).Error
 }
 
 // applyEmbeddingServingStateSchema owns the singleton constraints and seeds
