@@ -180,6 +180,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         operation.viewerID,
         operation.parentPostID,
         expected,
+        () => mayMutateCurrentReplySession(operation),
       );
       if (result === 'deleted') {
         if (mayMutateCurrentReplySession(operation)) {

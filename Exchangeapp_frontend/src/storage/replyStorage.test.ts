@@ -15,7 +15,10 @@ class FakeTransaction {
   private pending = 0;
   private completionScheduled = false;
 
-  constructor(private readonly records: Map<string, any>) {}
+  constructor(
+    private readonly records: Map<string, any>,
+    private readonly afterGet?: (key: string, value: unknown) => void,
+  ) {}
 
   run<T>(action: () => T): Request<T> {
     const result = request<T>();
@@ -39,7 +42,12 @@ class FakeTransaction {
 
   store() {
     return {
-      get: (key: IDBValidKey) => this.run(() => this.records.get(String(key))),
+      get: (key: IDBValidKey) => this.run(() => {
+        const stringKey = String(key);
+        const value = this.records.get(stringKey);
+        this.afterGet?.(stringKey, value);
+        return value;
+      }),
       put: (value: { key: string }) => this.run(() => { this.records.set(value.key, value); return value.key; }),
       delete: (key: IDBValidKey) => this.run(() => { this.records.delete(String(key)); return undefined; }),
       index: (name: string) => ({
@@ -65,6 +73,7 @@ class FakeDatabase {
   readonly stores = new Map<string, Map<string, any>>();
   readonly transactionModes: IDBTransactionMode[] = [];
   readonly objectStoreNames = { contains: (name: string) => this.stores.has(name) };
+  afterDraftGet: ((key: string, value: unknown) => void) | null = null;
   constructor(readonly name: string, readonly version: number) {}
   createObjectStore(name: string) {
     this.stores.set(name, new Map());
@@ -74,7 +83,10 @@ class FakeDatabase {
     const records = this.stores.get(name);
     if (!records) throw new Error(`Unknown store ${name}`);
     this.transactionModes.push(mode);
-    const transaction = new FakeTransaction(records);
+    const transaction = new FakeTransaction(
+      records,
+      name === 'reply_drafts' ? this.afterDraftGet ?? undefined : undefined,
+    );
     return Object.assign(transaction, { objectStore: (_storeName: string) => transaction.store() });
   }
   close() {}
@@ -149,6 +161,32 @@ describe('replyStorage', () => {
     expect(await storage.deleteReplyDraftIfUnchanged(7, 42, 'saved v1')).toBe('deleted');
     expect(await storage.deleteReplyDraftIfUnchanged(7, 42, 'saved v1')).toBe('missing');
     expect(indexedDBMock.database?.transactionModes).toContain('readwrite');
+  });
+
+  it('rechecks session ownership after reading and before deleting a same-content draft', async () => {
+    const original = {
+      key: '7:42', viewerID: 7, parentPostID: 42,
+      content: 'same text', createdAt: 1, updatedAt: 2,
+    };
+    const nextSessionDraft = { ...original, updatedAt: 3 };
+    await storage.saveReplyDraft(original);
+
+    const database = indexedDBMock.database!;
+    let currentSessionID = 'session-1';
+    const shouldDelete = vi.fn(() => currentSessionID === 'session-1');
+    database.afterDraftGet = (key, value) => {
+      expect(key).toBe('7:42');
+      expect(value).toEqual(original);
+      currentSessionID = 'session-2';
+      database.stores.get('reply_drafts')!.set(key, nextSessionDraft);
+    };
+
+    await expect(storage.deleteReplyDraftIfUnchanged(7, 42, 'same text', shouldDelete))
+      .resolves.toBe('changed');
+    expect(shouldDelete).toHaveBeenCalledTimes(2);
+
+    database.afterDraftGet = null;
+    await expect(storage.getReplyDraft(7, 42)).resolves.toEqual(nextSessionDraft);
   });
 
   it('lists operations by viewer and conditionally updates/deletes only the owning ID', async () => {

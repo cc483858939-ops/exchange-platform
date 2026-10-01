@@ -27,11 +27,18 @@ vi.mock('../storage/replyStorage', () => ({
   getReplyDraft: vi.fn(async (viewerID: number, parentPostID: number) => mocks.drafts.get(storageKey(viewerID, parentPostID)) ?? null),
   saveReplyDraft: vi.fn(async (record: any) => { mocks.drafts.set(record.key, record); }),
   deleteReplyDraft: vi.fn(async (viewerID: number, parentPostID: number) => mocks.drafts.delete(storageKey(viewerID, parentPostID))),
-  deleteReplyDraftIfUnchanged: vi.fn(async (viewerID: number, parentPostID: number, expected: string) => {
+  deleteReplyDraftIfUnchanged: vi.fn(async (
+    viewerID: number,
+    parentPostID: number,
+    expected: string,
+    shouldDelete: () => boolean = () => true,
+  ) => {
+    if (!shouldDelete()) return 'changed';
     const key = storageKey(viewerID, parentPostID);
     const current = mocks.drafts.get(key);
     if (!current) return 'missing';
     if (current.content !== expected) return 'changed';
+    if (!shouldDelete()) return 'changed';
     mocks.drafts.delete(key);
     return 'deleted';
   }),
@@ -449,12 +456,76 @@ describe('replySubmission store', () => {
       7,
       42,
       'saved source',
+      expect.any(Function),
     );
     expect(mocks.drafts.has('7:42')).toBe(false);
     expect(mocks.records.has('7:42')).toBe(false);
     expect(finishSubmission).toHaveBeenCalledWith(42, 'operation-a', 'saved source');
     expect(draftStore.getDraft(42)).toBe('');
     expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
+  it('preserves a same-content next-session draft when the session changes during succeeded cleanup', async () => {
+    const draftStore = drafts();
+    draftStore.setViewer(7);
+    draftStore.setDraft(42, 'same text');
+    await draftStore.saveDraft(42);
+    const finishSubmission = vi.spyOn(draftStore, 'finishBoundSubmission');
+    const markDeleted = vi.spyOn(draftStore, 'markSourceDraftDeleted');
+    mocks.records.set('7:42', record({
+      phase: 'succeeded',
+      post: replyPost(),
+      sourceDraftContent: 'same text',
+    }));
+
+    const storageModule = await import('../storage/replyStorage');
+    const deleteStarted = deferred<void>();
+    const continueDelete = deferred<void>();
+    const conditionalDelete = vi.mocked(storageModule.deleteReplyDraftIfUnchanged);
+    conditionalDelete.mockImplementationOnce(async (
+      viewerID,
+      parentPostID,
+      expectedContent,
+      shouldDelete = () => true,
+    ) => {
+      const key = storageKey(viewerID, parentPostID);
+      const observedDraft = mocks.drafts.get(key);
+      if (!shouldDelete()) return 'changed';
+      if (!observedDraft) return 'missing';
+      if (observedDraft.content !== expectedContent) return 'changed';
+
+      deleteStarted.resolve();
+      await continueDelete.promise;
+      if (!shouldDelete()) return 'changed';
+      mocks.drafts.delete(key);
+      return 'deleted';
+    });
+
+    await store().activateViewer(7);
+    await deleteStarted.promise;
+    mocks.authStore.sessionID = 'session-7-next';
+    mocks.authStore.sessionVersion = 6;
+    const nextSessionDraft = {
+      ...mocks.drafts.get('7:42'),
+      content: 'same text',
+      updatedAt: 3,
+    };
+    mocks.drafts.set('7:42', nextSessionDraft);
+    continueDelete.resolve();
+    await flushPromises();
+
+    expect(mocks.drafts.get('7:42')).toEqual(nextSessionDraft);
+    expect(mocks.records.has('7:42')).toBe(false);
+    expect(store().getOperation(7, 42)).toMatchObject({
+      phase: 'succeeded',
+      failureKind: null,
+      durableOwned: false,
+      cleanupPending: false,
+    });
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+    expect(finishSubmission).not.toHaveBeenCalled();
+    expect(markDeleted).not.toHaveBeenCalled();
+    expect(conditionalDelete).toHaveBeenCalledWith(7, 42, 'same text', expect.any(Function));
   });
 
   it('keeps a legacy reply draft and permits discard without adopting the current session', async () => {

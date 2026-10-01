@@ -206,8 +206,10 @@ export const deleteReplyDraftIfUnchanged = async (
   viewerID: number,
   parentPostID: number,
   expectedContent: string,
+  shouldDelete: () => boolean = () => true,
 ): Promise<ConditionalReplyDraftDelete> => {
   if (!validID(viewerID) || !validID(parentPostID)) return 'missing';
+  if (!shouldDelete()) return 'changed';
   return withStore(DRAFT_STORE, 'readwrite', async store => {
     const key = replyStorageKey(viewerID, parentPostID);
     const value = await requestResult(store.get(key));
@@ -215,6 +217,7 @@ export const deleteReplyDraftIfUnchanged = async (
     const record = validateDraft(value);
     if (!validOwner(record, viewerID, parentPostID)) return 'missing';
     if (record.content !== expectedContent) return 'changed';
+    if (!shouldDelete()) return 'changed';
     await requestResult(store.delete(key));
     return 'deleted';
   });
