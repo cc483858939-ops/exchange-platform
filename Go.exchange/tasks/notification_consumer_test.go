@@ -180,6 +180,15 @@ func TestDecodeNotificationActivityMapsDomainEvents(t *testing.T) {
 			typeName: models.NotificationTypePostReplied, dedupeKey: "post_reply:11", postID: 11, recipient: 9, actor: 7,
 		},
 		{
+			name: "quote",
+			make: func(id string) (eventing.Envelope, error) {
+				return eventing.NewQuoteCreatedEnvelope(id, eventing.QuoteCreatedPayload{
+					QuotePostID: 100, TargetPostID: 42, ActorID: 7, TargetAuthorID: 9, CreatedAt: now,
+				})
+			},
+			typeName: models.NotificationTypePostQuoted, dedupeKey: "post_quote:100", postID: 100, recipient: 9, actor: 7,
+		},
+		{
 			name: "follow",
 			make: func(id string) (eventing.Envelope, error) {
 				return eventing.NewUserFollowCreatedEnvelope(id, eventing.UserFollowCreatedPayload{
@@ -244,6 +253,14 @@ func TestDecodeNotificationActivitySuppressesValidNoOpEvents(t *testing.T) {
 				})
 			},
 		},
+		{
+			name: "self-quote",
+			envelope: func(id string) (eventing.Envelope, error) {
+				return eventing.NewQuoteCreatedEnvelope(id, eventing.QuoteCreatedPayload{
+					QuotePostID: 100, TargetPostID: 42, ActorID: 9, TargetAuthorID: 9, CreatedAt: now,
+				})
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -257,6 +274,58 @@ func TestDecodeNotificationActivitySuppressesValidNoOpEvents(t *testing.T) {
 			}
 			if record.Candidate != nil {
 				t.Fatalf("candidate=%+v, want valid no-op", record.Candidate)
+			}
+		})
+	}
+}
+
+func TestDecodeNotificationActivityRejectsMalformedQuoteEvents(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	validEnvelope := func(t *testing.T) eventing.Envelope {
+		t.Helper()
+		envelope, err := eventing.NewQuoteCreatedEnvelope(uuid.NewString(), eventing.QuoteCreatedPayload{
+			QuotePostID: 100, TargetPostID: 42, ActorID: 7, TargetAuthorID: 9, CreatedAt: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return envelope
+	}
+	payloadMutation := func(mutate func(*eventing.QuoteCreatedPayload)) func(*eventing.Envelope) {
+		return func(envelope *eventing.Envelope) {
+			var payload eventing.QuoteCreatedPayload
+			if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&payload)
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			envelope.Payload = raw
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*eventing.Envelope)
+	}{
+		{name: "wrong schema", mutate: func(e *eventing.Envelope) { e.SchemaVersion = 2 }},
+		{name: "wrong aggregate type", mutate: func(e *eventing.Envelope) { e.AggregateType = "user" }},
+		{name: "aggregate id mismatch", mutate: func(e *eventing.Envelope) { e.AggregateID = "101" }},
+		{name: "zero quote post", mutate: payloadMutation(func(p *eventing.QuoteCreatedPayload) { p.QuotePostID = 0 })},
+		{name: "zero target post", mutate: payloadMutation(func(p *eventing.QuoteCreatedPayload) { p.TargetPostID = 0 })},
+		{name: "zero actor", mutate: payloadMutation(func(p *eventing.QuoteCreatedPayload) { p.ActorID = 0 })},
+		{name: "zero target author", mutate: payloadMutation(func(p *eventing.QuoteCreatedPayload) { p.TargetAuthorID = 0 })},
+		{name: "zero created at", mutate: payloadMutation(func(p *eventing.QuoteCreatedPayload) { p.CreatedAt = time.Time{} })},
+		{name: "occurred at mismatch", mutate: payloadMutation(func(p *eventing.QuoteCreatedPayload) { p.CreatedAt = now.Add(time.Second) })},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			envelope := validEnvelope(t)
+			test.mutate(&envelope)
+			_, err := decodeNotificationActivity(notificationMessage(t, envelope))
+			if err == nil || kafkaFailureClassOf(err) != kafkaFailurePermanent {
+				t.Fatalf("error=%v class=%q, want permanent malformed-event failure", err, kafkaFailureClassOf(err))
 			}
 		})
 	}

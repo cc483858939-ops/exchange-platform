@@ -57,6 +57,7 @@ type notificationActivityRecord struct {
 type notificationPostRow struct {
 	AuthorID      uint
 	ReplyToPostID *uint
+	QuotePostID   *uint
 }
 
 func notificationPublicPostScope(query *gorm.DB, now time.Time) *gorm.DB {
@@ -305,6 +306,27 @@ func decodeNotificationActivity(message kafka.Message) (notificationActivityReco
 			PostID:    func() *uint { value := payload.ReplyPostID; return &value }(),
 			DedupeKey: fmt.Sprintf("post_reply:%d", payload.ReplyPostID), ActivityAt: payload.CreatedAt,
 		}
+	case eventing.EventTypeQuoteCreated:
+		if envelope.SchemaVersion != 1 || envelope.AggregateType != "post" {
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, errors.New("unsupported quote activity schema"))
+		}
+		var payload eventing.QuoteCreatedPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeDecodePayload, fmt.Errorf("decode quote activity payload: %w", err))
+		}
+		if payload.QuotePostID == 0 || payload.TargetPostID == 0 || payload.ActorID == 0 || payload.TargetAuthorID == 0 || payload.CreatedAt.IsZero() ||
+			!payload.CreatedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != strconv.FormatUint(uint64(payload.QuotePostID), 10) {
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("invalid quote activity payload"))
+		}
+		if payload.ActorID == payload.TargetAuthorID {
+			return record, nil
+		}
+		quotePostID := payload.QuotePostID
+		record.Candidate = &models.Notification{
+			RecipientID: payload.TargetAuthorID, ActorID: payload.ActorID, Type: models.NotificationTypePostQuoted,
+			PostID: &quotePostID, DedupeKey: fmt.Sprintf("post_quote:%d", payload.QuotePostID),
+			SourceVersion: 0, ActivityAt: payload.CreatedAt,
+		}
 	case eventing.EventTypeUserFollowCreated:
 		if envelope.SchemaVersion != 1 || envelope.AggregateType != "user_follow" {
 			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, errors.New("unsupported follow activity schema"))
@@ -416,35 +438,39 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 		ID            uint  `gorm:"column:id"`
 		AuthorID      uint  `gorm:"column:author_id"`
 		ReplyToPostID *uint `gorm:"column:reply_to_post_id"`
+		QuotePostID   *uint `gorm:"column:quote_post_id"`
 	}
 	if len(postIDs) > 0 {
 		now := time.Now().UTC()
 		if err := notificationPublicPostScope(tx.Table("posts"), now).
-			Select("posts.id, posts.author_id, posts.reply_to_post_id").
+			Select("posts.id, posts.author_id, posts.reply_to_post_id, posts.quote_post_id").
 			Where("posts.id IN ?", uniqueUintIDs(postIDs)).Find(&postRows).Error; err != nil {
 			return nil, err
 		}
 		for _, row := range postRows {
-			posts[row.ID] = notificationPostRow{AuthorID: row.AuthorID, ReplyToPostID: row.ReplyToPostID}
+			posts[row.ID] = notificationPostRow{AuthorID: row.AuthorID, ReplyToPostID: row.ReplyToPostID, QuotePostID: row.QuotePostID}
 		}
 	}
-	parentIDs := make([]uint, 0, len(postRows))
+	referencedPostIDs := make([]uint, 0, len(postRows)*2)
 	for _, row := range postRows {
 		if row.ReplyToPostID != nil && *row.ReplyToPostID != 0 {
-			parentIDs = append(parentIDs, *row.ReplyToPostID)
+			referencedPostIDs = append(referencedPostIDs, *row.ReplyToPostID)
+		}
+		if row.QuotePostID != nil && *row.QuotePostID != 0 {
+			referencedPostIDs = append(referencedPostIDs, *row.QuotePostID)
 		}
 	}
-	parentAuthors := make(map[uint]uint)
-	if len(parentIDs) > 0 {
-		var parentRows []struct {
+	referencedAuthors := make(map[uint]uint)
+	if len(referencedPostIDs) > 0 {
+		var referencedRows []struct {
 			ID       uint `gorm:"column:id"`
 			AuthorID uint `gorm:"column:author_id"`
 		}
-		if err := tx.Unscoped().Table("posts").Select("id, author_id").Where("id IN ?", uniqueUintIDs(parentIDs)).Find(&parentRows).Error; err != nil {
+		if err := tx.Unscoped().Table("posts").Select("id, author_id").Where("id IN ?", uniqueUintIDs(referencedPostIDs)).Find(&referencedRows).Error; err != nil {
 			return nil, err
 		}
-		for _, row := range parentRows {
-			parentAuthors[row.ID] = row.AuthorID
+		for _, row := range referencedRows {
+			referencedAuthors[row.ID] = row.AuthorID
 		}
 	}
 	filtered := make([]models.Notification, 0, len(candidates))
@@ -466,7 +492,11 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 					continue
 				}
 			case models.NotificationTypePostReplied:
-				if candidate.SourceVersion != 0 || post.ReplyToPostID == nil || parentAuthors[*post.ReplyToPostID] != candidate.RecipientID {
+				if candidate.SourceVersion != 0 || post.ReplyToPostID == nil || referencedAuthors[*post.ReplyToPostID] != candidate.RecipientID {
+					continue
+				}
+			case models.NotificationTypePostQuoted:
+				if candidate.SourceVersion != 0 || post.QuotePostID == nil || referencedAuthors[*post.QuotePostID] != candidate.RecipientID {
 					continue
 				}
 			default:

@@ -21,6 +21,7 @@ const (
 	EventTypePostEmbeddingRequested = "post.embedding.requested"
 	EventTypePostReactionApplied    = "post.reaction.applied"
 	EventTypeReplyCreated           = "post.reply.created"
+	EventTypeQuoteCreated           = "post.quote.created"
 	EventTypeUserFollowCreated      = "user_follow.created"
 
 	EventTypeRecommendationImpression    = "recommendation.impression"
@@ -74,6 +75,14 @@ type ReplyCreatedPayload struct {
 	ConversationID uint      `json:"conversation_id"`
 	ActorID        uint      `json:"actor_id"`
 	ParentAuthorID uint      `json:"parent_author_id"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type QuoteCreatedPayload struct {
+	QuotePostID    uint      `json:"quote_post_id"`
+	TargetPostID   uint      `json:"target_post_id"`
+	ActorID        uint      `json:"actor_id"`
+	TargetAuthorID uint      `json:"target_author_id"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -336,6 +345,17 @@ func NewReplyCreatedEnvelope(eventID string, payload ReplyCreatedPayload) (Envel
 	return newActivityEnvelope(eventID, EventTypeReplyCreated, "post", strconv.FormatUint(uint64(payload.ReplyPostID), 10), payload.CreatedAt, body)
 }
 
+func NewQuoteCreatedEnvelope(eventID string, payload QuoteCreatedPayload) (Envelope, error) {
+	if payload.QuotePostID == 0 || payload.TargetPostID == 0 || payload.ActorID == 0 || payload.TargetAuthorID == 0 || payload.CreatedAt.IsZero() {
+		return Envelope{}, errors.New("quote activity payload is missing required fields")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal quote activity payload: %w", err)
+	}
+	return newActivityEnvelope(eventID, EventTypeQuoteCreated, "post", strconv.FormatUint(uint64(payload.QuotePostID), 10), payload.CreatedAt, body)
+}
+
 func NewUserFollowCreatedEnvelope(eventID string, payload UserFollowCreatedPayload) (Envelope, error) {
 	if payload.FollowID == 0 || payload.FollowerID == 0 || payload.FollowingID == 0 || payload.FollowerID == payload.FollowingID || payload.CreatedAt.IsZero() {
 		return Envelope{}, errors.New("follow activity payload is missing required fields")
@@ -393,7 +413,7 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 		return strings.TrimSpace(kafkaConfig.RecommendationEventsTopic), nil
 	case EventTypePostEmbeddingRequested:
 		return strings.TrimSpace(kafkaConfig.PostEmbeddingTopic), nil
-	case EventTypePostReactionApplied, EventTypeReplyCreated, EventTypeUserFollowCreated:
+	case EventTypePostReactionApplied, EventTypeReplyCreated, EventTypeQuoteCreated, EventTypeUserFollowCreated:
 		return strings.TrimSpace(kafkaConfig.ActivityEventsTopic), nil
 	default:
 		return "", fmt.Errorf("unsupported event type %q", eventType)
@@ -435,6 +455,11 @@ func KeyForEvent(event Envelope) string {
 		var payload ReplyCreatedPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.ConversationID > 0 {
 			return strconv.FormatUint(uint64(payload.ConversationID), 10)
+		}
+	case EventTypeQuoteCreated:
+		var payload QuoteCreatedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.TargetPostID > 0 {
+			return strconv.FormatUint(uint64(payload.TargetPostID), 10)
 		}
 	case EventTypeUserFollowCreated:
 		var payload UserFollowCreatedPayload

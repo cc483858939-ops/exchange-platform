@@ -5,6 +5,7 @@ import "time"
 const (
 	NotificationTypePostLiked    = "post_liked"
 	NotificationTypePostReplied  = "post_replied"
+	NotificationTypePostQuoted   = "post_quoted"
 	NotificationTypeUserFollowed = "user_followed"
 )
 

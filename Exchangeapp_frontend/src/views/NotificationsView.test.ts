@@ -51,6 +51,13 @@ const notification = (id: number, read = false, avatarURL = ''): Notification =>
   read,
 });
 
+const quotedNotification = (id: number, read = false): Notification => ({
+  ...notification(id, read),
+  type: 'post_quoted',
+  post_id: 100,
+  conversation_id: 100,
+});
+
 const followedNotification = (id: number, actorID = 9, read = false): Notification => ({
   id,
   type: 'user_followed',
@@ -169,6 +176,36 @@ describe('NotificationsView', () => {
     await flushPromises();
     expect(wrapper.text()).toContain('Log in to view your notifications.');
     expect(mocks.getNotifications).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('shows quote notifications and navigates to the quote post before mark-read settles', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({ items: [quotedNotification(8)], next_cursor: null });
+    const pending = deferred<void>();
+    mocks.markNotificationRead.mockReturnValueOnce(pending.promise);
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('Alice quoted your post.');
+    await wrapper.find('.notification-card__open').trigger('click');
+
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'PostDetail', params: { id: '100' } });
+    expect(mocks.router.push).not.toHaveBeenCalledWith({ name: 'PostDetail', params: { id: '42' } });
+    expect(useNotificationStore().pendingReadIDs.has(8)).toBe(true);
+
+    pending.resolve();
+    await flushPromises();
+    wrapper.unmount();
+  });
+
+  it('mentions quotes in the empty state', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    const wrapper = mountView();
+    await flushPromises();
+    expect(wrapper.text()).toContain('New likes, replies, quotes, and follows will appear here.');
     wrapper.unmount();
   });
 

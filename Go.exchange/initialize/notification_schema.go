@@ -64,7 +64,7 @@ func applyNotificationSchema(tx *gorm.DB) error {
 	}
 	statements := []string{
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_type",
-		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'user_followed'))",
+		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'post_quoted', 'user_followed'))",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_recipient_actor",
 		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_recipient_actor CHECK (recipient_id <> actor_id)",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_dedupe_key",
@@ -75,6 +75,7 @@ func applyNotificationSchema(tx *gorm.DB) error {
 		`ALTER TABLE notifications ADD CONSTRAINT chk_notifications_shape CHECK (
   (notification_type = 'post_liked' AND post_id IS NOT NULL AND source_version > 0) OR
   (notification_type = 'post_replied' AND post_id IS NOT NULL AND source_version = 0) OR
+  (notification_type = 'post_quoted' AND post_id IS NOT NULL AND source_version = 0) OR
   (notification_type = 'user_followed' AND post_id IS NULL AND source_version > 0)
 )`,
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_recipient",

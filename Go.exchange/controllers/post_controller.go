@@ -243,6 +243,7 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 	}
 	return global.APIDb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var parentAuthor uint
+		var quoteTargetAuthor uint
 		*post = models.Post{
 			AuthorID: userID, Content: content, Language: postlanguage.Detect(content), ReplyToPostID: req.ReplyToPostID,
 			QuotePostID: req.QuotePostID, Visibility: "public",
@@ -264,6 +265,7 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 			if err := publicPostScope(tx.Where("posts.id = ?", *req.QuotePostID), now).First(&quoted).Error; err != nil {
 				return err
 			}
+			quoteTargetAuthor = quoted.AuthorID
 		}
 		post.CreatedAt = now
 		post.UpdatedAt = now
@@ -338,6 +340,17 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 			}
 			if activity.Payload == nil {
 				return errors.New("reply activity payload is empty")
+			}
+			if err := addConfiguredActivityOutboxEvent(tx, activity); err != nil {
+				return err
+			}
+		} else if post.QuotePostID != nil {
+			activity, err := eventing.NewQuoteCreatedEnvelope(uuid.NewString(), eventing.QuoteCreatedPayload{
+				QuotePostID: post.ID, TargetPostID: *post.QuotePostID,
+				ActorID: userID, TargetAuthorID: quoteTargetAuthor, CreatedAt: now,
+			})
+			if err != nil {
+				return err
 			}
 			if err := addConfiguredActivityOutboxEvent(tx, activity); err != nil {
 				return err
