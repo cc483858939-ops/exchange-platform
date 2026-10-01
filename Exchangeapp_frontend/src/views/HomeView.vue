@@ -254,6 +254,7 @@ import 'element-plus/es/components/message/style/css';
 import type { ComponentPublicInstance } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { isInitialDocumentEntryForRoute } from '../router/documentNavigation';
+import { virtualItemsWithInitialFallback } from '../utils/virtualizer';
 import FeedTabs from '../components/feed/FeedTabs.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
@@ -565,25 +566,6 @@ const setFeedTopPinned = (tab: FeedTab, pinned: boolean) => {
 if (initialHomeDocumentEntry) {
   setFeedTopPinned(initialHomeDocumentEntryTab, true);
 }
-
-const virtualItemsWithInitialFallback = (
-  virtualItems: VirtualItem[],
-  rowCount: number,
-  firstRowKey: string | undefined,
-  estimateSize: number,
-) => {
-  if (virtualItems.length > 0 || rowCount === 0 || firstRowKey === undefined) {
-    return virtualItems;
-  }
-  return [{
-    key: firstRowKey,
-    index: 0,
-    start: 0,
-    end: estimateSize,
-    size: estimateSize,
-    lane: 0,
-  }];
-};
 
 const forYouVirtualItems = computed(() => virtualItemsWithInitialFallback(
   forYouVirtualizer.value.getVirtualItems(),

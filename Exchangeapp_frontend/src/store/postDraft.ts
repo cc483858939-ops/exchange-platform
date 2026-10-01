@@ -15,7 +15,6 @@ import {
   isValidQuotePostID,
   postDraftSnapshotsEqual,
   type DraftSnapshot,
-  type DraftSnapshotMedia,
 } from '../utils/postDraftSnapshot';
 
 export type { DraftSnapshot, DraftSnapshotMedia } from '../utils/postDraftSnapshot';
