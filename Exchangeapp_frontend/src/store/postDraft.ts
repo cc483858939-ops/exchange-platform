@@ -279,6 +279,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     sourceViewerID: number,
     id: string,
     expectedSnapshot: DraftSnapshot | null,
+    shouldReconcileWorkingState: () => boolean = () => true,
   ): Promise<'deleted' | 'missing' | 'changed'> => {
     const normalizedViewerID = normalizeViewerID(sourceViewerID);
     if (normalizedViewerID === null || !id.trim()) {
@@ -292,6 +293,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
     const result = await deletePostDraftIfUnchanged(normalizedViewerID, id, expectedSnapshot);
     if (
       result === 'deleted'
+      && shouldReconcileWorkingState()
       && viewerID.value === normalizedViewerID
       && draftID.value === id
       && postDraftSnapshotsEqual(savedSnapshot.value, expectedSnapshot)

@@ -116,6 +116,10 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       && binding.userID === operation.viewerID
       && binding.sessionID === operation.viewerSessionID);
   };
+  const mayMutateCurrentReplySession = (operation: ReplySubmissionOperation) => (
+    activeViewerID.value === operation.viewerID
+    && operationMatchesCurrentSession(operation)
+  );
   const recoveryError = computed(() => (
     activeViewerID.value === null ? '' : recoveryErrors.value[String(activeViewerID.value)] || ''
   ));
@@ -170,7 +174,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
 
   const markDraftSourceResolved = async (operation: ReplySubmissionOperation) => {
     const expected = operation.sourceDraftContent;
-    if (expected === null) return true;
+    if (expected === null || !mayMutateCurrentReplySession(operation)) return true;
     try {
       const result = await deleteReplyDraftIfUnchanged(
         operation.viewerID,
@@ -178,20 +182,22 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         expected,
       );
       if (result === 'deleted') {
-        if (activeViewerID.value === operation.viewerID) {
+        if (mayMutateCurrentReplySession(operation)) {
           replyDraftStore.markSourceDraftDeleted(operation.parentPostID, expected);
         }
         return true;
       }
       if (result === 'missing' || result === 'changed') {
-        if (activeViewerID.value === operation.viewerID) {
+        if (mayMutateCurrentReplySession(operation)) {
           const latest = await getReplyDraft(operation.viewerID, operation.parentPostID);
-          replyDraftStore.refreshSavedBaseline(
-            operation.parentPostID,
-            latest?.content ?? null,
-            expected,
-            latest?.createdAt ?? null,
-          );
+          if (mayMutateCurrentReplySession(operation)) {
+            replyDraftStore.refreshSavedBaseline(
+              operation.parentPostID,
+              latest?.content ?? null,
+              expected,
+              latest?.createdAt ?? null,
+            );
+          }
         }
         return true;
       }
@@ -203,7 +209,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
 
   const performSuccessfulOperationFinalization = async (operation: ReplySubmissionOperation): Promise<boolean> => {
     if (!operation.durableOwned || operation.phase !== 'succeeded') return !operation.durableOwned;
-    if (activeViewerID.value === operation.viewerID
+    if (mayMutateCurrentReplySession(operation)
       && await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed') return false;
     operation.cleanupPending = true;
     upsertOperation(operation);
@@ -236,7 +242,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
 
     operation.durableOwned = false;
     operation.cleanupPending = false;
-    if (activeViewerID.value === operation.viewerID) {
+    if (mayMutateCurrentReplySession(operation)) {
       replyDraftStore.finishBoundSubmission(operation.parentPostID, operation.id, operation.content);
     }
     upsertOperation(operation);
@@ -285,16 +291,20 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       }
       await finalizeSuccessfulOperation(operation);
     } catch (error) {
-      operation.phase = 'failed';
-      const authContextChanged = (error instanceof Error && error.name === 'AuthSessionChangedError')
-        || !operationMatchesCurrentSession(operation);
-      operation.failureKind = authContextChanged
-        ? 'auth_context_changed'
-        : isIdempotencyConflict(error) ? 'idempotency_conflict' : 'retryable';
-      operation.error = operation.failureKind === 'idempotency_conflict'
-        ? 'This reply can’t be retried safely.'
-        : 'Reply failed. Retry safely.';
-      operation.cleanupPending = false;
+      if (operation.phase === 'succeeded' && operation.post) {
+        operation.cleanupPending = true;
+      } else {
+        operation.phase = 'failed';
+        const authContextChanged = (error instanceof Error && error.name === 'AuthSessionChangedError')
+          || !operationMatchesCurrentSession(operation);
+        operation.failureKind = authContextChanged
+          ? 'auth_context_changed'
+          : isIdempotencyConflict(error) ? 'idempotency_conflict' : 'retryable';
+        operation.error = operation.failureKind === 'idempotency_conflict'
+          ? 'This reply can’t be retried safely.'
+          : 'Reply failed. Retry safely.';
+        operation.cleanupPending = false;
+      }
       upsertOperation(operation);
       try { await updateReplySubmissionOperation(persistOperation(operation)); } catch { /* keep in-memory unresolved owner */ }
     } finally {
@@ -323,7 +333,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         const restored = records.map(restoreOperation);
         operations.value = operations.value.filter(operation => operation.viewerID !== normalized).concat(restored);
         for (const operation of restored) {
-          if (!operation.viewerSessionID) {
+          if (operation.phase !== 'succeeded' && !operation.viewerSessionID) {
             operation.phase = 'failed';
             operation.failureKind = 'auth_context_changed';
             operation.error = 'Reply failed. Retry safely.';
@@ -599,7 +609,9 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     }
     if (!deleted) return false;
     operation.durableOwned = false;
-    replyDraftStore.clearSubmissionBinding(operation.parentPostID, operation.id);
+    if (mayMutateCurrentReplySession(operation)) {
+      replyDraftStore.clearSubmissionBinding(operation.parentPostID, operation.id);
+    }
     upsertOperation(operation);
     return true;
   };

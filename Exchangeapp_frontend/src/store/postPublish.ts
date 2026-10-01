@@ -233,10 +233,11 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     operation: PublishOperation,
     post: Post,
   ) => {
+    if (!operationMatchesCurrentSession(operation)) return;
     const capturedVersion = captureBookmarkStateSyncVersion(post.id);
     const isCurrent = () => (
       operation.phase === 'succeeded'
-      && currentViewerID() === operation.publisherUserID
+      && operationMatchesCurrentSession(operation)
     );
 
     try {
@@ -393,6 +394,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           operation.publisherUserID,
           operation.sourceDraftID,
           operation.sourceDraftSnapshot,
+          () => operationMatchesCurrentSession(operation),
         );
         // Deleted, missing, changed, and legacy-without-snapshot all resolve ownership.
         sourceDraftClean = true;
@@ -401,7 +403,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       }
     }
 
-    if (currentViewerID() === operation.publisherUserID) {
+    if (operationMatchesCurrentSession(operation)) {
       // Cache reconciliation is best effort. The server response is authoritative.
       try {
         feedStore.registerPublishedPost(post, operation.publisherUserID);
@@ -421,7 +423,9 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       void hydratePublishedPostBookmarkState(operation, post);
     }
 
-    postDraft.clearIfBoundTo(operation.id, operation.publisherUserID);
+    if (operationMatchesCurrentSession(operation)) {
+      postDraft.clearIfBoundTo(operation.id, operation.publisherUserID);
+    }
     if (!sourceDraftClean) {
       return 'pending';
     }
@@ -466,6 +470,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     error: unknown,
     failureKind: Exclude<PublishFailureKind, null> = 'retryable',
   ) => {
+    if (operation.phase === 'succeeded' && operation.post) return;
     operation.phase = 'failed';
     operation.failureKind = failureKind;
     operation.error = failureKind === 'idempotency_conflict'
@@ -573,7 +578,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           if (operation.phase === 'succeeded' && !operation.post) {
             throw new Error('The successful publish record is incomplete.');
           }
-          if (!operationMatchesCurrentSession(operation)) {
+          if (operation.phase !== 'succeeded' && !operationMatchesCurrentSession(operation)) {
             operation.phase = 'failed';
             operation.failureKind = 'auth_context_changed';
             operation.error = publishFailureMessage;

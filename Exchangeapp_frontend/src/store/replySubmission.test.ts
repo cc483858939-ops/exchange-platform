@@ -344,6 +344,119 @@ describe('replySubmission store', () => {
     expect(await store().retry('operation-a')).toBe(false);
   });
 
+  it('keeps a recovered succeeded reply successful after the same user starts a new session', async () => {
+    mocks.records.set('7:42', record({
+      viewerSessionID: 'session-7',
+      phase: 'succeeded',
+      post: replyPost(),
+      sourceDraftContent: null,
+    }));
+    mocks.authStore.sessionID = 'session-7-new';
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'new session reply draft');
+
+    await store().activateViewer(7);
+    await flushPromises();
+
+    expect(store().getOperation(7, 42)).toMatchObject({
+      viewerSessionID: 'session-7',
+      phase: 'succeeded',
+      failureKind: null,
+    });
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+    expect(mocks.records.has('7:42')).toBe(false);
+    expect(drafts().getDraft(42)).toBe('new session reply draft');
+  });
+
+  it('preserves a same-content draft and skips reply draft store mutations across sessions', async () => {
+    const draftStore = drafts();
+    draftStore.setViewer(7);
+    draftStore.setDraft(42, 'same text');
+    await draftStore.saveDraft(42);
+    const markDeleted = vi.spyOn(draftStore, 'markSourceDraftDeleted');
+    const refreshBaseline = vi.spyOn(draftStore, 'refreshSavedBaseline');
+    const finishSubmission = vi.spyOn(draftStore, 'finishBoundSubmission');
+    const clearBinding = vi.spyOn(draftStore, 'clearSubmissionBinding');
+    mocks.drafts.set('7:42', {
+      key: '7:42', viewerID: 7, parentPostID: 42,
+      content: 'same text', createdAt: 1, updatedAt: 2,
+    });
+    mocks.records.set('7:42', record({
+      viewerSessionID: 'session-7',
+      phase: 'succeeded',
+      post: replyPost(),
+      sourceDraftContent: 'same text',
+    }));
+    mocks.authStore.sessionID = 'session-7-new';
+    const storageModule = await import('../storage/replyStorage');
+
+    await store().activateViewer(7);
+    await flushPromises();
+
+    expect(vi.mocked(storageModule.deleteReplyDraftIfUnchanged)).not.toHaveBeenCalled();
+    expect(mocks.drafts.get('7:42')?.content).toBe('same text');
+    expect(draftStore.getDraft(42)).toBe('same text');
+    expect(markDeleted).not.toHaveBeenCalled();
+    expect(refreshBaseline).not.toHaveBeenCalled();
+    expect(finishSubmission).not.toHaveBeenCalled();
+    expect(clearBinding).not.toHaveBeenCalled();
+    expect(mocks.records.has('7:42')).toBe(false);
+  });
+
+  it('retires a cross-session succeeded reply operation without retrying it', async () => {
+    mocks.records.set('7:42', record({
+      viewerSessionID: 'session-7',
+      phase: 'succeeded',
+      post: replyPost(),
+      sourceDraftContent: 'S1 saved source',
+    }));
+    mocks.authStore.sessionID = 'session-7-new';
+    const storageModule = await import('../storage/replyStorage');
+
+    await store().activateViewer(7);
+    await flushPromises();
+
+    expect(vi.mocked(storageModule.deleteReplyDraftIfUnchanged)).not.toHaveBeenCalled();
+    expect(vi.mocked(storageModule.deleteReplySubmissionOperation)).toHaveBeenCalledWith(
+      7,
+      42,
+      'operation-a',
+    );
+    expect(mocks.records.has('7:42')).toBe(false);
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
+  it('retains same-session succeeded reply source cleanup behavior', async () => {
+    const operation = record({
+      content: 'saved source',
+      phase: 'succeeded',
+      post: replyPost(),
+      sourceDraftContent: 'saved source',
+    });
+    mocks.records.set('7:42', operation);
+    const draftStore = drafts();
+    draftStore.setViewer(7);
+    draftStore.setDraft(42, 'saved source');
+    await draftStore.saveDraft(42);
+    expect(draftStore.bindSubmission(42, 'operation-a', 'saved source')).toBe(true);
+    const finishSubmission = vi.spyOn(draftStore, 'finishBoundSubmission');
+    const storageModule = await import('../storage/replyStorage');
+
+    await store().activateViewer(7);
+    await flushPromises();
+
+    expect(vi.mocked(storageModule.deleteReplyDraftIfUnchanged)).toHaveBeenCalledWith(
+      7,
+      42,
+      'saved source',
+    );
+    expect(mocks.drafts.has('7:42')).toBe(false);
+    expect(mocks.records.has('7:42')).toBe(false);
+    expect(finishSubmission).toHaveBeenCalledWith(42, 'operation-a', 'saved source');
+    expect(draftStore.getDraft(42)).toBe('');
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
   it('keeps a legacy reply draft and permits discard without adopting the current session', async () => {
     const { viewerSessionID: _sessionID, ...legacy } = record({ phase: 'publishing' });
     mocks.records.set('7:42', legacy);

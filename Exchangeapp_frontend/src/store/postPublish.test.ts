@@ -1406,6 +1406,15 @@ describe('postPublish store', () => {
     expect(store.latestOperation?.phase).toBe('succeeded');
     expect(mocks.createPost).not.toHaveBeenCalled();
     expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operationUUID(90));
+    expect(mocks.feedStore.registerPublishedPost).toHaveBeenCalledWith(post, 7);
+    expect(mocks.profileSessionStore.registerPublishedTimelinePost).toHaveBeenCalledWith(post, 7);
+    expect(mocks.authStore.syncCurrentIdentityProfile).toHaveBeenCalledWith(post.author);
+    expect(mocks.getPostBookmarkStates).toHaveBeenCalledWith([post.id]);
+    expect(mocks.syncHydratedPostBookmarkState).toHaveBeenCalledWith({
+      postId: post.id,
+      bookmarked: false,
+      status: 'unavailable',
+    }, 0);
   });
 
   it('marks an idempotency conflict non-retryable', async () => {
@@ -1826,6 +1835,136 @@ describe('postPublish store', () => {
     expect(mocks.createPost).not.toHaveBeenCalled();
     expect(await store.retry(operationUUID(911))).toBe(false);
     expect(draft.content).toBe('Keep the current draft');
+  });
+
+  it('keeps a recovered succeeded operation successful after the same user starts a new session', async () => {
+    const operationID = operationUUID(914);
+    const record = persistedFailedOperation({
+      id: operationID,
+      publisherSessionID: 'session-7',
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: publishedPost(),
+    });
+    mocks.publishRecords.set(7, record);
+    mocks.authStore.sessionID = 'session-7-new';
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+    await flushPromises();
+
+    expect(store.latestOperation).toMatchObject({
+      id: operationID,
+      phase: 'succeeded',
+      failureKind: null,
+      post: publishedPost(),
+    });
+    expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operationID);
+    expect(mocks.publishRecords.has(7)).toBe(false);
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('does not reconcile a recovered success into a newer same-user session cache', async () => {
+    const operationID = operationUUID(915);
+    mocks.publishRecords.set(7, persistedFailedOperation({
+      id: operationID,
+      publisherSessionID: 'session-7',
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: publishedPost(),
+    }));
+    mocks.authStore.sessionID = 'session-7-new';
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+    await flushPromises();
+
+    expect(mocks.feedStore.registerPublishedPost).not.toHaveBeenCalled();
+    expect(mocks.profileSessionStore.registerPublishedTimelinePost).not.toHaveBeenCalled();
+    expect(mocks.authStore.syncCurrentIdentityProfile).not.toHaveBeenCalled();
+    expect(mocks.getPostBookmarkStates).not.toHaveBeenCalled();
+    expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operationUUID(915));
+  });
+
+  it('preserves the current composer when an older succeeded operation is recovered in a new session', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Saved source from the older session');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const sourceDraftSnapshot = draft.savedSnapshot;
+    const operationID = operationUUID(916);
+    draft.setContent('New session composer content');
+    draft.addMedia(file('new-session.png'));
+    draft.bindPublishOperation(operationID);
+    mocks.publishRecords.set(7, persistedFailedOperation({
+      id: operationID,
+      publisherSessionID: 'session-7',
+      sourceDraftID,
+      sourceDraftSnapshot,
+      content: 'Saved source from the older session',
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: publishedPost(),
+    }));
+    mocks.authStore.sessionID = 'session-7-new';
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+    await flushPromises();
+
+    expect(draft.content).toBe('New session composer content');
+    expect(draft.media.map(item => item.file.name)).toEqual(['new-session.png']);
+    expect(draft.draftID).toBe(sourceDraftID);
+    expect(draft.savedSnapshot).toEqual(sourceDraftSnapshot);
+    expect(draft.publishOperationID).toBe(operationID);
+    expect(mocks.publishRecords.has(7)).toBe(false);
+  });
+
+  it('does not reconcile a source draft into the composer if the session changes during cleanup', async () => {
+    const deletion = deferred<'deleted' | 'missing' | 'changed'>();
+    mocks.deletePostDraftIfUnchanged.mockImplementationOnce(async () => deletion.promise);
+    const draft = usePostDraftStore();
+    draft.setContent('Saved source from the older session');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const sourceDraftSnapshot = draft.savedSnapshot;
+    const operationID = operationUUID(917);
+    draft.bindPublishOperation(operationID);
+    mocks.publishRecords.set(7, persistedFailedOperation({
+      id: operationID,
+      publisherSessionID: 'session-7',
+      sourceDraftID,
+      sourceDraftSnapshot,
+      content: 'Saved source from the older session',
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: publishedPost(),
+    }));
+    const store = usePostPublishStore();
+    const activation = store.activateViewer(7);
+
+    await vi.waitFor(() => expect(mocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(
+      7,
+      sourceDraftID,
+      sourceDraftSnapshot,
+    ));
+    mocks.authStore.sessionID = 'session-7-new';
+    draft.setContent('New session edits during cleanup');
+    draft.addMedia(file('new-session.png'));
+    expect(draft.bindPublishOperation(operationID)).toBe(true);
+    deletion.resolve('deleted');
+    await activation;
+    await flushPromises();
+
+    expect(draft.content).toBe('New session edits during cleanup');
+    expect(draft.media.map(item => item.file.name)).toEqual(['new-session.png']);
+    expect(draft.draftID).toBe(sourceDraftID);
+    expect(draft.savedSnapshot).toEqual(sourceDraftSnapshot);
+    expect(draft.publishOperationID).toBe(operationID);
+    expect(mocks.publishRecords.has(7)).toBe(false);
   });
 
   it('does not resume an Alice operation when Bob is the active viewer', async () => {
