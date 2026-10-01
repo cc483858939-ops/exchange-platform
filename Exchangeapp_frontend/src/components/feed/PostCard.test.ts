@@ -327,6 +327,23 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(mocks.remember).not.toHaveBeenCalled();
   });
 
+  it('opens the public quotes list for guests without opening the post or login', async () => {
+    const wrapper = mountPostCard({ ...basePost(), quoteCount: 12 }, {
+      requiresAuthForActions: true,
+    });
+
+    await wrapper.get('.repost-menu__disclosure').trigger('click');
+    await wrapper.get('[aria-label="View quotes"]').trigger('click');
+
+    expect(mocks.push).toHaveBeenCalledOnce();
+    expect(mocks.push).toHaveBeenCalledWith({
+      name: 'PostQuotes',
+      params: { id: '42' },
+    });
+    expect(wrapper.emitted('postClick')).toBeUndefined();
+    expect(mocks.remember).not.toHaveBeenCalled();
+  });
+
   it('keeps Quote out of generic More actions', async () => {
     const wrapper = mountPostCard();
     await wrapper.get('.post-card__more-button').trigger('click');

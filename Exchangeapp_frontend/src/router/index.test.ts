@@ -69,6 +69,7 @@ describe('History route', () => {
       ['CurrencyExchange', '/exchange', 'app', 'Currency Exchange'],
       ['PostCreate', '/posts/new', 'app', 'Post'],
       ['PostDetail', '/posts/:id', 'app', 'Post'],
+      ['PostQuotes', '/posts/:id/quotes', 'app', 'Quotes'],
       ['UserProfile', '/users/:id', 'app', 'Profile'],
       ['UserFollowing', '/users/:id/following', 'app', 'Following'],
       ['UserFollowers', '/users/:id/followers', 'app', 'Followers'],
@@ -94,6 +95,7 @@ describe('History route', () => {
     expect(router.getRoutes().find(item => item.name === 'Register')?.meta.guestOnly).toBe(true);
     expect(router.getRoutes().find(item => item.name === 'Topic')?.meta.guestOnly).toBeUndefined();
     expect(router.getRoutes().find(item => item.name === 'TopicDirectory')?.meta.guestOnly).toBeUndefined();
+    expect(router.getRoutes().find(item => item.name === 'PostQuotes')?.meta.guestOnly).toBeUndefined();
 
     const home = router.getRoutes().find(item => item.name === 'Home');
     const loaded = (home?.components?.default as () => Promise<unknown>)?.();
@@ -140,6 +142,7 @@ describe('History route', () => {
     expect(router.resolve('/topics').name).toBe('TopicDirectory');
     expect(router.resolve('/topics/japan').name).toBe('Topic');
     expect(router.resolve('/posts/42').name).toBe('PostDetail');
+    expect(router.resolve('/posts/42/quotes').name).toBe('PostQuotes');
     expect(router.resolve('/posts/new').name).toBe('PostCreate');
   });
 });

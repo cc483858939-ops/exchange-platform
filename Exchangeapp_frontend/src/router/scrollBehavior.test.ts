@@ -37,6 +37,14 @@ describe('routeScrollBehavior', () => {
     ).toEqual({ top: 0 });
   });
 
+  it('starts a new Quotes surface at the top and restores its saved history position', () => {
+    expect(applyScrollBehavior(location('PostQuotes', { id: '42' }), location('PostDetail', { id: '9' })))
+      .toEqual({ left: 0, top: 0 });
+    const savedPosition = { left: 0, top: 780 };
+    expect(applyScrollBehavior(location('PostQuotes', { id: '42' }), location('PostDetail', { id: '9' }), savedPosition))
+      .toBe(savedPosition);
+  });
+
   it.each([
     ['same PostDetail query mutation', location('PostDetail', { id: '123' }, { reply: '1' }), location('PostDetail', { id: '123' })],
     ['reply intent query cleanup', location('PostDetail', { id: '123' }), location('PostDetail', { id: '123' }, { reply: '1' })],

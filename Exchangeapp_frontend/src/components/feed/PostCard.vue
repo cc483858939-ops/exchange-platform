@@ -191,6 +191,7 @@
         variant="compact"
         @toggle="handleRepostActivation"
         @quote="quotePost"
+        @view-quotes="viewQuotes"
       />
       <LikeAction
         :key="post.id"
@@ -464,6 +465,13 @@ const quotePost = () => {
     return;
   }
   void router.push(destination);
+};
+
+const viewQuotes = () => {
+  void router.push({
+    name: 'PostQuotes',
+    params: { id: String(props.post.id) },
+  });
 };
 
 const handleReplyNavigation = (event: MouseEvent) => {

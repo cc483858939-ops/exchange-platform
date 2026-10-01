@@ -60,6 +60,16 @@
           {{ normalizedQuoteCount }}
         </span>
       </button>
+      <button
+        v-if="normalizedQuoteCount > 0"
+        class="repost-menu__item"
+        type="button"
+        role="menuitem"
+        aria-label="View quotes"
+        @click.stop="selectViewQuotes"
+      >
+        View quotes
+      </button>
     </div>
   </div>
 </template>
@@ -92,6 +102,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   toggle: [];
   quote: [];
+  viewQuotes: [];
 }>();
 
 const rootRef = ref<HTMLElement | null>(null);
@@ -210,6 +221,11 @@ const activateRepostFromMenu = () => {
 const selectQuote = () => {
   closeMenu(true);
   emit('quote');
+};
+
+const selectViewQuotes = () => {
+  closeMenu(true);
+  emit('viewQuotes');
 };
 
 onBeforeUnmount(() => {

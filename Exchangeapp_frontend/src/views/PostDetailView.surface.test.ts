@@ -383,7 +383,7 @@ describe('PostDetailView post-first surface', () => {
     });
     await wrapper.get('.post-detail > .post-detail__engagement .repost-menu__disclosure')
       .trigger('click');
-    await wrapper.get('.post-detail > .post-detail__engagement [role="menuitem"]:last-child')
+    await wrapper.get('.post-detail > .post-detail__engagement [aria-label="Quote post, 9 existing quotes"]')
       .trigger('click');
 
     expect(mocks.router.push).toHaveBeenCalledWith({
@@ -401,7 +401,7 @@ describe('PostDetailView post-first surface', () => {
 
     await wrapper.get('.post-detail > .post-detail__engagement .repost-menu__disclosure')
       .trigger('click');
-    await wrapper.get('.post-detail > .post-detail__engagement [role="menuitem"]:last-child')
+    await wrapper.get('.post-detail > .post-detail__engagement [aria-label="Quote post, no existing quotes"]')
       .trigger('click');
 
     expect(mocks.router.resolve).toHaveBeenCalledWith({
@@ -411,6 +411,45 @@ describe('PostDetailView post-first surface', () => {
     expect(mocks.router.push).toHaveBeenCalledWith({
       name: 'Login',
       query: { returnTo: '/posts/new?quote=42' },
+    });
+    expect(mocks.repostPost).not.toHaveBeenCalled();
+  });
+
+  it('routes View quotes from the main detail menu using the loaded Post ID for guests', async () => {
+    mocks.authStore.isAuthenticated = false;
+    mocks.authStore.currentIdentity = null;
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({ quote_count: 9 }));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail > .post-detail__engagement .repost-menu__disclosure')
+      .trigger('click');
+    await wrapper.get('.post-detail > .post-detail__engagement [aria-label="View quotes"]')
+      .trigger('click');
+
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'PostQuotes',
+      params: { id: '42' },
+    });
+    expect(mocks.router.push).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'Login' }));
+    expect(mocks.repostPost).not.toHaveBeenCalled();
+  });
+
+  it('routes View quotes from the media-context detail menu using the loaded Post ID', async () => {
+    mocks.getPostById.mockResolvedValueOnce(canonicalPost({
+      quote_count: 7,
+      media: [{ type: 'image', url: '/primary.png', large_url: '/primary-large.png', width: 1200, height: 800, position: 0 }],
+    }));
+    wrapper = mountDetail();
+    await flushPromises();
+
+    await wrapper.get('.post-detail__body .post-media-grid__open').trigger('click');
+    await wrapper.get('.post-media-context .repost-menu__disclosure').trigger('click');
+    await wrapper.get('.post-media-context [aria-label="View quotes"]').trigger('click');
+
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'PostQuotes',
+      params: { id: '42' },
     });
     expect(mocks.repostPost).not.toHaveBeenCalled();
   });

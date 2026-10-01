@@ -57,3 +57,8 @@ export interface PostReplyPageResponse {
   items: Post[];
   next_cursor: string | null;
 }
+
+export interface PostQuotePageResponse {
+  items: Post[];
+  next_cursor: string | null;
+}

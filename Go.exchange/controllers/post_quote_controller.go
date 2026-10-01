@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"errors"
 	"net/http"
 	"time"
 
@@ -12,19 +11,22 @@ import (
 	"gorm.io/gorm"
 )
 
-type replyCursor = postRelationCursor
+type quoteListResponse struct {
+	Items      []postResponse `json:"items"`
+	NextCursor *string        `json:"next_cursor"`
+}
 
-func GetPostReplies(ctx *gin.Context) {
+func GetPostQuotes(ctx *gin.Context) {
 	postID, ok := postIDFromContext(ctx)
 	if !ok {
 		return
 	}
-	limit, err := parseReplyLimit(ctx)
+	limit, err := parsePostRelationLimit(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	cursor, err := parseReplyCursor(ctx)
+	cursor, err := parsePostRelationCursor(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -35,16 +37,17 @@ func GetPostReplies(ctx *gin.Context) {
 	}
 
 	db := global.APIDb.WithContext(ctx.Request.Context())
-	var post models.Post
-	if err := db.
-		Select("id").
-		Scopes(func(tx *gorm.DB) *gorm.DB { return publicPostScope(tx, time.Now().UTC()) }).
-		First(&post, postID).Error; err != nil {
+	now := time.Now().UTC()
+	var target models.Post
+	if err := publicPostScope(db.Model(&models.Post{}).Select("id"), now).
+		Where("posts.id = ?", postID).
+		First(&target).Error; err != nil {
 		writeReplyPostLookupError(ctx, err)
 		return
 	}
 
-	query := publicPostScope(db.Model(&models.Post{}), time.Now().UTC()).Where("posts.reply_to_post_id = ?", postID)
+	query := publicPostScope(db.Model(&models.Post{}), now).
+		Where("posts.quote_post_id = ?", postID)
 	if cursor != nil {
 		query = query.Where(
 			"(created_at < ?) OR (created_at = ? AND id < ?)",
@@ -53,7 +56,6 @@ func GetPostReplies(ctx *gin.Context) {
 			cursor.ID,
 		)
 	}
-
 	posts := make([]models.Post, 0, limit+1)
 	if err := query.
 		Preload("Author", func(tx *gorm.DB) *gorm.DB {
@@ -95,8 +97,7 @@ func GetPostReplies(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	referenceNow := time.Now().UTC()
-	if err := hydratePostResponsesReferencesFromDB(db, items, referenceNow); err != nil {
+	if err := hydratePostResponsesReferencesFromDB(db, items, now); err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
@@ -107,23 +108,12 @@ func GetPostReplies(ctx *gin.Context) {
 	var nextCursor *string
 	if hasMore {
 		last := posts[len(posts)-1]
-		encoded, err := encodeReplyCursor(replyCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+		encoded, err := encodePostRelationCursor(postRelationCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		nextCursor = &encoded
 	}
-	ctx.JSON(http.StatusOK, replyListResponse{Items: items, NextCursor: nextCursor})
-}
-
-func writeReplyPostLookupError(ctx *gin.Context, err error) {
-	if handleRequestDBError(ctx, err) {
-		return
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
-		return
-	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	ctx.JSON(http.StatusOK, quoteListResponse{Items: items, NextCursor: nextCursor})
 }

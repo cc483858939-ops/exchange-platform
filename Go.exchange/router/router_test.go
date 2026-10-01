@@ -64,6 +64,7 @@ func TestSetupRouterRegistersOnlyCanonicalPostMutationRoutes(t *testing.T) {
 		"POST /api/uploads/profile-cover",
 		"DELETE /api/posts/:id",
 		"GET /api/posts/:id/replies",
+		"GET /api/posts/:id/quotes",
 		"GET /api/me/bookmarks",
 		"POST /api/posts/engagement-states",
 		"POST /api/posts/bookmark-states",
@@ -140,6 +141,7 @@ func TestSetupRouterKeepsPublicPostAndProfileReadsOpen(t *testing.T) {
 		{http.MethodGet, "/api/topics/japan/posts"},
 		{http.MethodGet, "/api/posts/not-a-number"},
 		{http.MethodGet, "/api/posts/not-a-number/replies"},
+		{http.MethodGet, "/api/posts/not-a-number/quotes"},
 		{http.MethodGet, "/api/users/not-a-number"},
 		{http.MethodGet, "/api/users/not-a-number/timeline"},
 	}

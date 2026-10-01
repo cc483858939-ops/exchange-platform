@@ -8,6 +8,7 @@ const HomeView = () => import('../views/HomeView.vue');
 const LiveExchangeView = () => import('../views/LiveExchangeView.vue');
 const PostDetailView = () => import('../views/PostDetailView.vue');
 const PostCreateView = () => import('../views/PostCreateView.vue');
+const PostQuotesView = () => import('../views/PostQuotesView.vue');
 const UserProfileView = () => import('../views/UserProfileView.vue');
 const UserConnectionsView = () => import('../views/UserConnectionsView.vue');
 const UserSearchView = () => import('../views/UserSearchView.vue');
@@ -30,6 +31,7 @@ const routes: RouteRecordRaw[] = [
 
   { path: '/posts/new', name: 'PostCreate', component: PostCreateView, meta: { layout: 'app', title: 'Post' } },
   { path: '/posts/:id', name: 'PostDetail', component: PostDetailView, meta: { layout: 'app', title: 'Post' } },
+  { path: '/posts/:id/quotes', name: 'PostQuotes', component: PostQuotesView, meta: { layout: 'app', title: 'Quotes' } },
 
   { path: '/users/:id', name: 'UserProfile', component: UserProfileView, meta: { layout: 'app', title: 'Profile' } },
   {

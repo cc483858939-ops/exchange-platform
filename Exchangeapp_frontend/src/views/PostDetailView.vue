@@ -142,6 +142,7 @@
               variant="detail"
               @toggle="toggleRepost"
               @quote="quotePost"
+              @view-quotes="viewQuotes"
             />
             <LikeAction
               :key="postId"
@@ -397,6 +398,7 @@
                 variant="detail"
                 @toggle="toggleRepost"
                 @quote="quotePost"
+                @view-quotes="viewQuotes"
               />
               <LikeAction
                 :key="postId"
@@ -1118,6 +1120,16 @@ const quotePost = () => {
   }
 
   void router.push(destination);
+};
+
+const viewQuotes = () => {
+  const currentPost = post.value;
+  if (!currentPost) return;
+
+  void router.push({
+    name: 'PostQuotes',
+    params: { id: String(currentPost.id) },
+  });
 };
 
 const postViewTelemetry = getPostViewTelemetry();

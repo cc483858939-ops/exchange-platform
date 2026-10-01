@@ -77,7 +77,7 @@ describe('RepostMenu', () => {
   it('closes before emitting Quote and does not toggle repost', async () => {
     const wrapper = mountMenu();
     await disclosure(wrapper).trigger('click');
-    await wrapper.get('[role="menuitem"]:last-child').trigger('click');
+    await wrapper.get('[aria-label="Quote post, no existing quotes"]').trigger('click');
 
     expect(wrapper.find('[role="menu"]').exists()).toBe(false);
     expect(wrapper.emitted('quote')).toEqual([[]]);
@@ -87,7 +87,7 @@ describe('RepostMenu', () => {
   it('shows the Quote count with an accessible action label', async () => {
     const wrapper = mountMenu({ quoteCount: 12 });
     await disclosure(wrapper).trigger('click');
-    const quoteItem = wrapper.get('[role="menuitem"]:last-child');
+    const quoteItem = wrapper.get('[aria-label="Quote post, 12 existing quotes"]');
 
     expect(quoteItem.text()).toBe('Quote post12');
     expect(quoteItem.attributes('aria-label')).toBe('Quote post, 12 existing quotes');
@@ -100,10 +100,25 @@ describe('RepostMenu', () => {
   it('keeps zero visible and labels the Quote action without existing quotes', async () => {
     const wrapper = mountMenu({ quoteCount: 0 });
     await disclosure(wrapper).trigger('click');
-    const quoteItem = wrapper.get('[role="menuitem"]:last-child');
+    const quoteItem = wrapper.get('[aria-label="Quote post, no existing quotes"]');
 
     expect(quoteItem.text()).toBe('Quote post0');
     expect(quoteItem.attributes('aria-label')).toBe('Quote post, no existing quotes');
+    expect(wrapper.find('[aria-label="View quotes"]').exists()).toBe(false);
+  });
+
+  it('shows View quotes for a positive count and emits only viewQuotes', async () => {
+    const wrapper = mountMenu({ quoteCount: 12 });
+    await disclosure(wrapper).trigger('click');
+    const item = wrapper.get('[aria-label="View quotes"]');
+
+    expect(item.text()).toBe('View quotes');
+    await item.trigger('click');
+
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false);
+    expect(wrapper.emitted('viewQuotes')).toEqual([[]]);
+    expect(wrapper.emitted('quote')).toBeUndefined();
+    expect(wrapper.emitted('toggle')).toBeUndefined();
   });
 
   it('routes the menu Repost command through RepostAction activation', async () => {
@@ -141,6 +156,22 @@ describe('RepostMenu', () => {
     expect(wrapper.emitted('toggle')).toBeUndefined();
   });
 
+  it.each([
+    { pending: true },
+    { loading: true },
+    { disabled: true },
+  ])('keeps View quotes available while Repost is disabled: %o', async state => {
+    const wrapper = mountMenu({ ...state, quoteCount: 12 });
+    await disclosure(wrapper).trigger('click');
+    const item = wrapper.get('[aria-label="View quotes"]');
+
+    expect(item.attributes('disabled')).toBeUndefined();
+    await item.trigger('click');
+    expect(wrapper.emitted('viewQuotes')).toEqual([[]]);
+    expect(wrapper.emitted('quote')).toBeUndefined();
+    expect(wrapper.emitted('toggle')).toBeUndefined();
+  });
+
   it('supports Escape and restores focus to the disclosure', async () => {
     const wrapper = mountMenu();
     (disclosure(wrapper).element as HTMLButtonElement).focus();
@@ -156,11 +187,12 @@ describe('RepostMenu', () => {
   });
 
   it('supports ArrowDown, ArrowUp, Home, and End menu navigation', async () => {
-    const wrapper = mountMenu();
+    const wrapper = mountMenu({ quoteCount: 12 });
     (disclosure(wrapper).element as HTMLButtonElement).focus();
     await disclosure(wrapper).trigger('keydown', { key: 'ArrowDown' });
     await nextTick();
     const items = wrapper.findAll('[role="menuitem"]');
+    expect(items).toHaveLength(3);
 
     expect(document.activeElement).toBe(items[0]!.element as HTMLButtonElement);
     await items[0]!.trigger('keydown', { key: 'ArrowDown' });
@@ -170,7 +202,9 @@ describe('RepostMenu', () => {
     await items[1]!.trigger('keydown', { key: 'Home' });
     expect(document.activeElement).toBe(items[0]!.element as HTMLButtonElement);
     await items[0]!.trigger('keydown', { key: 'End' });
-    expect(document.activeElement).toBe(items[1]!.element as HTMLButtonElement);
+    expect(document.activeElement).toBe(items[2]!.element as HTMLButtonElement);
+    await items[2]!.trigger('keydown', { key: 'Home' });
+    expect(document.activeElement).toBe(items[0]!.element as HTMLButtonElement);
   });
 
   it('closes on outside pointer interaction', async () => {

@@ -2,6 +2,10 @@ import type { RouterScrollBehavior } from 'vue-router';
 import { isViewOwnedScrollRoute } from './surfaceCachePolicy';
 
 export const routeScrollBehavior: RouterScrollBehavior = (to, from, savedPosition) => {
+  if (to.name === 'PostQuotes') {
+    return savedPosition ?? { left: 0, top: 0 };
+  }
+
   if (
     to.name === 'Home'
     || to.name === 'UserProfile'
