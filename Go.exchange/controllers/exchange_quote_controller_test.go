@@ -29,14 +29,12 @@ func (s stubExchangeQuoteReader) Quote(context.Context, string, string, string) 
 
 func TestGetExchangeQuoteReturnsQuote(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	original := liveExchangeQuoteReader
-	liveExchangeQuoteReader = stubExchangeQuoteReader{quote: services.Quote{From: "CNY", To: "JPY", Amount: "100", Rate: "20", ConvertedAmount: "2000", Freshness: services.FreshnessFresh}}
-	t.Cleanup(func() { liveExchangeQuoteReader = original })
+	reader := stubExchangeQuoteReader{quote: services.Quote{From: "CNY", To: "JPY", Amount: "100", Rate: "20", ConvertedAmount: "2000", Freshness: services.FreshnessFresh}}
 
 	response := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(response)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/exchange/quote?from=CNY&to=JPY&amount=100", nil)
-	GetExchangeQuote(ctx)
+	getExchangeQuote(ctx, reader)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -89,17 +87,15 @@ func TestGetExchangeQuoteErrorContract(t *testing.T) {
 		},
 	}
 	gin.SetMode(gin.TestMode)
-	original := liveExchangeQuoteReader
-	t.Cleanup(func() { liveExchangeQuoteReader = original })
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			liveExchangeQuoteReader = stubExchangeQuoteReader{err: test.err}
+			reader := stubExchangeQuoteReader{err: test.err}
 			response := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(response)
 			ctx.Request = httptest.NewRequest(http.MethodGet, "/api/exchange/quote?from=CNY&to=USD&amount=100", nil)
 
-			GetExchangeQuote(ctx)
+			getExchangeQuote(ctx, reader)
 
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d", response.Code, test.wantStatus)
@@ -120,14 +116,11 @@ func TestGetExchangeQuoteErrorContract(t *testing.T) {
 
 func TestGetExchangeCurrenciesMapsUnavailableTo503(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	original := liveExchangeQuoteReader
-	liveExchangeQuoteReader = stubExchangeQuoteReader{err: services.ErrNoRateSnapshot}
-	t.Cleanup(func() { liveExchangeQuoteReader = original })
 
 	response := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(response)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/exchange/currencies", nil)
-	GetExchangeCurrencies(ctx)
+	getExchangeCurrencies(ctx, stubExchangeQuoteReader{err: services.ErrNoRateSnapshot})
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)

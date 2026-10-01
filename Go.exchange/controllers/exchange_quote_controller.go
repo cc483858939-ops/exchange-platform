@@ -15,8 +15,6 @@ type exchangeQuoteReader interface {
 	Quote(context.Context, string, string, string) (services.Quote, error)
 }
 
-var liveExchangeQuoteReader exchangeQuoteReader
-
 const (
 	exchangeErrorInvalidCurrency     = "invalid_currency"
 	exchangeErrorInvalidAmount       = "invalid_amount"
@@ -29,15 +27,12 @@ type exchangeErrorResponse struct {
 	Error string `json:"error"`
 }
 
-func currentExchangeQuoteReader() exchangeQuoteReader {
-	if liveExchangeQuoteReader == nil {
-		liveExchangeQuoteReader = services.DefaultExchangeRateService()
-	}
-	return liveExchangeQuoteReader
+func GetExchangeCurrencies(ctx *gin.Context) {
+	getExchangeCurrencies(ctx, services.DefaultExchangeRateService())
 }
 
-func GetExchangeCurrencies(ctx *gin.Context) {
-	currencies, err := currentExchangeQuoteReader().Currencies(ctx.Request.Context())
+func getExchangeCurrencies(ctx *gin.Context, reader exchangeQuoteReader) {
+	currencies, err := reader.Currencies(ctx.Request.Context())
 	if err != nil {
 		writeExchangeError(ctx, err)
 		return
@@ -46,7 +41,11 @@ func GetExchangeCurrencies(ctx *gin.Context) {
 }
 
 func GetExchangeQuote(ctx *gin.Context) {
-	quote, err := currentExchangeQuoteReader().Quote(
+	getExchangeQuote(ctx, services.DefaultExchangeRateService())
+}
+
+func getExchangeQuote(ctx *gin.Context, reader exchangeQuoteReader) {
+	quote, err := reader.Quote(
 		ctx.Request.Context(),
 		ctx.Query("from"),
 		ctx.Query("to"),
