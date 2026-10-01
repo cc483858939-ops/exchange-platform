@@ -66,11 +66,16 @@ describe('engagement operations', () => {
 
   it('creates a pure optimistic Bookmark update', () => {
     const post = { id: 5, bookmarked: false };
+    const bookmarkedPost = { id: 6, bookmarked: true };
 
     expect(createOptimisticBookmarkUpdate(post)).toEqual({
       postId: 5, bookmarked: true, status: 'ready',
     });
+    expect(createOptimisticBookmarkUpdate(bookmarkedPost)).toEqual({
+      postId: 6, bookmarked: false, status: 'ready',
+    });
     expect(post).toEqual({ id: 5, bookmarked: false });
+    expect(bookmarkedPost).toEqual({ id: 6, bookmarked: true });
   });
 
   it('selects Like and Unlike endpoints and returns service results unchanged', async () => {

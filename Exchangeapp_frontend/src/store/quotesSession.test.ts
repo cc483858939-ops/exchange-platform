@@ -4,18 +4,22 @@ import { flushPromises } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { nextTick, reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  releaseEngagementMutationLease,
+  tryBeginEngagementMutationLease,
+} from './engagementMutationLease';
 import type { Post } from '../types/Post';
 
 const mocks = vi.hoisted(() => ({
   authStore: null as { isAuthenticated: boolean; currentIdentity: { id: number } | null } | null,
   getPostQuotes: vi.fn(),
   getPostEngagementStates: vi.fn(),
-  likePost: vi.fn(),
-  unlikePost: vi.fn(),
-  repostPost: vi.fn(),
-  undoRepostPost: vi.fn(),
-  bookmarkPost: vi.fn(),
-  unbookmarkPost: vi.fn(),
+  createOptimisticLikeUpdate: vi.fn(),
+  createOptimisticRepostUpdate: vi.fn(),
+  createOptimisticBookmarkUpdate: vi.fn(),
+  executeLikeToggle: vi.fn(),
+  executeRepostToggle: vi.fn(),
+  executeBookmarkToggle: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
@@ -25,9 +29,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../services/quoteService', () => ({ getPostQuotes: mocks.getPostQuotes }));
 vi.mock('../services/engagementService', () => ({ getPostEngagementStates: mocks.getPostEngagementStates }));
-vi.mock('../services/likeService', () => ({ likePost: mocks.likePost, unlikePost: mocks.unlikePost }));
-vi.mock('../services/repostService', () => ({ repostPost: mocks.repostPost, undoRepostPost: mocks.undoRepostPost }));
-vi.mock('../services/bookmarkService', () => ({ bookmarkPost: mocks.bookmarkPost, unbookmarkPost: mocks.unbookmarkPost }));
+vi.mock('./engagementOperations', () => ({
+  createOptimisticLikeUpdate: mocks.createOptimisticLikeUpdate,
+  createOptimisticRepostUpdate: mocks.createOptimisticRepostUpdate,
+  createOptimisticBookmarkUpdate: mocks.createOptimisticBookmarkUpdate,
+  executeLikeToggle: mocks.executeLikeToggle,
+  executeRepostToggle: mocks.executeRepostToggle,
+  executeBookmarkToggle: mocks.executeBookmarkToggle,
+}));
 vi.mock('./sessionSync', () => ({
   beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
   syncExternalPostLikeState: mocks.syncExternalPostLikeState,
@@ -85,26 +94,59 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
-const readyEngagement = (postIDs: number[]) => ({
+const readyEngagement = (
+  postIDs: number[],
+  overrides: {
+    likes?: number;
+    liked?: boolean;
+    reposts?: number;
+    reposted?: boolean;
+    bookmarked?: boolean;
+  } = {},
+) => ({
   items: postIDs.map(postID => ({
     post_id: postID,
-    like: { status: 'ready' as const, likes: 13, liked: true },
-    repost: { status: 'ready' as const, reposts: 9, reposted: true },
-    bookmark: { status: 'ready' as const, bookmarked: true },
+    like: { status: 'ready' as const, likes: overrides.likes ?? 13, liked: overrides.liked ?? true },
+    repost: { status: 'ready' as const, reposts: overrides.reposts ?? 9, reposted: overrides.reposted ?? true },
+    bookmark: { status: 'ready' as const, bookmarked: overrides.bookmarked ?? true },
   })),
 });
+
+const hydrateAllUnengaged = () => {
+  mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => Promise.resolve(readyEngagement(postIDs, {
+    likes: 3,
+    liked: false,
+    reposts: 4,
+    reposted: false,
+    bookmarked: false,
+  })));
+};
 
 describe('quotesSession store', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.getPostQuotes.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => Promise.resolve(readyEngagement(postIDs)));
-    mocks.likePost.mockResolvedValue({ likes: 4, liked: true });
-    mocks.unlikePost.mockResolvedValue({ likes: 2, liked: false });
-    mocks.repostPost.mockResolvedValue({ reposts: 5, reposted: true });
-    mocks.undoRepostPost.mockResolvedValue({ reposts: 3, reposted: false });
-    mocks.bookmarkPost.mockResolvedValue({ post_id: 1, bookmarked: true });
-    mocks.unbookmarkPost.mockResolvedValue({ post_id: 1, bookmarked: false });
+    mocks.createOptimisticLikeUpdate.mockImplementation((current: { id: number; liked: boolean; likeCount: number }) => ({
+      postId: current.id,
+      likes: current.liked ? Math.max(0, current.likeCount - 1) : current.likeCount + 1,
+      liked: !current.liked,
+      status: 'ready',
+    }));
+    mocks.createOptimisticRepostUpdate.mockImplementation((current: { id: number; reposted: boolean; repostCount: number }) => ({
+      postId: current.id,
+      reposts: current.reposted ? Math.max(0, current.repostCount - 1) : current.repostCount + 1,
+      reposted: !current.reposted,
+      status: 'ready',
+    }));
+    mocks.createOptimisticBookmarkUpdate.mockImplementation((current: { id: number; bookmarked: boolean }) => ({
+      postId: current.id,
+      bookmarked: !current.bookmarked,
+      status: 'ready',
+    }));
+    mocks.executeLikeToggle.mockResolvedValue({ likes: 4, liked: true });
+    mocks.executeRepostToggle.mockResolvedValue({ reposts: 5, reposted: true });
+    mocks.executeBookmarkToggle.mockResolvedValue({ post_id: 1, bookmarked: true });
   });
 
   it('loads fresh Posts for the target and initializes guest engagement as ready', async () => {
@@ -128,6 +170,26 @@ describe('quotesSession store', () => {
       bookmarkStatus: 'ready',
     });
     expect(mocks.getPostEngagementStates).not.toHaveBeenCalled();
+  });
+
+  it('ignores Like, Repost, and Bookmark mutations for guests', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const store = createStore(false);
+    await store.setTarget(42);
+
+    expect(await store.toggleLike(1)).toBe('ignored');
+    expect(await store.toggleRepost(1)).toBe('ignored');
+    expect(await store.toggleBookmark(1)).toBe('ignored');
+    expect(store.items[0]).toMatchObject({
+      liked: false,
+      likeCount: 3,
+      reposted: false,
+      repostCount: 4,
+      bookmarked: false,
+    });
+    expect(mocks.executeLikeToggle).not.toHaveBeenCalled();
+    expect(mocks.executeRepostToggle).not.toHaveBeenCalled();
+    expect(mocks.executeBookmarkToggle).not.toHaveBeenCalled();
   });
 
   it('stores the next cursor and suppresses duplicate IDs across pages', async () => {
@@ -274,14 +336,7 @@ describe('quotesSession store', () => {
 
   it('uses existing Like, Repost, and Bookmark operations and fans out successful updates', async () => {
     mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
-    mocks.getPostEngagementStates.mockImplementation((postIDs: number[]) => Promise.resolve({
-      items: postIDs.map(postID => ({
-        post_id: postID,
-        like: { status: 'ready' as const, likes: 3, liked: false },
-        repost: { status: 'ready' as const, reposts: 4, reposted: false },
-        bookmark: { status: 'ready' as const, bookmarked: false },
-      })),
-    }));
+    hydrateAllUnengaged();
     const store = createStore(true);
     await store.setTarget(42);
     await settle();
@@ -290,12 +345,145 @@ describe('quotesSession store', () => {
     expect(await store.toggleRepost(1)).toBe('succeeded');
     expect(await store.toggleBookmark(1)).toBe('succeeded');
 
-    expect(mocks.likePost).toHaveBeenCalledWith(1);
-    expect(mocks.repostPost).toHaveBeenCalledWith(1);
-    expect(mocks.bookmarkPost).toHaveBeenCalledWith(1);
+    expect(mocks.createOptimisticLikeUpdate).toHaveBeenCalledWith(store.items[0]);
+    expect(mocks.executeLikeToggle).toHaveBeenCalledWith(1, false);
+    expect(mocks.createOptimisticRepostUpdate).toHaveBeenCalledWith(store.items[0]);
+    expect(mocks.executeRepostToggle).toHaveBeenCalledWith(1, false);
+    expect(mocks.createOptimisticBookmarkUpdate).toHaveBeenCalledWith(store.items[0]);
+    expect(mocks.executeBookmarkToggle).toHaveBeenCalledWith(1, false);
     expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(1);
     expect(mocks.syncExternalPostLikeState).toHaveBeenCalledWith({ postId: 1, likes: 4, liked: true, status: 'ready' });
     expect(mocks.syncExternalPostRepostState).toHaveBeenCalledWith({ postId: 1, reposts: 5, reposted: true, status: 'ready' });
     expect(mocks.syncExternalPostBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
+  });
+
+  it('passes true to shared executors for Unlike, Undo Repost, and Unbookmark', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.executeLikeToggle.mockResolvedValue({ likes: 12, liked: false });
+    mocks.executeRepostToggle.mockResolvedValue({ reposts: 8, reposted: false });
+    mocks.executeBookmarkToggle.mockResolvedValue({ post_id: 1, bookmarked: false });
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    expect(await store.toggleLike(1)).toBe('succeeded');
+    expect(await store.toggleRepost(1)).toBe('succeeded');
+    expect(await store.toggleBookmark(1)).toBe('succeeded');
+
+    expect(mocks.executeLikeToggle).toHaveBeenCalledWith(1, true);
+    expect(mocks.executeRepostToggle).toHaveBeenCalledWith(1, true);
+    expect(mocks.executeBookmarkToggle).toHaveBeenCalledWith(1, true);
+    expect(store.items[0]).toMatchObject({
+      liked: false,
+      likeCount: 12,
+      reposted: false,
+      repostCount: 8,
+      bookmarked: false,
+    });
+  });
+
+  it('applies optimistic Like state and marks it pending before the shared executor resolves', async () => {
+    const request = deferred<{ likes: number; liked: boolean }>();
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    hydrateAllUnengaged();
+    mocks.executeLikeToggle.mockReturnValueOnce(request.promise);
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    const mutation = store.toggleLike(1);
+
+    expect(store.items[0]).toMatchObject({ liked: true, likeCount: 4 });
+    expect(store.likePendingPostIDs.has(1)).toBe(true);
+    expect(mocks.createOptimisticLikeUpdate).toHaveBeenCalledWith(store.items[0]);
+    expect(mocks.executeLikeToggle).toHaveBeenCalledWith(1, false);
+
+    request.resolve({ likes: 10, liked: true });
+    expect(await mutation).toBe('succeeded');
+    expect(store.items[0]).toMatchObject({ liked: true, likeCount: 10 });
+  });
+
+  it('rolls Like back and keeps its error when the shared executor fails', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    hydrateAllUnengaged();
+    mocks.executeLikeToggle.mockRejectedValueOnce(new Error('failed'));
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    expect(await store.toggleLike(1)).toBe('failed');
+
+    expect(store.items[0]).toMatchObject({ liked: false, likeCount: 3, likeStatus: 'ready' });
+    expect(store.mutationErrors.get(1)).toBe('Could not update like.');
+    expect(mocks.syncExternalPostLikeState).not.toHaveBeenCalled();
+  });
+
+  it('rolls Repost back and keeps its error when the shared executor fails', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    hydrateAllUnengaged();
+    mocks.executeRepostToggle.mockRejectedValueOnce(new Error('failed'));
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    expect(await store.toggleRepost(1)).toBe('failed');
+
+    expect(store.items[0]).toMatchObject({ reposted: false, repostCount: 4, repostStatus: 'ready' });
+    expect(store.mutationErrors.get(1)).toBe('Could not update repost.');
+    expect(mocks.syncExternalPostRepostState).not.toHaveBeenCalled();
+  });
+
+  it('rolls Bookmark back and keeps its error when the shared executor fails', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    hydrateAllUnengaged();
+    mocks.executeBookmarkToggle.mockRejectedValueOnce(new Error('failed'));
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    expect(await store.toggleBookmark(1)).toBe('failed');
+
+    expect(store.items[0]).toMatchObject({ bookmarked: false, bookmarkStatus: 'ready' });
+    expect(store.mutationErrors.get(1)).toBe('Could not update bookmark.');
+    expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(1);
+    expect(mocks.syncExternalPostBookmarkState).not.toHaveBeenCalled();
+  });
+
+  it('ignores a successful mutation after the target changes and does not fan it out', async () => {
+    const request = deferred<{ likes: number; liked: boolean }>();
+    mocks.getPostQuotes
+      .mockResolvedValueOnce({ items: [post(1)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [post(99)], next_cursor: null });
+    hydrateAllUnengaged();
+    mocks.executeLikeToggle.mockReturnValueOnce(request.promise);
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    const mutation = store.toggleLike(1);
+    await store.setTarget(99);
+    request.resolve({ likes: 50, liked: true });
+
+    expect(await mutation).toBe('ignored');
+    expect(store.targetPostID).toBe(99);
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0]).toMatchObject({ id: 99, liked: false, likeCount: 3 });
+    expect(mocks.syncExternalPostLikeState).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Like when another surface already holds the mutation lease', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    hydrateAllUnengaged();
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    const lease = tryBeginEngagementMutationLease(7, 'like', 1);
+    expect(lease).not.toBeNull();
+
+    expect(await store.toggleLike(1)).toBe('ignored');
+    expect(mocks.executeLikeToggle).not.toHaveBeenCalled();
+
+    if (lease) releaseEngagementMutationLease(lease);
   });
 });

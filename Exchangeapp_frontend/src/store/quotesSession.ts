@@ -2,12 +2,17 @@ import { defineStore } from 'pinia';
 import { reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import { getPostQuotes } from '../services/quoteService';
-import { bookmarkPost, unbookmarkPost } from '../services/bookmarkService';
 import { getPostEngagementStates } from '../services/engagementService';
-import { likePost, unlikePost } from '../services/likeService';
-import { repostPost, undoRepostPost } from '../services/repostService';
 import type { Post } from '../types/Post';
 import type { FeedBookmarkStateUpdate, FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
+import {
+  createOptimisticBookmarkUpdate,
+  createOptimisticLikeUpdate,
+  createOptimisticRepostUpdate,
+  executeBookmarkToggle,
+  executeLikeToggle,
+  executeRepostToggle,
+} from './engagementOperations';
 import {
   applyFeedBookmarkStateUpdate,
   applyFeedLikeStateUpdate,
@@ -330,20 +335,19 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     if (!lease) return 'ignored';
     try {
       const previous = { liked: post.liked, count: post.likeCount };
-      const expectedLiked = !previous.liked;
-      const expectedCount = expectedLiked ? previous.count + 1 : Math.max(0, previous.count - 1);
       const request = requestVersion.value;
       const generation = viewerGeneration.value;
       const token = engagementMutations.begin('like', postID);
+      const optimistic = createOptimisticLikeUpdate(post);
       mutationErrors.delete(postID);
-      applyFeedLikeStateUpdate(post, { postId: postID, likes: expectedCount, liked: expectedLiked, status: 'ready' });
+      applyFeedLikeStateUpdate(post, optimistic);
       try {
-        const result = previous.liked ? await unlikePost(postID) : await likePost(postID);
+        const result = await executeLikeToggle(postID, previous.liked);
         if (!isCurrentMutation(token, target, request, viewer, generation)) return 'ignored';
         const update: FeedLikeStateUpdate = {
           postId: postID,
-          likes: normalizeCount(result.likes, expectedCount),
-          liked: typeof result.liked === 'boolean' ? result.liked : expectedLiked,
+          likes: normalizeCount(result.likes, optimistic.likes),
+          liked: typeof result.liked === 'boolean' ? result.liked : optimistic.liked,
           status: 'ready',
         };
         applyFeedLikeStateUpdate(post, update);
@@ -371,20 +375,19 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     if (!lease) return 'ignored';
     try {
       const previous = { reposted: post.reposted, count: post.repostCount };
-      const expectedReposted = !previous.reposted;
-      const expectedCount = expectedReposted ? previous.count + 1 : Math.max(0, previous.count - 1);
       const request = requestVersion.value;
       const generation = viewerGeneration.value;
       const token = engagementMutations.begin('repost', postID);
+      const optimistic = createOptimisticRepostUpdate(post);
       mutationErrors.delete(postID);
-      applyFeedRepostStateUpdate(post, { postId: postID, reposts: expectedCount, reposted: expectedReposted, status: 'ready' });
+      applyFeedRepostStateUpdate(post, optimistic);
       try {
-        const result = previous.reposted ? await undoRepostPost(postID) : await repostPost(postID);
+        const result = await executeRepostToggle(postID, previous.reposted);
         if (!isCurrentMutation(token, target, request, viewer, generation)) return 'ignored';
         const update: FeedRepostStateUpdate = {
           postId: postID,
-          reposts: normalizeCount(result.reposts, expectedCount),
-          reposted: typeof result.reposted === 'boolean' ? result.reposted : expectedReposted,
+          reposts: normalizeCount(result.reposts, optimistic.reposts),
+          reposted: typeof result.reposted === 'boolean' ? result.reposted : optimistic.reposted,
           status: 'ready',
         };
         applyFeedRepostStateUpdate(post, update);
@@ -412,19 +415,19 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     if (!lease) return 'ignored';
     try {
       const previous = post.bookmarked;
-      const expectedBookmarked = !previous;
       const request = requestVersion.value;
       const generation = viewerGeneration.value;
       beginBookmarkStateMutation(postID);
       const token = engagementMutations.begin('bookmark', postID);
+      const optimistic = createOptimisticBookmarkUpdate(post);
       mutationErrors.delete(postID);
-      applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: expectedBookmarked, status: 'ready' });
+      applyFeedBookmarkStateUpdate(post, optimistic);
       try {
-        const result = previous ? await unbookmarkPost(postID) : await bookmarkPost(postID);
+        const result = await executeBookmarkToggle(postID, previous);
         if (!isCurrentMutation(token, target, request, viewer, generation)) return 'ignored';
         const update: FeedBookmarkStateUpdate = {
           postId: postID,
-          bookmarked: typeof result.bookmarked === 'boolean' ? result.bookmarked : expectedBookmarked,
+          bookmarked: typeof result.bookmarked === 'boolean' ? result.bookmarked : optimistic.bookmarked,
           status: 'ready',
         };
         applyFeedBookmarkStateUpdate(post, update);
