@@ -26,7 +26,7 @@
         <div
           ref="cropViewportRef"
           class="cover-crop-dialog__viewport"
-          :class="{ 'cover-crop-dialog__viewport--dragging': dragging }"
+          :class="{ 'cover-crop-dialog__viewport--dragging': isDragging }"
           :tabindex="cropInteractionEnabled ? 0 : -1"
           aria-label="Cover crop preview"
           aria-describedby="cover-crop-keyboard-help"
@@ -35,7 +35,8 @@
           @pointerdown="handlePointerDown"
           @pointermove="handlePointerMove"
           @pointerup="handlePointerUp"
-          @pointercancel="handlePointerUp"
+          @pointercancel="handlePointerCancel"
+          @lostpointercapture="handlePointerCancel"
         >
           <img
             v-if="sourcePreviewURL && geometry"
@@ -104,7 +105,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { useCropInteraction } from '../../composables/useCropInteraction';
 import {
   centeredCoverCropState,
   clampCoverCropState,
@@ -130,7 +132,6 @@ const emit = defineEmits<{
 const defaultViewportWidth = 460;
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const cropViewportRef = ref<HTMLElement | null>(null);
-const sourcePreviewURL = ref('');
 const viewportWidth = ref(defaultViewportWidth);
 const naturalWidth = ref(0);
 const naturalHeight = ref(0);
@@ -141,14 +142,6 @@ const loading = ref(true);
 const applying = ref(false);
 const sourceInvalid = ref(false);
 const errorMessage = ref('');
-const dragging = ref(false);
-const keyboardMoveStep = 8;
-const keyboardMoveLargeStep = 32;
-let sessionVersion = 0;
-let pointerID: number | null = null;
-let previousPointerX = 0;
-let previousPointerY = 0;
-let resizeObserver: ResizeObserver | null = null;
 
 const geometry = computed<CoverCropGeometry | null>(() => createCoverCropGeometry(
   viewportWidth.value,
@@ -180,19 +173,41 @@ const zoomRatio = computed(() => {
   return (scale.value - current.minScale) / (current.maxScale - current.minScale);
 });
 
-const revokeSourcePreviewURL = () => {
-  if (!sourcePreviewURL.value) return;
-  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-    URL.revokeObjectURL(sourcePreviewURL.value);
-  }
-  sourcePreviewURL.value = '';
-};
-
 const setCropState = (state: CoverCropState) => {
   scale.value = state.scale;
   offsetX.value = state.offsetX;
   offsetY.value = state.offsetY;
 };
+
+const applyPanDelta = (dx: number, dy: number) => {
+  const current = geometry.value;
+  if (!current || !cropInteractionEnabled.value) return;
+
+  setCropState(clampCoverCropState({
+    scale: scale.value,
+    offsetX: offsetX.value + dx,
+    offsetY: offsetY.value + dy,
+  }, current));
+};
+
+const {
+  sourcePreviewURL,
+  setSourcePreviewFile,
+  revokeSourcePreviewURL,
+  beginSession,
+  isSessionCurrent,
+  resetInteraction,
+  handleCropKeydown,
+  handlePointerDown,
+  handlePointerMove,
+  handlePointerUp,
+  handlePointerCancel,
+  attachViewport,
+  isDragging,
+} = useCropInteraction({
+  isDisabled: () => !cropInteractionEnabled.value,
+  onPan: applyPanDelta,
+});
 
 const resetCrop = () => {
   if (!geometry.value) return;
@@ -227,9 +242,7 @@ const openDialog = () => {
 };
 
 const initialize = async () => {
-  const currentVersion = ++sessionVersion;
-  pointerID = null;
-  dragging.value = false;
+  const currentVersion = beginSession();
   loading.value = true;
   applying.value = false;
   sourceInvalid.value = false;
@@ -246,9 +259,9 @@ const initialize = async () => {
   }
 
   try {
-    sourcePreviewURL.value = URL.createObjectURL(props.file);
+    setSourcePreviewFile(props.file);
     const decoded = await decodeCoverImage(props.file);
-    if (currentVersion !== sessionVersion) {
+    if (!isSessionCurrent(currentVersion)) {
       decoded.dispose();
       return;
     }
@@ -260,11 +273,11 @@ const initialize = async () => {
       setCropState(centeredCoverCropState(geometry.value));
     }
     await nextTick();
-    if (currentVersion !== sessionVersion) return;
+    if (!isSessionCurrent(currentVersion)) return;
     measureCropViewport();
     loading.value = false;
   } catch (error) {
-    if (currentVersion !== sessionVersion) return;
+    if (!isSessionCurrent(currentVersion)) return;
     loading.value = false;
     sourceInvalid.value = true;
     errorMessage.value = isCoverCropError(error, 'SOURCE_TOO_LARGE')
@@ -285,75 +298,15 @@ const handleZoomInput = (event: Event) => {
   ));
 };
 
-const handleCropKeydown = (event: KeyboardEvent) => {
-  const current = geometry.value;
-  if (!current || !cropInteractionEnabled.value) return;
-
-  const step = event.shiftKey ? keyboardMoveLargeStep : keyboardMoveStep;
-  let deltaX = 0;
-  let deltaY = 0;
-
-  switch (event.key) {
-    case 'ArrowLeft':
-      deltaX = -step;
-      break;
-    case 'ArrowRight':
-      deltaX = step;
-      break;
-    case 'ArrowUp':
-      deltaY = -step;
-      break;
-    case 'ArrowDown':
-      deltaY = step;
-      break;
-    default:
-      return;
-  }
-
-  event.preventDefault();
-  setCropState(clampCoverCropState({
-    scale: scale.value,
-    offsetX: offsetX.value + deltaX,
-    offsetY: offsetY.value + deltaY,
-  }, current));
-};
-
-const handlePointerDown = (event: PointerEvent) => {
-  if (pointerID !== null || loading.value || applying.value || !geometry.value) return;
-  pointerID = event.pointerId;
-  dragging.value = true;
-  previousPointerX = event.clientX;
-  previousPointerY = event.clientY;
-  cropViewportRef.value?.setPointerCapture?.(event.pointerId);
-};
-
-const handlePointerMove = (event: PointerEvent) => {
-  if (pointerID === null || event.pointerId !== pointerID || !geometry.value || applying.value) return;
-  const nextState = clampCoverCropState({
-    scale: scale.value,
-    offsetX: offsetX.value + event.clientX - previousPointerX,
-    offsetY: offsetY.value + event.clientY - previousPointerY,
-  }, geometry.value);
-  previousPointerX = event.clientX;
-  previousPointerY = event.clientY;
-  setCropState(nextState);
-};
-
-const handlePointerUp = (event: PointerEvent) => {
-  if (pointerID !== event.pointerId) return;
-  cropViewportRef.value?.releasePointerCapture?.(event.pointerId);
-  pointerID = null;
-  dragging.value = false;
-};
-
 const handleCancel = () => {
+  resetInteraction();
   emit('cancel');
 };
 
 const handleApply = async () => {
   const currentGeometry = geometry.value;
   if (!currentGeometry || loading.value || applying.value || sourceInvalid.value) return;
-  const currentVersion = sessionVersion;
+  const currentVersion = beginSession();
   applying.value = true;
   errorMessage.value = '';
   try {
@@ -366,14 +319,14 @@ const handleApply = async () => {
       offsetX: offsetX.value,
       offsetY: offsetY.value,
     });
-    if (currentVersion !== sessionVersion) return;
+    if (!isSessionCurrent(currentVersion)) return;
     emit('apply', croppedFile);
   } catch {
-    if (currentVersion === sessionVersion) {
+    if (isSessionCurrent(currentVersion)) {
       errorMessage.value = 'Could not prepare this cover. Try another image.';
     }
   } finally {
-    if (currentVersion === sessionVersion) applying.value = false;
+    if (isSessionCurrent(currentVersion)) applying.value = false;
   }
 };
 
@@ -384,21 +337,7 @@ watch(() => props.file, () => {
 onMounted(() => {
   openDialog();
   void initialize();
-  window.addEventListener('resize', measureCropViewport);
-  if (typeof ResizeObserver !== 'undefined' && cropViewportRef.value) {
-    resizeObserver = new ResizeObserver(measureCropViewport);
-    resizeObserver.observe(cropViewportRef.value);
-  }
-});
-
-onBeforeUnmount(() => {
-  sessionVersion += 1;
-  pointerID = null;
-  dragging.value = false;
-  resizeObserver?.disconnect();
-  resizeObserver = null;
-  window.removeEventListener('resize', measureCropViewport);
-  revokeSourcePreviewURL();
+  if (cropViewportRef.value) attachViewport(cropViewportRef.value, measureCropViewport);
 });
 </script>
 

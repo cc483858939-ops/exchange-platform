@@ -34,7 +34,8 @@
           @pointerdown="handlePointerDown"
           @pointermove="handlePointerMove"
           @pointerup="handlePointerUp"
-          @pointercancel="handlePointerUp"
+          @pointercancel="handlePointerCancel"
+          @lostpointercapture="handlePointerCancel"
         >
           <img
             v-if="sourcePreviewURL && geometry"
@@ -104,7 +105,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { useCropInteraction } from '../../composables/useCropInteraction';
 import {
   clampAvatarCropState,
   createAvatarCropGeometry,
@@ -129,7 +131,6 @@ const emit = defineEmits<{
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const cropViewportRef = ref<HTMLElement | null>(null);
-const sourcePreviewURL = ref('');
 const cropSize = ref(360);
 const naturalWidth = ref(0);
 const naturalHeight = ref(0);
@@ -139,14 +140,6 @@ const offsetY = ref(0);
 const loading = ref(true);
 const applying = ref(false);
 const errorMessage = ref('');
-const keyboardMoveStep = 8;
-const keyboardMoveLargeStep = 32;
-let sessionVersion = 0;
-let pointerID: number | null = null;
-let previousPointerX = 0;
-let previousPointerY = 0;
-let resizeObserver: ResizeObserver | null = null;
-
 const geometry = computed<AvatarCropGeometry | null>(() => createAvatarCropGeometry(
   cropSize.value,
   naturalWidth.value,
@@ -178,19 +171,40 @@ const zoomRatio = computed(() => {
   return (scale.value - current.minScale) / (current.maxScale - current.minScale);
 });
 
-const revokeSourcePreviewURL = () => {
-  if (!sourcePreviewURL.value) return;
-  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-    URL.revokeObjectURL(sourcePreviewURL.value);
-  }
-  sourcePreviewURL.value = '';
-};
-
 const setCropState = (state: AvatarCropState) => {
   scale.value = state.scale;
   offsetX.value = state.offsetX;
   offsetY.value = state.offsetY;
 };
+
+const applyPanDelta = (dx: number, dy: number) => {
+  const current = geometry.value;
+  if (!current || !cropInteractionEnabled.value) return;
+
+  setCropState(clampAvatarCropState({
+    scale: scale.value,
+    offsetX: offsetX.value + dx,
+    offsetY: offsetY.value + dy,
+  }, current));
+};
+
+const {
+  sourcePreviewURL,
+  setSourcePreviewFile,
+  revokeSourcePreviewURL,
+  beginSession,
+  isSessionCurrent,
+  resetInteraction,
+  handleCropKeydown,
+  handlePointerDown,
+  handlePointerMove,
+  handlePointerUp,
+  handlePointerCancel,
+  attachViewport,
+} = useCropInteraction({
+  isDisabled: () => !cropInteractionEnabled.value,
+  onPan: applyPanDelta,
+});
 
 const resetCrop = () => {
   if (!geometry.value) return;
@@ -225,7 +239,7 @@ const openDialog = () => {
 };
 
 const initialize = async () => {
-  const currentVersion = ++sessionVersion;
+  const currentVersion = beginSession();
   loading.value = true;
   applying.value = false;
   errorMessage.value = '';
@@ -239,10 +253,10 @@ const initialize = async () => {
     return;
   }
 
-  sourcePreviewURL.value = URL.createObjectURL(props.file);
+  setSourcePreviewFile(props.file);
   try {
     const decoded = await decodeAvatarImage(props.file);
-    if (currentVersion !== sessionVersion) {
+    if (!isSessionCurrent(currentVersion)) {
       decoded.dispose();
       return;
     }
@@ -250,12 +264,12 @@ const initialize = async () => {
     naturalHeight.value = decoded.naturalHeight;
     decoded.dispose();
     await nextTick();
-    if (currentVersion !== sessionVersion) return;
+    if (!isSessionCurrent(currentVersion)) return;
     measureCropViewport();
     if (geometry.value) resetCrop();
     loading.value = false;
   } catch (error) {
-    if (currentVersion !== sessionVersion) return;
+    if (!isSessionCurrent(currentVersion)) return;
     loading.value = false;
     errorMessage.value = isAvatarCropError(error, 'SOURCE_TOO_LARGE')
       ? 'This photo is too large. Choose a smaller image.'
@@ -275,73 +289,15 @@ const handleZoomInput = (event: Event) => {
   ));
 };
 
-const handleCropKeydown = (event: KeyboardEvent) => {
-  const current = geometry.value;
-  if (!current || !cropInteractionEnabled.value) return;
-
-  const step = event.shiftKey ? keyboardMoveLargeStep : keyboardMoveStep;
-  let deltaX = 0;
-  let deltaY = 0;
-
-  switch (event.key) {
-    case 'ArrowLeft':
-      deltaX = -step;
-      break;
-    case 'ArrowRight':
-      deltaX = step;
-      break;
-    case 'ArrowUp':
-      deltaY = -step;
-      break;
-    case 'ArrowDown':
-      deltaY = step;
-      break;
-    default:
-      return;
-  }
-
-  event.preventDefault();
-  setCropState(clampAvatarCropState({
-    scale: scale.value,
-    offsetX: offsetX.value + deltaX,
-    offsetY: offsetY.value + deltaY,
-  }, current));
-};
-
-const handlePointerDown = (event: PointerEvent) => {
-  if (loading.value || applying.value || !geometry.value) return;
-  pointerID = event.pointerId;
-  previousPointerX = event.clientX;
-  previousPointerY = event.clientY;
-  cropViewportRef.value?.setPointerCapture?.(event.pointerId);
-};
-
-const handlePointerMove = (event: PointerEvent) => {
-  if (pointerID === null || event.pointerId !== pointerID || !geometry.value) return;
-  const nextState = clampAvatarCropState({
-    scale: scale.value,
-    offsetX: offsetX.value + event.clientX - previousPointerX,
-    offsetY: offsetY.value + event.clientY - previousPointerY,
-  }, geometry.value);
-  previousPointerX = event.clientX;
-  previousPointerY = event.clientY;
-  setCropState(nextState);
-};
-
-const handlePointerUp = (event: PointerEvent) => {
-  if (pointerID !== event.pointerId) return;
-  cropViewportRef.value?.releasePointerCapture?.(event.pointerId);
-  pointerID = null;
-};
-
 const handleCancel = () => {
+  resetInteraction();
   emit('cancel');
 };
 
 const handleApply = async () => {
   const currentGeometry = geometry.value;
   if (!currentGeometry || loading.value || applying.value || errorMessage.value) return;
-  const currentVersion = sessionVersion;
+  const currentVersion = beginSession();
   applying.value = true;
   errorMessage.value = '';
   try {
@@ -354,14 +310,14 @@ const handleApply = async () => {
       offsetX: offsetX.value,
       offsetY: offsetY.value,
     });
-    if (currentVersion !== sessionVersion) return;
+    if (!isSessionCurrent(currentVersion)) return;
     emit('apply', croppedFile);
   } catch {
-    if (currentVersion === sessionVersion) {
+    if (isSessionCurrent(currentVersion)) {
       errorMessage.value = 'Could not prepare this photo. Try another image.';
     }
   } finally {
-    if (currentVersion === sessionVersion) applying.value = false;
+    if (isSessionCurrent(currentVersion)) applying.value = false;
   }
 };
 
@@ -372,20 +328,7 @@ watch(() => props.file, () => {
 onMounted(() => {
   openDialog();
   void initialize();
-  window.addEventListener('resize', measureCropViewport);
-  if (typeof ResizeObserver !== 'undefined' && cropViewportRef.value) {
-    resizeObserver = new ResizeObserver(measureCropViewport);
-    resizeObserver.observe(cropViewportRef.value);
-  }
-});
-
-onBeforeUnmount(() => {
-  sessionVersion += 1;
-  pointerID = null;
-  resizeObserver?.disconnect();
-  resizeObserver = null;
-  window.removeEventListener('resize', measureCropViewport);
-  revokeSourcePreviewURL();
+  if (cropViewportRef.value) attachViewport(cropViewportRef.value, measureCropViewport);
 });
 </script>
 
