@@ -24,6 +24,7 @@ import {
   syncHydratedPostBookmarkState,
   syncExternalPostRemoval,
   syncExternalReplyCount,
+  syncExternalQuoteCount,
   syncExternalFollowState,
   syncHomeAuthorIdentity,
   syncHomeLikeState,
@@ -82,6 +83,7 @@ const registerSinks = () => {
     applyBookmarkStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
     reconcileFollowStateLocal: vi.fn().mockReturnValue(true),
     removePostLocal: vi.fn(),
     replaceAuthorIdentityLocal: vi.fn(),
@@ -94,6 +96,7 @@ const registerSinks = () => {
     applyBookmarkStateUpdateLocal: vi.fn().mockReturnValue(true),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateEverywhereLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateEverywhereLocal: vi.fn().mockReturnValue(true),
     applyExternalFollowStateLocal: vi.fn().mockReturnValue(true),
     removePostEverywhereLocal: vi.fn(),
     replaceAuthorIdentityEverywhereLocal: vi.fn(),
@@ -106,6 +109,7 @@ const registerSinks = () => {
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
     removePostLocal: vi.fn(),
     replaceAuthorIdentityLocal: vi.fn(),
   };
@@ -114,6 +118,7 @@ const registerSinks = () => {
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
     removePostLocal: vi.fn(),
     replaceAuthorIdentityLocal: vi.fn(),
   };
@@ -122,6 +127,7 @@ const registerSinks = () => {
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
     removePostLocal: vi.fn().mockReturnValue(true),
     replaceAuthorIdentityLocal: vi.fn().mockReturnValue(true),
   };
@@ -133,6 +139,7 @@ const registerSinks = () => {
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
     removePostLocal: vi.fn().mockReturnValue(true),
     replaceAuthorIdentityLocal: vi.fn().mockReturnValue(true),
   };
@@ -140,9 +147,11 @@ const registerSinks = () => {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
   };
   const postDetail = {
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
+    applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
   };
   registerHomeTimelineSync(home);
   registerProfileSessionSync(profile);
@@ -274,6 +283,30 @@ describe('sessionSync external mutation sinks', () => {
     expect(topic.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
     expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledOnce();
     expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
+  });
+
+  it('fans out an absolute Quote count to every registered Post surface exactly once', () => {
+    const { home, profile, history, topic, bookmarks, postSearch, quotes, postDetail } = registerSinks();
+    const update = { postId: 42, quoteCount: 7 };
+
+    syncExternalQuoteCount(update);
+
+    expect(home.applyQuoteCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(home.applyQuoteCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(profile.applyQuoteCountUpdateEverywhereLocal).toHaveBeenCalledOnce();
+    expect(profile.applyQuoteCountUpdateEverywhereLocal).toHaveBeenCalledWith(update);
+    expect(history.applyQuoteCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(history.applyQuoteCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(topic.applyQuoteCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(topic.applyQuoteCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(bookmarks.applyQuoteCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(bookmarks.applyQuoteCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(postSearch.applyQuoteCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(postSearch.applyQuoteCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(quotes.applyQuoteCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(quotes.applyQuoteCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(postDetail.applyQuoteCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(postDetail.applyQuoteCountUpdateLocal).toHaveBeenCalledWith(update);
   });
 
   it('routes Profile follow success to Home and Search only', () => {

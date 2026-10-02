@@ -114,6 +114,20 @@ describe('postSearchSession', () => {
     });
   });
 
+  it('applies only valid absolute quote counts to the loaded search result', async () => {
+    mocks.searchPosts.mockResolvedValueOnce(page([1]));
+    const store = usePostSearchSessionStore();
+    store.activateCriteria(criteria('yen'));
+    await settle();
+
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: 8 })).toBe(true);
+    expect(store.items[0].quoteCount).toBe(8);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: 1.5 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 0, quoteCount: 9 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 99, quoteCount: 9 })).toBe(false);
+    expect(store.items[0].quoteCount).toBe(8);
+  });
+
   it('ignores an older initial result after criteria change', async () => {
     const stale = deferred<ReturnType<typeof page>>();
     mocks.searchPosts.mockReturnValueOnce(stale.promise).mockResolvedValueOnce(page([2]));

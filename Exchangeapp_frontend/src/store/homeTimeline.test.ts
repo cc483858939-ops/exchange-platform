@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   deletePost: vi.fn(),
+  refreshAndSyncPostQuoteCount: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({
@@ -60,6 +61,9 @@ vi.mock('../services/recommendationService', () => ({
 vi.mock('../services/postService', () => ({
   getFollowingTimeline: mocks.getFollowingTimeline,
   deletePost: mocks.deletePost,
+}));
+vi.mock('./postQuoteCountReconciliation', () => ({
+  refreshAndSyncPostQuoteCount: mocks.refreshAndSyncPostQuoteCount,
 }));
 
 vi.mock('../services/likeService', () => ({
@@ -231,6 +235,7 @@ describe('home timeline session store', () => {
     mocks.followUser.mockReset();
     mocks.unfollowUser.mockReset();
     mocks.deletePost.mockReset().mockResolvedValue(undefined);
+    mocks.refreshAndSyncPostQuoteCount.mockReset().mockResolvedValue(false);
     mocks.getPostEngagementStates.mockReset().mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
   });
 
@@ -766,6 +771,41 @@ describe('home timeline session store', () => {
     expect(mocks.feedStore!.markPostDeleted).toHaveBeenCalledWith(4, 7);
   });
 
+  it.each([
+    ['confirmed delete', undefined],
+    ['terminal 404', { response: { status: 404 } }],
+  ])('refreshes a deleted Quote target after %s', async (_label, error) => {
+    const store = useHomeTimelineStore();
+    const quote = feedPostFixture(100, 7);
+    quote.quotePost = { id: 42, deleted: true };
+    store.following.items = [quote];
+    if (error) mocks.deletePost.mockRejectedValueOnce(error);
+
+    await expect(store.deletePost(100)).resolves.toBe(true);
+
+    expect(store.following.items).toHaveLength(0);
+    expect(mocks.feedStore!.markPostDeleted).toHaveBeenCalledWith(100, 7);
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledOnce();
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledWith(42);
+  });
+
+  it('does not refresh a non-Quote delete or a non-terminal delete failure', async () => {
+    const store = useHomeTimelineStore();
+    store.following.items = [feedPostFixture(100, 7)];
+
+    await expect(store.deletePost(100)).resolves.toBe(true);
+    expect(mocks.refreshAndSyncPostQuoteCount).not.toHaveBeenCalled();
+
+    const quote = feedPostFixture(101, 7);
+    quote.quotePost = { id: 42, deleted: true };
+    store.following.items = [quote];
+    mocks.deletePost.mockRejectedValueOnce({ response: { status: 500 } });
+
+    await expect(store.deletePost(101)).resolves.toBe(false);
+    expect(store.following.items).toHaveLength(1);
+    expect(mocks.refreshAndSyncPostQuoteCount).not.toHaveBeenCalled();
+  });
+
   it('optimistically toggles Like and settles a successful mutation', async () => {
     const store = useHomeTimelineStore();
     const post = feedPostFixture(4, 7);
@@ -1174,6 +1214,24 @@ describe('home timeline session store', () => {
     expect(mocks.feedStore!.recentlyPublishedPosts[0].replyCount).toBe(7);
     expect(store.following.items[0].replyCount).toBe(7);
     expect(store.forYou.items[0].post.replyCount).toBe(7);
+  });
+
+  it('sets canonical Quote counts across every Home copy and rejects invalid updates', () => {
+    const store = useHomeTimelineStore();
+    const base = feedPostFixture(42, 7);
+    base.quoteCount = 3;
+    mocks.feedStore!.recentlyPublishedPosts = [{ ...base }];
+    store.following.items = [{ ...base }];
+    store.forYou.items = [{ recommendation: recommendation(42), post: { ...base } }];
+
+    expect(store.applyQuoteCountUpdateLocal({ postId: 42, quoteCount: 5 })).toBe(true);
+    expect(mocks.feedStore!.recentlyPublishedPosts[0].quoteCount).toBe(5);
+    expect(store.following.items[0].quoteCount).toBe(5);
+    expect(store.forYou.items[0].post.quoteCount).toBe(5);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 42, quoteCount: -1 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 42, quoteCount: 1.5 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 0, quoteCount: 9 })).toBe(false);
+    expect(store.following.items[0].quoteCount).toBe(5);
   });
 
   it('reconciles an unfollow by removing only Following posts and marking it stale', () => {

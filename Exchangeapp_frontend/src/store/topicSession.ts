@@ -9,6 +9,7 @@ import { repostPost, undoRepostPost } from '../services/repostService';
 import type { Post } from '../types/Post';
 import type { FeedBookmarkStateUpdate, FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   applyFeedBookmarkStateUpdate,
   applyFeedLikeStateUpdate,
@@ -25,7 +26,7 @@ import {
   syncTopicRepostState,
   beginBookmarkStateMutation,
 } from './sessionSync';
-import type { PostReplyCountUpdate } from './sessionSync';
+import type { PostQuoteCountUpdate, PostReplyCountUpdate } from './sessionSync';
 import {
   createEngagementMutationCoordinator,
   type EngagementMutationResult,
@@ -317,6 +318,15 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     return true;
   };
 
+  const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
+    const normalized = normalizePostQuoteCountUpdate(update);
+    if (!normalized) return false;
+    const post = findPost(normalized.postId);
+    if (!post) return false;
+    post.quoteCount = normalized.quoteCount;
+    return true;
+  };
+
   const removePostLocal = (postID: number) => {
     const existed = Boolean(findPost(postID));
     deletedPostIDs.add(postID);
@@ -351,6 +361,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
   });
@@ -545,6 +556,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
     saveScrollTop,

@@ -656,6 +656,9 @@ describe('historySession store', () => {
     expect(store.items).toEqual([]);
 
     expect(store.applyReplyCountUpdateLocal({ postId: 1, replyCount: 9 })).toBe(true);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: 6 })).toBe(true);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: -1 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 0, quoteCount: 10 })).toBe(false);
     expect(store.replaceAuthorIdentityLocal({
       id: 9,
       username: 'renamed',
@@ -666,6 +669,7 @@ describe('historySession store', () => {
     mocks.unlikePost.mockResolvedValueOnce({ likes: 10, liked: true });
     store.applyExternalLikeStateLocal({ postId: 1, likes: 10, liked: true, status: 'ready' });
     expect(store.items[0].replyCount).toBe(9);
+    expect(store.items[0].quoteCount).toBe(6);
     expect(store.items[0].author.username).toBe('renamed');
   });
 

@@ -21,6 +21,7 @@ import type {
   FeedRepostStateUpdate,
   FeedTab,
 } from '../types/Feed';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import type { PublicAuthor } from '../types/User';
 import {
   applyFeedLikeStateUpdate,
@@ -41,7 +42,8 @@ import {
   beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
 } from './sessionSync';
-import type { PostReplyCountUpdate } from './sessionSync';
+import type { PostQuoteCountUpdate, PostReplyCountUpdate } from './sessionSync';
+import { refreshAndSyncPostQuoteCount } from './postQuoteCountReconciliation';
 import { getGuestRecommendationSessionID } from '../utils/guestRecommendationSession';
 import {
   createEngagementMutationCoordinator,
@@ -320,6 +322,17 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     let applied = false;
     forEachHomePost(update.postId, (post) => {
       post.replyCount = replyCount;
+      applied = true;
+    });
+    return applied;
+  };
+
+  const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
+    const normalized = normalizePostQuoteCountUpdate(update);
+    if (!normalized) return false;
+    let applied = false;
+    forEachHomePost(normalized.postId, (post) => {
+      post.quoteCount = normalized.quoteCount;
       applied = true;
     });
     return applied;
@@ -1161,6 +1174,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       || pendingDeletePostIds.has(postId)
     ) return false;
 
+    const quoteTargetPostID = post.quotePost?.id ?? null;
+
     const capturedAuthGeneration = authGeneration;
     const capturedViewerID = ownerUserID;
     pendingDeletePostIds.add(postId);
@@ -1174,11 +1189,19 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     try {
       await deletePostRequest(postId);
       if (!isCurrent()) return false;
-      return removePost(postId, ownerUserID);
+      const removed = removePost(postId, ownerUserID);
+      if (removed && quoteTargetPostID !== null) {
+        void refreshAndSyncPostQuoteCount(quoteTargetPostID);
+      }
+      return removed;
     } catch (error) {
       if (!isCurrent()) return false;
       if (getErrorStatus(error) === 404) {
-        return removePost(postId, ownerUserID);
+        const removed = removePost(postId, ownerUserID);
+        if (removed && quoteTargetPostID !== null) {
+          void refreshAndSyncPostQuoteCount(quoteTargetPostID);
+        }
+        return removed;
       }
       deleteErrors.set(
         postId,
@@ -1246,6 +1269,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     applyBookmarkStateUpdateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     reconcileFollowStateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
@@ -1320,6 +1344,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     applyBookmarkStateUpdateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     reconcileFollowStateLocal,
     dismissRecommendation,
     removePost,

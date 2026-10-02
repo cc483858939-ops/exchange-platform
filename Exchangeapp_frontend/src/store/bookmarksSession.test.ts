@@ -167,6 +167,20 @@ describe('bookmarksSession store', () => {
     expect(mocks.getBookmarks).toHaveBeenNthCalledWith(2, { limit: 20, cursor: 'cursor-1' });
   });
 
+  it('applies valid absolute quote counts to a loaded bookmark and preserves state on invalid input', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const store = createStore();
+    await store.loadInitial();
+    await settle();
+
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: 7 })).toBe(true);
+    expect(store.items[0].quoteCount).toBe(7);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: -1 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1.5, quoteCount: 8 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 99, quoteCount: 8 })).toBe(false);
+    expect(store.items[0].quoteCount).toBe(7);
+  });
+
   it('keeps bookmark membership when bookmark hydration is unavailable and applies ready Like and Repost states', async () => {
     mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
     mocks.getPostEngagementStates.mockResolvedValueOnce({

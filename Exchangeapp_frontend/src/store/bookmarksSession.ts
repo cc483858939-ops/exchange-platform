@@ -21,6 +21,7 @@ import {
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import { useAuthStore } from './auth';
 import {
   registerBookmarksSessionSync,
@@ -28,6 +29,7 @@ import {
   syncExternalPostLikeState,
   syncExternalPostRepostState,
   beginBookmarkStateMutation,
+  type PostQuoteCountUpdate,
 } from './sessionSync';
 import {
   createEngagementMutationCoordinator,
@@ -641,6 +643,15 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     return post ? applyFeedRepostStateUpdate(post, update) : false;
   };
 
+  const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
+    const normalized = normalizePostQuoteCountUpdate(update);
+    if (!normalized) return false;
+    const post = findPost(normalized.postId);
+    if (!post) return false;
+    post.quoteCount = normalized.quoteCount;
+    return true;
+  };
+
   const removePostLocal = (postID: number) => {
     const existed = Boolean(findPost(postID) || removedBookmarkSnapshots.has(postID));
     deletedPostIDs.add(postID);
@@ -675,6 +686,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     applyExternalBookmarkStateLocal,
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
   });
@@ -720,6 +732,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
     saveScrollTop,

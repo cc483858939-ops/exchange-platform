@@ -161,7 +161,14 @@ describe('quotesSession store', () => {
       applyExternalLikeStateLocal: expect.any(Function),
       applyExternalRepostStateLocal: expect.any(Function),
       applyExternalBookmarkStateLocal: expect.any(Function),
+      applyQuoteCountUpdateLocal: expect.any(Function),
     });
+    const sync = mocks.registerQuotesSessionSync.mock.calls[0][0];
+    expect(sync.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: 7 })).toBe(true);
+    expect(store.items[0].quoteCount).toBe(7);
+    expect(sync.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: '8' })).toBe(false);
+    expect(sync.applyQuoteCountUpdateLocal({ postId: 99, quoteCount: 8 })).toBe(false);
+    expect(store.items[0].quoteCount).toBe(7);
   });
 
   it('loads fresh Posts for the target and initializes guest engagement as ready', async () => {

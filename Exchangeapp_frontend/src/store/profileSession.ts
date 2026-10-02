@@ -24,6 +24,7 @@ import type {
   FeedRepostStateUpdate,
 } from '../types/Feed';
 import type { PublicAuthor, PublicUser } from '../types/User';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   applyFeedLikeStateUpdate,
   applyFeedBookmarkStateUpdate,
@@ -43,8 +44,9 @@ import {
   beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
 } from './sessionSync';
-import type { PostReplyCountUpdate } from './sessionSync';
+import type { PostQuoteCountUpdate, PostReplyCountUpdate } from './sessionSync';
 import { syncProfileFollowState } from './sessionSync';
+import { refreshAndSyncPostQuoteCount } from './postQuoteCountReconciliation';
 import {
   createEngagementMutationCoordinator,
   type EngagementMutationRevision,
@@ -412,6 +414,20 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       session.timelineItems.forEach((item) => {
         if (item.post.id !== update.postId) return;
         item.post.replyCount = replyCount;
+        applied = true;
+      });
+    });
+    return applied;
+  };
+
+  const applyQuoteCountUpdateEverywhereLocal = (update: PostQuoteCountUpdate) => {
+    const normalized = normalizePostQuoteCountUpdate(update);
+    if (!normalized) return false;
+    let applied = false;
+    sessions.forEach((session) => {
+      session.timelineItems.forEach((item) => {
+        if (item.post.id !== normalized.postId) return;
+        item.post.quoteCount = normalized.quoteCount;
         applied = true;
       });
     });
@@ -1132,6 +1148,8 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       || pendingDeletePostIds.has(postId)
     ) return false;
 
+    const quoteTargetPostID = post.quotePost?.id ?? null;
+
     const capturedViewerGeneration = viewerGeneration.value;
     const capturedViewerID = ownerUserID;
     const deleteMutationVersion = (deleteMutationVersions.get(postId) ?? 0) + 1;
@@ -1147,10 +1165,20 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     try {
       await deletePostRequest(postId);
       if (!isCurrent()) return false;
-      return removePostEverywhere(postId, ownerUserID);
+      const removed = removePostEverywhere(postId, ownerUserID);
+      if (removed && quoteTargetPostID !== null) {
+        void refreshAndSyncPostQuoteCount(quoteTargetPostID);
+      }
+      return removed;
     } catch (error) {
       if (!isCurrent()) return false;
-      if (getErrorStatus(error) === 404) return removePostEverywhere(postId, ownerUserID);
+      if (getErrorStatus(error) === 404) {
+        const removed = removePostEverywhere(postId, ownerUserID);
+        if (removed && quoteTargetPostID !== null) {
+          void refreshAndSyncPostQuoteCount(quoteTargetPostID);
+        }
+        return removed;
+      }
       deleteErrors.set(
         postId,
         getErrorStatus(error) === 403
@@ -1351,6 +1379,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     applyBookmarkStateUpdateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateEverywhereLocal,
+    applyQuoteCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
     markOwnProfileTimelineStale: markOwnProfileTimelineStaleLocal,
     removePostEverywhereLocal,
@@ -1399,6 +1428,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     applyBookmarkStateUpdateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateEverywhereLocal,
+    applyQuoteCountUpdateEverywhereLocal,
     applyExternalFollowStateLocal,
     removePostEverywhere,
     removePostEverywhereLocal,

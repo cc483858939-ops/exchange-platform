@@ -651,13 +651,16 @@ import {
   syncExternalReplyCount,
   beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
+  type PostQuoteCountUpdate,
 } from '../store/sessionSync';
+import { refreshAndSyncPostQuoteCount } from '../store/postQuoteCountReconciliation';
 import type { Post } from '../types/Post';
 import type { FeedBookmarkStateUpdate, FeedBookmarkStatus, FeedPost } from '../types/Feed';
 import type { RecommendationTracking } from '../types/Recommendation';
 import type { PublicAuthor } from '../types/User';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
 import { formatPostDetailTimestamp } from '../utils/time';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   getPreferredTranslationLanguage,
   isPostTranslationAvailable,
@@ -1411,6 +1414,7 @@ const confirmDeletePost = async () => {
   const detailVersion = detailRequestVersion;
   const requestVersion = ++deleteRequestVersion;
   const postID = currentPost.id;
+  const quoteTargetPostID = currentPost.quote_post_id ?? null;
   deletePending.value = true;
   deleteError.value = '';
 
@@ -1427,6 +1431,9 @@ const confirmDeletePost = async () => {
       return false;
     }
     syncExternalPostRemoval(postID);
+    if (quoteTargetPostID !== null) {
+      void refreshAndSyncPostQuoteCount(quoteTargetPostID);
+    }
     finishRead('route_leave');
     void recommendationTelemetry.flush(false);
     deletePostConfirmOpen.value = false;
@@ -1866,6 +1873,19 @@ const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
   }
 
   return applied;
+};
+
+const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
+  const normalized = normalizePostQuoteCountUpdate(update);
+  if (
+    !normalized
+    || currentDetailPostID.value !== normalized.postId
+    || post.value?.id !== normalized.postId
+  ) {
+    return false;
+  }
+  quoteCount.value = normalized.quoteCount;
+  return true;
 };
 
 const loadInitialReplies = async (id: string, detailVersion: number) => {
@@ -2538,7 +2558,7 @@ onBeforeRouteLeave(async to => {
 });
 
 onMounted(() => {
-  registerPostDetailSessionSync({ applyExternalBookmarkStateLocal });
+  registerPostDetailSessionSync({ applyExternalBookmarkStateLocal, applyQuoteCountUpdateLocal });
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('scroll', handleReadScroll, { passive: true });
   window.addEventListener('resize', updateReadGeometry);

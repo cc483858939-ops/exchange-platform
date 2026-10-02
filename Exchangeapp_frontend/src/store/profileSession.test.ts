@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   bookmarkPost: vi.fn(),
   unbookmarkPost: vi.fn(),
   deletePost: vi.fn(),
+  refreshAndSyncPostQuoteCount: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({
@@ -62,6 +63,9 @@ vi.mock('../services/userService', () => ({
 
 vi.mock('../services/postService', () => ({
   deletePost: mocks.deletePost,
+}));
+vi.mock('./postQuoteCountReconciliation', () => ({
+  refreshAndSyncPostQuoteCount: mocks.refreshAndSyncPostQuoteCount,
 }));
 
 vi.mock('../services/likeService', () => ({
@@ -234,6 +238,7 @@ describe('profile session store', () => {
     mocks.bookmarkPost.mockReset();
     mocks.unbookmarkPost.mockReset();
     mocks.deletePost.mockReset().mockResolvedValue(undefined);
+    mocks.refreshAndSyncPostQuoteCount.mockReset().mockResolvedValue(false);
     mocks.getPostEngagementStates.mockReset().mockImplementation((postIDs: number[]) => engagementResponseFromBatchMocks(postIDs, mocks));
   });
 
@@ -1138,6 +1143,7 @@ describe('profile session store', () => {
       applyRepostStateUpdateLocal: vi.fn().mockReturnValue(false),
       applyExternalRepostStateLocal: vi.fn().mockReturnValue(false),
       applyReplyCountUpdateLocal: vi.fn().mockReturnValue(false),
+      applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(false),
       reconcileFollowStateLocal,
       removePostLocal: vi.fn(),
       replaceAuthorIdentityLocal: vi.fn(),
@@ -1181,6 +1187,61 @@ describe('profile session store', () => {
     expect(store.applyReplyCountUpdateEverywhereLocal({ postId: 4, replyCount: 6 })).toBe(true);
     expect(first.timelineItems[0].post.replyCount).toBe(6);
     expect(second.timelineItems[0].post.replyCount).toBe(6);
+  });
+
+  it('sets a canonical Quote count across every retained Profile session', () => {
+    const store = useProfileSessionStore();
+    const first = store.ensureSession(7)!;
+    const second = store.ensureSession(8)!;
+    const firstPost = readyProfilePost({ id: 42, quoteCount: 1 });
+    const secondPost = readyProfilePost({ id: 42, quoteCount: 1 });
+    first.timelineItems = [profileTimelineItem(firstPost)];
+    second.timelineItems = [profileTimelineItem(secondPost)];
+
+    expect(store.applyQuoteCountUpdateEverywhereLocal({ postId: 42, quoteCount: 4 })).toBe(true);
+    expect(firstPost.quoteCount).toBe(4);
+    expect(secondPost.quoteCount).toBe(4);
+    expect(store.applyQuoteCountUpdateEverywhereLocal({ postId: 42, quoteCount: 1.5 })).toBe(false);
+    expect(store.applyQuoteCountUpdateEverywhereLocal({ postId: 0, quoteCount: 8 })).toBe(false);
+    expect(firstPost.quoteCount).toBe(4);
+    expect(secondPost.quoteCount).toBe(4);
+    expect(store.applyQuoteCountUpdateEverywhereLocal({ postId: 99, quoteCount: 8 })).toBe(false);
+  });
+
+  it.each([
+    ['confirmed delete', undefined],
+    ['terminal 404', { response: { status: 404 } }],
+  ])('refreshes a deleted Profile Quote target after %s', async (_label, error) => {
+    const store = useProfileSessionStore();
+    store.setViewer(7);
+    const quote = readyProfilePost({ id: 100, author: author(7), quotePost: { id: 42, deleted: true } });
+    store.ensureSession(7)!.timelineItems = [profileTimelineItem(quote)];
+    if (error) mocks.deletePost.mockRejectedValueOnce(error);
+
+    await expect(store.deletePost(100, 7)).resolves.toBe(true);
+
+    expect(store.ensureSession(7)!.timelineItems).toHaveLength(0);
+    expect(mocks.feedStore!.markPostDeleted).toHaveBeenCalledWith(100, 7);
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledOnce();
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledWith(42);
+  });
+
+  it('does not refresh a normal Profile delete or a non-terminal Quote delete failure', async () => {
+    const store = useProfileSessionStore();
+    store.setViewer(7);
+    const normalPost = readyProfilePost({ id: 100, author: author(7) });
+    store.ensureSession(7)!.timelineItems = [profileTimelineItem(normalPost)];
+
+    await expect(store.deletePost(100, 7)).resolves.toBe(true);
+    expect(mocks.refreshAndSyncPostQuoteCount).not.toHaveBeenCalled();
+
+    const quote = readyProfilePost({ id: 101, author: author(7), quotePost: { id: 42, deleted: true } });
+    store.ensureSession(7)!.timelineItems = [profileTimelineItem(quote)];
+    mocks.deletePost.mockRejectedValueOnce({ response: { status: 500 } });
+
+    await expect(store.deletePost(101, 7)).resolves.toBe(false);
+    expect(store.ensureSession(7)!.timelineItems).toHaveLength(1);
+    expect(mocks.refreshAndSyncPostQuoteCount).not.toHaveBeenCalled();
   });
 
   it('synchronizes likes, deletes, identity edits, and newly published own posts across profile sessions', () => {

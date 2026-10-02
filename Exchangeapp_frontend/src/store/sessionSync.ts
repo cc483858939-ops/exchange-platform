@@ -12,6 +12,11 @@ export type PostReplyCountUpdate = {
   replyCount: number;
 };
 
+export type PostQuoteCountUpdate = {
+  postId: number;
+  quoteCount: number;
+};
+
 export type HomeTimelineSync = {
   applyLikeStateUpdateLocal: (update: FeedLikeStateUpdate, expectedVersion?: number) => boolean;
   applyExternalLikeStateLocal: (update: FeedLikeStateUpdate) => boolean;
@@ -20,6 +25,7 @@ export type HomeTimelineSync = {
   applyBookmarkStateUpdateLocal?: (update: FeedBookmarkStateUpdate, expectedVersion?: number) => boolean;
   applyExternalBookmarkStateLocal?: (update: FeedBookmarkStateUpdate) => boolean;
   applyReplyCountUpdateLocal: (update: PostReplyCountUpdate) => boolean;
+  applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
   reconcileFollowStateLocal: (state: UserFollowState) => boolean;
   removePostLocal: (postID: number) => void;
   replaceAuthorIdentityLocal: (author: PublicAuthor) => void;
@@ -33,6 +39,7 @@ export type ProfileSessionSync = {
   applyBookmarkStateUpdateLocal?: (update: FeedBookmarkStateUpdate) => boolean;
   applyExternalBookmarkStateLocal?: (update: FeedBookmarkStateUpdate) => boolean;
   applyReplyCountUpdateEverywhereLocal: (update: PostReplyCountUpdate) => boolean;
+  applyQuoteCountUpdateEverywhereLocal: (update: PostQuoteCountUpdate) => boolean;
   applyExternalFollowStateLocal: (state: UserFollowState) => boolean;
   markOwnProfileTimelineStale?: () => boolean;
   removePostEverywhereLocal: (postID: number) => void;
@@ -48,6 +55,7 @@ export type PostSearchSessionSync = {
   applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
   applyReplyCountUpdateLocal: (update: PostReplyCountUpdate) => boolean;
+  applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
   removePostLocal: (postID: number) => void;
   replaceAuthorIdentityLocal: (author: PublicAuthor) => void;
 };
@@ -57,6 +65,7 @@ export type HistorySessionSync = {
   applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyExternalBookmarkStateLocal?: (update: FeedBookmarkStateUpdate) => boolean;
   applyReplyCountUpdateLocal: (update: PostReplyCountUpdate) => boolean;
+  applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
   removePostLocal: (postID: number) => void;
   replaceAuthorIdentityLocal: (author: PublicAuthor) => void;
 };
@@ -66,6 +75,7 @@ export type TopicSessionSync = {
   applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
   applyReplyCountUpdateLocal: (update: PostReplyCountUpdate) => boolean;
+  applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
   removePostLocal: (postID: number) => boolean;
   replaceAuthorIdentityLocal: (author: PublicAuthor) => boolean;
 };
@@ -79,18 +89,21 @@ export type BookmarksSessionSync = {
   applyExternalBookmarkStateLocal?: (update: FeedBookmarkStateUpdate) => boolean;
   applyExternalLikeStateLocal?: (update: FeedLikeStateUpdate) => boolean;
   applyExternalRepostStateLocal?: (update: FeedRepostStateUpdate) => boolean;
+  applyQuoteCountUpdateLocal?: (update: PostQuoteCountUpdate) => boolean;
   removePostLocal?: (postID: number) => boolean;
   replaceAuthorIdentityLocal?: (author: PublicAuthor) => boolean;
 };
 
 export type PostDetailSessionSync = {
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
+  applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
 };
 
 export type QuotesSessionSync = {
   applyExternalLikeStateLocal: (update: FeedLikeStateUpdate) => boolean;
   applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
+  applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
 };
 
 let homeTimelineSync: HomeTimelineSync | null = null;
@@ -420,6 +433,17 @@ export const syncExternalReplyCount = (update: PostReplyCountUpdate) => {
   historySessionSync?.applyReplyCountUpdateLocal(update);
   topicSessionSync?.applyReplyCountUpdateLocal(update);
   postSearchSessionSync?.applyReplyCountUpdateLocal(update);
+};
+
+export const syncExternalQuoteCount = (update: PostQuoteCountUpdate) => {
+  homeTimelineSync?.applyQuoteCountUpdateLocal(update);
+  profileSessionSync?.applyQuoteCountUpdateEverywhereLocal(update);
+  historySessionSync?.applyQuoteCountUpdateLocal(update);
+  topicSessionSync?.applyQuoteCountUpdateLocal(update);
+  bookmarksSessionSync?.applyQuoteCountUpdateLocal?.(update);
+  postSearchSessionSync?.applyQuoteCountUpdateLocal(update);
+  quotesSessionSync?.applyQuoteCountUpdateLocal(update);
+  postDetailSessionSync?.applyQuoteCountUpdateLocal(update);
 };
 
 export const syncProfileFollowState = (state: UserFollowState) => {

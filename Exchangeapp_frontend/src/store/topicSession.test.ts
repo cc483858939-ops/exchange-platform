@@ -308,6 +308,7 @@ describe('topicSession store', () => {
       applyExternalRepostStateLocal: expect.any(Function),
       applyExternalBookmarkStateLocal: expect.any(Function),
       applyReplyCountUpdateLocal: expect.any(Function),
+      applyQuoteCountUpdateLocal: expect.any(Function),
       removePostLocal: expect.any(Function),
       replaceAuthorIdentityLocal: expect.any(Function),
     }));
@@ -316,6 +317,9 @@ describe('topicSession store', () => {
     expect(store.applyExternalRepostStateLocal({ postId: 1, reposts: 5, reposted: true, status: 'ready' })).toBe(true);
     expect(store.applyExternalBookmarkStateLocal({ postId: 1, bookmarked: true, status: 'ready' })).toBe(true);
     expect(store.applyReplyCountUpdateLocal({ postId: 1, replyCount: 7 })).toBe(true);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: 6 })).toBe(true);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: -1 })).toBe(false);
+    expect(store.applyQuoteCountUpdateLocal({ postId: 0, quoteCount: 10 })).toBe(false);
     expect(store.items[0]).toMatchObject({
       likeCount: 4,
       liked: true,
@@ -323,6 +327,7 @@ describe('topicSession store', () => {
       reposted: true,
       bookmarked: true,
       replyCount: 7,
+      quoteCount: 6,
     });
     expect(store.applyReplyCountUpdateLocal({ postId: 1, replyCount: -1 })).toBe(false);
   });

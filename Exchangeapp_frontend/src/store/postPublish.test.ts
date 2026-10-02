@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     registerPublishedTimelinePost: vi.fn(),
   },
   createPost: vi.fn(),
+  refreshAndSyncPostQuoteCount: vi.fn(),
   uploadPostMedia: vi.fn(),
   getPostBookmarkStates: vi.fn(),
   randomUUID: vi.fn(),
@@ -41,6 +42,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../services/postService', () => ({
   createPost: mocks.createPost,
   uploadPostMedia: mocks.uploadPostMedia,
+}));
+vi.mock('./postQuoteCountReconciliation', () => ({
+  refreshAndSyncPostQuoteCount: mocks.refreshAndSyncPostQuoteCount,
 }));
 
 vi.mock('../services/bookmarkService', () => ({
@@ -188,6 +192,7 @@ describe('postPublish store', () => {
       },
     });
     mocks.createPost.mockResolvedValue(publishedPost());
+    mocks.refreshAndSyncPostQuoteCount.mockReset().mockResolvedValue(false);
     mocks.uploadPostMedia.mockImplementation(async (item: File) => `/media/${item.name}`);
     mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
@@ -769,6 +774,7 @@ describe('postPublish store', () => {
     expect(first.status).toBe('accepted');
     await flushPromises();
     expect(store.latestOperation?.quotePostID).toBe(42);
+    expect(mocks.refreshAndSyncPostQuoteCount).not.toHaveBeenCalled();
     expect(mocks.publishRecords.get(7)?.quotePostID).toBe(42);
     expect(mocks.createPost.mock.calls[0]?.[0]).toEqual({
       content: 'Comment on the source',
@@ -776,11 +782,13 @@ describe('postPublish store', () => {
       media: [],
     });
 
-    mocks.createPost.mockResolvedValueOnce(publishedPost());
+    mocks.createPost.mockResolvedValueOnce({ ...publishedPost(), quote_post_id: 42 });
     const retry = await store.startOrRetryDraft();
     expect(retry.status).toBe('accepted');
     await flushPromises();
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledOnce();
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledWith(42);
     expect(mocks.createPost.mock.calls[1]?.[0]).toEqual(mocks.createPost.mock.calls[0]?.[0]);
     expect(mocks.createPost.mock.calls[1]?.[1].idempotencyKey)
       .toBe(mocks.createPost.mock.calls[0]?.[1].idempotencyKey);
@@ -1917,6 +1925,30 @@ describe('postPublish store', () => {
     expect(mocks.publishRecords.get(7)?.id).toBe(operationID);
     expect(mocks.randomUUID).not.toHaveBeenCalled();
     expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('reconciles the quoted Post again when retrying cleanup for a durable success', async () => {
+    const operationID = operationUUID(909);
+    mocks.publishRecords.set(7, persistedFailedOperation({
+      id: operationID,
+      content: 'Already quoted',
+      quotePostID: 42,
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: { ...publishedPost(), quote_post_id: 42 },
+    }));
+    mocks.deletePostPublishOperation.mockResolvedValue(false);
+    const draft = usePostDraftStore();
+    draft.setContent('Another post');
+    const store = usePostPublishStore();
+
+    await expect(store.startOrRetryDraft()).resolves.toEqual({ status: 'blocked', reason: 'cleanup_pending' });
+
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshAndSyncPostQuoteCount.mock.calls).toEqual([[42], [42]]);
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledWith(42);
     expect(mocks.createPost).not.toHaveBeenCalled();
   });
 

@@ -53,8 +53,12 @@ const mocks = vi.hoisted(() => ({
   externalRepost: vi.fn(),
   externalRemoval: vi.fn(),
   externalReplyCount: vi.fn(),
+  refreshAndSyncPostQuoteCount: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
-  detailSync: null as { applyExternalBookmarkStateLocal: (update: unknown) => boolean } | null,
+  detailSync: null as {
+    applyExternalBookmarkStateLocal: (update: unknown) => boolean;
+    applyQuoteCountUpdateLocal: (update: unknown) => boolean;
+  } | null,
 }));
 
 vi.mock('vue-router', () => ({
@@ -85,6 +89,9 @@ vi.mock('../store/sessionSync', () => ({
   markOwnProfileTimelineStale: vi.fn(),
   syncExternalPostRemoval: mocks.externalRemoval,
   syncExternalReplyCount: mocks.externalReplyCount,
+}));
+vi.mock('../store/postQuoteCountReconciliation', () => ({
+  refreshAndSyncPostQuoteCount: mocks.refreshAndSyncPostQuoteCount,
 }));
 vi.mock('../services/postService', () => ({
   getPostById: mocks.getPostById,
@@ -235,6 +242,7 @@ describe('PostDetailView mutation synchronization', () => {
     originalHistoryURL = window.location.href;
     window.history.replaceState({ back: null }, '', originalHistoryURL);
     mocks.getPostById.mockResolvedValue(post);
+    mocks.refreshAndSyncPostQuoteCount.mockReset().mockResolvedValue(false);
     const operationState = reactive({ operations: [] as any[] });
     mocks.replySubmissionStore = Object.assign(operationState, {
       activateViewer: vi.fn().mockResolvedValue(undefined),
@@ -318,6 +326,19 @@ describe('PostDetailView mutation synchronization', () => {
 
     expect(mocks.externalLike).not.toHaveBeenCalled();
     failed.unmount();
+  });
+
+  it('accepts a valid external quote count only for the active root Post', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+
+    expect(mocks.detailSync?.applyQuoteCountUpdateLocal({ postId: 42, quoteCount: 9 })).toBe(true);
+    expect((mounted.vm as any).$.setupState.quoteCount).toBe(9);
+    expect(mocks.detailSync?.applyQuoteCountUpdateLocal({ postId: 42, quoteCount: -1 })).toBe(false);
+    expect(mocks.detailSync?.applyQuoteCountUpdateLocal({ postId: 99, quoteCount: 12 })).toBe(false);
+    expect((mounted.vm as any).$.setupState.quoteCount).toBe(9);
+
+    mounted.unmount();
   });
 
   it('does not mutate the main Post or call Like service while another surface owns the lease', async () => {
@@ -815,6 +836,7 @@ describe('PostDetailView mutation synchronization', () => {
     ['success', undefined],
     ['terminal 404', { response: { status: 404 } }],
   ])('syncs Detail deletion before navigation on %s', async (_label, error) => {
+    mocks.getPostById.mockResolvedValueOnce({ ...post, quote_post_id: 77 });
     if (error) mocks.deletePost.mockRejectedValueOnce(error);
     window.history.replaceState({ back: '/history' }, '', window.location.href);
     const mounted = mountDetail();
@@ -829,6 +851,8 @@ describe('PostDetailView mutation synchronization', () => {
 
     expect(mocks.feedStore.markPostDeleted).toHaveBeenCalledWith(42, 7);
     expect(mocks.externalRemoval).toHaveBeenCalledWith(42);
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledOnce();
+    expect(mocks.refreshAndSyncPostQuoteCount).toHaveBeenCalledWith(77);
     expect(mocks.router.back).toHaveBeenCalledTimes(1);
     expect(mocks.router.replace).not.toHaveBeenCalled();
     expect(mocks.feedStore.markPostDeleted.mock.invocationCallOrder[0])
@@ -836,6 +860,18 @@ describe('PostDetailView mutation synchronization', () => {
     expect(mocks.externalRemoval.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.router.back.mock.invocationCallOrder[0]);
     expect(mounted.find('.test-confirm-dialog').exists()).toBe(false);
+    mounted.unmount();
+  });
+
+  it('does not refresh a quote count when deleting a normal root Post', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    await mounted.find('.post-detail__delete').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect(mocks.externalRemoval).toHaveBeenCalledWith(42);
+    expect(mocks.refreshAndSyncPostQuoteCount).not.toHaveBeenCalled();
     mounted.unmount();
   });
 
@@ -888,6 +924,7 @@ describe('PostDetailView mutation synchronization', () => {
     expect(mocks.deletePost).not.toHaveBeenCalled();
     expect(mocks.feedStore.markPostDeleted).not.toHaveBeenCalled();
     expect(mocks.externalRemoval).not.toHaveBeenCalled();
+    expect(mocks.refreshAndSyncPostQuoteCount).not.toHaveBeenCalled();
     expect(mocks.router.replace).not.toHaveBeenCalled();
 
     await mounted.find('.test-confirm-cancel').trigger('click');

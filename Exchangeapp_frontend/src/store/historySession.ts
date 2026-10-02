@@ -10,6 +10,7 @@ import type {
   FeedRepostStateUpdate,
 } from '../types/Feed';
 import type { PublicAuthor } from '../types/User';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   applyFeedLikeStateUpdate,
   applyFeedBookmarkStateUpdate,
@@ -28,7 +29,7 @@ import {
   syncHistoryBookmarkState,
   beginBookmarkStateMutation,
 } from './sessionSync';
-import type { PostReplyCountUpdate } from './sessionSync';
+import type { PostQuoteCountUpdate, PostReplyCountUpdate } from './sessionSync';
 import {
   createEngagementMutationCoordinator,
   type EngagementMutationRevision,
@@ -916,6 +917,23 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     return applied;
   };
 
+  const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
+    const normalized = normalizePostQuoteCountUpdate(update);
+    if (!normalized) return false;
+    let applied = false;
+    const post = findPost(normalized.postId);
+    if (post) {
+      post.quoteCount = normalized.quoteCount;
+      applied = true;
+    }
+    const snapshot = removedSnapshots.get(normalized.postId);
+    if (snapshot) {
+      snapshot.post.quoteCount = normalized.quoteCount;
+      applied = true;
+    }
+    return applied;
+  };
+
   const removePostLocal = (postID: number) => {
     const hadItem = Boolean(findPost(postID) || removedSnapshots.has(postID));
     deletedPostIDs.add(postID);
@@ -965,6 +983,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
   });
@@ -1013,6 +1032,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
     saveScrollTop,

@@ -23,12 +23,14 @@ import {
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   beginBookmarkStateMutation,
   registerPostSearchSessionSync,
   syncPostSearchBookmarkState,
   syncPostSearchLikeState,
   syncPostSearchRepostState,
+  type PostQuoteCountUpdate,
   type PostReplyCountUpdate,
 } from './sessionSync';
 import {
@@ -452,6 +454,15 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     return true;
   };
 
+  const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
+    const normalized = normalizePostQuoteCountUpdate(update);
+    if (!normalized) return false;
+    const post = findPost(normalized.postId);
+    if (!post) return false;
+    post.quoteCount = normalized.quoteCount;
+    return true;
+  };
+
   const removePostLocal = (postID: number) => {
     deletedPostIDs.add(postID);
     const existed = Boolean(findPost(postID));
@@ -473,6 +484,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
   });
@@ -647,6 +659,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
     removePostLocal,
     replaceAuthorIdentityLocal,
     toggleLike,

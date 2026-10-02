@@ -22,12 +22,14 @@ import {
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
+import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   beginBookmarkStateMutation,
   registerQuotesSessionSync,
   syncQuotesBookmarkState,
   syncQuotesLikeState,
   syncQuotesRepostState,
+  type PostQuoteCountUpdate,
 } from './sessionSync';
 import {
   createEngagementMutationCoordinator,
@@ -482,10 +484,20 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     return applyFeedBookmarkStateUpdate(post, update);
   };
 
+  const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
+    const normalized = normalizePostQuoteCountUpdate(update);
+    if (!normalized) return false;
+    const post = findPost(normalized.postId);
+    if (!post) return false;
+    post.quoteCount = normalized.quoteCount;
+    return true;
+  };
+
   registerQuotesSessionSync({
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
+    applyQuoteCountUpdateLocal,
   });
 
   return {
@@ -518,6 +530,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
+    applyQuoteCountUpdateLocal,
     reset,
   };
 });

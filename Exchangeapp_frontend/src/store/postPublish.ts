@@ -26,6 +26,7 @@ import { useFeedStore } from './feed';
 import { usePostDraftStore } from './postDraft';
 import { useProfileSessionStore } from './profileSession';
 import { createClientOperationID } from '../utils/clientOperationId';
+import { refreshAndSyncPostQuoteCount } from './postQuoteCountReconciliation';
 import {
   canAbandonDurableSubmission,
   canMarkDurableSubmissionFailed,
@@ -436,6 +437,9 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     if (post.author.id !== operation.publisherUserID) {
       await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
       return 'pending';
+    }
+    if (operation.quotePostID !== null) {
+      void refreshAndSyncPostQuoteCount(operation.quotePostID);
     }
     let sourceDraftClean = operation.sourceDraftID === null;
     if (operation.sourceDraftID) {
