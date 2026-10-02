@@ -17,8 +17,18 @@ import {
   type ReplySubmissionPhase,
 } from '../storage/replyStorage';
 import { useAuthStore } from './auth';
-import type { AuthRequestBinding } from '../auth/authRequestBinding';
+import {
+  matchesDurableAuthOwner,
+  type AuthRequestBinding,
+} from '../auth/authRequestBinding';
 import { useReplyDraftStore } from './replyDraft';
+import {
+  canAbandonDurableSubmission,
+  canMarkDurableSubmissionFailed,
+  canRetryDurableSubmission,
+  isPostIdempotencyConflictError,
+  recoveredSubmissionMustFailClosed,
+} from '../utils/durableSubmissionContract';
 
 export type ReplySubmissionOperation = {
   id: string;
@@ -51,12 +61,6 @@ export type StartReplySubmissionResult =
 const normalizeViewerID = (value: unknown): number | null => (
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
 );
-
-const isIdempotencyConflict = (error: unknown) => {
-  if (!error || typeof error !== 'object') return false;
-  const response = (error as { response?: { status?: unknown; data?: { code?: unknown } } }).response;
-  return response?.status === 409 && response.data?.code === 'POST_IDEMPOTENCY_CONFLICT';
-};
 
 const restoreOperation = (record: PersistedReplySubmissionOperation): ReplySubmissionOperation => ({
   id: record.id,
@@ -100,21 +104,15 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     authStore.isAuthenticated ? normalizeViewerID(authStore.currentIdentity?.id) : null
   ));
   const captureOperationAuthBinding = (operation: ReplySubmissionOperation): AuthRequestBinding => {
-    if (!operation.viewerSessionID) throw Object.assign(new Error('Authentication session changed'), {
-      name: 'AuthSessionChangedError',
-    });
     const binding = authStore.captureRequestAuthBinding();
-    if (!binding || binding.userID !== operation.viewerID || binding.sessionID !== operation.viewerSessionID) {
+    if (!binding || !matchesDurableAuthOwner(binding, operation.viewerID, operation.viewerSessionID)) {
       throw Object.assign(new Error('Authentication session changed'), { name: 'AuthSessionChangedError' });
     }
     return binding;
   };
   const operationMatchesCurrentSession = (operation: ReplySubmissionOperation) => {
     const binding = authStore.captureRequestAuthBinding();
-    return Boolean(binding
-      && operation.viewerSessionID
-      && binding.userID === operation.viewerID
-      && binding.sessionID === operation.viewerSessionID);
+    return matchesDurableAuthOwner(binding, operation.viewerID, operation.viewerSessionID);
   };
   const mayMutateCurrentReplySession = (operation: ReplySubmissionOperation) => (
     activeViewerID.value === operation.viewerID
@@ -292,7 +290,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       }
       await finalizeSuccessfulOperation(operation);
     } catch (error) {
-      if (operation.phase === 'succeeded' && operation.post) {
+      if (!canMarkDurableSubmissionFailed(operation.phase)) {
         operation.cleanupPending = true;
       } else {
         operation.phase = 'failed';
@@ -300,7 +298,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
           || !operationMatchesCurrentSession(operation);
         operation.failureKind = authContextChanged
           ? 'auth_context_changed'
-          : isIdempotencyConflict(error) ? 'idempotency_conflict' : 'retryable';
+          : isPostIdempotencyConflictError(error) ? 'idempotency_conflict' : 'retryable';
         operation.error = operation.failureKind === 'idempotency_conflict'
           ? 'This reply can’t be retried safely.'
           : 'Reply failed. Retry safely.';
@@ -334,7 +332,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         const restored = records.map(restoreOperation);
         operations.value = operations.value.filter(operation => operation.viewerID !== normalized).concat(restored);
         for (const operation of restored) {
-          if (operation.phase !== 'succeeded' && !operation.viewerSessionID) {
+          if (recoveredSubmissionMustFailClosed(operation.phase, operation.viewerSessionID)) {
             operation.phase = 'failed';
             operation.failureKind = 'auth_context_changed';
             operation.error = 'Reply failed. Retry safely.';
@@ -393,7 +391,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
   };
 
   const transitionToPublishing = async (operation: ReplySubmissionOperation): Promise<boolean> => {
-    if (operation.phase !== 'failed' || operation.failureKind !== 'retryable') return false;
+    if (!canRetryDurableSubmission(operation.phase, operation.failureKind)) return false;
     if (!operationMatchesCurrentSession(operation)) {
       operation.phase = 'failed';
       operation.failureKind = 'auth_context_changed';
@@ -549,8 +547,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       !operation
       || operation.viewerID !== currentViewerID.value
       || runningOperationIDs.has(operation.id)
-      || operation.phase !== 'failed'
-      || operation.failureKind !== 'retryable'
+      || !canRetryDurableSubmission(operation.phase, operation.failureKind)
       || !operation.durableOwned
     ) return false;
     if (!operationMatchesCurrentSession(operation)) {
@@ -564,8 +561,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     if (await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed'
       || currentViewerID.value !== operation.viewerID
       || runningOperationIDs.has(operation.id)
-      || operation.phase !== 'failed'
-      || operation.failureKind !== 'retryable'
+      || !canRetryDurableSubmission(operation.phase, operation.failureKind)
       || !operation.durableOwned) return false;
     if (!operationMatchesCurrentSession(operation)) {
       operation.phase = 'failed';
@@ -583,15 +579,14 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     if (
       !operation
       || operation.viewerID !== currentViewerID.value
-      || operation.phase !== 'failed'
+      || !canAbandonDurableSubmission(operation.phase, operation.failureKind)
       || !operation.durableOwned
       || runningOperationIDs.has(operation.id)
       || abandoningOperationIDs.has(operation.id)
-      || operation.failureKind === null
     ) return false;
     if (await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed'
       || currentViewerID.value !== operation.viewerID
-      || operation.phase !== 'failed'
+      || !canAbandonDurableSubmission(operation.phase, operation.failureKind)
       || !operation.durableOwned
       || runningOperationIDs.has(operation.id)
       || abandoningOperationIDs.has(operation.id)) return false;

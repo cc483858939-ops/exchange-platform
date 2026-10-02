@@ -18,11 +18,21 @@ import {
   type PersistedPublishPhase,
 } from '../storage/postPublishRepository';
 import { useAuthStore } from './auth';
-import type { AuthRequestBinding } from '../auth/authRequestBinding';
+import {
+  matchesDurableAuthOwner,
+  type AuthRequestBinding,
+} from '../auth/authRequestBinding';
 import { useFeedStore } from './feed';
 import { usePostDraftStore } from './postDraft';
 import { useProfileSessionStore } from './profileSession';
 import { createClientOperationID } from '../utils/clientOperationId';
+import {
+  canAbandonDurableSubmission,
+  canMarkDurableSubmissionFailed,
+  canRetryDurableSubmission,
+  isPostIdempotencyConflictError,
+  recoveredSubmissionMustFailClosed,
+} from '../utils/durableSubmissionContract';
 import {
   createPostDraftSnapshot,
   type DraftSnapshot,
@@ -109,12 +119,6 @@ const normalizeViewerID = (value: unknown) => (
     : null
 );
 
-const isIdempotencyConflict = (error: unknown) => {
-  if (!error || typeof error !== 'object') return false;
-  const response = (error as { response?: { status?: unknown; data?: { code?: unknown } } }).response;
-  return response?.status === 409 && response.data?.code === 'POST_IDEMPOTENCY_CONFLICT';
-};
-
 export const usePostPublishStore = defineStore('postPublish', () => {
   const authStore = useAuthStore();
   const feedStore = useFeedStore();
@@ -137,22 +141,16 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   );
 
   const captureOperationAuthBinding = (operation: PublishOperation): AuthRequestBinding => {
-    if (!operation.publisherSessionID) throw new PublishAuthContextChangedError();
     const binding = authStore.captureRequestAuthBinding();
-    if (
-      !binding
-      || binding.userID !== operation.publisherUserID
-      || binding.sessionID !== operation.publisherSessionID
-    ) throw new PublishAuthContextChangedError();
+    if (!binding || !matchesDurableAuthOwner(binding, operation.publisherUserID, operation.publisherSessionID)) {
+      throw new PublishAuthContextChangedError();
+    }
     return binding;
   };
 
   const operationMatchesCurrentSession = (operation: PublishOperation) => {
     const binding = authStore.captureRequestAuthBinding();
-    return Boolean(binding
-      && operation.publisherSessionID
-      && binding.userID === operation.publisherUserID
-      && binding.sessionID === operation.publisherSessionID);
+    return matchesDurableAuthOwner(binding, operation.publisherUserID, operation.publisherSessionID);
   };
 
   const getOperation = (operationID: string | null | undefined) => (
@@ -383,7 +381,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     if (operation.phase === 'failed' && sameSubmission) {
       return operation.failureKind === 'idempotency_conflict'
         ? 'idempotency_conflict'
-        : operation.failureKind === 'retryable'
+        : canRetryDurableSubmission(operation.phase, operation.failureKind)
           ? null
           : 'unresolved_publish';
     }
@@ -526,7 +524,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     error: unknown,
     failureKind: Exclude<PublishFailureKind, null> = 'retryable',
   ) => {
-    if (operation.phase === 'succeeded' && operation.post) return;
+    if (!canMarkDurableSubmissionFailed(operation.phase)) return;
     operation.phase = 'failed';
     operation.failureKind = failureKind;
     operation.error = failureKind === 'idempotency_conflict'
@@ -579,7 +577,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       await finalizeSuccessfulOperation(operation, post);
     } catch (error) {
       if (error instanceof SupersededPublishOperationError) return;
-      const conflict = posting && isIdempotencyConflict(error);
+      const conflict = posting && isPostIdempotencyConflictError(error);
       const authContextChanged = error instanceof PublishAuthContextChangedError
         || (error instanceof Error && error.name === 'AuthSessionChangedError')
         || !operationMatchesCurrentSession(operation);
@@ -605,8 +603,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       } else {
         void runOperation(operation);
       }
-    } else if (operation.phase === 'failed'
-      && operation.failureKind === 'retryable'
+    } else if (canRetryDurableSubmission(operation.phase, operation.failureKind)
       && !operationMatchesCurrentSession(operation)) {
       void markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
     }
@@ -634,7 +631,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           if (operation.phase === 'succeeded' && !operation.post) {
             throw new Error('The successful publish record is incomplete.');
           }
-          if (operation.phase !== 'succeeded' && !operationMatchesCurrentSession(operation)) {
+          if (recoveredSubmissionMustFailClosed(operation.phase, operation.publisherSessionID)
+            || (operation.phase !== 'succeeded' && !operationMatchesCurrentSession(operation))) {
             operation.phase = 'failed';
             operation.failureKind = 'auth_context_changed';
             operation.error = publishFailureMessage;
@@ -681,8 +679,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     const operation = getOperation(operationID);
     if (
       !operation
-      || operation.phase !== 'failed'
-      || operation.failureKind !== 'retryable'
+      || !canRetryDurableSubmission(operation.phase, operation.failureKind)
       || currentViewerID() !== operation.publisherUserID
       || unresolvedOperationByViewer.value.get(operation.publisherUserID) !== operation.id
       || abandoningOperationIDs.has(operation.id)
@@ -775,7 +772,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           };
         }
         if (
-          unresolvedOperation.failureKind !== 'retryable'
+          !canRetryDurableSubmission(unresolvedOperation.phase, unresolvedOperation.failureKind)
           || !sameSubmission
         ) {
           return { status: 'blocked', reason: 'unresolved_publish' };
@@ -878,7 +875,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     const operation = getOperation(operationID);
     if (
       !operation
-      || operation.phase !== 'failed'
+      || !canAbandonDurableSubmission(operation.phase, operation.failureKind)
       || currentViewerID() !== operation.publisherUserID
       || runningOperationIDs.has(operation.id)
       || abandoningOperationIDs.has(operation.id)

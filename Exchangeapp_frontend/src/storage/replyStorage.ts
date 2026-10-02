@@ -1,7 +1,12 @@
 import type { Post } from '../types/Post';
+import {
+  hasValidDurableSubmissionFailureShape,
+  isDurableSubmissionFailureKind,
+  type DurableSubmissionFailureKind,
+} from '../utils/durableSubmissionContract';
 
 export type ReplySubmissionPhase = 'publishing' | 'failed' | 'succeeded';
-export type ReplySubmissionFailureKind = 'retryable' | 'idempotency_conflict' | 'auth_context_changed' | null;
+export type ReplySubmissionFailureKind = DurableSubmissionFailureKind;
 
 export type PersistedReplyDraft = {
   key: string;
@@ -69,16 +74,14 @@ const validateOperation = (value: unknown): PersistedReplySubmissionOperation =>
     || typeof record.content !== 'string' || !record.content || record.content !== record.content.trim()
     || !(record.sourceDraftContent === null || typeof record.sourceDraftContent === 'string')
     || !(record.phase === 'publishing' || record.phase === 'failed' || record.phase === 'succeeded')
-    || !(record.failureKind === null || record.failureKind === 'retryable'
-      || record.failureKind === 'idempotency_conflict' || record.failureKind === 'auth_context_changed')
+    || !isDurableSubmissionFailureKind(record.failureKind)
     || (record.viewerSessionID !== undefined && record.viewerSessionID !== null
       && (typeof record.viewerSessionID !== 'string' || !record.viewerSessionID.trim()))
     || typeof record.error !== 'string'
     || typeof record.startedAt !== 'number' || !Number.isFinite(record.startedAt)
     || typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)
     || !(record.post === null || (typeof record.post === 'object' && record.post !== null))
-    || (record.phase !== 'failed' && record.failureKind !== null)
-    || (record.phase === 'failed' && record.failureKind === null)
+    || !hasValidDurableSubmissionFailureShape(record.phase, record.failureKind)
   ) throw new Error('The saved reply operation is invalid.');
   return { ...record, viewerSessionID: record.viewerSessionID ?? null } as PersistedReplySubmissionOperation;
 };

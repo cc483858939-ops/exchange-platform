@@ -8,6 +8,8 @@ import {
   restorePublishOperation,
   serializePublishOperation,
   updatePostPublishOperation,
+  type PersistedPublishFailureKind,
+  type PersistedPublishPhase,
   type PersistedPostPublishOperation,
 } from './postPublishRepository';
 
@@ -344,5 +346,42 @@ describe('postPublishRepository', () => {
       ...makeOperation('missing-session', 7),
       publisherSessionID: null,
     })).toThrow('must be bound to an authentication session');
+  });
+
+  it('rejects invalid phase/failure combinations and round-trips valid durable shapes', async () => {
+    const invalidShapes: Array<{
+      phase: PersistedPublishPhase;
+      failureKind: PersistedPublishFailureKind;
+    }> = [
+      { phase: 'failed', failureKind: null },
+      { phase: 'succeeded', failureKind: 'retryable' },
+      { phase: 'publishing', failureKind: 'auth_context_changed' },
+      { phase: 'uploading', failureKind: 'idempotency_conflict' },
+    ];
+
+    for (const [index, shape] of invalidShapes.entries()) {
+      const persisted = serializePublishOperation(makeOperation(`invalid-shape-${index}`, 7));
+      await expect(replacePostPublishOperation({ ...persisted, ...shape }))
+        .rejects.toThrow('saved publish operation is invalid');
+    }
+
+    const validShapes: Array<{
+      phase: PersistedPublishPhase;
+      failureKind: PersistedPublishFailureKind;
+    }> = [
+      { phase: 'failed', failureKind: 'retryable' },
+      { phase: 'failed', failureKind: 'idempotency_conflict' },
+      { phase: 'failed', failureKind: 'auth_context_changed' },
+      { phase: 'publishing', failureKind: null },
+      { phase: 'uploading', failureKind: null },
+      { phase: 'succeeded', failureKind: null },
+    ];
+
+    for (const [index, shape] of validShapes.entries()) {
+      const persisted = serializePublishOperation(makeOperation(`valid-shape-${index}`, 7));
+      const record = { ...persisted, ...shape };
+      await replacePostPublishOperation(record);
+      await expect(getPostPublishOperation(7)).resolves.toMatchObject(shape);
+    }
   });
 });

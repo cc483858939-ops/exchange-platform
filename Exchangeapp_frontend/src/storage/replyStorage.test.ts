@@ -206,4 +206,23 @@ describe('replyStorage', () => {
     expect(await storage.getReplySubmissionOperation(7, 42)).toBeNull();
     expect(await storage.getReplySubmissionOperation(8, 42)).toMatchObject({ id: 'op-c' });
   });
+
+  it('rejects invalid phase/failure combinations and accepts canonical failed records', async () => {
+    const invalidShapes = [
+      { phase: 'failed' as const, failureKind: null },
+      { phase: 'publishing' as const, failureKind: 'retryable' as const },
+      { phase: 'succeeded' as const, failureKind: 'auth_context_changed' as const },
+    ];
+    for (const shape of invalidShapes) {
+      await expect(storage.replaceReplySubmissionOperation(operation(shape)))
+        .rejects.toThrow('saved reply operation is invalid');
+    }
+
+    const valid = operation({ phase: 'failed', failureKind: 'retryable' });
+    await expect(storage.replaceReplySubmissionOperation(valid)).resolves.toBeUndefined();
+    await expect(storage.getReplySubmissionOperation(7, 42)).resolves.toMatchObject({
+      phase: 'failed',
+      failureKind: 'retryable',
+    });
+  });
 });

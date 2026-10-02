@@ -4,9 +4,14 @@ import {
   isValidQuotePostID,
   type DraftSnapshot,
 } from '../utils/postDraftSnapshot';
+import {
+  hasValidDurableSubmissionFailureShape,
+  isDurableSubmissionFailureKind,
+  type DurableSubmissionFailureKind,
+} from '../utils/durableSubmissionContract';
 
 export type PersistedPublishPhase = 'uploading' | 'publishing' | 'failed' | 'succeeded';
-export type PersistedPublishFailureKind = 'retryable' | 'idempotency_conflict' | 'auth_context_changed' | null;
+export type PersistedPublishFailureKind = DurableSubmissionFailureKind;
 
 export type PublishOperationMediaValue = {
   draftMediaID: string;
@@ -114,8 +119,8 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
     || typeof record.content !== 'string'
     || !Array.isArray(record.media)
     || !validPhase(record.phase)
-    || !(record.failureKind === null || record.failureKind === 'retryable'
-      || record.failureKind === 'idempotency_conflict' || record.failureKind === 'auth_context_changed')
+    || !isDurableSubmissionFailureKind(record.failureKind)
+    || !hasValidDurableSubmissionFailureShape(record.phase, record.failureKind)
     || ((schemaVersion === 3 || schemaVersion === 4) && (typeof record.publisherSessionID !== 'string'
       || !record.publisherSessionID.trim()))
     || (schemaVersion === 4 && (!Object.prototype.hasOwnProperty.call(record, 'quotePostID')

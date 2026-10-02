@@ -41,10 +41,12 @@
 </template>
 
 <script setup lang="ts">
+import type { DurableSubmissionFailureKind } from '../../utils/durableSubmissionContract';
+
 defineProps<{
   operation: {
     phase: 'publishing' | 'failed' | 'succeeded';
-    failureKind: 'retryable' | 'idempotency_conflict' | 'auth_context_changed' | null;
+    failureKind: DurableSubmissionFailureKind;
     cleanupPending?: boolean;
   } | null;
   busy?: boolean;
