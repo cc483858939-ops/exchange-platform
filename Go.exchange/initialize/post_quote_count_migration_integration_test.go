@@ -139,8 +139,8 @@ FOR EACH ROW EXECUTE FUNCTION fail_quote_count_schema_publication()`).Error; err
 	if err := tx.First(&state, runtimeSchemaStateID).Error; err != nil {
 		t.Fatalf("read published schema state: %v", err)
 	}
-	if state.CurrentVersion != 13 || state.CompatibilityFloor != 13 {
-		t.Fatalf("published runtime schema=%d/%d want=13/13", state.CurrentVersion, state.CompatibilityFloor)
+	if state.CurrentVersion != 14 || state.CompatibilityFloor != 14 {
+		t.Fatalf("published runtime schema=%d/%d want=14/14", state.CurrentVersion, state.CompatibilityFloor)
 	}
 
 	if err := RunMigrationsWithDB(context.Background(), tx); err != nil {

@@ -31,6 +31,7 @@ func TestRequestAndDatabaseTimeoutDefaults(t *testing.T) {
 	for _, key := range []string{
 		"API_REQUEST_TIMEOUT",
 		"API_UPLOAD_REQUEST_TIMEOUT",
+		"POST_SEARCH_TIMEOUT",
 		"DB_STATEMENT_TIMEOUT",
 		"DB_LOCK_TIMEOUT",
 		"API_DB_STATEMENT_TIMEOUT",
@@ -48,6 +49,9 @@ func TestRequestAndDatabaseTimeoutDefaults(t *testing.T) {
 	}
 	if got := APIUploadRequestTimeout(); got != 55*time.Second {
 		t.Errorf("APIUploadRequestTimeout()=%s, want 55s", got)
+	}
+	if got := PostSearchTimeout(); got != 2*time.Second {
+		t.Errorf("PostSearchTimeout()=%s, want 2s", got)
 	}
 	if got := DBStatementTimeout(); got != 8*time.Second {
 		t.Errorf("DBStatementTimeout()=%s, want 8s", got)
@@ -72,6 +76,7 @@ func TestRequestAndDatabaseTimeoutDefaults(t *testing.T) {
 func TestRequestAndDatabaseTimeoutOverrides(t *testing.T) {
 	t.Setenv("API_REQUEST_TIMEOUT", "15s")
 	t.Setenv("API_UPLOAD_REQUEST_TIMEOUT", "60s")
+	t.Setenv("POST_SEARCH_TIMEOUT", "3s")
 	t.Setenv("DB_STATEMENT_TIMEOUT", "7s")
 	t.Setenv("DB_LOCK_TIMEOUT", "1500ms")
 	t.Setenv("API_DB_STATEMENT_TIMEOUT", "")
@@ -82,6 +87,9 @@ func TestRequestAndDatabaseTimeoutOverrides(t *testing.T) {
 	}
 	if got := APIUploadRequestTimeout(); got != 60*time.Second {
 		t.Errorf("APIUploadRequestTimeout()=%s, want 60s", got)
+	}
+	if got := PostSearchTimeout(); got != 3*time.Second {
+		t.Errorf("PostSearchTimeout()=%s, want 3s", got)
 	}
 	if got := DBStatementTimeout(); got != 7*time.Second {
 		t.Errorf("DBStatementTimeout()=%s, want 7s", got)

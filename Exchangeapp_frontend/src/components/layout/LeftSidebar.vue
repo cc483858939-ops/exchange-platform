@@ -66,6 +66,7 @@ import { useLogout } from '../../composables/useLogout';
 import { useHomeTimelineStore } from '../../store/homeTimeline';
 import { useNotificationStore } from '../../store/notification';
 import { useSearchSessionStore } from '../../store/searchSession';
+import { usePostSearchSessionStore } from '../../store/postSearchSession';
 import BrandMark from '../brand/BrandMark.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
@@ -78,6 +79,7 @@ const route = useRoute();
 const homeTimeline = useHomeTimelineStore();
 const notificationStore = useNotificationStore();
 const searchSession = useSearchSessionStore();
+const postSearchSession = usePostSearchSessionStore();
 const currentProfileID = computed(() => {
   const id = authStore.currentIdentity?.id;
 
@@ -109,7 +111,11 @@ const searchReturnTarget = computed(() => {
   const routeQuery = typeof route.query?.q === 'string' ? route.query.q.trim() : '';
   const sessionQuery = typeof searchSession.query === 'string' ? searchSession.query.trim() : '';
   const query = routeQuery || sessionQuery;
-  return query ? `/search?q=${encodeURIComponent(query)}` : '/search';
+  const tab = route.query?.tab === 'people' || route.query?.tab === 'posts'
+    ? route.query.tab
+    : (!routeQuery && sessionQuery ? 'people' : '');
+  const tabQuery = tab ? `tab=${tab}&` : '';
+  return query ? `/search?${tabQuery}q=${encodeURIComponent(query)}` : '/search';
 });
 
 const navigationDestination = (item: typeof navigation[number]) => {
@@ -182,6 +188,7 @@ const handleNavigationClick = (
   if (item.name === 'UserSearch' && route.name === 'UserSearch') {
     event.preventDefault();
     searchSession.requestSearchReselect();
+    postSearchSession.requestSearchReselect();
     return;
   }
 

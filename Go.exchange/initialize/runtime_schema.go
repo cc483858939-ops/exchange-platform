@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 13 adds the canonical Post quote aggregate.
-const RequiredSchemaVersion int64 = 13
+// Schema 14 adds indexes for bounded Post substring search.
+const RequiredSchemaVersion int64 = 14
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 13
-	PublishedSchemaCompatibilityFloor int64 = 13
+	PublishedSchemaCurrentVersion     int64 = 14
+	PublishedSchemaCompatibilityFloor int64 = 14
 )
 
 const runtimeSchemaStateID uint = 1
@@ -112,6 +112,8 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		},
 		Indexes: []string{
 			"idx_posts_author_created",
+			"idx_posts_search_content_trgm",
+			"idx_posts_search_public_created",
 			"idx_posts_reply_to_created",
 			"idx_posts_conversation_created",
 			"idx_posts_quote",

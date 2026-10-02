@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   router: { push: vi.fn() },
   routeLeaveGuard: null as (() => void) | null,
   searchUsers: vi.fn(),
+  getUser: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
 }));
@@ -28,11 +29,17 @@ vi.mock('vue-router', () => ({
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../services/userService', () => ({
   searchUsers: mocks.searchUsers,
+  getUser: mocks.getUser,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
 }));
 vi.mock('../store/sessionSync', () => ({
   registerSearchSessionSync: vi.fn(),
+  registerPostSearchSessionSync: vi.fn(),
+  syncPostSearchLikeState: vi.fn(),
+  syncPostSearchRepostState: vi.fn(),
+  syncPostSearchBookmarkState: vi.fn(),
+  beginBookmarkStateMutation: vi.fn(),
   syncExternalFollowState: vi.fn(),
 }));
 
@@ -114,7 +121,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     TestIntersectionObserver.instances = [];
     vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
     setWindowScrollY(0);
-    mocks.route = reactive({ name: 'UserSearch', query: { q: 'alice' } });
+    mocks.route = reactive({ name: 'UserSearch', query: { tab: 'people', q: 'alice' } });
     mocks.authStore = reactive({
       isAuthenticated: true,
       currentIdentity: { id: 7, username: 'viewer-7' },
@@ -136,7 +143,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     state.showSearch = false;
     await nextTick();
     mocks.route.name = 'UserProfile';
-    mocks.route.query = {};
+    mocks.route.query = { tab: 'people' };
     await nextTick();
 
     expect(searchSession.query).toBe('alice');
@@ -215,7 +222,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     setWindowScrollY(1200);
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
     mocks.route.name = 'UserSearch';
-    mocks.route.query = { q: 'alice' };
+    mocks.route.query = { tab: 'people', q: 'alice' };
     state.showSearch = true;
     await settle();
 
@@ -342,7 +349,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
 
     mocks.searchUsers.mockResolvedValueOnce({ items: [], has_more: false });
     mocks.route.name = 'UserSearch';
-    mocks.route.query = { q: 'bob' };
+    mocks.route.query = { tab: 'people', q: 'bob' };
     state.showSearch = true;
     await settle();
 
@@ -401,7 +408,7 @@ describe('UserSearchView KeepAlive lifecycle', () => {
     searchSession.saveScrollTop(900);
 
     await wrapper.get('.search-view__clear').trigger('click');
-    mocks.route.query = {};
+    mocks.route.query = { tab: 'people' };
     await nextTick();
 
     expect(searchSession.query).toBe('');

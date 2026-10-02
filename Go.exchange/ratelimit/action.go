@@ -5,6 +5,7 @@ type Action string
 
 const (
 	ActionPostCreate      Action = "post_create"
+	ActionPostSearch      Action = "post_search"
 	ActionFollowMutation  Action = "follow_mutation"
 	ActionMediaUpload     Action = "media_upload"
 	ActionTranslation     Action = "translation"

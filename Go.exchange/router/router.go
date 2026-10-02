@@ -70,6 +70,10 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 	api.GET("/exchange/quote", controllers.GetExchangeQuote)
 	api.GET("/files/*objectKey", controllers.GetFile)
 	api.GET("/public/recommendations/posts", publicRecommendationHandler)
+	api.GET("/posts/search", append(
+		[]gin.HandlerFunc{middlewares.AuthMiddleware(verifier)},
+		withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionPostSearch, ratelimit.FailOpen, controllers.SearchPosts)...,
+	)...)
 	api.GET("/posts/:id", controllers.GetPostByID)
 	api.GET("/posts/:id/replies", controllers.GetPostReplies)
 	api.GET("/posts/:id/quotes", controllers.GetPostQuotes)

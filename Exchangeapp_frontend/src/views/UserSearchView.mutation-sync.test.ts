@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   authStore: null as any,
   router: { push: vi.fn() },
   searchUsers: vi.fn(),
+  getUser: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   externalFollow: vi.fn(),
@@ -28,11 +29,17 @@ vi.mock('vue-router', () => ({
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../services/userService', () => ({
   searchUsers: mocks.searchUsers,
+  getUser: mocks.getUser,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
 }));
 vi.mock('../store/sessionSync', () => ({
   registerSearchSessionSync: vi.fn(),
+  registerPostSearchSessionSync: vi.fn(),
+  syncPostSearchLikeState: vi.fn(),
+  syncPostSearchRepostState: vi.fn(),
+  syncPostSearchBookmarkState: vi.fn(),
+  beginBookmarkStateMutation: vi.fn(),
   syncExternalFollowState: mocks.externalFollow,
 }));
 
@@ -71,7 +78,7 @@ describe('UserSearchView mutation synchronization', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     mocks.routeLeaveGuard = null;
-    mocks.route = reactive({ name: 'UserSearch', query: { q: 'alice' } });
+    mocks.route = reactive({ name: 'UserSearch', query: { tab: 'people', q: 'alice' } });
     mocks.authStore = reactive({
       isAuthenticated: true,
       token: 'Bearer token-a',

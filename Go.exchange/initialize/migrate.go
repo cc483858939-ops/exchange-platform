@@ -79,6 +79,9 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		if err := applyPostSchemaConstraints(tx); err != nil {
 			return err
 		}
+		if err := applyPostSearchSchema(tx); err != nil {
+			return err
+		}
 		if err := applyPostMediaConstraints(tx); err != nil {
 			return err
 		}
@@ -138,6 +141,23 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		}
 		return nil
 	})
+}
+
+func applyPostSearchSchema(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("database transaction is not initialized")
+	}
+	statements := []string{
+		"CREATE EXTENSION IF NOT EXISTS pg_trgm",
+		"CREATE INDEX IF NOT EXISTS idx_posts_search_content_trgm ON posts USING GIN (content gin_trgm_ops) WHERE deleted_at IS NULL AND visibility = 'public'",
+		"CREATE INDEX IF NOT EXISTS idx_posts_search_public_created ON posts (created_at DESC, id DESC) WHERE deleted_at IS NULL AND visibility = 'public'",
+	}
+	for _, statement := range statements {
+		if err := tx.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply Post search schema: %w", err)
+		}
+	}
+	return nil
 }
 
 func readPublishedSchemaVersion(tx *gorm.DB) (int64, error) {

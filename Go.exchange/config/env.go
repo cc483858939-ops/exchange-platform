@@ -407,6 +407,11 @@ func APIUploadRequestTimeout() time.Duration {
 	return envDuration("API_UPLOAD_REQUEST_TIMEOUT", 55*time.Second)
 }
 
+// PostSearchTimeout bounds candidate retrieval and canonical Post hydration.
+func PostSearchTimeout() time.Duration {
+	return envDuration("POST_SEARCH_TIMEOUT", 2*time.Second)
+}
+
 func DBStatementTimeout() time.Duration {
 	return envDuration("DB_STATEMENT_TIMEOUT", 8*time.Second)
 }

@@ -59,6 +59,7 @@ func TestSetupRouterWiresInitialRateLimitActions(t *testing.T) {
 		{http.MethodDelete, "/api/users/8/follow", ""},
 		{http.MethodPost, "/api/posts/1/translation", `{"target_language":"zh-CN"}`},
 		{http.MethodPost, "/api/posts", `{"content":"new post"}`},
+		{http.MethodGet, "/api/posts/search?q=posts", ""},
 	}
 	wantActions := []ratelimit.Action{
 		ratelimit.ActionRecommendations,
@@ -67,6 +68,7 @@ func TestSetupRouterWiresInitialRateLimitActions(t *testing.T) {
 		ratelimit.ActionFollowMutation,
 		ratelimit.ActionTranslation,
 		ratelimit.ActionPostCreate,
+		ratelimit.ActionPostSearch,
 	}
 	for index, route := range requests {
 		request := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
@@ -97,6 +99,38 @@ func TestSetupRouterExplicitlyDisablesApplicationRateLimit(t *testing.T) {
 	engine.ServeHTTP(response, request)
 	if response.Code == http.StatusServiceUnavailable && strings.Contains(response.Body.String(), `"code":"RATE_LIMIT_UNAVAILABLE"`) {
 		t.Fatalf("legacy router unexpectedly applied application rate limiting: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPostSearchRequiresAuthenticationBeforeRateLimit(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	limiter := &rateLimitRouteLimiter{}
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, limiter, newRouterRecommendationHandler(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/posts/search?q=posts", nil)
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated Post search status=%d body=%s, want 401", response.Code, response.Body.String())
+	}
+	if len(limiter.actions) != 0 {
+		t.Fatalf("unauthenticated Post search reached rate limiter: %#v", limiter.actions)
+	}
+}
+
+func TestPostDetailRemainsPublicBesideAuthenticatedSearch(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, nil, newRouterRecommendationHandler(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/posts/42", nil)
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code == http.StatusUnauthorized {
+		t.Fatalf("public Post detail unexpectedly requires authentication: %s", response.Body.String())
 	}
 }
 

@@ -32,6 +32,13 @@ var Policies = map[Action]Policy{
 			{Limit: 300, Window: 24 * time.Hour},
 		},
 	},
+	ActionPostSearch: {
+		Action: ActionPostSearch,
+		Rules: []Rule{
+			{Limit: 60, Window: time.Minute},
+			{Limit: 600, Window: time.Hour},
+		},
+	},
 	ActionFollowMutation: {
 		Action: ActionFollowMutation,
 		Rules: []Rule{

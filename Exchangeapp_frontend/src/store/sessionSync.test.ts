@@ -11,6 +11,7 @@ import {
   registerHistorySessionSync,
   registerProfileSessionSync,
   registerSearchSessionSync,
+  registerPostSearchSessionSync,
   registerBookmarksSessionSync,
   registerTopicSessionSync,
   captureBookmarkStateSyncVersion,
@@ -30,6 +31,9 @@ import {
   syncTopicBookmarkState,
   syncTopicLikeState,
   syncTopicRepostState,
+  syncPostSearchLikeState,
+  syncPostSearchRepostState,
+  syncPostSearchBookmarkState,
 } from './sessionSync';
 
 const likeUpdate: FeedLikeStateUpdate = {
@@ -87,6 +91,14 @@ const registerSinks = () => {
   const search = {
     applyExternalFollowStateLocal: vi.fn().mockReturnValue(true),
   };
+  const postSearch = {
+    applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
+    applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
+    applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
+    applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
+    removePostLocal: vi.fn(),
+    replaceAuthorIdentityLocal: vi.fn(),
+  };
   const history = {
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
@@ -117,16 +129,17 @@ const registerSinks = () => {
   registerHomeTimelineSync(home);
   registerProfileSessionSync(profile);
   registerSearchSessionSync(search);
+  registerPostSearchSessionSync(postSearch);
   registerHistorySessionSync(history);
   registerTopicSessionSync(topic);
   registerConnectionsSessionSync(connections);
   registerBookmarksSessionSync(bookmarks);
-  return { home, profile, search, history, topic, connections, bookmarks };
+  return { home, profile, search, postSearch, history, topic, connections, bookmarks };
 };
 
 describe('sessionSync external mutation sinks', () => {
   it('sends external likes to Home and Profile exactly once', () => {
-    const { home, profile, history, topic, bookmarks } = registerSinks();
+    const { home, profile, postSearch, history, topic, bookmarks } = registerSinks();
 
     syncExternalPostLikeState(likeUpdate);
 
@@ -140,10 +153,12 @@ describe('sessionSync external mutation sinks', () => {
     expect(topic.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
     expect(bookmarks.applyExternalLikeStateLocal).toHaveBeenCalledOnce();
     expect(bookmarks.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(postSearch.applyExternalLikeStateLocal).toHaveBeenCalledOnce();
+    expect(postSearch.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
   });
 
   it('sends external reposts to Bookmarks as presentation updates', () => {
-    const { home, profile, history, topic, bookmarks } = registerSinks();
+    const { home, profile, postSearch, history, topic, bookmarks } = registerSinks();
 
     syncExternalPostRepostState(repostUpdate);
 
@@ -154,10 +169,12 @@ describe('sessionSync external mutation sinks', () => {
     expect(topic.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
     expect(bookmarks.applyExternalRepostStateLocal).toHaveBeenCalledOnce();
     expect(bookmarks.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(postSearch.applyExternalRepostStateLocal).toHaveBeenCalledOnce();
+    expect(postSearch.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
   });
 
   it('fans out external bookmark state to every live post surface', () => {
-    const { home, profile, history, topic, bookmarks } = registerSinks();
+    const { home, profile, postSearch, history, topic, bookmarks } = registerSinks();
 
     syncExternalPostBookmarkState(bookmarkUpdate);
 
@@ -167,6 +184,8 @@ describe('sessionSync external mutation sinks', () => {
     expect(topic.applyExternalBookmarkStateLocal).toHaveBeenCalledOnce();
     expect(topic.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
     expect(bookmarks.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(postSearch.applyExternalBookmarkStateLocal).toHaveBeenCalledOnce();
+    expect(postSearch.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
   });
 
   it('rejects a bookmark hydration result after an external mutation advances its fence', () => {
@@ -198,7 +217,7 @@ describe('sessionSync external mutation sinks', () => {
   });
 
   it('sends external removals to Home and Profile exactly once', () => {
-    const { home, profile, history, topic, bookmarks } = registerSinks();
+    const { home, profile, postSearch, history, topic, bookmarks } = registerSinks();
 
     syncExternalPostRemoval(42);
 
@@ -212,10 +231,12 @@ describe('sessionSync external mutation sinks', () => {
     expect(topic.removePostLocal).toHaveBeenCalledWith(42);
     expect(bookmarks.removePostLocal).toHaveBeenCalledOnce();
     expect(bookmarks.removePostLocal).toHaveBeenCalledWith(42);
+    expect(postSearch.removePostLocal).toHaveBeenCalledOnce();
+    expect(postSearch.removePostLocal).toHaveBeenCalledWith(42);
   });
 
   it('sends absolute comment counts to both caches', () => {
-    const { home, profile, history, topic } = registerSinks();
+    const { home, profile, postSearch, history, topic } = registerSinks();
     const update = { postId: 42, replyCount: 5 };
 
     syncExternalReplyCount(update);
@@ -224,6 +245,8 @@ describe('sessionSync external mutation sinks', () => {
     expect(profile.applyReplyCountUpdateEverywhereLocal).toHaveBeenCalledWith(update);
     expect(history.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
     expect(topic.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledOnce();
+    expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
   });
 
   it('routes Profile follow success to Home and Search only', () => {
@@ -264,7 +287,7 @@ describe('sessionSync external mutation sinks', () => {
   });
 
   it('fans out home and profile identity updates to History and Connections', () => {
-    const { home, profile, history, topic, connections, bookmarks } = registerSinks();
+    const { home, profile, postSearch, history, topic, connections, bookmarks } = registerSinks();
     const author = { id: 8, username: 'new-name', display_name: 'New Name', avatar_url: '' };
 
     syncHomeAuthorIdentity(author);
@@ -278,10 +301,12 @@ describe('sessionSync external mutation sinks', () => {
     expect(bookmarks.replaceAuthorIdentityLocal).toHaveBeenCalledWith(author);
     expect(topic.replaceAuthorIdentityLocal).toHaveBeenCalledTimes(2);
     expect(topic.replaceAuthorIdentityLocal).toHaveBeenCalledWith(author);
+    expect(postSearch.replaceAuthorIdentityLocal).toHaveBeenCalledTimes(2);
+    expect(postSearch.replaceAuthorIdentityLocal).toHaveBeenCalledWith(author);
   });
 
   it('broadcasts Topic-originated engagement to other surfaces without self-broadcast', () => {
-    const { home, profile, history, topic, bookmarks } = registerSinks();
+    const { home, profile, postSearch, history, topic, bookmarks } = registerSinks();
 
     syncTopicLikeState(likeUpdate);
     syncTopicRepostState(repostUpdate);
@@ -302,5 +327,35 @@ describe('sessionSync external mutation sinks', () => {
     expect(topic.applyExternalLikeStateLocal).not.toHaveBeenCalled();
     expect(topic.applyExternalRepostStateLocal).not.toHaveBeenCalled();
     expect(topic.applyExternalBookmarkStateLocal).not.toHaveBeenCalled();
+    expect(postSearch.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(postSearch.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(postSearch.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+  });
+
+  it('fans out Post Search engagement to other surfaces without self-sync', () => {
+    const { home, profile, postSearch, history, topic, bookmarks } = registerSinks();
+
+    syncPostSearchLikeState(likeUpdate);
+    syncPostSearchRepostState(repostUpdate);
+    syncPostSearchBookmarkState(bookmarkUpdate);
+
+    expect(home.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(profile.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(history.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(topic.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(bookmarks.applyExternalLikeStateLocal).toHaveBeenCalledWith(likeUpdate);
+    expect(home.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(profile.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(history.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(topic.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(bookmarks.applyExternalRepostStateLocal).toHaveBeenCalledWith(repostUpdate);
+    expect(home.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(profile.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(history.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(topic.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(bookmarks.applyExternalBookmarkStateLocal).toHaveBeenCalledWith(bookmarkUpdate);
+    expect(postSearch.applyExternalLikeStateLocal).not.toHaveBeenCalled();
+    expect(postSearch.applyExternalRepostStateLocal).not.toHaveBeenCalled();
+    expect(postSearch.applyExternalBookmarkStateLocal).not.toHaveBeenCalled();
   });
 });

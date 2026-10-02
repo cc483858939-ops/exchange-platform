@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   homeTimeline: null as any,
   notificationStore: null as any,
   searchSession: null as any,
+  postSearchSession: null as any,
 }));
 
 vi.mock('../../composables/useLogout', () => ({
@@ -32,6 +33,10 @@ vi.mock('../../store/notification', () => ({
 
 vi.mock('../../store/searchSession', () => ({
   useSearchSessionStore: () => mocks.searchSession,
+}));
+
+vi.mock('../../store/postSearchSession', () => ({
+  usePostSearchSessionStore: () => mocks.postSearchSession,
 }));
 
 const routerLinkStub = {
@@ -82,6 +87,9 @@ describe('LeftSidebar navigation', () => {
       requestNotificationReselect: vi.fn(),
     });
     mocks.searchSession = reactive({
+      requestSearchReselect: vi.fn(),
+    });
+    mocks.postSearchSession = reactive({
       requestSearchReselect: vi.fn(),
     });
   });
@@ -301,6 +309,7 @@ describe('LeftSidebar navigation', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(mocks.searchSession.requestSearchReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.postSearchSession.requestSearchReselect).toHaveBeenCalledTimes(1);
     expect(mocks.homeTimeline.requestHomeReselect).not.toHaveBeenCalled();
     expect(mocks.notificationStore.requestNotificationReselect).not.toHaveBeenCalled();
   });

@@ -9,6 +9,7 @@ import (
 func TestPoliciesUseExpectedInitialRules(t *testing.T) {
 	want := map[Action][]Rule{
 		ActionPostCreate:      {{5, time.Minute}, {50, time.Hour}, {300, 24 * time.Hour}},
+		ActionPostSearch:      {{60, time.Minute}, {600, time.Hour}},
 		ActionFollowMutation:  {{15, time.Minute}, {100, time.Hour}, {500, 24 * time.Hour}},
 		ActionMediaUpload:     {{10, time.Minute}, {100, 24 * time.Hour}},
 		ActionTranslation:     {{20, time.Minute}, {200, time.Hour}},

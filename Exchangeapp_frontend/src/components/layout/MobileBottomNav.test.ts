@@ -34,6 +34,9 @@ const mocks = vi.hoisted(() => ({
     query: '',
     requestSearchReselect: vi.fn(),
   },
+  postSearchSession: {
+    requestSearchReselect: vi.fn(),
+  },
 }));
 
 vi.mock('../../store/auth', () => ({
@@ -54,6 +57,10 @@ vi.mock('../../store/profileSession', () => ({
 
 vi.mock('../../store/searchSession', () => ({
   useSearchSessionStore: () => mocks.searchSession,
+}));
+
+vi.mock('../../store/postSearchSession', () => ({
+  usePostSearchSessionStore: () => mocks.postSearchSession,
 }));
 
 vi.mock('vue-router', () => ({
@@ -116,6 +123,7 @@ describe('MobileBottomNav', () => {
     mocks.profileSession.requestProfileReselect.mockClear();
     mocks.searchSession.query = '';
     mocks.searchSession.requestSearchReselect.mockClear();
+    mocks.postSearchSession.requestSearchReselect.mockClear();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -208,6 +216,7 @@ describe('MobileBottomNav', () => {
 
     expect(search.attributes('data-route-name')).toBe('UserSearch');
     expect(search.attributes('data-route-query-q')).toBe('alice');
+    expect(search.attributes('data-route-query-tab')).toBe('people');
   });
 
   it('uses the optical icon sizes for authenticated navigation', () => {
@@ -343,6 +352,7 @@ describe('MobileBottomNav', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(mocks.searchSession.requestSearchReselect).toHaveBeenCalledTimes(1);
+    expect(mocks.postSearchSession.requestSearchReselect).toHaveBeenCalledTimes(1);
     expect(window.scrollTo).not.toHaveBeenCalled();
     expect(mocks.searchSession.query).toBe('alice');
     expect(wrapper.findAll('.mobile-bottom-nav__item')[1].attributes('data-route-query-q')).toBe('alice');

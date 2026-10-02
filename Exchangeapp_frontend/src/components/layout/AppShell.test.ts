@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   postPublishStore: null as any,
   replySubmissionStore: null as any,
   searchSession: null as any,
+  postSearchSession: null as any,
   route: null as any,
 }));
 
@@ -34,6 +35,10 @@ vi.mock('../../store/replySubmission', () => ({
 
 vi.mock('../../store/searchSession', () => ({
   useSearchSessionStore: () => mocks.searchSession,
+}));
+
+vi.mock('../../store/postSearchSession', () => ({
+  usePostSearchSessionStore: () => mocks.postSearchSession,
 }));
 
 vi.mock('vue-router', () => ({
@@ -117,6 +122,7 @@ describe('AppShell mobile structure and notification freshness', () => {
       }),
     };
     mocks.searchSession = { setViewer: vi.fn() };
+    mocks.postSearchSession = { setViewer: vi.fn() };
     mocks.postPublishStore = { activateViewer: vi.fn().mockResolvedValue(undefined) };
     mocks.replySubmissionStore = { activateViewer: vi.fn().mockResolvedValue(undefined) };
     mocks.route = reactive({ name: 'Home' });
@@ -141,6 +147,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     expect(wrapper.find('.app-layout__mobile-account').exists()).toBe(false);
     expect(wrapper.find('.app-layout__mobile-links').exists()).toBe(false);
     expect(mocks.searchSession.setViewer).toHaveBeenCalledWith(7);
+    expect(mocks.postSearchSession.setViewer).toHaveBeenCalledWith(7);
     expect(mocks.postPublishStore.activateViewer).toHaveBeenCalledWith(7);
     expect(mocks.replySubmissionStore.activateViewer).toHaveBeenCalledWith(7);
     expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(1);
@@ -154,6 +161,7 @@ describe('AppShell mobile structure and notification freshness', () => {
 
     expect(mocks.notificationStore.refreshUnreadCount).not.toHaveBeenCalled();
     expect(mocks.postPublishStore.activateViewer).toHaveBeenCalledWith(null);
+    expect(mocks.postSearchSession.setViewer).toHaveBeenCalledWith(null);
     expect(mocks.replySubmissionStore.activateViewer).toHaveBeenCalledWith(null);
     await vi.advanceTimersByTimeAsync(NOTIFICATION_POLL_INTERVAL_MS * 3);
     expect(mocks.notificationStore.refreshUnreadCount).not.toHaveBeenCalled();
