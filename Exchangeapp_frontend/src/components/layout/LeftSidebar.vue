@@ -67,6 +67,7 @@ import { useHomeTimelineStore } from '../../store/homeTimeline';
 import { useNotificationStore } from '../../store/notification';
 import { useSearchSessionStore } from '../../store/searchSession';
 import { usePostSearchSessionStore } from '../../store/postSearchSession';
+import { searchNavigationDestination } from '../../router/searchRouteState';
 import BrandMark from '../brand/BrandMark.vue';
 import AppIcon from '../icons/AppIcon.vue';
 
@@ -103,20 +104,11 @@ const homeDestination = computed(() => (
     : { name: 'Home' }
 ));
 
-const searchReturnTarget = computed(() => {
-  if (route.name === 'UserSearch' && typeof route.fullPath === 'string' && route.fullPath) {
-    return route.fullPath;
-  }
-
-  const routeQuery = typeof route.query?.q === 'string' ? route.query.q.trim() : '';
-  const sessionQuery = typeof searchSession.query === 'string' ? searchSession.query.trim() : '';
-  const query = routeQuery || sessionQuery;
-  const tab = route.query?.tab === 'people' || route.query?.tab === 'posts'
-    ? route.query.tab
-    : (!routeQuery && sessionQuery ? 'people' : '');
-  const tabQuery = tab ? `tab=${tab}&` : '';
-  return query ? `/search?${tabQuery}q=${encodeURIComponent(query)}` : '/search';
-});
+const searchDestination = computed(() => searchNavigationDestination(
+  authStore.isAuthenticated,
+  route,
+  searchSession.query,
+));
 
 const navigationDestination = (item: typeof navigation[number]) => {
   if (item.name === 'Home') {
@@ -124,9 +116,7 @@ const navigationDestination = (item: typeof navigation[number]) => {
   }
 
   if (item.name === 'UserSearch') {
-    return authStore.isAuthenticated
-      ? { name: 'UserSearch' }
-      : { name: 'Login', query: { returnTo: searchReturnTarget.value } };
+    return searchDestination.value;
   }
 
   if (item.name === 'Notifications') {

@@ -83,6 +83,23 @@ func TestPostSearchCriteriaVisibilityTypesAndPaginationIntegration(t *testing.T)
 		}
 	})
 
+	normalPage, normalStatus, normalBody := requestPostSearchIntegration(t, url.Values{
+		"q": {searchNeedle}, "limit": {"50"},
+	})
+	if normalStatus != http.StatusOK {
+		t.Fatalf("normal literal query q=%q status=%d body=%s", searchNeedle, normalStatus, normalBody)
+	}
+	foundRoot := false
+	for _, item := range normalPage.Items {
+		if item.ID == root.ID {
+			foundRoot = true
+			break
+		}
+	}
+	if !foundRoot {
+		t.Fatalf("normal literal query q=%q status=%d did not return expected post %d: %+v", searchNeedle, normalStatus, root.ID, normalPage)
+	}
+
 	allQuery := url.Values{"q": {searchNeedle}, "limit": {"2"}}
 	first, status, body := requestPostSearchIntegration(t, allQuery)
 	if status != http.StatusOK {

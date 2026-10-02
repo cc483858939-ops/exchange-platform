@@ -98,7 +98,7 @@
                 :like-pending="likePendingPostIDs.has(post.id)"
                 :repost-pending="repostPendingPostIDs.has(post.id)"
                 :bookmark-pending="bookmarkPendingPostIDs.has(post.id)"
-                :requires-auth-for-actions="true"
+                :requires-auth-for-actions="!authStore.isAuthenticated"
                 @toggle-like="toggleLike"
                 @toggle-repost="toggleRepost"
                 @toggle-bookmark="toggleBookmark"
@@ -150,6 +150,7 @@ import PostCard from '../components/feed/PostCard.vue';
 import { useAuthStore } from '../store/auth';
 import { normalizeSearchQuery, useSearchSessionStore } from '../store/searchSession';
 import { postSearchQueryError, usePostSearchSessionStore, type PostSearchCriteriaV1 } from '../store/postSearchSession';
+import { rememberSearchRoute } from '../router/searchRouteState';
 import { getUser, searchUsers, type UserConnectionItem } from '../services/userService';
 import type { PublicAuthor } from '../types/User';
 
@@ -403,6 +404,7 @@ const resolveRouteAuthor = async (authorID: number) => {
 };
 const activateRouteCriteria = () => {
   if (route.name !== 'UserSearch' || !searchViewActive.value) return;
+  rememberSearchRoute(route.query);
   beginSearchRestoreEpoch();
   if (activeTab.value === 'people') {
     const nextQuery = routeQuery.value;

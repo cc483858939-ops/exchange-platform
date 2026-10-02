@@ -6,12 +6,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { Post } from '../types/Post';
 import { usePostSearchSessionStore } from '../store/postSearchSession';
+import { rememberedSearchRouteSnapshot } from '../router/searchRouteState';
 import UserSearchView from './UserSearchView.vue';
 
 const mocks = vi.hoisted(() => ({
   route: null as any,
   authStore: null as any,
-  router: { push: vi.fn() },
+  router: { push: vi.fn(), resolve: vi.fn() },
   searchPosts: vi.fn(),
   getPostEngagementStates: vi.fn(),
   searchUsers: vi.fn(),
@@ -73,9 +74,38 @@ const mountView = () => mount(UserSearchView, {
       AppIcon: { template: '<span />' },
       RouterLink: { template: '<a><slot /></a>' },
       PostCard: {
-        props: ['post', 'trackView'],
+        props: ['post', 'trackView', 'requiresAuthForActions'],
         emits: ['toggle-like', 'toggle-repost', 'toggle-bookmark'],
-        template: '<article class="test-post" :data-id="post.id" :data-track-view="String(trackView)">{{ post.content }}<button class="test-like" @click="$emit(\'toggle-like\', post.id)">Like</button></article>',
+        template: '<article class="test-post" :data-id="post.id" :data-track-view="String(trackView)" :data-requires-auth="String(requiresAuthForActions)">{{ post.content }}<button class="test-like" @click="$emit(\'toggle-like\', post.id)">Like</button></article>',
+      },
+      UserRow: { template: '<div />' },
+    },
+  },
+});
+
+const mountViewWithRealPostCard = () => mount(UserSearchView, {
+  global: {
+    stubs: {
+      AppIcon: { template: '<span />' },
+      RouterLink: { props: ['to'], template: '<a><slot /></a>' },
+      AuthorIdentity: { template: '<span class="test-author" />' },
+      LinkifiedText: { props: ['text'], template: '<span>{{ text }}</span>' },
+      PostMediaGrid: { template: '<div />' },
+      ConfirmDialog: { template: '<div />' },
+      LikeAction: {
+        props: ['disabled', 'loading', 'pending'],
+        emits: ['toggle'],
+        template: '<button class="real-card-like" :disabled="disabled || loading || pending" @click="$emit(\'toggle\')">Like</button>',
+      },
+      RepostMenu: {
+        props: ['disabled', 'loading', 'pending'],
+        emits: ['toggle', 'quote', 'view-quotes'],
+        template: '<div><button class="real-card-repost" :disabled="disabled || loading || pending" @click="$emit(\'toggle\')">Repost</button><button class="real-card-quote" @click="$emit(\'quote\')">Quote</button></div>',
+      },
+      BookmarkAction: {
+        props: ['disabled', 'loading', 'pending'],
+        emits: ['toggle'],
+        template: '<button class="real-card-bookmark" :disabled="disabled || loading || pending" @click="$emit(\'toggle\')">Bookmark</button>',
       },
       UserRow: { template: '<div />' },
     },
@@ -90,6 +120,9 @@ describe('UserSearchView Post Search', () => {
     mocks.authStore = reactive({ isAuthenticated: true, currentIdentity: { id: 7, username: 'viewer' } });
     mocks.searchPosts.mockResolvedValue({ items: [post(1)], next_cursor: null });
     mocks.getPostEngagementStates.mockResolvedValue({ items: [] });
+    mocks.router.resolve.mockImplementation((destination: { query?: { quote?: string } }) => ({
+      fullPath: destination.query?.quote ? `/posts/new?quote=${destination.query.quote}` : '/posts/new',
+    }));
     mocks.searchUsers.mockResolvedValue({ items: [], has_more: false });
   });
 
@@ -99,6 +132,7 @@ describe('UserSearchView Post Search', () => {
 
     expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toBe('Posts');
     expect(wrapper.find('.test-post').attributes('data-track-view')).toBe('false');
+    expect(wrapper.find('.test-post').attributes('data-requires-auth')).toBe('false');
     expect(mocks.searchPosts).toHaveBeenCalledWith(expect.objectContaining({ q: 'yen', sort: 'latest', limit: 20 }));
     wrapper.unmount();
   });
@@ -111,6 +145,50 @@ describe('UserSearchView Post Search', () => {
 
     await wrapper.get('.test-like').trigger('click');
     expect(toggleLike).toHaveBeenCalledWith(1);
+    wrapper.unmount();
+  });
+
+  it('lets a real PostCard Like from Search reach the mutation without Login navigation', async () => {
+    mocks.getPostEngagementStates.mockResolvedValue({ items: [{
+      post_id: 1,
+      like: { status: 'ready', likes: 0, liked: false },
+      repost: { status: 'ready', reposts: 0, reposted: false },
+      bookmark: { status: 'ready', bookmarked: false },
+    }] });
+    const wrapper = mountViewWithRealPostCard();
+    await flushPromises();
+    const store = usePostSearchSessionStore();
+    const toggleLike = vi.spyOn(store, 'toggleLike').mockResolvedValue('succeeded');
+    mocks.router.push.mockClear();
+
+    await wrapper.get('.real-card-like').trigger('click');
+
+    expect(toggleLike).toHaveBeenCalledWith(1);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('opens Quote PostCreate directly from a real authenticated Search PostCard', async () => {
+    const wrapper = mountViewWithRealPostCard();
+    await flushPromises();
+    mocks.router.push.mockClear();
+
+    await wrapper.get('.real-card-quote').trigger('click');
+
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'PostCreate', query: { quote: '1' } });
+    wrapper.unmount();
+  });
+
+  it('remembers canonical Post Search criteria without transient route state', async () => {
+    const from = '2026-09-01T00:00:00.000Z';
+    const to = '2026-09-02T00:00:00.000Z';
+    mocks.route.query = { tab: 'posts', q: '日元', author: '42', time: 'custom', from, to, cursor: 'ignored' };
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(rememberedSearchRouteSnapshot.value).toEqual({
+      tab: 'posts', q: '日元', author: '42', time: 'custom', from, to,
+    });
     wrapper.unmount();
   });
 

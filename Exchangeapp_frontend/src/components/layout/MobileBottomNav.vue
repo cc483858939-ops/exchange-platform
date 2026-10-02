@@ -42,6 +42,7 @@ import { useNotificationStore } from '../../store/notification';
 import { useProfileSessionStore } from '../../store/profileSession';
 import { useSearchSessionStore } from '../../store/searchSession';
 import { usePostSearchSessionStore } from '../../store/postSearchSession';
+import { searchNavigationDestination } from '../../router/searchRouteState';
 import AppIcon from '../icons/AppIcon.vue';
 
 type RouteParam = string | string[] | undefined;
@@ -83,27 +84,10 @@ const homeDestination = computed<NavigationItem['to']>(() =>
     : { name: 'Home' },
 );
 
-const searchReturnTarget = computed(() => {
-  if (route.name === 'UserSearch' && typeof route.fullPath === 'string' && route.fullPath) {
-    return route.fullPath;
-  }
-
-  const routeQuery = typeof route.query?.q === 'string' ? route.query.q.trim() : '';
-  const sessionQuery = searchSession.query.trim();
-  const query = routeQuery || sessionQuery;
-  const tab = route.query?.tab === 'people' || route.query?.tab === 'posts'
-    ? route.query.tab
-    : (!routeQuery && sessionQuery ? 'people' : '');
-  const tabQuery = tab ? `tab=${tab}&` : '';
-  return query ? `/search?${tabQuery}q=${encodeURIComponent(query)}` : '/search';
-});
-
-const searchDestination = computed<NavigationItem['to']>(() => (
-  authStore.isAuthenticated
-    ? (searchSession.query
-      ? { name: 'UserSearch', query: { tab: 'people', q: searchSession.query } }
-      : { name: 'UserSearch' })
-    : { name: 'Login', query: { returnTo: searchReturnTarget.value } }
+const searchDestination = computed<NavigationItem['to']>(() => searchNavigationDestination(
+  authStore.isAuthenticated,
+  route,
+  searchSession.query,
 ));
 
 const notificationsDestination = computed<NavigationItem['to']>(() => (

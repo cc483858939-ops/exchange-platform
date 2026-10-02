@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { reactive } from 'vue';
+import { rememberSearchRoute } from '../../router/searchRouteState';
 import MobileBottomNav from './MobileBottomNav.vue';
 
 type AuthState = {
@@ -69,7 +70,7 @@ vi.mock('vue-router', () => ({
 
 const routerLinkStub = {
   props: { to: { type: [String, Object], required: true } },
-  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" :data-route-query-q="to && to.query && to.query.q" :data-route-query-return-to="to && to.query && to.query.returnTo" :data-route-query-intent="to && to.query && to.query.intent" v-bind="$attrs"><slot /></a>',
+  template: '<a :data-route-name="to && to.name" :data-route-id="to && to.params && to.params.id" :data-route-query-tab="to && to.query && to.query.tab" :data-route-query-q="to && to.query && to.query.q" :data-route-query-author="to && to.query && to.query.author" :data-route-query-time="to && to.query && to.query.time" :data-route-query-from="to && to.query && to.query.from" :data-route-query-to="to && to.query && to.query.to" :data-route-query-return-to="to && to.query && to.query.returnTo" :data-route-query-intent="to && to.query && to.query.intent" v-bind="$attrs"><slot /></a>',
 };
 
 const mountNav = (notificationBadge: string | null = null) => mount(MobileBottomNav, {
@@ -122,6 +123,7 @@ describe('MobileBottomNav', () => {
     mocks.notificationStore.requestNotificationReselect.mockClear();
     mocks.profileSession.requestProfileReselect.mockClear();
     mocks.searchSession.query = '';
+    rememberSearchRoute({});
     mocks.searchSession.requestSearchReselect.mockClear();
     mocks.postSearchSession.requestSearchReselect.mockClear();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
@@ -167,13 +169,13 @@ describe('MobileBottomNav', () => {
 
   it('gates anonymous protected destinations without fabricating a profile id', () => {
     setState(false);
-    mocks.route!.query = { q: 'alice' };
+    mocks.searchSession.query = 'alice';
     const wrapper = mountNav();
     const links = wrapper.findAll('.mobile-bottom-nav__item');
 
     expect(links[0].attributes('data-route-name')).toBe('Home');
     expect(links[1].attributes('data-route-name')).toBe('Login');
-    expect(links[1].attributes('data-route-query-return-to')).toBe('/search?q=alice');
+    expect(links[1].attributes('data-route-query-return-to')).toBe('/search?tab=people&q=alice');
     expect(links[2].attributes('data-route-name')).toBe('TopicDirectory');
     expect(links[3].attributes('data-route-name')).toBe('CurrencyExchange');
     expect(links[4].attributes('data-route-name')).toBe('Login');
@@ -217,6 +219,64 @@ describe('MobileBottomNav', () => {
     expect(search.attributes('data-route-name')).toBe('UserSearch');
     expect(search.attributes('data-route-query-q')).toBe('alice');
     expect(search.attributes('data-route-query-tab')).toBe('people');
+  });
+
+  it('restores remembered Post Search criteria from another route', () => {
+    setState(true, 'PostDetail');
+    mocks.searchSession.query = 'legacy alice';
+    rememberSearchRoute({ tab: 'posts', q: '日元', author: '42', time: '7d' });
+    const search = mountNav().findAll('.mobile-bottom-nav__item')[1];
+
+    expect(search.attributes('data-route-name')).toBe('UserSearch');
+    expect(search.attributes('data-route-query-tab')).toBe('posts');
+    expect(search.attributes('data-route-query-q')).toBe('日元');
+    expect(search.attributes('data-route-query-author')).toBe('42');
+    expect(search.attributes('data-route-query-time')).toBe('7d');
+  });
+
+  it('restores custom Post Search dates from another route', () => {
+    setState(true, 'PostDetail');
+    const from = '2026-09-01T00:00:00.000Z';
+    const to = '2026-09-02T00:00:00.000Z';
+    rememberSearchRoute({ tab: 'posts', q: '日元', author: '42', time: 'custom', from, to });
+    const search = mountNav().findAll('.mobile-bottom-nav__item')[1];
+
+    expect(search.attributes('data-route-query-from')).toBe(from);
+    expect(search.attributes('data-route-query-to')).toBe(to);
+  });
+
+  it('restores People Search and falls back to the legacy People query', () => {
+    setState(true, 'PostDetail');
+    rememberSearchRoute({ tab: 'people', q: 'alice' });
+    const remembered = mountNav().findAll('.mobile-bottom-nav__item')[1];
+    expect(remembered.attributes('data-route-query-tab')).toBe('people');
+    expect(remembered.attributes('data-route-query-q')).toBe('alice');
+
+    rememberSearchRoute({});
+    mocks.searchSession.query = 'legacy bob';
+    const legacy = mountNav().findAll('.mobile-bottom-nav__item')[1];
+    expect(legacy.attributes('data-route-query-tab')).toBe('people');
+    expect(legacy.attributes('data-route-query-q')).toBe('legacy bob');
+  });
+
+  it('uses bare Search when no route snapshot or legacy People query exists', () => {
+    setState(true, 'PostDetail');
+    rememberSearchRoute({});
+    const search = mountNav().findAll('.mobile-bottom-nav__item')[1];
+
+    expect(search.attributes('data-route-name')).toBe('UserSearch');
+    expect(search.attributes('data-route-query-tab')).toBeUndefined();
+    expect(search.attributes('data-route-query-q')).toBeUndefined();
+  });
+
+  it('uses remembered Post Search criteria as a guest Login returnTo', () => {
+    setState(false, 'PostDetail');
+    rememberSearchRoute({ tab: 'posts', q: '日元', author: '42', time: '7d' });
+    const search = mountNav().findAll('.mobile-bottom-nav__item')[1];
+
+    expect(search.attributes('data-route-name')).toBe('Login');
+    expect(search.attributes('data-route-query-return-to'))
+      .toBe('/search?tab=posts&q=%E6%97%A5%E5%85%83&author=42&time=7d');
   });
 
   it('uses the optical icon sizes for authenticated navigation', () => {
@@ -346,6 +406,12 @@ describe('MobileBottomNav', () => {
 
   it('signals an active Search reselect without scrolling the window or changing the query', () => {
     setState(true, 'UserSearch');
+    mocks.route = reactive({
+      name: 'UserSearch',
+      params: {},
+      query: { tab: 'people', q: 'alice' },
+      fullPath: '/search?tab=people&q=alice',
+    });
     mocks.searchSession.query = 'alice';
     const wrapper = mountNav();
     const event = dispatchClick(wrapper, 1);

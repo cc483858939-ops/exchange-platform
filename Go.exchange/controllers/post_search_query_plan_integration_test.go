@@ -74,11 +74,11 @@ FROM generate_series(1, 20000) AS generated`, searchToken).Error; err != nil {
 SELECT posts.id, posts.created_at
 FROM posts
 WHERE ` + publicPostEligibilitySQL("posts") + `
-  AND posts.content ILIKE ? ESCAPE '\'
+  AND ` + postSearchContentPredicate + `
   AND posts.created_at <= ?
 ORDER BY posts.created_at DESC, posts.id DESC
 LIMIT 21`
-	if err := tx.Raw(query, "%"+searchToken+"%", time.Now().UTC()).Row().Scan(&planJSON); err != nil {
+	if err := tx.Raw(query, postSearchLikePattern(searchToken), time.Now().UTC()).Row().Scan(&planJSON); err != nil {
 		t.Fatal(err)
 	}
 	var plan []postSearchExplainPlan

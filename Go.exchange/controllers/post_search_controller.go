@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	postSearchDefaultLimit = 20
-	postSearchMaxLimit     = 50
-	postSearchMaxSafeID    = uint64(1<<53 - 1)
+	postSearchDefaultLimit     = 20
+	postSearchMaxLimit         = 50
+	postSearchMaxSafeID        = uint64(1<<53 - 1)
+	postSearchContentPredicate = `posts.content ILIKE ? ESCAPE '\'`
 )
 
 type postSearchCriteria struct {
@@ -169,7 +170,7 @@ func loadPostSearchPage(
 		Model(&models.Post{}).
 		Select("posts.id, posts.created_at").
 		Where(publicPostEligibilitySQL("posts")).
-		Where("posts.content ILIKE ? ESCAPE '\\'", postSearchLikePattern(criteria.Query)).
+		Where(postSearchContentPredicate, postSearchLikePattern(criteria.Query)).
 		Where("posts.created_at <= ?", anchorAt.UTC())
 	if criteria.AuthorID != nil {
 		query = query.Where("posts.author_id = ?", *criteria.AuthorID)

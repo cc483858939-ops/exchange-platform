@@ -124,6 +124,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
   const { likePendingPostIDs, repostPendingPostIDs, bookmarkPendingPostIDs } = engagementMutations;
   const mutationErrors = reactive(new Map<number, string>());
   const loadedPostIDs = new Set<number>();
+  const deletedPostIDs = new Set<number>();
 
   const findPost = (postID: number) => items.value.find(post => post.id === postID);
   const hasMore = computed(() => nextCursor.value !== null);
@@ -159,6 +160,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     loadMoreError.value = '';
     scrollTop.value = 0;
     loadedPostIDs.clear();
+    deletedPostIDs.clear();
     engagementMutations.resetAll();
     mutationErrors.clear();
   };
@@ -166,7 +168,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
   const appendPosts = (posts: Post[]) => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
-      if (!Number.isSafeInteger(post.id) || post.id <= 0 || loadedPostIDs.has(post.id)) return;
+      if (!Number.isSafeInteger(post.id) || post.id <= 0 || loadedPostIDs.has(post.id) || deletedPostIDs.has(post.id)) return;
       loadedPostIDs.add(post.id);
       additions.push(postToFeedPost(post));
     });
@@ -451,10 +453,13 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
   };
 
   const removePostLocal = (postID: number) => {
-    if (!findPost(postID)) return;
+    deletedPostIDs.add(postID);
+    const existed = Boolean(findPost(postID));
     items.value = items.value.filter(post => post.id !== postID);
+    loadedPostIDs.delete(postID);
     engagementMutations.invalidatePost(postID);
     mutationErrors.delete(postID);
+    return existed;
   };
 
   const replaceAuthorIdentityLocal = (author: PublicAuthor) => {

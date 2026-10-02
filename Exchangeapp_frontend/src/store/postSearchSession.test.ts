@@ -147,6 +147,41 @@ describe('postSearchSession', () => {
     expect(store.nextCursor).toBeNull();
   });
 
+  it('does not reinsert a post tombstoned before an in-flight page resolves', async () => {
+    const pageTwo = deferred<ReturnType<typeof page>>();
+    mocks.searchPosts.mockResolvedValueOnce(page([1], 'cursor-a'))
+      .mockReturnValueOnce(pageTwo.promise);
+    const store = usePostSearchSessionStore();
+    store.activateCriteria(criteria('yen'));
+    await settle();
+
+    const pendingPage = store.loadMore();
+    expect(store.removePostLocal(25)).toBe(false);
+    pageTwo.resolve(page([25, 26]));
+    await pendingPage;
+
+    expect(store.items.map(post => post.id)).toEqual([1, 26]);
+    expect(store.nextCursor).toBeNull();
+  });
+
+  it('removes a loaded post immediately and suppresses it from a stale page', async () => {
+    const pageTwo = deferred<ReturnType<typeof page>>();
+    mocks.searchPosts.mockResolvedValueOnce(page([10], 'cursor-a'))
+      .mockReturnValueOnce(pageTwo.promise);
+    const store = usePostSearchSessionStore();
+    store.activateCriteria(criteria('yen'));
+    await settle();
+
+    const pendingPage = store.loadMore();
+    expect(store.removePostLocal(10)).toBe(true);
+    expect(store.items.map(post => post.id)).toEqual([]);
+    pageTwo.resolve(page([10, 11]));
+    await pendingPage;
+
+    expect(store.items.map(post => post.id)).toEqual([11]);
+    expect(store.nextCursor).toBeNull();
+  });
+
   it('keeps relative time bounds fixed across cursor pages and tab reactivation', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-01T00:00:00.000Z'));
