@@ -21,9 +21,10 @@ const mocks = vi.hoisted(() => ({
   executeRepostToggle: vi.fn(),
   executeBookmarkToggle: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
-  syncExternalPostLikeState: vi.fn(),
-  syncExternalPostRepostState: vi.fn(),
-  syncExternalPostBookmarkState: vi.fn(),
+  registerQuotesSessionSync: vi.fn(),
+  syncQuotesLikeState: vi.fn(),
+  syncQuotesRepostState: vi.fn(),
+  syncQuotesBookmarkState: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -39,9 +40,10 @@ vi.mock('./engagementOperations', () => ({
 }));
 vi.mock('./sessionSync', () => ({
   beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
-  syncExternalPostLikeState: mocks.syncExternalPostLikeState,
-  syncExternalPostRepostState: mocks.syncExternalPostRepostState,
-  syncExternalPostBookmarkState: mocks.syncExternalPostBookmarkState,
+  registerQuotesSessionSync: mocks.registerQuotesSessionSync,
+  syncQuotesLikeState: mocks.syncQuotesLikeState,
+  syncQuotesRepostState: mocks.syncQuotesRepostState,
+  syncQuotesBookmarkState: mocks.syncQuotesBookmarkState,
 }));
 
 import { useQuotesSessionStore } from './quotesSession';
@@ -147,6 +149,19 @@ describe('quotesSession store', () => {
     mocks.executeLikeToggle.mockResolvedValue({ likes: 4, liked: true });
     mocks.executeRepostToggle.mockResolvedValue({ reposts: 5, reposted: true });
     mocks.executeBookmarkToggle.mockResolvedValue({ post_id: 1, bookmarked: true });
+  });
+
+  it('registers its external engagement handlers as a terminal Quotes sink', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const store = createStore();
+    await store.setTarget(42);
+
+    expect(mocks.registerQuotesSessionSync).toHaveBeenCalledOnce();
+    expect(mocks.registerQuotesSessionSync).toHaveBeenCalledWith({
+      applyExternalLikeStateLocal: expect.any(Function),
+      applyExternalRepostStateLocal: expect.any(Function),
+      applyExternalBookmarkStateLocal: expect.any(Function),
+    });
   });
 
   it('loads fresh Posts for the target and initializes guest engagement as ready', async () => {
@@ -295,6 +310,65 @@ describe('quotesSession store', () => {
     });
   });
 
+  it('applies incoming Like, Repost, and Bookmark state and clears stale mutation errors', async () => {
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    const store = createStore();
+    await store.setTarget(42);
+    store.mutationErrors.set(1, 'Could not update like.');
+
+    expect(store.applyExternalLikeStateLocal({ postId: 1, liked: true, likes: 5, status: 'ready' })).toBe(true);
+    expect(store.applyExternalRepostStateLocal({ postId: 1, reposted: true, reposts: 3, status: 'ready' })).toBe(true);
+    expect(store.applyExternalBookmarkStateLocal({ postId: 1, bookmarked: true, status: 'ready' })).toBe(true);
+
+    expect(store.items[0]).toMatchObject({
+      liked: true, likeCount: 5, likeStatus: 'ready',
+      reposted: true, repostCount: 3, repostStatus: 'ready',
+      bookmarked: true, bookmarkStatus: 'ready',
+    });
+    expect(store.mutationErrors.has(1)).toBe(false);
+    expect(mocks.syncQuotesLikeState).not.toHaveBeenCalled();
+    expect(mocks.syncQuotesRepostState).not.toHaveBeenCalled();
+    expect(mocks.syncQuotesBookmarkState).not.toHaveBeenCalled();
+  });
+
+  it('ignores incoming engagement for a Post that Quotes does not contain', async () => {
+    const store = createStore();
+    await store.setTarget(42);
+
+    expect(store.applyExternalLikeStateLocal({ postId: 1, liked: true, likes: 5, status: 'ready' })).toBe(false);
+    expect(store.applyExternalRepostStateLocal({ postId: 1, reposted: true, reposts: 3, status: 'ready' })).toBe(false);
+    expect(store.applyExternalBookmarkStateLocal({ postId: 1, bookmarked: true, status: 'ready' })).toBe(false);
+    expect(store.items).toEqual([]);
+  });
+
+  it('keeps a newer external Like when older engagement hydration resolves later', async () => {
+    const hydration = deferred<ReturnType<typeof readyEngagement>>();
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+    const store = createStore(true);
+    await store.setTarget(42);
+
+    expect(store.applyExternalLikeStateLocal({ postId: 1, liked: true, likes: 5, status: 'ready' })).toBe(true);
+    hydration.resolve(readyEngagement([1], { likes: 4, liked: false }));
+    await settle();
+
+    expect(store.items[0]).toMatchObject({ liked: true, likeCount: 5, likeStatus: 'ready' });
+  });
+
+  it('keeps a newer external Bookmark when older engagement hydration resolves later', async () => {
+    const hydration = deferred<ReturnType<typeof readyEngagement>>();
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+    const store = createStore(true);
+    await store.setTarget(42);
+
+    expect(store.applyExternalBookmarkStateLocal({ postId: 1, bookmarked: true, status: 'ready' })).toBe(true);
+    hydration.resolve(readyEngagement([1], { bookmarked: false }));
+    await settle();
+
+    expect(store.items[0]).toMatchObject({ bookmarked: true, bookmarkStatus: 'ready' });
+  });
+
   it('ignores engagement hydration from an earlier viewer generation', async () => {
     const hydration = deferred<ReturnType<typeof readyEngagement>>();
     mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
@@ -352,9 +426,10 @@ describe('quotesSession store', () => {
     expect(mocks.createOptimisticBookmarkUpdate).toHaveBeenCalledWith(store.items[0]);
     expect(mocks.executeBookmarkToggle).toHaveBeenCalledWith(1, false);
     expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(1);
-    expect(mocks.syncExternalPostLikeState).toHaveBeenCalledWith({ postId: 1, likes: 4, liked: true, status: 'ready' });
-    expect(mocks.syncExternalPostRepostState).toHaveBeenCalledWith({ postId: 1, reposts: 5, reposted: true, status: 'ready' });
-    expect(mocks.syncExternalPostBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
+    expect(mocks.syncQuotesLikeState).toHaveBeenCalledWith({ postId: 1, likes: 4, liked: true, status: 'ready' });
+    expect(mocks.syncQuotesRepostState).toHaveBeenCalledWith({ postId: 1, reposts: 5, reposted: true, status: 'ready' });
+    expect(mocks.syncQuotesBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
+    expect(store.items[0]).toMatchObject({ liked: true, likeCount: 4, reposted: true, repostCount: 5, bookmarked: true });
   });
 
   it('passes true to shared executors for Unlike, Undo Repost, and Unbookmark', async () => {
@@ -403,6 +478,46 @@ describe('quotesSession store', () => {
     expect(store.items[0]).toMatchObject({ liked: true, likeCount: 10 });
   });
 
+  it('lets an external Like invalidate a pending local response', async () => {
+    const request = deferred<{ likes: number; liked: boolean }>();
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    hydrateAllUnengaged();
+    mocks.executeLikeToggle.mockReturnValueOnce(request.promise);
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    const mutation = store.toggleLike(1);
+    expect(store.likePendingPostIDs.has(1)).toBe(true);
+    store.applyExternalLikeStateLocal({ postId: 1, likes: 5, liked: true, status: 'ready' });
+    request.resolve({ likes: 99, liked: false });
+
+    expect(await mutation).toBe('ignored');
+    expect(store.items[0]).toMatchObject({ liked: true, likeCount: 5 });
+    expect(store.likePendingPostIDs.has(1)).toBe(false);
+    expect(mocks.syncQuotesLikeState).not.toHaveBeenCalled();
+  });
+
+  it('lets an external Bookmark invalidate a pending local response', async () => {
+    const request = deferred<{ post_id: number; bookmarked: boolean }>();
+    mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    hydrateAllUnengaged();
+    mocks.executeBookmarkToggle.mockReturnValueOnce(request.promise);
+    const store = createStore(true);
+    await store.setTarget(42);
+    await settle();
+
+    const mutation = store.toggleBookmark(1);
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(true);
+    store.applyExternalBookmarkStateLocal({ postId: 1, bookmarked: true, status: 'ready' });
+    request.resolve({ post_id: 1, bookmarked: false });
+
+    expect(await mutation).toBe('ignored');
+    expect(store.items[0]).toMatchObject({ bookmarked: true });
+    expect(store.bookmarkPendingPostIDs.has(1)).toBe(false);
+    expect(mocks.syncQuotesBookmarkState).not.toHaveBeenCalled();
+  });
+
   it('rolls Like back and keeps its error when the shared executor fails', async () => {
     mocks.getPostQuotes.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
     hydrateAllUnengaged();
@@ -415,7 +530,7 @@ describe('quotesSession store', () => {
 
     expect(store.items[0]).toMatchObject({ liked: false, likeCount: 3, likeStatus: 'ready' });
     expect(store.mutationErrors.get(1)).toBe('Could not update like.');
-    expect(mocks.syncExternalPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.syncQuotesLikeState).not.toHaveBeenCalled();
   });
 
   it('rolls Repost back and keeps its error when the shared executor fails', async () => {
@@ -430,7 +545,7 @@ describe('quotesSession store', () => {
 
     expect(store.items[0]).toMatchObject({ reposted: false, repostCount: 4, repostStatus: 'ready' });
     expect(store.mutationErrors.get(1)).toBe('Could not update repost.');
-    expect(mocks.syncExternalPostRepostState).not.toHaveBeenCalled();
+    expect(mocks.syncQuotesRepostState).not.toHaveBeenCalled();
   });
 
   it('rolls Bookmark back and keeps its error when the shared executor fails', async () => {
@@ -446,7 +561,7 @@ describe('quotesSession store', () => {
     expect(store.items[0]).toMatchObject({ bookmarked: false, bookmarkStatus: 'ready' });
     expect(store.mutationErrors.get(1)).toBe('Could not update bookmark.');
     expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(1);
-    expect(mocks.syncExternalPostBookmarkState).not.toHaveBeenCalled();
+    expect(mocks.syncQuotesBookmarkState).not.toHaveBeenCalled();
   });
 
   it('ignores a successful mutation after the target changes and does not fan it out', async () => {
@@ -468,7 +583,7 @@ describe('quotesSession store', () => {
     expect(store.targetPostID).toBe(99);
     expect(store.items).toHaveLength(1);
     expect(store.items[0]).toMatchObject({ id: 99, liked: false, likeCount: 3 });
-    expect(mocks.syncExternalPostLikeState).not.toHaveBeenCalled();
+    expect(mocks.syncQuotesLikeState).not.toHaveBeenCalled();
   });
 
   it('rejects a Like when another surface already holds the mutation lease', async () => {

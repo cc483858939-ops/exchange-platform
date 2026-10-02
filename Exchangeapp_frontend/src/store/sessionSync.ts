@@ -87,6 +87,12 @@ export type PostDetailSessionSync = {
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
 };
 
+export type QuotesSessionSync = {
+  applyExternalLikeStateLocal: (update: FeedLikeStateUpdate) => boolean;
+  applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
+  applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
+};
+
 let homeTimelineSync: HomeTimelineSync | null = null;
 let profileSessionSync: ProfileSessionSync | null = null;
 let searchSessionSync: SearchSessionSync | null = null;
@@ -96,6 +102,7 @@ let topicSessionSync: TopicSessionSync | null = null;
 let connectionsSessionSync: ConnectionsSessionSync | null = null;
 let bookmarksSessionSync: BookmarksSessionSync | null = null;
 let postDetailSessionSync: PostDetailSessionSync | null = null;
+let quotesSessionSync: QuotesSessionSync | null = null;
 const bookmarkStateSyncVersions = new Map<number, number>();
 
 const getBookmarkStateSyncVersion = (postID: number) => (
@@ -152,13 +159,18 @@ export const registerPostDetailSessionSync = (sync: PostDetailSessionSync | null
   postDetailSessionSync = sync;
 };
 
+export const registerQuotesSessionSync = (sync: QuotesSessionSync | null) => {
+  quotesSessionSync = sync;
+};
+
 export const syncHomeLikeState = (update: FeedLikeStateUpdate) => {
   const profileApplied = profileSessionSync?.applyLikeStateUpdateLocal(update) ?? false;
   const historyApplied = historySessionSync?.applyExternalLikeStateLocal(update) ?? false;
   const topicApplied = topicSessionSync?.applyExternalLikeStateLocal(update) ?? false;
   const bookmarksApplied = bookmarksSessionSync?.applyExternalLikeStateLocal?.(update) ?? false;
   const searchApplied = postSearchSessionSync?.applyExternalLikeStateLocal(update) ?? false;
-  return profileApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied;
+  const quotesApplied = quotesSessionSync?.applyExternalLikeStateLocal(update) ?? false;
+  return profileApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied || quotesApplied;
 };
 
 export const syncHomeRepostState = (update: FeedRepostStateUpdate) => {
@@ -167,7 +179,8 @@ export const syncHomeRepostState = (update: FeedRepostStateUpdate) => {
   const topicApplied = topicSessionSync?.applyExternalRepostStateLocal(update) ?? false;
   const bookmarksApplied = bookmarksSessionSync?.applyExternalRepostStateLocal?.(update) ?? false;
   const searchApplied = postSearchSessionSync?.applyExternalRepostStateLocal(update) ?? false;
-  return profileApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied;
+  const quotesApplied = quotesSessionSync?.applyExternalRepostStateLocal(update) ?? false;
+  return profileApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied || quotesApplied;
 };
 
 export const syncHomePostRemoval = (postID: number) => {
@@ -193,7 +206,8 @@ export const syncProfileLikeState = (update: FeedLikeStateUpdate) => {
   const topicApplied = topicSessionSync?.applyExternalLikeStateLocal(update) ?? false;
   const bookmarksApplied = bookmarksSessionSync?.applyExternalLikeStateLocal?.(update) ?? false;
   const searchApplied = postSearchSessionSync?.applyExternalLikeStateLocal(update) ?? false;
-  return homeApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied;
+  const quotesApplied = quotesSessionSync?.applyExternalLikeStateLocal(update) ?? false;
+  return homeApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied || quotesApplied;
 };
 
 export const syncProfileRepostState = (update: FeedRepostStateUpdate) => {
@@ -202,7 +216,8 @@ export const syncProfileRepostState = (update: FeedRepostStateUpdate) => {
   const topicApplied = topicSessionSync?.applyExternalRepostStateLocal(update) ?? false;
   const bookmarksApplied = bookmarksSessionSync?.applyExternalRepostStateLocal?.(update) ?? false;
   const searchApplied = postSearchSessionSync?.applyExternalRepostStateLocal(update) ?? false;
-  return homeApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied;
+  const quotesApplied = quotesSessionSync?.applyExternalRepostStateLocal(update) ?? false;
+  return homeApplied || historyApplied || topicApplied || bookmarksApplied || searchApplied || quotesApplied;
 };
 
 export const syncTopicLikeState = (update: FeedLikeStateUpdate) => {
@@ -211,6 +226,7 @@ export const syncTopicLikeState = (update: FeedLikeStateUpdate) => {
   historySessionSync?.applyExternalLikeStateLocal(update);
   bookmarksSessionSync?.applyExternalLikeStateLocal?.(update);
   postSearchSessionSync?.applyExternalLikeStateLocal(update);
+  quotesSessionSync?.applyExternalLikeStateLocal(update);
 };
 
 export const syncTopicRepostState = (update: FeedRepostStateUpdate) => {
@@ -219,6 +235,7 @@ export const syncTopicRepostState = (update: FeedRepostStateUpdate) => {
   historySessionSync?.applyExternalRepostStateLocal(update);
   bookmarksSessionSync?.applyExternalRepostStateLocal?.(update);
   postSearchSessionSync?.applyExternalRepostStateLocal(update);
+  quotesSessionSync?.applyExternalRepostStateLocal(update);
 };
 
 export const syncTopicBookmarkState = (update: FeedBookmarkStateUpdate) => {
@@ -229,6 +246,7 @@ export const syncTopicBookmarkState = (update: FeedBookmarkStateUpdate) => {
   bookmarksSessionSync?.applyExternalBookmarkStateLocal?.(update);
   postDetailSessionSync?.applyExternalBookmarkStateLocal(update);
   postSearchSessionSync?.applyExternalBookmarkStateLocal(update);
+  quotesSessionSync?.applyExternalBookmarkStateLocal(update);
 };
 
 export const syncHomeBookmarkState = (update: FeedBookmarkStateUpdate) => {
@@ -239,7 +257,8 @@ export const syncHomeBookmarkState = (update: FeedBookmarkStateUpdate) => {
   bookmarksSessionSync?.applyExternalBookmarkStateLocal?.(update);
   postDetailSessionSync?.applyExternalBookmarkStateLocal(update);
   const searchApplied = postSearchSessionSync?.applyExternalBookmarkStateLocal(update) ?? false;
-  return profileApplied || historyApplied || topicApplied || searchApplied;
+  const quotesApplied = quotesSessionSync?.applyExternalBookmarkStateLocal(update) ?? false;
+  return profileApplied || historyApplied || topicApplied || searchApplied || quotesApplied;
 };
 
 export const syncProfileBookmarkState = (update: FeedBookmarkStateUpdate) => {
@@ -250,7 +269,8 @@ export const syncProfileBookmarkState = (update: FeedBookmarkStateUpdate) => {
   bookmarksSessionSync?.applyExternalBookmarkStateLocal?.(update);
   postDetailSessionSync?.applyExternalBookmarkStateLocal(update);
   const searchApplied = postSearchSessionSync?.applyExternalBookmarkStateLocal(update) ?? false;
-  return homeApplied || historyApplied || topicApplied || searchApplied;
+  const quotesApplied = quotesSessionSync?.applyExternalBookmarkStateLocal(update) ?? false;
+  return homeApplied || historyApplied || topicApplied || searchApplied || quotesApplied;
 };
 
 export const syncHistoryBookmarkState = (update: FeedBookmarkStateUpdate) => {
@@ -261,6 +281,7 @@ export const syncHistoryBookmarkState = (update: FeedBookmarkStateUpdate) => {
   bookmarksSessionSync?.applyExternalBookmarkStateLocal?.(update);
   postDetailSessionSync?.applyExternalBookmarkStateLocal(update);
   postSearchSessionSync?.applyExternalBookmarkStateLocal(update);
+  quotesSessionSync?.applyExternalBookmarkStateLocal(update);
 };
 
 export const syncProfilePostRemoval = (postID: number) => {
@@ -287,6 +308,7 @@ export const syncExternalPostLikeState = (update: FeedLikeStateUpdate) => {
   topicSessionSync?.applyExternalLikeStateLocal(update);
   bookmarksSessionSync?.applyExternalLikeStateLocal?.(update);
   postSearchSessionSync?.applyExternalLikeStateLocal(update);
+  quotesSessionSync?.applyExternalLikeStateLocal(update);
 };
 
 export const syncExternalPostRepostState = (update: FeedRepostStateUpdate) => {
@@ -296,9 +318,40 @@ export const syncExternalPostRepostState = (update: FeedRepostStateUpdate) => {
   topicSessionSync?.applyExternalRepostStateLocal(update);
   bookmarksSessionSync?.applyExternalRepostStateLocal?.(update);
   postSearchSessionSync?.applyExternalRepostStateLocal(update);
+  quotesSessionSync?.applyExternalRepostStateLocal(update);
 };
 
 export const syncExternalPostBookmarkState = (update: FeedBookmarkStateUpdate) => {
+  bumpBookmarkStateSyncVersion(update.postId);
+  homeTimelineSync?.applyExternalBookmarkStateLocal?.(update);
+  profileSessionSync?.applyExternalBookmarkStateLocal?.(update);
+  historySessionSync?.applyExternalBookmarkStateLocal?.(update);
+  topicSessionSync?.applyExternalBookmarkStateLocal(update);
+  bookmarksSessionSync?.applyExternalBookmarkStateLocal?.(update);
+  postDetailSessionSync?.applyExternalBookmarkStateLocal(update);
+  postSearchSessionSync?.applyExternalBookmarkStateLocal(update);
+  quotesSessionSync?.applyExternalBookmarkStateLocal(update);
+};
+
+export const syncQuotesLikeState = (update: FeedLikeStateUpdate) => {
+  homeTimelineSync?.applyExternalLikeStateLocal(update);
+  profileSessionSync?.applyExternalLikeStateLocal(update);
+  historySessionSync?.applyExternalLikeStateLocal(update);
+  topicSessionSync?.applyExternalLikeStateLocal(update);
+  bookmarksSessionSync?.applyExternalLikeStateLocal?.(update);
+  postSearchSessionSync?.applyExternalLikeStateLocal(update);
+};
+
+export const syncQuotesRepostState = (update: FeedRepostStateUpdate) => {
+  homeTimelineSync?.applyExternalRepostStateLocal(update);
+  profileSessionSync?.applyExternalRepostStateLocal(update);
+  historySessionSync?.applyExternalRepostStateLocal(update);
+  topicSessionSync?.applyExternalRepostStateLocal(update);
+  bookmarksSessionSync?.applyExternalRepostStateLocal?.(update);
+  postSearchSessionSync?.applyExternalRepostStateLocal(update);
+};
+
+export const syncQuotesBookmarkState = (update: FeedBookmarkStateUpdate) => {
   bumpBookmarkStateSyncVersion(update.postId);
   homeTimelineSync?.applyExternalBookmarkStateLocal?.(update);
   profileSessionSync?.applyExternalBookmarkStateLocal?.(update);
@@ -315,6 +368,7 @@ export const syncPostSearchLikeState = (update: FeedLikeStateUpdate) => {
   historySessionSync?.applyExternalLikeStateLocal(update);
   topicSessionSync?.applyExternalLikeStateLocal(update);
   bookmarksSessionSync?.applyExternalLikeStateLocal?.(update);
+  quotesSessionSync?.applyExternalLikeStateLocal(update);
 };
 
 export const syncPostSearchRepostState = (update: FeedRepostStateUpdate) => {
@@ -323,6 +377,7 @@ export const syncPostSearchRepostState = (update: FeedRepostStateUpdate) => {
   historySessionSync?.applyExternalRepostStateLocal(update);
   topicSessionSync?.applyExternalRepostStateLocal(update);
   bookmarksSessionSync?.applyExternalRepostStateLocal?.(update);
+  quotesSessionSync?.applyExternalRepostStateLocal(update);
 };
 
 export const syncPostSearchBookmarkState = (update: FeedBookmarkStateUpdate) => {
@@ -333,6 +388,7 @@ export const syncPostSearchBookmarkState = (update: FeedBookmarkStateUpdate) => 
   topicSessionSync?.applyExternalBookmarkStateLocal(update);
   bookmarksSessionSync?.applyExternalBookmarkStateLocal?.(update);
   postDetailSessionSync?.applyExternalBookmarkStateLocal(update);
+  quotesSessionSync?.applyExternalBookmarkStateLocal(update);
 };
 
 export const markOwnProfileTimelineStale = () =>

@@ -24,9 +24,10 @@ import {
 } from '../utils/feedPost';
 import {
   beginBookmarkStateMutation,
-  syncExternalPostBookmarkState,
-  syncExternalPostLikeState,
-  syncExternalPostRepostState,
+  registerQuotesSessionSync,
+  syncQuotesBookmarkState,
+  syncQuotesLikeState,
+  syncQuotesRepostState,
 } from './sessionSync';
 import {
   createEngagementMutationCoordinator,
@@ -352,7 +353,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
         };
         applyFeedLikeStateUpdate(post, update);
         engagementMutations.settle(token);
-        syncExternalPostLikeState(update);
+        syncQuotesLikeState(update);
         return 'succeeded';
       } catch {
         if (!isCurrentMutation(token, target, request, viewer, generation)) return 'ignored';
@@ -392,7 +393,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
         };
         applyFeedRepostStateUpdate(post, update);
         engagementMutations.settle(token);
-        syncExternalPostRepostState(update);
+        syncQuotesRepostState(update);
         return 'succeeded';
       } catch {
         if (!isCurrentMutation(token, target, request, viewer, generation)) return 'ignored';
@@ -432,7 +433,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
         };
         applyFeedBookmarkStateUpdate(post, update);
         engagementMutations.settle(token);
-        syncExternalPostBookmarkState(update);
+        syncQuotesBookmarkState(update);
         return 'succeeded';
       } catch {
         if (!isCurrentMutation(token, target, request, viewer, generation)) return 'ignored';
@@ -450,6 +451,42 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     targetPostID.value = null;
     clearPageState();
   };
+
+  const applyExternalLikeStateLocal = (update: FeedLikeStateUpdate) => {
+    const post = findPost(update.postId);
+    if (!post) return false;
+
+    engagementMutations.invalidate('like', post.id);
+    mutationErrors.delete(post.id);
+
+    return applyFeedLikeStateUpdate(post, update);
+  };
+
+  const applyExternalRepostStateLocal = (update: FeedRepostStateUpdate) => {
+    const post = findPost(update.postId);
+    if (!post) return false;
+
+    engagementMutations.invalidate('repost', post.id);
+    mutationErrors.delete(post.id);
+
+    return applyFeedRepostStateUpdate(post, update);
+  };
+
+  const applyExternalBookmarkStateLocal = (update: FeedBookmarkStateUpdate) => {
+    const post = findPost(update.postId);
+    if (!post) return false;
+
+    engagementMutations.invalidate('bookmark', post.id);
+    mutationErrors.delete(post.id);
+
+    return applyFeedBookmarkStateUpdate(post, update);
+  };
+
+  registerQuotesSessionSync({
+    applyExternalLikeStateLocal,
+    applyExternalRepostStateLocal,
+    applyExternalBookmarkStateLocal,
+  });
 
   return {
     targetPostID,
@@ -478,6 +515,9 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     toggleLike,
     toggleRepost,
     toggleBookmark,
+    applyExternalLikeStateLocal,
+    applyExternalRepostStateLocal,
+    applyExternalBookmarkStateLocal,
     reset,
   };
 });
