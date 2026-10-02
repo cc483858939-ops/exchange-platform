@@ -4,12 +4,12 @@ import { createPostReply } from '../services/replyService';
 import type { Post } from '../types/Post';
 import { createClientOperationID } from '../utils/clientOperationId';
 import {
+  claimReplySubmissionOperation,
   deleteReplyDraftIfUnchanged,
   deleteReplySubmissionOperation,
   getReplyDraft,
   getReplySubmissionOperation,
   listReplySubmissionOperations,
-  replaceReplySubmissionOperation,
   replyStorageKey,
   updateReplySubmissionOperation,
   type PersistedReplySubmissionOperation,
@@ -522,11 +522,41 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       durableOwned: true,
       cleanupPending: false,
     };
+    let claim: Awaited<ReturnType<typeof claimReplySubmissionOperation>>;
     try {
-      await replaceReplySubmissionOperation(persistOperation(operation, now));
+      claim = await claimReplySubmissionOperation(persistOperation(operation, now));
     } catch {
       return { status: 'rejected', reason: 'persistence_unavailable' };
     }
+
+    if (claim.status === 'occupied') {
+      if (activeViewerID.value !== viewerID || currentViewerID.value !== viewerID) {
+        return { status: 'rejected', reason: 'unauthenticated' };
+      }
+      const existing = restoreOperation(claim.operation);
+      if (existing.phase === 'succeeded') completedSucceededOperationIDs.add(existing.id);
+      if (existing.phase !== 'succeeded' && !operationMatchesCurrentSession(existing)) {
+        existing.phase = 'failed';
+        existing.failureKind = 'auth_context_changed';
+        existing.error = 'Reply failed. Retry safely.';
+        try { await updateReplySubmissionOperation(persistOperation(existing)); } catch { /* retain fail-closed state */ }
+      }
+      upsertOperation(existing);
+      if (!authStore.matchesRequestAuthBinding(authBinding)) {
+        return { status: 'rejected', reason: 'unauthenticated' };
+      }
+      if (existing.phase === 'succeeded') {
+        return { status: 'blocked', reason: 'cleanup_pending' };
+      }
+      if (existing.phase === 'publishing') {
+        return { status: 'blocked', reason: 'another_reply_in_flight' };
+      }
+      if (existing.failureKind === 'idempotency_conflict') {
+        return { status: 'blocked', reason: 'idempotency_conflict' };
+      }
+      return { status: 'blocked', reason: 'unresolved_reply' };
+    }
+
     if (!authStore.matchesRequestAuthBinding(authBinding)) {
       operation.phase = 'failed';
       operation.failureKind = 'auth_context_changed';

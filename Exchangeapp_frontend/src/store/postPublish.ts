@@ -8,9 +8,9 @@ import {
 import { getPostBookmarkStates } from '../services/bookmarkService';
 import type { Post } from '../types/Post';
 import {
+  claimPostPublishOperation,
   deletePostPublishOperation,
   getPostPublishOperation,
-  replacePostPublishOperation,
   restorePublishOperation,
   serializePublishOperation,
   updatePostPublishOperation,
@@ -845,10 +845,51 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       post: null,
     };
 
+    let claim: Awaited<ReturnType<typeof claimPostPublishOperation>>;
     try {
-      await replacePostPublishOperation(serialize(operation));
+      claim = await claimPostPublishOperation(serialize(operation));
     } catch {
       return { status: 'rejected', reason: 'persistence_unavailable' };
+    }
+
+    if (claim.status === 'occupied') {
+      if (currentViewerID() !== publisherUserID) {
+        return { status: 'rejected', reason: 'unauthenticated' };
+      }
+      const existing = restorePublishOperation(claim.operation) as PublishOperation;
+      if (existing.phase === 'succeeded' && !existing.post) {
+        recoveryErrors.value.set(
+          publisherUserID,
+          'Couldn’t restore the pending post from this device. Publishing is paused until storage is available.',
+        );
+        return { status: 'rejected', reason: 'persistence_unavailable' };
+      }
+      if (existing.phase !== 'succeeded' && !operationMatchesCurrentSession(existing)) {
+        existing.phase = 'failed';
+        existing.failureKind = 'auth_context_changed';
+        existing.error = publishFailureMessage;
+        await persistBestEffort(existing);
+      }
+      markOperationUnresolved(existing);
+      upsertOperation(existing);
+      recoveryErrors.value.delete(publisherUserID);
+
+      if (!authStore.matchesRequestAuthBinding(authBinding)) {
+        return { status: 'rejected', reason: 'unauthenticated' };
+      }
+      if (isInFlight(existing)) {
+        return { status: 'blocked', reason: 'another_publish_in_flight' };
+      }
+      if (existing.phase === 'succeeded') {
+        return { status: 'blocked', reason: 'cleanup_pending' };
+      }
+      if (existing.failureKind === 'idempotency_conflict') {
+        return {
+          status: 'blocked',
+          reason: draftMatchesOperation(existing) ? 'idempotency_conflict' : 'unresolved_publish',
+        };
+      }
+      return { status: 'blocked', reason: 'unresolved_publish' };
     }
 
     if (!authStore.matchesRequestAuthBinding(authBinding)) {

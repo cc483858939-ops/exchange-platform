@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   authStore: { isAuthenticated: true, currentIdentity: { id: 7 } } as any,
   createPostReply: vi.fn(),
   createClientOperationID: vi.fn(),
-  replaceReplySubmissionOperation: vi.fn(),
+  claimReplySubmissionOperation: vi.fn(),
 }));
 
 const storageKey = (viewerID: number, parentPostID: number) => `${viewerID}:${parentPostID}`;
@@ -44,7 +44,7 @@ vi.mock('../storage/replyStorage', () => ({
   }),
   getReplySubmissionOperation: vi.fn(async (viewerID: number, parentPostID: number) => mocks.records.get(storageKey(viewerID, parentPostID)) ?? null),
   listReplySubmissionOperations: vi.fn(async (viewerID: number) => Array.from(mocks.records.values()).filter((item: any) => item.viewerID === viewerID)),
-  replaceReplySubmissionOperation: (...args: any[]) => mocks.replaceReplySubmissionOperation(...args),
+  claimReplySubmissionOperation: (...args: any[]) => mocks.claimReplySubmissionOperation(...args),
   updateReplySubmissionOperation: vi.fn(async (operation: any) => {
     const current = mocks.records.get(operation.key);
     if (!current || current.id !== operation.id) return false;
@@ -125,8 +125,11 @@ describe('replySubmission store', () => {
     });
     mocks.createClientOperationID.mockReset().mockReturnValue('operation-new');
     mocks.createPostReply.mockReset().mockResolvedValue(replyPost());
-    mocks.replaceReplySubmissionOperation.mockReset().mockImplementation(async (operation: any) => {
+    mocks.claimReplySubmissionOperation.mockReset().mockImplementation(async (operation: any) => {
+      const current = mocks.records.get(operation.key);
+      if (current) return { status: 'occupied', operation: current };
       mocks.records.set(operation.key, operation);
+      return { status: 'claimed' };
     });
   });
 
@@ -134,9 +137,10 @@ describe('replySubmission store', () => {
 
   it('writes the immutable operation durably before starting reply HTTP', async () => {
     const write = deferred<void>();
-    mocks.replaceReplySubmissionOperation.mockImplementationOnce(async (operation: any) => {
+    mocks.claimReplySubmissionOperation.mockImplementationOnce(async (operation: any) => {
       await write.promise;
       mocks.records.set(operation.key, operation);
+      return { status: 'claimed' };
     });
     drafts().setViewer(7);
     drafts().setDraft(42, '  hello  ');
@@ -144,7 +148,7 @@ describe('replySubmission store', () => {
     const starting = store().startOrRetry(42, '  hello  ');
     await flushPromises();
     expect(mocks.createPostReply).not.toHaveBeenCalled();
-    expect(mocks.replaceReplySubmissionOperation).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mocks.claimReplySubmissionOperation).toHaveBeenCalledWith(expect.objectContaining({
       id: 'operation-new', parentPostID: 42, content: 'hello', sourceDraftContent: null, phase: 'publishing',
     }));
 
@@ -155,12 +159,114 @@ describe('replySubmission store', () => {
       idempotencyKey: 'operation-new',
       authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7', sessionVersion: 5 }),
     }));
-    mocks.records.set('7:42', mocks.replaceReplySubmissionOperation.mock.calls[0]?.[0]);
+    mocks.records.set('7:42', mocks.claimReplySubmissionOperation.mock.calls[0]?.[0]);
     expect(mocks.records.get('7:42')).toMatchObject({ viewerSessionID: 'session-7' });
   });
 
+  it('blocks a losing same-content claim and adopts the occupied reply owner without binding or sending', async () => {
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'same reply');
+    const owner = record({ id: 'operation-owner', content: 'same reply', phase: 'publishing' });
+    mocks.claimReplySubmissionOperation.mockImplementationOnce(async () => {
+      mocks.records.set('7:42', owner);
+      return { status: 'occupied', operation: owner };
+    });
+    const submission = store();
+
+    await expect(submission.startOrRetry(42, 'same reply')).resolves.toEqual({
+      status: 'blocked', reason: 'another_reply_in_flight',
+    });
+
+    expect(submission.operations.map(operation => operation.id)).toEqual(['operation-owner']);
+    expect(submission.getOperation(7, 42)?.id).toBe('operation-owner');
+    expect(submission.getBlockReason(7, 42)).toBe('another_reply_in_flight');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+    expect(mocks.records.get('7:42')?.id).toBe('operation-owner');
+    expect(mocks.claimReplySubmissionOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.records.get('7:42')).toEqual(owner);
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
+  it('does not retry an occupied failed retryable reply in the losing action', async () => {
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'retry candidate');
+    const owner = record({
+      id: 'operation-owner',
+      content: 'previous reply',
+      phase: 'failed',
+      failureKind: 'retryable',
+      error: 'Reply failed. Retry safely.',
+    });
+    mocks.claimReplySubmissionOperation.mockImplementationOnce(async () => {
+      mocks.records.set('7:42', owner);
+      return { status: 'occupied', operation: owner };
+    });
+    const submission = store();
+
+    await expect(submission.startOrRetry(42, 'retry candidate')).resolves.toEqual({
+      status: 'blocked', reason: 'unresolved_reply',
+    });
+    expect(submission.getOperation(7, 42)?.id).toBe('operation-owner');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+    expect(mocks.claimReplySubmissionOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.records.get('7:42')).toEqual(owner);
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
+  it('reports an occupied reply idempotency conflict without creating a replacement', async () => {
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'new reply');
+    const owner = record({
+      id: 'operation-owner',
+      content: 'old reply',
+      phase: 'failed',
+      failureKind: 'idempotency_conflict',
+      error: 'This reply can’t be retried safely.',
+    });
+    mocks.claimReplySubmissionOperation.mockImplementationOnce(async () => {
+      mocks.records.set('7:42', owner);
+      return { status: 'occupied', operation: owner };
+    });
+    const submission = store();
+
+    await expect(submission.startOrRetry(42, 'new reply')).resolves.toEqual({
+      status: 'blocked', reason: 'idempotency_conflict',
+    });
+    expect(submission.getOperation(7, 42)?.id).toBe('operation-owner');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+    expect(mocks.records.get('7:42')).toEqual(owner);
+    expect(mocks.claimReplySubmissionOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
+  it('keeps an occupied succeeded reply cleanup-only for the current action', async () => {
+    drafts().setViewer(7);
+    drafts().setDraft(42, 'next reply');
+    const owner = record({
+      id: 'operation-owner',
+      phase: 'succeeded',
+      post: replyPost(),
+    });
+    mocks.claimReplySubmissionOperation.mockImplementationOnce(async () => {
+      mocks.records.set('7:42', owner);
+      return { status: 'occupied', operation: owner };
+    });
+    const submission = store();
+    const storageModule = await import('../storage/replyStorage');
+
+    await expect(submission.startOrRetry(42, 'next reply')).resolves.toEqual({
+      status: 'blocked', reason: 'cleanup_pending',
+    });
+    expect(submission.getOperation(7, 42)?.id).toBe('operation-owner');
+    expect(submission.getBlockReason(7, 42)).toBe('cleanup_pending');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+    expect(mocks.claimReplySubmissionOperation).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(storageModule.deleteReplySubmissionOperation)).not.toHaveBeenCalled();
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+  });
+
   it('fails closed when initial persistence fails', async () => {
-    mocks.replaceReplySubmissionOperation.mockRejectedValueOnce(new Error('quota'));
+    mocks.claimReplySubmissionOperation.mockRejectedValueOnce(new Error('quota'));
     drafts().setViewer(7);
     drafts().setDraft(42, 'preserved reply');
 
@@ -200,7 +306,7 @@ describe('replySubmission store', () => {
     expect(mocks.createPostReply).toHaveBeenCalledWith(42, 'hello', expect.objectContaining({
       idempotencyKey: 'operation-a', authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
     }));
-    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.claimReplySubmissionOperation).not.toHaveBeenCalled();
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
   });
 
@@ -597,7 +703,7 @@ describe('replySubmission store', () => {
     const cleanupOnly = await store().startOrRetry(42, 'first');
     expect(cleanupOnly).toEqual({ status: 'resolved_previous', operationID: 'operation-a' });
     expect(mocks.createClientOperationID).toHaveBeenCalledTimes(1);
-    expect(mocks.replaceReplySubmissionOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.claimReplySubmissionOperation).toHaveBeenCalledTimes(1);
     expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
     expect(drafts().getDraft(42)).toBe('');
     expect(drafts().getBoundOperationID(42)).toBeNull();
@@ -669,7 +775,7 @@ describe('replySubmission store', () => {
 
     expect(drafts().isSavePending(42)).toBe(true);
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
-    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.claimReplySubmissionOperation).not.toHaveBeenCalled();
     expect(mocks.createPostReply).not.toHaveBeenCalled();
 
     write.resolve();
@@ -712,7 +818,7 @@ describe('replySubmission store', () => {
     expect(await starting).toEqual({ status: 'resolved_previous', operationID: 'operation-a' });
     expect(mocks.drafts.get('7:42')?.content).toBe('new saved content');
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
-    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.claimReplySubmissionOperation).not.toHaveBeenCalled();
     expect(mocks.createPostReply).not.toHaveBeenCalled();
   });
 
@@ -728,7 +834,7 @@ describe('replySubmission store', () => {
     await flushPromises();
 
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
-    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.claimReplySubmissionOperation).not.toHaveBeenCalled();
     expect(mocks.createPostReply).not.toHaveBeenCalled();
 
     write.reject(new Error('quota'));
@@ -752,7 +858,7 @@ describe('replySubmission store', () => {
     await saving;
     expect(await starting).toEqual({ status: 'rejected', reason: 'editor_changed' });
     expect(mocks.createClientOperationID).not.toHaveBeenCalled();
-    expect(mocks.replaceReplySubmissionOperation).not.toHaveBeenCalled();
+    expect(mocks.claimReplySubmissionOperation).not.toHaveBeenCalled();
     expect(mocks.createPostReply).not.toHaveBeenCalled();
     expect(drafts().getDraft(42)).toBe('newer editor content');
   });

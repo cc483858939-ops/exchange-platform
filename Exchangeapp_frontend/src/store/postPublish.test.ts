@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   listPostDrafts: vi.fn(),
   savePostDraft: vi.fn(),
   getPostPublishOperation: vi.fn(),
-  replacePostPublishOperation: vi.fn(),
+  claimPostPublishOperation: vi.fn(),
   updatePostPublishOperation: vi.fn(),
   deletePostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
@@ -74,7 +74,7 @@ vi.mock('../storage/postDraftRepository', () => ({
 
 vi.mock('../storage/postPublishRepository', () => ({
   getPostPublishOperation: mocks.getPostPublishOperation,
-  replacePostPublishOperation: mocks.replacePostPublishOperation,
+  claimPostPublishOperation: mocks.claimPostPublishOperation,
   updatePostPublishOperation: mocks.updatePostPublishOperation,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
@@ -115,18 +115,25 @@ const publishedPost = (authorID = 7) => ({
 
 const file = (name: string) => new File(['image'], name, { type: 'image/png' });
 
-const persistedFailedOperation = (overrides: Record<string, any> = {}) => mocks.serializePublishOperation({
+const persistedPublishOperation = (overrides: Record<string, any> = {}) => mocks.serializePublishOperation({
   id: operationUUID(901),
   publisherUserID: 7,
   sourceDraftID: null,
   sourceDraftSnapshot: null,
   content: 'Recovered post',
   media: [],
+  phase: 'publishing',
+  failureKind: null,
+  error: '',
+  startedAt: 901,
+  post: null,
+  ...overrides,
+});
+
+const persistedFailedOperation = (overrides: Record<string, any> = {}) => persistedPublishOperation({
   phase: 'failed',
   failureKind: 'retryable',
   error: 'Couldn’t confirm this post. Retry safely.',
-  startedAt: 901,
-  post: null,
   ...overrides,
 });
 
@@ -242,8 +249,11 @@ describe('postPublish store', () => {
     mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => (
       mocks.publishRecords.get(viewerID) || null
     ));
-    mocks.replacePostPublishOperation.mockImplementation(async (record: any) => {
+    mocks.claimPostPublishOperation.mockImplementation(async (record: any) => {
+      const current = mocks.publishRecords.get(record.publisherUserID);
+      if (current) return { status: 'occupied', operation: current };
       mocks.publishRecords.set(record.publisherUserID, record);
+      return { status: 'claimed' };
     });
     mocks.updatePostPublishOperation.mockImplementation(async (record: any) => {
       const current = mocks.publishRecords.get(record.publisherUserID);
@@ -814,7 +824,7 @@ describe('postPublish store', () => {
 
     expect(secondResult).toEqual({ status: 'blocked', reason: 'unresolved_publish' });
     expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
-    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
     expect(mocks.publishRecords.get(7)?.id).toBe(first.id);
     expect(first.phase).toBe('failed');
@@ -1045,7 +1055,7 @@ describe('postPublish store', () => {
   });
 
   it('does not start uploads or publishing when the initial durable write fails', async () => {
-    mocks.replacePostPublishOperation.mockRejectedValueOnce(new Error('quota exceeded'));
+    mocks.claimPostPublishOperation.mockRejectedValueOnce(new Error('quota exceeded'));
     const draft = usePostDraftStore();
     draft.setContent('Preserve me');
     draft.addMedia(file('unpublished.png'));
@@ -1054,6 +1064,146 @@ describe('postPublish store', () => {
 
     expect(result).toEqual({ status: 'rejected', reason: 'persistence_unavailable' });
     expect(draft.content).toBe('Preserve me');
+    expect(draft.publishOperationID).toBeNull();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('blocks a losing claim, adopts only the existing owner, and never binds or sends its candidate', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Losing tab candidate');
+    draft.addMedia(file('loser.png'));
+    const store = usePostPublishStore();
+    const owner = persistedPublishOperation({
+      id: operationUUID(920),
+      content: 'Other tab operation',
+      phase: 'publishing',
+      failureKind: null,
+      error: '',
+    });
+    mocks.claimPostPublishOperation.mockImplementationOnce(async () => {
+      mocks.publishRecords.set(7, owner);
+      return { status: 'occupied', operation: owner };
+    });
+
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'blocked', reason: 'another_publish_in_flight',
+    });
+
+    expect(store.latestOperation?.id).toBe(owner.id);
+    expect(store.operations.map(operation => operation.id)).toEqual([owner.id]);
+    expect(store.getDraftPublishBlockReason(7)).toBe('another_publish_in_flight');
+    expect(draft.publishOperationID).toBeNull();
+    expect(mocks.publishRecords.get(7)?.id).toBe(owner.id);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(mocks.updatePostPublishOperation).not.toHaveBeenCalled();
+  });
+
+  it('does not retry an occupied failed retryable publish during the losing action', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('A different candidate');
+    const store = usePostPublishStore();
+    const owner = persistedFailedOperation({
+      id: operationUUID(921),
+      content: 'Previous tab candidate',
+      phase: 'failed',
+      failureKind: 'retryable',
+      error: 'Couldn’t confirm this post. Retry safely.',
+    });
+    mocks.claimPostPublishOperation.mockImplementationOnce(async () => {
+      mocks.publishRecords.set(7, owner);
+      return { status: 'occupied', operation: owner };
+    });
+
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'blocked', reason: 'unresolved_publish',
+    });
+    expect(store.latestOperation?.id).toBe(owner.id);
+    expect(draft.publishOperationID).toBeNull();
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.updatePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('keeps a succeeded occupied owner cleanup-only for the current action', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Next post draft');
+    const store = usePostPublishStore();
+    const owner = persistedPublishOperation({
+      id: operationUUID(922),
+      phase: 'succeeded',
+      failureKind: null,
+      error: '',
+      post: publishedPost(),
+    });
+    mocks.claimPostPublishOperation.mockImplementationOnce(async () => {
+      mocks.publishRecords.set(7, owner);
+      return { status: 'occupied', operation: owner };
+    });
+
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'blocked', reason: 'cleanup_pending',
+    });
+    expect(store.latestOperation?.id).toBe(owner.id);
+    expect(store.getDraftPublishBlockReason(7)).toBe('cleanup_pending');
+    expect(draft.publishOperationID).toBeNull();
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.deletePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('returns idempotency conflict only when the occupied failed owner matches the saved draft', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Saved exact post');
+    const sourceDraftID = await draft.saveCurrentDraft();
+    const store = usePostPublishStore();
+    const owner = persistedFailedOperation({
+      id: operationUUID(923),
+      sourceDraftID,
+      sourceDraftSnapshot: draft.savedSnapshot,
+      content: 'Saved exact post',
+      phase: 'failed',
+      failureKind: 'idempotency_conflict',
+      error: 'This post can’t be retried safely.',
+    });
+    mocks.claimPostPublishOperation.mockImplementationOnce(async () => {
+      mocks.publishRecords.set(7, owner);
+      return { status: 'occupied', operation: owner };
+    });
+
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'blocked', reason: 'idempotency_conflict',
+    });
+    expect(store.latestOperation?.id).toBe(owner.id);
+    expect(draft.publishOperationID).toBeNull();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('keeps an occupied idempotency conflict unresolved when the current draft does not match', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Different current draft');
+    const store = usePostPublishStore();
+    const owner = persistedFailedOperation({
+      id: operationUUID(924),
+      content: 'Old conflicting post',
+      phase: 'failed',
+      failureKind: 'idempotency_conflict',
+      error: 'This post can’t be retried safely.',
+    });
+    mocks.claimPostPublishOperation.mockImplementationOnce(async () => {
+      mocks.publishRecords.set(7, owner);
+      return { status: 'occupied', operation: owner };
+    });
+
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'blocked', reason: 'unresolved_publish',
+    });
+    expect(store.latestOperation?.id).toBe(owner.id);
     expect(draft.publishOperationID).toBeNull();
     expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
@@ -1155,7 +1305,7 @@ describe('postPublish store', () => {
 
     expect(result).toEqual({ status: 'rejected', reason: 'persistence_unavailable' });
     expect(store.recoveryError).toContain('Couldn’t restore the pending post');
-    expect(mocks.replacePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
   });
 
@@ -1323,7 +1473,7 @@ describe('postPublish store', () => {
     if (result.status !== 'accepted') throw new Error('recovered operation was not retried');
     expect(result.operation.id).toBe(operationID);
     expect(mocks.randomUUID).not.toHaveBeenCalled();
-    expect(mocks.replacePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
     expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.createPost).toHaveBeenCalledWith({
       content: 'Saved exact content',
@@ -1399,7 +1549,7 @@ describe('postPublish store', () => {
 
     expect(result).toEqual({ status: 'blocked', reason: 'unresolved_publish' });
     expect(mocks.randomUUID).not.toHaveBeenCalled();
-    expect(mocks.replacePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
     expect(mocks.publishRecords.get(7)?.id).toBe(operationUUID(903));
   });
@@ -1481,7 +1631,7 @@ describe('postPublish store', () => {
         reason: 'unresolved_publish',
       });
       expect(mocks.randomUUID).not.toHaveBeenCalled();
-      expect(mocks.replacePostPublishOperation).not.toHaveBeenCalled();
+      expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
       expect(mocks.createPost).not.toHaveBeenCalled();
     },
   );
@@ -1519,7 +1669,7 @@ describe('postPublish store', () => {
       reason: 'unresolved_publish',
     });
     expect(mocks.randomUUID).not.toHaveBeenCalled();
-    expect(mocks.replacePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
   });
 
@@ -1589,7 +1739,7 @@ describe('postPublish store', () => {
       reason: 'unresolved_publish',
     });
     expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
-    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
   });
 
@@ -1623,7 +1773,7 @@ describe('postPublish store', () => {
     });
     expect(store.getDraftPublishBlockReason(7)).toBe('cleanup_pending');
     expect(mocks.randomUUID).toHaveBeenCalledTimes(uuidCalls);
-    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
     expect(mocks.publishRecords.get(7)?.id).toBe(result.operation.id);
     expect(result.operation.phase).toBe('succeeded');
@@ -1649,7 +1799,7 @@ describe('postPublish store', () => {
 
     draft.setContent('Next post');
     const uuidCallsBeforeRetry = mocks.randomUUID.mock.calls.length;
-    const replaceCallsBeforeRetry = mocks.replacePostPublishOperation.mock.calls.length;
+    const replaceCallsBeforeRetry = mocks.claimPostPublishOperation.mock.calls.length;
     const second = await store.startOrRetryDraft();
     expect(second.status).toBe('accepted');
     if (second.status !== 'accepted') throw new Error('next publish was not accepted');
@@ -1660,7 +1810,7 @@ describe('postPublish store', () => {
     expect(mocks.sourceDraftRecords.has(sourceDraftID)).toBe(false);
     expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, first.operation.id);
     expect(mocks.randomUUID).toHaveBeenCalledTimes(uuidCallsBeforeRetry + 1);
-    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(replaceCallsBeforeRetry + 1);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(replaceCallsBeforeRetry + 1);
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
     expect(mocks.createPost).toHaveBeenLastCalledWith(
       { content: 'Next post', media: [] },
@@ -1670,8 +1820,8 @@ describe('postPublish store', () => {
       }),
     );
     expect(mocks.deletePostPublishOperation.mock.invocationCallOrder[0])
-      .toBeLessThan(mocks.replacePostPublishOperation.mock.invocationCallOrder[1]!);
-    expect(mocks.replacePostPublishOperation.mock.invocationCallOrder[1])
+      .toBeLessThan(mocks.claimPostPublishOperation.mock.invocationCallOrder[1]!);
+    expect(mocks.claimPostPublishOperation.mock.invocationCallOrder[1])
       .toBeLessThan(mocks.createPost.mock.invocationCallOrder[1]!);
 
     retryPostRequest.resolve(publishedPost());
@@ -1766,7 +1916,7 @@ describe('postPublish store', () => {
     expect(store.currentSuccessNotice).toBeNull();
     expect(mocks.publishRecords.get(7)?.id).toBe(operationID);
     expect(mocks.randomUUID).not.toHaveBeenCalled();
-    expect(mocks.replacePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
   });
 
@@ -1795,7 +1945,7 @@ describe('postPublish store', () => {
     expect(result.operation.content).toBe('Next post');
     expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, previousID);
     expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
-    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
     expect(mocks.publishRecords.get(7)?.id).toBe(result.operation.id);
     expect(mocks.createPost).toHaveBeenCalledWith(
       { content: 'Next post', media: [] },
@@ -1836,7 +1986,7 @@ describe('postPublish store', () => {
       reason: 'unresolved_publish',
     });
     expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
-    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
   });
 
@@ -1916,9 +2066,10 @@ describe('postPublish store', () => {
 
   it('does not start the first media request if the session changes during the durable write', async () => {
     const write = deferred<void>();
-    mocks.replacePostPublishOperation.mockImplementationOnce(async (record: any) => {
+    mocks.claimPostPublishOperation.mockImplementationOnce(async (record: any) => {
       await write.promise;
       mocks.publishRecords.set(record.publisherUserID, record);
+      return { status: 'claimed' };
     });
     const draft = usePostDraftStore();
     draft.setContent('Alice draft');

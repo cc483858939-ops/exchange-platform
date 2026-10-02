@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   syncHydratedPostBookmarkState: vi.fn(),
   publishRecords: new Map<number, any>(),
   getPostPublishOperation: vi.fn(),
-  replacePostPublishOperation: vi.fn(),
+  claimPostPublishOperation: vi.fn(),
   updatePostPublishOperation: vi.fn(),
   deletePostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
@@ -105,7 +105,7 @@ vi.mock('../store/sessionSync', () => ({
 
 vi.mock('../storage/postPublishRepository', () => ({
   getPostPublishOperation: mocks.getPostPublishOperation,
-  replacePostPublishOperation: mocks.replacePostPublishOperation,
+  claimPostPublishOperation: mocks.claimPostPublishOperation,
   updatePostPublishOperation: mocks.updatePostPublishOperation,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
@@ -223,8 +223,11 @@ describe('PostCreateView identity and text publishing', () => {
     mocks.router.replace.mockResolvedValue(undefined);
     mocks.publishRecords.clear();
     mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => mocks.publishRecords.get(viewerID) || null);
-    mocks.replacePostPublishOperation.mockImplementation(async (record: any) => {
+    mocks.claimPostPublishOperation.mockImplementation(async (record: any) => {
+      const current = mocks.publishRecords.get(record.publisherUserID);
+      if (current) return { status: 'occupied', operation: current };
       mocks.publishRecords.set(record.publisherUserID, record);
+      return { status: 'claimed' };
     });
     mocks.updatePostPublishOperation.mockImplementation(async (record: any) => {
       if (mocks.publishRecords.get(record.publisherUserID)?.id !== record.id) return false;
@@ -622,7 +625,7 @@ describe('PostCreateView identity and text publishing', () => {
     expect(wrapper.get('.composer-validation-error').text())
       .toContain('Retry or discard the previous attempt first.');
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
-    expect(mocks.replacePostPublishOperation).toHaveBeenCalledTimes(1);
+    expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
   });
 
   it('does not render the composer while logged out', () => {

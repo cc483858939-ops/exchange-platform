@@ -35,7 +35,7 @@ const mocks = vi.hoisted(() => ({
   syncHydratedPostBookmarkState: vi.fn(),
   publishOperations: new Map<number, any>(),
   getPostPublishOperation: vi.fn(),
-  replacePostPublishOperation: vi.fn(),
+  claimPostPublishOperation: vi.fn(),
   updatePostPublishOperation: vi.fn(),
   deletePostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
@@ -101,7 +101,7 @@ vi.mock('../storage/postDraftRepository', () => ({
 }));
 vi.mock('../storage/postPublishRepository', () => ({
   getPostPublishOperation: mocks.getPostPublishOperation,
-  replacePostPublishOperation: mocks.replacePostPublishOperation,
+  claimPostPublishOperation: mocks.claimPostPublishOperation,
   updatePostPublishOperation: mocks.updatePostPublishOperation,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
@@ -242,8 +242,11 @@ describe('PostCreateView durable drafts and exit protection', () => {
     mocks.getPostPublishOperation.mockReset().mockImplementation(async (viewerID: number) => (
       mocks.publishOperations.get(viewerID) || null
     ));
-    mocks.replacePostPublishOperation.mockReset().mockImplementation(async (record: any) => {
+    mocks.claimPostPublishOperation.mockReset().mockImplementation(async (record: any) => {
+      const current = mocks.publishOperations.get(record.publisherUserID);
+      if (current) return { status: 'occupied', operation: current };
       mocks.publishOperations.set(record.publisherUserID, record);
+      return { status: 'claimed' };
     });
     mocks.updatePostPublishOperation.mockReset().mockImplementation(async (record: any) => {
       if (mocks.publishOperations.get(record.publisherUserID)?.id !== record.id) return false;

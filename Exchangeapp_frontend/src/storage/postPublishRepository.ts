@@ -63,6 +63,10 @@ export type PersistedPostPublishOperation = {
   post: Post | null;
 };
 
+export type PostPublishClaimResult =
+  | { status: 'claimed' }
+  | { status: 'occupied'; operation: PersistedPostPublishOperation };
+
 const DATABASE_NAME = 'exchangeapp-publish-operations';
 const DATABASE_VERSION = 1;
 const OBJECT_STORE_NAME = 'post_publish_operations';
@@ -295,12 +299,21 @@ export const getPostPublishOperation = async (
   });
 };
 
-export const replacePostPublishOperation = async (
+export const claimPostPublishOperation = async (
   operation: PersistedPostPublishOperation,
-): Promise<void> => {
+): Promise<PostPublishClaimResult> => {
   const record = validateRecord(operation);
-  await withStore('readwrite', async store => {
+  return withStore('readwrite', async store => {
+    const value = await requestResult(store.get(record.publisherUserID));
+    if (value !== undefined) {
+      const current = validateRecord(value);
+      if (current.publisherUserID !== record.publisherUserID) {
+        throw new Error('The saved publish operation belongs to another viewer.');
+      }
+      return { status: 'occupied', operation: current };
+    }
     await requestResult(store.put(record));
+    return { status: 'claimed' };
   });
 };
 

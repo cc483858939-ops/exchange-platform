@@ -2,9 +2,9 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  claimPostPublishOperation,
   deletePostPublishOperation,
   getPostPublishOperation,
-  replacePostPublishOperation,
   restorePublishOperation,
   serializePublishOperation,
   updatePostPublishOperation,
@@ -29,13 +29,18 @@ class TestTransaction {
   error: DOMException | null = null;
   private pending = 0;
   private completionQueued = false;
+  private released = false;
 
-  constructor(private readonly records: Map<number, PersistedPostPublishOperation>) {}
+  constructor(
+    private readonly records: Map<number, PersistedPostPublishOperation>,
+    private readonly ready: Promise<void>,
+    private readonly releaseReadwrite: () => void,
+  ) {}
 
   request<T>(action: () => T) {
     const request = requestFor<T>();
     this.pending += 1;
-    setTimeout(() => {
+    void this.ready.then(() => new Promise<void>(resolve => setTimeout(resolve, 0))).then(() => {
       try {
         request.result = action();
         request.onsuccess?.(new Event('success'));
@@ -48,8 +53,15 @@ class TestTransaction {
         this.pending -= 1;
         this.scheduleCompletion();
       }
-    }, 0);
+    });
     return request;
+  }
+
+  abort() {
+    setTimeout(() => {
+      this.onabort?.(new Event('abort'));
+      this.release();
+    }, 0);
   }
 
   objectStore(_name: string) {
@@ -61,8 +73,17 @@ class TestTransaction {
     this.completionQueued = true;
     setTimeout(() => {
       this.completionQueued = false;
-      if (this.pending === 0) this.oncomplete?.(new Event('complete'));
+      if (this.pending === 0) {
+        this.oncomplete?.(new Event('complete'));
+        this.release();
+      }
     }, 0);
+  }
+
+  private release() {
+    if (this.released) return;
+    this.released = true;
+    this.releaseReadwrite();
   }
 }
 
@@ -100,6 +121,7 @@ class TestDatabase {
   readonly records = new Map<number, PersistedPostPublishOperation>();
   readonly stores = new Set<string>();
   readonly objectStoreNames = { contains: (name: string) => this.stores.has(name) };
+  private readonly readwriteTails = new Map<string, Promise<void>>();
   onversionchange: (() => void) | null = null;
 
   constructor(readonly name: string) {}
@@ -109,8 +131,18 @@ class TestDatabase {
     return new TestObjectStore(this.records);
   }
 
-  transaction(_name: string, _mode: IDBTransactionMode) {
-    return new TestTransaction(this.records);
+  transaction(name: string, mode: IDBTransactionMode) {
+    if (mode !== 'readwrite') {
+      return new TestTransaction(this.records, Promise.resolve(), () => undefined);
+    }
+    const previous = this.readwriteTails.get(name) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    this.readwriteTails.set(name, current);
+    return new TestTransaction(this.records, previous, () => {
+      release();
+      if (this.readwriteTails.get(name) === current) this.readwriteTails.delete(name);
+    });
   }
 
   close() {}
@@ -199,7 +231,7 @@ describe('postPublishRepository', () => {
     vi.unstubAllGlobals();
   });
 
-  it('round-trips media and keeps replace, update, and delete scoped to the current operation', async () => {
+  it('round-trips media and keeps claim, update, and delete scoped to the current operation', async () => {
     const original = makeOperation('operation-a', 7);
     const persisted = serializePublishOperation({
       ...original,
@@ -211,8 +243,9 @@ describe('postPublishRepository', () => {
     expect(persisted).not.toHaveProperty('sessionVersion');
     expect(persisted).not.toHaveProperty('authBinding');
     expect(persisted).not.toHaveProperty('accessToken');
-    await replacePostPublishOperation(persisted);
-    await replacePostPublishOperation(serializePublishOperation(makeOperation('operation-b', 8), 457));
+    await expect(claimPostPublishOperation(persisted)).resolves.toEqual({ status: 'claimed' });
+    await expect(claimPostPublishOperation(serializePublishOperation(makeOperation('operation-b', 8), 457)))
+      .resolves.toEqual({ status: 'claimed' });
 
     const restoredRecord = await getPostPublishOperation(7);
     expect(restoredRecord).toMatchObject({
@@ -261,9 +294,57 @@ describe('postPublishRepository', () => {
     expect(await getPostPublishOperation(8)).toMatchObject({ id: 'operation-b' });
   });
 
+  it('returns the validated durable owner without replacing it when a slot is occupied', async () => {
+    const owner = serializePublishOperation(makeOperation('owner-a', 71), 456);
+    const candidate = serializePublishOperation(makeOperation('candidate-b', 71), 789);
+
+    await expect(claimPostPublishOperation(owner)).resolves.toEqual({ status: 'claimed' });
+    await expect(claimPostPublishOperation(candidate)).resolves.toEqual({
+      status: 'occupied',
+      operation: owner,
+    });
+    await expect(getPostPublishOperation(71)).resolves.toEqual(owner);
+  });
+
+  it('serializes concurrent same-slot claims and allows independent viewer slots', async () => {
+    const [claimA, claimB] = await Promise.all([
+      claimPostPublishOperation(serializePublishOperation(makeOperation('candidate-a', 72), 456)),
+      claimPostPublishOperation(serializePublishOperation(makeOperation('candidate-b', 72), 789)),
+    ]);
+    const results = [claimA, claimB];
+    const winner = results.find(result => result.status === 'claimed');
+    const loser = results.find(result => result.status === 'occupied');
+
+    expect(results.filter(result => result.status === 'claimed')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'occupied')).toHaveLength(1);
+    expect(winner).toBeDefined();
+    expect(loser).toBeDefined();
+    if (winner?.status !== 'claimed' || loser?.status !== 'occupied') {
+      throw new Error('same-slot claims did not produce one winner and one loser');
+    }
+    expect(loser.operation.id).toBe(winner === claimA ? 'candidate-a' : 'candidate-b');
+    await expect(getPostPublishOperation(72)).resolves.toMatchObject({ id: loser.operation.id });
+
+    const independent = await Promise.all([
+      claimPostPublishOperation(serializePublishOperation(makeOperation('viewer-73', 73), 1)),
+      claimPostPublishOperation(serializePublishOperation(makeOperation('viewer-74', 74), 1)),
+    ]);
+    expect(independent).toEqual([{ status: 'claimed' }, { status: 'claimed' }]);
+  });
+
+  it('fails closed on a corrupted occupied record without replacing it', async () => {
+    const valid = serializePublishOperation(makeOperation('corrupted-owner', 75));
+    const corrupted = { ...valid, phase: 'failed', failureKind: null } as unknown as PersistedPostPublishOperation;
+    factory.database!.records.set(75, corrupted);
+
+    await expect(claimPostPublishOperation(serializePublishOperation(makeOperation('candidate', 75))))
+      .rejects.toThrow('saved publish operation is invalid');
+    expect(factory.database!.records.get(75)).toBe(corrupted);
+  });
+
   it('normalizes a legacy operation without a source snapshot to preservation-only state', async () => {
     const original = serializePublishOperation(makeOperation('legacy-operation', 7), 456);
-    await replacePostPublishOperation(original);
+    await expect(claimPostPublishOperation(original)).resolves.toEqual({ status: 'claimed' });
     const legacyRecord = { ...original } as unknown as Record<string, unknown>;
     delete legacyRecord.schemaVersion;
     delete legacyRecord.sourceDraftSnapshot;
@@ -361,7 +442,7 @@ describe('postPublishRepository', () => {
 
     for (const [index, shape] of invalidShapes.entries()) {
       const persisted = serializePublishOperation(makeOperation(`invalid-shape-${index}`, 7));
-      await expect(replacePostPublishOperation({ ...persisted, ...shape }))
+      await expect(claimPostPublishOperation({ ...persisted, ...shape }))
         .rejects.toThrow('saved publish operation is invalid');
     }
 
@@ -378,10 +459,11 @@ describe('postPublishRepository', () => {
     ];
 
     for (const [index, shape] of validShapes.entries()) {
-      const persisted = serializePublishOperation(makeOperation(`valid-shape-${index}`, 7));
+      const viewerID = 20 + index;
+      const persisted = serializePublishOperation(makeOperation(`valid-shape-${index}`, viewerID));
       const record = { ...persisted, ...shape };
-      await replacePostPublishOperation(record);
-      await expect(getPostPublishOperation(7)).resolves.toMatchObject(shape);
+      await expect(claimPostPublishOperation(record)).resolves.toEqual({ status: 'claimed' });
+      await expect(getPostPublishOperation(viewerID)).resolves.toMatchObject(shape);
     }
   });
 });

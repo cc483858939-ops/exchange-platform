@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   syncHydratedPostBookmarkState: vi.fn(),
   publishRecords: new Map<number, any>(),
   getPostPublishOperation: vi.fn(),
-  replacePostPublishOperation: vi.fn(),
+  claimPostPublishOperation: vi.fn(),
   updatePostPublishOperation: vi.fn(),
   deletePostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
@@ -107,7 +107,7 @@ vi.mock('../store/sessionSync', () => ({
 
 vi.mock('../storage/postPublishRepository', () => ({
   getPostPublishOperation: mocks.getPostPublishOperation,
-  replacePostPublishOperation: mocks.replacePostPublishOperation,
+  claimPostPublishOperation: mocks.claimPostPublishOperation,
   updatePostPublishOperation: mocks.updatePostPublishOperation,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
@@ -210,8 +210,11 @@ describe('PostCreateView media picker and retry behavior', () => {
     mocks.router.replace.mockResolvedValue(undefined);
     mocks.publishRecords.clear();
     mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => mocks.publishRecords.get(viewerID) || null);
-    mocks.replacePostPublishOperation.mockImplementation(async (record: any) => {
+    mocks.claimPostPublishOperation.mockImplementation(async (record: any) => {
+      const current = mocks.publishRecords.get(record.publisherUserID);
+      if (current) return { status: 'occupied', operation: current };
       mocks.publishRecords.set(record.publisherUserID, record);
+      return { status: 'claimed' };
     });
     mocks.updatePostPublishOperation.mockImplementation(async (record: any) => {
       if (mocks.publishRecords.get(record.publisherUserID)?.id !== record.id) return false;
@@ -854,7 +857,7 @@ describe('PostCreateView media picker and retry behavior', () => {
   it('fails closed when the durable operation cannot be prepared', async () => {
     wrapper = mountPage();
     await wrapper.get('#post-content').setValue('Keep this draft');
-    mocks.replacePostPublishOperation.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
+    mocks.claimPostPublishOperation.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
 
     await wrapper.get('form').trigger('submit');
     await flushPromises();
@@ -869,9 +872,9 @@ describe('PostCreateView media picker and retry behavior', () => {
   });
 
   it('locks the composer during durable preflight and only suppresses unload after acceptance', async () => {
-    const persistence = deferred<void>();
+    const persistence = deferred<{ status: 'claimed' }>();
     const postRequest = deferred<ReturnType<typeof publishedPost>>();
-    mocks.replacePostPublishOperation.mockReturnValueOnce(persistence.promise);
+    mocks.claimPostPublishOperation.mockReturnValueOnce(persistence.promise);
     mocks.createPost.mockReturnValue(postRequest.promise);
     wrapper = mountPage();
     await wrapper.get('#post-content').setValue('Reliable send');
@@ -888,7 +891,7 @@ describe('PostCreateView media picker and retry behavior', () => {
     window.dispatchEvent(beforeDurability);
     expect(beforeDurability.defaultPrevented).toBe(true);
 
-    persistence.resolve();
+    persistence.resolve({ status: 'claimed' });
     await flushPromises();
     expect(usePostDraftStore().publishOperationID).not.toBeNull();
     const afterDurability = new Event('beforeunload', { cancelable: true });

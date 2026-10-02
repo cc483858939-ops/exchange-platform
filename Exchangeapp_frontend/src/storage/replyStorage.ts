@@ -34,6 +34,10 @@ export type PersistedReplySubmissionOperation = {
   post: Post | null;
 };
 
+export type ReplySubmissionClaimResult =
+  | { status: 'claimed' }
+  | { status: 'occupied'; operation: PersistedReplySubmissionOperation };
+
 const DATABASE_NAME = 'exchangeapp-replies';
 const DATABASE_VERSION = 1;
 const DRAFT_STORE = 'reply_drafts';
@@ -244,12 +248,21 @@ export const listReplySubmissionOperations = async (viewerID: number) => {
   });
 };
 
-export const replaceReplySubmissionOperation = async (
+export const claimReplySubmissionOperation = async (
   operation: PersistedReplySubmissionOperation,
-): Promise<void> => {
+): Promise<ReplySubmissionClaimResult> => {
   const normalized = validateOperation(operation);
-  await withStore(OPERATION_STORE, 'readwrite', async store => {
+  return withStore(OPERATION_STORE, 'readwrite', async store => {
+    const value = await requestResult(store.get(normalized.key));
+    if (value !== undefined) {
+      const current = validateOperation(value);
+      if (!validOwner(current, normalized.viewerID, normalized.parentPostID)) {
+        throw new Error('The saved reply operation belongs to another owner.');
+      }
+      return { status: 'occupied', operation: current };
+    }
     await requestResult(store.put(normalized));
+    return { status: 'claimed' };
   });
 };
 
