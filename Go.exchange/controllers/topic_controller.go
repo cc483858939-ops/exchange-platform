@@ -1,16 +1,12 @@
 package controllers
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"Go.exchange/config"
@@ -18,6 +14,7 @@ import (
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
@@ -41,14 +38,10 @@ type topicPostsResponse struct {
 	NextCursor *string              `json:"next_cursor"`
 }
 
-type topicPostCursor struct {
-	CreatedAt time.Time `json:"created_at"`
-	PostID    uint      `json:"post_id"`
-}
-
 type topicPostQueryRow struct {
-	ID        uint      `gorm:"column:id"`
-	CreatedAt time.Time `gorm:"column:created_at"`
+	ID         uint  `gorm:"column:id"`
+	ShuffleKey int64 `gorm:"column:shuffle_key"`
+	Bucket     int64 `gorm:"-"`
 }
 
 var loadTopicConfiguration = config.LoadCuratedTopics
@@ -80,7 +73,7 @@ func GetTopicPosts(ctx *gin.Context) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "topic not found"})
 		return
 	}
-	limit, cursor, err := parseTopicPostPageQuery(ctx)
+	limit, cursor, err := parseTopicPostPageQuery(ctx, topic)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -117,7 +110,7 @@ func enabledTopicBySlug(catalog config.CuratedTopicsConfig, slug string) (config
 	return config.CuratedTopic{}, false
 }
 
-func parseTopicPostPageQuery(ctx *gin.Context) (int, *topicPostCursor, error) {
+func parseTopicPostPageQuery(ctx *gin.Context, topic config.CuratedTopic) (int, *topicPostCursorV2, error) {
 	limit := defaultTopicPostLimit
 	if raw, exists := ctx.GetQuery("limit"); exists {
 		parsed, err := strconv.Atoi(raw)
@@ -130,47 +123,20 @@ func parseTopicPostPageQuery(ctx *gin.Context) (int, *topicPostCursor, error) {
 		limit = maxTopicPostLimit
 	}
 	if raw, exists := ctx.GetQuery("cursor"); exists {
-		cursor, err := decodeTopicPostCursor(raw)
+		topicHash, err := topicCursorCriteriaHash(topic)
 		if err != nil {
 			return 0, nil, err
+		}
+		cursor, err := decodeTopicPostCursor(raw, topicHash)
+		if err != nil {
+			return 0, nil, errInvalidTopicCursor
 		}
 		return limit, &cursor, nil
 	}
 	return limit, nil, nil
 }
 
-func encodeTopicPostCursor(cursor topicPostCursor) (string, error) {
-	if cursor.CreatedAt.IsZero() || cursor.PostID == 0 {
-		return "", errors.New("invalid cursor")
-	}
-	payload, err := json.Marshal(cursor)
-	if err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(payload), nil
-}
-
-func decodeTopicPostCursor(raw string) (topicPostCursor, error) {
-	if strings.TrimSpace(raw) == "" {
-		return topicPostCursor{}, errors.New("invalid cursor")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return topicPostCursor{}, errors.New("invalid cursor")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var cursor topicPostCursor
-	if err := decoder.Decode(&cursor); err != nil || cursor.CreatedAt.IsZero() || cursor.PostID == 0 {
-		return topicPostCursor{}, errors.New("invalid cursor")
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return topicPostCursor{}, errors.New("invalid cursor")
-	}
-	return cursor, nil
-}
-
-func loadTopicPostsPageFromDB(ctx context.Context, topic config.CuratedTopic, limit int, cursor *topicPostCursor) (postPageResponse, error) {
+func loadTopicPostsPageFromDB(ctx context.Context, topic config.CuratedTopic, limit int, cursor *topicPostCursorV2) (postPageResponse, error) {
 	db := global.APIDb
 	if db == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
@@ -178,45 +144,34 @@ func loadTopicPostsPageFromDB(ctx context.Context, topic config.CuratedTopic, li
 	if limit <= 0 {
 		return postPageResponse{}, errors.New("invalid limit")
 	}
+	traversal, err := resolveTopicTraversal(topic, cursor)
+	if err != nil {
+		return postPageResponse{}, err
+	}
+	return loadTopicPostsPageWithTraversal(ctx, db, topic, limit, traversal)
+}
+
+func loadTopicPostsPageWithTraversal(ctx context.Context, db *gorm.DB, topic config.CuratedTopic, limit int, traversal topicTraversal) (postPageResponse, error) {
+	if db == nil {
+		return postPageResponse{}, errors.New("database is not initialized")
+	}
+	if limit <= 0 {
+		return postPageResponse{}, errors.New("invalid limit")
+	}
 	db = db.WithContext(ctx)
+	page := postPageResponse{Items: make([]postResponse, 0)}
 	if len(topic.SourceKeys) == 0 {
-		return postPageResponse{Items: make([]postResponse, 0)}, nil
+		return page, nil
 	}
 
-	query := `
-SELECT posts.id, posts.created_at
-FROM devdata_mirror_posts AS mirror_posts
-JOIN devdata_mirror_accounts AS mirror_accounts
-  ON mirror_accounts.id = mirror_posts.mirror_account_id
-JOIN posts
-  ON posts.id = mirror_posts.local_post_id
-WHERE mirror_accounts.registry_key IN ?
-  AND mirror_accounts.enabled = TRUE
-  AND mirror_posts.state = ?
-  AND ` + publicPostEligibilitySQL("posts") + `
-`
-	args := []interface{}{topic.SourceKeys, models.DevDataMirrorPostStateActive}
-	if cursor != nil {
-		if cursor.CreatedAt.IsZero() || cursor.PostID == 0 {
-			return postPageResponse{}, errors.New("invalid cursor")
-		}
-		query += `
-  AND (posts.created_at < ? OR (posts.created_at = ? AND posts.id < ?))
-`
-		args = append(args, cursor.CreatedAt, cursor.CreatedAt, cursor.PostID)
-	}
-	query += `ORDER BY posts.created_at DESC, posts.id DESC LIMIT ?`
-	args = append(args, limit+1)
-
-	var rows []topicPostQueryRow
-	if err := db.Raw(query, args...).Scan(&rows).Error; err != nil {
+	rows, err := loadTopicTraversalCandidates(db, topic, limit+1, traversal)
+	if err != nil {
 		return postPageResponse{}, err
 	}
 	hasMore := len(rows) > limit
 	if hasMore {
 		rows = rows[:limit]
 	}
-	page := postPageResponse{Items: make([]postResponse, 0, len(rows))}
 	if len(rows) == 0 {
 		return page, nil
 	}
@@ -238,16 +193,23 @@ WHERE mirror_accounts.registry_key IN ?
 	for _, response := range responses {
 		responsesByID[response.ID] = response
 	}
+	returnedRows := make([]topicPostQueryRow, 0, len(rows))
 	for _, row := range rows {
 		if response, exists := responsesByID[row.ID]; exists {
 			page.Items = append(page.Items, response)
+			returnedRows = append(returnedRows, row)
 		}
 	}
-	if hasMore && len(rows) > 0 {
-		lastRow := rows[len(rows)-1]
-		encoded, err := encodeTopicPostCursor(topicPostCursor{
-			CreatedAt: lastRow.CreatedAt,
-			PostID:    lastRow.ID,
+	if hasMore && len(returnedRows) > 0 {
+		lastRow := returnedRows[len(returnedRows)-1]
+		encoded, err := encodeTopicPostCursor(topicPostCursorV2{
+			Version:    topicPostCursorVersion,
+			TopicHash:  traversal.TopicHash,
+			AnchorAt:   traversal.AnchorAt,
+			Seed:       traversal.Seed,
+			Bucket:     lastRow.Bucket,
+			ShuffleKey: lastRow.ShuffleKey,
+			PostID:     lastRow.ID,
 		})
 		if err != nil {
 			return postPageResponse{}, fmt.Errorf("encode topic cursor: %w", err)
@@ -255,6 +217,125 @@ WHERE mirror_accounts.registry_key IN ?
 		page.NextCursor = &encoded
 	}
 	return page, nil
+}
+
+func loadTopicTraversalCandidates(db *gorm.DB, topic config.CuratedTopic, limit int, traversal topicTraversal) ([]topicPostQueryRow, error) {
+	rows := make([]topicPostQueryRow, 0, limit)
+	remaining := limit
+	bucket := traversal.Bucket
+	continuation := traversal.After
+	for remaining > 0 {
+		batch, err := loadTopicBucketCandidates(db, topic, traversal.AnchorAt, traversal.Seed, bucket, continuation, remaining)
+		if err != nil {
+			return nil, err
+		}
+		for index := range batch {
+			batch[index].Bucket = bucket
+		}
+		rows = append(rows, batch...)
+		remaining -= len(batch)
+		if remaining == 0 {
+			break
+		}
+
+		nextBucket, found, err := loadNextTopicBucket(db, topic, traversal.AnchorAt, bucket)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			break
+		}
+		if nextBucket <= bucket {
+			return nil, errors.New("topic bucket traversal did not advance")
+		}
+		bucket = nextBucket
+		continuation = nil
+	}
+	return rows, nil
+}
+
+func loadTopicBucketCandidates(db *gorm.DB, topic config.CuratedTopic, anchorAt time.Time, seed int64, bucket int64, after *topicPostCursorV2, limit int) ([]topicPostQueryRow, error) {
+	query, args, err := topicBucketCandidatesQuery(topic, anchorAt, seed, bucket, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	var rows []topicPostQueryRow
+	if err := db.Raw(query, args...).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func topicBucketCandidatesQuery(topic config.CuratedTopic, anchorAt time.Time, seed int64, bucket int64, after *topicPostCursorV2, limit int) (string, []interface{}, error) {
+	if limit <= 0 {
+		return "", nil, errors.New("invalid limit")
+	}
+	bucketStart, bucketEnd, err := topicBucketRange(anchorAt, bucket)
+	if err != nil {
+		return "", nil, err
+	}
+	// The 12-hour range scopes the seeded sort; imported_at excludes late historical imports.
+	query := `
+SELECT id, shuffle_key
+FROM (
+    SELECT mirror_posts.local_post_id AS id,
+           hashint8extended(mirror_posts.local_post_id::bigint, ?::bigint) AS shuffle_key
+    FROM devdata_mirror_posts AS mirror_posts
+    JOIN devdata_mirror_accounts AS mirror_accounts
+      ON mirror_accounts.id = mirror_posts.mirror_account_id
+    JOIN posts
+      ON posts.id = mirror_posts.local_post_id
+    WHERE mirror_accounts.registry_key IN ?
+      AND mirror_accounts.enabled = TRUE
+      AND mirror_posts.state = ?
+      AND mirror_posts.imported_at <= ?
+      AND mirror_posts.source_created_at > ?
+      AND mirror_posts.source_created_at <= ?
+      AND ` + publicPostEligibilitySQL("posts") + `
+) AS candidates
+`
+	args := []interface{}{seed, topic.SourceKeys, models.DevDataMirrorPostStateActive, anchorAt, bucketStart, bucketEnd}
+	if after != nil {
+		query += `WHERE shuffle_key < ? OR (shuffle_key = ? AND id < ?)
+`
+		args = append(args, after.ShuffleKey, after.ShuffleKey, after.PostID)
+	}
+	query += `ORDER BY shuffle_key DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+	return query, args, nil
+}
+
+func loadNextTopicBucket(db *gorm.DB, topic config.CuratedTopic, anchorAt time.Time, bucket int64) (int64, bool, error) {
+	bucketStart, _, err := topicBucketRange(anchorAt, bucket)
+	if err != nil {
+		return 0, false, err
+	}
+	// Jump to the next occupied bucket instead of querying every empty twelve-hour interval.
+	query := `
+SELECT MAX(mirror_posts.source_created_at)
+FROM devdata_mirror_posts AS mirror_posts
+JOIN devdata_mirror_accounts AS mirror_accounts
+  ON mirror_accounts.id = mirror_posts.mirror_account_id
+JOIN posts
+  ON posts.id = mirror_posts.local_post_id
+WHERE mirror_accounts.registry_key IN ?
+  AND mirror_accounts.enabled = TRUE
+  AND mirror_posts.state = ?
+  AND mirror_posts.imported_at <= ?
+  AND mirror_posts.source_created_at <= ?
+  AND ` + publicPostEligibilitySQL("posts")
+	var sourceTime sql.NullTime
+	if err := db.Raw(query, topic.SourceKeys, models.DevDataMirrorPostStateActive, anchorAt, bucketStart).Row().Scan(&sourceTime); err != nil {
+		return 0, false, err
+	}
+	if !sourceTime.Valid {
+		return 0, false, nil
+	}
+	nextBucket, err := topicBucketIndex(anchorAt, sourceTime.Time)
+	if err != nil {
+		return 0, false, err
+	}
+	return nextBucket, true, nil
 }
 
 func writeTopicInternalError(ctx *gin.Context) {
