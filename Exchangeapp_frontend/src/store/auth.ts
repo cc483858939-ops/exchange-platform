@@ -55,6 +55,7 @@ export class AuthSessionChangedError extends Error {
 }
 
 const toAuthRequestError = (error: unknown, fallback: string): AuthRequestError => {
+  if (error instanceof AuthRequestError) return error;
   if (isRequestTimeoutError(error)) {
     return new AuthRequestError(
       'Request timed out. Check your connection and try again.',
@@ -182,6 +183,22 @@ export const useAuthStore = defineStore('auth', () => {
   const identity = ref<AuthIdentity | null>(null);
   const sessionVersion = ref(0);
   let pendingLocalLogoutSessionId: string | null = null;
+  let sessionTransition = new AbortController();
+
+  const runWithSessionMutationLock = <T>(
+    operation: () => Promise<T> | T,
+    options: { requireLock?: boolean; signal?: AbortSignal } = {},
+  ): Promise<T> => {
+    const controller = new AbortController();
+    const signals = [sessionTransition.signal, options.signal].filter((signal): signal is AbortSignal => Boolean(signal));
+    const cancel = (event: Event) => controller.abort((event.target as AbortSignal).reason);
+    for (const signal of signals) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener('abort', cancel, { once: true });
+    }
+    return runWithAuthMutationLock(operation, { requireLock: options.requireLock, signal: controller.signal })
+      .finally(() => signals.forEach(signal => signal.removeEventListener('abort', cancel)));
+  };
 
   const isAuthenticated = computed(() => Boolean(token.value && refreshToken.value && identity.value));
   const currentIdentity = computed<AuthIdentity | null>(() => identity.value);
@@ -209,6 +226,8 @@ export const useAuthStore = defineStore('auth', () => {
   );
 
   const advanceSessionVersion = (): number => {
+    sessionTransition.abort(new AuthSessionChangedError());
+    sessionTransition = new AbortController();
     sessionVersion.value += 1;
     return sessionVersion.value;
   };
@@ -277,7 +296,8 @@ export const useAuthStore = defineStore('auth', () => {
     response: AuthResponse,
     operationVersion: number,
   ) => {
-    await runWithAuthMutationLock(() => {
+    if (sessionVersion.value !== operationVersion) throw new AuthSessionChangedError();
+    await runWithSessionMutationLock(() => {
       reconcilePersistedAuthState();
       if (sessionVersion.value !== operationVersion) {
         throw new AuthSessionChangedError();
@@ -312,7 +332,7 @@ export const useAuthStore = defineStore('auth', () => {
     return true;
   };
 
-  const refreshAccessToken = async (): Promise<string> => {
+  const refreshAccessToken = async (options: { signal?: AbortSignal } = {}): Promise<string> => {
     const versionAtStart = sessionVersion.value;
     const sessionIdAtStart = sessionId.value;
     const tokenRevisionAtStart = tokenRevision.value;
@@ -320,11 +340,11 @@ export const useAuthStore = defineStore('auth', () => {
     const userIdAtStart = sessionUserId.value;
 
     if (!sessionIdAtStart || !tokenRevisionAtStart || !refreshTokenAtStart || !userIdAtStart) {
-      void clearAuth();
+      void clearAuth().catch(() => undefined);
       throw new Error('Missing refresh session');
     }
 
-    return runWithAuthMutationLock(async () => {
+    return runWithSessionMutationLock(async () => {
       if (
         sessionVersion.value !== versionAtStart
         || sessionId.value !== sessionIdAtStart
@@ -399,11 +419,11 @@ export const useAuthStore = defineStore('auth', () => {
         commitRefreshFailureIfCurrent(error, versionAtStart, sessionIdAtStart);
         throw error;
       }
-    }, { requireLock: true });
+    }, { requireLock: true, signal: options.signal });
   };
 
-  const clearAuth = (): Promise<void> => {
-    const loggedOutSessionId = sessionId.value;
+  const clearAuth = (options: { signal?: AbortSignal } = {}): Promise<void> => {
+    const loggedOutSessionId = sessionId.value ?? pendingLocalLogoutSessionId;
     advanceSessionVersion();
     applyPersistedSession(null);
     if (loggedOutSessionId) {
@@ -416,7 +436,9 @@ export const useAuthStore = defineStore('auth', () => {
         clearPersistedAuthSession();
         localStorage.removeItem(authUserKey);
       }
-    }).finally(() => {
+    }, { signal: options.signal }).then(() => {
+      // Keep the guard if acquisition or storage cleanup fails. A retry must
+      // target this captured sid even though memory is already signed out.
       if (pendingLocalLogoutSessionId === loggedOutSessionId) {
         pendingLocalLogoutSessionId = null;
       }
@@ -427,10 +449,16 @@ export const useAuthStore = defineStore('auth', () => {
     // Capture before clearing memory. Never use a later login's credentials.
     // The server accepts this family's consumed secret if an in-flight refresh
     // already rotated it, and revocation cannot restore credentials locally.
-    const loggedOutRefreshToken = refreshToken.value;
-    await clearAuth();
-    if (!loggedOutRefreshToken) return;
-    try {
+    const pendingSession = readPersistedAuthSession();
+    const loggedOutRefreshToken = refreshToken.value ?? (
+      pendingLocalLogoutSessionId && pendingSession?.sessionId === pendingLocalLogoutSessionId
+        ? pendingSession.refreshToken : null
+    );
+    let cleanupFailed = false;
+    try { await clearAuth(); } catch { cleanupFailed = true; }
+    // Revocation is safe with the captured credential even when local lock
+    // acquisition failed. It must never use a later login's refresh token.
+    if (loggedOutRefreshToken) try {
       const response = await authClient.post('/auth/logout', {
         refresh_token: loggedOutRefreshToken,
       });
@@ -441,6 +469,10 @@ export const useAuthStore = defineStore('auth', () => {
         'AUTH_LOGOUT_UNCONFIRMED',
       );
     }
+    if (cleanupFailed) throw new AuthRequestError(
+      'Signed out locally, but saved credentials could not be cleared. Please retry sign-out.',
+      'AUTH_LOGOUT_CLEANUP_PENDING',
+    );
   };
 
   const syncCurrentIdentityProfile = (candidate: AuthIdentity): boolean => {
@@ -465,6 +497,7 @@ export const useAuthStore = defineStore('auth', () => {
     window.addEventListener('pageshow', handlePageShow);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     onScopeDispose(() => {
+      sessionTransition.abort(new AuthSessionChangedError());
       unsubscribe();
       window.removeEventListener('pageshow', handlePageShow);
       document.removeEventListener('visibilitychange', handleVisibilityChange);

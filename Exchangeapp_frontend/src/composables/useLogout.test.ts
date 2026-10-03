@@ -7,6 +7,7 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock('../store/auth', () => ({ useAuthStore: () => ({ logout: mocks.logout }) }));
 vi.mock('element-plus', () => ({ ElMessage: { warning: mocks.warning } }));
 import { useLogout } from './useLogout';
+import { AuthRequestError } from '../utils/authError';
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -15,6 +16,13 @@ beforeEach(() => {
 });
 
 describe('logout feedback', () => {
+  it('reports pending local cleanup separately from server revocation', async () => {
+    const message = 'Signed out locally, but saved credentials could not be cleared. Please retry sign-out.';
+    mocks.logout.mockRejectedValue(new AuthRequestError(message, 'AUTH_LOGOUT_CLEANUP_PENDING'));
+    useLogout().handleLogout();
+    await flushPromises();
+    expect(mocks.warning).toHaveBeenCalledWith(message);
+  });
   it('returns home immediately while server logout is pending', async () => {
     let resolve!: () => void;
     mocks.logout.mockReturnValue(new Promise<void>(done => { resolve = done; }));

@@ -6,8 +6,11 @@ import type { Pinia } from 'pinia';
 import { apiBaseUrl } from '../api';
 import {
   AUTH_SESSION_STORAGE_KEY,
+  AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS,
   AUTH_USER_STORAGE_KEY,
   AuthRefreshCoordinationUnavailableError,
+  AuthMutationLockTimeoutError,
+  runWithAuthMutationLock,
   writePersistedAuthSession,
 } from '../auth/authSessionCoordinator';
 import type { PersistedAuthSession } from '../auth/authSessionCoordinator';
@@ -141,12 +144,17 @@ const installSerializedLock = () => {
     const previous = tail;
     let release!: () => void;
     tail = new Promise<void>(resolve => { release = resolve; });
-    await previous;
-    try {
-      return await callback({ name, mode: options.mode } as Lock);
-    } finally {
-      release();
-    }
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(options.signal?.reason);
+      options.signal?.addEventListener('abort', abort, { once: true });
+      void previous.then(async () => {
+        options.signal?.removeEventListener('abort', abort);
+        try {
+          if (options.signal?.aborted) { reject(options.signal.reason); return; }
+          resolve(await callback({ name, mode: options.mode } as Lock));
+        } catch (error) { reject(error); } finally { release(); }
+      });
+    });
   });
   setLocks({ request } as unknown as LockManager);
   return request;
@@ -156,6 +164,14 @@ const createAuthStore = (pinia?: Pinia) => {
   const store = useAuthStore(pinia);
   stores.push(store);
   return store;
+};
+
+const holdAuthMutationLock = async () => {
+  const release = deferred<void>();
+  const started = deferred<void>();
+  const promise = runWithAuthMutationLock(() => { started.resolve(); return release.promise; });
+  await started.promise;
+  return { release: () => release.resolve(), promise };
 };
 
 beforeEach(() => {
@@ -168,6 +184,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   stores.forEach(store => store.$dispose());
   if (originalLocksDescriptor) {
     Object.defineProperty(navigator, 'locks', originalLocksDescriptor);
@@ -177,6 +194,166 @@ afterEach(() => {
 });
 
 describe('auth store cross-tab session coordination', () => {
+  it('bounds refresh queue time without HTTP or credential mutation, then allows retry', async () => {
+    vi.useFakeTimers();
+    seedV2Auth();
+    const store = createAuthStore();
+    const saved = readStoredSession();
+    const holder = await holdAuthMutationLock();
+    try {
+      const pending = store.refreshAccessToken().catch(error => error);
+      await vi.advanceTimersByTimeAsync(AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS);
+      expect(await pending).toBeInstanceOf(AuthMutationLockTimeoutError);
+      expect(mocks.post).not.toHaveBeenCalled();
+      expect(readStoredSession()).toEqual(saved);
+      expect(store.isAuthenticated).toBe(true);
+    } finally { holder.release(); await holder.promise; }
+    mocks.post.mockResolvedValueOnce({ data: authResponse(fullIdentity, 'retry-access', 'retry-refresh') });
+    await expect(store.refreshAccessToken()).resolves.toBe(bearerFor('retry-access'));
+    expect(readStoredSession()?.refreshToken).toBe('retry-refresh');
+  });
+
+  it('supports caller cancellation while refresh is queued', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    try {
+      const controller = new AbortController();
+      const pending = store.refreshAccessToken({ signal: controller.signal }).catch(error => error);
+      controller.abort();
+      expect(await pending).toMatchObject({ name: 'AbortError' });
+      expect(mocks.post).not.toHaveBeenCalled();
+      expect(store.isAuthenticated).toBe(true);
+      expect(readStoredSession()?.refreshToken).toBe('alice-refresh');
+    } finally { holder.release(); await holder.promise; }
+  });
+
+  it('cancels a queued refresh immediately on logout before the holder releases', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    const pendingRefresh = store.refreshAccessToken().catch(error => error);
+    const logout = store.logout();
+    try {
+      expect(await pendingRefresh).toBeInstanceOf(AuthSessionChangedError);
+      expect(mocks.post).not.toHaveBeenCalled();
+      expect(store.isAuthenticated).toBe(false);
+      window.dispatchEvent(new Event('pageshow'));
+      expect(store.isAuthenticated).toBe(false);
+    } finally { holder.release(); await holder.promise; await logout; }
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'alice-refresh' });
+    expect(readStoredSession()).toBeNull();
+  });
+
+  it('cancels queued refresh when another tab switches the account', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    try {
+      const pending = store.refreshAccessToken().catch(error => error);
+      writePersistedAuthSession(persistedSession(otherIdentity, 'bob-access', 'bob-refresh'));
+      localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(otherIdentity));
+      window.dispatchEvent(new StorageEvent('storage', { key: AUTH_SESSION_STORAGE_KEY }));
+      expect(await pending).toBeInstanceOf(AuthSessionChangedError);
+      expect(mocks.post).not.toHaveBeenCalled();
+      expect(store.token).toBe(bearerFor('bob-access', otherIdentity));
+    } finally { holder.release(); await holder.promise; }
+    expect(readStoredSession()?.refreshToken).toBe('bob-refresh');
+  });
+
+  it('retains the logout guard after cleanup timeout, still revokes and can retry cleanup', async () => {
+    vi.useFakeTimers();
+    seedV2Auth();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    try {
+      const pending = store.logout().catch(error => error);
+      expect(store.isAuthenticated).toBe(false);
+      await vi.advanceTimersByTimeAsync(AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS);
+      expect(await pending).toMatchObject({ code: 'AUTH_LOGOUT_CLEANUP_PENDING' });
+      expect(mocks.post).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'alice-refresh' });
+      expect(readStoredSession()?.sessionId).toBe('sid-7');
+      window.dispatchEvent(new Event('pageshow'));
+      window.dispatchEvent(new StorageEvent('storage', { key: AUTH_SESSION_STORAGE_KEY }));
+      store.reconcilePersistedAuthState();
+      expect(store.isAuthenticated).toBe(false);
+    } finally { holder.release(); await holder.promise; }
+    await store.logout();
+    expect(readStoredSession()).toBeNull();
+    expect(store.isAuthenticated).toBe(false);
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1]).toEqual(['/auth/logout', { refresh_token: 'alice-refresh' }]);
+  });
+
+  it('keeps newer credentials when retrying a timed-out logout cleanup', async () => {
+    vi.useFakeTimers();
+    seedV2Auth();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    try {
+      const pending = store.clearAuth().catch(error => error);
+      await vi.advanceTimersByTimeAsync(AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS);
+      expect(await pending).toBeInstanceOf(AuthMutationLockTimeoutError);
+    } finally { holder.release(); await holder.promise; }
+    writePersistedAuthSession(persistedSession(otherIdentity, 'bob-access', 'bob-refresh'));
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(otherIdentity));
+    await store.logout();
+    expect(readStoredSession()?.refreshToken).toBe('bob-refresh');
+    expect(mocks.post).not.toHaveBeenCalled();
+    store.reconcilePersistedAuthState();
+    expect(store.token).toBe(bearerFor('bob-access', otherIdentity));
+  });
+
+  it('retains logout protection after canceled or failed storage cleanup', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    try {
+      const controller = new AbortController();
+      const pending = store.clearAuth({ signal: controller.signal }).catch(error => error);
+      controller.abort();
+      expect(await pending).toMatchObject({ name: 'AbortError' });
+      store.reconcilePersistedAuthState();
+      expect(store.isAuthenticated).toBe(false);
+    } finally { holder.release(); await holder.promise; }
+    const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => { throw new Error('Storage unavailable'); });
+    await expect(store.clearAuth()).rejects.toThrow('Storage unavailable');
+    store.reconcilePersistedAuthState();
+    expect(store.isAuthenticated).toBe(false);
+    remove.mockRestore();
+    await store.clearAuth();
+    expect(readStoredSession()).toBeNull();
+  });
+
+  it.each(['login', 'register'] as const)('bounds a queued %s commit and preserves the coordination error code', async method => {
+    vi.useFakeTimers();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    try {
+      mocks.post.mockResolvedValueOnce({ data: authResponse() });
+      const pending = store[method]('alice', 'secret123').catch(error => error);
+      await vi.advanceTimersByTimeAsync(AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS);
+      expect(await pending).toMatchObject({ code: 'AUTH_COORDINATION_TIMEOUT' });
+      expect(store.isAuthenticated).toBe(false);
+      expect(readStoredSession()).toBeNull();
+    } finally { holder.release(); await holder.promise; }
+    expect(readStoredSession()).toBeNull();
+  });
+
+  it('cancels a queued refresh on store disposal without sending HTTP', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const holder = await holdAuthMutationLock();
+    try {
+      const pending = store.refreshAccessToken().catch(error => error);
+      store.$dispose();
+      expect(await pending).toBeInstanceOf(AuthSessionChangedError);
+      expect(mocks.post).not.toHaveBeenCalled();
+      expect(readStoredSession()?.refreshToken).toBe('alice-refresh');
+    } finally { holder.release(); await holder.promise; }
+  });
+
   it('configures the auth client with its bounded timeout', () => {
     expect(mocks.create).toHaveBeenCalledWith({
       baseURL: apiBaseUrl,
@@ -271,7 +448,7 @@ describe('auth store cross-tab session coordination', () => {
     expect(localStorage.getItem('token')).toBeNull();
     expect(localStorage.getItem('refresh_token')).toBeNull();
     expect(JSON.parse(localStorage.getItem(AUTH_USER_STORAGE_KEY) || 'null')).toEqual(fullIdentity);
-    expect(lockRequest).toHaveBeenCalledWith(expect.any(String), { mode: 'exclusive' }, expect.any(Function));
+    expect(lockRequest).toHaveBeenCalledWith(expect.any(String), { mode: 'exclusive', signal: expect.any(AbortSignal) }, expect.any(Function));
   });
 
   it('rejects a login response whose JWT subject does not match its profile', async () => {

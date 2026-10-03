@@ -1,8 +1,17 @@
 import { decodeAuthTokenMetadata } from '../utils/authIdentity';
+import { AuthRequestError } from '../utils/authError';
 
 export const AUTH_SESSION_STORAGE_KEY = 'exchange_auth_session_v2';
 export const AUTH_USER_STORAGE_KEY = 'auth_user';
 export const AUTH_MUTATION_LOCK_NAME = 'exchange-auth-session-mutation';
+export const AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS = 15_000;
+
+export class AuthMutationLockTimeoutError extends AuthRequestError {
+  constructor() {
+    super('Authentication coordination timed out. Please try again.', 'AUTH_COORDINATION_TIMEOUT');
+    this.name = 'AuthMutationLockTimeoutError';
+  }
+}
 
 const legacyAccessTokenKey = 'token';
 const legacyRefreshTokenKey = 'refresh_token';
@@ -143,8 +152,10 @@ export const clearPersistedAuthSession = (): void => {
 
 export const runWithAuthMutationLock = async <T>(
   operation: () => Promise<T> | T,
-  options: { requireLock?: boolean } = {},
+  options: { requireLock?: boolean; signal?: AbortSignal } = {},
 ): Promise<T> => {
+  const cancellationReason = () => options.signal?.reason ?? new DOMException('Authentication coordination canceled', 'AbortError');
+  if (options.signal?.aborted) throw cancellationReason();
   const lockManager = typeof navigator === 'undefined' ? undefined : navigator.locks;
   if (!lockManager || typeof lockManager.request !== 'function') {
     if (options.requireLock) {
@@ -152,11 +163,49 @@ export const runWithAuthMutationLock = async <T>(
     }
     return operation();
   }
-  return lockManager.request(
-    AUTH_MUTATION_LOCK_NAME,
-    { mode: 'exclusive' },
-    () => operation(),
-  );
+  const controller = new AbortController();
+  const deadline = Date.now() + AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS;
+  let waiting = true;
+  let waitError: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortWait: () => void;
+  const finishWaiting = () => {
+    waiting = false;
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abortWait);
+  };
+  return new Promise<T>((resolve, reject) => {
+    const cancelWait = (reason: unknown) => {
+      if (!waiting) return;
+      waitError = reason;
+      finishWaiting();
+      controller.abort(reason);
+      reject(reason);
+    };
+    abortWait = () => cancelWait(cancellationReason());
+    options.signal?.addEventListener('abort', abortWait, { once: true });
+    timer = setTimeout(() => cancelWait(new AuthMutationLockTimeoutError()), AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS);
+    try {
+      const request = lockManager.request(
+        AUTH_MUTATION_LOCK_NAME,
+        { mode: 'exclusive', signal: controller.signal },
+        () => {
+          // A resumed tab may receive the grant before its overdue timer runs.
+          // Also reject a late callback from a canceled request.
+          if (waiting && Date.now() >= deadline) cancelWait(new AuthMutationLockTimeoutError());
+          if (waitError !== undefined) throw waitError;
+          finishWaiting();
+          // The deadline only bounds acquisition. Keep holding the lock until
+          // the entire operation (including HTTP and credential commit) ends.
+          return operation();
+        },
+      );
+      Promise.resolve(request).then(resolve, reject).finally(finishWaiting);
+    } catch (error) {
+      finishWaiting();
+      reject(error);
+    }
+  });
 };
 
 export const subscribeToPersistedAuthChanges = (callback: () => void): (() => void) => {

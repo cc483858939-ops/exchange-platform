@@ -5,13 +5,11 @@ import (
 	"errors"
 	"log"
 	"sort"
-	"strconv"
 
 	"Go.exchange/global"
 	"Go.exchange/likes"
 	"Go.exchange/models"
 
-	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
 
@@ -42,7 +40,7 @@ var (
 	}
 )
 
-var postLikeRecoveryGroup singleflight.Group
+var postLikeRecoveryGroup postLikeRecoveryFlights
 
 func loadActivePostLikeBaselineFromDB(db *gorm.DB, postID uint) (postLikeBaseline, error) {
 	if db == nil {
@@ -177,69 +175,17 @@ func ensurePostLikeStateReady(ctx context.Context, postID uint) error {
 	if postID == 0 {
 		return likes.ErrPostLikeUnavailable
 	}
-	resultCh := postLikeRecoveryGroup.DoChan(strconv.FormatUint(uint64(postID), 10), func() (interface{}, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		store := likes.NewStore(global.RedisDB)
-		if _, err := store.Get(ctx, 0, postID); err == nil {
-			return nil, nil
-		} else if !errors.Is(err, likes.ErrNotReady) {
-			return nil, err
-		}
-
-		registered, err := store.RegistryContains(ctx, postID)
+	results, err := postLikeRecoveryGroup.recover(ctx, likes.NewStore(global.RedisDB), []uint{postID}, func(ctx context.Context, ids []uint) (map[uint]postLikeBaseline, error) {
+		baseline, err := loadPostLikeBaselineFromDB(ctx, ids[0])
 		if err != nil {
 			return nil, err
 		}
-		marker, err := store.GetRecoverableVersion(ctx, postID)
-		if err != nil {
-			return nil, err
-		}
-		baseline, err := loadPostLikeBaselineFromDB(ctx, postID)
-		if err != nil {
-			return nil, err
-		}
-		fence, err := classifyPostLikeRecovery(registered, marker, baseline)
-		if err != nil {
-			return nil, err
-		}
-
-		fullState := likes.FullState{Count: baseline.Count, Version: baseline.Version, UserIDs: baseline.UserIDs}
-		if _, err := store.Recover(ctx, postID, fullState, fence); err != nil {
-			return nil, err
-		}
-		return nil, nil
+		return map[uint]postLikeBaseline{ids[0]: baseline}, nil
 	})
-	var err error
-	select {
-	case <-ctx.Done():
-		err = ctx.Err()
-	case result := <-resultCh:
-		err = result.Err
+	if err == nil {
+		err = results[postID]
 	}
 	logPostLikeRecoveryOutcome(postID, err)
-	return err
-}
-
-func recoverPostLikeStateFromBatchBaseline(ctx context.Context, store *likes.Store, postID uint, registered bool, marker *int64, baseline postLikeBaseline) error {
-	_, err, _ := postLikeRecoveryGroup.Do(strconv.FormatUint(uint64(postID), 10), func() (interface{}, error) {
-		if _, err := store.Get(ctx, 0, postID); err == nil {
-			return nil, nil
-		} else if !errors.Is(err, likes.ErrNotReady) {
-			return nil, err
-		}
-
-		fence, err := classifyPostLikeRecovery(registered, marker, baseline)
-		if err != nil {
-			return nil, err
-		}
-		fullState := likes.FullState{Count: baseline.Count, Version: baseline.Version, UserIDs: baseline.UserIDs}
-		if _, err := store.Recover(ctx, postID, fullState, fence); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	})
 	return err
 }
 
@@ -298,35 +244,14 @@ func loadPostLikeStatesWithRecovery(ctx context.Context, userID uint, postIDs []
 		return result, err
 	}
 
-	store := likes.NewStore(global.RedisDB)
-	registered, err := store.RegistryContainsMany(ctx, result.Unavailable)
-	if err != nil {
-		return postLikeStatesLoadResult{}, err
-	}
-	markers, err := store.GetRecoverableVersions(ctx, result.Unavailable)
-	if err != nil {
-		return postLikeStatesLoadResult{}, err
-	}
-	baselines, err := loadPostLikeBaselinesFromDB(ctx, result.Unavailable)
+	recoveryResults, err := postLikeRecoveryGroup.recover(ctx, likes.NewStore(global.RedisDB), result.Unavailable, loadPostLikeBaselinesFromDB)
 	if err != nil {
 		return postLikeStatesLoadResult{}, err
 	}
 
 	unavailable := make(map[uint]struct{}, len(result.Unavailable))
 	for _, postID := range result.Unavailable {
-		baseline, active := baselines[postID]
-		if !active {
-			unavailable[postID] = struct{}{}
-			logPostLikeRecoveryOutcome(postID, likes.ErrPostLikeUnavailable)
-			continue
-		}
-		isRegistered := registered[postID]
-		marker, hasMarker := markers[postID]
-		var markerPtr *int64
-		if hasMarker {
-			markerPtr = &marker
-		}
-		recoverErr := recoverPostLikeStateFromBatchBaseline(ctx, store, postID, isRegistered, markerPtr, baseline)
+		recoverErr := recoveryResults[postID]
 		if recoverErr != nil {
 			if isPostLikeBatchUnavailableError(recoverErr) {
 				unavailable[postID] = struct{}{}
