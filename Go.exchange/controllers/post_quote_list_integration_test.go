@@ -195,7 +195,11 @@ func TestGetPostQuotesVisibilityHydrationAndReferenceBatchIntegration(t *testing
 	if strings.Contains(recorder.Body.String(), "deleted author's quote") || strings.Contains(recorder.Body.String(), "different target quote") || strings.Contains(recorder.Body.String(), "reply, not quote") {
 		t.Fatalf("ineligible Posts leaked into response: %s", recorder.Body.String())
 	}
-	assertOneReferenceBatch(t, queryLogger.snapshot(), 3, 2, 2, 1)
+	queries := queryLogger.snapshot()
+	// The fixed stages include one target eligibility lookup and the quote
+	// page query. Only reference hydration must use a deduplicated ID batch.
+	assertPageBatchQueryCounts(t, queries, 3, 2, 2)
+	assertReferenceBatchPredicateSize(t, referencePostQueries(queries), 1)
 }
 
 func TestGetPostQuotesCursorOrderingAndNewQuoteStabilityIntegration(t *testing.T) {

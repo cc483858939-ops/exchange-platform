@@ -15,13 +15,13 @@ import (
 	"Go.exchange/controllers"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
+	"Go.exchange/internal/testdb"
 	"Go.exchange/likes"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -51,7 +51,7 @@ func openLikeStateClosureIntegration(t *testing.T) *likeStateClosureIntegration 
 		t.Skip("set REDIS_TEST_ADDR to run Redis integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

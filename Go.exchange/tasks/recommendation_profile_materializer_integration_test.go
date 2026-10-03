@@ -14,13 +14,13 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
+	"Go.exchange/internal/testdb"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 	"github.com/segmentio/kafka-go"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -56,7 +56,7 @@ func openRecommendationProfileMaterializerIntegrationDB(t *testing.T) *gorm.DB {
 	if dsn == "" {
 		t.Skip("SKIPPED — POSTGRES_TEST_DSN unavailable")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

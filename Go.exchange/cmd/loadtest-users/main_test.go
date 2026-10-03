@@ -6,12 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"Go.exchange/internal/testdb"
 	"Go.exchange/models"
 	"Go.exchange/utils"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func lookupEnvironment(values map[string]string) func(string) (string, bool) {
@@ -97,7 +96,7 @@ func TestProvisionSyntheticUsersIntegration(t *testing.T) {
 		t.Skip("POSTGRES_TEST_DSN is not configured")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

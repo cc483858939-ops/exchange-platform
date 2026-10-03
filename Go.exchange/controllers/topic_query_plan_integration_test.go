@@ -4,14 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/internal/testdb"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -20,29 +21,74 @@ type topicExplainPlan struct {
 }
 
 type topicExplainNode struct {
+	NodeType  string             `json:"Node Type"`
 	IndexName string             `json:"Index Name"`
 	TotalCost float64            `json:"Total Cost"`
 	PlanRows  float64            `json:"Plan Rows"`
 	Plans     []topicExplainNode `json:"Plans"`
 }
 
-func TestTopicBucketQueryPlanUsesMirrorMembershipIndexIntegration(t *testing.T) {
-	tx, topic, anchor := openTopicQueryPlanFixture(t)
-	query, args, err := topicBucketCandidatesQuery(topic, anchor, 7654321, 0, nil, 21)
-	if err != nil {
-		t.Fatal(err)
+func TestTopicBucketQueryPlanBoundsSelectiveCandidatesIntegration(t *testing.T) {
+	// Two sources out of 64, over 17 days of source times: the current 12h
+	// bucket has about 45 matching rows rather than most of the mapping table.
+	tx, topic, anchor := openTopicQueryPlanFixture(t, 64, 30)
+	for _, after := range []*topicPostCursorV2{nil, {ShuffleKey: 0, PostID: 25000}} {
+		query, args, err := topicBucketCandidatesQuery(topic, anchor, 7654321, 0, after, 21)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, predicate := range []string{
+			"mirror_accounts.registry_key IN ?", "mirror_accounts.enabled = TRUE",
+			"mirror_posts.state = ?", "mirror_posts.imported_at <= ?",
+			"mirror_posts.source_created_at > ?", "mirror_posts.source_created_at <= ?",
+			publicPostEligibilitySQL("posts"), "ORDER BY shuffle_key DESC, id DESC LIMIT ?",
+		} {
+			if !strings.Contains(query, predicate) {
+				t.Fatalf("missing bucket query contract %q: %s", predicate, query)
+			}
+		}
+		if strings.Contains(strings.ToUpper(query), "OFFSET") {
+			t.Fatal("bucket query must use keyset pagination, not OFFSET")
+		}
+		if !reflect.DeepEqual(args[1], topic.SourceKeys) || args[2] != "active" ||
+			args[3] != anchor || args[4] != anchor.Add(-12*time.Hour) || args[5] != anchor || args[len(args)-1] != 21 {
+			t.Fatalf("unexpected source/bucket/anchor/limit arguments: %v", args)
+		}
+		if after != nil && (!strings.Contains(query, "shuffle_key < ? OR (shuffle_key = ? AND id < ?)") ||
+			args[6] != after.ShuffleKey || args[7] != after.ShuffleKey || args[8] != after.PostID) {
+			t.Fatal("continuation query lost its shuffle-key/ID cursor bounds")
+		}
+		planJSON, plan, err := explainTopicQuery(tx, query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan) != 1 || plan[0].Plan.NodeType != "Limit" || plan[0].Plan.PlanRows > 21 {
+			t.Fatalf("bucket query is not limited to a page: %s", planJSON)
+		}
+		assertTopicSortCandidatesBounded(t, plan[0].Plan, planJSON)
+		t.Logf("continuation=%t uses_membership_index=%t estimated_page_rows=%.0f",
+			after != nil, topicPlanUsesIndex(plan[0].Plan, "idx_devdata_mirror_posts_account_state"), plan[0].Plan.PlanRows)
 	}
-	planJSON, plan, err := explainTopicQuery(tx, query, args...)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func assertTopicSortCandidatesBounded(t *testing.T, node topicExplainNode, planJSON []byte) {
+	t.Helper()
+	if node.NodeType == "Sort" || node.NodeType == "Incremental Sort" {
+		for _, input := range node.Plans {
+			// Leave room for estimation error, while rejecting a sort of the
+			// unfiltered 50,000-row mapping population.
+			if input.PlanRows > 200 {
+				t.Fatalf("seeded sort is not bounded to selective bucket candidates: %s", planJSON)
+			}
+		}
 	}
-	if len(plan) != 1 || !topicPlanUsesIndex(plan[0].Plan, "idx_devdata_mirror_posts_account_state") {
-		t.Fatalf("current-bucket query plan did not use the mirror membership/source-time index: %s", string(planJSON))
+	for _, child := range node.Plans {
+		assertTopicSortCandidatesBounded(t, child, planJSON)
 	}
 }
 
 func TestTopicNextBucketQueryPlanUsesMirrorMembershipIndexIntegration(t *testing.T) {
-	tx, topic, anchor := openTopicQueryPlanFixture(t)
+	tx, topic, anchor := openTopicQueryPlanFixture(t, 8, 1)
 	var versionNum int
 	if err := tx.Raw("SHOW server_version_num").Row().Scan(&versionNum); err != nil {
 		t.Fatal(err)
@@ -85,13 +131,13 @@ func TestTopicNextBucketQueryPlanUsesMirrorMembershipIndexIntegration(t *testing
 		topicPlanUsesIndex(orderedPlan[0].Plan, "idx_devdata_mirror_posts_account_state"), orderedPlanJSON)
 }
 
-func openTopicQueryPlanFixture(t *testing.T) (*gorm.DB, config.CuratedTopic, time.Time) {
+func openTopicQueryPlanFixture(t *testing.T, accountCount, sourceSpacingSeconds int) (*gorm.DB, config.CuratedTopic, time.Time) {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN is not set")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,26 +169,25 @@ func openTopicQueryPlanFixture(t *testing.T) (*gorm.DB, config.CuratedTopic, tim
 	}
 	if err := tx.Exec(`
 INSERT INTO devdata_mirror_accounts (id, registry_key, enabled)
-SELECT generated, 'topic-plan-' || generated::text, generated <> 8
-FROM generate_series(1, 8) AS generated`).Error; err != nil {
+SELECT generated, 'topic-plan-' || generated::text, generated <> ?
+FROM generate_series(1, ?) AS generated`, accountCount, accountCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Exec(`
 INSERT INTO posts (id, author_id, created_at, visibility)
-SELECT generated, 1, NOW() - make_interval(secs => generated % 7776000),
-       CASE WHEN generated % 9 = 0 THEN 'private' ELSE 'public' END
-FROM generate_series(1, 50000) AS generated`).Error; err != nil {
+SELECT generated, 1, NOW() - make_interval(secs => generated * ?), 'public'
+FROM generate_series(1, 50000) AS generated`, sourceSpacingSeconds).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Exec(`
 INSERT INTO devdata_mirror_posts (mirror_account_id, local_post_id, source_created_at, imported_at, state)
-SELECT ((generated - 1) % 8) + 1, generated,
-       NOW() - make_interval(secs => generated % 7776000), NOW() - INTERVAL '1 second',
+SELECT ((generated - 1) % ?) + 1, generated,
+       NOW() - make_interval(secs => generated * ?), NOW() - INTERVAL '1 second',
        CASE WHEN generated % 11 = 0 THEN 'tombstone' ELSE 'active' END
-FROM generate_series(1, 50000) AS generated`).Error; err != nil {
+FROM generate_series(1, 50000) AS generated`, accountCount, sourceSpacingSeconds).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"devdata_mirror_posts", "devdata_mirror_accounts", "posts"} {
+	for _, table := range []string{"devdata_mirror_posts", "devdata_mirror_accounts", "posts", "users"} {
 		if err := tx.Exec("ANALYZE " + table).Error; err != nil {
 			t.Fatal(err)
 		}

@@ -145,8 +145,6 @@ func TestTopicFeedStableSeededBucketTraversalIntegration(t *testing.T) {
 	mapPost(outsideAccount, outside, excludedAt, anchor.Add(-time.Second), models.DevDataMirrorPostStateActive)
 	tombstone := newPost(author, "tombstone", excludedAt, "public")
 	mapPost(accountA, tombstone, excludedAt, anchor.Add(-time.Second), models.DevDataMirrorPostStateTombstone)
-	private := newPost(author, "private", excludedAt, "private")
-	mapPost(accountA, private, excludedAt, anchor.Add(-time.Second), models.DevDataMirrorPostStateActive)
 	deleted := newPost(author, "deleted", excludedAt, "public")
 	mapPost(accountA, deleted, excludedAt, anchor.Add(-time.Second), models.DevDataMirrorPostStateActive)
 	if err := db.Delete(&deleted).Error; err != nil {
@@ -233,7 +231,7 @@ func TestTopicFeedStableSeededBucketTraversalIntegration(t *testing.T) {
 			t.Errorf("eligible post %d omitted", id)
 		}
 	}
-	for _, id := range []uint{disabled.ID, outside.ID, tombstone.ID, private.ID, deleted.ID, deletedAuthorPost.ID} {
+	for _, id := range []uint{disabled.ID, outside.ID, tombstone.ID, deleted.ID, deletedAuthorPost.ID} {
 		if _, ok := seen[id]; ok {
 			t.Errorf("excluded post %d appeared in traversal", id)
 		}

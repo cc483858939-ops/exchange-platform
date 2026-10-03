@@ -108,6 +108,9 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
 	}
+	if err := applyPostSearchSchema(tx); err != nil {
+		t.Fatalf("apply Post search indexes: %v", err)
+	}
 	if err := applyPostMediaConstraints(tx); err != nil {
 		t.Fatalf("apply PostMedia constraints: %v", err)
 	}
@@ -185,6 +188,15 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_index_missing")
 	})
+	for _, indexName := range []string{"idx_posts_search_content_trgm", "idx_posts_search_public_created"} {
+		withIntegrationSavepoint(t, tx, "missing_"+indexName, func() {
+			if err := tx.Exec("DROP INDEX " + qualifiedIntegrationTable(primarySchema, indexName)).Error; err != nil {
+				t.Fatalf("drop required Post search index %s: %v", indexName, err)
+			}
+			expectIntegrationSchemaCode(t, tx, apiOptions, "schema_index_missing")
+			expectIntegrationSchemaCode(t, tx, workerOptions, "schema_index_missing")
+		})
+	}
 
 	withIntegrationSavepoint(t, tx, "missing_post_media_upload_cleanup_index", func() {
 		if err := tx.Exec("DROP INDEX " + qualifiedIntegrationTable(primarySchema, "idx_post_media_uploads_status_cleanup_after")).Error; err != nil {

@@ -9,6 +9,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/global"
+	"Go.exchange/internal/testdb"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ func TestRecommendationTraceCleanupIntegration(t *testing.T) {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,10 +4,8 @@ import (
 	"os"
 	"testing"
 
+	"Go.exchange/internal/testdb"
 	"Go.exchange/models"
-
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func TestRecommendationLanguageAffinityConstraintsIntegration(t *testing.T) {
@@ -15,7 +13,7 @@ func TestRecommendationLanguageAffinityConstraintsIntegration(t *testing.T) {
 	if dsn == "" {
 		t.Skip("SKIPPED — POSTGRES_TEST_DSN unavailable")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,11 +11,11 @@ import (
 	"Go.exchange/embeddingstate"
 	"Go.exchange/eventing"
 	"Go.exchange/initialize"
+	"Go.exchange/internal/testdb"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +27,7 @@ func openRecommendationProfileControllerIntegrationDB(t *testing.T) *gorm.DB {
 	if dsn == "" {
 		t.Skip("SKIPPED — POSTGRES_TEST_DSN unavailable")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

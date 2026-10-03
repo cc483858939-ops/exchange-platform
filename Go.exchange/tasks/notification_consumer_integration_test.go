@@ -5,11 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/internal/testdb"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost(t *testing.T) {
@@ -17,7 +16,7 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,11 +18,10 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/eventing"
+	"Go.exchange/internal/testdb"
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 const cdcAcceptanceActivityTopic = "goexchange.activity.events.v1"
@@ -46,7 +45,7 @@ func newCDCAcceptanceFixture(t *testing.T) *cdcAcceptanceFixture {
 	if dsn == "" || len(brokers) == 0 || connectURL == "" {
 		t.Skip("RUN_CDC_INTEGRATION requires POSTGRES_TEST_DSN, KAFKA_BROKERS, and CDC_CONNECT_URL")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +498,7 @@ func TestRealCDCIsolatedInitialSnapshotAcceptance(t *testing.T) {
 		t.Skip("RUN_CDC_SNAPSHOT_INTEGRATION requires POSTGRES_TEST_DSN, KAFKA_BROKERS, and CDC_CONNECT_URL")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

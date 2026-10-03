@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"Go.exchange/auth"
+	"Go.exchange/internal/testdb"
 	"Go.exchange/models"
 	"Go.exchange/utils"
 	"bytes"
@@ -15,8 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 type stubTokenService struct{}
@@ -75,7 +74,7 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +134,7 @@ func TestRefreshPreservesProfileIdentityIntegration(t *testing.T) {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

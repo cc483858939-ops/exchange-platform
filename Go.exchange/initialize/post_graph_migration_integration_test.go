@@ -6,8 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+	"Go.exchange/internal/testdb"
 )
 
 func TestPostGraphSchemaIntegration(t *testing.T) {
@@ -15,7 +14,7 @@ func TestPostGraphSchemaIntegration(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := testdb.Open(t, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

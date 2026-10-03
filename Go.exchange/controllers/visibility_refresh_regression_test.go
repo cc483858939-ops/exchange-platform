@@ -257,7 +257,9 @@ func TestRefreshProfileErrorsKeepTransientFailureDistinctFromInvalidSession(t *t
 }
 
 func TestPostDetailCachedPublicEligibilityIntegration(t *testing.T) {
-	for _, state := range []string{"post deleted", "post private", "author deleted"} {
+	// Canonical Posts are public-only. The public visibility predicate remains
+	// covered by the mock-store regression; PostgreSQL uses representable states.
+	for _, state := range []string{"post deleted", "author deleted"} {
 		t.Run(state, func(t *testing.T) {
 			db := openReplyIntegrationDatabase(t)
 			fixture := newReplyIntegrationFixture(t, db)
@@ -276,8 +278,6 @@ func TestPostDetailCachedPublicEligibilityIntegration(t *testing.T) {
 			switch state {
 			case "post deleted":
 				err = db.Model(&models.Post{}).Where("id = ?", fixture.Article.ID).Update("deleted_at", time.Now().UTC()).Error
-			case "post private":
-				err = db.Model(&models.Post{}).Where("id = ?", fixture.Article.ID).Update("visibility", "private").Error
 			case "author deleted":
 				err = db.Model(&models.User{}).Where("id = ?", fixture.Author.ID).Update("deleted_at", time.Now().UTC()).Error
 			}
