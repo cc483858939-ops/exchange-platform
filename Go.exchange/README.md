@@ -146,6 +146,16 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/healthz
 
 The API and worker both start pprof on port `6060` inside their containers. That port is not currently published to the host in the local compose file.
 
+Pipeline health metrics (CDC slot/WAL lag, oldest retained Outbox age, profile
+dirty queue and Redis like queue depths) are sampled every 10 seconds. Exact
+retained Outbox and notification ConsumerInbox row counts are sampled at startup
+and every 5 minutes in a separate loop. Each loop has a 5-second total sampling
+budget. Failed counts retain the previous value and success timestamp;
+`go_exchange_outbox_rows_last_success_timestamp_seconds` and
+`go_exchange_consumer_inbox_rows_last_success_timestamp_seconds{consumer="…"}`
+expose freshness. ConsumerInbox row count measures deduplication history, not
+consumer lag. This changes no retention, cleanup, or readiness policy.
+
 ## Core API Surface
 
 Public endpoints:

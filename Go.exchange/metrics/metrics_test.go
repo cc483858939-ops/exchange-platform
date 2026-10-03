@@ -39,8 +39,10 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	telemetryEventBefore := prometheusMetricValue(t, `go_exchange_recommendation_telemetry_events_total{event_type="impression",reason="",status="accepted"}`)
 	telemetryProjectionBefore := prometheusMetricValue(t, `go_exchange_recommendation_telemetry_projection_total{status="applied"}`)
 	SetOutboxRowsTotal(11)
+	SetOutboxRowsSampleSuccess(time.Unix(1700000000, 0))
 	SetOutboxOldestRowAgeSeconds(7)
 	SetConsumerInboxRows("goexchange-notification-projection-v1", 13)
+	SetConsumerInboxRowsSampleSuccess("goexchange-notification-projection-v1", time.Unix(1700000001, 0))
 	RecordNotificationProjectionFailure("database")
 	ObserveNotificationProjectionLatency(time.Second)
 	RecordRecommendationTelemetryEvent("accepted", "impression", "")
@@ -50,6 +52,12 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	body := r.Body.String()
 	if !strings.Contains(body, "go_exchange_outbox_rows_total 11") {
 		t.Fatal(body)
+	}
+	if !strings.Contains(body, "go_exchange_outbox_rows_last_success_timestamp_seconds 1.7e+09") {
+		t.Fatal("outbox sample freshness timestamp missing")
+	}
+	if !strings.Contains(body, `go_exchange_consumer_inbox_rows_last_success_timestamp_seconds{consumer="goexchange-notification-projection-v1"} 1.700000001e+09`) {
+		t.Fatal("ConsumerInbox sample freshness timestamp missing")
 	}
 	if !strings.Contains(body, "go_exchange_outbox_oldest_row_age_seconds 7") {
 		t.Fatal(body)

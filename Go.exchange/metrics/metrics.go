@@ -22,10 +22,12 @@ var (
 	outboxCDCSlotActive                          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_active", Help: "Whether the configured PostgreSQL CDC slot is active."})
 	outboxCDCWALLagBytes                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_wal_lag_bytes", Help: "WAL lag behind the outbox CDC slot in bytes."})
 	outboxCDCSlotConfirmedLSN                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_confirmed_lsn", Help: "Confirmed flush LSN reported by the outbox CDC slot."})
-	outboxRowsTotal                              = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_rows_total", Help: "Current retained outbox row count."})
+	outboxRowsTotal                              = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_rows_total", Help: "Last successfully sampled exact retained outbox row count; sampled every 5 minutes."})
+	outboxRowsLastSuccess                        = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_rows_last_success_timestamp_seconds", Help: "Unix timestamp of the last successful exact retained outbox row count sample; zero until the first success."})
 	outboxOldestRowAgeSeconds                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_oldest_row_age_seconds", Help: "Age of the oldest retained outbox row in seconds."})
 	notificationConsumerLag                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_notification_consumer_lag", Help: "Notification projection consumer lag."})
-	consumerInboxRows                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_consumer_inbox_rows_total", Help: "ConsumerInbox rows retained for a consumer."}, []string{"consumer"})
+	consumerInboxRows                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_consumer_inbox_rows_total", Help: "Last successfully sampled exact ConsumerInbox deduplication history rows retained for a consumer, not consumer lag; sampled every 5 minutes."}, []string{"consumer"})
+	consumerInboxRowsLastSuccess                 = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_consumer_inbox_rows_last_success_timestamp_seconds", Help: "Unix timestamp of the last successful exact retained ConsumerInbox row count sample."}, []string{"consumer"})
 	notificationProjectionFailures               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_notification_projection_failures_total", Help: "Notification projection failures by stage."}, []string{"stage"})
 	notificationProjectionLatency                = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_notification_projection_latency_seconds", Help: "Notification projection batch latency in seconds.", Buckets: prometheus.DefBuckets})
 	likePipelineDepth                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
@@ -80,7 +82,7 @@ var (
 func init() {
 	registry.MustRegister(
 		httpRequestsTotal, httpRequestDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
-		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -180,11 +182,17 @@ func SetOutboxCDCSlotActive(value float64)       { outboxCDCSlotActive.Set(value
 func SetOutboxCDCWALLagBytes(value float64)      { outboxCDCWALLagBytes.Set(value) }
 func SetOutboxCDCSlotConfirmedLSN(value float64) { outboxCDCSlotConfirmedLSN.Set(value) }
 func SetOutboxRowsTotal(value float64)           { outboxRowsTotal.Set(value) }
+func SetOutboxRowsSampleSuccess(at time.Time)    { outboxRowsLastSuccess.Set(float64(at.Unix())) }
 func SetOutboxOldestRowAgeSeconds(value float64) { outboxOldestRowAgeSeconds.Set(value) }
 func SetNotificationConsumerLag(value float64)   { notificationConsumerLag.Set(value) }
 func SetConsumerInboxRows(consumer string, value float64) {
 	if consumer != "" {
 		consumerInboxRows.WithLabelValues(consumer).Set(value)
+	}
+}
+func SetConsumerInboxRowsSampleSuccess(consumer string, at time.Time) {
+	if consumer != "" {
+		consumerInboxRowsLastSuccess.WithLabelValues(consumer).Set(float64(at.Unix()))
 	}
 }
 func RecordNotificationProjectionFailure(stage string) {

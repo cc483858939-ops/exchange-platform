@@ -16,14 +16,28 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	pipelineHealthMetricsInterval   = 10 * time.Second
+	pipelineRetainedMetricsInterval = 5 * time.Minute
+	pipelineMetricsSampleTimeout    = 5 * time.Second
+)
+
 func startPipelineMetrics(ctx context.Context, wg *sync.WaitGroup) {
+	// Historical COUNTs must not hold up the fast health sampling loop.
+	startPipelineMetricsSampler(ctx, wg, pipelineHealthMetricsInterval, pipelineMetricsSampleTimeout, refreshPipelineMetrics)
+	startPipelineMetricsSampler(ctx, wg, pipelineRetainedMetricsInterval, pipelineMetricsSampleTimeout, refreshPipelineRetainedMetrics)
+}
+
+func startPipelineMetricsSampler(ctx context.Context, wg *sync.WaitGroup, interval, timeout time.Duration, refresh func(context.Context)) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for {
-			refreshPipelineMetrics(ctx)
+		for ctx.Err() == nil {
+			sampleCtx, cancel := context.WithTimeout(ctx, timeout)
+			refresh(sampleCtx)
+			cancel()
 			select {
 			case <-ctx.Done():
 				return
@@ -38,12 +52,6 @@ func refreshPipelineMetrics(ctx context.Context) {
 		return
 	}
 	db := global.WorkerDb.WithContext(ctx)
-	var outboxRows int64
-	if err := db.Model(&models.OutboxEvent{}).Count(&outboxRows).Error; err != nil {
-		log.Printf("[Metrics] count retained outbox rows: %v", err)
-	} else {
-		metrics.SetOutboxRowsTotal(float64(outboxRows))
-	}
 	var oldest struct {
 		CreatedAt *time.Time `gorm:"column:created_at"`
 	}
@@ -57,7 +65,6 @@ func refreshPipelineMetrics(ctx context.Context) {
 		metrics.SetOutboxOldestRowAgeSeconds(0)
 	}
 	refreshOutboxCDCMetrics(ctx, db)
-	refreshNotificationProjectionMetrics(ctx, db)
 	var dirtyProfiles int64
 	if err := db.Model(&models.UserRecoProfileDirty{}).Count(&dirtyProfiles).Error; err != nil {
 		log.Printf("[Metrics] count dirty recommendation profiles: %v", err)
@@ -83,7 +90,22 @@ func refreshPipelineMetrics(ctx context.Context) {
 	}
 }
 
-func refreshNotificationProjectionMetrics(ctx context.Context, db *gorm.DB) {
+func refreshPipelineRetainedMetrics(ctx context.Context) {
+	if ctx == nil || ctx.Err() != nil || global.WorkerDb == nil {
+		return
+	}
+	db := global.WorkerDb.WithContext(ctx)
+	var outboxRows int64
+	if err := db.Model(&models.OutboxEvent{}).Count(&outboxRows).Error; err != nil {
+		log.Printf("[Metrics] count retained outbox rows: %v", err)
+	} else {
+		metrics.SetOutboxRowsTotal(float64(outboxRows))
+		metrics.SetOutboxRowsSampleSuccess(time.Now().UTC())
+	}
+	refreshNotificationInboxMetrics(ctx, db)
+}
+
+func refreshNotificationInboxMetrics(ctx context.Context, db *gorm.DB) {
 	if ctx == nil || ctx.Err() != nil || db == nil {
 		return
 	}
@@ -96,6 +118,7 @@ func refreshNotificationProjectionMetrics(ctx context.Context, db *gorm.DB) {
 		log.Printf("[Metrics] count notification ConsumerInbox rows: %v", err)
 	} else {
 		metrics.SetConsumerInboxRows(consumerName, float64(inboxRows))
+		metrics.SetConsumerInboxRowsSampleSuccess(consumerName, time.Now().UTC())
 	}
 }
 
