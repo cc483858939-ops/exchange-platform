@@ -642,6 +642,7 @@ func appendAppliedReactionActivities(tx *gorm.DB, kafkaConfig config.KafkaConfig
 	for _, row := range rows {
 		authors[row.ID] = row.AuthorID
 	}
+	outboxEvents := make([]models.OutboxEvent, 0, len(applied))
 	for _, reaction := range applied {
 		authorID := authors[reaction.PostID]
 		if authorID == 0 {
@@ -658,11 +659,9 @@ func appendAppliedReactionActivities(tx *gorm.DB, kafkaConfig config.KafkaConfig
 		if err != nil {
 			return err
 		}
-		if err := eventing.AddOutboxEvent(tx, outboxEvent); err != nil {
-			return err
-		}
+		outboxEvents = append(outboxEvents, outboxEvent)
 	}
-	return nil
+	return eventing.AddOutboxEvents(tx, outboxEvents)
 }
 
 func bulkUpsertPostReactions(tx *gorm.DB, candidates []userBehaviorReactionCandidate) error {

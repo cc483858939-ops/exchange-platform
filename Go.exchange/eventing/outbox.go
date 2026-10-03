@@ -19,6 +19,39 @@ func AddOutboxEvent(tx *gorm.DB, event models.OutboxEvent) error {
 	return tx.Create(&event).Error
 }
 
+const (
+	outboxBatchMaxRows         = 500
+	outboxBatchMaxMessageBytes = 1 << 20
+)
+
+// AddOutboxEvents writes already materialized canonical events using the
+// caller's transaction. Return any error to that transaction so earlier chunks
+// and projection writes roll back together. It neither commits nor deduplicates
+// events. A single oversized message is written alone, preserving the existing
+// single-event contract; ordinary chunks bound both parameters and JSON bytes.
+func AddOutboxEvents(tx *gorm.DB, events []models.OutboxEvent) error {
+	if tx == nil {
+		return errors.New("database transaction is nil")
+	}
+	for start := 0; start < len(events); {
+		end, messageBytes := start, 0
+		for end < len(events) && end-start < outboxBatchMaxRows {
+			nextBytes := len(events[end].Message)
+			if end > start && messageBytes+nextBytes > outboxBatchMaxMessageBytes {
+				break
+			}
+			messageBytes += nextBytes
+			end++
+		}
+		batch := events[start:end]
+		if err := tx.Create(&batch).Error; err != nil {
+			return err
+		}
+		start = end
+	}
+	return nil
+}
+
 // MarkInboxProcessed returns false when the same consumer already processed
 // the event. It must be called in the same transaction as the projection write.
 func MarkInboxProcessed(tx *gorm.DB, consumerName, eventID string) (bool, error) {
