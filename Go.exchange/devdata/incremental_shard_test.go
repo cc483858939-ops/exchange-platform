@@ -56,14 +56,21 @@ func TestBuildIncrementalShardAssignmentsAreBalancedAndOrderIndependent(t *testi
 	}
 }
 
-func TestIncrementalAutoShardUsesHourlyUTCBuckets(t *testing.T) {
+func TestIncrementalAutoShardUsesSixHourlyUTCBuckets(t *testing.T) {
 	base := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
 	want := IncrementalShardForTime(base)
-	for offset := 0; offset <= 4; offset++ {
-		got := IncrementalShardForTime(base.Add(time.Duration(offset)*time.Hour + 30*time.Minute))
-		if got != (want+offset)%IncrementalShardCount {
-			t.Fatalf("offset=%dh shard=%d want=%d", offset, got, (want+offset)%IncrementalShardCount)
+	for hour := 0; hour <= 24; hour++ {
+		at := base.Add(time.Duration(hour)*time.Hour + 30*time.Minute)
+		got := IncrementalShardForTime(at)
+		if expected := (want + hour/6) % IncrementalShardCount; got != expected {
+			t.Fatalf("offset=%dh shard=%d want=%d", hour, got, expected)
 		}
+		if local := at.In(time.FixedZone("SGT", 8*60*60)); IncrementalShardForTime(local) != got {
+			t.Fatalf("timezone changed shard at %s", local)
+		}
+	}
+	if got := IncrementalShardForTime(base.Add(6*time.Hour - time.Nanosecond)); got != want {
+		t.Fatalf("shard switched before six-hour boundary: %d", got)
 	}
 }
 

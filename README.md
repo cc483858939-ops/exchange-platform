@@ -307,6 +307,13 @@ docker compose --env-file deploy/.env -f deploy/compose.prod.yml \
 
 日常增量和校准：
 
+增量任务由外部 scheduler 每 6 小时调用一次，4 个分片约 24 小时覆盖全部
+账号。它使用独立的 `.devdata/x_incremental_checkpoint.json` 保存账号抓取
+进度和同步阶段；失败后先恢复原分片，再处理当前到期分片。完整校准前应先
+完成待恢复的增量检查点，避免基线冲突。配置和恢复说明见
+[DevData 运维文档](Go.exchange/devdata/README.md)。生产 Compose 不会自动安装
+或启动该定时任务。
+
 ```bash
 docker compose --env-file deploy/.env -f deploy/compose.prod.yml \
   --profile rss --profile devdata run --rm devdata \

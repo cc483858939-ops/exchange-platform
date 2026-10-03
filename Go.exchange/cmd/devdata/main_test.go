@@ -2,10 +2,37 @@ package main
 
 import (
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"Go.exchange/devdata"
 )
+
+func TestIncrementalCheckpointPathIsSeparateAndFollowsSnapshotOverride(t *testing.T) {
+	base := t.TempDir()
+	options := commandOptions{}
+	if got := options.incrementalCheckpointPath(base); got == options.checkpointPath(base) || got == options.snapshotPath(base) {
+		t.Fatalf("incremental path aliases full checkpoint or snapshot: %s", got)
+	}
+	options.snapshot = filepath.Join(base, "custom", "baseline.json")
+	if got, want := options.incrementalCheckpointPath(base), filepath.Join(base, "custom", "x_incremental_checkpoint.json"); got != want {
+		t.Fatalf("checkpoint path=%s want=%s", got, want)
+	}
+	options.checkpoint = filepath.Join(base, "custom-checkpoint.json")
+	if got := options.incrementalCheckpointPath(base); got != options.checkpoint {
+		t.Fatalf("explicit checkpoint ignored: %s", got)
+	}
+}
+
+func TestIncrementalSummaryReportsTwentyFourHourCycle(t *testing.T) {
+	var output strings.Builder
+	writeIncrementalSummary(&output, 0, devdata.IncrementalFetchReport{}, devdata.SyncResult{}, devdata.AvatarMirrorReport{}, devdata.CoverMirrorReport{}, devdata.PostMediaMirrorReport{}, devdata.Snapshot{})
+	if !strings.Contains(output.String(), "account_refresh_interval≈24h") || !strings.Contains(output.String(), "requests_total=") {
+		t.Fatalf("unexpected incremental summary: %s", output.String())
+	}
+}
 
 func TestParseCommandFlagsDefaultsToRSSHub(t *testing.T) {
 	for _, name := range []string{"DEVDATA_FETCH_BATCH_SIZE", "DEVDATA_FETCH_BATCH_DELAY"} {

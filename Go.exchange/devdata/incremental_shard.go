@@ -12,7 +12,7 @@ import (
 
 const (
 	IncrementalShardCount    = 4
-	IncrementalShardInterval = time.Hour
+	IncrementalShardInterval = 6 * time.Hour
 )
 
 type incrementalShardAccount struct {

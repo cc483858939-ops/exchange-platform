@@ -334,6 +334,13 @@ func (o commandOptions) checkpointPath(baseDir string) string {
 	return o.checkpoint
 }
 
+func (o commandOptions) incrementalCheckpointPath(baseDir string) string {
+	if strings.TrimSpace(o.checkpoint) == "" {
+		return devdata.DefaultIncrementalCheckpointPath(o.snapshotPath(baseDir))
+	}
+	return o.checkpoint
+}
+
 func parseCommandFlags(command string, args []string, stderr io.Writer, destructive bool) (commandOptions, error) {
 	batchSize, err := fetchIntEnv("DEVDATA_FETCH_BATCH_SIZE", DefaultCommandBatchSize)
 	if err != nil {
@@ -363,7 +370,7 @@ func parseCommandFlags(command string, args []string, stderr io.Writer, destruct
 	flags.BoolVar(&options.allowDestructive, "allow-destructive", false, "allow desired-state retirement/deletion")
 	flags.StringVar(&options.registry, "registry", "", "source registry path (operator/test override)")
 	flags.StringVar(&options.snapshot, "snapshot", "", "snapshot path (operator/test override)")
-	flags.StringVar(&options.checkpoint, "checkpoint", "", "fetch checkpoint path (operator/test override)")
+	flags.StringVar(&options.checkpoint, "checkpoint", "", "checkpoint path (operator/test override)")
 	flags.BoolVar(&options.resetCheckpoint, "reset-checkpoint", false, "remove the existing fetch checkpoint before fetching")
 	flags.IntVar(&options.batchSize, "batch-size", options.batchSize, "RSSHub accounts per sequential batch")
 	flags.DurationVar(&options.batchDelay, "batch-delay", options.batchDelay, "delay between RSSHub batches")
@@ -529,47 +536,48 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	shard, err := devdata.ParseIncrementalShard(options.shard, now)
-	if err != nil {
-		return fmt.Errorf("--shard: %w", err)
-	}
-	selected, err := devdata.SelectIncrementalShardAccounts(registry, shard)
-	if err != nil {
-		return err
-	}
-	selectedKeys := make([]string, 0, len(selected))
-	for _, account := range selected {
-		selectedKeys = append(selectedKeys, account.Key)
-	}
-	snapshotPath := options.snapshotPath(baseDir)
-	baseline, baselineFingerprint, err := devdata.ReadIncrementalBaseline(snapshotPath, registry)
-	if err != nil {
-		return err
-	}
 	client, err := newLiveSource(options.source)
 	if err != nil {
 		return err
 	}
-	batch, fetchReport, err := devdata.FetchIncrementalBatchWithOptions(ctx, client, registry, baseline, devdata.IncrementalFetchOptions{
-		Shard:      shard,
-		FetchCount: options.fetchCount,
-		FetchedAt:  now,
+	var summaries []incrementalSyncSummary
+	results, runErr := devdata.RunIncrementalRefreshResumable(ctx, client, registry, devdata.IncrementalRefreshOptions{
+		Source: options.source, Shard: options.shard, FetchCount: options.fetchCount,
+		SnapshotPath: options.snapshotPath(baseDir), CheckpointPath: options.incrementalCheckpointPath(baseDir),
 		Progress: func(message string) {
 			fmt.Fprintln(stdout, message)
 		},
+	}, func(ctx context.Context, batch devdata.IncrementalBatch) error {
+		summary, err := applyIncrementalBatch(ctx, db, registry, batch, stderr)
+		if err == nil {
+			summaries = append(summaries, summary)
+		}
+		return err
 	})
-	if err != nil {
-		return err
+	for _, result := range results {
+		if result.Applied {
+			summary := summaries[0]
+			summaries = summaries[1:]
+			writeIncrementalSummary(stdout, result.Batch.Shard, result.FetchReport, summary.sync, summary.avatars, summary.covers, summary.media, result.Snapshot)
+		} else {
+			fmt.Fprintf(stdout, "Incremental snapshot recovery completed: shard=%d source_requests=0 database_replayed=false\n", result.Batch.Shard)
+		}
 	}
-	if err := devdata.ValidateIncrementalBatch(batch, registry); err != nil {
-		return err
-	}
-	nextSnapshot, err := devdata.MergeIncrementalSnapshot(baseline, batch, registry, now)
-	if err != nil {
-		return err
-	}
+	return runErr
+}
 
+type incrementalSyncSummary struct {
+	sync    devdata.SyncResult
+	avatars devdata.AvatarMirrorReport
+	covers  devdata.CoverMirrorReport
+	media   devdata.PostMediaMirrorReport
+}
+
+func applyIncrementalBatch(ctx context.Context, db *gorm.DB, registry devdata.SourceRegistry, batch devdata.IncrementalBatch, stderr io.Writer) (incrementalSyncSummary, error) {
+	selectedKeys := make([]string, 0, len(batch.Accounts))
+	for _, account := range batch.Accounts {
+		selectedKeys = append(selectedKeys, account.RegistryKey)
+	}
 	redisClient := bestEffortRedis(stderr)
 	if redisClient != nil {
 		defer redisClient.Close()
@@ -595,17 +603,17 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 	avatarSnapshot := devdata.Snapshot{Version: devdata.DefaultSnapshotVersion, FetchedAt: batch.FetchedAt, Accounts: batch.Accounts}
 	avatarResolutions, avatarReport, err := devdata.PrepareAvatarMirrorsForKeys(ctx, registry, avatarSnapshot, selectedKeys, avatarFetcher, mirrorStore)
 	if err != nil {
-		return err
+		return incrementalSyncSummary{}, err
 	}
 	coverResolutions, coverReport, err := devdata.PrepareCoverMirrorsForKeys(ctx, registry, avatarSnapshot, selectedKeys, coverFetcher, mirrorStore)
 	if err != nil {
-		return err
+		return incrementalSyncSummary{}, err
 	}
 	postMediaResolutions, postMediaReport, err := devdata.PrepareIncrementalPostMediaMirrors(ctx, db, registry, batch, postMediaFetcher, mirrorStore)
 	if err != nil {
-		return err
+		return incrementalSyncSummary{}, err
 	}
-	result, err := devdata.SyncIncremental(ctx, db, registry, batch, redisClient, now, devdata.SyncOptions{
+	result, err := devdata.SyncIncremental(ctx, db, registry, batch, redisClient, time.Now().UTC(), devdata.SyncOptions{
 		AvatarResolutions:                    avatarResolutions,
 		CoverResolutions:                     coverResolutions,
 		PostMediaResolutions:                 postMediaResolutions,
@@ -613,24 +621,16 @@ func runIncrementalRefresh(ctx context.Context, baseDir string, options commandO
 		PreserveExistingCoverWhenUnresolved:  true,
 	})
 	if err != nil {
-		return err
+		return incrementalSyncSummary{}, err
 	}
-	if err := devdata.WriteIncrementalSnapshotIfUnchanged(snapshotPath, baselineFingerprint, nextSnapshot, registry); err != nil {
-		if errors.Is(err, devdata.ErrIncrementalSnapshotChanged) {
-			fmt.Fprintln(stderr, "Incremental refresh aborted: rolling snapshot changed during this run; retry against the new baseline")
-			return err
-		}
-		return fmt.Errorf("write incremental snapshot: %w", err)
-	}
-	writeIncrementalSummary(stdout, shard, fetchReport, result, avatarReport, coverReport, postMediaReport, nextSnapshot)
 	writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
 	writeCoverLocalizationWarning(stderr, coverReport.Failed)
-	return nil
+	return incrementalSyncSummary{sync: result, avatars: avatarReport, covers: coverReport, media: postMediaReport}, nil
 }
 
 func writeIncrementalSummary(stdout io.Writer, shard int, fetchReport devdata.IncrementalFetchReport, syncResult devdata.SyncResult, avatarReport devdata.AvatarMirrorReport, coverReport devdata.CoverMirrorReport, postMediaReport devdata.PostMediaMirrorReport, snapshot devdata.Snapshot) {
-	fmt.Fprintf(stdout, "Incremental refresh: shard=%d/%d accounts=%d account_refresh_interval≈4h fetch_count=%d escalated_to_60=%d coverage_window_exhausted=%d\n", shard, devdata.IncrementalShardCount, fetchReport.Accounts, fetchReport.FetchCount, fetchReport.EscalatedToFull, fetchReport.CoverageWindowExhausted)
-	fmt.Fprintf(stdout, "Source: requests=%d posts_returned=%d scanned=%d eligible=%d\n", fetchReport.APIRequests, fetchReport.SourcePostsReturned, fetchReport.SourcePostsScanned, fetchReport.EligibleSelected)
+	fmt.Fprintf(stdout, "Incremental refresh: shard=%d/%d accounts=%d account_refresh_interval≈%dh fetch_count=%d escalated_to_60=%d coverage_window_exhausted=%d\n", shard, devdata.IncrementalShardCount, fetchReport.Accounts, int(devdata.IncrementalShardInterval/time.Hour)*devdata.IncrementalShardCount, fetchReport.FetchCount, fetchReport.EscalatedToFull, fetchReport.CoverageWindowExhausted)
+	fmt.Fprintf(stdout, "Source: requests_total=%d posts_returned=%d scanned=%d eligible=%d\n", fetchReport.APIRequests, fetchReport.SourcePostsReturned, fetchReport.SourcePostsScanned, fetchReport.EligibleSelected)
 	fmt.Fprintf(stdout, "Sync: new_posts=%d existing_posts=%d reactivated=%d media_uploaded=%d media_reused=%d avatars_uploaded=%d avatars_reused=%d covers_uploaded=%d covers_reused=%d covers_cleared=%d\n", syncResult.Inserted, syncResult.Kept, syncResult.Reactivated, postMediaReport.Uploaded, postMediaReport.Reused, avatarReport.Uploaded, avatarReport.Reused, coverReport.Uploaded, coverReport.Reused, coverReport.Cleared)
 	fmt.Fprintf(stdout, "Snapshot: accounts=%d posts=%d\n", len(snapshot.Accounts), len(snapshot.Posts))
 }
