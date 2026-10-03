@@ -21,6 +21,7 @@ import (
 	"Go.exchange/recommendation"
 	"Go.exchange/router"
 	"Go.exchange/runtimehealth"
+	"Go.exchange/services"
 	"Go.exchange/translation"
 )
 
@@ -30,10 +31,12 @@ const (
 )
 
 type APIRuntime struct {
-	Server            *http.Server
-	readiness         *runtimehealth.APIReadiness
-	traceDispatcher   recommendation.TraceDispatcher
-	traceDrainTimeout time.Duration
+	Server             *http.Server
+	readiness          *runtimehealth.APIReadiness
+	traceDispatcher    recommendation.TraceDispatcher
+	traceDrainTimeout  time.Duration
+	translationService *translation.TranslationService
+	rateService        *services.RateService
 }
 
 func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher) (_ *APIRuntime, returnErr error) {
@@ -72,8 +75,14 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 			CacheJitter:    time.Duration(translationConfig.CacheJitterHours) * time.Hour,
 			MaxSourceRunes: translationConfig.MaxSourceRunes,
 			BaseURL:        translationConfig.BaseURL,
+			WorkTimeout:    time.Duration(translationConfig.TimeoutSeconds)*time.Second + 2*translation.DefaultCacheTimeout,
 		},
 	)
+	defer func() {
+		if returnErr != nil {
+			translationService.Close()
+		}
+	}()
 	apiDB := global.APIDb
 	recommendationDependencies, err := recommendation.NewGormServiceDependencies(apiDB, global.RedisDB)
 	if err != nil {
@@ -140,7 +149,9 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 	}()
 	return &APIRuntime{
 		Server: server, readiness: readiness, traceDispatcher: traceDispatcher,
-		traceDrainTimeout: time.Duration(recommendationConfig.Trace.ShutdownDrainTimeoutMS) * time.Millisecond,
+		traceDrainTimeout:  time.Duration(recommendationConfig.Trace.ShutdownDrainTimeoutMS) * time.Millisecond,
+		translationService: translationService,
+		rateService:        services.DefaultExchangeRateService(),
 	}, nil
 }
 
@@ -188,6 +199,12 @@ func shutdownAPIRuntime(cancel context.CancelFunc, runtime *APIRuntime, waitGrou
 		if err := runtime.Server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("HTTP server forced to shut down: %v", err)
 		}
+	}
+	if runtime.translationService != nil {
+		runtime.translationService.Close()
+	}
+	if runtime.rateService != nil {
+		runtime.rateService.Close()
 	}
 	traceDrainTimeout := runtime.traceDrainTimeout
 	if traceDrainTimeout <= 0 {

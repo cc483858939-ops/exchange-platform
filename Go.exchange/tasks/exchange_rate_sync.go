@@ -11,14 +11,18 @@ import (
 )
 
 func startExchangeRateRefresh(ctx context.Context, wg *sync.WaitGroup) {
+	service := services.DefaultExchangeRateService()
+	stopClose := context.AfterFunc(ctx, service.Close)
 	interval := config.ExchangeRateRefreshInterval()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer stopClose()
+		defer service.Close()
 		refresh := func() {
 			requestCtx, cancel := context.WithTimeout(ctx, config.ExchangeRateRequestTimeout())
 			defer cancel()
-			if _, err := services.DefaultExchangeRateService().Refresh(requestCtx); err != nil && ctx.Err() == nil {
+			if _, err := service.Refresh(requestCtx); err != nil && ctx.Err() == nil {
 				log.Printf("[ExchangeRate] refresh failed: %v", err)
 			}
 		}

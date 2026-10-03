@@ -49,9 +49,10 @@ type Service interface {
 
 // Cache is deliberately small so the translation service can be tested
 // without a Redis server. RedisCache is the production implementation.
+// Implementations must honor the context deadline for the actual operation.
 type Cache interface {
-	Get(key string) (string, error)
-	Set(key, value string, expiration time.Duration) error
+	Get(ctx context.Context, key string) (string, error)
+	Set(ctx context.Context, key, value string, expiration time.Duration) error
 }
 
 type JitterFunc func(max time.Duration) time.Duration

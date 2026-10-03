@@ -69,18 +69,22 @@ type SnapshotStore interface {
 }
 
 type RateServiceOptions struct {
-	FreshFor time.Duration
-	MaxStale time.Duration
-	Now      func() time.Time
+	FreshFor       time.Duration
+	MaxStale       time.Duration
+	Now            func() time.Time
+	RefreshTimeout time.Duration
 }
 
 type RateService struct {
-	provider SnapshotProvider
-	store    SnapshotStore
-	freshFor time.Duration
-	maxStale time.Duration
-	now      func() time.Time
-	group    singleflight.Group
+	provider       SnapshotProvider
+	store          SnapshotStore
+	freshFor       time.Duration
+	maxStale       time.Duration
+	now            func() time.Time
+	group          singleflight.Group
+	refreshTimeout time.Duration
+	lifetime       context.Context
+	close          context.CancelFunc
 }
 
 func NewRateService(provider SnapshotProvider, store SnapshotStore, options RateServiceOptions) *RateService {
@@ -96,16 +100,46 @@ func NewRateService(provider SnapshotProvider, store SnapshotStore, options Rate
 	if now == nil {
 		now = time.Now
 	}
-	return &RateService{provider: provider, store: store, freshFor: freshFor, maxStale: maxStale, now: now}
+	refreshTimeout := options.RefreshTimeout
+	if refreshTimeout <= 0 {
+		refreshTimeout = 9 * time.Second
+	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	return &RateService{provider: provider, store: store, freshFor: freshFor, maxStale: maxStale, now: now,
+		refreshTimeout: refreshTimeout, lifetime: lifetime, close: cancel}
 }
 
+// Close cancels shared refreshes when the owning API or worker stops.
+func (s *RateService) Close() { s.close() }
+
 func (s *RateService) Refresh(ctx context.Context) (RateSnapshot, error) {
+	if ctx == nil {
+		return RateSnapshot{}, errors.New("exchange-rate refresh context is nil")
+	}
+	if err := callerContextError(ctx); err != nil {
+		return RateSnapshot{}, err
+	}
+	if err := s.lifetime.Err(); err != nil {
+		return RateSnapshot{}, err
+	}
 	if s.provider == nil || s.store == nil {
 		return RateSnapshot{}, ErrNoRateSnapshot
 	}
-	value, err, _ := s.group.Do("exchange-rate-snapshot", func() (interface{}, error) {
-		snapshot, err := s.provider.Fetch(ctx)
+	resultChannel := s.group.DoChan("exchange-rate-snapshot", func() (interface{}, error) {
+		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.refreshTimeout)
+		stopClose := context.AfterFunc(s.lifetime, cancel)
+		defer func() { stopClose(); cancel() }()
+		if s.lifetime.Err() != nil {
+			cancel()
+		}
+		if err := workCtx.Err(); err != nil {
+			return nil, err
+		}
+		snapshot, err := s.provider.Fetch(workCtx)
 		if err != nil {
+			return nil, err
+		}
+		if err := workCtx.Err(); err != nil {
 			return nil, err
 		}
 		if err := validateSnapshot(snapshot); err != nil {
@@ -114,15 +148,31 @@ func (s *RateService) Refresh(ctx context.Context) (RateSnapshot, error) {
 		if snapshot.FetchedAt.IsZero() {
 			snapshot.FetchedAt = s.now().UTC()
 		}
-		if err := s.store.Save(ctx, snapshot, s.maxStale); err != nil {
+		if err := s.store.Save(workCtx, snapshot, s.maxStale); err != nil {
 			return nil, fmt.Errorf("save exchange-rate snapshot: %w", err)
+		}
+		if err := workCtx.Err(); err != nil {
+			return nil, err
 		}
 		return snapshot, nil
 	})
-	if err != nil {
-		return RateSnapshot{}, err
+	select {
+	case <-ctx.Done():
+		return RateSnapshot{}, ctx.Err()
+	case <-s.lifetime.Done():
+		return RateSnapshot{}, s.lifetime.Err()
+	case result := <-resultChannel:
+		if err := callerContextError(ctx); err != nil {
+			return RateSnapshot{}, err
+		}
+		if err := s.lifetime.Err(); err != nil {
+			return RateSnapshot{}, err
+		}
+		if result.Err != nil {
+			return RateSnapshot{}, result.Err
+		}
+		return result.Val.(RateSnapshot), nil
 	}
-	return value.(RateSnapshot), nil
 }
 
 func (s *RateService) Currencies(ctx context.Context) (CurrencyList, error) {
@@ -184,6 +234,9 @@ func (s *RateService) snapshot(ctx context.Context) (RateSnapshot, string, error
 	if err := callerContextError(ctx); err != nil {
 		return RateSnapshot{}, "", err
 	}
+	if err := s.lifetime.Err(); err != nil {
+		return RateSnapshot{}, "", err
+	}
 
 	var cached RateSnapshot
 	if s.store != nil {
@@ -206,14 +259,14 @@ func (s *RateService) snapshot(ctx context.Context) (RateSnapshot, string, error
 		return RateSnapshot{}, "", err
 	}
 	refreshed, err := s.Refresh(ctx)
-	if err == nil {
-		if ctxErr := callerContextError(ctx); ctxErr != nil {
-			return RateSnapshot{}, "", ctxErr
-		}
-		return refreshed, FreshnessFresh, nil
-	}
 	if ctxErr := callerContextError(ctx); ctxErr != nil {
 		return RateSnapshot{}, "", ctxErr
+	}
+	if closeErr := s.lifetime.Err(); closeErr != nil {
+		return RateSnapshot{}, "", closeErr
+	}
+	if err == nil {
+		return refreshed, FreshnessFresh, nil
 	}
 	if !cached.FetchedAt.IsZero() && s.now().Sub(cached.FetchedAt) <= s.maxStale {
 		return cached, FreshnessStale, nil
@@ -489,7 +542,8 @@ func DefaultExchangeRateService() *RateService {
 		defaultRateService = NewRateService(
 			provider,
 			RedisSnapshotStore{Client: global.RedisDB},
-			RateServiceOptions{FreshFor: config.ExchangeRateFreshFor(), MaxStale: config.ExchangeRateMaxStale()},
+			RateServiceOptions{FreshFor: config.ExchangeRateFreshFor(), MaxStale: config.ExchangeRateMaxStale(),
+				RefreshTimeout: config.ExchangeRateRequestTimeout() + time.Second},
 		)
 	})
 	return defaultRateService

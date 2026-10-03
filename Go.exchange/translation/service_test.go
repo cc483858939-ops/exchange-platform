@@ -59,7 +59,7 @@ func newFakeTranslationCache() *fakeTranslationCache {
 	return &fakeTranslationCache{values: make(map[string]string)}
 }
 
-func (c *fakeTranslationCache) Get(key string) (string, error) {
+func (c *fakeTranslationCache) Get(_ context.Context, key string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.getCalls++
@@ -73,7 +73,7 @@ func (c *fakeTranslationCache) Get(key string) (string, error) {
 	return value, nil
 }
 
-func (c *fakeTranslationCache) Set(key, value string, expiration time.Duration) error {
+func (c *fakeTranslationCache) Set(_ context.Context, key, value string, expiration time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.setCalls++

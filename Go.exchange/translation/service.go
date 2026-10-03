@@ -20,6 +20,7 @@ const (
 	DefaultBaseTTL        = 7 * 24 * time.Hour
 	DefaultCacheJitter    = 24 * time.Hour
 	DefaultMaxSourceRunes = 2000
+	DefaultCacheTimeout   = 250 * time.Millisecond
 )
 
 type ServiceConfig struct {
@@ -31,12 +32,16 @@ type ServiceConfig struct {
 	CacheJitter    time.Duration
 	MaxSourceRunes int
 	Jitter         JitterFunc
+	CacheTimeout   time.Duration
+	WorkTimeout    time.Duration
 }
 
 type TranslationService struct {
 	provider Provider
 	cache    Cache
 	config   ServiceConfig
+	lifetime context.Context
+	close    context.CancelFunc
 	// group is process-local; Redis is only the durable derived-data cache in v1.
 	group singleflight.Group
 }
@@ -60,12 +65,28 @@ func NewService(provider Provider, cache Cache, config ServiceConfig) *Translati
 	if config.Jitter == nil {
 		config.Jitter = cryptoJitter
 	}
-	return &TranslationService{provider: provider, cache: cache, config: config}
+	if config.CacheTimeout <= 0 {
+		config.CacheTimeout = DefaultCacheTimeout
+	}
+	if config.WorkTimeout <= 0 {
+		config.WorkTimeout = DefaultTimeout + 2*config.CacheTimeout
+	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	return &TranslationService{provider: provider, cache: cache, config: config, lifetime: lifetime, close: cancel}
 }
+
+// Close cancels shared work without coupling it to any individual caller.
+func (s *TranslationService) Close() { s.close() }
 
 func (s *TranslationService) Translate(ctx context.Context, postID uint, content, sourceLanguage, targetLanguage string) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	if err := s.lifetime.Err(); err != nil {
+		return Result{}, err
 	}
 	started := time.Now()
 	source := NormalizeSourceLanguage(sourceLanguage)
@@ -95,27 +116,49 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 	}
 
 	key := CacheKey(postID, content, source, target, BackendIdentity(s.config.BaseURL, s.config.Model), s.config.PromptVersion)
-	if cached, found, _ := s.readCache(key, source, target); found {
+	cached, found, _ := s.readCache(ctx, key, source, target)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	if err := s.lifetime.Err(); err != nil {
+		return Result{}, err
+	}
+	if found {
 		outcome = "cache_hit"
 		return cached, nil
 	}
 
 	resultChannel := s.group.DoChan(key, func() (interface{}, error) {
+		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.config.WorkTimeout)
+		stopClose := context.AfterFunc(s.lifetime, cancel)
+		defer func() { stopClose(); cancel() }()
+		if s.lifetime.Err() != nil {
+			cancel()
+		}
 		// The second lookup is mandatory: another request can have populated
 		// Redis between the first read and this process-local flight.
-		if cached, found, _ := s.readCache(key, source, target); found {
+		cached, found, _ := s.readCache(workCtx, key, source, target)
+		if s.lifetime.Err() != nil {
+			cancel()
+		}
+		if err := translationWorkError(workCtx); err != nil {
+			return nil, err
+		}
+		if found {
 			return cached, nil
 		}
 		if s.provider == nil {
 			return nil, newProviderError(ProviderErrorMisconfigured, 0, ErrProviderMisconfigured)
 		}
 
-		providerContext := context.WithoutCancel(ctx)
 		providerStarted := time.Now()
-		providerResult, err := s.provider.Translate(providerContext, Request{
+		providerResult, err := s.provider.Translate(workCtx, Request{
 			Content: content, SourceLanguage: source, TargetLanguage: target,
 		})
 		metrics.ObserveTranslationProviderDuration(time.Since(providerStarted))
+		if workErr := translationWorkError(workCtx); workErr != nil {
+			err = workErr
+		}
 		if err != nil {
 			errorClass := providerOutcome(err)
 			metrics.RecordTranslationProviderRequest(errorClass)
@@ -156,7 +199,10 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 						expiration += s.config.CacheJitter - time.Nanosecond
 					}
 				}
-				if setErr := s.cache.Set(key, string(payload), expiration); setErr != nil {
+				_, setErr := s.cacheOperation(workCtx, func(cacheCtx context.Context) (string, error) {
+					return "", s.cache.Set(cacheCtx, key, string(payload), expiration)
+				})
+				if setErr != nil {
 					metrics.RecordTranslationCacheOperation("set", "error")
 					log.Printf("[Translation] cache set failed for post %d: %v", postID, setErr)
 				} else {
@@ -164,13 +210,24 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 				}
 			}
 		}
+		if err := translationWorkError(workCtx); err != nil {
+			return nil, err
+		}
 		return result, nil
 	})
 
 	select {
 	case <-ctx.Done():
 		return Result{}, ctx.Err()
+	case <-s.lifetime.Done():
+		return Result{}, s.lifetime.Err()
 	case flightResult := <-resultChannel:
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
+		if err := s.lifetime.Err(); err != nil {
+			return Result{}, err
+		}
 		if flightResult.Err != nil {
 			outcome = "provider_error"
 			return Result{}, flightResult.Err
@@ -189,11 +246,13 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 	}
 }
 
-func (s *TranslationService) readCache(key, source, target string) (Result, bool, error) {
+func (s *TranslationService) readCache(ctx context.Context, key, source, target string) (Result, bool, error) {
 	if s.cache == nil {
 		return Result{}, false, nil
 	}
-	raw, err := s.cache.Get(key)
+	raw, err := s.cacheOperation(ctx, func(cacheCtx context.Context) (string, error) {
+		return s.cache.Get(cacheCtx, key)
+	})
 	if err != nil {
 		if isRedisCacheMiss(err) {
 			metrics.RecordTranslationCacheOperation("get", "miss")
@@ -220,6 +279,51 @@ func (s *TranslationService) readCache(key, source, target string) (Result, bool
 		Translation: strings.TrimSpace(value.Translation), SourceLanguage: source,
 		TargetLanguage: target, Translated: true,
 	}, true, nil
+}
+
+// Redis v7 observes a deadline during socket I/O, but does not interrupt an
+// active read on cancellation alone. The operation has a short I/O budget;
+// the caller can stop waiting immediately without starting replacement work.
+func (s *TranslationService) cacheOperation(ctx context.Context, operation func(context.Context) (string, error)) (string, error) {
+	if err := s.lifetime.Err(); err != nil {
+		return "", err
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, s.config.CacheTimeout)
+	defer cancel()
+	if err := cacheCtx.Err(); err != nil {
+		return "", err
+	}
+	type result struct {
+		value string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := operation(cacheCtx)
+		done <- result{value, err}
+	}()
+	select {
+	case <-cacheCtx.Done():
+		return "", cacheCtx.Err()
+	case <-s.lifetime.Done():
+		return "", s.lifetime.Err()
+	case value := <-done:
+		if err := cacheCtx.Err(); err != nil {
+			return "", err
+		}
+		return value.value, value.err
+	}
+}
+
+func translationWorkError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		kind := ProviderErrorUnavailable
+		if errors.Is(err, context.DeadlineExceeded) {
+			kind = ProviderErrorTimeout
+		}
+		return newProviderError(kind, 0, err)
+	}
+	return nil
 }
 
 func isKnownProviderError(err error) bool {

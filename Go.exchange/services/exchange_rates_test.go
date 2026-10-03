@@ -161,6 +161,7 @@ func TestRateServiceDoesNotUseStaleSnapshotAfterCallerDeadline(t *testing.T) {
 		store,
 		RateServiceOptions{FreshFor: 30 * time.Minute, MaxStale: 24 * time.Hour, Now: func() time.Time { return now }},
 	)
+	t.Cleanup(service.Close)
 
 	_, err := service.Quote(ctx, "EUR", "USD", "2")
 	if !errors.Is(err, context.DeadlineExceeded) {

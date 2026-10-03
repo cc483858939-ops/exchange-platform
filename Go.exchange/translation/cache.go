@@ -1,6 +1,7 @@
 package translation
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -19,18 +20,32 @@ func NewRedisCache(client *redis.Client) *RedisCache {
 	return &RedisCache{client: client}
 }
 
-func (c *RedisCache) Get(key string) (string, error) {
+func (c *RedisCache) Get(ctx context.Context, key string) (string, error) {
 	if c == nil || c.client == nil {
 		return "", ErrCacheUnavailable
 	}
-	return c.client.Get(key).Result()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	value, err := c.client.WithContext(ctx).Get(key).Result()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	return value, err
 }
 
-func (c *RedisCache) Set(key, value string, expiration time.Duration) error {
+func (c *RedisCache) Set(ctx context.Context, key, value string, expiration time.Duration) error {
 	if c == nil || c.client == nil {
 		return ErrCacheUnavailable
 	}
-	return c.client.Set(key, value, expiration).Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := c.client.WithContext(ctx).Set(key, value, expiration).Err()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func ContentHash(content string) string {
