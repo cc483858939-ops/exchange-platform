@@ -28,10 +28,11 @@ func TestTopicFeedStableSeededBucketTraversalIntegration(t *testing.T) {
 
 	anchor := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
 	sourceA, sourceB := "topic-a-"+uuid.NewString(), "topic-b-"+uuid.NewString()
+	disabledSource := "topic-disabled-" + uuid.NewString()
 	topic := config.CuratedTopic{
 		Slug:  "topic-seeded-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
 		Label: "Topic", Description: "Seeded pagination fixture",
-		SourceKeys: []string{sourceA, sourceB}, Enabled: true,
+		SourceKeys: []string{sourceA, sourceB, disabledSource}, Enabled: true,
 	}
 	originalLoader := loadTopicConfiguration
 	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) {
@@ -104,7 +105,16 @@ func TestTopicFeedStableSeededBucketTraversalIntegration(t *testing.T) {
 
 	accountA := newAccount(sourceA, true)
 	accountB := newAccount(sourceB, true)
-	disabledAccount := newAccount("topic-disabled-"+uuid.NewString(), false)
+	disabledAccount := newAccount(disabledSource, true)
+	disabledResult := db.Model(&models.DevDataMirrorAccount{}).
+		Where("id = ?", disabledAccount.ID).
+		UpdateColumn("enabled", false)
+	if disabledResult.Error != nil {
+		t.Fatal(disabledResult.Error)
+	}
+	if disabledResult.RowsAffected != 1 {
+		t.Fatalf("disabled account update affected %d rows, want 1", disabledResult.RowsAffected)
+	}
 	outsideAccount := newAccount("topic-outside-"+uuid.NewString(), true)
 	author, deletedAuthor := newUser("author"), newUser("deleted-author")
 	eligible := make(map[uint]time.Time)
@@ -223,6 +233,11 @@ func TestTopicFeedStableSeededBucketTraversalIntegration(t *testing.T) {
 			t.Errorf("eligible post %d omitted", id)
 		}
 	}
+	for _, id := range []uint{disabled.ID, outside.ID, tombstone.ID, private.ID, deleted.ID, deletedAuthorPost.ID} {
+		if _, ok := seen[id]; ok {
+			t.Errorf("excluded post %d appeared in traversal", id)
+		}
+	}
 	bucketZeroOrder := func(values [][]uint) []uint {
 		out := make([]uint, 0)
 		for _, id := range flatten(values) {
@@ -269,6 +284,65 @@ func TestTopicFeedStableSeededBucketTraversalIntegration(t *testing.T) {
 	if !foundLate {
 		t.Fatal("new traversal did not include the imported historical post")
 	}
+
+	t.Run("hydration loss keeps remaining candidates reachable", func(t *testing.T) {
+		lossSource := "topic-hydration-loss-" + uuid.NewString()
+		lossTopic := config.CuratedTopic{
+			Slug:       "topic-hydration-loss-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+			SourceKeys: []string{lossSource}, Enabled: true,
+		}
+		lossAccount := newAccount(lossSource, true)
+		lossAt := anchor.Add(-20 * time.Minute)
+		for index := 0; index < 3; index++ {
+			post := newPost(author, "hydration-loss-"+strconv.Itoa(index), lossAt, "public")
+			mapPost(lossAccount, post, lossAt, anchor.Add(-time.Second), models.DevDataMirrorPostStateActive)
+		}
+		lossHash, err := topicCursorCriteriaHash(lossTopic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		traversal := topicTraversal{TopicHash: lossHash, AnchorAt: anchor, Seed: 19}
+		candidates, err := loadTopicTraversalCandidates(db, lossTopic, 3, traversal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(candidates) != 3 {
+			t.Fatalf("candidate count=%d, want 3", len(candidates))
+		}
+
+		page, err := loadTopicPostsPageWithTraversalAndHydrator(
+			context.Background(), db, lossTopic, 2, traversal,
+			func(*gorm.DB) ([]postResponse, error) { return []postResponse{}, nil },
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) != 0 || page.NextCursor == nil {
+			t.Fatalf("page items=%v next_cursor=%v, want empty items and continuation", topicPostIDs(page.Items), page.NextCursor)
+		}
+		cursor, err := decodeTopicPostCursor(*page.NextCursor, lossHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cursor.PostID != candidates[1].ID {
+			t.Fatalf("fallback cursor post=%d, want last selected candidate %d (not lookahead %d)", cursor.PostID, candidates[1].ID, candidates[2].ID)
+		}
+
+		continued, err := resolveTopicTraversal(lossTopic, &cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nextPage, err := loadTopicPostsPageWithTraversal(context.Background(), db, lossTopic, 2, continued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range topicPostIDs(nextPage.Items) {
+			if id == candidates[2].ID {
+				return
+			}
+		}
+		t.Fatalf("candidate after fallback cursor %d was not reachable; next page=%v", cursor.PostID, topicPostIDs(nextPage.Items))
+	})
 
 	changed := topic
 	changed.SourceKeys = append(append([]string(nil), topic.SourceKeys...), "topic-source-c-"+uuid.NewString())

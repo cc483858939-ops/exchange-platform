@@ -152,6 +152,10 @@ func loadTopicPostsPageFromDB(ctx context.Context, topic config.CuratedTopic, li
 }
 
 func loadTopicPostsPageWithTraversal(ctx context.Context, db *gorm.DB, topic config.CuratedTopic, limit int, traversal topicTraversal) (postPageResponse, error) {
+	return loadTopicPostsPageWithTraversalAndHydrator(ctx, db, topic, limit, traversal, loadPostResponses)
+}
+
+func loadTopicPostsPageWithTraversalAndHydrator(ctx context.Context, db *gorm.DB, topic config.CuratedTopic, limit int, traversal topicTraversal, hydrate func(*gorm.DB) ([]postResponse, error)) (postPageResponse, error) {
 	if db == nil {
 		return postPageResponse{}, errors.New("database is not initialized")
 	}
@@ -180,7 +184,7 @@ func loadTopicPostsPageWithTraversal(ctx context.Context, db *gorm.DB, topic con
 	for _, row := range rows {
 		postIDs = append(postIDs, row.ID)
 	}
-	responses, err := loadPostResponses(publicPostScope(
+	responses, err := hydrate(publicPostScope(
 		db.Model(&models.Post{}).
 			Select(publicPostSelectColumns).
 			Where("posts.id IN ?", postIDs),
@@ -200,16 +204,25 @@ func loadTopicPostsPageWithTraversal(ctx context.Context, db *gorm.DB, topic con
 			returnedRows = append(returnedRows, row)
 		}
 	}
-	if hasMore && len(returnedRows) > 0 {
-		lastRow := returnedRows[len(returnedRows)-1]
+	var cursorRow *topicPostQueryRow
+	if hasMore {
+		if len(returnedRows) > 0 {
+			row := returnedRows[len(returnedRows)-1]
+			cursorRow = &row
+		} else if len(rows) > 0 {
+			row := rows[len(rows)-1]
+			cursorRow = &row
+		}
+	}
+	if cursorRow != nil {
 		encoded, err := encodeTopicPostCursor(topicPostCursorV2{
 			Version:    topicPostCursorVersion,
 			TopicHash:  traversal.TopicHash,
 			AnchorAt:   traversal.AnchorAt,
 			Seed:       traversal.Seed,
-			Bucket:     lastRow.Bucket,
-			ShuffleKey: lastRow.ShuffleKey,
-			PostID:     lastRow.ID,
+			Bucket:     cursorRow.Bucket,
+			ShuffleKey: cursorRow.ShuffleKey,
+			PostID:     cursorRow.ID,
 		})
 		if err != nil {
 			return postPageResponse{}, fmt.Errorf("encode topic cursor: %w", err)
@@ -306,9 +319,28 @@ FROM (
 }
 
 func loadNextTopicBucket(db *gorm.DB, topic config.CuratedTopic, anchorAt time.Time, bucket int64) (int64, bool, error) {
-	bucketStart, _, err := topicBucketRange(anchorAt, bucket)
+	query, args, err := topicNextBucketLookupQuery(topic, anchorAt, bucket)
 	if err != nil {
 		return 0, false, err
+	}
+	var sourceTime sql.NullTime
+	if err := db.Raw(query, args...).Row().Scan(&sourceTime); err != nil {
+		return 0, false, err
+	}
+	if !sourceTime.Valid {
+		return 0, false, nil
+	}
+	nextBucket, err := topicBucketIndex(anchorAt, sourceTime.Time)
+	if err != nil {
+		return 0, false, err
+	}
+	return nextBucket, true, nil
+}
+
+func topicNextBucketLookupQuery(topic config.CuratedTopic, anchorAt time.Time, bucket int64) (string, []interface{}, error) {
+	bucketStart, _, err := topicBucketRange(anchorAt, bucket)
+	if err != nil {
+		return "", nil, err
 	}
 	// Jump to the next occupied bucket instead of querying every empty twelve-hour interval.
 	query := `
@@ -324,18 +356,7 @@ WHERE mirror_accounts.registry_key IN ?
   AND mirror_posts.imported_at <= ?
   AND mirror_posts.source_created_at <= ?
   AND ` + publicPostEligibilitySQL("posts")
-	var sourceTime sql.NullTime
-	if err := db.Raw(query, topic.SourceKeys, models.DevDataMirrorPostStateActive, anchorAt, bucketStart).Row().Scan(&sourceTime); err != nil {
-		return 0, false, err
-	}
-	if !sourceTime.Valid {
-		return 0, false, nil
-	}
-	nextBucket, err := topicBucketIndex(anchorAt, sourceTime.Time)
-	if err != nil {
-		return 0, false, err
-	}
-	return nextBucket, true, nil
+	return query, []interface{}{topic.SourceKeys, models.DevDataMirrorPostStateActive, anchorAt, bucketStart}, nil
 }
 
 func writeTopicInternalError(ctx *gin.Context) {

@@ -15,7 +15,78 @@ import (
 	"gorm.io/gorm"
 )
 
+type topicExplainPlan struct {
+	Plan topicExplainNode `json:"Plan"`
+}
+
+type topicExplainNode struct {
+	IndexName string             `json:"Index Name"`
+	TotalCost float64            `json:"Total Cost"`
+	PlanRows  float64            `json:"Plan Rows"`
+	Plans     []topicExplainNode `json:"Plans"`
+}
+
 func TestTopicBucketQueryPlanUsesMirrorMembershipIndexIntegration(t *testing.T) {
+	tx, topic, anchor := openTopicQueryPlanFixture(t)
+	query, args, err := topicBucketCandidatesQuery(topic, anchor, 7654321, 0, nil, 21)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planJSON, plan, err := explainTopicQuery(tx, query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 1 || !topicPlanUsesIndex(plan[0].Plan, "idx_devdata_mirror_posts_account_state") {
+		t.Fatalf("current-bucket query plan did not use the mirror membership/source-time index: %s", string(planJSON))
+	}
+}
+
+func TestTopicNextBucketQueryPlanUsesMirrorMembershipIndexIntegration(t *testing.T) {
+	tx, topic, anchor := openTopicQueryPlanFixture(t)
+	var versionNum int
+	if err := tx.Raw("SHOW server_version_num").Row().Scan(&versionNum); err != nil {
+		t.Fatal(err)
+	}
+	if major := versionNum / 10000; major != 16 {
+		t.Skipf("MAX versus ordered LIMIT comparison requires PostgreSQL 16, got server_version_num=%d", versionNum)
+	}
+
+	maxQuery, args, err := topicNextBucketLookupQuery(topic, anchor, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxPlanJSON, maxPlan, err := explainTopicQuery(tx, maxQuery, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(maxPlan) != 1 || !topicPlanUsesIndex(maxPlan[0].Plan, "idx_devdata_mirror_posts_account_state") {
+		t.Fatalf("next-bucket MAX query plan did not use the mirror membership/source-time index: %s", string(maxPlanJSON))
+	}
+
+	orderedQuery := strings.Replace(maxQuery,
+		"SELECT MAX(mirror_posts.source_created_at)",
+		"SELECT mirror_posts.source_created_at", 1)
+	if orderedQuery == maxQuery {
+		t.Fatal("could not derive ordered Top-1 comparison from the production query")
+	}
+	orderedQuery = strings.TrimSpace(orderedQuery) + "\nORDER BY mirror_posts.source_created_at DESC\nLIMIT 1"
+	orderedPlanJSON, orderedPlan, err := explainTopicQuery(tx, orderedQuery, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orderedPlan) != 1 {
+		t.Fatalf("ordered Top-1 query returned %d plan roots: %s", len(orderedPlan), string(orderedPlanJSON))
+	}
+	t.Logf("PostgreSQL 16 MAX plan: total_cost=%.2f plan_rows=%.0f uses_membership_index=%t plan=%s",
+		maxPlan[0].Plan.TotalCost, maxPlan[0].Plan.PlanRows,
+		topicPlanUsesIndex(maxPlan[0].Plan, "idx_devdata_mirror_posts_account_state"), maxPlanJSON)
+	t.Logf("PostgreSQL 16 ordered LIMIT 1 plan: total_cost=%.2f plan_rows=%.0f uses_membership_index=%t plan=%s",
+		orderedPlan[0].Plan.TotalCost, orderedPlan[0].Plan.PlanRows,
+		topicPlanUsesIndex(orderedPlan[0].Plan, "idx_devdata_mirror_posts_account_state"), orderedPlanJSON)
+}
+
+func openTopicQueryPlanFixture(t *testing.T) (*gorm.DB, config.CuratedTopic, time.Time) {
+	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN is not set")
@@ -28,7 +99,7 @@ func TestTopicBucketQueryPlanUsesMirrorMembershipIndexIntegration(t *testing.T) 
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
-	defer tx.Rollback()
+	t.Cleanup(func() { tx.Rollback() })
 	schema := "topic_plan_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if err := tx.Exec("CREATE SCHEMA " + schema).Error; err != nil {
 		t.Fatal(err)
@@ -71,31 +142,35 @@ SELECT ((generated - 1) % 8) + 1, generated,
 FROM generate_series(1, 50000) AS generated`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.Exec("ANALYZE devdata_mirror_posts").Error; err != nil {
-		t.Fatal(err)
+	for _, table := range []string{"devdata_mirror_posts", "devdata_mirror_accounts", "posts"} {
+		if err := tx.Exec("ANALYZE " + table).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := tx.Exec("ANALYZE devdata_mirror_accounts").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Exec("ANALYZE posts").Error; err != nil {
-		t.Fatal(err)
-	}
-
 	topic := config.CuratedTopic{Slug: "plan", SourceKeys: []string{"topic-plan-1", "topic-plan-2"}}
-	anchor := time.Now().UTC()
-	query, args, err := topicBucketCandidatesQuery(topic, anchor, 7654321, 0, nil, 21)
-	if err != nil {
-		t.Fatal(err)
-	}
+	return tx, topic, time.Now().UTC()
+}
+
+func explainTopicQuery(tx *gorm.DB, query string, args ...interface{}) ([]byte, []topicExplainPlan, error) {
 	var planJSON []byte
 	if err := tx.Raw("EXPLAIN (FORMAT JSON)\n"+query, args...).Row().Scan(&planJSON); err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
-	var plan []postSearchExplainPlan
+	var plan []topicExplainPlan
 	if err := json.Unmarshal(planJSON, &plan); err != nil {
-		t.Fatalf("decode EXPLAIN JSON: %v output=%s", err, planJSON)
+		return planJSON, nil, fmt.Errorf("decode EXPLAIN JSON: %w; output=%s", err, planJSON)
 	}
-	if len(plan) != 1 || !postSearchPlanUsesIndex(plan[0].Plan, "idx_devdata_mirror_posts_account_state") {
-		t.Fatalf("current-bucket query plan did not use the mirror membership/source-time index: %s", fmt.Sprint(string(planJSON)))
+	return planJSON, plan, nil
+}
+
+func topicPlanUsesIndex(node topicExplainNode, indexName string) bool {
+	if node.IndexName == indexName {
+		return true
 	}
+	for _, child := range node.Plans {
+		if topicPlanUsesIndex(child, indexName) {
+			return true
+		}
+	}
+	return false
 }
